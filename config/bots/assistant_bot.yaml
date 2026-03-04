@@ -1,0 +1,10 @@
+id: "assistant-bot"
+name: "Assistant Bot"
+role: "general_assistant"
+priority: 0
+enabled: true
+backends:
+  - type: "local_llm"
+    provider: "ollama"
+    model: "llama3"
+    worker_id: "local-worker-01"
