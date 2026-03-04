@@ -61,10 +61,21 @@ def bot_detail_page(bot_id: str):
     cp = get_cp_client()
     cp_bot = cp.get_bot(bot_id)
     cp_tasks = cp.list_tasks()
+    cp_workers = cp.list_workers() or []
+    cp_models = cp.list_models() or []
+    cp_keys = cp.list_keys() or []
 
     if cp_bot is not None and cp_tasks is not None:
         tasks = [t for t in cp_tasks if str(t.get("bot_id")) == str(bot_id)]
-        return render_template("bot_detail.html", bot=cp_bot, tasks=tasks, error=None)
+        return render_template(
+            "bot_detail.html",
+            bot=cp_bot,
+            tasks=tasks,
+            workers=cp_workers,
+            models=cp_models,
+            api_keys=cp_keys,
+            error=None,
+        )
 
     db = get_db()
     try:
@@ -89,7 +100,15 @@ def bot_detail_page(bot_id: str):
                     "updated_at": t.updated_at.isoformat() if t.updated_at else "",
                 }
             )
-        return render_template("bot_detail.html", bot=_bot_to_dict(bot), tasks=tasks, error=None)
+        return render_template(
+            "bot_detail.html",
+            bot=_bot_to_dict(bot),
+            tasks=tasks,
+            workers=[],
+            models=[],
+            api_keys=[],
+            error=None,
+        )
     finally:
         db.close()
 

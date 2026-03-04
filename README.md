@@ -99,6 +99,7 @@ Dashboard navigation now includes `Projects`, `Chat`, and `Vault` pages connecte
 The Chat page also supports one-click conversation ingestion into Vault.
 Workers now include a detail view at `/workers/<worker_id>` and Settings includes API Keys / Model Catalog / Projects tabs.
 Worker detail now includes live resource graphs (load, queue, GPU utilization) with periodic polling.
+Bot detail (`/bots/<bot_id>`) now includes backend chain editing (add/edit/remove/reorder) with model/worker/key pickers and a task kanban/detail modal.
 
 ---
 

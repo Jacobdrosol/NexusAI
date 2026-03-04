@@ -6,6 +6,7 @@
   <h1>Bot Detail</h1>
   <a class="btn" href="{{ url_for('bots.bots_page') }}">Back to Bots</a>
 </div>
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
 {% if error %}
 <div class="alert alert-error">{{ error }}</div>
@@ -23,20 +24,54 @@
       {% endif %}
     </div>
     <div>
-      <div><strong>Backend Chain (priority order)</strong></div>
-      <ol style="margin-top:0.4rem; padding-left:1.2rem;">
-        {% for b in bot.backends %}
-        <li style="margin-bottom:0.35rem;">
-          <code>{{ b.type }}</code> · {{ b.provider }} · <strong>{{ b.model }}</strong>
-          {% if b.worker_id %}<span style="color:#64748b;">(worker: {{ b.worker_id }})</span>{% endif %}
-          {% if b.api_key_ref %}<span style="color:#64748b;">(key: {{ b.api_key_ref }})</span>{% endif %}
-        </li>
+      <div><strong>Backlog</strong> <span style="color:#64748b;">(blocked)</span></div>
+      <ul style="margin-top:0.35rem;padding-left:1.2rem;">
+        {% for t in tasks if t.status == 'blocked' %}
+        <li><code>{{ t.id }}</code></li>
         {% else %}
-        <li style="color:#64748b;">No backends configured</li>
+        <li class="empty">No blocked tasks</li>
         {% endfor %}
-      </ol>
+      </ul>
     </div>
   </div>
+</section>
+
+<section class="panel" style="margin-bottom:1rem;">
+  <div class="page-header" style="margin-bottom:0.75rem;">
+    <h2 class="panel-title">Backend Chain Editor</h2>
+    <div>
+      <button class="btn" onclick="openBotEdit()">Edit Bot Info</button>
+      <button class="btn btn-primary" onclick="openAddBackend()">+ Add Backend</button>
+      <button class="btn btn-primary" onclick="saveBackendChain()">Save Chain</button>
+    </div>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>#</th><th>Type</th><th>Provider</th><th>Model</th><th>Worker</th><th>API Key</th><th>Actions</th>
+      </tr>
+    </thead>
+    <tbody id="backend-chain-tbody">
+      {% for b in bot.backends %}
+      <tr data-index="{{ loop.index0 }}">
+        <td>{{ loop.index }}</td>
+        <td>{{ b.type }}</td>
+        <td>{{ b.provider }}</td>
+        <td>{{ b.model }}</td>
+        <td>{{ b.worker_id or '—' }}</td>
+        <td>{{ b.api_key_ref or '—' }}</td>
+        <td class="actions">
+          <button class="btn btn-sm" onclick="moveBackendUp({{ loop.index0 }})">↑</button>
+          <button class="btn btn-sm" onclick="moveBackendDown({{ loop.index0 }})">↓</button>
+          <button class="btn btn-sm" onclick="editBackend({{ loop.index0 }})">Edit</button>
+          <button class="btn btn-sm btn-danger" onclick="removeBackend({{ loop.index0 }})">Remove</button>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="empty">No backends configured</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
 </section>
 
 <section class="panel">
@@ -47,10 +82,10 @@
     <div class="kanban-col">
       <h3>{{ status|capitalize }}</h3>
       {% for t in tasks if t.status == status %}
-      <div class="kanban-card">
+      <button class="kanban-card" style="width:100%;text-align:left;" onclick="openTaskModal('{{ t.id|e }}')">
         <div><strong>{{ t.id }}</strong></div>
         <div style="color:#64748b;font-size:0.85rem;">{{ (t.created_at[:19] if t.created_at else '') | replace('T',' ') }}</div>
-      </div>
+      </button>
       {% else %}
       <div class="empty">No {{ status }} tasks</div>
       {% endfor %}
@@ -58,5 +93,252 @@
     {% endfor %}
   </div>
 </section>
+
+<div id="modal-edit-bot" class="modal" style="display:none;">
+  <div class="modal-content">
+    <h2>Edit Bot</h2>
+    <form id="form-edit-bot">
+      <div class="form-group"><label>Name</label><input class="form-control" name="name" value="{{ bot.name }}"></div>
+      <div class="form-group"><label>Role</label><input class="form-control" name="role" value="{{ bot.role }}"></div>
+      <div class="form-group"><label>Priority</label><input class="form-control" type="number" name="priority" value="{{ bot.priority }}"></div>
+      <div class="form-group"><label>System Prompt</label><textarea class="form-control" rows="5" name="system_prompt">{{ bot.system_prompt or '' }}</textarea></div>
+      <div class="form-group">
+        <label><input type="checkbox" name="enabled" {% if bot.enabled %}checked{% endif %}> Enabled</label>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-primary" onclick="saveBotInfo()">Save</button>
+        <button type="button" class="btn" onclick="closeModal('modal-edit-bot')">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="modal-backend" class="modal" style="display:none;">
+  <div class="modal-content">
+    <h2 id="backend-modal-title">Add Backend</h2>
+    <form id="form-backend">
+      <input type="hidden" name="index" value="">
+      <div class="form-group">
+        <label>Type</label>
+        <select class="form-control" name="type">
+          <option value="local_llm">local_llm</option>
+          <option value="remote_llm">remote_llm</option>
+          <option value="cloud_api">cloud_api</option>
+          <option value="cli">cli</option>
+          <option value="custom">custom</option>
+        </select>
+      </div>
+      <div class="form-group"><label>Provider</label><input class="form-control" name="provider" placeholder="openai / ollama / claude"></div>
+      <div class="form-group">
+        <label>Model</label>
+        <select class="form-control" name="model_select" onchange="syncModelInput(this.value)">
+          <option value="">Custom...</option>
+          {% for m in models %}
+          <option value="{{ m.name }}">{{ m.provider }} / {{ m.name }}</option>
+          {% endfor %}
+        </select>
+        <input class="form-control" style="margin-top:0.5rem;" name="model" placeholder="Model name">
+      </div>
+      <div class="form-group">
+        <label>Worker</label>
+        <select class="form-control" name="worker_id">
+          <option value="">None</option>
+          {% for w in workers %}
+          <option value="{{ w.id }}">{{ w.name }} ({{ w.id }})</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-group">
+        <label>API Key Ref</label>
+        <select class="form-control" name="api_key_ref">
+          <option value="">None</option>
+          {% for k in api_keys %}
+          <option value="{{ k.name }}">{{ k.name }} ({{ k.provider }})</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="split-grid" style="grid-template-columns:1fr 1fr;">
+        <div class="form-group"><label>Temperature</label><input class="form-control" type="number" step="any" name="temperature"></div>
+        <div class="form-group"><label>Max Tokens</label><input class="form-control" type="number" name="max_tokens"></div>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-primary" onclick="saveBackendForm()">Apply</button>
+        <button type="button" class="btn" onclick="closeModal('modal-backend')">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="modal-task-detail" class="modal" style="display:none;">
+  <div class="modal-content">
+    <h2>Task Detail</h2>
+    <pre id="task-detail-pre" style="max-height:60vh;overflow:auto;white-space:pre-wrap;"></pre>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal('modal-task-detail')">Close</button>
+    </div>
+  </div>
+</div>
 {% endif %}
+{% endblock %}
+{% block scripts %}
+<script>
+const BOT_ID = {{ bot.id|tojson }};
+let BOT = {{ bot|tojson }};
+const TASKS = {{ tasks|tojson }};
+
+function getCsrf() {
+  const el = document.querySelector('input[name=csrf_token]');
+  return el ? el.value : '';
+}
+
+function closeModal(id) {
+  const el = document.getElementById(id);
+  if (el) el.style.display = 'none';
+}
+
+function openBotEdit() {
+  document.getElementById('modal-edit-bot').style.display = 'flex';
+}
+
+function saveBotInfo() {
+  const form = document.getElementById('form-edit-bot');
+  const fd = new FormData(form);
+  BOT.name = fd.get('name');
+  BOT.role = fd.get('role');
+  BOT.priority = parseInt(fd.get('priority') || '0', 10);
+  BOT.system_prompt = fd.get('system_prompt') || null;
+  BOT.enabled = form.querySelector('input[name=enabled]').checked;
+  persistBot('Bot details saved.');
+}
+
+function syncModelInput(value) {
+  if (!value) return;
+  document.querySelector('#form-backend input[name=model]').value = value;
+}
+
+function renderBackendChain() {
+  const tbody = document.getElementById('backend-chain-tbody');
+  if (!tbody) return;
+  const list = Array.isArray(BOT.backends) ? BOT.backends : [];
+  if (!list.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty">No backends configured</td></tr>';
+    return;
+  }
+  tbody.innerHTML = list.map((b, idx) => `
+    <tr data-index="${idx}">
+      <td>${idx + 1}</td>
+      <td>${b.type ?? ''}</td>
+      <td>${b.provider ?? ''}</td>
+      <td>${b.model ?? ''}</td>
+      <td>${b.worker_id || '—'}</td>
+      <td>${b.api_key_ref || '—'}</td>
+      <td class="actions">
+        <button class="btn btn-sm" onclick="moveBackendUp(${idx})">↑</button>
+        <button class="btn btn-sm" onclick="moveBackendDown(${idx})">↓</button>
+        <button class="btn btn-sm" onclick="editBackend(${idx})">Edit</button>
+        <button class="btn btn-sm btn-danger" onclick="removeBackend(${idx})">Remove</button>
+      </td>
+    </tr>
+  `).join('');
+}
+
+function openAddBackend() {
+  const form = document.getElementById('form-backend');
+  form.reset();
+  form.index.value = '';
+  document.getElementById('backend-modal-title').textContent = 'Add Backend';
+  document.getElementById('modal-backend').style.display = 'flex';
+}
+
+function editBackend(index) {
+  const b = BOT.backends[index];
+  if (!b) return;
+  const form = document.getElementById('form-backend');
+  form.index.value = index;
+  form.type.value = b.type || '';
+  form.provider.value = b.provider || '';
+  form.model.value = b.model || '';
+  form.worker_id.value = b.worker_id || '';
+  form.api_key_ref.value = b.api_key_ref || '';
+  form.temperature.value = b.params?.temperature ?? '';
+  form.max_tokens.value = b.params?.max_tokens ?? '';
+  document.getElementById('backend-modal-title').textContent = 'Edit Backend';
+  document.getElementById('modal-backend').style.display = 'flex';
+}
+
+function saveBackendForm() {
+  const form = document.getElementById('form-backend');
+  const fd = new FormData(form);
+  const backend = {
+    type: fd.get('type'),
+    provider: (fd.get('provider') || '').toString().trim(),
+    model: (fd.get('model') || '').toString().trim(),
+    worker_id: (fd.get('worker_id') || '').toString().trim() || null,
+    api_key_ref: (fd.get('api_key_ref') || '').toString().trim() || null,
+  };
+  const temp = (fd.get('temperature') || '').toString().trim();
+  const maxTokens = (fd.get('max_tokens') || '').toString().trim();
+  if (temp || maxTokens) {
+    backend.params = {};
+    if (temp) backend.params.temperature = Number(temp);
+    if (maxTokens) backend.params.max_tokens = parseInt(maxTokens, 10);
+  }
+  if (!backend.type || !backend.provider || !backend.model) {
+    alert('Type, provider, and model are required.');
+    return;
+  }
+  const idxRaw = (fd.get('index') || '').toString();
+  if (idxRaw === '') BOT.backends.push(backend);
+  else BOT.backends[parseInt(idxRaw, 10)] = backend;
+  renderBackendChain();
+  closeModal('modal-backend');
+}
+
+function moveBackendUp(index) {
+  if (index <= 0) return;
+  const arr = BOT.backends;
+  [arr[index - 1], arr[index]] = [arr[index], arr[index - 1]];
+  renderBackendChain();
+}
+
+function moveBackendDown(index) {
+  const arr = BOT.backends;
+  if (index >= arr.length - 1) return;
+  [arr[index], arr[index + 1]] = [arr[index + 1], arr[index]];
+  renderBackendChain();
+}
+
+function removeBackend(index) {
+  BOT.backends.splice(index, 1);
+  renderBackendChain();
+}
+
+function saveBackendChain() {
+  persistBot('Backend chain saved.');
+}
+
+function persistBot(successMessage) {
+  fetch('/api/bots/' + encodeURIComponent(BOT_ID), {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify(BOT)
+  })
+  .then(async (r) => {
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || 'Save failed');
+    alert(successMessage);
+    location.reload();
+  })
+  .catch((e) => alert(e.message));
+}
+
+function openTaskModal(taskId) {
+  const task = TASKS.find(t => String(t.id) === String(taskId));
+  if (!task) return;
+  document.getElementById('task-detail-pre').textContent = JSON.stringify(task, null, 2);
+  document.getElementById('modal-task-detail').style.display = 'flex';
+}
+
+renderBackendChain();
+</script>
 {% endblock %}

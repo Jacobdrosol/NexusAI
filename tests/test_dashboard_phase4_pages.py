@@ -64,6 +64,8 @@ def test_bot_detail_page_loads_when_logged_in(dashboard_client):
     resp = dashboard_client.get(f"/bots/{bot_id}")
     assert resp.status_code == 200
     assert b"Task Board" in resp.data
+    assert b"Backend Chain Editor" in resp.data
+    assert b"Backlog" in resp.data
 
 
 def test_chat_ingest_api_validates_required_fields(dashboard_client):

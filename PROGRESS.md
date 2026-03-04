@@ -413,10 +413,10 @@ These are confirmed issues that must be fixed before serious testing:
 - [x] Worker enable/disable/delete/ping actions
 
 #### 4c. Bot Detail + Task Board
-- [ ] Bot edit form: name, role, system prompt, backend chain editor
-- [ ] Backend chain: add/remove/reorder backends, model picker, worker picker, API key picker
-- [ ] Task board Kanban: Queued | Blocked | Running | Completed | Failed
-- [ ] Task detail modal, backlog view
+- [x] Bot edit form: name, role, system prompt, backend chain editor
+- [x] Backend chain: add/remove/reorder backends, model picker, worker picker, API key picker
+- [x] Task board Kanban: Queued | Blocked | Running | Completed | Failed
+- [x] Task detail modal, backlog view
 
 #### 4d. Projects Page
 - [x] Project list + create modal
@@ -971,4 +971,32 @@ NexusAI/
 **Validation:**
 
 - `pytest -q tests/test_dashboard_phase4_pages.py tests/test_dashboard_smoke.py tests/test_dashboard_onboarding.py tests/test_control_plane_api.py` → **38 passed**
+- `pytest -q` → **94 passed**
+
+---
+
+### 2026-03-05 01:37 — Phase 4: Bot Backend Chain Editor (Slice 12)
+
+**Status:** Bot detail page now supports end-to-end backend chain editing and task detail inspection.
+
+**Changes made:**
+
+- Enhanced bot detail route data hydration (`dashboard/routes/bots.py`):
+  - loads workers, model catalog, and API keys for backend pickers
+- Rebuilt bot detail template (`dashboard/templates/bot_detail.html`) with:
+  - bot edit modal (name, role, priority, system prompt, enabled)
+  - backend chain editor:
+    - add/edit/remove backend entries
+    - reorder up/down
+    - picker support for models, workers, API keys
+  - save flow via `PUT /api/bots/<bot_id>`
+  - backlog section (blocked tasks)
+  - task detail modal (JSON payload/result/error snapshot)
+  - full kanban columns: blocked, queued, running, completed, failed
+- Added page assertions for editor/backlog in dashboard tests:
+  - `tests/test_dashboard_phase4_pages.py`
+
+**Validation:**
+
+- `pytest -q tests/test_dashboard_phase4_pages.py tests/test_dashboard_smoke.py tests/test_dashboard_onboarding.py` → **20 passed**
 - `pytest -q` → **94 passed**
