@@ -359,9 +359,9 @@ These are confirmed issues that must be fixed before serious testing:
 
 | # | Issue | Location | Impact |
 |---|---|---|---|
-| 1 | **`shared/` not in Docker build context for some services** | `control_plane/Dockerfile`, `worker_agent/Dockerfile` | Import errors at runtime — `from shared.xxx import` will fail if `shared/` is not copied in |
-| 2 | **Settings port mismatch** | `shared/settings_manager.py` line ~65 | `control_plane_port` defaults to `"8080"` but control plane runs on `8000`; dashboard CPClient will connect to wrong port |
-| 3 | **`Bot` ORM has `routing_rules` column; shared Pydantic `Bot` model does not** | `dashboard/models.py` vs `shared/models.py` | Schema mismatch; serialization will silently drop or error on `routing_rules` |
+| 1 | ~~**`shared/` not in Docker build context for some services**~~ ✅ **RESOLVED** | `control_plane/Dockerfile`, `worker_agent/Dockerfile`, `dashboard/Dockerfile` | Added `ENV PYTHONPATH=/app` to all three Dockerfiles so `shared/` is always importable regardless of working directory |
+| 2 | ~~**Settings port mismatch**~~ ✅ **RESOLVED** | `shared/settings_manager.py` line ~65 | `control_plane_port` default changed from `"8080"` to `"8000"`; dashboard CPClient now connects to the correct port |
+| 3 | ~~**`Bot` ORM has `routing_rules` column; shared Pydantic `Bot` model does not**~~ ✅ **RESOLVED** | `dashboard/models.py` vs `shared/models.py` | Added `routing_rules: Optional[Any] = None` to shared Pydantic `Bot` model; field now round-trips correctly |
 | 4 | **`Worker.enabled` in dashboard ORM but not in shared Pydantic `Worker` model** | `dashboard/models.py` vs `shared/models.py` | Inconsistent model; `enabled` field will not round-trip through CP API |
 | 5 | **No `api_key_ref` resolution in Scheduler** | `control_plane/scheduler/scheduler.py` | `api_key_ref` is stored on `BackendConfig` but the scheduler reads raw env var keys — no vault lookup implemented |
 | 6 | **Task execution has no dependency engine** | `control_plane/task_manager/task_manager.py` | Tasks run immediately on creation; no "wait for Task A before Task B" logic |
@@ -438,7 +438,7 @@ These are confirmed issues that must be fixed before serious testing:
 
 #### 4g. Settings Additions
 - [ ] API Keys tab, Model Catalog tab, Projects tab
-- [ ] Fix control plane port setting (Bug #2)
+- [x] Fix control plane port setting (Bug #2) — **RESOLVED**
 
 #### 4h. Overview Page Enhancement
 - [ ] Recent activity feed, worker health mini-bars, quick links, system alerts
