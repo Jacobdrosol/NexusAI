@@ -7,3 +7,5 @@ jinja2>=3.1.0
 python-multipart>=0.0.9
 aiosqlite>=0.20.0
 pynvml>=11.5.0
+bcrypt>=4.0.0
+itsdangerous>=2.1.0

@@ -1,0 +1,62 @@
+{% extends "setup/base_setup.html" %}
+{% block content %}
+<div class="setup-title">Create Admin Account</div>
+<p class="setup-subtitle">
+  This account will have full access to the dashboard.
+</p>
+
+<form method="post" action="/setup/step2" novalidate>
+  <div class="form-group">
+    <label for="email">Email address</label>
+    <input
+      type="email"
+      id="email"
+      name="email"
+      value="{{ email or '' }}"
+      autocomplete="username"
+      class="{% if errors and errors.email %}is-error{% endif %}"
+      required
+    >
+    {% if errors and errors.email %}
+      <div class="form-error">{{ errors.email }}</div>
+    {% endif %}
+  </div>
+
+  <div class="form-group">
+    <label for="password">Password</label>
+    <input
+      type="password"
+      id="password"
+      name="password"
+      autocomplete="new-password"
+      class="{% if errors and errors.password %}is-error{% endif %}"
+      required
+    >
+    {% if errors and errors.password %}
+      <div class="form-error">{{ errors.password }}</div>
+    {% else %}
+      <div class="form-hint">Minimum 8 characters.</div>
+    {% endif %}
+  </div>
+
+  <div class="form-group">
+    <label for="confirm_password">Confirm Password</label>
+    <input
+      type="password"
+      id="confirm_password"
+      name="confirm_password"
+      autocomplete="new-password"
+      class="{% if errors and errors.confirm_password %}is-error{% endif %}"
+      required
+    >
+    {% if errors and errors.confirm_password %}
+      <div class="form-error">{{ errors.confirm_password }}</div>
+    {% endif %}
+  </div>
+
+  <div class="btn-group">
+    <a href="/setup/step1" class="btn btn-secondary">← Back</a>
+    <button type="submit" class="btn btn-primary">Create Account →</button>
+  </div>
+</form>
+{% endblock %}
