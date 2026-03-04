@@ -1,0 +1,27 @@
+from typing import Any, Dict, List
+
+import httpx
+
+
+async def infer(
+    model: str,
+    messages: List[Dict],
+    params: Dict,
+    api_key: str,
+) -> Dict[str, Any]:
+    parts = [{"text": msg.get("content", "")} for msg in messages]
+    body: Dict[str, Any] = {
+        "contents": [{"parts": parts}],
+    }
+    if params:
+        body["generationConfig"] = params
+    url = (
+        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{model}:generateContent?key={api_key}"
+    )
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        response = await client.post(url, json=body)
+        response.raise_for_status()
+        data = response.json()
+        output = data["candidates"][0]["content"]["parts"][0]["text"]
+        return {"output": output, "usage": data.get("usageMetadata", {})}

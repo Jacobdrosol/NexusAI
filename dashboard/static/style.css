@@ -1,0 +1,137 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background: #0f1117;
+  color: #e0e0e0;
+  line-height: 1.5;
+}
+
+nav {
+  background: #1a1d27;
+  padding: 0.75rem 2rem;
+  border-bottom: 1px solid #2d3045;
+  display: flex;
+  align-items: center;
+  gap: 2rem;
+}
+
+nav .brand {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #7c3aed;
+  text-decoration: none;
+}
+
+nav a {
+  color: #a0aec0;
+  text-decoration: none;
+  font-size: 0.9rem;
+  transition: color 0.2s;
+}
+
+nav a:hover,
+nav a.active {
+  color: #e0e0e0;
+}
+
+.container {
+  max-width: 1200px;
+  margin: 2rem auto;
+  padding: 0 1.5rem;
+}
+
+h1 {
+  font-size: 1.5rem;
+  margin-bottom: 1.5rem;
+  color: #f0f0f0;
+}
+
+.alert {
+  background: #2d1a1a;
+  border: 1px solid #7c2020;
+  color: #fca5a5;
+  padding: 0.75rem 1rem;
+  border-radius: 6px;
+  margin-bottom: 1rem;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #1a1d27;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+thead {
+  background: #12141e;
+}
+
+th {
+  text-align: left;
+  padding: 0.75rem 1rem;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #718096;
+  border-bottom: 1px solid #2d3045;
+}
+
+td {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid #1e2133;
+  font-size: 0.9rem;
+}
+
+tr:last-child td {
+  border-bottom: none;
+}
+
+tr:hover td {
+  background: #20243a;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.2rem 0.6rem;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.badge-online { background: #064e3b; color: #6ee7b7; }
+.badge-offline { background: #1f2937; color: #9ca3af; }
+.badge-degraded { background: #78350f; color: #fcd34d; }
+.badge-queued { background: #1e3a5f; color: #93c5fd; }
+.badge-running { background: #1a2e4a; color: #60a5fa; }
+.badge-completed { background: #064e3b; color: #6ee7b7; }
+.badge-failed { background: #450a0a; color: #fca5a5; }
+.badge-enabled { background: #064e3b; color: #6ee7b7; }
+.badge-disabled { background: #1f2937; color: #9ca3af; }
+
+.task-row { cursor: pointer; }
+
+.task-detail {
+  display: none;
+  background: #12141e;
+  padding: 1rem;
+}
+
+.task-detail pre {
+  font-size: 0.8rem;
+  color: #a0aec0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.task-detail.open { display: table-row; }
+
+.metrics {
+  font-size: 0.8rem;
+  color: #718096;
+}

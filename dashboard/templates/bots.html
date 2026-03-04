@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% set active_page = "bots" %}
+{% block title %}Bots{% endblock %}
+{% block content %}
+<h1>Bots</h1>
+{% if error %}
+<div class="alert">Error fetching bots: {{ error }}</div>
+{% endif %}
+<table>
+  <thead>
+    <tr>
+      <th>Name</th>
+      <th>ID</th>
+      <th>Role</th>
+      <th>Priority</th>
+      <th>Enabled</th>
+      <th>Backends</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for b in bots %}
+    <tr>
+      <td>{{ b.name }}</td>
+      <td><code>{{ b.id }}</code></td>
+      <td>{{ b.role }}</td>
+      <td>{{ b.priority }}</td>
+      <td>
+        {% if b.enabled %}
+          <span class="badge badge-enabled">enabled</span>
+        {% else %}
+          <span class="badge badge-disabled">disabled</span>
+        {% endif %}
+      </td>
+      <td>{{ b.backends | length }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6" style="text-align:center;color:#718096;">No bots registered</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

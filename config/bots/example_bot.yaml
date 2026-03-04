@@ -1,0 +1,21 @@
+id: bot-coder-14b
+name: Coder 14B
+role: coding
+priority: 10
+enabled: true
+backends:
+  - type: local_llm
+    worker_id: worker-main-4070
+    model: llama3-8b-instruct-q4
+    provider: ollama
+    gpu_id: GPU-0
+    params:
+      temperature: 0.1
+      max_tokens: 1024
+  - type: cloud_api
+    provider: claude
+    model: claude-3-5-sonnet
+    api_key_ref: ANTHROPIC_API_KEY
+    params:
+      temperature: 0.1
+      max_tokens: 2048
