@@ -12,6 +12,7 @@
     <a href="/dashboard/workers" {% if active_page == 'workers' %}class="active"{% endif %}>Workers</a>
     <a href="/dashboard/bots" {% if active_page == 'bots' %}class="active"{% endif %}>Bots</a>
     <a href="/dashboard/tasks" {% if active_page == 'tasks' %}class="active"{% endif %}>Tasks</a>
+    <a href="/dashboard/settings" {% if active_page == 'settings' %}class="active"{% endif %}>Settings</a>
   </nav>
   <div class="container">
     {% block content %}{% endblock %}
