@@ -1,0 +1,15 @@
+control_plane:
+  host: 0.0.0.0
+  port: 8000
+  workers_config_dir: config/workers
+  bots_config_dir: config/bots
+  heartbeat_timeout_seconds: 30
+
+dashboard:
+  host: 0.0.0.0
+  port: 8080
+  enabled: true
+
+logging:
+  level: INFO
+  file_path: data/nexus.log

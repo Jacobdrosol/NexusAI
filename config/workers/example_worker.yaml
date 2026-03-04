@@ -1,0 +1,12 @@
+id: worker-main-4070
+name: Main 4070 Box
+host: 192.168.1.10
+port: 8080
+capabilities:
+  - type: llm
+    provider: ollama
+    models:
+      - llama3-8b-instruct-q4
+      - mistral-7b-instruct
+    gpus:
+      - GPU-0

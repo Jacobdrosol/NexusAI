@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% set active_page = "workers" %}
+{% block title %}Workers{% endblock %}
+{% block content %}
+<h1>Workers</h1>
+{% if error %}
+<div class="alert">Error fetching workers: {{ error }}</div>
+{% endif %}
+<table>
+  <thead>
+    <tr>
+      <th>Name</th>
+      <th>ID</th>
+      <th>Host</th>
+      <th>Status</th>
+      <th>Load</th>
+      <th>GPU Utilization</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for w in workers %}
+    <tr>
+      <td>{{ w.name }}</td>
+      <td><code>{{ w.id }}</code></td>
+      <td>{{ w.host }}:{{ w.port }}</td>
+      <td><span class="badge badge-{{ w.status }}">{{ w.status }}</span></td>
+      <td class="metrics">
+        {% if w.metrics and w.metrics.load is not none %}
+          {{ "%.1f"|format(w.metrics.load * 100) }}%
+        {% else %}
+          –
+        {% endif %}
+      </td>
+      <td class="metrics">
+        {% if w.metrics and w.metrics.gpu_utilization %}
+          {% for g in w.metrics.gpu_utilization %}
+            GPU{{ loop.index0 }}: {{ "%.1f"|format(g) }}%{% if not loop.last %}, {% endif %}
+          {% endfor %}
+        {% else %}
+          –
+        {% endif %}
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6" style="text-align:center;color:#718096;">No workers registered</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% set active_page = "tasks" %}
+{% block title %}Tasks{% endblock %}
+{% block content %}
+<h1>Tasks</h1>
+{% if error %}
+<div class="alert">Error fetching tasks: {{ error }}</div>
+{% endif %}
+<table>
+  <thead>
+    <tr>
+      <th>ID</th>
+      <th>Bot</th>
+      <th>Status</th>
+      <th>Created</th>
+      <th>Updated</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for t in tasks %}
+    <tr class="task-row" onclick="toggleDetail('{{ t.id }}')">
+      <td><code title="{{ t.id }}">{{ t.id[:8] }}…</code></td>
+      <td>{{ t.bot_id }}</td>
+      <td><span class="badge badge-{{ t.status }}">{{ t.status }}</span></td>
+      <td>{{ t.created_at[:19] | replace("T"," ") }}</td>
+      <td>{{ t.updated_at[:19] | replace("T"," ") }}</td>
+    </tr>
+    <tr id="detail-{{ t.id }}" class="task-detail">
+      <td colspan="5">
+        <strong>Payload:</strong>
+        <pre>{{ t.payload | tojson(indent=2) }}</pre>
+        {% if t.result %}
+        <strong>Result:</strong>
+        <pre>{{ t.result | tojson(indent=2) }}</pre>
+        {% endif %}
+        {% if t.error %}
+        <strong>Error:</strong>
+        <pre>{{ t.error | tojson(indent=2) }}</pre>
+        {% endif %}
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="5" style="text-align:center;color:#718096;">No tasks yet</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+<script>
+function toggleDetail(id) {
+  const el = document.getElementById('detail-' + id);
+  if (el) el.classList.toggle('open');
+}
+</script>
+{% endblock %}
