@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% set active_page = "projects" %}
+{% block title %}Project Detail{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Project Detail</h1>
+  <a class="btn" href="{{ url_for('projects.projects_page') }}">Back to Projects</a>
+</div>
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+{% if error %}
+<div class="alert alert-error">{{ error }}</div>
+{% elif project %}
+<section class="panel" style="margin-bottom:1rem;">
+  <h2 class="panel-title">{{ project.name }} <small style="color:#64748b;">({{ project.id }})</small></h2>
+  <div class="split-grid" style="grid-template-columns:1fr 1fr;">
+    <div>
+      <div><strong>Mode:</strong> {{ project.mode }}</div>
+      <div><strong>Enabled:</strong> <span class="badge badge-{{ 'enabled' if project.enabled else 'disabled' }}">{{ 'enabled' if project.enabled else 'disabled' }}</span></div>
+      <div><strong>Description:</strong> {{ project.description or '—' }}</div>
+    </div>
+    <div>
+      <div><strong>Settings Overrides</strong></div>
+      <pre style="white-space:pre-wrap; margin-top:0.35rem;">{{ project.settings_overrides | tojson(indent=2) if project.settings_overrides else '{}' }}</pre>
+    </div>
+  </div>
+</section>
+
+<section class="panel" style="margin-bottom:1rem;">
+  <div class="page-header" style="margin-bottom:0.75rem;">
+    <h2 class="panel-title">Bridge Management</h2>
+  </div>
+  <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-bottom:0.75rem;">
+    {% for b in project.bridge_project_ids %}
+    <span class="badge badge-running" style="display:flex;align-items:center;gap:0.4rem;">
+      {{ b }}
+      <button class="btn btn-sm btn-danger" style="padding:0.1rem 0.35rem;" onclick="removeBridge('{{ b }}')">x</button>
+    </span>
+    {% else %}
+    <div class="empty">No bridges configured</div>
+    {% endfor %}
+  </div>
+  <div class="split-grid" style="grid-template-columns:1fr auto;">
+    <select class="form-control" id="bridge-target">
+      {% for p in all_projects %}
+      {% if p.id != project.id and p.id not in project.bridge_project_ids %}
+      <option value="{{ p.id }}">{{ p.name }} ({{ p.id }})</option>
+      {% endif %}
+      {% endfor %}
+    </select>
+    <button class="btn btn-primary" onclick="addBridge()">Add Bridge</button>
+  </div>
+</section>
+
+<section class="panel" style="margin-bottom:1rem;">
+  <h2 class="panel-title">Project Bots</h2>
+  <table>
+    <thead><tr><th>ID</th><th>Name</th><th>Role</th><th>Priority</th></tr></thead>
+    <tbody>
+      {% for b in bots %}
+      <tr>
+        <td><code>{{ b.id }}</code></td>
+        <td>{{ b.name }}</td>
+        <td>{{ b.role }}</td>
+        <td>{{ b.priority }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4" class="empty">No project-scoped bots defined</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="panel" style="margin-bottom:1rem;">
+  <h2 class="panel-title">Project Tasks</h2>
+  <table>
+    <thead><tr><th>ID</th><th>Bot</th><th>Status</th><th>Updated</th></tr></thead>
+    <tbody>
+      {% for t in tasks %}
+      <tr>
+        <td><code>{{ t.id }}</code></td>
+        <td>{{ t.bot_id }}</td>
+        <td><span class="badge badge-{{ t.status }}">{{ t.status }}</span></td>
+        <td>{{ (t.updated_at[:19] if t.updated_at else '') | replace('T',' ') }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4" class="empty">No project-scoped tasks found</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="panel">
+  <h2 class="panel-title">Project Vault Items</h2>
+  <table>
+    <thead><tr><th>Title</th><th>Namespace</th><th>Source</th><th>Updated</th></tr></thead>
+    <tbody>
+      {% for i in vault_items %}
+      <tr>
+        <td>{{ i.title }}</td>
+        <td>{{ i.namespace }}</td>
+        <td>{{ i.source_type }}</td>
+        <td>{{ (i.updated_at[:19] if i.updated_at else '') | replace('T',' ') }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4" class="empty">No vault items for this project</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+<script>
+const PROJECT_ID = {{ project.id|tojson if project else "''" }};
+
+function getCsrf() {
+  const el = document.querySelector('input[name=csrf_token]');
+  return el ? el.value : '';
+}
+
+async function addBridge() {
+  const target = document.getElementById('bridge-target')?.value;
+  if (!target) { alert('Select a target project first.'); return; }
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/bridges', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify({target_project_id: target}),
+  });
+  if (res.ok) location.reload();
+  else {
+    const data = await res.json().catch(() => ({}));
+    alert(data.error || 'Add bridge failed');
+  }
+}
+
+async function removeBridge(target) {
+  if (!confirm('Remove bridge to ' + target + '?')) return;
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/bridges/' + encodeURIComponent(target), {
+    method: 'DELETE',
+    headers: {'X-CSRFToken': getCsrf()},
+  });
+  if (res.ok) location.reload();
+  else {
+    const data = await res.json().catch(() => ({}));
+    alert(data.error || 'Remove bridge failed');
+  }
+}
+</script>
+{% endblock %}

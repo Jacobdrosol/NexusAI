@@ -420,8 +420,8 @@ These are confirmed issues that must be fixed before serious testing:
 
 #### 4d. Projects Page
 - [x] Project list + create modal
-- [ ] Project detail: bots, task board, vault items, settings overrides
-- [ ] Bridge management UI
+- [x] Project detail: bots, task board, vault items, settings overrides
+- [x] Bridge management UI
 
 #### 4e. Chat Page
 - [ ] Conversation sidebar, streaming message area, model/bot selector
@@ -1000,3 +1000,37 @@ NexusAI/
 
 - `pytest -q tests/test_dashboard_phase4_pages.py tests/test_dashboard_smoke.py tests/test_dashboard_onboarding.py` → **20 passed**
 - `pytest -q` → **94 passed**
+
+---
+
+### 2026-03-05 02:03 — Phase 4: Project Detail + Bridge Management (Slice 13)
+
+**Status:** Projects UI now includes detail pages with bridge operations and project-scoped data panels.
+
+**Changes made:**
+
+- Added project detail route:
+  - `GET /projects/<project_id>` in `dashboard/routes/projects.py`
+- Added bridge management APIs in dashboard layer:
+  - `POST /api/projects/<project_id>/bridges`
+  - `DELETE /api/projects/<project_id>/bridges/<target_project_id>`
+- Extended CP client for project detail and bridge actions:
+  - `get_project`
+  - `add_project_bridge`
+  - `remove_project_bridge`
+  - (`dashboard/cp_client.py`)
+- Added project detail template (`dashboard/templates/project_detail.html`) with:
+  - project metadata and settings-overrides panel
+  - bridge management controls (add/remove)
+  - project bots list
+  - project task snapshot
+  - project vault item snapshot
+- Updated projects list template to link into project detail:
+  - `dashboard/templates/projects.html`
+- Added dashboard test coverage for project detail handling:
+  - `tests/test_dashboard_phase4_pages.py`
+
+**Validation:**
+
+- `pytest -q tests/test_dashboard_phase4_pages.py tests/test_dashboard_smoke.py tests/test_dashboard_onboarding.py` → **21 passed**
+- `pytest -q` → **95 passed**

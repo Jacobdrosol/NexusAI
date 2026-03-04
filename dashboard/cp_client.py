@@ -115,8 +115,17 @@ class CPClient:
     def create_project(self, project: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return self._post("/v1/projects", project)
 
+    def get_project(self, project_id: str) -> Optional[Dict[str, Any]]:
+        return self._get(f"/v1/projects/{project_id}")
+
     def delete_project(self, project_id: str) -> bool:
         return self._delete(f"/v1/projects/{project_id}")
+
+    def add_project_bridge(self, project_id: str, target_project_id: str) -> Optional[Dict[str, Any]]:
+        return self._post(f"/v1/projects/{project_id}/bridges/{target_project_id}", {})
+
+    def remove_project_bridge(self, project_id: str, target_project_id: str) -> bool:
+        return self._delete(f"/v1/projects/{project_id}/bridges/{target_project_id}")
 
     # Models
     def list_models(self) -> Optional[List[Dict[str, Any]]]:

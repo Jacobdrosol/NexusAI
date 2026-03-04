@@ -18,8 +18,8 @@
   <tbody>
     {% for p in projects %}
     <tr>
-      <td><code>{{ p.id }}</code></td>
-      <td>{{ p.name }}</td>
+      <td><code><a href="{{ url_for('projects.project_detail_page', project_id=p.id) }}">{{ p.id }}</a></code></td>
+      <td><a href="{{ url_for('projects.project_detail_page', project_id=p.id) }}">{{ p.name }}</a></td>
       <td>{{ p.mode }}</td>
       <td><span class="badge badge-{{ 'enabled' if p.enabled else 'disabled' }}">{{ 'enabled' if p.enabled else 'disabled' }}</span></td>
       <td>{{ p.bridge_project_ids | length }}</td>

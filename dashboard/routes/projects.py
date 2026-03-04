@@ -23,6 +23,45 @@ def projects_page() -> str:
     return render_template("projects.html", projects=projects, error=error)
 
 
+@bp.get("/projects/<project_id>")
+@login_required
+def project_detail_page(project_id: str):
+    cp = get_cp_client()
+    project = cp.get_project(project_id)
+    if project is None:
+        return render_template(
+            "project_detail.html",
+            project=None,
+            bots=[],
+            tasks=[],
+            vault_items=[],
+            all_projects=[],
+            error="Control plane unavailable or project not found.",
+        ), 502
+
+    all_projects = cp.list_projects() or []
+    bots = cp.list_bots() or []
+    tasks = cp.list_tasks() or []
+    vault_items = cp.list_vault_items(project_id=project_id, limit=100) or []
+
+    project_bot_ids = set(project.get("bot_ids") or [])
+    project_bots = [b for b in bots if str(b.get("id")) in project_bot_ids] if project_bot_ids else []
+    project_tasks = []
+    for t in tasks:
+        md = t.get("metadata") or {}
+        if isinstance(md, dict) and str(md.get("project_id", "")) == str(project_id):
+            project_tasks.append(t)
+    return render_template(
+        "project_detail.html",
+        project=project,
+        bots=project_bots,
+        tasks=project_tasks,
+        vault_items=vault_items,
+        all_projects=all_projects,
+        error=None,
+    )
+
+
 @bp.post("/api/projects")
 @login_required
 def api_create_project():
@@ -45,3 +84,27 @@ def api_create_project():
     if created is None:
         return jsonify({"error": "control plane unavailable"}), 502
     return jsonify(created), 201
+
+
+@bp.post("/api/projects/<project_id>/bridges")
+@login_required
+def api_add_project_bridge(project_id: str):
+    data: dict[str, Any] = request.get_json(force=True) or {}
+    target_project_id = (data.get("target_project_id") or "").strip()
+    if not target_project_id:
+        return jsonify({"error": "target_project_id is required"}), 400
+    cp = get_cp_client()
+    result = cp.add_project_bridge(project_id, target_project_id)
+    if result is None:
+        return jsonify({"error": "control plane unavailable"}), 502
+    return jsonify(result)
+
+
+@bp.delete("/api/projects/<project_id>/bridges/<target_project_id>")
+@login_required
+def api_remove_project_bridge(project_id: str, target_project_id: str):
+    cp = get_cp_client()
+    ok = cp.remove_project_bridge(project_id, target_project_id)
+    if not ok:
+        return jsonify({"error": "control plane unavailable"}), 502
+    return "", 204

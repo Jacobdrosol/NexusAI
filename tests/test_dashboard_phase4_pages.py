@@ -32,6 +32,13 @@ def test_projects_page_loads_when_logged_in(dashboard_client):
     assert b"Projects" in resp.data
 
 
+def test_project_detail_page_handles_unavailable_cp(dashboard_client):
+    _login_admin(dashboard_client)
+    resp = dashboard_client.get("/projects/proj-x")
+    assert resp.status_code == 502
+    assert b"Project Detail" in resp.data
+
+
 def test_chat_page_loads_when_logged_in(dashboard_client):
     _login_admin(dashboard_client)
     resp = dashboard_client.get("/chat")
