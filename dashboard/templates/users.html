@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% set active_page = "users" %}
+{% block title %}Users{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Users</h1>
+  <button class="btn btn-primary" onclick="showAddUser()">+ Invite User</button>
+</div>
+<table>
+  <thead>
+    <tr>
+      <th>Email</th><th>Role</th><th>Active</th><th>Created</th><th>Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for u in users %}
+    <tr>
+      <td>{{ u.email }}</td>
+      <td><span class="badge badge-{{ 'enabled' if u.role == 'admin' else 'disabled' }}">{{ u.role }}</span></td>
+      <td><span class="badge badge-{{ 'enabled' if u.is_active else 'disabled' }}">{{ 'active' if u.is_active else 'inactive' }}</span></td>
+      <td>{{ (u.created_at[:19] if u.created_at else '') | replace("T"," ") }}</td>
+      <td class="actions">
+        <button class="btn btn-sm" onclick="showResetPwd({{ u.id }})">Reset Password</button>
+        {% if u.is_active %}
+        <button class="btn btn-sm btn-danger" onclick="disableUser({{ u.id }})">Disable</button>
+        {% else %}
+        <button class="btn btn-sm" onclick="enableUser({{ u.id }})">Enable</button>
+        {% endif %}
+        <button class="btn btn-sm btn-danger" onclick="deleteUser({{ u.id }}, '{{ u.email }}')">Delete</button>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="5" style="text-align:center;color:#718096;">No users found</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<!-- Add User Modal -->
+<div id="modal-add-user" class="modal" style="display:none;">
+  <div class="modal-content">
+    <h2>Invite User</h2>
+    <form id="form-add-user">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-group"><label>Email</label><input class="form-control" name="email" type="email" required></div>
+      <div class="form-group"><label>Password</label><input class="form-control" name="password" type="password" required minlength="8"></div>
+      <div class="form-group">
+        <label>Role</label>
+        <select class="form-control" name="role">
+          <option value="user">User</option>
+          <option value="admin">Admin</option>
+        </select>
+      </div>
+      <div class="modal-actions">
+        <button type="submit" class="btn btn-primary">Create</button>
+        <button type="button" class="btn" onclick="hideModal('modal-add-user')">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Reset Password Modal -->
+<div id="modal-reset-pwd" class="modal" style="display:none;">
+  <div class="modal-content">
+    <h2>Reset Password</h2>
+    <form id="form-reset-pwd">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="user_id" id="reset-user-id">
+      <div class="form-group"><label>New Password</label><input class="form-control" name="password" type="password" required minlength="8"></div>
+      <div class="modal-actions">
+        <button type="submit" class="btn btn-primary">Reset</button>
+        <button type="button" class="btn" onclick="hideModal('modal-reset-pwd')">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+function showAddUser() { document.getElementById('modal-add-user').style.display='flex'; }
+function showResetPwd(id) {
+  document.getElementById('reset-user-id').value = id;
+  document.getElementById('modal-reset-pwd').style.display='flex';
+}
+function hideModal(id) { document.getElementById(id).style.display='none'; }
+
+function getCsrf() {
+  const el = document.querySelector('input[name=csrf_token]');
+  return el ? el.value : '';
+}
+
+document.getElementById('form-add-user').addEventListener('submit', async function(e) {
+  e.preventDefault();
+  const fd = new FormData(this);
+  const res = await fetch('/api/users', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json','X-CSRFToken': fd.get('csrf_token')},
+    body: JSON.stringify({email:fd.get('email'),password:fd.get('password'),role:fd.get('role')}),
+  });
+  if (res.ok) location.reload(); else alert('Error: ' + (await res.json()).error);
+});
+
+document.getElementById('form-reset-pwd').addEventListener('submit', async function(e) {
+  e.preventDefault();
+  const fd = new FormData(this);
+  const uid = fd.get('user_id');
+  const res = await fetch('/api/users/'+uid, {
+    method: 'PUT',
+    headers: {'Content-Type':'application/json','X-CSRFToken': fd.get('csrf_token')},
+    body: JSON.stringify({password:fd.get('password')}),
+  });
+  if (res.ok) { hideModal('modal-reset-pwd'); alert('Password reset.'); } else alert('Error');
+});
+
+async function disableUser(id) {
+  if (!confirm('Disable this user?')) return;
+  const res = await fetch('/api/users/'+id, {method:'PUT',headers:{'Content-Type':'application/json','X-CSRFToken':getCsrf()},body:JSON.stringify({is_active:false})});
+  if (res.ok) location.reload();
+}
+async function enableUser(id) {
+  const res = await fetch('/api/users/'+id, {method:'PUT',headers:{'Content-Type':'application/json','X-CSRFToken':getCsrf()},body:JSON.stringify({is_active:true})});
+  if (res.ok) location.reload();
+}
+async function deleteUser(id, email) {
+  if (!confirm('Delete user ' + email + '? This cannot be undone.')) return;
+  const res = await fetch('/api/users/'+id, {method:'DELETE',headers:{'X-CSRFToken':getCsrf()}});
+  if (res.ok) location.reload(); else alert((await res.json()).error);
+}
+</script>
+{% endblock %}

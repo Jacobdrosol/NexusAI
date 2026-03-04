@@ -2,28 +2,26 @@
 {% set active_page = "tasks" %}
 {% block title %}Tasks{% endblock %}
 {% block content %}
-<h1>Tasks</h1>
+<div class="page-header">
+  <h1>Tasks</h1>
+</div>
 {% if error %}
-<div class="alert">Error fetching tasks: {{ error }}</div>
+<div class="alert alert-error">{{ error }}</div>
 {% endif %}
 <table>
   <thead>
     <tr>
-      <th>ID</th>
-      <th>Bot</th>
-      <th>Status</th>
-      <th>Created</th>
-      <th>Updated</th>
+      <th>ID</th><th>Bot</th><th>Status</th><th>Created</th><th>Updated</th>
     </tr>
   </thead>
-  <tbody>
+  <tbody id="tasks-tbody">
     {% for t in tasks %}
     <tr class="task-row" onclick="toggleDetail('{{ t.id }}')">
-      <td><code title="{{ t.id }}">{{ t.id[:8] }}…</code></td>
+      <td><code title="{{ t.id }}">{{ t.id }}</code></td>
       <td>{{ t.bot_id }}</td>
       <td><span class="badge badge-{{ t.status }}">{{ t.status }}</span></td>
-      <td>{{ t.created_at[:19] | replace("T"," ") }}</td>
-      <td>{{ t.updated_at[:19] | replace("T"," ") }}</td>
+      <td>{{ (t.created_at[:19] if t.created_at else '') | replace("T"," ") }}</td>
+      <td>{{ (t.updated_at[:19] if t.updated_at else '') | replace("T"," ") }}</td>
     </tr>
     <tr id="detail-{{ t.id }}" class="task-detail">
       <td colspan="5">
@@ -44,6 +42,8 @@
     {% endfor %}
   </tbody>
 </table>
+{% endblock %}
+{% block scripts %}
 <script>
 function toggleDetail(id) {
   const el = document.getElementById('detail-' + id);
