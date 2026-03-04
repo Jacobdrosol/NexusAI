@@ -2,40 +2,88 @@
 {% set active_page = "bots" %}
 {% block title %}Bots{% endblock %}
 {% block content %}
-<h1>Bots</h1>
+<div class="page-header">
+  <h1>Bots</h1>
+  <button class="btn btn-primary" onclick="showAddBot()">+ Add Bot</button>
+</div>
 {% if error %}
-<div class="alert">Error fetching bots: {{ error }}</div>
+<div class="alert alert-error">{{ error }}</div>
 {% endif %}
-<table>
+<table id="bots-table">
   <thead>
     <tr>
-      <th>Name</th>
-      <th>ID</th>
-      <th>Role</th>
-      <th>Priority</th>
-      <th>Enabled</th>
-      <th>Backends</th>
+      <th>Name</th><th>Role</th><th>Priority</th><th>Enabled</th><th>Backends</th><th>Actions</th>
     </tr>
   </thead>
   <tbody>
     {% for b in bots %}
-    <tr>
+    <tr data-id="{{ b.id }}">
       <td>{{ b.name }}</td>
-      <td><code>{{ b.id }}</code></td>
       <td>{{ b.role }}</td>
       <td>{{ b.priority }}</td>
-      <td>
-        {% if b.enabled %}
-          <span class="badge badge-enabled">enabled</span>
-        {% else %}
-          <span class="badge badge-disabled">disabled</span>
-        {% endif %}
+      <td><span class="badge badge-{{ 'enabled' if b.enabled else 'disabled' }}">{{ 'enabled' if b.enabled else 'disabled' }}</span></td>
+      <td>{{ b.backends | length }} backend(s)</td>
+      <td class="actions">
+        <button class="btn btn-sm" onclick="toggleBot({{ b.id }}, {{ 'false' if b.enabled else 'true' }})">
+          {{ 'Disable' if b.enabled else 'Enable' }}
+        </button>
+        <button class="btn btn-sm btn-danger" onclick="deleteBot({{ b.id }})">Delete</button>
       </td>
-      <td>{{ b.backends | length }}</td>
     </tr>
     {% else %}
     <tr><td colspan="6" style="text-align:center;color:#718096;">No bots registered</td></tr>
     {% endfor %}
   </tbody>
 </table>
+
+<!-- Add Bot Modal -->
+<div id="modal-add-bot" class="modal" style="display:none;">
+  <div class="modal-content">
+    <h2>Add Bot</h2>
+    <form id="form-add-bot">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-group"><label>Name</label><input class="form-control" name="name" required></div>
+      <div class="form-group"><label>Role</label><input class="form-control" name="role" placeholder="e.g. assistant"></div>
+      <div class="form-group"><label>Priority</label><input class="form-control" name="priority" type="number" value="0"></div>
+      <div class="modal-actions">
+        <button type="submit" class="btn btn-primary">Add</button>
+        <button type="button" class="btn" onclick="hideModal('modal-add-bot')">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+function showAddBot() { document.getElementById('modal-add-bot').style.display='flex'; }
+function hideModal(id) { document.getElementById(id).style.display='none'; }
+
+document.getElementById('form-add-bot').addEventListener('submit', async function(e) {
+  e.preventDefault();
+  const fd = new FormData(this);
+  const res = await fetch('/api/bots', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json','X-CSRFToken': fd.get('csrf_token')},
+    body: JSON.stringify({name:fd.get('name'),role:fd.get('role'),priority:parseInt(fd.get('priority'))||0}),
+  });
+  if (res.ok) location.reload(); else alert('Error: ' + (await res.json()).error);
+});
+
+async function deleteBot(id) {
+  if (!confirm('Delete this bot?')) return;
+  const csrfToken = document.querySelector('input[name=csrf_token]') ? document.querySelector('input[name=csrf_token]').value : '';
+  const res = await fetch('/api/bots/'+id, {method:'DELETE', headers:{'X-CSRFToken': csrfToken}});
+  if (res.ok) location.reload(); else alert('Delete failed');
+}
+
+async function toggleBot(id, enable) {
+  const csrfToken = document.querySelector('input[name=csrf_token]') ? document.querySelector('input[name=csrf_token]').value : '';
+  const res = await fetch('/api/bots/'+id, {
+    method:'PUT',
+    headers:{'Content-Type':'application/json','X-CSRFToken': csrfToken},
+    body: JSON.stringify({enabled: enable}),
+  });
+  if (res.ok) location.reload(); else alert('Update failed');
+}
+</script>
 {% endblock %}
