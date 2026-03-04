@@ -524,6 +524,118 @@ select.form-control {
   margin-bottom: 0.35rem;
 }
 
+.overview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(280px, 1fr));
+  gap: 0.75rem;
+}
+
+.alert-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.alert-row {
+  border-radius: 8px;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--line);
+}
+
+.alert-row-warning {
+  background: #fffbeb;
+  border-color: #fde68a;
+  color: #92400e;
+}
+
+.alert-row-error {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #991b1b;
+}
+
+.alert-row-info {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+  color: #1e40af;
+}
+
+.quick-links {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(120px, 1fr));
+  gap: 0.5rem;
+}
+
+.quick-link {
+  display: block;
+  text-decoration: none;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.55rem 0.65rem;
+  color: var(--ink);
+  background: #fff;
+}
+
+.quick-link:hover {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+}
+
+.health-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.health-item {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.5rem;
+  background: #fff;
+}
+
+.health-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.35rem;
+}
+
+.mini-bar-row {
+  display: grid;
+  grid-template-columns: 46px 1fr;
+  gap: 0.4rem;
+  align-items: center;
+  margin-bottom: 0.25rem;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.mini-bar {
+  height: 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: #f1f5f9;
+  overflow: hidden;
+}
+
+.mini-fill {
+  height: 100%;
+}
+
+.mini-fill-teal {
+  background: linear-gradient(90deg, #14b8a6, #0f766e);
+}
+
+.mini-fill-amber {
+  background: linear-gradient(90deg, #f59e0b, #b45309);
+}
+
+.mini-note {
+  font-size: 0.76rem;
+  color: #64748b;
+}
+
 @media (max-width: 900px) {
   nav {
     gap: 0.75rem;
@@ -552,6 +664,14 @@ select.form-control {
   }
 
   .graph-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .overview-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .quick-links {
     grid-template-columns: 1fr;
   }
 }

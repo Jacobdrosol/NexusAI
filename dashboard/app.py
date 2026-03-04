@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from flask import Flask, jsonify, render_template
+from flask import Flask, jsonify, render_template, url_for
 from flask_login import LoginManager, login_required
 from flask_wtf.csrf import CSRFProtect
 
@@ -98,8 +98,9 @@ def create_app() -> Flask:
         cp_workers = cp.list_workers()
         cp_bots = cp.list_bots()
         cp_tasks = cp.list_tasks()
+        cp_available = cp_workers is not None or cp_bots is not None or cp_tasks is not None
 
-        if cp_workers is not None or cp_bots is not None or cp_tasks is not None:
+        if cp_available:
             workers = cp_workers or []
             bots = cp_bots or []
             tasks = cp_tasks or []
@@ -111,11 +112,49 @@ def create_app() -> Flask:
             running = sum(1 for t in tasks if t.get("status") == "running")
             completed = sum(1 for t in tasks if t.get("status") == "completed")
             failed = sum(1 for t in tasks if t.get("status") == "failed")
+
+            worker_health = []
+            for w in workers[:12]:
+                m = w.get("metrics") or {}
+                gpu_util = m.get("gpu_utilization") or []
+                gpu_avg = (
+                    (sum(float(x) for x in gpu_util) / len(gpu_util))
+                    if isinstance(gpu_util, list) and gpu_util
+                    else 0.0
+                )
+                worker_health.append(
+                    {
+                        "id": w.get("id"),
+                        "name": w.get("name") or w.get("id"),
+                        "status": w.get("status", "offline"),
+                        "enabled": bool(w.get("enabled", True)),
+                        "load": float(m.get("load") or 0.0),
+                        "queue_depth": int(m.get("queue_depth") or 0),
+                        "gpu_avg": float(gpu_avg),
+                    }
+                )
+
+            recent_activity = []
+            sorted_tasks = sorted(
+                tasks,
+                key=lambda t: str(t.get("updated_at") or t.get("created_at") or ""),
+                reverse=True,
+            )
+            for t in sorted_tasks[:12]:
+                recent_activity.append(
+                    {
+                        "id": t.get("id"),
+                        "status": t.get("status"),
+                        "bot_id": t.get("bot_id"),
+                        "updated_at": t.get("updated_at") or t.get("created_at") or "",
+                    }
+                )
         else:
             db = get_db()
             try:
                 from dashboard.models import Bot, Task, Worker
 
+                workers = db.query(Worker).all()
                 total_workers = db.query(Worker).count()
                 online_workers = db.query(Worker).filter(Worker.status == "online").count()
                 offline_workers = db.query(Worker).filter(Worker.status == "offline").count()
@@ -124,8 +163,69 @@ def create_app() -> Flask:
                 running = db.query(Task).filter(Task.status == "running").count()
                 completed = db.query(Task).filter(Task.status == "completed").count()
                 failed = db.query(Task).filter(Task.status == "failed").count()
+
+                worker_health = []
+                for w in workers[:12]:
+                    m = w.metrics_as_dict()
+                    gpu_util = m.get("gpu_utilization") or []
+                    gpu_avg = (
+                        (sum(float(x) for x in gpu_util) / len(gpu_util))
+                        if isinstance(gpu_util, list) and gpu_util
+                        else 0.0
+                    )
+                    worker_health.append(
+                        {
+                            "id": w.id,
+                            "name": w.name,
+                            "status": w.status,
+                            "enabled": bool(w.enabled),
+                            "load": float(m.get("load") or 0.0),
+                            "queue_depth": int(m.get("queue_depth") or 0),
+                            "gpu_avg": float(gpu_avg),
+                        }
+                    )
+
+                task_rows = db.query(Task).order_by(Task.updated_at.desc()).limit(12).all()
+                recent_activity = []
+                for t in task_rows:
+                    recent_activity.append(
+                        {
+                            "id": t.id,
+                            "status": t.status,
+                            "bot_id": t.bot_id,
+                            "updated_at": t.updated_at.isoformat() if t.updated_at else "",
+                        }
+                    )
             finally:
                 db.close()
+
+        system_alerts = []
+        if not cp_available:
+            system_alerts.append(
+                {
+                    "level": "warning",
+                    "message": "Control plane is unavailable; overview is using local fallback data.",
+                }
+            )
+        if offline_workers > 0:
+            system_alerts.append(
+                {"level": "warning", "message": f"{offline_workers} worker(s) are offline."}
+            )
+        if failed > 0:
+            system_alerts.append(
+                {"level": "error", "message": f"{failed} task(s) are currently in failed state."}
+            )
+        if not system_alerts:
+            system_alerts.append({"level": "info", "message": "No critical alerts. System is stable."})
+
+        quick_links = [
+            {"label": "Open Tasks", "href": url_for("tasks.tasks_page")},
+            {"label": "Manage Workers", "href": url_for("workers.workers_page")},
+            {"label": "Configure Bots", "href": url_for("bots.bots_page")},
+            {"label": "Project Dashboard", "href": url_for("projects.projects_page")},
+            {"label": "Chat Workspace", "href": url_for("chat.chat_page")},
+            {"label": "Vault Browser", "href": url_for("vault.vault_page")},
+        ]
 
         return render_template(
             "index.html",
@@ -139,6 +239,10 @@ def create_app() -> Flask:
                 "tasks_completed": completed,
                 "tasks_failed": failed,
             },
+            worker_health=worker_health,
+            recent_activity=recent_activity,
+            system_alerts=system_alerts,
+            quick_links=quick_links,
         )
 
     @app.context_processor

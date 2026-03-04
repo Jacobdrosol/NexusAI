@@ -129,3 +129,13 @@ def test_worker_live_endpoint_returns_payload(dashboard_client):
     data = resp.get_json()
     assert "worker" in data
     assert "running_tasks" in data
+
+
+def test_overview_page_shows_enhanced_sections(dashboard_client):
+    _login_admin(dashboard_client)
+    resp = dashboard_client.get("/")
+    assert resp.status_code == 200
+    assert b"System Alerts" in resp.data
+    assert b"Recent Activity" in resp.data
+    assert b"Worker Health" in resp.data
+    assert b"Quick Links" in resp.data

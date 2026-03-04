@@ -441,7 +441,7 @@ These are confirmed issues that must be fixed before serious testing:
 - [x] Fix control plane port setting (Bug #2) — **RESOLVED**
 
 #### 4h. Overview Page Enhancement
-- [ ] Recent activity feed, worker health mini-bars, quick links, system alerts
+- [x] Recent activity feed, worker health mini-bars, quick links, system alerts
 
 ### Phase 5 — Agentic Workflow
 
@@ -1034,3 +1034,35 @@ NexusAI/
 
 - `pytest -q tests/test_dashboard_phase4_pages.py tests/test_dashboard_smoke.py tests/test_dashboard_onboarding.py` → **21 passed**
 - `pytest -q` → **95 passed**
+
+---
+
+### 2026-03-05 02:28 — Phase 4: Overview Enhancement (Slice 14)
+
+**Status:** Overview now includes operational insight panels and actionable navigation.
+
+**Changes made:**
+
+- Enhanced overview data assembly in `dashboard/app.py`:
+  - worker health summary metrics (load, GPU avg, queue depth)
+  - recent activity feed (latest tasks)
+  - system alerts (CP availability, offline workers, failed tasks)
+  - quick links
+- Upgraded overview template (`dashboard/templates/index.html`) with:
+  - System Alerts panel
+  - Quick Links panel
+  - Worker Health mini-bars panel
+  - Recent Activity table
+- Added supporting styles:
+  - overview grid layout
+  - alert row variants
+  - quick-link cards
+  - worker mini-bar components
+  - (`dashboard/static/style.css`)
+- Added dashboard test for enhanced overview sections:
+  - `tests/test_dashboard_phase4_pages.py`
+
+**Validation:**
+
+- `pytest -q tests/test_dashboard_phase4_pages.py tests/test_dashboard_smoke.py tests/test_dashboard_onboarding.py` → **22 passed**
+- `pytest -q` → **96 passed**

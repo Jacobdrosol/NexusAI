@@ -33,6 +33,70 @@
     <div class="card-value card-red" id="stat-tasks-failed">{{ stats.tasks_failed }}</div>
   </div>
 </div>
+
+<div class="overview-grid">
+  <section class="panel">
+    <h2 class="panel-title">System Alerts</h2>
+    <div class="alert-list">
+      {% for a in system_alerts %}
+      <div class="alert-row alert-row-{{ a.level }}">{{ a.message }}</div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2 class="panel-title">Quick Links</h2>
+    <div class="quick-links">
+      {% for q in quick_links %}
+      <a class="quick-link" href="{{ q.href }}">{{ q.label }}</a>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2 class="panel-title">Worker Health</h2>
+    <div class="health-list">
+      {% for w in worker_health %}
+      <div class="health-item">
+        <div class="health-header">
+          <strong><a href="{{ url_for('workers.worker_detail_page', worker_id=w.id) }}">{{ w.name }}</a></strong>
+          <span class="badge badge-{{ w.status }}">{{ w.status }}</span>
+        </div>
+        <div class="mini-bar-row">
+          <span>Load</span>
+          <div class="mini-bar"><div class="mini-fill mini-fill-teal" style="width: {{ [w.load, 100]|min }}%;"></div></div>
+        </div>
+        <div class="mini-bar-row">
+          <span>GPU</span>
+          <div class="mini-bar"><div class="mini-fill mini-fill-amber" style="width: {{ [w.gpu_avg, 100]|min }}%;"></div></div>
+        </div>
+        <div class="mini-note">Queue depth: {{ w.queue_depth }}</div>
+      </div>
+      {% else %}
+      <div class="empty">No workers available</div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2 class="panel-title">Recent Activity</h2>
+    <table>
+      <thead><tr><th>Task</th><th>Bot</th><th>Status</th><th>Updated</th></tr></thead>
+      <tbody>
+        {% for a in recent_activity %}
+        <tr>
+          <td><code>{{ a.id }}</code></td>
+          <td>{{ a.bot_id }}</td>
+          <td><span class="badge badge-{{ a.status }}">{{ a.status }}</span></td>
+          <td>{{ (a.updated_at[:19] if a.updated_at else '') | replace('T', ' ') }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" class="empty">No recent activity</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+</div>
 {% endblock %}
 {% block scripts %}
 <script>

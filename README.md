@@ -101,6 +101,7 @@ Workers now include a detail view at `/workers/<worker_id>` and Settings include
 Worker detail now includes live resource graphs (load, queue, GPU utilization) with periodic polling.
 Bot detail (`/bots/<bot_id>`) now includes backend chain editing (add/edit/remove/reorder) with model/worker/key pickers and a task kanban/detail modal.
 Projects now include a detail page at `/projects/<project_id>` with bridge management and project-scoped bots/tasks/vault panels.
+Overview now includes system alerts, worker health mini-bars, quick links, and a recent activity feed.
 
 ---
 
