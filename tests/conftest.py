@@ -11,7 +11,7 @@ def anyio_backend():
 
 
 @pytest_asyncio.fixture
-async def cp_app():
+async def cp_app(tmp_path):
     """Create a control plane FastAPI app with empty registries (no YAML loading)."""
     from control_plane.registry.worker_registry import WorkerRegistry
     from control_plane.registry.bot_registry import BotRegistry
@@ -28,7 +28,7 @@ async def cp_app():
     worker_registry = WorkerRegistry()
     bot_registry = BotRegistry()
     scheduler = Scheduler(bot_registry, worker_registry)
-    task_manager = TaskManager(scheduler)
+    task_manager = TaskManager(scheduler, db_path=str(tmp_path / "tasks.db"))
 
     app.state.worker_registry = worker_registry
     app.state.bot_registry = bot_registry
