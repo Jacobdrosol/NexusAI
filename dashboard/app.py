@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from flask import Flask, jsonify, redirect, render_template, url_for
+from flask import Flask, jsonify, render_template
 from flask_login import LoginManager, login_required
 from flask_wtf.csrf import CSRFProtect
 
@@ -13,6 +13,7 @@ from dashboard.models import User
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 _STATIC_DIR = Path(__file__).parent / "static"
+_DATA_DIR = Path(__file__).parent.parent / "data"
 
 
 def create_app() -> Flask:
@@ -49,6 +50,10 @@ def create_app() -> Flask:
 
     # Initialise database
     init_db()
+
+    # Initialise settings singleton so dashboard/settings.py can use it
+    from shared.settings_manager import SettingsManager as _SM
+    _SM.instance(db_path=str(_DATA_DIR / "nexusai.db"))
 
     # Register blueprints
     from dashboard.auth import bp as auth_bp
