@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from flask import Flask, redirect, render_template, url_for
+from flask import Flask, jsonify, redirect, render_template, url_for
 from flask_login import LoginManager, login_required
 from flask_wtf.csrf import CSRFProtect
 
@@ -111,6 +111,10 @@ def create_app() -> Flask:
         )
 
     app.register_blueprint(main_bp)
+
+    @app.get("/health")
+    def health():
+        return jsonify({"status": "ok"})
 
     return app
 
