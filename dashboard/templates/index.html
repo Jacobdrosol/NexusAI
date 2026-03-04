@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% set active_page = "overview" %}
+{% block title %}Overview{% endblock %}
+{% block content %}
+<h1>Overview</h1>
+<div class="cards">
+  <div class="card">
+    <div class="card-label">Workers online</div>
+    <div class="card-value card-green" id="stat-workers-online">{{ stats.workers_online }}</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Workers offline</div>
+    <div class="card-value card-gray" id="stat-workers-offline">{{ stats.workers_offline }}</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Bots active</div>
+    <div class="card-value card-blue" id="stat-bots-active">{{ stats.bots_active }}</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Tasks queued</div>
+    <div class="card-value card-yellow" id="stat-tasks-queued">{{ stats.tasks_queued }}</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Tasks running</div>
+    <div class="card-value card-blue" id="stat-tasks-running">{{ stats.tasks_running }}</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Tasks completed</div>
+    <div class="card-value card-green" id="stat-tasks-completed">{{ stats.tasks_completed }}</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Tasks failed</div>
+    <div class="card-value card-red" id="stat-tasks-failed">{{ stats.tasks_failed }}</div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const evtSrc = new EventSource("/events");
+evtSrc.onmessage = function(e) {
+  const d = JSON.parse(e.data);
+  document.getElementById("stat-workers-online").textContent  = d.workers.online;
+  document.getElementById("stat-workers-offline").textContent = d.workers.offline;
+  document.getElementById("stat-bots-active").textContent     = d.bots.active;
+  document.getElementById("stat-tasks-queued").textContent    = d.tasks.queued;
+  document.getElementById("stat-tasks-running").textContent   = d.tasks.running;
+  document.getElementById("stat-tasks-completed").textContent = d.tasks.completed;
+  document.getElementById("stat-tasks-failed").textContent    = d.tasks.failed;
+};
+</script>
+{% endblock %}

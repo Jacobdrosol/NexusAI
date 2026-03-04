@@ -1,0 +1,49 @@
+{% extends "setup/base_setup.html" %}
+{% block content %}
+<div class="setup-title">Welcome to NexusAI 👋</div>
+<p class="setup-subtitle">
+  Let's get your installation up and running in just a few steps.
+</p>
+
+<p style="color:#a0aec0;font-size:0.9rem;margin-bottom:1.25rem;">
+  NexusAI is a modular, distributed platform for orchestrating large language
+  models, workers, and bots. Here's what you can do with it:
+</p>
+
+<ul style="list-style:none;padding:0;margin-bottom:1.75rem;display:flex;flex-direction:column;gap:0.75rem;">
+  <li style="display:flex;gap:0.75rem;align-items:flex-start;">
+    <span style="color:#7c3aed;font-size:1rem;margin-top:0.1rem;">⚙️</span>
+    <span style="color:#a0aec0;font-size:0.9rem;">
+      <strong style="color:#e0e0e0;">Orchestrate LLMs</strong> — route prompts to local or cloud models
+      (Ollama, OpenAI, Claude, Gemini, and more).
+    </span>
+  </li>
+  <li style="display:flex;gap:0.75rem;align-items:flex-start;">
+    <span style="color:#7c3aed;font-size:1rem;margin-top:0.1rem;">🤖</span>
+    <span style="color:#a0aec0;font-size:0.9rem;">
+      <strong style="color:#e0e0e0;">Manage Workers</strong> — register GPU / CPU worker agents and
+      monitor their load in real time.
+    </span>
+  </li>
+  <li style="display:flex;gap:0.75rem;align-items:flex-start;">
+    <span style="color:#7c3aed;font-size:1rem;margin-top:0.1rem;">🧩</span>
+    <span style="color:#a0aec0;font-size:0.9rem;">
+      <strong style="color:#e0e0e0;">Deploy Bots</strong> — configure intelligent bots with custom
+      roles, priorities, and backend chains.
+    </span>
+  </li>
+  <li style="display:flex;gap:0.75rem;align-items:flex-start;">
+    <span style="color:#7c3aed;font-size:1rem;margin-top:0.1rem;">📊</span>
+    <span style="color:#a0aec0;font-size:0.9rem;">
+      <strong style="color:#e0e0e0;">Track Tasks</strong> — observe queued, running, and completed
+      inference tasks from one dashboard.
+    </span>
+  </li>
+</ul>
+
+<form method="post" action="/setup/step1">
+  <div class="btn-group">
+    <button type="submit" class="btn btn-primary">Get Started →</button>
+  </div>
+</form>
+{% endblock %}

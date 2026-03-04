@@ -1,0 +1,49 @@
+{% extends "setup/base_setup.html" %}
+{% block content %}
+<div class="setup-title">Review &amp; Finish 🎉</div>
+<p class="setup-subtitle">
+  Here's a summary of your configuration. Click "Launch Dashboard" to get started.
+</p>
+
+<div style="background:#12141e;border:1px solid #2d3045;border-radius:8px;padding:1rem 1.25rem;margin-bottom:1.75rem;">
+  <div class="summary-row">
+    <span class="summary-key">Admin email</span>
+    <span class="summary-val">{{ wizard.admin_email or '—' }}</span>
+  </div>
+  <div class="summary-row">
+    <span class="summary-key">Control plane</span>
+    <span class="summary-val">
+      {{ wizard.cp_host or 'localhost' }}:{{ wizard.cp_port or 8080 }}
+    </span>
+  </div>
+  <div class="summary-row">
+    <span class="summary-key">First worker</span>
+    <span class="summary-val">
+      {% if wizard.worker_name %}
+        {{ wizard.worker_name }} ({{ wizard.worker_host }}:{{ wizard.worker_port }})
+      {% else %}
+        <span style="color:#718096;">None added</span>
+      {% endif %}
+    </span>
+  </div>
+  <div class="summary-row">
+    <span class="summary-key">Site name</span>
+    <span class="summary-val">{{ wizard.site_name or 'NexusAI' }}</span>
+  </div>
+  {% if wizard.tagline %}
+  <div class="summary-row">
+    <span class="summary-key">Tagline</span>
+    <span class="summary-val">{{ wizard.tagline }}</span>
+  </div>
+  {% endif %}
+</div>
+
+<form method="post" action="/setup/step5">
+  <div class="btn-group" style="flex-wrap:wrap;">
+    <button type="submit" class="btn btn-primary">Launch Dashboard →</button>
+    <a href="/setup/download-compose" class="btn btn-secondary" download="docker-compose.yml">
+      ⬇ Download docker-compose.yml
+    </a>
+  </div>
+</form>
+{% endblock %}

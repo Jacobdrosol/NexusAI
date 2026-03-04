@@ -2,43 +2,32 @@
 {% set active_page = "workers" %}
 {% block title %}Workers{% endblock %}
 {% block content %}
-<h1>Workers</h1>
+<div class="page-header">
+  <h1>Workers</h1>
+  <button class="btn btn-primary" onclick="showAddWorker()">+ Add Worker</button>
+</div>
 {% if error %}
-<div class="alert">Error fetching workers: {{ error }}</div>
+<div class="alert alert-error">{{ error }}</div>
 {% endif %}
-<table>
+<table id="workers-table">
   <thead>
     <tr>
-      <th>Name</th>
-      <th>ID</th>
-      <th>Host</th>
-      <th>Status</th>
-      <th>Load</th>
-      <th>GPU Utilization</th>
+      <th>Name</th><th>Host</th><th>Status</th><th>Enabled</th><th>Capabilities</th><th>Actions</th>
     </tr>
   </thead>
   <tbody>
     {% for w in workers %}
-    <tr>
+    <tr data-id="{{ w.id }}">
       <td>{{ w.name }}</td>
-      <td><code>{{ w.id }}</code></td>
       <td>{{ w.host }}:{{ w.port }}</td>
       <td><span class="badge badge-{{ w.status }}">{{ w.status }}</span></td>
-      <td class="metrics">
-        {% if w.metrics and w.metrics.load is not none %}
-          {{ "%.1f"|format(w.metrics.load * 100) }}%
-        {% else %}
-          –
-        {% endif %}
-      </td>
-      <td class="metrics">
-        {% if w.metrics and w.metrics.gpu_utilization %}
-          {% for g in w.metrics.gpu_utilization %}
-            GPU{{ loop.index0 }}: {{ "%.1f"|format(g) }}%{% if not loop.last %}, {% endif %}
-          {% endfor %}
-        {% else %}
-          –
-        {% endif %}
+      <td><span class="badge badge-{{ 'enabled' if w.enabled else 'disabled' }}">{{ 'enabled' if w.enabled else 'disabled' }}</span></td>
+      <td class="metrics">{{ w.capabilities | length }} cap(s)</td>
+      <td class="actions">
+        <button class="btn btn-sm" onclick="toggleWorker({{ w.id }}, {{ 'false' if w.enabled else 'true' }})">
+          {{ 'Disable' if w.enabled else 'Enable' }}
+        </button>
+        <button class="btn btn-sm btn-danger" onclick="deleteWorker({{ w.id }})">Delete</button>
       </td>
     </tr>
     {% else %}
@@ -46,4 +35,62 @@
     {% endfor %}
   </tbody>
 </table>
+
+<!-- Add Worker Modal -->
+<div id="modal-add-worker" class="modal" style="display:none;">
+  <div class="modal-content">
+    <h2>Add Worker</h2>
+    <form id="form-add-worker">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-group"><label>Name</label><input class="form-control" name="name" required></div>
+      <div class="form-group"><label>Host</label><input class="form-control" name="host" required></div>
+      <div class="form-group"><label>Port</label><input class="form-control" name="port" type="number" value="8001"></div>
+      <div class="modal-actions">
+        <button type="submit" class="btn btn-primary">Add</button>
+        <button type="button" class="btn" onclick="hideModal('modal-add-worker')">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+function showAddWorker() { document.getElementById('modal-add-worker').style.display='flex'; }
+function hideModal(id) { document.getElementById(id).style.display='none'; }
+
+document.getElementById('form-add-worker').addEventListener('submit', async function(e) {
+  e.preventDefault();
+  const fd = new FormData(this);
+  const res = await fetch('/api/workers', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json','X-CSRFToken': fd.get('csrf_token')},
+    body: JSON.stringify({name:fd.get('name'),host:fd.get('host'),port:parseInt(fd.get('port'))}),
+  });
+  if (res.ok) location.reload(); else alert('Error: ' + (await res.json()).error);
+});
+
+function getCsrf() {
+  const el = document.querySelector('input[name=csrf_token]');
+  return el ? el.value : '';
+}
+
+async function deleteWorker(id) {
+  if (!confirm('Delete this worker?')) return;
+  const res = await fetch('/api/workers/'+id, {method:'DELETE', headers:{'X-CSRFToken': getCsrf()}});
+  if (res.ok) location.reload(); else alert('Delete failed');
+}
+
+async function toggleWorker(id, enable) {
+  const res = await fetch('/api/workers/'+id, {
+    method:'PUT',
+    headers:{'Content-Type':'application/json','X-CSRFToken': getCsrf()},
+    body: JSON.stringify({enabled: enable}),
+  });
+  if (res.ok) location.reload(); else alert('Update failed');
+}
+
+// SSE live updates — refresh table every time an event arrives
+const evtSrc = new EventSource("/events");
+evtSrc.onmessage = function() { /* optionally refresh table */ };
+</script>
 {% endblock %}
