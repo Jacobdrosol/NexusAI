@@ -53,7 +53,7 @@ async def infer(request: Request, body: InferRequest) -> dict:
             return await claude_backend.infer(
                 model=body.model,
                 messages=body.messages,
-                params=dict(params),
+                params=params,
                 api_key=api_key,
             )
         elif body.provider == "gemini":

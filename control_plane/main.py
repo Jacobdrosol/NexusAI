@@ -43,7 +43,7 @@ async def lifespan(app: FastAPI):
     bot_configs = ConfigLoader.load_all_from_dir(bots_dir)
 
     worker_registry.load_from_configs(worker_configs)
-    worker_ids = {w.id for w in worker_registry._workers.values()}
+    worker_ids = set(await worker_registry.get_worker_ids())
     bot_registry.load_from_configs(bot_configs, worker_ids)
 
     # Initialize scheduler and task manager

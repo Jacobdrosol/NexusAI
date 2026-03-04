@@ -65,6 +65,10 @@ class WorkerRegistry:
             del self._workers[worker_id]
             self._last_heartbeat.pop(worker_id, None)
 
+    async def get_worker_ids(self) -> List[str]:
+        async with self._lock:
+            return list(self._workers.keys())
+
     async def get_last_heartbeat(self, worker_id: str) -> Optional[datetime]:
         async with self._lock:
             return self._last_heartbeat.get(worker_id)

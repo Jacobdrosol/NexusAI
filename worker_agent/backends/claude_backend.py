@@ -9,13 +9,13 @@ async def infer(
     params: Dict,
     api_key: str,
 ) -> Dict[str, Any]:
-    max_tokens = params.pop("max_tokens", 1024)
+    max_tokens = params.get("max_tokens", 1024)
     body: Dict[str, Any] = {
         "model": model,
         "max_tokens": max_tokens,
         "messages": messages,
     }
-    body.update(params)
+    body.update({k: v for k, v in params.items() if k != "max_tokens"})
     async with httpx.AsyncClient(timeout=120.0) as client:
         response = await client.post(
             "https://api.anthropic.com/v1/messages",

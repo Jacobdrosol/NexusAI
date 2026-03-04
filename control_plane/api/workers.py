@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
@@ -10,7 +10,7 @@ router = APIRouter(prefix="/v1/workers", tags=["workers"])
 
 
 class HeartbeatRequest(BaseModel):
-    metrics: WorkerMetrics | None = None
+    metrics: Optional[WorkerMetrics] = None
 
 
 @router.post("", response_model=Worker)
@@ -48,7 +48,7 @@ async def remove_worker(worker_id: str, request: Request) -> dict:
 
 
 @router.post("/{worker_id}/heartbeat")
-async def heartbeat(worker_id: str, request: Request, body: HeartbeatRequest | None = None) -> dict:
+async def heartbeat(worker_id: str, request: Request, body: Optional[HeartbeatRequest] = None) -> dict:
     worker_registry = request.app.state.worker_registry
     try:
         await worker_registry.update_heartbeat(worker_id)
