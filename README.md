@@ -17,6 +17,12 @@
 
 ## Architecture
 
+| Service | Framework | Port |
+|---|---|---|
+| `control_plane` | FastAPI | `8000` |
+| `worker_agent` | FastAPI (uvicorn) | `8001` |
+| `dashboard` | Flask / Gunicorn | `5000` |
+
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                      NexusAI Control Plane                   │
@@ -36,11 +42,13 @@
      │  Worker Agent   │       │  Worker Agent     │   │  Cloud APIs     │
      │  (Ollama/vLLM)  │       │  (LM Studio)      │   │ (OpenAI/Claude/ │
      │  GPU Machine A  │       │  GPU Machine B    │   │  Gemini)        │
+     │  port 8001      │       │  port 8001        │   │                 │
      └─────────────────┘       └──────────────────┘   └─────────────────┘
-              │
-     ┌────────▼────────┐
+
+     ┌─────────────────┐
      │   Dashboard     │
-     │  (port 8080)    │
+     │  Flask/Gunicorn │
+     │  port 5000      │
      └─────────────────┘
 ```
 
@@ -75,17 +83,51 @@ WORKER_CONFIG_PATH=config/workers/example_worker.yaml \
 CONTROL_PLANE_URL=http://localhost:8000 \
 python -m worker_agent.main
 # or
-uvicorn worker_agent.main:app --host 0.0.0.0 --port 8080
+uvicorn worker_agent.main:app --host 0.0.0.0 --port 8001
 ```
 
 ### 5. Run the Dashboard
 
 ```bash
 CONTROL_PLANE_URL=http://localhost:8000 \
-uvicorn dashboard.main:app --host 0.0.0.0 --port 8081
+gunicorn --bind 0.0.0.0:5000 --workers 2 "dashboard.app:create_app()"
 ```
 
-Then open http://localhost:8081/dashboard in your browser.
+Then open http://localhost:5000 in your browser.
+
+---
+
+## Environment Variables
+
+Copy `.env.example` to `.env` and set the following variables before starting the stack:
+
+| Variable | Default | Description |
+|---|---|---|
+| `NEXUSAI_SECRET_KEY` | `dev-secret-change-in-production` | Flask session secret key — **must be changed in production** |
+| `DATABASE_URL` | `sqlite:///data/nexusai.db` | SQLAlchemy connection URL (SQLite or PostgreSQL) |
+| `CONTROL_PLANE_URL` | — | URL the dashboard and worker use to reach the control plane, e.g. `http://localhost:8000` |
+| `NEXUS_CONFIG_PATH` | — | Path to `nexus_config.yaml` for the control plane |
+| `WORKER_CONFIG_PATH` | — | Path to a worker YAML file for the worker agent |
+| `DASHBOARD_PORT` | `5000` | Port the dashboard listens on (used when running directly) |
+| `OPENAI_API_KEY` | — | OpenAI API key for cloud LLM backends |
+| `ANTHROPIC_API_KEY` | — | Anthropic Claude API key |
+| `GEMINI_API_KEY` | — | Google Gemini API key |
+
+---
+
+## First-Run Onboarding
+
+On the first visit to the dashboard (before any admin account exists), NexusAI presents a **5-step onboarding wizard** at `/onboarding`:
+
+| Step | Path | Description |
+|---|---|---|
+| 1 | `/onboarding/step1` | **Welcome** — introduction screen |
+| 2 | `/onboarding/step2` | **Admin Account** — create the first admin user (email + password) |
+| 3 | `/onboarding/step3` | **LLM Backend** — choose the default LLM provider (`ollama`, `openai`, `claude`, `gemini`) |
+| 4 | `/onboarding/step4` | **Worker Node** — optionally register the first compute worker |
+| 5 | `/onboarding/step5` | **Complete** — wizard summary and redirect to login |
+
+Once an admin account exists every `/onboarding` request redirects to `/login`.
 
 ---
 
@@ -103,7 +145,7 @@ control_plane:
 
 dashboard:
   host: 0.0.0.0
-  port: 8080
+  port: 5000
   enabled: true
 
 logging:
@@ -117,7 +159,7 @@ logging:
 id: worker-main-4070
 name: Main 4070 Box
 host: 192.168.1.10
-port: 8080
+port: 8001
 capabilities:
   - type: llm
     provider: ollama
@@ -216,17 +258,17 @@ curl -X POST http://localhost:8000/v1/workers/{worker_id}/heartbeat
 curl -X DELETE http://localhost:8000/v1/workers/{worker_id}
 ```
 
-### Worker Agent (`http://localhost:8080`)
+### Worker Agent (`http://localhost:8001`)
 
 ```bash
 # Health check
-curl http://localhost:8080/health
+curl http://localhost:8001/health
 
 # Get capabilities
-curl http://localhost:8080/capabilities
+curl http://localhost:8001/capabilities
 
 # Run inference
-curl -X POST http://localhost:8080/infer \
+curl -X POST http://localhost:8001/infer \
   -H "Content-Type: application/json" \
   -d '{"model": "llama3-8b-instruct-q4", "provider": "ollama", "messages": [{"role": "user", "content": "Hi"}]}'
 ```
@@ -241,7 +283,7 @@ curl -X POST http://localhost:8080/infer \
 id: worker-gpu-box-2
 name: GPU Box 2
 host: 192.168.1.20
-port: 8080
+port: 8001
 capabilities:
   - type: llm
     provider: ollama
@@ -257,7 +299,7 @@ capabilities:
 ```bash
 WORKER_CONFIG_PATH=config/workers/gpu-box-2.yaml \
 CONTROL_PLANE_URL=http://<control-plane-ip>:8000 \
-uvicorn worker_agent.main:app --host 0.0.0.0 --port 8080
+uvicorn worker_agent.main:app --host 0.0.0.0 --port 8001
 ```
 
 The worker will self-register and begin sending heartbeats.
