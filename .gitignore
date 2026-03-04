@@ -4,6 +4,7 @@ __pycache__/
 *.so
 .env
 .env.*
+!.env.example
 *.log
 data/*.log
 data/*.db
