@@ -42,6 +42,7 @@
 </ul>
 
 <form method="post" action="/setup/step1">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <div class="btn-group">
     <button type="submit" class="btn btn-primary">Get Started →</button>
   </div>

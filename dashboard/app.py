@@ -52,6 +52,7 @@ def create_app() -> Flask:
 
     # Register blueprints
     from dashboard.auth import bp as auth_bp
+    from dashboard.onboarding import bp as onboarding_bp
     from dashboard.routes.bots import bp as bots_bp
     from dashboard.routes.events import bp as events_bp
     from dashboard.routes.tasks import bp as tasks_bp
@@ -60,6 +61,7 @@ def create_app() -> Flask:
     from dashboard.settings import bp as settings_bp
 
     app.register_blueprint(auth_bp)
+    app.register_blueprint(onboarding_bp)
     app.register_blueprint(workers_bp)
     app.register_blueprint(bots_bp)
     app.register_blueprint(tasks_bp)

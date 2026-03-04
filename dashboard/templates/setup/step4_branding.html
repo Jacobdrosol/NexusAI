@@ -6,6 +6,7 @@
 </p>
 
 <form method="post" action="/setup/step4" novalidate>
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <div class="form-group">
     <label for="site_name">Site / App Name</label>
     <input
