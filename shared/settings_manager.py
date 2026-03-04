@@ -61,7 +61,7 @@ _DEFAULTS: List[tuple] = [
      "Short subtitle displayed on the dashboard."),
     ("control_plane_host", "localhost", "string", "general", "Control Plane Host",
      "Hostname or IP of the control-plane service."),
-    ("control_plane_port", "8080", "int", "general", "Control Plane Port",
+    ("control_plane_port", "8000", "int", "general", "Control Plane Port",
      "TCP port the control-plane listens on."),
     # Auth
     ("session_secret_key", "", "secret", "auth", "Session Secret Key",

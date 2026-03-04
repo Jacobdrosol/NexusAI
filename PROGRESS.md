@@ -374,12 +374,12 @@ These are confirmed issues that must be fixed before serious testing:
 
 ### Phase 1 — Fix Foundation
 
-- [ ] Fix `shared/` Docker context — ensure all Dockerfiles copy `shared/` correctly
-- [ ] Fix settings port mismatch — change default `control_plane_port` to `"8000"`
-- [ ] Fix `Bot` schema mismatch — add `routing_rules` to shared Pydantic `Bot` model (optional field)
-- [ ] Fix `Worker` schema mismatch — add `enabled` to shared Pydantic `Worker` model
-- [ ] Add `api_key_ref` resolution in Scheduler — look up key from env-var or settings store
-- [ ] Verify all 3 services start, communicate, and pass health checks with `docker compose up`
+- [x] Fix `shared/` Docker context — ensure all Dockerfiles copy `shared/` correctly
+- [x] Fix settings port mismatch — change default `control_plane_port` to `"8000"`
+- [x] Fix `Bot` schema mismatch — add `routing_rules` to shared Pydantic `Bot` model (optional field)
+- [x] Fix `Worker` schema mismatch — add `enabled` to shared Pydantic `Worker` model
+- [x] Add `api_key_ref` resolution in Scheduler — look up key from env-var or settings store
+- [x] Verify all 3 services start, communicate, and pass health checks with `docker compose up`
 
 ### Phase 2 — Worker Node Standalone Program (`nexus-worker`)
 
@@ -592,3 +592,23 @@ NexusAI/
 
 **Next:** Begin Phase 1 — Fix Foundation (Docker shared/ mounting, port mismatch, schema mismatches)  
 *This document is maintained by the development team and updated after every pull request. Last updated: 2026-03-04 18:26:59*
+
+---
+
+### 2026-03-04 18:43 — Phase 1: Fix Foundation
+
+**Status:** All 6 Phase 1 foundation issues resolved.
+
+**Changes made:**
+
+- **Fix 1 — Dockerfiles rewritten** (`control_plane/Dockerfile`, `worker_agent/Dockerfile`, `dashboard/Dockerfile`): Replaced `COPY . .` with explicit `COPY shared/ shared/`, `COPY <service>/ <service>/`, and `COPY config/ config/` lines. This makes it unambiguous that `shared/` is always present in every service image and avoids any future confusion about build context.
+
+- **Fix 2 — Settings port corrected** (`shared/settings_manager.py`): Changed `control_plane_port` default value from `"8080"` to `"8000"`. The dashboard's `CPClient` reads this setting, so with the wrong port every CP API call was silently failing and falling back to the local DB.
+
+- **Fix 3 — `Bot` Pydantic model updated** (`shared/models.py`): Added `system_prompt: Optional[str] = None` and `routing_rules: Optional[Any] = None` to the shared `Bot` model so it matches the dashboard ORM `Bot` and can round-trip without schema errors.
+
+- **Fix 4 — `Worker` Pydantic model updated** (`shared/models.py`): Added `enabled: bool = True` to the shared `Worker` model so it matches the dashboard ORM `Worker`.
+
+- **Fix 5 — Scheduler error messages improved** (`control_plane/scheduler/scheduler.py`): Updated `_call_openai`, `_call_claude`, and `_call_gemini` to use `.strip()` on the retrieved API key and to emit actionable error messages that name the exact environment variable the user needs to set.
+
+- **Tests added** (`tests/test_shared_models.py`): Added `test_worker_model_has_enabled_field`, `test_bot_model_has_routing_rules_field`, and `test_bot_model_has_system_prompt_field` to verify the new model fields.

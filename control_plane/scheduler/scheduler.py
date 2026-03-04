@@ -98,9 +98,12 @@ class Scheduler:
 
     async def _call_openai(self, backend: BackendConfig, payload: Any) -> Any:
         api_key_ref = backend.api_key_ref or "OPENAI_API_KEY"
-        api_key = os.environ.get(api_key_ref, "")
+        api_key = os.environ.get(api_key_ref, "").strip()
         if not api_key:
-            raise BackendError(f"API key not found in env var: {api_key_ref}")
+            raise BackendError(
+                f"API key not found. Set the environment variable '{api_key_ref}' "
+                f"with your OpenAI API key before starting the service."
+            )
         messages = (
             payload
             if isinstance(payload, list)
@@ -125,9 +128,12 @@ class Scheduler:
 
     async def _call_claude(self, backend: BackendConfig, payload: Any) -> Any:
         api_key_ref = backend.api_key_ref or "ANTHROPIC_API_KEY"
-        api_key = os.environ.get(api_key_ref, "")
+        api_key = os.environ.get(api_key_ref, "").strip()
         if not api_key:
-            raise BackendError(f"API key not found in env var: {api_key_ref}")
+            raise BackendError(
+                f"API key not found. Set the environment variable '{api_key_ref}' "
+                f"with your Anthropic API key before starting the service."
+            )
         messages = (
             payload
             if isinstance(payload, list)
@@ -158,9 +164,12 @@ class Scheduler:
 
     async def _call_gemini(self, backend: BackendConfig, payload: Any) -> Any:
         api_key_ref = backend.api_key_ref or "GEMINI_API_KEY"
-        api_key = os.environ.get(api_key_ref, "")
+        api_key = os.environ.get(api_key_ref, "").strip()
         if not api_key:
-            raise BackendError(f"API key not found in env var: {api_key_ref}")
+            raise BackendError(
+                f"API key not found. Set the environment variable '{api_key_ref}' "
+                f"with your Gemini API key before starting the service."
+            )
         messages = (
             payload
             if isinstance(payload, list)

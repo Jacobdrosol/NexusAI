@@ -26,6 +26,7 @@ class Worker(BaseModel):
     capabilities: List[Capability]
     status: Literal["online", "offline", "degraded"] = "offline"
     metrics: Optional[WorkerMetrics] = None
+    enabled: bool = True
 
 
 class BackendParams(BaseModel):
@@ -51,9 +52,11 @@ class Bot(BaseModel):
     id: str
     name: str
     role: str
+    system_prompt: Optional[str] = None
     priority: int = 0
     enabled: bool = True
     backends: List[BackendConfig]
+    routing_rules: Optional[Any] = None
 
 
 class TaskMetadata(BaseModel):
