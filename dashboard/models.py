@@ -1,3 +1,9 @@
+"""SQLAlchemy ORM models and onboarding helpers for NexusAI dashboard.
+
+ORM models: User, Worker, Bot, Task, Setting.
+Onboarding helpers: init_db, admin_exists, create_user, create_worker,
+set_setting, get_setting.
+"""
 """SQLAlchemy ORM models for NexusAI dashboard."""
 import json
 from datetime import datetime, timezone
@@ -119,3 +125,98 @@ class Task(Base):
             return json.loads(self.payload)
         except (json.JSONDecodeError, TypeError):
             return {}
+
+
+class Setting(Base):
+    """Key-value configuration store (used by the onboarding wizard)."""
+    __tablename__ = "settings"
+
+    key: Mapped[str] = Column(String(255), primary_key=True)
+    value: Mapped[Optional[str]] = Column(Text, nullable=True)
+    updated_at: Mapped[datetime] = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Onboarding helper functions (used by the first-run wizard)
+# Lazy imports of dashboard.db avoid a circular-import with db.py which
+# itself imports Base from this module.
+# ---------------------------------------------------------------------------
+
+
+def init_db() -> None:
+    """Create all required tables if they do not already exist."""
+    from dashboard.db import init_db as _db_init
+    _db_init()
+
+
+def admin_exists() -> bool:
+    """Return True if at least one admin user exists in the database."""
+    from dashboard.db import get_db
+    db = get_db()
+    try:
+        return db.query(User).filter_by(role="admin").first() is not None
+    except Exception:
+        return False
+    finally:
+        db.close()
+
+
+def create_user(email: str, hashed_password: str, role: str = "admin") -> None:
+    """Insert a new user row into the database."""
+    from dashboard.db import get_db
+    db = get_db()
+    try:
+        db.add(User(
+            email=email,
+            password_hash=hashed_password,
+            role=role,
+            is_active=True,
+            created_at=datetime.now(timezone.utc),
+        ))
+        db.commit()
+    finally:
+        db.close()
+
+
+def create_worker(name: str, host: str, port: int) -> None:
+    """Insert a new worker row into the database."""
+    from dashboard.db import get_db
+    db = get_db()
+    try:
+        db.add(Worker(name=name, host=host, port=port))
+        db.commit()
+    finally:
+        db.close()
+
+
+def set_setting(key: str, value: str) -> None:
+    """Upsert a key/value pair in the settings table."""
+    from dashboard.db import get_db
+    db = get_db()
+    try:
+        row = db.query(Setting).filter_by(key=key).first()
+        if row:
+            row.value = value
+            row.updated_at = datetime.now(timezone.utc)
+        else:
+            db.add(Setting(key=key, value=value, updated_at=datetime.now(timezone.utc)))
+        db.commit()
+    finally:
+        db.close()
+
+
+def get_setting(key: str, default: Optional[str] = None) -> Optional[str]:
+    """Return the value for *key* from the settings table, or *default*."""
+    from dashboard.db import get_db
+    db = get_db()
+    try:
+        row = db.query(Setting).filter_by(key=key).first()
+        return row.value if row else default
+    except Exception:
+        return default
+    finally:
+        db.close()
