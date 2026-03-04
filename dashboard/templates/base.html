@@ -15,6 +15,7 @@
     <a href="{{ url_for('tasks.tasks_page') }}" {% if active_page == 'tasks' %}class="active"{% endif %}>Tasks</a>
     {% if current_user.role == 'admin' %}
     <a href="{{ url_for('users.users_page') }}" {% if active_page == 'users' %}class="active"{% endif %}>Users</a>
+    <a href="{{ url_for('settings.settings_page') }}" {% if active_page == 'settings' %}class="active"{% endif %}>Settings</a>
     {% endif %}
     <span class="nav-spacer"></span>
     <span class="nav-user">{{ current_user.email }}</span>

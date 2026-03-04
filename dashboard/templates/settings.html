@@ -1,0 +1,299 @@
+{% extends "base.html" %}
+{% set active_page = "settings" %}
+{% block title %}Settings{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Settings</h1>
+</div>
+
+<!-- Toast notification -->
+<div id="toast" style="display:none;position:fixed;top:1.5rem;right:1.5rem;z-index:1000;
+     padding:0.75rem 1.25rem;border-radius:6px;font-size:0.9rem;font-weight:600;
+     min-width:220px;box-shadow:0 4px 16px rgba(0,0,0,0.4);">
+</div>
+
+<!-- Tab bar -->
+<div class="settings-tabs" style="display:flex;gap:0.5rem;margin-bottom:1.5rem;flex-wrap:wrap;">
+  {% for g in groups %}
+  <button class="tab-btn{% if loop.first %} active{% endif %}"
+          data-target="section-{{ g.id }}"
+          onclick="switchTab(this)"
+          style="padding:0.4rem 1rem;border-radius:20px;border:1px solid #2d3045;
+                 background:{% if loop.first %}#7c3aed{% else %}#1a1d27{% endif %};
+                 color:#e0e0e0;cursor:pointer;font-size:0.85rem;transition:background 0.2s;">
+    {{ g.label }}
+  </button>
+  {% endfor %}
+</div>
+
+<!-- Hidden CSRF token for JS use -->
+<input type="hidden" id="csrf-token" value="{{ csrf_token() }}">
+
+<!-- Setting sections -->
+{% for g in groups %}
+<section id="section-{{ g.id }}"
+         style="{% if not loop.first %}display:none;{% endif %}background:#1a1d27;
+                border-radius:8px;padding:1.5rem;margin-bottom:1.5rem;border:1px solid #2d3045;">
+  <h2 style="font-size:1.1rem;margin-bottom:1.25rem;color:#f0f0f0;">{{ g.label }}</h2>
+  <form onsubmit="saveSection(event, '{{ g.id }}')">
+    {% for s in g.settings %}
+    <div class="form-group">
+      <label for="field-{{ s.key }}"
+             style="display:block;font-size:0.85rem;font-weight:600;
+                    color:#a0aec0;margin-bottom:0.35rem;">
+        {{ s.label or s.key }}
+      </label>
+
+      {% if s.value_type == "bool" %}
+      <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;">
+        <input type="checkbox" id="field-{{ s.key }}" name="{{ s.key }}"
+               {% if s.value == "true" or s.value == True %}checked{% endif %}
+               style="width:16px;height:16px;accent-color:#7c3aed;">
+        <span style="font-size:0.85rem;color:#718096;">Enable</span>
+      </label>
+
+      {% elif s.value_type == "secret" %}
+      <div style="display:flex;gap:0.5rem;align-items:center;">
+        <input type="password" id="field-{{ s.key }}" name="{{ s.key }}"
+               value="{{ s.value }}"
+               placeholder="{% if s.value == '[REDACTED]' %}(stored — leave blank to keep){% endif %}"
+               autocomplete="new-password"
+               class="form-control"
+               style="flex:1;">
+        <button type="button" class="btn" onclick="toggleSecret('field-{{ s.key }}')"
+                style="font-size:0.8rem;">
+          Show
+        </button>
+      </div>
+
+      {% elif s.value_type in ["int", "float"] %}
+      <input type="number" id="field-{{ s.key }}" name="{{ s.key }}"
+             value="{{ s.value }}"
+             {% if s.value_type == "float" %}step="any"{% endif %}
+             class="form-control"
+             style="min-width:220px;">
+
+      {% elif s.value_type == "json" %}
+      <textarea id="field-{{ s.key }}" name="{{ s.key }}" rows="4"
+                class="form-control"
+                style="font-family:monospace;resize:vertical;">{{ s.value }}</textarea>
+
+      {% else %}
+      <input type="text" id="field-{{ s.key }}" name="{{ s.key }}"
+             value="{{ s.value }}"
+             class="form-control"
+             style="max-width:480px;">
+      {% endif %}
+
+      {% if s.description %}
+      <p style="font-size:0.78rem;color:#718096;margin-top:0.3rem;">{{ s.description }}</p>
+      {% endif %}
+    </div>
+    {% endfor %}
+
+    <button type="submit" class="btn btn-primary">Save {{ g.label }}</button>
+  </form>
+</section>
+{% endfor %}
+
+<!-- Export / Import -->
+<section style="background:#1a1d27;border-radius:8px;padding:1.5rem;
+                margin-bottom:1.5rem;border:1px solid #2d3045;">
+  <h2 style="font-size:1.1rem;margin-bottom:1rem;color:#f0f0f0;">Export / Import</h2>
+  <div style="display:flex;gap:0.75rem;flex-wrap:wrap;align-items:center;">
+    <a href="{{ url_for('settings.export_yaml') }}" class="btn">⬇ Export YAML</a>
+    <a href="{{ url_for('settings.export_json_endpoint') }}" class="btn">⬇ Export JSON</a>
+    <label class="btn" style="cursor:pointer;">
+      ⬆ Import YAML/JSON
+      <input type="file" id="import-file" accept=".yaml,.yml,.json"
+             onchange="previewImport()" style="display:none;">
+    </label>
+  </div>
+
+  <!-- Import preview -->
+  <div id="import-preview" style="display:none;margin-top:1rem;">
+    <p style="font-size:0.85rem;color:#a0aec0;margin-bottom:0.5rem;">
+      Preview (<span id="import-count">0</span> keys):
+    </p>
+    <pre id="import-content"
+         style="background:#12141e;border:1px solid #2d3045;color:#a0aec0;
+                padding:0.75rem;border-radius:6px;font-size:0.8rem;
+                max-height:200px;overflow:auto;"></pre>
+    <button onclick="applyImport()" class="btn btn-primary" style="margin-top:0.75rem;">
+      Apply Import
+    </button>
+  </div>
+</section>
+
+<!-- Audit log -->
+<section style="background:#1a1d27;border-radius:8px;padding:1.5rem;border:1px solid #2d3045;">
+  <h2 style="font-size:1.1rem;margin-bottom:1rem;color:#f0f0f0;">
+    Audit Log <span style="font-weight:400;color:#718096;font-size:0.85rem;">(last 50 changes)</span>
+  </h2>
+  {% if audit_log %}
+  <table>
+    <thead>
+      <tr>
+        <th>When</th>
+        <th>Key</th>
+        <th>Old Value</th>
+        <th>New Value</th>
+        <th>Changed By</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for entry in audit_log %}
+      <tr>
+        <td style="white-space:nowrap;font-size:0.8rem;color:#718096;">{{ entry.changed_at }}</td>
+        <td><code>{{ entry.key }}</code></td>
+        <td style="color:#718096;font-size:0.85rem;">{{ entry.old_value or '—' }}</td>
+        <td style="font-size:0.85rem;">{{ entry.new_value or '—' }}</td>
+        <td style="font-size:0.85rem;color:#a0aec0;">{{ entry.changed_by }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p style="color:#718096;font-size:0.9rem;">No changes recorded yet.</p>
+  {% endif %}
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+var _csrfToken = document.getElementById('csrf-token').value;
+
+// ---------------------------------------------------------------------------
+// Tab switching
+// ---------------------------------------------------------------------------
+function switchTab(btn) {
+  document.querySelectorAll('.tab-btn').forEach(function(b) {
+    b.style.background = '#1a1d27';
+  });
+  btn.style.background = '#7c3aed';
+  var target = btn.dataset.target;
+  document.querySelectorAll('section[id^="section-"]').forEach(function(s) {
+    s.style.display = s.id === target ? '' : 'none';
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Toast
+// ---------------------------------------------------------------------------
+function showToast(msg, ok) {
+  var t = document.getElementById('toast');
+  t.textContent = msg;
+  t.style.background = ok ? '#064e3b' : '#450a0a';
+  t.style.color = ok ? '#6ee7b7' : '#fca5a5';
+  t.style.border = '1px solid ' + (ok ? '#065f46' : '#7c2020');
+  t.style.display = 'block';
+  setTimeout(function() { t.style.display = 'none'; }, 3500);
+}
+
+// ---------------------------------------------------------------------------
+// Save section via AJAX
+// ---------------------------------------------------------------------------
+function saveSection(evt, categoryId) {
+  evt.preventDefault();
+  var form = evt.target;
+  var payload = {};
+  form.querySelectorAll('input, textarea').forEach(function(el) {
+    if (!el.name) return;
+    if (el.type === 'checkbox') {
+      payload[el.name] = el.checked ? 'true' : 'false';
+    } else if (el.type === 'password' && el.value === '') {
+      // Leave blank = keep existing secret
+    } else {
+      payload[el.name] = el.value;
+    }
+  });
+  fetch('/api/settings', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-CSRFToken': _csrfToken},
+    body: JSON.stringify(payload)
+  })
+  .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
+  .then(function(res) {
+    if (res.ok) {
+      showToast('✓ Saved ' + res.data.updated + ' setting(s)', true);
+    } else {
+      showToast('✗ ' + (res.data.error || 'Save failed'), false);
+    }
+  })
+  .catch(function(e) { showToast('✗ Network error: ' + e, false); });
+}
+
+// ---------------------------------------------------------------------------
+// Show/hide secret field
+// ---------------------------------------------------------------------------
+function toggleSecret(fieldId) {
+  var inp = document.getElementById(fieldId);
+  var btn = inp.parentElement.querySelector('button');
+  if (inp.type === 'password') {
+    inp.type = 'text';
+    btn.textContent = 'Hide';
+  } else {
+    inp.type = 'password';
+    btn.textContent = 'Show';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Import preview
+// ---------------------------------------------------------------------------
+var _importData = null;
+function previewImport() {
+  var file = document.getElementById('import-file').files[0];
+  if (!file) return;
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      var text = e.target.result;
+      var data;
+      if (file.name.endsWith('.json')) {
+        data = JSON.parse(text);
+      } else {
+        // Basic YAML key:value preview without a full YAML parser
+        data = {};
+        text.split('\n').forEach(function(line) {
+          var m = line.match(/^([^:#\s][^:]*?):\s*(.*)$/);
+          if (m) data[m[1].trim()] = m[2].trim();
+        });
+      }
+      _importData = data;
+      document.getElementById('import-count').textContent = Object.keys(data).length;
+      document.getElementById('import-content').textContent =
+        JSON.stringify(data, null, 2).slice(0, 2000);
+      document.getElementById('import-preview').style.display = '';
+    } catch(err) {
+      showToast('✗ Cannot parse file: ' + err, false);
+    }
+  };
+  reader.readAsText(file);
+}
+
+function applyImport() {
+  if (!_importData) return;
+  var file = document.getElementById('import-file').files[0];
+  var form = new FormData();
+  form.append('file', file);
+  fetch('/api/settings/import', {
+    method: 'POST',
+    headers: {'X-CSRFToken': _csrfToken},
+    body: form
+  })
+  .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
+  .then(function(res) {
+    if (res.ok) {
+      showToast('✓ Imported ' + res.data.imported + ' setting(s)', true);
+      document.getElementById('import-preview').style.display = 'none';
+      _importData = null;
+    } else {
+      showToast('✗ ' + (res.data.error || 'Import failed'), false);
+    }
+  })
+  .catch(function(e) { showToast('✗ Network error: ' + e, false); });
+}
+</script>
+{% endblock %}
+

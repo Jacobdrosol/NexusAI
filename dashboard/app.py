@@ -57,6 +57,7 @@ def create_app() -> Flask:
     from dashboard.routes.tasks import bp as tasks_bp
     from dashboard.routes.users import bp as users_bp
     from dashboard.routes.workers import bp as workers_bp
+    from dashboard.settings import bp as settings_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(workers_bp)
@@ -64,6 +65,7 @@ def create_app() -> Flask:
     app.register_blueprint(tasks_bp)
     app.register_blueprint(users_bp)
     app.register_blueprint(events_bp)
+    app.register_blueprint(settings_bp)
 
     # Exempt SSE from CSRF (it's GET-only)
     csrf.exempt(events_bp)
