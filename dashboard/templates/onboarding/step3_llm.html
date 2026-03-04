@@ -1,0 +1,79 @@
+{% extends "onboarding/base.html" %}
+{% block content %}
+<div class="setup-title">LLM Backend Selection</div>
+<p class="setup-subtitle">
+  Choose the language model backend for your NexusAI installation.
+  You can change this later in Settings.
+</p>
+
+<form method="post" action="/onboarding/step3">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+  <div class="llm-options">
+    <div class="llm-option">
+      <input
+        type="radio"
+        id="backend_ollama"
+        name="llm_backend"
+        value="ollama"
+        {% if llm_backend == 'ollama' %}checked{% endif %}
+      >
+      <label for="backend_ollama">
+        <span class="llm-icon">🦙</span>
+        <strong>Ollama</strong>
+        <span style="font-size:0.75rem;color:#718096;text-align:center;">Local / self-hosted</span>
+      </label>
+    </div>
+
+    <div class="llm-option">
+      <input
+        type="radio"
+        id="backend_openai"
+        name="llm_backend"
+        value="openai"
+        {% if llm_backend == 'openai' %}checked{% endif %}
+      >
+      <label for="backend_openai">
+        <span class="llm-icon">🤖</span>
+        <strong>OpenAI</strong>
+        <span style="font-size:0.75rem;color:#718096;text-align:center;">GPT-4 / GPT-3.5</span>
+      </label>
+    </div>
+
+    <div class="llm-option">
+      <input
+        type="radio"
+        id="backend_claude"
+        name="llm_backend"
+        value="claude"
+        {% if llm_backend == 'claude' %}checked{% endif %}
+      >
+      <label for="backend_claude">
+        <span class="llm-icon">🧠</span>
+        <strong>Claude</strong>
+        <span style="font-size:0.75rem;color:#718096;text-align:center;">Anthropic</span>
+      </label>
+    </div>
+
+    <div class="llm-option">
+      <input
+        type="radio"
+        id="backend_gemini"
+        name="llm_backend"
+        value="gemini"
+        {% if llm_backend == 'gemini' %}checked{% endif %}
+      >
+      <label for="backend_gemini">
+        <span class="llm-icon">✨</span>
+        <strong>Gemini</strong>
+        <span style="font-size:0.75rem;color:#718096;text-align:center;">Google</span>
+      </label>
+    </div>
+  </div>
+
+  <div class="btn-group">
+    <a href="/onboarding/step2" class="btn btn-secondary">← Back</a>
+    <button type="submit" class="btn btn-primary">Continue →</button>
+  </div>
+</form>
+{% endblock %}
