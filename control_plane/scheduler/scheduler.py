@@ -26,9 +26,7 @@ class Scheduler:
 
         last_error: Exception = NoViableBackendError("No backends configured")
 
-        backends = sorted(bot.backends, key=lambda b: 0)  # backends in order as defined
-
-        for backend in backends:
+        for backend in bot.backends:
             try:
                 result = await self._dispatch_backend(backend, task.payload)
                 return result
