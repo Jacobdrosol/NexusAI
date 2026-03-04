@@ -35,6 +35,7 @@ def create_app() -> Flask:
     csrf = CSRFProtect(app)
     login_manager = LoginManager(app)
     login_manager.login_view = "auth.login_get"  # type: ignore[assignment]
+    login_manager.login_message = ""  # suppress the default "please log in" flash
     login_manager.login_message_category = "error"
 
     @login_manager.user_loader

@@ -69,18 +69,21 @@ document.getElementById('form-add-bot').addEventListener('submit', async functio
   if (res.ok) location.reload(); else alert('Error: ' + (await res.json()).error);
 });
 
+function getCsrf() {
+  const el = document.querySelector('input[name=csrf_token]');
+  return el ? el.value : '';
+}
+
 async function deleteBot(id) {
   if (!confirm('Delete this bot?')) return;
-  const csrfToken = document.querySelector('input[name=csrf_token]') ? document.querySelector('input[name=csrf_token]').value : '';
-  const res = await fetch('/api/bots/'+id, {method:'DELETE', headers:{'X-CSRFToken': csrfToken}});
+  const res = await fetch('/api/bots/'+id, {method:'DELETE', headers:{'X-CSRFToken': getCsrf()}});
   if (res.ok) location.reload(); else alert('Delete failed');
 }
 
 async function toggleBot(id, enable) {
-  const csrfToken = document.querySelector('input[name=csrf_token]') ? document.querySelector('input[name=csrf_token]').value : '';
   const res = await fetch('/api/bots/'+id, {
     method:'PUT',
-    headers:{'Content-Type':'application/json','X-CSRFToken': csrfToken},
+    headers:{'Content-Type':'application/json','X-CSRFToken': getCsrf()},
     body: JSON.stringify({enabled: enable}),
   });
   if (res.ok) location.reload(); else alert('Update failed');
