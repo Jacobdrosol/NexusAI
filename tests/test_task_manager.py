@@ -49,3 +49,39 @@ async def test_task_fails_on_scheduler_error():
         await asyncio.sleep(0.1)
     assert updated.status == "failed"
     assert updated.error is not None
+
+
+@pytest.mark.anyio
+async def test_dependent_task_unblocks_after_dependency_completes():
+    import asyncio
+    from control_plane.task_manager.task_manager import TaskManager
+
+    async def slow_then_fast_schedule(task):
+        if task.payload.get("kind") == "root":
+            await asyncio.sleep(0.2)
+        return {"ok": task.payload.get("kind")}
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return await slow_then_fast_schedule(task)
+
+    tm = TaskManager(StubScheduler())
+
+    root = await tm.create_task(bot_id="bot1", payload={"kind": "root"})
+    dependent = await tm.create_task(
+        bot_id="bot1",
+        payload={"kind": "child"},
+        depends_on=[root.id],
+    )
+
+    dep_initial = await tm.get_task(dependent.id)
+    assert dep_initial.status == "blocked"
+
+    for _ in range(40):
+        dep_latest = await tm.get_task(dependent.id)
+        if dep_latest.status == "completed":
+            break
+        await asyncio.sleep(0.1)
+
+    assert dep_latest.status == "completed"
+    assert dep_latest.result == {"ok": "child"}

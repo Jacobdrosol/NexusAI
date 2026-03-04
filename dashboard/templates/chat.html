@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+{% set active_page = "chat" %}
+{% block title %}Chat{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Chat</h1>
+  <button class="btn btn-primary" onclick="showCreateConversation()">+ New Conversation</button>
+</div>
+
+<div class="split-grid">
+  <section class="panel">
+    <h2 class="panel-title">Conversations</h2>
+    <div class="list">
+      {% for c in conversations %}
+      <a class="list-item {% if selected_conversation and selected_conversation.id == c.id %}active{% endif %}" href="{{ url_for('chat.chat_page') }}?conversation_id={{ c.id }}">
+        <div>{{ c.title }}</div>
+        <small>{{ (c.updated_at[:19] if c.updated_at else '') | replace('T', ' ') }}</small>
+      </a>
+      {% else %}
+      <div class="empty">No conversations yet</div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2 class="panel-title">Messages</h2>
+    {% if selected_conversation %}
+    <div style="margin-bottom:0.5rem;">
+      <button class="btn" type="button" onclick="ingestConversation('{{ selected_conversation.id }}')">Ingest This Chat</button>
+    </div>
+    <div id="messages" class="messages">
+      {% for m in messages %}
+      <div class="message {{ m.role }}">
+        <div class="message-role">{{ m.role }}</div>
+        <div class="message-body">{{ m.content }}</div>
+      </div>
+      {% else %}
+      <div class="empty">No messages yet</div>
+      {% endfor %}
+    </div>
+    <form id="chat-send-form" class="chat-input">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="conversation_id" value="{{ selected_conversation.id }}">
+      <textarea class="form-control" name="content" placeholder="Type a message..." required></textarea>
+      <div class="chat-controls">
+        <select class="form-control" name="bot_id">
+          <option value="">Use conversation default</option>
+          {% for b in bots %}
+          <option value="{{ b.id }}">{{ b.name }} ({{ b.id }})</option>
+          {% endfor %}
+        </select>
+        <button type="submit" class="btn btn-primary">Send</button>
+      </div>
+    </form>
+    {% else %}
+    <div class="empty">Choose a conversation to begin.</div>
+    {% endif %}
+  </section>
+</div>
+
+<div id="modal-create-convo" class="modal" style="display:none;">
+  <div class="modal-content">
+    <h2>New Conversation</h2>
+    <form id="form-create-convo">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-group"><label>Title</label><input class="form-control" name="title" required></div>
+      <div class="form-group">
+        <label>Default Bot</label>
+        <select class="form-control" name="default_bot_id">
+          <option value="">None</option>
+          {% for b in bots %}
+          <option value="{{ b.id }}">{{ b.name }} ({{ b.id }})</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="modal-actions">
+        <button type="submit" class="btn btn-primary">Create</button>
+        <button type="button" class="btn" onclick="hideModal('modal-create-convo')">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+function showCreateConversation() { document.getElementById('modal-create-convo').style.display='flex'; }
+function hideModal(id) { document.getElementById(id).style.display='none'; }
+
+const createForm = document.getElementById('form-create-convo');
+if (createForm) {
+  createForm.addEventListener('submit', async function(e) {
+    e.preventDefault();
+    const fd = new FormData(this);
+    const res = await fetch('/api/chat/conversations', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json', 'X-CSRFToken': fd.get('csrf_token')},
+      body: JSON.stringify({title: fd.get('title'), default_bot_id: fd.get('default_bot_id') || null}),
+    });
+    if (!res.ok) { alert('Create failed'); return; }
+    const created = await res.json();
+    window.location = '/chat?conversation_id=' + encodeURIComponent(created.id);
+  });
+}
+
+const sendForm = document.getElementById('chat-send-form');
+if (sendForm) {
+  sendForm.addEventListener('submit', async function(e) {
+    e.preventDefault();
+    const fd = new FormData(this);
+    const res = await fetch('/api/chat/messages', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json', 'X-CSRFToken': fd.get('csrf_token')},
+      body: JSON.stringify({
+        conversation_id: fd.get('conversation_id'),
+        content: fd.get('content'),
+        bot_id: fd.get('bot_id') || null
+      }),
+    });
+    if (res.ok) location.reload();
+    else alert('Send failed');
+  });
+}
+
+async function ingestConversation(conversationId) {
+  const csrf = document.querySelector('input[name=csrf_token]')?.value || '';
+  const ns = prompt('Vault namespace for this chat?', 'global');
+  if (ns === null) return;
+  const res = await fetch('/api/chat/ingest', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json', 'X-CSRFToken': csrf},
+    body: JSON.stringify({conversation_id: conversationId, namespace: ns}),
+  });
+  if (res.ok) {
+    alert('Chat ingested into vault.');
+  } else {
+    const data = await res.json().catch(() => ({}));
+    alert(data.error || 'Ingest failed');
+  }
+}
+</script>
+{% endblock %}

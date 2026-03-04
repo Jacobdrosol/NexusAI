@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% set active_page = "bots" %}
+{% block title %}Bot Detail{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Bot Detail</h1>
+  <a class="btn" href="{{ url_for('bots.bots_page') }}">Back to Bots</a>
+</div>
+
+{% if error %}
+<div class="alert alert-error">{{ error }}</div>
+{% else %}
+<section class="panel" style="margin-bottom:1rem;">
+  <h2 class="panel-title">{{ bot.name }} <small style="color:#64748b;">({{ bot.id }})</small></h2>
+  <div class="split-grid" style="grid-template-columns:1fr 1fr;">
+    <div>
+      <div><strong>Role:</strong> {{ bot.role }}</div>
+      <div><strong>Priority:</strong> {{ bot.priority }}</div>
+      <div><strong>Enabled:</strong> {{ 'yes' if bot.enabled else 'no' }}</div>
+      {% if bot.system_prompt %}
+      <div style="margin-top:0.5rem;"><strong>System Prompt:</strong></div>
+      <pre style="white-space:pre-wrap;margin-top:0.25rem;">{{ bot.system_prompt }}</pre>
+      {% endif %}
+    </div>
+    <div>
+      <div><strong>Backend Chain (priority order)</strong></div>
+      <ol style="margin-top:0.4rem; padding-left:1.2rem;">
+        {% for b in bot.backends %}
+        <li style="margin-bottom:0.35rem;">
+          <code>{{ b.type }}</code> · {{ b.provider }} · <strong>{{ b.model }}</strong>
+          {% if b.worker_id %}<span style="color:#64748b;">(worker: {{ b.worker_id }})</span>{% endif %}
+          {% if b.api_key_ref %}<span style="color:#64748b;">(key: {{ b.api_key_ref }})</span>{% endif %}
+        </li>
+        {% else %}
+        <li style="color:#64748b;">No backends configured</li>
+        {% endfor %}
+      </ol>
+    </div>
+  </div>
+</section>
+
+<section class="panel">
+  <h2 class="panel-title">Task Board</h2>
+  <div class="kanban">
+    {% set statuses = ['blocked', 'queued', 'running', 'completed', 'failed'] %}
+    {% for status in statuses %}
+    <div class="kanban-col">
+      <h3>{{ status|capitalize }}</h3>
+      {% for t in tasks if t.status == status %}
+      <div class="kanban-card">
+        <div><strong>{{ t.id }}</strong></div>
+        <div style="color:#64748b;font-size:0.85rem;">{{ (t.created_at[:19] if t.created_at else '') | replace('T',' ') }}</div>
+      </div>
+      {% else %}
+      <div class="empty">No {{ status }} tasks</div>
+      {% endfor %}
+    </div>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+{% endblock %}

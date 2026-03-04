@@ -24,10 +24,10 @@
       <td><span class="badge badge-{{ 'enabled' if w.enabled else 'disabled' }}">{{ 'enabled' if w.enabled else 'disabled' }}</span></td>
       <td class="metrics">{{ w.capabilities | length }} cap(s)</td>
       <td class="actions">
-        <button class="btn btn-sm" onclick="toggleWorker({{ w.id }}, {{ 'false' if w.enabled else 'true' }})">
+        <button class="btn btn-sm" onclick="toggleWorker('{{ w.id }}', {{ 'false' if w.enabled else 'true' }})">
           {{ 'Disable' if w.enabled else 'Enable' }}
         </button>
-        <button class="btn btn-sm btn-danger" onclick="deleteWorker({{ w.id }})">Delete</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteWorker('{{ w.id }}')">Delete</button>
       </td>
     </tr>
     {% else %}

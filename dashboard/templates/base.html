@@ -7,9 +7,13 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
+  <div class="ambient-bg"></div>
   <nav>
-    <a href="{{ url_for('main.index') }}" class="brand">⚡ NexusAI</a>
+    <a href="{{ url_for('main.index') }}" class="brand">NexusAI</a>
     <a href="{{ url_for('main.index') }}" {% if active_page == 'overview' %}class="active"{% endif %}>Overview</a>
+    <a href="{{ url_for('projects.projects_page') }}" {% if active_page == 'projects' %}class="active"{% endif %}>Projects</a>
+    <a href="{{ url_for('chat.chat_page') }}" {% if active_page == 'chat' %}class="active"{% endif %}>Chat</a>
+    <a href="{{ url_for('vault.vault_page') }}" {% if active_page == 'vault' %}class="active"{% endif %}>Vault</a>
     <a href="{{ url_for('workers.workers_page') }}" {% if active_page == 'workers' %}class="active"{% endif %}>Workers</a>
     <a href="{{ url_for('bots.bots_page') }}" {% if active_page == 'bots' %}class="active"{% endif %}>Bots</a>
     <a href="{{ url_for('tasks.tasks_page') }}" {% if active_page == 'tasks' %}class="active"{% endif %}>Tasks</a>

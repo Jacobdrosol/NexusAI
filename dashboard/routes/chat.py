@@ -1,0 +1,119 @@
+"""Chat dashboard page and proxy endpoints."""
+from __future__ import annotations
+
+from typing import Any
+
+from flask import Blueprint, jsonify, render_template, request
+from flask_login import login_required
+
+from dashboard.cp_client import get_cp_client
+
+bp = Blueprint("chat", __name__)
+
+
+@bp.get("/chat")
+@login_required
+def chat_page() -> str:
+    cp = get_cp_client()
+    conversations = cp.list_conversations() or []
+    bots = cp.list_bots() or []
+    selected_id = request.args.get("conversation_id")
+    selected = None
+    messages = []
+    if selected_id:
+        for c in conversations:
+            if c.get("id") == selected_id:
+                selected = c
+                break
+        messages = cp.list_messages(selected_id) or []
+    return render_template(
+        "chat.html",
+        conversations=conversations,
+        selected_conversation=selected,
+        messages=messages,
+        bots=bots,
+        error=None,
+    )
+
+
+@bp.post("/api/chat/conversations")
+@login_required
+def api_create_conversation():
+    data: dict[str, Any] = request.get_json(force=True) or {}
+    title = (data.get("title") or "").strip()
+    if not title:
+        return jsonify({"error": "title is required"}), 400
+    cp = get_cp_client()
+    created = cp.create_conversation(
+        {
+            "title": title,
+            "project_id": data.get("project_id"),
+            "scope": data.get("scope", "global"),
+            "default_bot_id": data.get("default_bot_id"),
+            "default_model_id": data.get("default_model_id"),
+        }
+    )
+    if created is None:
+        return jsonify({"error": "control plane unavailable"}), 502
+    return jsonify(created), 201
+
+
+@bp.post("/api/chat/messages")
+@login_required
+def api_send_message():
+    data: dict[str, Any] = request.get_json(force=True) or {}
+    conversation_id = (data.get("conversation_id") or "").strip()
+    content = (data.get("content") or "").strip()
+    if not conversation_id or not content:
+        return jsonify({"error": "conversation_id and content are required"}), 400
+    cp = get_cp_client()
+    resp = cp.post_message(
+        conversation_id,
+        {
+            "content": content,
+            "bot_id": data.get("bot_id"),
+            "context_items": data.get("context_items"),
+        },
+    )
+    if resp is None:
+        return jsonify({"error": "control plane unavailable"}), 502
+    return jsonify(resp)
+
+
+@bp.post("/api/chat/ingest")
+@login_required
+def api_ingest_chat():
+    data: dict[str, Any] = request.get_json(force=True) or {}
+    conversation_id = (data.get("conversation_id") or "").strip()
+    namespace = (data.get("namespace") or "global").strip() or "global"
+    if not conversation_id:
+        return jsonify({"error": "conversation_id is required"}), 400
+
+    cp = get_cp_client()
+    conversation = None
+    for c in (cp.list_conversations() or []):
+        if c.get("id") == conversation_id:
+            conversation = c
+            break
+    messages = cp.list_messages(conversation_id)
+    if not conversation or messages is None:
+        return jsonify({"error": "conversation or messages unavailable"}), 502
+
+    lines = []
+    for m in messages:
+        lines.append(f"[{m.get('role', 'unknown')}] {m.get('content', '')}")
+    content = "\n\n".join(lines)
+    title = f"Chat: {conversation.get('title', conversation_id)}"
+    ingested = cp.ingest_vault_item(
+        {
+            "title": title,
+            "content": content,
+            "namespace": namespace,
+            "source_type": "chat",
+            "source_ref": conversation_id,
+            "metadata": {"conversation_id": conversation_id},
+        }
+    )
+    if ingested is None:
+        return jsonify({"error": "vault ingestion failed"}), 502
+    return jsonify(ingested), 201

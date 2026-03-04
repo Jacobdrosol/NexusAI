@@ -394,18 +394,18 @@ These are confirmed issues that must be fixed before serious testing:
 
 ### Phase 3 — Data + Chat + Vault Backend
 
-- [ ] **Projects**: `projects` DB table, `ProjectRegistry`, `/v1/projects` REST API, isolation + bridge logic
-- [ ] **API Key Vault**: `api_keys` DB table (encrypted), CRUD API, Scheduler resolution
-- [ ] **Model Catalog**: `models` DB table, CRUD API, used by Scheduler + UI
-- [ ] **Chat System**: `conversations` + `messages` tables, `ChatManager`, streaming SSE, context injection
-- [ ] **Data Vault**: `vault_items` + `vault_chunks` tables, `VaultManager`, ingestion pipeline, vector search
-- [ ] **MCP Broker**: standardized context pull interface for bots pre-inference
-- [ ] **Dependency Engine**: `task_dependencies` table, `depends_on` on Task, DAG resolver, `blocked` status
+- [x] **Projects**: `projects` DB table, `ProjectRegistry`, `/v1/projects` REST API, isolation + bridge logic
+- [x] **API Key Vault**: `api_keys` DB table (encrypted), CRUD API, Scheduler resolution
+- [x] **Model Catalog**: `models` DB table, CRUD API, used by Scheduler + UI
+- [x] **Chat System**: `conversations` + `messages` tables, `ChatManager`, streaming SSE, context injection
+- [x] **Data Vault**: `vault_items` + `vault_chunks` tables, `VaultManager`, ingestion pipeline, vector search
+- [x] **MCP Broker**: standardized context pull interface for bots pre-inference
+- [x] **Dependency Engine**: `task_dependencies` table, `depends_on` on Task, DAG resolver, `blocked` status
 
 ### Phase 4 — Dashboard UI
 
 #### 4a. Design System + Navigation Refresh
-- [ ] Expand nav: add Projects, Chat, Vault
+- [x] Expand nav: add Projects, Chat, Vault
 - [ ] Consistent dark theme, loading/empty/error states, responsive layout
 
 #### 4b. Worker Detail Page
@@ -419,7 +419,7 @@ These are confirmed issues that must be fixed before serious testing:
 - [ ] Task detail modal, backlog view
 
 #### 4d. Projects Page
-- [ ] Project list + create modal
+- [x] Project list + create modal
 - [ ] Project detail: bots, task board, vault items, settings overrides
 - [ ] Bridge management UI
 
@@ -434,7 +434,7 @@ These are confirmed issues that must be fixed before serious testing:
 - [ ] Upload panel (file, URL, paste), vault item list with search/filter
 - [ ] Item detail: preview, chunk count, embedding status, metadata
 - [ ] Namespace manager, bulk actions
-- [ ] "Ingest this chat" button on chat page
+- [x] "Ingest this chat" button on chat page
 
 #### 4g. Settings Additions
 - [ ] API Keys tab, Model Catalog tab, Projects tab
@@ -612,3 +612,289 @@ NexusAI/
 - **Fix 5 — Scheduler error messages improved** (`control_plane/scheduler/scheduler.py`): Updated `_call_openai`, `_call_claude`, and `_call_gemini` to use `.strip()` on the retrieved API key and to emit actionable error messages that name the exact environment variable the user needs to set.
 
 - **Tests added** (`tests/test_shared_models.py`): Added `test_worker_model_has_enabled_field`, `test_bot_model_has_routing_rules_field`, and `test_bot_model_has_system_prompt_field` to verify the new model fields.
+
+---
+
+### 2026-03-04 21:20 — Phase 3: Projects Backend (Slice 1)
+
+**Status:** Core projects backend is implemented and tested.
+
+**Changes made:**
+
+- Added shared `Project` model with isolation/bridge fields (`shared/models.py`).
+- Added `ProjectNotFoundError` (`shared/exceptions.py`).
+- Added persistent `ProjectRegistry` with SQLite-backed storage and bridge consistency logic (`control_plane/registry/project_registry.py`).
+- Added full `/v1/projects` REST API with CRUD + bridge add/remove endpoints (`control_plane/api/projects.py`).
+- Wired project registry and routes into control plane app startup (`control_plane/main.py`) and test app fixtures (`tests/conftest.py`).
+- Updated packaging metadata to prevent dependency/install drift:
+  - Added runtime dependencies to `[project.dependencies]` (`pyproject.toml`)
+  - Added explicit setuptools package discovery for multi-package layout (`pyproject.toml`)
+- Added tests for project registry behavior and API endpoints:
+  - `tests/test_project_registry.py`
+  - updates in `tests/test_control_plane_api.py`
+
+**Validation:**
+
+- `pytest -q tests/test_project_registry.py tests/test_control_plane_api.py tests/test_bot_registry.py tests/test_worker_registry.py tests/test_task_manager.py` → **28 passed**
+- `pytest -q` → **56 passed**
+
+---
+
+### 2026-03-04 21:48 — Phase 3: API Key Vault (Slice 2)
+
+**Status:** Encrypted API key storage and scheduler key-resolution are implemented.
+
+**Changes made:**
+
+- Added encrypted key vault backed by SQLite `api_keys` table (`control_plane/keys/key_vault.py`).
+- Added API key CRUD endpoints (`control_plane/api/keys.py`):
+  - `POST /v1/keys`
+  - `GET /v1/keys`
+  - `GET /v1/keys/{name}`
+  - `DELETE /v1/keys/{name}`
+- Wired key vault into control plane startup/state and registered key routes (`control_plane/main.py`).
+- Updated scheduler to resolve `api_key_ref` from key vault first, then fall back to environment variables for backward compatibility (`control_plane/scheduler/scheduler.py`).
+- Added `APIKeyNotFoundError` (`shared/exceptions.py`).
+- Updated test fixture wiring to include a test key vault (`tests/conftest.py`).
+- Added tests:
+  - `tests/test_key_vault.py`
+  - `tests/test_scheduler_api_keys.py`
+  - key API coverage in `tests/test_control_plane_api.py`
+- Added `cryptography` runtime dependency (`requirements.txt`, `pyproject.toml`).
+
+**Validation:**
+
+- `pytest -q tests/test_key_vault.py tests/test_scheduler_api_keys.py tests/test_control_plane_api.py` → **18 passed**
+- `pytest -q` → **63 passed**
+
+---
+
+### 2026-03-04 22:10 — Phase 3: Model Catalog (Slice 3)
+
+**Status:** Model catalog backend and scheduler integration are implemented.
+
+**Changes made:**
+
+- Added shared catalog model type (`shared/models.py`): `CatalogModel`.
+- Added `CatalogModelNotFoundError` (`shared/exceptions.py`).
+- Added persistent model registry backed by SQLite `models` table (`control_plane/registry/model_registry.py`).
+- Added model catalog CRUD API (`control_plane/api/models_catalog.py`):
+  - `POST /v1/models`
+  - `GET /v1/models`
+  - `GET /v1/models/{model_id}`
+  - `PUT /v1/models/{model_id}`
+  - `DELETE /v1/models/{model_id}`
+- Wired model registry and routes into control-plane startup and test app fixture:
+  - `control_plane/main.py`
+  - `tests/conftest.py`
+- Updated scheduler to enforce catalog compatibility when catalog entries exist:
+  - Validates `backend.provider` + `backend.model` against enabled catalog entries
+  - Keeps backward compatibility when the catalog is empty
+  - (`control_plane/scheduler/scheduler.py`)
+- Added tests:
+  - `tests/test_model_registry.py`
+  - `tests/test_scheduler_model_catalog.py`
+  - model API coverage in `tests/test_control_plane_api.py`
+
+**Validation:**
+
+- `pytest -q tests/test_model_registry.py tests/test_scheduler_model_catalog.py tests/test_control_plane_api.py` → **20 passed**
+- `pytest -q` → **70 passed**
+
+---
+
+### 2026-03-04 22:32 — Phase 3: Chat System (Slice 4)
+
+**Status:** Chat persistence and API streaming endpoints are implemented.
+
+**Changes made:**
+
+- Added shared chat models (`shared/models.py`):
+  - `ChatConversation`
+  - `ChatMessage`
+- Added `ConversationNotFoundError` (`shared/exceptions.py`).
+- Added chat manager with SQLite-backed persistence:
+  - `conversations` table
+  - `messages` table
+  - conversation/message CRUD helpers
+  - (`control_plane/chat/chat_manager.py`)
+- Added chat API routes (`control_plane/api/chat.py`):
+  - `POST /v1/chat/conversations`
+  - `GET /v1/chat/conversations`
+  - `GET /v1/chat/conversations/{conversation_id}`
+  - `GET /v1/chat/conversations/{conversation_id}/messages`
+  - `POST /v1/chat/conversations/{conversation_id}/messages`
+  - `POST /v1/chat/conversations/{conversation_id}/stream` (SSE)
+- Implemented context injection support for message execution via `context_items`.
+- Wired chat manager/router into control-plane startup and test fixture wiring:
+  - `control_plane/main.py`
+  - `tests/conftest.py`
+- Added package init modules:
+  - `control_plane/chat/__init__.py`
+  - `control_plane/keys/__init__.py`
+- Added tests:
+  - `tests/test_chat_manager.py`
+  - `tests/test_chat_api.py`
+
+**Validation:**
+
+- `pytest -q tests/test_chat_manager.py tests/test_chat_api.py tests/test_control_plane_api.py` → **19 passed**
+- `pytest -q` → **74 passed**
+
+---
+
+### 2026-03-04 22:55 — Phase 3: Data Vault + MCP Broker (Slice 5)
+
+**Status:** Vault ingestion/search and MCP context retrieval are implemented.
+
+**Changes made:**
+
+- Added shared vault models:
+  - `VaultItem`
+  - `VaultChunk`
+  - (`shared/models.py`)
+- Added `VaultItemNotFoundError` (`shared/exceptions.py`).
+- Implemented vault chunking utility (`control_plane/vault/chunker.py`).
+- Implemented `VaultManager` with SQLite-backed storage:
+  - `vault_items` table
+  - `vault_chunks` table
+  - ingestion pipeline (text -> chunks -> deterministic embeddings)
+  - vector-style similarity search
+  - (`control_plane/vault/vault_manager.py`)
+- Implemented `MCPBroker` standardized context pull interface (`control_plane/vault/mcp_broker.py`).
+- Added vault API routes (`control_plane/api/vault.py`):
+  - `POST /v1/vault/items`
+  - `GET /v1/vault/items`
+  - `GET /v1/vault/items/{item_id}`
+  - `GET /v1/vault/items/{item_id}/chunks`
+  - `POST /v1/vault/search`
+  - `POST /v1/vault/context` (MCP-style context response)
+- Wired vault and MCP broker into control-plane app startup and test fixture:
+  - `control_plane/main.py`
+  - `tests/conftest.py`
+- Added tests:
+  - `tests/test_chunker.py`
+  - `tests/test_vault_manager.py`
+  - `tests/test_mcp_broker.py`
+  - API coverage updates in `tests/test_control_plane_api.py`
+
+**Validation:**
+
+- `pytest -q tests/test_chunker.py tests/test_vault_manager.py tests/test_mcp_broker.py tests/test_control_plane_api.py` → **23 passed**
+- `pytest -q` → **82 passed**
+
+---
+
+### 2026-03-04 23:16 — Phase 3: Dependency Engine (Slice 6)
+
+**Status:** Task dependency persistence and blocked/unblocked execution flow are implemented.
+
+**Changes made:**
+
+- Added task dependency semantics to shared model:
+  - `Task.depends_on: List[str]`
+  - `Task.status` now includes `blocked`
+  - (`shared/models.py`)
+- Added dependency resolver utility (`control_plane/scheduler/dependency_engine.py`).
+- Extended task persistence and migration in `TaskManager`:
+  - Added `depends_on` column support in `tasks` table
+  - Added `task_dependencies` table
+  - Added migration step for existing task tables
+  - Persisted dependencies for each task
+  - (`control_plane/task_manager/task_manager.py`)
+- Implemented blocked task lifecycle:
+  - Tasks with dependencies start as `blocked`
+  - Blocked tasks automatically transition to `queued` and run when all dependencies are `completed`
+  - Unblocking check runs after task terminal updates
+- Updated task create API to accept `depends_on` (`control_plane/api/tasks.py`).
+- Added tests:
+  - `tests/test_dependency_engine.py`
+  - dependency flow test in `tests/test_task_manager.py`
+
+**Validation:**
+
+- `pytest -q tests/test_task_manager.py tests/test_dependency_engine.py tests/test_control_plane_api.py tests/test_vault_manager.py tests/test_chat_api.py` → **28 passed**
+- `pytest -q` → **85 passed**
+
+---
+
+### 2026-03-04 23:45 — Phase 4: UI Navigation + Core Pages Scaffold (Slice 7)
+
+**Status:** Phase 4 frontend is started with real, connected pages for Projects, Chat, and Vault.
+
+**Changes made:**
+
+- Added dashboard route blueprints:
+  - `dashboard/routes/projects.py`
+  - `dashboard/routes/chat.py`
+  - `dashboard/routes/vault.py`
+- Wired new blueprints into app factory (`dashboard/app.py`).
+- Extended control-plane client with new endpoint helpers:
+  - projects, models, chat conversations/messages, vault list/ingest/search
+  - (`dashboard/cp_client.py`)
+- Added new templates:
+  - `dashboard/templates/projects.html`
+  - `dashboard/templates/chat.html`
+  - `dashboard/templates/vault.html`
+- Updated navigation and layout shell:
+  - added Projects, Chat, Vault nav items in `dashboard/templates/base.html`
+- Refreshed base visual system and responsive behavior:
+  - updated palette, ambient background, sticky nav, panel/list/chat layout helpers
+  - responsive breakpoints for mobile
+  - (`dashboard/static/style.css`)
+- Added dashboard tests for new pages:
+  - `tests/test_dashboard_phase4_pages.py`
+
+**Validation:**
+
+- `pytest -q tests/test_dashboard_phase4_pages.py tests/test_dashboard_smoke.py tests/test_dashboard_onboarding.py` → **15 passed**
+- `pytest -q` → **88 passed**
+
+---
+
+### 2026-03-05 00:05 — Phase 4: Bot Detail + Task Board Scaffold (Slice 8)
+
+**Status:** Bot detail and task-board UI foundation is in place, with connected Projects/Chat/Vault pages and route coverage.
+
+**Changes made:**
+
+- Added bot detail route and page scaffold:
+  - `GET /bots/<bot_id>` in `dashboard/routes/bots.py`
+  - template `dashboard/templates/bot_detail.html`
+- Bot detail now shows:
+  - core bot metadata
+  - backend chain summary
+  - kanban-style task board columns (`blocked`, `queued`, `running`, `completed`, `failed`)
+- Updated bots table to link each bot to its detail page (`dashboard/templates/bots.html`).
+- Fixed client-side action ID handling for non-numeric control-plane IDs:
+  - `dashboard/templates/bots.html`
+  - `dashboard/templates/workers.html`
+- Extended style system for kanban/task-board UI (`dashboard/static/style.css`).
+- Added dashboard coverage for new route:
+  - `tests/test_dashboard_phase4_pages.py` includes `/bots/<id>` load test.
+
+**Validation:**
+
+- `pytest -q tests/test_dashboard_phase4_pages.py tests/test_dashboard_smoke.py tests/test_dashboard_onboarding.py tests/test_control_plane_api.py` → **33 passed**
+- `pytest -q` → **89 passed**
+
+---
+
+### 2026-03-05 00:24 — Phase 4: Chat-to-Vault Ingestion (Slice 9)
+
+**Status:** Chat page can now ingest an entire conversation into the vault.
+
+**Changes made:**
+
+- Added chat ingestion API on dashboard:
+  - `POST /api/chat/ingest` in `dashboard/routes/chat.py`
+  - collects conversation + messages from control plane
+  - writes a consolidated chat transcript into vault (`source_type=chat`)
+- Added `"Ingest This Chat"` action in `dashboard/templates/chat.html`.
+- Added validation coverage for ingest endpoint in dashboard tests:
+  - update to `tests/test_dashboard_phase4_pages.py`
+
+**Validation:**
+
+- `pytest -q tests/test_dashboard_phase4_pages.py tests/test_dashboard_smoke.py tests/test_dashboard_onboarding.py` → **17 passed**
+- `pytest -q` → **90 passed**

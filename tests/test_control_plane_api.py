@@ -69,3 +69,139 @@ async def test_list_tasks_empty(cp_client):
     resp = await cp_client.get("/v1/tasks")
     assert resp.status_code == 200
     assert resp.json() == []
+
+
+@pytest.mark.anyio
+async def test_create_project(cp_client):
+    project = {"id": "p1", "name": "Project 1", "mode": "isolated"}
+    resp = await cp_client.post("/v1/projects", json=project)
+    assert resp.status_code == 200
+    assert resp.json()["id"] == "p1"
+
+
+@pytest.mark.anyio
+async def test_add_project_bridge(cp_client):
+    await cp_client.post("/v1/projects", json={"id": "p1", "name": "One", "mode": "bridged"})
+    await cp_client.post("/v1/projects", json={"id": "p2", "name": "Two", "mode": "bridged"})
+
+    resp = await cp_client.post("/v1/projects/p1/bridges/p2")
+    assert resp.status_code == 200
+
+    p1 = (await cp_client.get("/v1/projects/p1")).json()
+    p2 = (await cp_client.get("/v1/projects/p2")).json()
+    assert "p2" in p1["bridge_project_ids"]
+    assert "p1" in p2["bridge_project_ids"]
+
+
+@pytest.mark.anyio
+async def test_add_project_bridge_rejects_isolated_mode(cp_client):
+    await cp_client.post("/v1/projects", json={"id": "p1", "name": "One", "mode": "isolated"})
+    await cp_client.post("/v1/projects", json={"id": "p2", "name": "Two", "mode": "bridged"})
+
+    resp = await cp_client.post("/v1/projects/p1/bridges/p2")
+    assert resp.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_create_and_get_api_key_metadata(cp_client):
+    resp = await cp_client.post(
+        "/v1/keys",
+        json={"name": "openai-dev", "provider": "openai", "value": "sk-test"},
+    )
+    assert resp.status_code == 200
+
+    meta = await cp_client.get("/v1/keys/openai-dev")
+    assert meta.status_code == 200
+    data = meta.json()
+    assert data["name"] == "openai-dev"
+    assert data["provider"] == "openai"
+    assert "value" not in data
+
+
+@pytest.mark.anyio
+async def test_delete_api_key(cp_client):
+    await cp_client.post(
+        "/v1/keys",
+        json={"name": "gemini-dev", "provider": "gemini", "value": "gk-test"},
+    )
+    delete_resp = await cp_client.delete("/v1/keys/gemini-dev")
+    assert delete_resp.status_code == 200
+
+    get_resp = await cp_client.get("/v1/keys/gemini-dev")
+    assert get_resp.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_create_and_get_catalog_model(cp_client):
+    model = {
+        "id": "openai-gpt-4o-mini",
+        "name": "gpt-4o-mini",
+        "provider": "openai",
+        "context_window": 128000,
+        "capabilities": ["chat"],
+        "input_cost_per_1k": 0.00015,
+        "output_cost_per_1k": 0.0006,
+        "notes": "fast baseline model",
+        "enabled": True,
+    }
+    resp = await cp_client.post("/v1/models", json=model)
+    assert resp.status_code == 200
+    assert resp.json()["id"] == "openai-gpt-4o-mini"
+
+    get_resp = await cp_client.get("/v1/models/openai-gpt-4o-mini")
+    assert get_resp.status_code == 200
+    assert get_resp.json()["provider"] == "openai"
+
+
+@pytest.mark.anyio
+async def test_delete_catalog_model(cp_client):
+    await cp_client.post(
+        "/v1/models",
+        json={"id": "gemini-2-flash", "name": "gemini-2.0-flash", "provider": "gemini"},
+    )
+    delete_resp = await cp_client.delete("/v1/models/gemini-2-flash")
+    assert delete_resp.status_code == 200
+
+    get_resp = await cp_client.get("/v1/models/gemini-2-flash")
+    assert get_resp.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_vault_ingest_and_search(cp_client):
+    ingest_resp = await cp_client.post(
+        "/v1/vault/items",
+        json={
+            "title": "Design Notes",
+            "content": "NexusAI uses a control plane and worker nodes.",
+            "namespace": "global",
+        },
+    )
+    assert ingest_resp.status_code == 200
+    item_id = ingest_resp.json()["id"]
+
+    chunks_resp = await cp_client.get(f"/v1/vault/items/{item_id}/chunks")
+    assert chunks_resp.status_code == 200
+    assert len(chunks_resp.json()) >= 1
+
+    search_resp = await cp_client.post(
+        "/v1/vault/search",
+        json={"query": "control plane", "limit": 3},
+    )
+    assert search_resp.status_code == 200
+    assert len(search_resp.json()) >= 1
+
+
+@pytest.mark.anyio
+async def test_vault_context_endpoint(cp_client):
+    await cp_client.post(
+        "/v1/vault/items",
+        json={"title": "JWT", "content": "JWT refresh token flow and auth middleware."},
+    )
+    context_resp = await cp_client.post(
+        "/v1/vault/context",
+        json={"query": "auth token", "limit": 2},
+    )
+    assert context_resp.status_code == 200
+    data = context_resp.json()
+    assert "contexts" in data
+    assert data["context_count"] >= 1

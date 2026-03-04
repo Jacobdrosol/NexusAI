@@ -1,5 +1,6 @@
 from typing import Any, List, Literal, Optional
-from pydantic import BaseModel, ConfigDict
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class Capability(BaseModel):
@@ -79,8 +80,85 @@ class Task(BaseModel):
     bot_id: str
     payload: Any
     metadata: Optional[TaskMetadata] = None
-    status: Literal["queued", "running", "completed", "failed"] = "queued"
+    depends_on: List[str] = Field(default_factory=list)
+    status: Literal["queued", "blocked", "running", "completed", "failed"] = "queued"
     result: Optional[Any] = None
     error: Optional[TaskError] = None
     created_at: str
     updated_at: str
+
+
+class Project(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    name: str
+    description: Optional[str] = None
+    mode: Literal["isolated", "bridged"] = "isolated"
+    bridge_project_ids: List[str] = Field(default_factory=list)
+    bot_ids: List[str] = Field(default_factory=list)
+    settings_overrides: Optional[Any] = None
+    enabled: bool = True
+
+
+class CatalogModel(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    name: str
+    provider: str
+    context_window: Optional[int] = None
+    capabilities: List[str] = Field(default_factory=list)
+    input_cost_per_1k: Optional[float] = None
+    output_cost_per_1k: Optional[float] = None
+    notes: Optional[str] = None
+    enabled: bool = True
+
+
+class ChatConversation(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    title: str
+    project_id: Optional[str] = None
+    scope: Literal["global", "project", "bridged"] = "global"
+    default_bot_id: Optional[str] = None
+    default_model_id: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+
+class ChatMessage(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    conversation_id: str
+    role: Literal["system", "user", "assistant", "tool"]
+    content: str
+    bot_id: Optional[str] = None
+    model: Optional[str] = None
+    provider: Optional[str] = None
+    metadata: Optional[Any] = None
+    created_at: str
+
+
+class VaultItem(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    source_type: Literal["text", "file", "url", "chat", "task", "custom"] = "text"
+    source_ref: Optional[str] = None
+    title: str
+    content: str
+    namespace: str = "global"
+    project_id: Optional[str] = None
+    metadata: Optional[Any] = None
+    embedding_status: Literal["pending", "completed", "failed"] = "completed"
+    created_at: str
+    updated_at: str
+
+
+class VaultChunk(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    item_id: str
+    chunk_index: int
+    content: str
+    embedding: List[float] = Field(default_factory=list)
+    metadata: Optional[Any] = None
+    created_at: str

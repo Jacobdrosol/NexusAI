@@ -11,9 +11,17 @@ logger = logging.getLogger(__name__)
 
 
 class Scheduler:
-    def __init__(self, bot_registry: Any, worker_registry: Any) -> None:
+    def __init__(
+        self,
+        bot_registry: Any,
+        worker_registry: Any,
+        key_vault: Any = None,
+        model_registry: Any = None,
+    ) -> None:
         self.bot_registry = bot_registry
         self.worker_registry = worker_registry
+        self.key_vault = key_vault
+        self.model_registry = model_registry
 
     async def schedule(self, task: Task) -> Any:
         try:
@@ -46,6 +54,7 @@ class Scheduler:
         ) from last_error
 
     async def _dispatch_backend(self, backend: BackendConfig, payload: Any) -> Any:
+        await self._validate_model_if_catalog_present(backend)
         if backend.type in ("local_llm", "remote_llm"):
             if not backend.worker_id:
                 raise BackendError("worker_id is required for local_llm/remote_llm backends")
@@ -98,7 +107,7 @@ class Scheduler:
 
     async def _call_openai(self, backend: BackendConfig, payload: Any) -> Any:
         api_key_ref = backend.api_key_ref or "OPENAI_API_KEY"
-        api_key = os.environ.get(api_key_ref, "").strip()
+        api_key = await self._resolve_api_key(api_key_ref, "OPENAI_API_KEY")
         if not api_key:
             raise BackendError(
                 f"API key not found. Set the environment variable '{api_key_ref}' "
@@ -128,7 +137,7 @@ class Scheduler:
 
     async def _call_claude(self, backend: BackendConfig, payload: Any) -> Any:
         api_key_ref = backend.api_key_ref or "ANTHROPIC_API_KEY"
-        api_key = os.environ.get(api_key_ref, "").strip()
+        api_key = await self._resolve_api_key(api_key_ref, "ANTHROPIC_API_KEY")
         if not api_key:
             raise BackendError(
                 f"API key not found. Set the environment variable '{api_key_ref}' "
@@ -164,7 +173,7 @@ class Scheduler:
 
     async def _call_gemini(self, backend: BackendConfig, payload: Any) -> Any:
         api_key_ref = backend.api_key_ref or "GEMINI_API_KEY"
-        api_key = os.environ.get(api_key_ref, "").strip()
+        api_key = await self._resolve_api_key(api_key_ref, "GEMINI_API_KEY")
         if not api_key:
             raise BackendError(
                 f"API key not found. Set the environment variable '{api_key_ref}' "
@@ -195,3 +204,34 @@ class Scheduler:
             data = response.json()
             output = data["candidates"][0]["content"]["parts"][0]["text"]
             return {"output": output, "usage": data.get("usageMetadata", {})}
+
+    async def _resolve_api_key(self, api_key_ref: str, default_env_var: str) -> str:
+        if self.key_vault and api_key_ref:
+            try:
+                return (await self.key_vault.get_secret(api_key_ref)).strip()
+            except Exception:
+                # Fall through to environment-variable lookup for backward compatibility.
+                pass
+
+        if api_key_ref:
+            return os.environ.get(api_key_ref, "").strip()
+        return os.environ.get(default_env_var, "").strip()
+
+    async def _validate_model_if_catalog_present(self, backend: BackendConfig) -> None:
+        if not self.model_registry:
+            return
+        try:
+            has_models = await self.model_registry.has_any()
+            if not has_models:
+                return
+            exists = await self.model_registry.exists(backend.provider, backend.model)
+            if not exists:
+                raise BackendError(
+                    f"Model '{backend.model}' (provider '{backend.provider}') "
+                    "is not present/enabled in the model catalog."
+                )
+        except BackendError:
+            raise
+        except Exception:
+            # If model registry lookup fails unexpectedly, avoid blocking execution.
+            return

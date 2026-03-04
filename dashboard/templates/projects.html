@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% set active_page = "projects" %}
+{% block title %}Projects{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Projects</h1>
+  <button class="btn btn-primary" onclick="showAddProject()">+ New Project</button>
+</div>
+{% if error %}
+<div class="alert alert-error">{{ error }}</div>
+{% endif %}
+<table>
+  <thead>
+    <tr>
+      <th>ID</th><th>Name</th><th>Mode</th><th>Enabled</th><th>Bridges</th><th>Bots</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for p in projects %}
+    <tr>
+      <td><code>{{ p.id }}</code></td>
+      <td>{{ p.name }}</td>
+      <td>{{ p.mode }}</td>
+      <td><span class="badge badge-{{ 'enabled' if p.enabled else 'disabled' }}">{{ 'enabled' if p.enabled else 'disabled' }}</span></td>
+      <td>{{ p.bridge_project_ids | length }}</td>
+      <td>{{ p.bot_ids | length }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6" style="text-align:center;color:#7b879a;">No projects configured</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<div id="modal-add-project" class="modal" style="display:none;">
+  <div class="modal-content">
+    <h2>Create Project</h2>
+    <form id="form-add-project">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-group"><label>Project ID</label><input class="form-control" name="id" placeholder="proj-auth" required></div>
+      <div class="form-group"><label>Name</label><input class="form-control" name="name" required></div>
+      <div class="form-group"><label>Description</label><input class="form-control" name="description"></div>
+      <div class="form-group">
+        <label>Mode</label>
+        <select class="form-control" name="mode">
+          <option value="isolated">isolated</option>
+          <option value="bridged">bridged</option>
+        </select>
+      </div>
+      <div class="modal-actions">
+        <button type="submit" class="btn btn-primary">Create</button>
+        <button type="button" class="btn" onclick="hideModal('modal-add-project')">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+function showAddProject() { document.getElementById('modal-add-project').style.display='flex'; }
+function hideModal(id) { document.getElementById(id).style.display='none'; }
+document.getElementById('form-add-project').addEventListener('submit', async function(e) {
+  e.preventDefault();
+  const fd = new FormData(this);
+  const res = await fetch('/api/projects', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-CSRFToken': fd.get('csrf_token')},
+    body: JSON.stringify({
+      id: fd.get('id'),
+      name: fd.get('name'),
+      description: fd.get('description'),
+      mode: fd.get('mode')
+    }),
+  });
+  if (res.ok) location.reload();
+  else {
+    const data = await res.json().catch(() => ({}));
+    alert(data.error || 'Create failed');
+  }
+});
+</script>
+{% endblock %}

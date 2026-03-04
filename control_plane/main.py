@@ -7,11 +7,17 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from control_plane.api import bots, tasks, workers
+from control_plane.api import bots, chat, keys, models_catalog, projects, tasks, vault, workers
+from control_plane.chat.chat_manager import ChatManager
+from control_plane.keys.key_vault import KeyVault
 from control_plane.registry.bot_registry import BotRegistry
+from control_plane.registry.model_registry import ModelRegistry
+from control_plane.registry.project_registry import ProjectRegistry
 from control_plane.registry.worker_registry import WorkerRegistry
 from control_plane.scheduler.scheduler import Scheduler
 from control_plane.task_manager.task_manager import TaskManager
+from control_plane.vault.mcp_broker import MCPBroker
+from control_plane.vault.vault_manager import VaultManager
 from shared.config_loader import ConfigLoader
 
 logger = logging.getLogger(__name__)
@@ -35,6 +41,12 @@ async def lifespan(app: FastAPI):
     # Initialize registries
     worker_registry = WorkerRegistry()
     bot_registry = BotRegistry()
+    project_registry = ProjectRegistry()
+    model_registry = ModelRegistry()
+    key_vault = KeyVault()
+    chat_manager = ChatManager()
+    vault_manager = VaultManager()
+    mcp_broker = MCPBroker(vault_manager)
 
     # Load from YAML configs
     workers_dir = cp_cfg.get("workers_config_dir", "config/workers")
@@ -47,12 +59,23 @@ async def lifespan(app: FastAPI):
     bot_registry.load_from_configs(bot_configs, worker_ids)
 
     # Initialize scheduler and task manager
-    scheduler = Scheduler(bot_registry, worker_registry)
+    scheduler = Scheduler(
+        bot_registry,
+        worker_registry,
+        key_vault=key_vault,
+        model_registry=model_registry,
+    )
     task_manager = TaskManager(scheduler)
 
     # Store on app state
     app.state.worker_registry = worker_registry
     app.state.bot_registry = bot_registry
+    app.state.project_registry = project_registry
+    app.state.model_registry = model_registry
+    app.state.key_vault = key_vault
+    app.state.chat_manager = chat_manager
+    app.state.vault_manager = vault_manager
+    app.state.mcp_broker = mcp_broker
     app.state.scheduler = scheduler
     app.state.task_manager = task_manager
     app.state.config = config
@@ -106,6 +129,11 @@ def create_app() -> FastAPI:
     app.include_router(tasks.router)
     app.include_router(bots.router)
     app.include_router(workers.router)
+    app.include_router(projects.router)
+    app.include_router(keys.router)
+    app.include_router(models_catalog.router)
+    app.include_router(chat.router)
+    app.include_router(vault.router)
 
     @app.exception_handler(Exception)
     async def generic_exception_handler(request: Request, exc: Exception):

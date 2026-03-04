@@ -13,6 +13,7 @@ class CreateTaskRequest(BaseModel):
     bot_id: str
     payload: Any
     metadata: Optional[TaskMetadata] = None
+    depends_on: Optional[List[str]] = None
 
 
 @router.post("", response_model=Task)
@@ -23,6 +24,7 @@ async def create_task(request: Request, body: CreateTaskRequest) -> Task:
             bot_id=body.bot_id,
             payload=body.payload,
             metadata=body.metadata,
+            depends_on=body.depends_on,
         )
         return task
     except BotNotFoundError as e:

@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% set active_page = "vault" %}
+{% block title %}Vault{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Vault</h1>
+  <button class="btn btn-primary" onclick="showIngest()">+ Ingest Text</button>
+</div>
+
+<form id="vault-search-form" class="search-row">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+  <input class="form-control" name="query" placeholder="Search vault...">
+  <input class="form-control" name="namespace" value="{{ namespace }}" placeholder="Namespace (optional)">
+  <button class="btn">Search</button>
+</form>
+
+<div id="search-results"></div>
+
+<table>
+  <thead>
+    <tr>
+      <th>Title</th><th>Namespace</th><th>Source</th><th>Updated</th><th>Status</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for i in items %}
+    <tr>
+      <td>{{ i.title }}</td>
+      <td><code>{{ i.namespace }}</code></td>
+      <td>{{ i.source_type }}</td>
+      <td>{{ (i.updated_at[:19] if i.updated_at else '') | replace('T', ' ') }}</td>
+      <td><span class="badge badge-{{ i.embedding_status }}">{{ i.embedding_status }}</span></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="5" style="text-align:center;color:#7b879a;">Vault is empty</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<div id="modal-ingest" class="modal" style="display:none;">
+  <div class="modal-content">
+    <h2>Ingest Text</h2>
+    <form id="form-ingest">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-group"><label>Title</label><input class="form-control" name="title" required></div>
+      <div class="form-group"><label>Namespace</label><input class="form-control" name="namespace" value="global"></div>
+      <div class="form-group"><label>Content</label><textarea class="form-control" name="content" rows="8" required></textarea></div>
+      <div class="modal-actions">
+        <button type="submit" class="btn btn-primary">Ingest</button>
+        <button type="button" class="btn" onclick="hideModal('modal-ingest')">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+function showIngest() { document.getElementById('modal-ingest').style.display = 'flex'; }
+function hideModal(id) { document.getElementById(id).style.display = 'none'; }
+
+document.getElementById('form-ingest').addEventListener('submit', async function(e) {
+  e.preventDefault();
+  const fd = new FormData(this);
+  const res = await fetch('/api/vault/ingest', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json', 'X-CSRFToken': fd.get('csrf_token')},
+    body: JSON.stringify({
+      title: fd.get('title'),
+      namespace: fd.get('namespace'),
+      content: fd.get('content')
+    }),
+  });
+  if (res.ok) location.reload();
+  else alert('Ingest failed');
+});
+
+document.getElementById('vault-search-form').addEventListener('submit', async function(e) {
+  e.preventDefault();
+  const fd = new FormData(this);
+  const query = (fd.get('query') || '').toString().trim();
+  if (!query) return;
+  const res = await fetch('/api/vault/search', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json', 'X-CSRFToken': fd.get('csrf_token')},
+    body: JSON.stringify({
+      query,
+      namespace: (fd.get('namespace') || '').toString().trim() || null,
+      limit: 5
+    }),
+  });
+  if (!res.ok) { alert('Search failed'); return; }
+  const results = await res.json();
+  const html = results.map(r => `
+    <div class="panel" style="margin-top:0.75rem;">
+      <h3 style="margin-bottom:0.35rem;">${r.title} <small style="color:#7b879a;">(score ${Number(r.score).toFixed(3)})</small></h3>
+      <div style="white-space:pre-wrap;">${r.content}</div>
+    </div>
+  `).join('');
+  document.getElementById('search-results').innerHTML = html || '<div class="empty" style="margin:0.75rem 0;">No matches</div>';
+});
+</script>
+{% endblock %}

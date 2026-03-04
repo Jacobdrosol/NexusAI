@@ -38,6 +38,15 @@ class CPClient:
             logger.warning("CP POST %s failed: %s", path, exc)
             return None
 
+    def _put(self, path: str, json: Any) -> Optional[Any]:
+        try:
+            resp = requests.put(f"{self.base_url}{path}", json=json, timeout=self.timeout)
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as exc:
+            logger.warning("CP PUT %s failed: %s", path, exc)
+            return None
+
     def _delete(self, path: str) -> bool:
         try:
             resp = requests.delete(f"{self.base_url}{path}", timeout=self.timeout)
@@ -74,6 +83,9 @@ class CPClient:
     def create_bot(self, bot: Dict) -> Optional[Dict]:
         return self._post("/v1/bots", bot)
 
+    def update_bot(self, bot_id: str, bot: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        return self._put(f"/v1/bots/{bot_id}", bot)
+
     def delete_bot(self, bot_id: str) -> bool:
         return self._delete(f"/v1/bots/{bot_id}")
 
@@ -86,6 +98,54 @@ class CPClient:
 
     def create_task(self, bot_id: str, payload: Any) -> Optional[Dict]:
         return self._post("/v1/tasks", {"bot_id": bot_id, "payload": payload})
+
+    # Projects
+    def list_projects(self) -> Optional[List[Dict[str, Any]]]:
+        return self._get("/v1/projects")
+
+    def create_project(self, project: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        return self._post("/v1/projects", project)
+
+    # Models
+    def list_models(self) -> Optional[List[Dict[str, Any]]]:
+        return self._get("/v1/models")
+
+    # Chat
+    def list_conversations(self, project_id: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
+        path = "/v1/chat/conversations"
+        if project_id:
+            path = f"{path}?project_id={project_id}"
+        return self._get(path)
+
+    def create_conversation(self, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        return self._post("/v1/chat/conversations", body)
+
+    def list_messages(self, conversation_id: str) -> Optional[List[Dict[str, Any]]]:
+        return self._get(f"/v1/chat/conversations/{conversation_id}/messages")
+
+    def post_message(self, conversation_id: str, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        return self._post(f"/v1/chat/conversations/{conversation_id}/messages", body)
+
+    # Vault
+    def list_vault_items(
+        self,
+        namespace: Optional[str] = None,
+        project_id: Optional[str] = None,
+        limit: int = 100,
+    ) -> Optional[List[Dict[str, Any]]]:
+        parts = [f"limit={limit}"]
+        if namespace:
+            parts.append(f"namespace={namespace}")
+        if project_id:
+            parts.append(f"project_id={project_id}")
+        qs = "&".join(parts)
+        return self._get(f"/v1/vault/items?{qs}")
+
+    def ingest_vault_item(self, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        return self._post("/v1/vault/items", body)
+
+    def search_vault(self, body: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
+        return self._post("/v1/vault/search", body)
 
 
 _client: Optional[CPClient] = None

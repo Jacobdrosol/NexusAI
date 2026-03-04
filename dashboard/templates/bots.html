@@ -18,16 +18,16 @@
   <tbody>
     {% for b in bots %}
     <tr data-id="{{ b.id }}">
-      <td>{{ b.name }}</td>
+      <td><a href="{{ url_for('bots.bot_detail_page', bot_id=b.id) }}">{{ b.name }}</a></td>
       <td>{{ b.role }}</td>
       <td>{{ b.priority }}</td>
       <td><span class="badge badge-{{ 'enabled' if b.enabled else 'disabled' }}">{{ 'enabled' if b.enabled else 'disabled' }}</span></td>
       <td>{{ b.backends | length }} backend(s)</td>
       <td class="actions">
-        <button class="btn btn-sm" onclick="toggleBot({{ b.id }}, {{ 'false' if b.enabled else 'true' }})">
+        <button class="btn btn-sm" onclick="toggleBot('{{ b.id }}', {{ 'false' if b.enabled else 'true' }})">
           {{ 'Disable' if b.enabled else 'Enable' }}
         </button>
-        <button class="btn btn-sm btn-danger" onclick="deleteBot({{ b.id }})">Delete</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteBot('{{ b.id }}')">Delete</button>
       </td>
     </tr>
     {% else %}

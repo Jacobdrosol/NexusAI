@@ -59,9 +59,12 @@ def create_app() -> Flask:
     from dashboard.auth import bp as auth_bp
     from dashboard.onboarding import bp as onboarding_bp
     from dashboard.routes.bots import bp as bots_bp
+    from dashboard.routes.chat import bp as chat_bp
     from dashboard.routes.events import bp as events_bp
+    from dashboard.routes.projects import bp as projects_bp
     from dashboard.routes.tasks import bp as tasks_bp
     from dashboard.routes.users import bp as users_bp
+    from dashboard.routes.vault import bp as vault_bp
     from dashboard.routes.workers import bp as workers_bp
     from dashboard.settings import bp as settings_bp
 
@@ -70,6 +73,9 @@ def create_app() -> Flask:
     app.register_blueprint(workers_bp)
     app.register_blueprint(bots_bp)
     app.register_blueprint(tasks_bp)
+    app.register_blueprint(projects_bp)
+    app.register_blueprint(chat_bp)
+    app.register_blueprint(vault_bp)
     app.register_blueprint(users_bp)
     app.register_blueprint(events_bp)
     app.register_blueprint(settings_bp)

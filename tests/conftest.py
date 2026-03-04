@@ -15,23 +15,51 @@ async def cp_app(tmp_path):
     """Create a control plane FastAPI app with empty registries (no YAML loading)."""
     from control_plane.registry.worker_registry import WorkerRegistry
     from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.keys.key_vault import KeyVault
+    from control_plane.chat.chat_manager import ChatManager
+    from control_plane.registry.model_registry import ModelRegistry
+    from control_plane.registry.project_registry import ProjectRegistry
     from control_plane.scheduler.scheduler import Scheduler
     from control_plane.task_manager.task_manager import TaskManager
+    from control_plane.vault.mcp_broker import MCPBroker
+    from control_plane.vault.vault_manager import VaultManager
     from fastapi import FastAPI
-    from control_plane.api import bots, tasks, workers as workers_api
+    from control_plane.api import bots, chat, keys, models_catalog, projects, tasks, vault, workers as workers_api
 
     app = FastAPI(title="NexusAI Control Plane Test")
     app.include_router(tasks.router)
     app.include_router(bots.router)
     app.include_router(workers_api.router)
+    app.include_router(projects.router)
+    app.include_router(keys.router)
+    app.include_router(models_catalog.router)
+    app.include_router(chat.router)
+    app.include_router(vault.router)
 
     worker_registry = WorkerRegistry()
     bot_registry = BotRegistry()
-    scheduler = Scheduler(bot_registry, worker_registry)
+    project_registry = ProjectRegistry(db_path=str(tmp_path / "projects.db"))
+    model_registry = ModelRegistry(db_path=str(tmp_path / "models.db"))
+    key_vault = KeyVault(db_path=str(tmp_path / "keys.db"), master_key="test-master-key")
+    chat_manager = ChatManager(db_path=str(tmp_path / "chat.db"))
+    vault_manager = VaultManager(db_path=str(tmp_path / "vault.db"))
+    mcp_broker = MCPBroker(vault_manager=vault_manager)
+    scheduler = Scheduler(
+        bot_registry,
+        worker_registry,
+        key_vault=key_vault,
+        model_registry=model_registry,
+    )
     task_manager = TaskManager(scheduler, db_path=str(tmp_path / "tasks.db"))
 
     app.state.worker_registry = worker_registry
     app.state.bot_registry = bot_registry
+    app.state.project_registry = project_registry
+    app.state.model_registry = model_registry
+    app.state.key_vault = key_vault
+    app.state.chat_manager = chat_manager
+    app.state.vault_manager = vault_manager
+    app.state.mcp_broker = mcp_broker
     app.state.scheduler = scheduler
     app.state.task_manager = task_manager
 

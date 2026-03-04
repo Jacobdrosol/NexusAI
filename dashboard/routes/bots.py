@@ -9,7 +9,7 @@ from flask import Blueprint, flash, jsonify, render_template, request
 from flask_login import login_required
 
 from dashboard.db import get_db
-from dashboard.models import Bot
+from dashboard.models import Bot, Task
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,48 @@ def bots_page() -> str:
             bots=[_bot_to_dict(b) for b in bots],
             error=None,
         )
+    finally:
+        db.close()
+
+
+@bp.get("/bots/<bot_id>")
+@login_required
+def bot_detail_page(bot_id: str):
+    """Render a bot detail page with backend chain and task board columns."""
+    from dashboard.cp_client import get_cp_client
+
+    cp = get_cp_client()
+    cp_bot = cp.get_bot(bot_id)
+    cp_tasks = cp.list_tasks()
+
+    if cp_bot is not None and cp_tasks is not None:
+        tasks = [t for t in cp_tasks if str(t.get("bot_id")) == str(bot_id)]
+        return render_template("bot_detail.html", bot=cp_bot, tasks=tasks, error=None)
+
+    db = get_db()
+    try:
+        # Fallback local bot IDs are integer PKs.
+        if not str(bot_id).isdigit():
+            return render_template("bot_detail.html", bot=None, tasks=[], error="Bot not found"), 404
+        bot = db.get(Bot, int(bot_id))
+        if not bot:
+            return render_template("bot_detail.html", bot=None, tasks=[], error="Bot not found"), 404
+        local_tasks = db.query(Task).filter_by(bot_id=bot.id).all()
+        tasks = []
+        for t in local_tasks:
+            tasks.append(
+                {
+                    "id": t.id,
+                    "bot_id": t.bot_id,
+                    "status": t.status,
+                    "payload": t.payload_as_dict(),
+                    "result": json.loads(t.result) if t.result else None,
+                    "error": json.loads(t.error) if t.error else None,
+                    "created_at": t.created_at.isoformat() if t.created_at else "",
+                    "updated_at": t.updated_at.isoformat() if t.updated_at else "",
+                }
+            )
+        return render_template("bot_detail.html", bot=_bot_to_dict(bot), tasks=tasks, error=None)
     finally:
         db.close()
 

@@ -18,6 +18,26 @@ class TaskNotFoundError(NexusError):
     """Raised when a task cannot be found."""
 
 
+class ProjectNotFoundError(NexusError):
+    """Raised when a project cannot be found."""
+
+
+class APIKeyNotFoundError(NexusError):
+    """Raised when an API key cannot be found."""
+
+
+class CatalogModelNotFoundError(NexusError):
+    """Raised when a catalog model cannot be found."""
+
+
+class ConversationNotFoundError(NexusError):
+    """Raised when a chat conversation cannot be found."""
+
+
+class VaultItemNotFoundError(NexusError):
+    """Raised when a vault item cannot be found."""
+
+
 class SchedulerError(NexusError):
     """Raised when scheduling fails."""
 
