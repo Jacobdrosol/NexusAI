@@ -4,6 +4,7 @@ ORM models: User, Worker, Bot, Task, Setting.
 Onboarding helpers: init_db, admin_exists, create_user, create_worker,
 set_setting, get_setting.
 """
+"""SQLAlchemy ORM models for NexusAI dashboard."""
 import json
 from datetime import datetime, timezone
 from typing import Any, Optional
