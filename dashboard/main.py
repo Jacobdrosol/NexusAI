@@ -8,8 +8,6 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from dashboard.settings import router as settings_router
-
 logger = logging.getLogger(__name__)
 
 CONTROL_PLANE_URL = os.environ.get("CONTROL_PLANE_URL", "http://localhost:8000")
@@ -22,8 +20,6 @@ def create_app() -> FastAPI:
 
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-
-    app.include_router(settings_router)
 
     @app.get("/dashboard", response_class=RedirectResponse)
     async def dashboard_root():

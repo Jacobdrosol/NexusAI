@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 # DDL
 # ---------------------------------------------------------------------------
 _CREATE_SETTINGS = """
-CREATE TABLE IF NOT EXISTS settings (
+CREATE TABLE IF NOT EXISTS nexus_settings (
     key         TEXT PRIMARY KEY,
     value       TEXT,
     value_type  TEXT DEFAULT 'string',
@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS settings (
 """
 
 _CREATE_AUDIT = """
-CREATE TABLE IF NOT EXISTS settings_audit (
+CREATE TABLE IF NOT EXISTS nexus_settings_audit (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     key        TEXT,
     old_value  TEXT,
@@ -205,7 +205,7 @@ class SettingsManager:
             for key, value, vtype, category, label, desc in _DEFAULTS:
                 conn.execute(
                     """
-                    INSERT OR IGNORE INTO settings
+                    INSERT OR IGNORE INTO nexus_settings
                         (key, value, value_type, category, label,
                          description, updated_at, updated_by)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -224,7 +224,7 @@ class SettingsManager:
         if now - self._cache_ts < self._cache_ttl and self._cache:
             return self._cache
         with self._connect() as conn:
-            cur = conn.execute("SELECT * FROM settings")
+            cur = conn.execute("SELECT * FROM nexus_settings")
             rows = {row["key"]: dict(row) for row in cur.fetchall()}
         self._cache = rows
         self._cache_ts = now
@@ -290,7 +290,7 @@ class SettingsManager:
         with self._write_lock:
             with self._connect() as conn:
                 cur = conn.execute(
-                    "SELECT value, value_type FROM settings WHERE key = ?",
+                    "SELECT value, value_type FROM nexus_settings WHERE key = ?",
                     (key,),
                 )
                 row = cur.fetchone()
@@ -300,7 +300,7 @@ class SettingsManager:
                 new_masked = _mask(raw, vtype)
                 conn.execute(
                     """
-                    INSERT INTO settings (key, value, updated_at, updated_by)
+                    INSERT INTO nexus_settings (key, value, updated_at, updated_by)
                     VALUES (?, ?, ?, ?)
                     ON CONFLICT(key) DO UPDATE SET
                         value      = excluded.value,
@@ -311,7 +311,7 @@ class SettingsManager:
                 )
                 conn.execute(
                     """
-                    INSERT INTO settings_audit
+                    INSERT INTO nexus_settings_audit
                         (key, old_value, new_value, changed_by, changed_at)
                     VALUES (?, ?, ?, ?, ?)
                     """,
@@ -362,7 +362,7 @@ class SettingsManager:
             cur = conn.execute(
                 """
                 SELECT id, key, old_value, new_value, changed_by, changed_at
-                FROM settings_audit
+                FROM nexus_settings_audit
                 ORDER BY id DESC
                 LIMIT ?
                 """,

@@ -2,7 +2,9 @@
 {% set active_page = "settings" %}
 {% block title %}Settings{% endblock %}
 {% block content %}
-<h1>Settings</h1>
+<div class="page-header">
+  <h1>Settings</h1>
+</div>
 
 <!-- Toast notification -->
 <div id="toast" style="display:none;position:fixed;top:1.5rem;right:1.5rem;z-index:1000;
@@ -24,6 +26,9 @@
   {% endfor %}
 </div>
 
+<!-- Hidden CSRF token for JS use -->
+<input type="hidden" id="csrf-token" value="{{ csrf_token() }}">
+
 <!-- Setting sections -->
 {% for g in groups %}
 <section id="section-{{ g.id }}"
@@ -32,7 +37,7 @@
   <h2 style="font-size:1.1rem;margin-bottom:1.25rem;color:#f0f0f0;">{{ g.label }}</h2>
   <form onsubmit="saveSection(event, '{{ g.id }}')">
     {% for s in g.settings %}
-    <div style="margin-bottom:1.25rem;">
+    <div class="form-group">
       <label for="field-{{ s.key }}"
              style="display:block;font-size:0.85rem;font-weight:600;
                     color:#a0aec0;margin-bottom:0.35rem;">
@@ -53,12 +58,10 @@
                value="{{ s.value }}"
                placeholder="{% if s.value == '[REDACTED]' %}(stored — leave blank to keep){% endif %}"
                autocomplete="new-password"
-               style="flex:1;background:#12141e;border:1px solid #2d3045;color:#e0e0e0;
-                      padding:0.5rem 0.75rem;border-radius:6px;font-size:0.9rem;">
-        <button type="button" onclick="toggleSecret('field-{{ s.key }}')"
-                style="background:#12141e;border:1px solid #2d3045;color:#a0aec0;
-                       padding:0.5rem 0.75rem;border-radius:6px;cursor:pointer;
-                       font-size:0.8rem;">
+               class="form-control"
+               style="flex:1;">
+        <button type="button" class="btn" onclick="toggleSecret('field-{{ s.key }}')"
+                style="font-size:0.8rem;">
           Show
         </button>
       </div>
@@ -67,21 +70,19 @@
       <input type="number" id="field-{{ s.key }}" name="{{ s.key }}"
              value="{{ s.value }}"
              {% if s.value_type == "float" %}step="any"{% endif %}
-             style="background:#12141e;border:1px solid #2d3045;color:#e0e0e0;
-                    padding:0.5rem 0.75rem;border-radius:6px;font-size:0.9rem;
-                    min-width:220px;">
+             class="form-control"
+             style="min-width:220px;">
 
       {% elif s.value_type == "json" %}
       <textarea id="field-{{ s.key }}" name="{{ s.key }}" rows="4"
-                style="width:100%;background:#12141e;border:1px solid #2d3045;
-                       color:#e0e0e0;padding:0.5rem 0.75rem;border-radius:6px;
-                       font-size:0.85rem;font-family:monospace;resize:vertical;">{{ s.value }}</textarea>
+                class="form-control"
+                style="font-family:monospace;resize:vertical;">{{ s.value }}</textarea>
 
       {% else %}
       <input type="text" id="field-{{ s.key }}" name="{{ s.key }}"
              value="{{ s.value }}"
-             style="width:100%;max-width:480px;background:#12141e;border:1px solid #2d3045;
-                    color:#e0e0e0;padding:0.5rem 0.75rem;border-radius:6px;font-size:0.9rem;">
+             class="form-control"
+             style="max-width:480px;">
       {% endif %}
 
       {% if s.description %}
@@ -90,12 +91,7 @@
     </div>
     {% endfor %}
 
-    <button type="submit"
-            style="background:#7c3aed;color:#fff;border:none;padding:0.5rem 1.25rem;
-                   border-radius:6px;cursor:pointer;font-size:0.9rem;font-weight:600;
-                   transition:background 0.2s;">
-      Save {{ g.label }}
-    </button>
+    <button type="submit" class="btn btn-primary">Save {{ g.label }}</button>
   </form>
 </section>
 {% endfor %}
@@ -105,20 +101,9 @@
                 margin-bottom:1.5rem;border:1px solid #2d3045;">
   <h2 style="font-size:1.1rem;margin-bottom:1rem;color:#f0f0f0;">Export / Import</h2>
   <div style="display:flex;gap:0.75rem;flex-wrap:wrap;align-items:center;">
-    <a href="/api/settings/export/yaml"
-       style="background:#12141e;border:1px solid #2d3045;color:#e0e0e0;
-              padding:0.5rem 1rem;border-radius:6px;text-decoration:none;
-              font-size:0.85rem;">
-      ⬇ Export YAML
-    </a>
-    <a href="/api/settings/export/json"
-       style="background:#12141e;border:1px solid #2d3045;color:#e0e0e0;
-              padding:0.5rem 1rem;border-radius:6px;text-decoration:none;
-              font-size:0.85rem;">
-      ⬇ Export JSON
-    </a>
-    <label style="background:#12141e;border:1px solid #2d3045;color:#e0e0e0;
-                  padding:0.5rem 1rem;border-radius:6px;cursor:pointer;font-size:0.85rem;">
+    <a href="{{ url_for('settings.export_yaml') }}" class="btn">⬇ Export YAML</a>
+    <a href="{{ url_for('settings.export_json_endpoint') }}" class="btn">⬇ Export JSON</a>
+    <label class="btn" style="cursor:pointer;">
       ⬆ Import YAML/JSON
       <input type="file" id="import-file" accept=".yaml,.yml,.json"
              onchange="previewImport()" style="display:none;">
@@ -134,10 +119,7 @@
          style="background:#12141e;border:1px solid #2d3045;color:#a0aec0;
                 padding:0.75rem;border-radius:6px;font-size:0.8rem;
                 max-height:200px;overflow:auto;"></pre>
-    <button onclick="applyImport()"
-            style="margin-top:0.75rem;background:#7c3aed;color:#fff;border:none;
-                   padding:0.5rem 1.25rem;border-radius:6px;cursor:pointer;
-                   font-size:0.9rem;font-weight:600;">
+    <button onclick="applyImport()" class="btn btn-primary" style="margin-top:0.75rem;">
       Apply Import
     </button>
   </div>
@@ -175,8 +157,12 @@
   <p style="color:#718096;font-size:0.9rem;">No changes recorded yet.</p>
   {% endif %}
 </section>
+{% endblock %}
 
+{% block scripts %}
 <script>
+var _csrfToken = document.getElementById('csrf-token').value;
+
 // ---------------------------------------------------------------------------
 // Tab switching
 // ---------------------------------------------------------------------------
@@ -223,7 +209,7 @@ function saveSection(evt, categoryId) {
   });
   fetch('/api/settings', {
     method: 'POST',
-    headers: {'Content-Type': 'application/json'},
+    headers: {'Content-Type': 'application/json', 'X-CSRFToken': _csrfToken},
     body: JSON.stringify(payload)
   })
   .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
@@ -231,7 +217,7 @@ function saveSection(evt, categoryId) {
     if (res.ok) {
       showToast('✓ Saved ' + res.data.updated + ' setting(s)', true);
     } else {
-      showToast('✗ ' + (res.data.detail || 'Save failed'), false);
+      showToast('✗ ' + (res.data.error || 'Save failed'), false);
     }
   })
   .catch(function(e) { showToast('✗ Network error: ' + e, false); });
@@ -242,7 +228,7 @@ function saveSection(evt, categoryId) {
 // ---------------------------------------------------------------------------
 function toggleSecret(fieldId) {
   var inp = document.getElementById(fieldId);
-  var btn = inp.nextElementSibling;
+  var btn = inp.parentElement.querySelector('button');
   if (inp.type === 'password') {
     inp.type = 'text';
     btn.textContent = 'Hide';
@@ -267,7 +253,7 @@ function previewImport() {
       if (file.name.endsWith('.json')) {
         data = JSON.parse(text);
       } else {
-        // Basic YAML key:value preview without a YAML parser
+        // Basic YAML key:value preview without a full YAML parser
         data = {};
         text.split('\n').forEach(function(line) {
           var m = line.match(/^([^:#\s][^:]*?):\s*(.*)$/);
@@ -291,7 +277,11 @@ function applyImport() {
   var file = document.getElementById('import-file').files[0];
   var form = new FormData();
   form.append('file', file);
-  fetch('/api/settings/import', { method: 'POST', body: form })
+  fetch('/api/settings/import', {
+    method: 'POST',
+    headers: {'X-CSRFToken': _csrfToken},
+    body: form
+  })
   .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
   .then(function(res) {
     if (res.ok) {
@@ -299,10 +289,11 @@ function applyImport() {
       document.getElementById('import-preview').style.display = 'none';
       _importData = null;
     } else {
-      showToast('✗ ' + (res.data.detail || 'Import failed'), false);
+      showToast('✗ ' + (res.data.error || 'Import failed'), false);
     }
   })
   .catch(function(e) { showToast('✗ Network error: ' + e, false); });
 }
 </script>
 {% endblock %}
+

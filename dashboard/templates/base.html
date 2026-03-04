@@ -4,18 +4,31 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>NexusAI – {% block title %}Dashboard{% endblock %}</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
   <nav>
-    <a href="/dashboard" class="brand">⚡ NexusAI</a>
-    <a href="/dashboard/workers" {% if active_page == 'workers' %}class="active"{% endif %}>Workers</a>
-    <a href="/dashboard/bots" {% if active_page == 'bots' %}class="active"{% endif %}>Bots</a>
-    <a href="/dashboard/tasks" {% if active_page == 'tasks' %}class="active"{% endif %}>Tasks</a>
-    <a href="/dashboard/settings" {% if active_page == 'settings' %}class="active"{% endif %}>Settings</a>
+    <a href="{{ url_for('main.index') }}" class="brand">⚡ NexusAI</a>
+    <a href="{{ url_for('main.index') }}" {% if active_page == 'overview' %}class="active"{% endif %}>Overview</a>
+    <a href="{{ url_for('workers.workers_page') }}" {% if active_page == 'workers' %}class="active"{% endif %}>Workers</a>
+    <a href="{{ url_for('bots.bots_page') }}" {% if active_page == 'bots' %}class="active"{% endif %}>Bots</a>
+    <a href="{{ url_for('tasks.tasks_page') }}" {% if active_page == 'tasks' %}class="active"{% endif %}>Tasks</a>
+    {% if current_user.role == 'admin' %}
+    <a href="{{ url_for('users.users_page') }}" {% if active_page == 'users' %}class="active"{% endif %}>Users</a>
+    <a href="{{ url_for('settings.settings_page') }}" {% if active_page == 'settings' %}class="active"{% endif %}>Settings</a>
+    {% endif %}
+    <span class="nav-spacer"></span>
+    <span class="nav-user">{{ current_user.email }}</span>
+    <a href="{{ url_for('auth.logout') }}" class="nav-logout">Logout</a>
   </nav>
   <div class="container">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">{{ message }}</div>
+      {% endfor %}
+    {% endwith %}
     {% block content %}{% endblock %}
   </div>
+  {% block scripts %}{% endblock %}
 </body>
 </html>

@@ -1,37 +1,38 @@
-"""Settings Blueprint (FastAPI APIRouter) for the NexusAI Dashboard.
+"""Settings Blueprint for the NexusAI Dashboard (Flask).
 
 Provides:
-  - GET  /dashboard/settings          – settings UI page (admin only)
-  - GET  /api/settings                – list all settings (secrets masked)
-  - GET  /api/settings/export/yaml    – download settings as YAML
-  - GET  /api/settings/export/json    – download settings as JSON
-  - POST /api/settings/import         – import from uploaded YAML/JSON file
-  - GET  /api/settings/{key}          – get single setting
-  - POST /api/settings                – bulk update (admin only)
-  - PUT  /api/settings/{key}          – update single setting (admin only)
+  - GET  /settings                – settings UI page (admin only)
+  - GET  /api/settings            – list all settings (secrets masked)
+  - GET  /api/settings/export/yaml – download settings as YAML
+  - GET  /api/settings/export/json – download settings as JSON
+  - POST /api/settings/import     – import from uploaded YAML/JSON file
+  - GET  /api/settings/<key>      – get single setting
+  - POST /api/settings            – bulk update (admin only)
+  - PUT  /api/settings/<key>      – update single setting (admin only)
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
-from pathlib import Path
 from typing import Any, Dict
 
 import yaml
-from fastapi import APIRouter, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse, Response
-from fastapi.templating import Jinja2Templates
+from flask import (
+    Blueprint,
+    abort,
+    jsonify,
+    make_response,
+    render_template,
+    request,
+)
+from flask_login import current_user, login_required
 
 from shared.settings_manager import SettingsManager
 
 logger = logging.getLogger(__name__)
 
-TEMPLATES_DIR = Path(__file__).parent / "templates"
-templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
-
-router = APIRouter()
+bp = Blueprint("settings", __name__)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -73,119 +74,133 @@ def _group_by_category(
     ]
 
 
+def _require_admin() -> None:
+    """Abort with 403 if the current user is not an admin."""
+    if not current_user.is_authenticated or current_user.role != "admin":
+        abort(403)
+
+
 # ---------------------------------------------------------------------------
 # UI route
 # ---------------------------------------------------------------------------
 
-@router.get("/dashboard/settings", response_class=HTMLResponse)
-async def settings_page(request: Request) -> HTMLResponse:
-    """Render the settings management page."""
+@bp.get("/settings")
+@login_required
+def settings_page() -> str:
+    """Render the settings management page (admin only)."""
+    _require_admin()
     mgr = _get_mgr()
-    all_settings = await asyncio.to_thread(mgr.get_all, mask_secrets=False)
-    audit_log = await asyncio.to_thread(mgr.get_audit_log, 50)
+    all_settings = mgr.get_all(mask_secrets=False)
+    audit_log = mgr.get_audit_log(50)
     groups = _group_by_category(all_settings)
-    return templates.TemplateResponse(
+    return render_template(
         "settings.html",
-        {
-            "request": request,
-            "groups": groups,
-            "audit_log": audit_log,
-            "active_page": "settings",
-        },
+        groups=groups,
+        audit_log=audit_log,
+        active_page="settings",
     )
 
 
 # ---------------------------------------------------------------------------
-# API routes — ordering matters: fixed paths before parameterised ones
+# API routes — fixed paths before parameterised ones
 # ---------------------------------------------------------------------------
 
-@router.get("/api/settings/export/yaml")
-async def export_yaml() -> Response:
+@bp.get("/api/settings/export/yaml")
+@login_required
+def export_yaml():
     """Download all settings as a YAML file (secrets masked)."""
+    _require_admin()
     mgr = _get_mgr()
-    content = await asyncio.to_thread(mgr.export_yaml)
-    return Response(
-        content=content,
-        media_type="application/x-yaml",
-        headers={"Content-Disposition": "attachment; filename=nexusai_settings.yaml"},
-    )
+    content = mgr.export_yaml()
+    resp = make_response(content)
+    resp.headers["Content-Type"] = "application/x-yaml"
+    resp.headers["Content-Disposition"] = "attachment; filename=nexusai_settings.yaml"
+    return resp
 
 
-@router.get("/api/settings/export/json")
-async def export_json_endpoint() -> Response:
+@bp.get("/api/settings/export/json")
+@login_required
+def export_json_endpoint():
     """Download all settings as a JSON file (secrets masked)."""
+    _require_admin()
     mgr = _get_mgr()
-    content = await asyncio.to_thread(mgr.export_json)
-    return Response(
-        content=content,
-        media_type="application/json",
-        headers={"Content-Disposition": "attachment; filename=nexusai_settings.json"},
-    )
+    content = mgr.export_json()
+    resp = make_response(content)
+    resp.headers["Content-Type"] = "application/json"
+    resp.headers["Content-Disposition"] = "attachment; filename=nexusai_settings.json"
+    return resp
 
 
-@router.post("/api/settings/import")
-async def import_settings(file: UploadFile, request: Request) -> JSONResponse:
+@bp.post("/api/settings/import")
+@login_required
+def import_settings():
     """Import settings from an uploaded YAML or JSON file."""
-    raw = await file.read()
+    _require_admin()
+    if "file" not in request.files:
+        return jsonify({"error": "No file provided."}), 400
+    file = request.files["file"]
     filename = file.filename or ""
+    raw = file.read()
     try:
         if filename.endswith((".yaml", ".yml")):
             data = yaml.safe_load(raw)
         else:
             data = json.loads(raw)
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Failed to parse file: {exc}") from exc
+        return jsonify({"error": f"Failed to parse file: {exc}"}), 400
     if not isinstance(data, dict):
-        raise HTTPException(status_code=400, detail="Imported file must be a JSON/YAML object.")
+        return jsonify({"error": "Imported file must be a JSON/YAML object."}), 400
     mgr = _get_mgr()
-    changed_by = request.headers.get("X-User", "import")
-    await asyncio.to_thread(mgr.import_from_dict, data, changed_by)
-    return JSONResponse({"status": "ok", "imported": len(data)})
+    changed_by = getattr(current_user, "email", "import")
+    mgr.import_from_dict(data, changed_by)
+    return jsonify({"status": "ok", "imported": len(data)})
 
 
-@router.get("/api/settings")
-async def list_settings() -> JSONResponse:
+@bp.get("/api/settings")
+@login_required
+def list_settings():
     """Return all settings with secrets masked."""
+    _require_admin()
     mgr = _get_mgr()
-    all_settings = await asyncio.to_thread(mgr.get_all, mask_secrets=True)
-    return JSONResponse(all_settings)
+    return jsonify(mgr.get_all(mask_secrets=True))
 
 
-@router.get("/api/settings/{key}")
-async def get_setting(key: str) -> JSONResponse:
+@bp.get("/api/settings/<key>")
+@login_required
+def get_setting(key: str):
     """Return a single setting (secret values are masked)."""
+    _require_admin()
     mgr = _get_mgr()
-    all_settings = await asyncio.to_thread(mgr.get_all, mask_secrets=True)
+    all_settings = mgr.get_all(mask_secrets=True)
     if key not in all_settings:
-        raise HTTPException(status_code=404, detail=f"Setting '{key}' not found.")
-    return JSONResponse(all_settings[key])
+        return jsonify({"error": f"Setting '{key}' not found."}), 404
+    return jsonify(all_settings[key])
 
 
-@router.post("/api/settings")
-async def bulk_update_settings(request: Request) -> JSONResponse:
+@bp.post("/api/settings")
+@login_required
+def bulk_update_settings():
     """Bulk-update settings from a JSON body ``{key: value, ...}``."""
-    try:
-        body: Dict[str, Any] = await request.json()
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail="Invalid JSON body.") from exc
+    _require_admin()
+    body = request.get_json(silent=True)
     if not isinstance(body, dict):
-        raise HTTPException(status_code=400, detail="Request body must be a JSON object.")
+        return jsonify({"error": "Request body must be a JSON object."}), 400
     mgr = _get_mgr()
-    changed_by = request.headers.get("X-User", "api")
-    await asyncio.to_thread(mgr.import_from_dict, body, changed_by)
-    return JSONResponse({"status": "ok", "updated": len(body)})
+    changed_by = getattr(current_user, "email", "api")
+    mgr.import_from_dict(body, changed_by)
+    return jsonify({"status": "ok", "updated": len(body)})
 
 
-@router.put("/api/settings/{key}")
-async def update_setting(key: str, request: Request) -> JSONResponse:
+@bp.put("/api/settings/<key>")
+@login_required
+def update_setting(key: str):
     """Update a single setting value."""
-    try:
-        body: Dict[str, Any] = await request.json()
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail="Invalid JSON body.") from exc
-    if "value" not in body:
-        raise HTTPException(status_code=400, detail="Body must contain a 'value' field.")
+    _require_admin()
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict) or "value" not in body:
+        return jsonify({"error": "Body must contain a 'value' field."}), 400
     mgr = _get_mgr()
-    changed_by = request.headers.get("X-User", "api")
-    await asyncio.to_thread(mgr.set, key, body["value"], changed_by)
-    return JSONResponse({"status": "ok", "key": key})
+    changed_by = getattr(current_user, "email", "api")
+    mgr.set(key, body["value"], changed_by)
+    return jsonify({"status": "ok", "key": key})
+
