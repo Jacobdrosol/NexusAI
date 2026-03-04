@@ -4,6 +4,17 @@
 
 ---
 
+## Quick Start with Docker
+
+1. Clone the repo
+2. Copy `.env.example` to `.env` and fill in your values
+3. Run: `docker compose up --build`
+4. Open http://localhost:5000 to access the dashboard
+5. The control plane API is at http://localhost:8000
+6. The worker agent is at http://localhost:8001
+
+---
+
 ## Architecture
 
 ```
