@@ -36,6 +36,9 @@ services:
       - nexus-data:/app/data
     networks:
       - nexus-net
+    depends_on:
+      control_plane:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
       interval: 30s

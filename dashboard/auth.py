@@ -39,7 +39,7 @@ def login_get():
     db = get_db()
     try:
         if db.query(User).count() == 0:
-            return redirect(url_for("onboarding.setup_root"))
+            return redirect(url_for("onboarding.index"))
     finally:
         db.close()
     return render_template("login.html", form=LoginForm())
