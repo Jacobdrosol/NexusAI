@@ -70,3 +70,30 @@ def test_chat_ingest_api_validates_required_fields(dashboard_client):
     _login_admin(dashboard_client)
     resp = dashboard_client.post("/api/chat/ingest", json={})
     assert resp.status_code == 400
+
+
+def test_worker_detail_page_loads_when_logged_in(dashboard_client):
+    _login_admin(dashboard_client)
+    from dashboard.db import get_db
+    from dashboard.models import Worker
+
+    db = get_db()
+    try:
+        worker = Worker(name="Worker Detail", host="localhost", port=8001, status="online", capabilities="[]", metrics="{}")
+        db.add(worker)
+        db.commit()
+        db.refresh(worker)
+        worker_id = worker.id
+    finally:
+        db.close()
+
+    resp = dashboard_client.get(f"/workers/{worker_id}")
+    assert resp.status_code == 200
+    assert b"Live Metrics" in resp.data
+
+
+def test_settings_page_loads_for_admin(dashboard_client):
+    _login_admin(dashboard_client)
+    resp = dashboard_client.get("/settings")
+    assert resp.status_code == 200
+    assert b"Settings" in resp.data

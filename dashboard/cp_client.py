@@ -10,7 +10,7 @@ import requests
 logger = logging.getLogger(__name__)
 
 _CP_BASE = os.environ.get("CONTROL_PLANE_URL", "http://control_plane:8000")
-_TIMEOUT = float(os.environ.get("CP_TIMEOUT", "5"))
+_TIMEOUT = float(os.environ.get("CP_TIMEOUT", "2"))
 
 
 class CPClient:
@@ -70,6 +70,15 @@ class CPClient:
     def register_worker(self, worker: Dict) -> Optional[Dict]:
         return self._post("/v1/workers", worker)
 
+    def update_worker(self, worker_id: str, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        return self._put(f"/v1/workers/{worker_id}", body)
+
+    def heartbeat_worker(self, worker_id: str, metrics: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+        payload: Dict[str, Any] = {}
+        if metrics:
+            payload["metrics"] = metrics
+        return self._post(f"/v1/workers/{worker_id}/heartbeat", payload)
+
     def delete_worker(self, worker_id: str) -> bool:
         return self._delete(f"/v1/workers/{worker_id}")
 
@@ -106,9 +115,28 @@ class CPClient:
     def create_project(self, project: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return self._post("/v1/projects", project)
 
+    def delete_project(self, project_id: str) -> bool:
+        return self._delete(f"/v1/projects/{project_id}")
+
     # Models
     def list_models(self) -> Optional[List[Dict[str, Any]]]:
         return self._get("/v1/models")
+
+    def create_model(self, model: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        return self._post("/v1/models", model)
+
+    def delete_model(self, model_id: str) -> bool:
+        return self._delete(f"/v1/models/{model_id}")
+
+    # Keys
+    def list_keys(self) -> Optional[List[Dict[str, Any]]]:
+        return self._get("/v1/keys")
+
+    def upsert_key(self, name: str, provider: str, value: str) -> Optional[Dict[str, Any]]:
+        return self._post("/v1/keys", {"name": name, "provider": provider, "value": value})
+
+    def delete_key(self, name: str) -> bool:
+        return self._delete(f"/v1/keys/{name}")
 
     # Chat
     def list_conversations(self, project_id: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:

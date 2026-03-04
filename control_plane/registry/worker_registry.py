@@ -65,6 +65,12 @@ class WorkerRegistry:
             del self._workers[worker_id]
             self._last_heartbeat.pop(worker_id, None)
 
+    async def update(self, worker_id: str, worker: Worker) -> None:
+        async with self._lock:
+            if worker_id not in self._workers:
+                raise WorkerNotFoundError(f"Worker not found: {worker_id}")
+            self._workers[worker_id] = worker
+
     async def get_worker_ids(self) -> List[str]:
         async with self._lock:
             return list(self._workers.keys())

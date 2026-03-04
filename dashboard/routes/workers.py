@@ -53,6 +53,37 @@ def workers_page() -> str:
         db.close()
 
 
+@bp.get("/workers/<worker_id>")
+@login_required
+def worker_detail_page(worker_id: str):
+    """Render worker detail with capabilities, metrics, and basic actions."""
+    from dashboard.cp_client import get_cp_client
+
+    cp = get_cp_client()
+    worker = cp.get_worker(worker_id)
+    tasks = cp.list_tasks() or []
+    running_tasks = [t for t in tasks if t.get("status") == "running"]
+    if worker is not None:
+        return render_template("worker_detail.html", worker=worker, running_tasks=running_tasks, error=None)
+
+    flash("Control plane unavailable — showing local data.", "warning")
+    db = get_db()
+    try:
+        if not str(worker_id).isdigit():
+            return render_template("worker_detail.html", worker=None, running_tasks=[], error="Worker not found"), 404
+        local = db.get(Worker, int(worker_id))
+        if not local:
+            return render_template("worker_detail.html", worker=None, running_tasks=[], error="Worker not found"), 404
+        return render_template(
+            "worker_detail.html",
+            worker=_worker_to_dict(local),
+            running_tasks=[],
+            error=None,
+        )
+    finally:
+        db.close()
+
+
 # ── API ────────────────────────────────────────────────────────────────────────
 
 @bp.get("/api/workers")
@@ -93,12 +124,18 @@ def api_create_worker():
         db.close()
 
 
-@bp.get("/api/workers/<int:worker_id>")
+@bp.get("/api/workers/<worker_id>")
 @login_required
-def api_get_worker(worker_id: int):
+def api_get_worker(worker_id: str):
     """Get a single worker by ID."""
+    from dashboard.cp_client import get_cp_client
+    cp_worker = get_cp_client().get_worker(worker_id)
+    if cp_worker is not None:
+        return jsonify(cp_worker)
     db = get_db()
     try:
+        if not str(worker_id).isdigit():
+            return jsonify({"error": "not found"}), 404
         worker = db.get(Worker, worker_id)
         if not worker:
             return jsonify({"error": "not found"}), 404
@@ -107,16 +144,30 @@ def api_get_worker(worker_id: int):
         db.close()
 
 
-@bp.put("/api/workers/<int:worker_id>")
+@bp.put("/api/workers/<worker_id>")
 @login_required
-def api_update_worker(worker_id: int):
+def api_update_worker(worker_id: str):
     """Update an existing worker."""
+    from dashboard.cp_client import get_cp_client
+    data: dict[str, Any] = request.get_json(force=True) or {}
+    cp = get_cp_client()
+    cp_worker = cp.get_worker(worker_id)
+    if cp_worker is not None:
+        merged = dict(cp_worker)
+        merged.update(data)
+        updated = cp.update_worker(worker_id, merged)
+        if updated is None:
+            return jsonify({"error": "control plane unavailable"}), 502
+        return jsonify(updated)
+
     db = get_db()
     try:
-        worker = db.get(Worker, worker_id)
+        if not str(worker_id).isdigit():
+            return jsonify({"error": "not found"}), 404
+        worker_id_int = int(worker_id)
+        worker = db.get(Worker, worker_id_int)
         if not worker:
             return jsonify({"error": "not found"}), 404
-        data: dict[str, Any] = request.get_json(force=True) or {}
         for field in ("name", "host", "status"):
             if field in data:
                 setattr(worker, field, data[field])
@@ -135,13 +186,24 @@ def api_update_worker(worker_id: int):
         db.close()
 
 
-@bp.delete("/api/workers/<int:worker_id>")
+@bp.delete("/api/workers/<worker_id>")
 @login_required
-def api_delete_worker(worker_id: int):
+def api_delete_worker(worker_id: str):
     """Delete a worker."""
+    from dashboard.cp_client import get_cp_client
+    cp = get_cp_client()
+    cp_worker = cp.get_worker(worker_id)
+    if cp_worker is not None:
+        ok = cp.delete_worker(worker_id)
+        if not ok:
+            return jsonify({"error": "delete failed"}), 502
+        return "", 204
+
     db = get_db()
     try:
-        worker = db.get(Worker, worker_id)
+        if not str(worker_id).isdigit():
+            return jsonify({"error": "not found"}), 404
+        worker = db.get(Worker, int(worker_id))
         if not worker:
             return jsonify({"error": "not found"}), 404
         db.delete(worker)
@@ -149,3 +211,14 @@ def api_delete_worker(worker_id: int):
         return "", 204
     finally:
         db.close()
+
+
+@bp.post("/api/workers/<worker_id>/ping")
+@login_required
+def api_ping_worker(worker_id: str):
+    from dashboard.cp_client import get_cp_client
+    cp = get_cp_client()
+    resp = cp.heartbeat_worker(worker_id)
+    if resp is None:
+        return jsonify({"error": "control plane unavailable"}), 502
+    return jsonify(resp)

@@ -50,6 +50,16 @@ async def test_worker_heartbeat(cp_client):
 
 
 @pytest.mark.anyio
+async def test_update_worker(cp_client):
+    worker = {"id": "w1", "name": "W1", "host": "h1", "port": 8001, "status": "offline", "capabilities": [], "metrics": {}, "enabled": True}
+    await cp_client.post("/v1/workers", json=worker)
+    update = {"id": "w1", "name": "W1 Renamed", "host": "h1", "port": 8001, "status": "online", "capabilities": [], "metrics": {}, "enabled": False}
+    resp = await cp_client.put("/v1/workers/w1", json=update)
+    assert resp.status_code == 200
+    assert resp.json()["enabled"] is False
+
+
+@pytest.mark.anyio
 async def test_list_bots_empty(cp_client):
     resp = await cp_client.get("/v1/bots")
     assert resp.status_code == 200

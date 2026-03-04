@@ -410,7 +410,7 @@ These are confirmed issues that must be fixed before serious testing:
 
 #### 4b. Worker Detail Page
 - [ ] Hardware profile card, model capability list, live resource graphs, current task list
-- [ ] Worker enable/disable/delete/ping actions
+- [x] Worker enable/disable/delete/ping actions
 
 #### 4c. Bot Detail + Task Board
 - [ ] Bot edit form: name, role, system prompt, backend chain editor
@@ -437,7 +437,7 @@ These are confirmed issues that must be fixed before serious testing:
 - [x] "Ingest this chat" button on chat page
 
 #### 4g. Settings Additions
-- [ ] API Keys tab, Model Catalog tab, Projects tab
+- [x] API Keys tab, Model Catalog tab, Projects tab
 - [x] Fix control plane port setting (Bug #2) — **RESOLVED**
 
 #### 4h. Overview Page Enhancement
@@ -898,3 +898,43 @@ NexusAI/
 
 - `pytest -q tests/test_dashboard_phase4_pages.py tests/test_dashboard_smoke.py tests/test_dashboard_onboarding.py` → **17 passed**
 - `pytest -q` → **90 passed**
+
+---
+
+### 2026-03-05 00:58 — Phase 4: Worker Detail + Settings Tabs (Slice 10)
+
+**Status:** Worker detail page and Settings additive tabs are implemented and wired to control-plane APIs.
+
+**Changes made:**
+
+- Added worker detail route and page:
+  - `GET /workers/<worker_id>` in `dashboard/routes/workers.py`
+  - template `dashboard/templates/worker_detail.html`
+- Worker detail includes:
+  - worker identity/status/capabilities
+  - live metrics summary (load, queue depth, GPU utilization samples)
+  - running task list snapshot
+  - actions: ping, enable/disable, delete
+- Added worker action endpoint:
+  - `POST /api/workers/<worker_id>/ping`
+- Extended control-plane workers API with update support:
+  - `PUT /v1/workers/{worker_id}` in `control_plane/api/workers.py`
+  - worker registry update method in `control_plane/registry/worker_registry.py`
+- Updated dashboard workers/bots local API routes to handle string IDs and CP passthrough cleanly:
+  - `dashboard/routes/workers.py`
+  - `dashboard/routes/bots.py`
+- Expanded dashboard control-plane client:
+  - worker update/heartbeat helpers
+  - key/model/project management helpers
+  - (`dashboard/cp_client.py`)
+- Added Settings additions (4g):
+  - API Keys tab
+  - Model Catalog tab
+  - Projects tab
+  - routes in `dashboard/settings.py`
+  - UI controls in `dashboard/templates/settings.html`
+
+**Validation:**
+
+- `pytest -q tests/test_dashboard_phase4_pages.py tests/test_dashboard_smoke.py tests/test_dashboard_onboarding.py tests/test_control_plane_api.py tests/test_worker_registry.py` → **43 passed**
+- `pytest -q` → **93 passed**

@@ -18,7 +18,7 @@
   <tbody>
     {% for w in workers %}
     <tr data-id="{{ w.id }}">
-      <td>{{ w.name }}</td>
+      <td><a href="{{ url_for('workers.worker_detail_page', worker_id=w.id) }}">{{ w.name }}</a></td>
       <td>{{ w.host }}:{{ w.port }}</td>
       <td><span class="badge badge-{{ w.status }}">{{ w.status }}</span></td>
       <td><span class="badge badge-{{ 'enabled' if w.enabled else 'disabled' }}">{{ 'enabled' if w.enabled else 'disabled' }}</span></td>

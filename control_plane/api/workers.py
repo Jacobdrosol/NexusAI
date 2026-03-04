@@ -37,6 +37,16 @@ async def get_worker(worker_id: str, request: Request) -> Worker:
         raise HTTPException(status_code=404, detail=str(e))
 
 
+@router.put("/{worker_id}", response_model=Worker)
+async def update_worker(worker_id: str, request: Request, worker: Worker) -> Worker:
+    worker_registry = request.app.state.worker_registry
+    try:
+        await worker_registry.update(worker_id, worker)
+        return worker
+    except WorkerNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
 @router.delete("/{worker_id}")
 async def remove_worker(worker_id: str, request: Request) -> dict:
     worker_registry = request.app.state.worker_registry

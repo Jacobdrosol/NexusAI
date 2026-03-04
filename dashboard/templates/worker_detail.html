@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% set active_page = "workers" %}
+{% block title %}Worker Detail{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Worker Detail</h1>
+  <a class="btn" href="{{ url_for('workers.workers_page') }}">Back to Workers</a>
+</div>
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+{% if error %}
+<div class="alert alert-error">{{ error }}</div>
+{% elif worker %}
+<section class="panel" style="margin-bottom:1rem;">
+  <h2 class="panel-title">{{ worker.name }} <small style="color:#64748b;">({{ worker.id }})</small></h2>
+  <div class="split-grid" style="grid-template-columns:1fr 1fr;">
+    <div>
+      <div><strong>Host:</strong> {{ worker.host }}:{{ worker.port }}</div>
+      <div><strong>Status:</strong> <span class="badge badge-{{ worker.status }}">{{ worker.status }}</span></div>
+      <div><strong>Enabled:</strong> <span class="badge badge-{{ 'enabled' if worker.enabled else 'disabled' }}">{{ 'enabled' if worker.enabled else 'disabled' }}</span></div>
+      <div style="margin-top:0.75rem; display:flex; gap:0.5rem; flex-wrap:wrap;">
+        <button class="btn" onclick="pingWorker('{{ worker.id }}')">Ping</button>
+        <button class="btn" onclick="toggleWorker('{{ worker.id }}', {{ 'false' if worker.enabled else 'true' }})">
+          {{ 'Disable' if worker.enabled else 'Enable' }}
+        </button>
+        <button class="btn btn-danger" onclick="deleteWorker('{{ worker.id }}')">Delete</button>
+      </div>
+    </div>
+    <div>
+      <div><strong>Capabilities</strong></div>
+      <ul style="margin-top:0.35rem; padding-left:1.2rem;">
+        {% for c in worker.capabilities %}
+        <li>{{ c.provider }} / {{ c.type }} — {{ c.models | join(', ') }}</li>
+        {% else %}
+        <li class="empty">No capabilities reported</li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section class="panel" style="margin-bottom:1rem;">
+  <h2 class="panel-title">Live Metrics</h2>
+  {% set m = worker.metrics or {} %}
+  <div class="cards">
+    <div class="card"><div class="card-label">Load</div><div class="card-value">{{ m.load if m.load is not none else '—' }}</div></div>
+    <div class="card"><div class="card-label">Queue Depth</div><div class="card-value">{{ m.queue_depth if m.queue_depth is not none else '—' }}</div></div>
+    <div class="card"><div class="card-label">GPU Samples</div><div class="card-value">{{ (m.gpu_utilization or []) | length }}</div></div>
+  </div>
+  {% if m.gpu_utilization %}
+  <table>
+    <thead><tr><th>GPU</th><th>Utilization %</th></tr></thead>
+    <tbody>
+      {% for u in m.gpu_utilization %}
+      <tr><td>GPU {{ loop.index0 }}</td><td>{{ '%.2f'|format(u) }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <h2 class="panel-title">Current Running Tasks</h2>
+  <table>
+    <thead><tr><th>ID</th><th>Bot</th><th>Status</th><th>Updated</th></tr></thead>
+    <tbody>
+      {% for t in running_tasks %}
+      <tr>
+        <td><code>{{ t.id }}</code></td>
+        <td>{{ t.bot_id }}</td>
+        <td><span class="badge badge-{{ t.status }}">{{ t.status }}</span></td>
+        <td>{{ (t.updated_at[:19] if t.updated_at else '') | replace('T', ' ') }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4" class="empty">No running tasks</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+{% endblock %}
+{% block scripts %}
+<script>
+function getCsrf() {
+  const el = document.querySelector('input[name=csrf_token]');
+  return el ? el.value : '';
+}
+
+async function pingWorker(id) {
+  const res = await fetch('/api/workers/' + encodeURIComponent(id) + '/ping', {
+    method: 'POST',
+    headers: {'X-CSRFToken': getCsrf()}
+  });
+  if (res.ok) location.reload();
+  else alert('Ping failed');
+}
+
+async function toggleWorker(id, enable) {
+  const detailResp = await fetch('/api/workers/' + encodeURIComponent(id));
+  if (!detailResp.ok) { alert('Worker lookup failed'); return; }
+  const worker = await detailResp.json();
+  worker.enabled = !!enable;
+  const res = await fetch('/api/workers/' + encodeURIComponent(id), {
+    method: 'PUT',
+    headers: {'Content-Type':'application/json','X-CSRFToken': getCsrf()},
+    body: JSON.stringify(worker)
+  });
+  if (res.ok) location.reload(); else alert('Update failed');
+}
+
+async function deleteWorker(id) {
+  if (!confirm('Delete this worker?')) return;
+  const res = await fetch('/api/workers/' + encodeURIComponent(id), {
+    method: 'DELETE',
+    headers: {'X-CSRFToken': getCsrf()}
+  });
+  if (res.ok) window.location = '/workers';
+  else alert('Delete failed');
+}
+</script>
+{% endblock %}

@@ -133,13 +133,19 @@ def api_create_bot():
         db.close()
 
 
-@bp.get("/api/bots/<int:bot_id>")
+@bp.get("/api/bots/<bot_id>")
 @login_required
-def api_get_bot(bot_id: int):
+def api_get_bot(bot_id: str):
     """Get a single bot by ID."""
+    from dashboard.cp_client import get_cp_client
+    cp_bot = get_cp_client().get_bot(bot_id)
+    if cp_bot is not None:
+        return jsonify(cp_bot)
     db = get_db()
     try:
-        bot = db.get(Bot, bot_id)
+        if not str(bot_id).isdigit():
+            return jsonify({"error": "not found"}), 404
+        bot = db.get(Bot, int(bot_id))
         if not bot:
             return jsonify({"error": "not found"}), 404
         return jsonify(_bot_to_dict(bot))
@@ -147,16 +153,29 @@ def api_get_bot(bot_id: int):
         db.close()
 
 
-@bp.put("/api/bots/<int:bot_id>")
+@bp.put("/api/bots/<bot_id>")
 @login_required
-def api_update_bot(bot_id: int):
+def api_update_bot(bot_id: str):
     """Update an existing bot."""
+    from dashboard.cp_client import get_cp_client
+    cp = get_cp_client()
+    data: dict[str, Any] = request.get_json(force=True) or {}
+    cp_bot = cp.get_bot(bot_id)
+    if cp_bot is not None:
+        merged = dict(cp_bot)
+        merged.update(data)
+        updated = cp.update_bot(bot_id, merged)
+        if updated is None:
+            return jsonify({"error": "control plane unavailable"}), 502
+        return jsonify(updated)
+
     db = get_db()
     try:
-        bot = db.get(Bot, bot_id)
+        if not str(bot_id).isdigit():
+            return jsonify({"error": "not found"}), 404
+        bot = db.get(Bot, int(bot_id))
         if not bot:
             return jsonify({"error": "not found"}), 404
-        data: dict[str, Any] = request.get_json(force=True) or {}
         for field in ("name", "role"):
             if field in data:
                 setattr(bot, field, data[field])
@@ -175,13 +194,24 @@ def api_update_bot(bot_id: int):
         db.close()
 
 
-@bp.delete("/api/bots/<int:bot_id>")
+@bp.delete("/api/bots/<bot_id>")
 @login_required
-def api_delete_bot(bot_id: int):
+def api_delete_bot(bot_id: str):
     """Delete a bot."""
+    from dashboard.cp_client import get_cp_client
+    cp = get_cp_client()
+    cp_bot = cp.get_bot(bot_id)
+    if cp_bot is not None:
+        ok = cp.delete_bot(bot_id)
+        if not ok:
+            return jsonify({"error": "delete failed"}), 502
+        return "", 204
+
     db = get_db()
     try:
-        bot = db.get(Bot, bot_id)
+        if not str(bot_id).isdigit():
+            return jsonify({"error": "not found"}), 404
+        bot = db.get(Bot, int(bot_id))
         if not bot:
             return jsonify({"error": "not found"}), 404
         db.delete(bot)

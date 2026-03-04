@@ -24,6 +24,27 @@
     {{ g.label }}
   </button>
   {% endfor %}
+  <button class="tab-btn"
+          data-target="section-api-keys"
+          onclick="switchTab(this)"
+          style="padding:0.4rem 1rem;border-radius:20px;border:1px solid #2d3045;
+                 background:#1a1d27;color:#e0e0e0;cursor:pointer;font-size:0.85rem;transition:background 0.2s;">
+    API Keys
+  </button>
+  <button class="tab-btn"
+          data-target="section-model-catalog"
+          onclick="switchTab(this)"
+          style="padding:0.4rem 1rem;border-radius:20px;border:1px solid #2d3045;
+                 background:#1a1d27;color:#e0e0e0;cursor:pointer;font-size:0.85rem;transition:background 0.2s;">
+    Model Catalog
+  </button>
+  <button class="tab-btn"
+          data-target="section-projects"
+          onclick="switchTab(this)"
+          style="padding:0.4rem 1rem;border-radius:20px;border:1px solid #2d3045;
+                 background:#1a1d27;color:#e0e0e0;cursor:pointer;font-size:0.85rem;transition:background 0.2s;">
+    Projects
+  </button>
 </div>
 
 <!-- Hidden CSRF token for JS use -->
@@ -95,6 +116,84 @@
   </form>
 </section>
 {% endfor %}
+
+<!-- API Keys -->
+<section id="section-api-keys"
+         style="display:none;background:#1a1d27;border-radius:8px;padding:1.5rem;margin-bottom:1.5rem;border:1px solid #2d3045;">
+  <h2 style="font-size:1.1rem;margin-bottom:1rem;color:#f0f0f0;">API Keys</h2>
+  <form id="form-api-key" onsubmit="saveApiKey(event)" style="margin-bottom:1rem;">
+    <div class="form-group"><label>Name</label><input class="form-control" name="name" required></div>
+    <div class="form-group"><label>Provider</label><input class="form-control" name="provider" placeholder="openai | claude | gemini" required></div>
+    <div class="form-group"><label>Key Value</label><input type="password" class="form-control" name="value" required></div>
+    <button class="btn btn-primary" type="submit">Save Key</button>
+  </form>
+  <table>
+    <thead><tr><th>Name</th><th>Provider</th><th>Updated</th><th>Actions</th></tr></thead>
+    <tbody>
+      {% for k in api_keys %}
+      <tr>
+        <td><code>{{ k.name }}</code></td>
+        <td>{{ k.provider }}</td>
+        <td>{{ (k.updated_at[:19] if k.updated_at else '') | replace('T',' ') }}</td>
+        <td><button class="btn btn-sm btn-danger" onclick="deleteApiKey('{{ k.name }}')">Delete</button></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4" style="color:#718096;">No API keys saved</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<!-- Model Catalog -->
+<section id="section-model-catalog"
+         style="display:none;background:#1a1d27;border-radius:8px;padding:1.5rem;margin-bottom:1.5rem;border:1px solid #2d3045;">
+  <h2 style="font-size:1.1rem;margin-bottom:1rem;color:#f0f0f0;">Model Catalog</h2>
+  <form id="form-model" onsubmit="saveModel(event)" style="margin-bottom:1rem;">
+    <div class="form-group"><label>Model ID</label><input class="form-control" name="id" required></div>
+    <div class="form-group"><label>Name</label><input class="form-control" name="name" required></div>
+    <div class="form-group"><label>Provider</label><input class="form-control" name="provider" required></div>
+    <div class="form-group"><label>Capabilities (comma-separated)</label><input class="form-control" name="capabilities" placeholder="chat,embedding"></div>
+    <button class="btn btn-primary" type="submit">Add Model</button>
+  </form>
+  <table>
+    <thead><tr><th>ID</th><th>Name</th><th>Provider</th><th>Enabled</th><th>Actions</th></tr></thead>
+    <tbody>
+      {% for m in model_catalog %}
+      <tr>
+        <td><code>{{ m.id }}</code></td>
+        <td>{{ m.name }}</td>
+        <td>{{ m.provider }}</td>
+        <td>{{ m.enabled }}</td>
+        <td><button class="btn btn-sm btn-danger" onclick="deleteModel('{{ m.id }}')">Delete</button></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5" style="color:#718096;">No models in catalog</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<!-- Projects -->
+<section id="section-projects"
+         style="display:none;background:#1a1d27;border-radius:8px;padding:1.5rem;margin-bottom:1.5rem;border:1px solid #2d3045;">
+  <h2 style="font-size:1.1rem;margin-bottom:1rem;color:#f0f0f0;">Projects</h2>
+  <table>
+    <thead><tr><th>ID</th><th>Name</th><th>Mode</th><th>Enabled</th><th>Bridges</th></tr></thead>
+    <tbody>
+      {% for p in projects %}
+      <tr>
+        <td><code>{{ p.id }}</code></td>
+        <td>{{ p.name }}</td>
+        <td>{{ p.mode }}</td>
+        <td>{{ p.enabled }}</td>
+        <td>{{ p.bridge_project_ids|length }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5" style="color:#718096;">No projects configured</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
 
 <!-- Export / Import -->
 <section style="background:#1a1d27;border-radius:8px;padding:1.5rem;
@@ -293,6 +392,77 @@ function applyImport() {
     }
   })
   .catch(function(e) { showToast('✗ Network error: ' + e, false); });
+}
+
+function saveApiKey(evt) {
+  evt.preventDefault();
+  var fd = new FormData(evt.target);
+  fetch('/api/settings/keys', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-CSRFToken': _csrfToken},
+    body: JSON.stringify({
+      name: fd.get('name'),
+      provider: fd.get('provider'),
+      value: fd.get('value')
+    })
+  })
+  .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, data:d}; }); })
+  .then(function(res){
+    if (res.ok) { showToast('✓ API key saved', true); location.reload(); }
+    else { showToast('✗ ' + (res.data.error || 'Save failed'), false); }
+  })
+  .catch(function(e){ showToast('✗ Network error: ' + e, false); });
+}
+
+function deleteApiKey(name) {
+  if (!confirm('Delete API key ' + name + '?')) return;
+  fetch('/api/settings/keys/' + encodeURIComponent(name), {
+    method: 'DELETE',
+    headers: {'X-CSRFToken': _csrfToken}
+  })
+  .then(function(r){
+    if (r.ok) { showToast('✓ API key deleted', true); location.reload(); }
+    else { showToast('✗ Delete failed', false); }
+  })
+  .catch(function(e){ showToast('✗ Network error: ' + e, false); });
+}
+
+function saveModel(evt) {
+  evt.preventDefault();
+  var fd = new FormData(evt.target);
+  var caps = (fd.get('capabilities') || '').toString()
+    .split(',')
+    .map(function(x){ return x.trim(); })
+    .filter(Boolean);
+  fetch('/api/settings/models', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-CSRFToken': _csrfToken},
+    body: JSON.stringify({
+      id: fd.get('id'),
+      name: fd.get('name'),
+      provider: fd.get('provider'),
+      capabilities: caps
+    })
+  })
+  .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, data:d}; }); })
+  .then(function(res){
+    if (res.ok) { showToast('✓ Model saved', true); location.reload(); }
+    else { showToast('✗ ' + (res.data.error || 'Save failed'), false); }
+  })
+  .catch(function(e){ showToast('✗ Network error: ' + e, false); });
+}
+
+function deleteModel(modelId) {
+  if (!confirm('Delete model ' + modelId + '?')) return;
+  fetch('/api/settings/models/' + encodeURIComponent(modelId), {
+    method: 'DELETE',
+    headers: {'X-CSRFToken': _csrfToken}
+  })
+  .then(function(r){
+    if (r.ok) { showToast('✓ Model deleted', true); location.reload(); }
+    else { showToast('✗ Delete failed', false); }
+  })
+  .catch(function(e){ showToast('✗ Network error: ' + e, false); });
 }
 </script>
 {% endblock %}

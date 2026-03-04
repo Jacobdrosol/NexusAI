@@ -93,10 +93,24 @@ def settings_page() -> str:
     all_settings = mgr.get_all(mask_secrets=False)
     audit_log = mgr.get_audit_log(50)
     groups = _group_by_category(all_settings)
+    from dashboard.cp_client import get_cp_client
+
+    cp = get_cp_client()
+    if cp.health():
+        api_keys = cp.list_keys() or []
+        model_catalog = cp.list_models() or []
+        projects = cp.list_projects() or []
+    else:
+        api_keys = []
+        model_catalog = []
+        projects = []
     return render_template(
         "settings.html",
         groups=groups,
         audit_log=audit_log,
+        api_keys=api_keys,
+        model_catalog=model_catalog,
+        projects=projects,
         active_page="settings",
     )
 
@@ -163,6 +177,113 @@ def list_settings():
     _require_admin()
     mgr = _get_mgr()
     return jsonify(mgr.get_all(mask_secrets=True))
+
+
+@bp.get("/api/settings/keys")
+@login_required
+def list_api_keys():
+    _require_admin()
+    from dashboard.cp_client import get_cp_client
+
+    keys = get_cp_client().list_keys()
+    if keys is None:
+        return jsonify({"error": "control plane unavailable"}), 502
+    return jsonify(keys)
+
+
+@bp.post("/api/settings/keys")
+@login_required
+def create_or_update_api_key():
+    _require_admin()
+    body = request.get_json(silent=True) or {}
+    name = (body.get("name") or "").strip()
+    provider = (body.get("provider") or "").strip()
+    value = body.get("value") or ""
+    if not name or not provider or not value:
+        return jsonify({"error": "name, provider, and value are required"}), 400
+    from dashboard.cp_client import get_cp_client
+
+    result = get_cp_client().upsert_key(name=name, provider=provider, value=value)
+    if result is None:
+        return jsonify({"error": "control plane unavailable"}), 502
+    return jsonify(result), 201
+
+
+@bp.delete("/api/settings/keys/<name>")
+@login_required
+def delete_api_key(name: str):
+    _require_admin()
+    from dashboard.cp_client import get_cp_client
+
+    ok = get_cp_client().delete_key(name)
+    if not ok:
+        return jsonify({"error": "delete failed"}), 502
+    return "", 204
+
+
+@bp.get("/api/settings/models")
+@login_required
+def list_model_catalog():
+    _require_admin()
+    from dashboard.cp_client import get_cp_client
+
+    models = get_cp_client().list_models()
+    if models is None:
+        return jsonify({"error": "control plane unavailable"}), 502
+    return jsonify(models)
+
+
+@bp.post("/api/settings/models")
+@login_required
+def create_catalog_model():
+    _require_admin()
+    body = request.get_json(silent=True) or {}
+    model_id = (body.get("id") or "").strip()
+    name = (body.get("name") or "").strip()
+    provider = (body.get("provider") or "").strip()
+    if not model_id or not name or not provider:
+        return jsonify({"error": "id, name, and provider are required"}), 400
+    payload = {
+        "id": model_id,
+        "name": name,
+        "provider": provider,
+        "context_window": body.get("context_window"),
+        "capabilities": body.get("capabilities", []),
+        "input_cost_per_1k": body.get("input_cost_per_1k"),
+        "output_cost_per_1k": body.get("output_cost_per_1k"),
+        "notes": body.get("notes"),
+        "enabled": bool(body.get("enabled", True)),
+    }
+    from dashboard.cp_client import get_cp_client
+
+    created = get_cp_client().create_model(payload)
+    if created is None:
+        return jsonify({"error": "control plane unavailable"}), 502
+    return jsonify(created), 201
+
+
+@bp.delete("/api/settings/models/<model_id>")
+@login_required
+def delete_catalog_model(model_id: str):
+    _require_admin()
+    from dashboard.cp_client import get_cp_client
+
+    ok = get_cp_client().delete_model(model_id)
+    if not ok:
+        return jsonify({"error": "delete failed"}), 502
+    return "", 204
+
+
+@bp.get("/api/settings/projects")
+@login_required
+def list_projects():
+    _require_admin()
+    from dashboard.cp_client import get_cp_client
+
+    projects = get_cp_client().list_projects()
+    if projects is None:
+        return jsonify({"error": "control plane unavailable"}), 502
+    return jsonify(projects)
 
 
 @bp.get("/api/settings/<key>")
