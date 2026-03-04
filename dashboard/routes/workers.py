@@ -9,7 +9,7 @@ from flask import Blueprint, flash, jsonify, render_template, request
 from flask_login import login_required
 
 from dashboard.db import get_db
-from dashboard.models import Worker
+from dashboard.models import Task, Worker
 
 logger = logging.getLogger(__name__)
 
@@ -222,3 +222,38 @@ def api_ping_worker(worker_id: str):
     if resp is None:
         return jsonify({"error": "control plane unavailable"}), 502
     return jsonify(resp)
+
+
+@bp.get("/api/workers/<worker_id>/live")
+@login_required
+def api_worker_live(worker_id: str):
+    """Return worker details and a running-task snapshot for live UI polling."""
+    from dashboard.cp_client import get_cp_client
+    cp = get_cp_client()
+    cp_worker = cp.get_worker(worker_id)
+    if cp_worker is not None:
+        tasks = cp.list_tasks() or []
+        running_tasks = [t for t in tasks if t.get("status") == "running"]
+        return jsonify({"worker": cp_worker, "running_tasks": running_tasks})
+
+    db = get_db()
+    try:
+        if not str(worker_id).isdigit():
+            return jsonify({"error": "not found"}), 404
+        local = db.get(Worker, int(worker_id))
+        if not local:
+            return jsonify({"error": "not found"}), 404
+        running = db.query(Task).filter(Task.status == "running").order_by(Task.updated_at.desc()).limit(20).all()
+        running_tasks = []
+        for t in running:
+            running_tasks.append(
+                {
+                    "id": t.id,
+                    "bot_id": t.bot_id,
+                    "status": t.status,
+                    "updated_at": t.updated_at.isoformat() if t.updated_at else "",
+                }
+            )
+        return jsonify({"worker": _worker_to_dict(local), "running_tasks": running_tasks})
+    finally:
+        db.close()

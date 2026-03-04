@@ -11,7 +11,7 @@
 {% if error %}
 <div class="alert alert-error">{{ error }}</div>
 {% elif worker %}
-<section class="panel" style="margin-bottom:1rem;">
+<section class="panel" style="margin-bottom:1rem;" id="worker-profile-card">
   <h2 class="panel-title">{{ worker.name }} <small style="color:#64748b;">({{ worker.id }})</small></h2>
   <div class="split-grid" style="grid-template-columns:1fr 1fr;">
     <div>
@@ -59,11 +59,29 @@
   {% endif %}
 </section>
 
+<section class="panel" style="margin-bottom:1rem;">
+  <h2 class="panel-title">Resource Graphs</h2>
+  <div class="graph-grid">
+    <div class="graph-card">
+      <div class="graph-title">Load</div>
+      <canvas id="graph-load" height="120"></canvas>
+    </div>
+    <div class="graph-card">
+      <div class="graph-title">Queue Depth</div>
+      <canvas id="graph-queue" height="120"></canvas>
+    </div>
+    <div class="graph-card">
+      <div class="graph-title">GPU Utilization Avg (%)</div>
+      <canvas id="graph-gpu" height="120"></canvas>
+    </div>
+  </div>
+</section>
+
 <section class="panel">
   <h2 class="panel-title">Current Running Tasks</h2>
-  <table>
+  <table id="running-tasks-table">
     <thead><tr><th>ID</th><th>Bot</th><th>Status</th><th>Updated</th></tr></thead>
-    <tbody>
+    <tbody id="running-tasks-tbody">
       {% for t in running_tasks %}
       <tr>
         <td><code>{{ t.id }}</code></td>
@@ -117,5 +135,103 @@ async function deleteWorker(id) {
   if (res.ok) window.location = '/workers';
   else alert('Delete failed');
 }
+
+const workerId = {{ worker.id|tojson }};
+const historyData = {
+  load: [],
+  queue: [],
+  gpu: [],
+  maxPoints: 30
+};
+
+function pushMetric(arr, value) {
+  arr.push(Number.isFinite(value) ? value : 0);
+  if (arr.length > historyData.maxPoints) arr.shift();
+}
+
+function drawLineGraph(canvasId, points, opts) {
+  const canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  const width = canvas.clientWidth || 360;
+  const height = canvas.height || 120;
+  canvas.width = width;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  ctx.clearRect(0, 0, width, height);
+
+  ctx.fillStyle = '#f8fafc';
+  ctx.fillRect(0, 0, width, height);
+
+  const minY = opts.minY;
+  const maxY = Math.max(opts.maxY, minY + 1);
+  const n = Math.max(points.length, 2);
+  const pad = 12;
+  const plotW = width - pad * 2;
+  const plotH = height - pad * 2;
+
+  ctx.strokeStyle = '#e2e8f0';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = pad + (plotH * i) / 4;
+    ctx.beginPath();
+    ctx.moveTo(pad, y);
+    ctx.lineTo(width - pad, y);
+    ctx.stroke();
+  }
+
+  ctx.strokeStyle = opts.color;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  for (let i = 0; i < n; i++) {
+    const v = points[i] ?? points[points.length - 1] ?? 0;
+    const x = pad + (plotW * i) / (n - 1);
+    const y = pad + (1 - (v - minY) / (maxY - minY)) * plotH;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+}
+
+function renderRunningTasks(rows) {
+  const tbody = document.getElementById('running-tasks-tbody');
+  if (!tbody) return;
+  if (!rows || rows.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="4" class="empty">No running tasks</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(t => `
+    <tr>
+      <td><code>${t.id}</code></td>
+      <td>${t.bot_id ?? ''}</td>
+      <td><span class="badge badge-${t.status}">${t.status}</span></td>
+      <td>${(t.updated_at || '').slice(0,19).replace('T',' ')}</td>
+    </tr>
+  `).join('');
+}
+
+async function pollLiveWorker() {
+  const res = await fetch('/api/workers/' + encodeURIComponent(workerId) + '/live');
+  if (!res.ok) return;
+  const data = await res.json();
+  const worker = data.worker || {};
+  const metrics = worker.metrics || {};
+  const gpu = Array.isArray(metrics.gpu_utilization) && metrics.gpu_utilization.length
+    ? metrics.gpu_utilization.reduce((a, b) => a + b, 0) / metrics.gpu_utilization.length
+    : 0;
+
+  pushMetric(historyData.load, Number(metrics.load ?? 0));
+  pushMetric(historyData.queue, Number(metrics.queue_depth ?? 0));
+  pushMetric(historyData.gpu, Number(gpu));
+
+  const qMax = Math.max(10, ...historyData.queue);
+  drawLineGraph('graph-load', historyData.load, {minY: 0, maxY: 100, color: '#0f766e'});
+  drawLineGraph('graph-queue', historyData.queue, {minY: 0, maxY: qMax, color: '#1d4ed8'});
+  drawLineGraph('graph-gpu', historyData.gpu, {minY: 0, maxY: 100, color: '#b45309'});
+
+  renderRunningTasks(data.running_tasks || []);
+}
+
+pollLiveWorker();
+setInterval(pollLiveWorker, 5000);
 </script>
 {% endblock %}

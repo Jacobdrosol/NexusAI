@@ -409,7 +409,7 @@ These are confirmed issues that must be fixed before serious testing:
 - [ ] Consistent dark theme, loading/empty/error states, responsive layout
 
 #### 4b. Worker Detail Page
-- [ ] Hardware profile card, model capability list, live resource graphs, current task list
+- [x] Hardware profile card, model capability list, live resource graphs, current task list
 - [x] Worker enable/disable/delete/ping actions
 
 #### 4c. Bot Detail + Task Board
@@ -938,3 +938,37 @@ NexusAI/
 
 - `pytest -q tests/test_dashboard_phase4_pages.py tests/test_dashboard_smoke.py tests/test_dashboard_onboarding.py tests/test_control_plane_api.py tests/test_worker_registry.py` → **43 passed**
 - `pytest -q` → **93 passed**
+
+---
+
+### 2026-03-05 01:14 — Phase 4: Worker Live Graphs (Slice 11)
+
+**Status:** Worker detail page now includes live resource graphs and live data polling.
+
+**Changes made:**
+
+- Added worker live data endpoint:
+  - `GET /api/workers/<worker_id>/live`
+  - returns worker object + running task snapshot
+  - (`dashboard/routes/workers.py`)
+- Upgraded worker detail UI:
+  - Added resource graph section with canvas line charts for:
+    - load
+    - queue depth
+    - average GPU utilization
+  - Added polling loop (`5s`) against `/api/workers/<id>/live`
+  - Running task table now refreshes from live endpoint
+  - (`dashboard/templates/worker_detail.html`)
+- Added graph layout styling:
+  - `graph-grid`, `graph-card`, `graph-title`
+  - mobile responsive behavior
+  - (`dashboard/static/style.css`)
+- Added test coverage:
+  - worker detail page asserts resource graph section
+  - live endpoint payload shape test
+  - (`tests/test_dashboard_phase4_pages.py`)
+
+**Validation:**
+
+- `pytest -q tests/test_dashboard_phase4_pages.py tests/test_dashboard_smoke.py tests/test_dashboard_onboarding.py tests/test_control_plane_api.py` → **38 passed**
+- `pytest -q` → **94 passed**

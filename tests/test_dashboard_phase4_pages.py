@@ -90,6 +90,7 @@ def test_worker_detail_page_loads_when_logged_in(dashboard_client):
     resp = dashboard_client.get(f"/workers/{worker_id}")
     assert resp.status_code == 200
     assert b"Live Metrics" in resp.data
+    assert b"Resource Graphs" in resp.data
 
 
 def test_settings_page_loads_for_admin(dashboard_client):
@@ -97,3 +98,25 @@ def test_settings_page_loads_for_admin(dashboard_client):
     resp = dashboard_client.get("/settings")
     assert resp.status_code == 200
     assert b"Settings" in resp.data
+
+
+def test_worker_live_endpoint_returns_payload(dashboard_client):
+    _login_admin(dashboard_client)
+    from dashboard.db import get_db
+    from dashboard.models import Worker
+
+    db = get_db()
+    try:
+        worker = Worker(name="Worker Live", host="localhost", port=8001, status="online", capabilities="[]", metrics="{}")
+        db.add(worker)
+        db.commit()
+        db.refresh(worker)
+        worker_id = worker.id
+    finally:
+        db.close()
+
+    resp = dashboard_client.get(f"/api/workers/{worker_id}/live")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert "worker" in data
+    assert "running_tasks" in data

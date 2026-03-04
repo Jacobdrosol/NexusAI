@@ -98,6 +98,7 @@ Then open http://localhost:5000 in your browser.
 Dashboard navigation now includes `Projects`, `Chat`, and `Vault` pages connected to the control-plane APIs, plus a bot detail/task-board view at `/bots/<bot_id>`.
 The Chat page also supports one-click conversation ingestion into Vault.
 Workers now include a detail view at `/workers/<worker_id>` and Settings includes API Keys / Model Catalog / Projects tabs.
+Worker detail now includes live resource graphs (load, queue, GPU utilization) with periodic polling.
 
 ---
 
