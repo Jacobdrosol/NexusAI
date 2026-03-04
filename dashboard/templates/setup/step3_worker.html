@@ -7,6 +7,7 @@
 </p>
 
 <form method="post" action="/setup/step3" novalidate>
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
   <fieldset style="border:1px solid #2d3045;border-radius:8px;padding:1.25rem 1rem;margin-bottom:1.5rem;">
     <legend style="padding:0 0.5rem;font-size:0.8rem;color:#718096;text-transform:uppercase;letter-spacing:0.05em;">
