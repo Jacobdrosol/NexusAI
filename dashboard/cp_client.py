@@ -108,6 +108,20 @@ class CPClient:
     def create_task(self, bot_id: str, payload: Any) -> Optional[Dict]:
         return self._post("/v1/tasks", {"bot_id": bot_id, "payload": payload})
 
+    def create_task_full(
+        self,
+        bot_id: str,
+        payload: Any,
+        metadata: Optional[Dict[str, Any]] = None,
+        depends_on: Optional[List[str]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        body: Dict[str, Any] = {"bot_id": bot_id, "payload": payload}
+        if metadata is not None:
+            body["metadata"] = metadata
+        if depends_on is not None:
+            body["depends_on"] = depends_on
+        return self._post("/v1/tasks", body)
+
     # Projects
     def list_projects(self) -> Optional[List[Dict[str, Any]]]:
         return self._get("/v1/projects")
@@ -183,6 +197,12 @@ class CPClient:
 
     def search_vault(self, body: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
         return self._post("/v1/vault/search", body)
+
+    def get_vault_item(self, item_id: str) -> Optional[Dict[str, Any]]:
+        return self._get(f"/v1/vault/items/{item_id}")
+
+    def list_vault_chunks(self, item_id: str) -> Optional[List[Dict[str, Any]]]:
+        return self._get(f"/v1/vault/items/{item_id}/chunks")
 
 
 _client: Optional[CPClient] = None

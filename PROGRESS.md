@@ -424,15 +424,15 @@ These are confirmed issues that must be fixed before serious testing:
 - [x] Bridge management UI
 
 #### 4e. Chat Page
-- [ ] Conversation sidebar, streaming message area, model/bot selector
-- [ ] Context picker (vault items, files, past chats), scope selector
-- [ ] Inline task assignment (`@assign` → PM Bot), task assignment modal
-- [ ] Message actions: copy, re-run, send to vault
-- [ ] Chat history persistence + retrieval
+- [x] Conversation sidebar, streaming message area, model/bot selector
+- [x] Context picker (vault items, files, past chats), scope selector
+- [x] Inline task assignment (`@assign` → PM Bot), task assignment modal
+- [x] Message actions: copy, re-run, send to vault
+- [x] Chat history persistence + retrieval
 
 #### 4f. Vault Page
-- [ ] Upload panel (file, URL, paste), vault item list with search/filter
-- [ ] Item detail: preview, chunk count, embedding status, metadata
+- [x] Upload panel (file, URL, paste), vault item list with search/filter
+- [x] Item detail: preview, chunk count, embedding status, metadata
 - [ ] Namespace manager, bulk actions
 - [x] "Ingest this chat" button on chat page
 
@@ -1066,3 +1066,44 @@ NexusAI/
 
 - `pytest -q tests/test_dashboard_phase4_pages.py tests/test_dashboard_smoke.py tests/test_dashboard_onboarding.py` → **22 passed**
 - `pytest -q` → **96 passed**
+
+---
+
+### 2026-03-05 03:01 — Phase 4: Chat + Vault UX Deepening (Slice 15)
+
+**Status:** Chat page feature set is now fully implemented for Phase 4 scope; Vault page gained upload variants and item detail inspection.
+
+**Changes made:**
+
+- Expanded chat route and APIs (`dashboard/routes/chat.py`):
+  - context-aware chat page data (vault items + conversation/bot context)
+  - `@assign` inline task assignment path in `/api/chat/messages`
+  - streaming proxy endpoint: `POST /api/chat/stream`
+  - per-message ingestion endpoint: `POST /api/chat/message-to-vault`
+- Upgraded chat UI (`dashboard/templates/chat.html`):
+  - context picker (vault checkboxes + past chat selector)
+  - scope selector on conversation creation
+  - send vs stream-send controls
+  - inline task assignment modal
+  - message actions: copy / re-run / send-to-vault
+  - retained chat-history retrieval and conversation sidebar
+- Extended CP client for richer task/vault operations:
+  - `create_task_full`
+  - `get_vault_item`
+  - `list_vault_chunks`
+  - (`dashboard/cp_client.py`)
+- Expanded vault route APIs (`dashboard/routes/vault.py`):
+  - multipart/URL/paste upload endpoint: `POST /api/vault/upload`
+  - item detail endpoint: `GET /api/vault/items/<item_id>/detail`
+- Upgraded vault UI (`dashboard/templates/vault.html`):
+  - upload panel modes: paste / file / URL
+  - item detail modal with metadata, preview, chunk count, and chunk samples
+  - existing list/search flow preserved
+- Added/updated styles for chat context/actions in `dashboard/static/style.css`.
+- Added dashboard test coverage for new route validations and page rendering:
+  - updates in `tests/test_dashboard_phase4_pages.py`
+
+**Validation:**
+
+- `pytest -q tests/test_dashboard_phase4_pages.py tests/test_dashboard_smoke.py tests/test_dashboard_onboarding.py` → **25 passed**
+- `pytest -q` → **99 passed**

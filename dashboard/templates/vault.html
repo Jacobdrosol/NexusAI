@@ -4,11 +4,11 @@
 {% block content %}
 <div class="page-header">
   <h1>Vault</h1>
-  <button class="btn btn-primary" onclick="showIngest()">+ Ingest Text</button>
+  <button class="btn btn-primary" onclick="showUpload()">+ Upload / Ingest</button>
 </div>
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
 <form id="vault-search-form" class="search-row">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
   <input class="form-control" name="query" placeholder="Search vault...">
   <input class="form-control" name="namespace" value="{{ namespace }}" placeholder="Namespace (optional)">
   <button class="btn">Search</button>
@@ -19,7 +19,7 @@
 <table>
   <thead>
     <tr>
-      <th>Title</th><th>Namespace</th><th>Source</th><th>Updated</th><th>Status</th>
+      <th>Title</th><th>Namespace</th><th>Source</th><th>Updated</th><th>Status</th><th>Actions</th>
     </tr>
   </thead>
   <tbody>
@@ -30,48 +30,84 @@
       <td>{{ i.source_type }}</td>
       <td>{{ (i.updated_at[:19] if i.updated_at else '') | replace('T', ' ') }}</td>
       <td><span class="badge badge-{{ i.embedding_status }}">{{ i.embedding_status }}</span></td>
+      <td><button class="btn btn-sm" onclick="openItemDetail('{{ i.id }}')">View</button></td>
     </tr>
     {% else %}
-    <tr><td colspan="5" style="text-align:center;color:#7b879a;">Vault is empty</td></tr>
+    <tr><td colspan="6" style="text-align:center;color:#7b879a;">Vault is empty</td></tr>
     {% endfor %}
   </tbody>
 </table>
 
-<div id="modal-ingest" class="modal" style="display:none;">
+<div id="modal-upload" class="modal" style="display:none;">
   <div class="modal-content">
-    <h2>Ingest Text</h2>
-    <form id="form-ingest">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <h2>Upload / Ingest</h2>
+    <div class="settings-tabs" style="margin-bottom:1rem;">
+      <button class="tab-btn active" type="button" onclick="switchUploadMode(this, 'paste')">Paste</button>
+      <button class="tab-btn" type="button" onclick="switchUploadMode(this, 'file')">File</button>
+      <button class="tab-btn" type="button" onclick="switchUploadMode(this, 'url')">URL</button>
+    </div>
+    <form id="form-upload">
+      <input type="hidden" name="source_mode" value="paste">
       <div class="form-group"><label>Title</label><input class="form-control" name="title" required></div>
       <div class="form-group"><label>Namespace</label><input class="form-control" name="namespace" value="global"></div>
-      <div class="form-group"><label>Content</label><textarea class="form-control" name="content" rows="8" required></textarea></div>
+      <div id="upload-paste-fields">
+        <div class="form-group"><label>Content</label><textarea class="form-control" name="content" rows="8"></textarea></div>
+      </div>
+      <div id="upload-file-fields" style="display:none;">
+        <div class="form-group"><label>File</label><input class="form-control" type="file" name="file"></div>
+      </div>
+      <div id="upload-url-fields" style="display:none;">
+        <div class="form-group"><label>URL</label><input class="form-control" name="url" placeholder="https://..."></div>
+      </div>
       <div class="modal-actions">
-        <button type="submit" class="btn btn-primary">Ingest</button>
-        <button type="button" class="btn" onclick="hideModal('modal-ingest')">Cancel</button>
+        <button type="submit" class="btn btn-primary">Upload</button>
+        <button type="button" class="btn" onclick="hideModal('modal-upload')">Cancel</button>
       </div>
     </form>
+  </div>
+</div>
+
+<div id="modal-item-detail" class="modal" style="display:none;">
+  <div class="modal-content">
+    <h2>Vault Item Detail</h2>
+    <div id="item-detail-body" style="max-height:60vh;overflow:auto;"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="hideModal('modal-item-detail')">Close</button>
+    </div>
   </div>
 </div>
 {% endblock %}
 {% block scripts %}
 <script>
-function showIngest() { document.getElementById('modal-ingest').style.display = 'flex'; }
+function getCsrf() {
+  return document.querySelector('input[name=csrf_token]')?.value || '';
+}
+function showUpload() { document.getElementById('modal-upload').style.display = 'flex'; }
 function hideModal(id) { document.getElementById(id).style.display = 'none'; }
 
-document.getElementById('form-ingest').addEventListener('submit', async function(e) {
+function switchUploadMode(btn, mode) {
+  document.querySelectorAll('#modal-upload .tab-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  const form = document.getElementById('form-upload');
+  form.source_mode.value = mode;
+  document.getElementById('upload-paste-fields').style.display = mode === 'paste' ? '' : 'none';
+  document.getElementById('upload-file-fields').style.display = mode === 'file' ? '' : 'none';
+  document.getElementById('upload-url-fields').style.display = mode === 'url' ? '' : 'none';
+}
+
+document.getElementById('form-upload').addEventListener('submit', async function(e) {
   e.preventDefault();
   const fd = new FormData(this);
-  const res = await fetch('/api/vault/ingest', {
+  const res = await fetch('/api/vault/upload', {
     method: 'POST',
-    headers: {'Content-Type':'application/json', 'X-CSRFToken': fd.get('csrf_token')},
-    body: JSON.stringify({
-      title: fd.get('title'),
-      namespace: fd.get('namespace'),
-      content: fd.get('content')
-    }),
+    headers: {'X-CSRFToken': getCsrf()},
+    body: fd,
   });
   if (res.ok) location.reload();
-  else alert('Ingest failed');
+  else {
+    const data = await res.json().catch(() => ({}));
+    alert(data.error || 'Upload failed');
+  }
 });
 
 document.getElementById('vault-search-form').addEventListener('submit', async function(e) {
@@ -81,7 +117,7 @@ document.getElementById('vault-search-form').addEventListener('submit', async fu
   if (!query) return;
   const res = await fetch('/api/vault/search', {
     method: 'POST',
-    headers: {'Content-Type':'application/json', 'X-CSRFToken': fd.get('csrf_token')},
+    headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
     body: JSON.stringify({
       query,
       namespace: (fd.get('namespace') || '').toString().trim() || null,
@@ -98,5 +134,27 @@ document.getElementById('vault-search-form').addEventListener('submit', async fu
   `).join('');
   document.getElementById('search-results').innerHTML = html || '<div class="empty" style="margin:0.75rem 0;">No matches</div>';
 });
+
+async function openItemDetail(itemId) {
+  const res = await fetch('/api/vault/items/' + encodeURIComponent(itemId) + '/detail');
+  if (!res.ok) { alert('Failed to load item detail'); return; }
+  const data = await res.json();
+  const item = data.item || {};
+  const chunks = data.chunks || [];
+  const html = `
+    <div><strong>Title:</strong> ${item.title || ''}</div>
+    <div><strong>Namespace:</strong> ${item.namespace || ''}</div>
+    <div><strong>Embedding Status:</strong> ${item.embedding_status || ''}</div>
+    <div><strong>Chunk Count:</strong> ${data.chunk_count ?? 0}</div>
+    <div style="margin-top:0.5rem;"><strong>Metadata:</strong></div>
+    <pre>${JSON.stringify(item.metadata || {}, null, 2)}</pre>
+    <div style="margin-top:0.5rem;"><strong>Preview:</strong></div>
+    <pre style="white-space:pre-wrap;">${data.preview || ''}</pre>
+    <div style="margin-top:0.5rem;"><strong>Chunk Samples:</strong></div>
+    <pre>${JSON.stringify(chunks.map(c => ({index: c.chunk_index, content: (c.content || '').slice(0, 200)})), null, 2)}</pre>
+  `;
+  document.getElementById('item-detail-body').innerHTML = html;
+  document.getElementById('modal-item-detail').style.display = 'flex';
+}
 </script>
 {% endblock %}

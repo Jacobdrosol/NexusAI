@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import requests
 from flask import Blueprint, jsonify, render_template, request
 from flask_login import login_required
 
@@ -64,3 +65,83 @@ def api_vault_search():
     if results is None:
         return jsonify({"error": "control plane unavailable"}), 502
     return jsonify(results)
+
+
+@bp.post("/api/vault/upload")
+@login_required
+def api_vault_upload():
+    source_mode = (request.form.get("source_mode") or "").strip().lower()
+    title = (request.form.get("title") or "").strip()
+    namespace = (request.form.get("namespace") or "global").strip() or "global"
+    project_id = (request.form.get("project_id") or "").strip() or None
+    source_ref = None
+    content = ""
+
+    if source_mode == "file":
+        file = request.files.get("file")
+        if file is None or not file.filename:
+            return jsonify({"error": "file is required"}), 400
+        source_ref = file.filename
+        raw = file.read()
+        try:
+            content = raw.decode("utf-8")
+        except Exception:
+            content = raw.decode("latin-1", errors="ignore")
+        if not title:
+            title = file.filename
+    elif source_mode == "url":
+        url = (request.form.get("url") or "").strip()
+        if not url:
+            return jsonify({"error": "url is required"}), 400
+        source_ref = url
+        try:
+            resp = requests.get(url, timeout=15)
+            resp.raise_for_status()
+            content = resp.text[:200000]
+        except Exception as e:
+            return jsonify({"error": f"url fetch failed: {e}"}), 400
+        if not title:
+            title = url
+    elif source_mode in {"paste", "text", ""}:
+        content = (request.form.get("content") or "").strip()
+        if not title:
+            title = "Pasted Content"
+    else:
+        return jsonify({"error": "invalid source_mode"}), 400
+
+    if not title or not content:
+        return jsonify({"error": "title and content are required"}), 400
+
+    cp = get_cp_client()
+    created = cp.ingest_vault_item(
+        {
+            "title": title,
+            "content": content,
+            "namespace": namespace,
+            "project_id": project_id,
+            "source_type": "file" if source_mode == "file" else ("url" if source_mode == "url" else "text"),
+            "source_ref": source_ref,
+        }
+    )
+    if created is None:
+        return jsonify({"error": "control plane unavailable"}), 502
+    return jsonify(created), 201
+
+
+@bp.get("/api/vault/items/<item_id>/detail")
+@login_required
+def api_vault_item_detail(item_id: str):
+    cp = get_cp_client()
+    item = cp.get_vault_item(item_id)
+    chunks = cp.list_vault_chunks(item_id)
+    if item is None or chunks is None:
+        return jsonify({"error": "control plane unavailable"}), 502
+    preview = (item.get("content") or "")[:1200]
+    return jsonify(
+        {
+            "item": item,
+            "chunk_count": len(chunks),
+            "preview": preview,
+            "chunks": chunks[:10],
+        }
+    )

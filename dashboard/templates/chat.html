@@ -20,19 +20,52 @@
       <div class="empty">No conversations yet</div>
       {% endfor %}
     </div>
+
+    {% if selected_conversation %}
+    <hr style="margin:0.9rem 0;">
+    <h3 style="font-size:0.9rem;margin-bottom:0.35rem;">Context Picker</h3>
+    <div class="form-group">
+      <label>Past Chats</label>
+      <select class="form-control" id="context-conversation-select">
+        <option value="">None</option>
+        {% for c in conversations if c.id != selected_conversation.id %}
+        <option value="{{ c.title }}">Chat: {{ c.title }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Vault Items</label>
+      <div class="context-picker-list">
+        {% for v in vault_items %}
+        <label class="context-item">
+          <input type="checkbox" class="context-vault" value="{{ v.content }}">
+          <span>{{ v.title }}</span>
+        </label>
+        {% else %}
+        <div class="empty">No vault items available</div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
   </section>
 
   <section class="panel">
     <h2 class="panel-title">Messages</h2>
     {% if selected_conversation %}
-    <div style="margin-bottom:0.5rem;">
+    <div style="margin-bottom:0.5rem; display:flex; gap:0.5rem; flex-wrap:wrap;">
       <button class="btn" type="button" onclick="ingestConversation('{{ selected_conversation.id }}')">Ingest This Chat</button>
+      <button class="btn" type="button" onclick="openAssignModal()">Assign Message to PM</button>
     </div>
     <div id="messages" class="messages">
       {% for m in messages %}
-      <div class="message {{ m.role }}">
+      <div class="message {{ m.role }}" data-message-id="{{ m.id }}">
         <div class="message-role">{{ m.role }}</div>
         <div class="message-body">{{ m.content }}</div>
+        <div class="message-actions">
+          <button class="btn btn-sm" onclick="copyMessage(this)">Copy</button>
+          <button class="btn btn-sm" onclick="rerunMessage(this)">Re-run</button>
+          <button class="btn btn-sm" onclick="sendMessageToVault(this)">Send to Vault</button>
+        </div>
       </div>
       {% else %}
       <div class="empty">No messages yet</div>
@@ -41,7 +74,7 @@
     <form id="chat-send-form" class="chat-input">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="conversation_id" value="{{ selected_conversation.id }}">
-      <textarea class="form-control" name="content" placeholder="Type a message..." required></textarea>
+      <textarea class="form-control" name="content" placeholder="Type a message or use @assign ..." required></textarea>
       <div class="chat-controls">
         <select class="form-control" name="bot_id">
           <option value="">Use conversation default</option>
@@ -49,7 +82,8 @@
           <option value="{{ b.id }}">{{ b.name }} ({{ b.id }})</option>
           {% endfor %}
         </select>
-        <button type="submit" class="btn btn-primary">Send</button>
+        <button type="button" class="btn" onclick="sendMessage(false)">Send</button>
+        <button type="button" class="btn btn-primary" onclick="sendMessage(true)">Stream Send</button>
       </div>
     </form>
     {% else %}
@@ -64,6 +98,14 @@
     <form id="form-create-convo">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-group"><label>Title</label><input class="form-control" name="title" required></div>
+      <div class="form-group">
+        <label>Scope</label>
+        <select class="form-control" name="scope">
+          <option value="global">global</option>
+          <option value="project">project</option>
+          <option value="bridged">bridged</option>
+        </select>
+      </div>
       <div class="form-group">
         <label>Default Bot</label>
         <select class="form-control" name="default_bot_id">
@@ -80,59 +122,249 @@
     </form>
   </div>
 </div>
+
+<div id="modal-assign" class="modal" style="display:none;">
+  <div class="modal-content">
+    <h2>Assign Task to PM</h2>
+    <form id="form-assign">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="conversation_id" value="{{ selected_conversation.id if selected_conversation else '' }}">
+      <div class="form-group">
+        <label>Instruction</label>
+        <textarea class="form-control" name="instruction" rows="5" placeholder="Break this work into tasks and assign..." required></textarea>
+      </div>
+      <div class="form-group">
+        <label>PM Bot (optional)</label>
+        <select class="form-control" name="bot_id">
+          <option value="">Auto-detect PM bot</option>
+          {% for b in bots %}
+          <option value="{{ b.id }}">{{ b.name }} ({{ b.role }})</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="modal-actions">
+        <button type="submit" class="btn btn-primary">Assign</button>
+        <button type="button" class="btn" onclick="hideModal('modal-assign')">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
 {% endblock %}
 {% block scripts %}
 <script>
+const selectedConversationId = {{ (selected_conversation.id if selected_conversation else "")|tojson }};
+const initialMessages = {{ messages|tojson }};
+
 function showCreateConversation() { document.getElementById('modal-create-convo').style.display='flex'; }
+function openAssignModal() { document.getElementById('modal-assign').style.display='flex'; }
 function hideModal(id) { document.getElementById(id).style.display='none'; }
 
-const createForm = document.getElementById('form-create-convo');
-if (createForm) {
-  createForm.addEventListener('submit', async function(e) {
-    e.preventDefault();
-    const fd = new FormData(this);
-    const res = await fetch('/api/chat/conversations', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json', 'X-CSRFToken': fd.get('csrf_token')},
-      body: JSON.stringify({title: fd.get('title'), default_bot_id: fd.get('default_bot_id') || null}),
-    });
-    if (!res.ok) { alert('Create failed'); return; }
-    const created = await res.json();
-    window.location = '/chat?conversation_id=' + encodeURIComponent(created.id);
-  });
+function getCsrf() {
+  return document.querySelector('input[name=csrf_token]')?.value || '';
 }
 
-const sendForm = document.getElementById('chat-send-form');
-if (sendForm) {
-  sendForm.addEventListener('submit', async function(e) {
-    e.preventDefault();
-    const fd = new FormData(this);
+function selectedContextItems() {
+  const contexts = [];
+  document.querySelectorAll('.context-vault:checked').forEach((el) => {
+    contexts.push(el.value);
+  });
+  const conv = document.getElementById('context-conversation-select')?.value;
+  if (conv) contexts.push(conv);
+  return contexts;
+}
+
+function appendMessage(role, content, id='temp-' + Date.now()) {
+  const container = document.getElementById('messages');
+  if (!container) return;
+  const div = document.createElement('div');
+  div.className = 'message ' + role;
+  div.dataset.messageId = id;
+  div.innerHTML = `
+    <div class="message-role">${role}</div>
+    <div class="message-body"></div>
+    <div class="message-actions">
+      <button class="btn btn-sm" onclick="copyMessage(this)">Copy</button>
+      <button class="btn btn-sm" onclick="rerunMessage(this)">Re-run</button>
+      <button class="btn btn-sm" onclick="sendMessageToVault(this)">Send to Vault</button>
+    </div>
+  `;
+  div.querySelector('.message-body').textContent = content;
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
+  return div;
+}
+
+async function sendMessage(streamMode) {
+  const form = document.getElementById('chat-send-form');
+  if (!form || !selectedConversationId) return;
+  const fd = new FormData(form);
+  const content = (fd.get('content') || '').toString().trim();
+  if (!content) return;
+
+  const payload = {
+    conversation_id: fd.get('conversation_id'),
+    content,
+    bot_id: fd.get('bot_id') || null,
+    context_items: selectedContextItems(),
+  };
+
+  if (!streamMode) {
     const res = await fetch('/api/chat/messages', {
       method: 'POST',
-      headers: {'Content-Type':'application/json', 'X-CSRFToken': fd.get('csrf_token')},
-      body: JSON.stringify({
-        conversation_id: fd.get('conversation_id'),
-        content: fd.get('content'),
-        bot_id: fd.get('bot_id') || null
-      }),
+      headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
+      body: JSON.stringify(payload),
     });
-    if (res.ok) location.reload();
-    else alert('Send failed');
+    if (!res.ok) { alert('Send failed'); return; }
+    const data = await res.json();
+    if (data.mode === 'assign') {
+      alert('Assignment created: ' + (data.assigned_task?.id || 'unknown'));
+      form.reset();
+      return;
+    }
+    location.reload();
+    return;
+  }
+
+  appendMessage('user', content);
+  const pending = appendMessage('assistant', '...');
+  form.reset();
+
+  const res = await fetch('/api/chat/stream', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify(payload),
   });
+  if (!res.ok || !res.body) { alert('Stream send failed'); return; }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  while (true) {
+    const {done, value} = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, {stream: true});
+    let idx;
+    while ((idx = buffer.indexOf('\n\n')) >= 0) {
+      const block = buffer.slice(0, idx);
+      buffer = buffer.slice(idx + 2);
+      let eventType = 'message';
+      let dataText = '';
+      block.split('\n').forEach((line) => {
+        if (line.startsWith('event:')) eventType = line.slice(6).trim();
+        if (line.startsWith('data:')) dataText += line.slice(5).trim();
+      });
+      if (!dataText) continue;
+      try {
+        const parsed = JSON.parse(dataText);
+        if (eventType === 'assistant_message' && pending) {
+          pending.dataset.messageId = parsed.id || pending.dataset.messageId;
+          pending.querySelector('.message-body').textContent = parsed.content || '';
+        } else if (eventType === 'error') {
+          alert(parsed.error || 'Stream error');
+        }
+      } catch (_) {
+        // ignore malformed frames
+      }
+    }
+  }
+}
+
+document.getElementById('chat-send-form')?.addEventListener('submit', function(e) {
+  e.preventDefault();
+  sendMessage(false);
+});
+
+document.getElementById('form-create-convo')?.addEventListener('submit', async function(e) {
+  e.preventDefault();
+  const fd = new FormData(this);
+  const res = await fetch('/api/chat/conversations', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify({
+      title: fd.get('title'),
+      scope: fd.get('scope'),
+      default_bot_id: fd.get('default_bot_id') || null
+    }),
+  });
+  if (!res.ok) { alert('Create failed'); return; }
+  const created = await res.json();
+  window.location = '/chat?conversation_id=' + encodeURIComponent(created.id);
+});
+
+document.getElementById('form-assign')?.addEventListener('submit', async function(e) {
+  e.preventDefault();
+  const fd = new FormData(this);
+  const instruction = (fd.get('instruction') || '').toString().trim();
+  if (!instruction) return;
+  const res = await fetch('/api/chat/messages', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify({
+      conversation_id: fd.get('conversation_id'),
+      content: '@assign ' + instruction,
+      bot_id: fd.get('bot_id') || null
+    }),
+  });
+  if (!res.ok) { alert('Assign failed'); return; }
+  const data = await res.json();
+  alert('Assignment created: ' + (data.assigned_task?.id || 'unknown'));
+  hideModal('modal-assign');
+});
+
+function getMessageData(buttonEl) {
+  const messageEl = buttonEl.closest('.message');
+  const messageId = messageEl?.dataset.messageId || '';
+  const content = messageEl?.querySelector('.message-body')?.textContent || '';
+  const role = messageEl?.querySelector('.message-role')?.textContent || '';
+  const msg = initialMessages.find(m => String(m.id) === String(messageId));
+  return {
+    id: messageId,
+    role: role || msg?.role || 'assistant',
+    content: content || msg?.content || '',
+    bot_id: msg?.bot_id || null,
+  };
+}
+
+function copyMessage(btn) {
+  const m = getMessageData(btn);
+  navigator.clipboard?.writeText(m.content);
+}
+
+function rerunMessage(btn) {
+  const m = getMessageData(btn);
+  const textarea = document.querySelector('#chat-send-form textarea[name=content]');
+  if (!textarea) return;
+  textarea.value = m.content;
+  textarea.focus();
+}
+
+async function sendMessageToVault(btn) {
+  const m = getMessageData(btn);
+  const namespace = prompt('Vault namespace for this message?', 'global');
+  if (namespace === null) return;
+  const res = await fetch('/api/chat/message-to-vault', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify({
+      conversation_id: selectedConversationId,
+      namespace,
+      message: m,
+    }),
+  });
+  if (res.ok) alert('Message sent to vault.');
+  else alert('Send to vault failed.');
 }
 
 async function ingestConversation(conversationId) {
-  const csrf = document.querySelector('input[name=csrf_token]')?.value || '';
   const ns = prompt('Vault namespace for this chat?', 'global');
   if (ns === null) return;
   const res = await fetch('/api/chat/ingest', {
     method: 'POST',
-    headers: {'Content-Type':'application/json', 'X-CSRFToken': csrf},
+    headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
     body: JSON.stringify({conversation_id: conversationId, namespace: ns}),
   });
-  if (res.ok) {
-    alert('Chat ingested into vault.');
-  } else {
+  if (res.ok) alert('Chat ingested into vault.');
+  else {
     const data = await res.json().catch(() => ({}));
     alert(data.error || 'Ingest failed');
   }

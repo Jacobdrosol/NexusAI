@@ -44,6 +44,7 @@ def test_chat_page_loads_when_logged_in(dashboard_client):
     resp = dashboard_client.get("/chat")
     assert resp.status_code == 200
     assert b"Chat" in resp.data
+    assert b"New Conversation" in resp.data
 
 
 def test_vault_page_loads_when_logged_in(dashboard_client):
@@ -51,6 +52,7 @@ def test_vault_page_loads_when_logged_in(dashboard_client):
     resp = dashboard_client.get("/vault")
     assert resp.status_code == 200
     assert b"Vault" in resp.data
+    assert b"Upload / Ingest" in resp.data
 
 
 def test_bot_detail_page_loads_when_logged_in(dashboard_client):
@@ -78,6 +80,18 @@ def test_bot_detail_page_loads_when_logged_in(dashboard_client):
 def test_chat_ingest_api_validates_required_fields(dashboard_client):
     _login_admin(dashboard_client)
     resp = dashboard_client.post("/api/chat/ingest", json={})
+    assert resp.status_code == 400
+
+
+def test_chat_message_to_vault_validates_required_fields(dashboard_client):
+    _login_admin(dashboard_client)
+    resp = dashboard_client.post("/api/chat/message-to-vault", json={})
+    assert resp.status_code == 400
+
+
+def test_chat_stream_api_validates_required_fields(dashboard_client):
+    _login_admin(dashboard_client)
+    resp = dashboard_client.post("/api/chat/stream", json={})
     assert resp.status_code == 400
 
 
@@ -129,6 +143,12 @@ def test_worker_live_endpoint_returns_payload(dashboard_client):
     data = resp.get_json()
     assert "worker" in data
     assert "running_tasks" in data
+
+
+def test_vault_upload_api_validates_required_fields(dashboard_client):
+    _login_admin(dashboard_client)
+    resp = dashboard_client.post("/api/vault/upload", data={"source_mode": "paste"})
+    assert resp.status_code == 400
 
 
 def test_overview_page_shows_enhanced_sections(dashboard_client):
