@@ -2,13 +2,16 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
-from flask import Blueprint, jsonify, render_template, request
+from flask import Blueprint, flash, jsonify, render_template, request
 from flask_login import login_required
 
 from dashboard.db import get_db
 from dashboard.models import Worker
+
+logger = logging.getLogger(__name__)
 
 bp = Blueprint("workers", __name__)
 
@@ -31,6 +34,13 @@ def _worker_to_dict(w: Worker) -> dict[str, Any]:
 @login_required
 def workers_page() -> str:
     """Render the workers table page."""
+    from dashboard.cp_client import get_cp_client
+
+    cp_data = get_cp_client().list_workers()
+    if cp_data is not None:
+        return render_template("workers.html", workers=cp_data, error=None)
+
+    flash("Control plane unavailable — showing local data.", "warning")
     db = get_db()
     try:
         workers = db.query(Worker).all()

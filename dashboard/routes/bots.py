@@ -2,13 +2,16 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
-from flask import Blueprint, jsonify, render_template, request
+from flask import Blueprint, flash, jsonify, render_template, request
 from flask_login import login_required
 
 from dashboard.db import get_db
 from dashboard.models import Bot
+
+logger = logging.getLogger(__name__)
 
 bp = Blueprint("bots", __name__)
 
@@ -30,6 +33,13 @@ def _bot_to_dict(b: Bot) -> dict[str, Any]:
 @login_required
 def bots_page() -> str:
     """Render the bots table page."""
+    from dashboard.cp_client import get_cp_client
+
+    cp_data = get_cp_client().list_bots()
+    if cp_data is not None:
+        return render_template("bots.html", bots=cp_data, error=None)
+
+    flash("Control plane unavailable — showing local data.", "warning")
     db = get_db()
     try:
         bots = db.query(Bot).order_by(Bot.priority).all()
