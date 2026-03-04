@@ -1,0 +1,6 @@
+id: "local-worker-01"
+name: "Local Worker 01"
+host: "worker_agent"
+port: 8001
+status: "offline"
+capabilities: []
