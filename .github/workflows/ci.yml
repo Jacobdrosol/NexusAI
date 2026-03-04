@@ -19,9 +19,9 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt ruff pytest
       - name: Lint
-        run: ruff check . --ignore E501 || true
+        run: ruff check . --ignore E501
       - name: Test
-        run: pytest --tb=short -q || true
+        run: pytest --tb=short -q
 
   docker-build:
     runs-on: ubuntu-latest
