@@ -81,20 +81,40 @@ def create_app() -> Flask:
     @login_required
     def index():
         """Overview / home page."""
-        db = get_db()
-        try:
-            from dashboard.models import Bot, Task, Worker
+        from dashboard.cp_client import get_cp_client
 
-            total_workers = db.query(Worker).count()
-            online_workers = db.query(Worker).filter(Worker.status == "online").count()
-            offline_workers = db.query(Worker).filter(Worker.status == "offline").count()
-            active_bots = db.query(Bot).filter(Bot.enabled.is_(True)).count()
-            queued = db.query(Task).filter(Task.status == "queued").count()
-            running = db.query(Task).filter(Task.status == "running").count()
-            completed = db.query(Task).filter(Task.status == "completed").count()
-            failed = db.query(Task).filter(Task.status == "failed").count()
-        finally:
-            db.close()
+        cp = get_cp_client()
+        cp_workers = cp.list_workers()
+        cp_bots = cp.list_bots()
+        cp_tasks = cp.list_tasks()
+
+        if cp_workers is not None or cp_bots is not None or cp_tasks is not None:
+            workers = cp_workers or []
+            bots = cp_bots or []
+            tasks = cp_tasks or []
+            total_workers = len(workers)
+            online_workers = sum(1 for w in workers if w.get("status") == "online")
+            offline_workers = sum(1 for w in workers if w.get("status") == "offline")
+            active_bots = sum(1 for b in bots if b.get("enabled"))
+            queued = sum(1 for t in tasks if t.get("status") == "queued")
+            running = sum(1 for t in tasks if t.get("status") == "running")
+            completed = sum(1 for t in tasks if t.get("status") == "completed")
+            failed = sum(1 for t in tasks if t.get("status") == "failed")
+        else:
+            db = get_db()
+            try:
+                from dashboard.models import Bot, Task, Worker
+
+                total_workers = db.query(Worker).count()
+                online_workers = db.query(Worker).filter(Worker.status == "online").count()
+                offline_workers = db.query(Worker).filter(Worker.status == "offline").count()
+                active_bots = db.query(Bot).filter(Bot.enabled.is_(True)).count()
+                queued = db.query(Task).filter(Task.status == "queued").count()
+                running = db.query(Task).filter(Task.status == "running").count()
+                completed = db.query(Task).filter(Task.status == "completed").count()
+                failed = db.query(Task).filter(Task.status == "failed").count()
+            finally:
+                db.close()
 
         return render_template(
             "index.html",
@@ -109,6 +129,15 @@ def create_app() -> Flask:
                 "tasks_failed": failed,
             },
         )
+
+    @app.context_processor
+    def inject_cp_status():
+        from dashboard.cp_client import get_cp_client
+        try:
+            available = get_cp_client().health()
+        except Exception:
+            available = False
+        return {"cp_available": available}
 
     app.register_blueprint(main_bp)
 

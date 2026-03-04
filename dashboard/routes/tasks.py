@@ -2,13 +2,16 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Optional
 
-from flask import Blueprint, jsonify, render_template, request
+from flask import Blueprint, flash, jsonify, render_template, request
 from flask_login import login_required
 
 from dashboard.db import get_db
 from dashboard.models import Task
+
+logger = logging.getLogger(__name__)
 
 bp = Blueprint("tasks", __name__)
 
@@ -31,6 +34,13 @@ def _task_to_dict(t: Task) -> dict[str, Any]:
 @login_required
 def tasks_page() -> str:
     """Render the tasks table page."""
+    from dashboard.cp_client import get_cp_client
+
+    cp_data = get_cp_client().list_tasks()
+    if cp_data is not None:
+        return render_template("tasks.html", tasks=cp_data, error=None)
+
+    flash("Control plane unavailable — showing local data.", "warning")
     db = get_db()
     try:
         tasks = db.query(Task).order_by(Task.created_at.desc()).limit(100).all()
