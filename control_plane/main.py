@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from control_plane.api import bots, chat, keys, models_catalog, projects, tasks, vault, workers
 from control_plane.chat.chat_manager import ChatManager
 from control_plane.chat.pm_orchestrator import PMOrchestrator
+from control_plane.github.webhook_store import GitHubWebhookStore
 from control_plane.keys.key_vault import KeyVault
 from control_plane.registry.bot_registry import BotRegistry
 from control_plane.registry.model_registry import ModelRegistry
@@ -48,6 +49,7 @@ async def lifespan(app: FastAPI):
     chat_manager = ChatManager()
     vault_manager = VaultManager()
     mcp_broker = MCPBroker(vault_manager)
+    github_webhook_store = GitHubWebhookStore()
 
     # Load from YAML configs
     workers_dir = cp_cfg.get("workers_config_dir", "config/workers")
@@ -83,6 +85,7 @@ async def lifespan(app: FastAPI):
     app.state.chat_manager = chat_manager
     app.state.vault_manager = vault_manager
     app.state.mcp_broker = mcp_broker
+    app.state.github_webhook_store = github_webhook_store
     app.state.scheduler = scheduler
     app.state.task_manager = task_manager
     app.state.pm_orchestrator = pm_orchestrator

@@ -1,4 +1,8 @@
 """Integration tests for control plane FastAPI routes."""
+import hashlib
+import hmac
+import json
+
 import pytest
 
 
@@ -300,3 +304,161 @@ async def test_project_github_pat_connect_status_disconnect(cp_client):
     status_after = await cp_client.get("/v1/projects/gh-proj/github/status")
     assert status_after.status_code == 200
     assert status_after.json()["connected"] is False
+
+
+@pytest.mark.anyio
+async def test_project_github_webhook_ingestion_and_list(cp_client):
+    await cp_client.post(
+        "/v1/projects",
+        json={"id": "gh-hook", "name": "GitHub Hook Project", "mode": "isolated"},
+    )
+    set_secret = await cp_client.post(
+        "/v1/projects/gh-hook/github/webhook/secret",
+        json={"secret": "topsecret"},
+    )
+    assert set_secret.status_code == 200
+
+    payload = {
+        "action": "opened",
+        "repository": {"full_name": "owner/repo"},
+        "pull_request": {"number": 42},
+    }
+    raw = json.dumps(payload).encode("utf-8")
+    sig = hmac.new(b"topsecret", raw, hashlib.sha256).hexdigest()
+    ingest = await cp_client.post(
+        "/v1/projects/gh-hook/github/webhook",
+        content=raw,
+        headers={
+            "Content-Type": "application/json",
+            "X-Hub-Signature-256": f"sha256={sig}",
+            "X-GitHub-Event": "pull_request",
+            "X-GitHub-Delivery": "delivery-1",
+        },
+    )
+    assert ingest.status_code == 200
+    assert ingest.json()["status"] == "accepted"
+
+    events = await cp_client.get("/v1/projects/gh-hook/github/webhook/events")
+    assert events.status_code == 200
+    rows = events.json()["events"]
+    assert len(rows) >= 1
+    assert rows[0]["event_type"] == "pull_request"
+    assert rows[0]["action"] == "opened"
+
+
+@pytest.mark.anyio
+async def test_project_github_webhook_rejects_bad_signature(cp_client):
+    await cp_client.post(
+        "/v1/projects",
+        json={"id": "gh-hook-bad", "name": "GitHub Hook Bad", "mode": "isolated"},
+    )
+    await cp_client.post(
+        "/v1/projects/gh-hook-bad/github/webhook/secret",
+        json={"secret": "topsecret"},
+    )
+    ingest = await cp_client.post(
+        "/v1/projects/gh-hook-bad/github/webhook",
+        json={"repository": {"full_name": "owner/repo"}},
+        headers={
+            "X-Hub-Signature-256": "sha256=deadbeef",
+            "X-GitHub-Event": "push",
+        },
+    )
+    assert ingest.status_code == 401
+
+
+@pytest.mark.anyio
+async def test_project_github_context_sync_ingests_vault_items(cp_client, monkeypatch):
+    await cp_client.post(
+        "/v1/projects",
+        json={"id": "gh-sync", "name": "GitHub Sync", "mode": "isolated"},
+    )
+    await cp_client.post(
+        "/v1/projects/gh-sync/github/pat",
+        json={
+            "token": "ghp_example_token_for_tests_only",
+            "repo_full_name": "owner/repo",
+            "validate": False,
+        },
+    )
+
+    async def _fake_fetch(token, repo_full_name, branch, max_files):
+        return {
+            "repo_full_name": repo_full_name,
+            "branch": branch or "main",
+            "files": [
+                {"path": "README.md", "content": "# test", "size": 6, "sha": "abc"},
+                {"path": "src/app.py", "content": "print('ok')", "size": 11, "sha": "def"},
+            ][:max_files],
+        }
+
+    monkeypatch.setattr("control_plane.api.projects._fetch_repo_context_files", _fake_fetch)
+
+    sync_resp = await cp_client.post(
+        "/v1/projects/gh-sync/github/context/sync",
+        json={"max_files": 10},
+    )
+    assert sync_resp.status_code == 200
+    body = sync_resp.json()
+    assert body["ingested_count"] == 2
+
+    items_resp = await cp_client.get("/v1/vault/items?project_id=gh-sync&limit=20")
+    assert items_resp.status_code == 200
+    assert len(items_resp.json()) >= 2
+
+
+@pytest.mark.anyio
+async def test_project_github_pr_review_workflow_creates_task(cp_client):
+    await cp_client.post(
+        "/v1/projects",
+        json={"id": "gh-pr", "name": "GitHub PR", "mode": "isolated"},
+    )
+    await cp_client.post(
+        "/v1/projects/gh-pr/github/pat",
+        json={
+            "token": "ghp_example_token_for_tests_only",
+            "repo_full_name": "owner/repo",
+            "validate": False,
+        },
+    )
+    await cp_client.post(
+        "/v1/projects/gh-pr/github/webhook/secret",
+        json={"secret": "topsecret"},
+    )
+    cfg = await cp_client.post(
+        "/v1/projects/gh-pr/github/pr-review/config",
+        json={"enabled": True, "bot_id": "bot-reviewer"},
+    )
+    assert cfg.status_code == 200
+
+    payload = {
+        "action": "opened",
+        "repository": {"full_name": "owner/repo"},
+        "pull_request": {
+            "number": 7,
+            "title": "Add auth",
+            "body": "Please review",
+            "html_url": "https://github.com/owner/repo/pull/7",
+            "base": {"ref": "main"},
+            "head": {"ref": "feature/auth"},
+        },
+    }
+    raw = json.dumps(payload).encode("utf-8")
+    sig = hmac.new(b"topsecret", raw, hashlib.sha256).hexdigest()
+    ingest = await cp_client.post(
+        "/v1/projects/gh-pr/github/webhook",
+        content=raw,
+        headers={
+            "Content-Type": "application/json",
+            "X-Hub-Signature-256": f"sha256={sig}",
+            "X-GitHub-Event": "pull_request",
+        },
+    )
+    assert ingest.status_code == 200
+    review_task_id = ingest.json().get("review_task_id")
+    assert review_task_id
+
+    tasks = await cp_client.get("/v1/tasks")
+    assert tasks.status_code == 200
+    rows = tasks.json()
+    assert any((r.get("payload") or {}).get("source") == "github_pr_review" for r in rows)

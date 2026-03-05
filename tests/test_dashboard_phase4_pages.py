@@ -113,6 +113,30 @@ def test_project_github_status_api_handles_unavailable_cp(dashboard_client):
     assert resp.status_code == 502
 
 
+def test_project_webhook_secret_api_validates_required_fields(dashboard_client):
+    _login_admin(dashboard_client)
+    resp = dashboard_client.post("/api/projects/proj-x/github/webhook/secret", json={})
+    assert resp.status_code == 400
+
+
+def test_project_webhook_events_api_handles_unavailable_cp(dashboard_client):
+    _login_admin(dashboard_client)
+    resp = dashboard_client.get("/api/projects/proj-x/github/webhook/events")
+    assert resp.status_code == 502
+
+
+def test_project_github_context_sync_api_handles_unavailable_cp(dashboard_client):
+    _login_admin(dashboard_client)
+    resp = dashboard_client.post("/api/projects/proj-x/github/context/sync", json={})
+    assert resp.status_code == 502
+
+
+def test_project_pr_review_config_api_handles_unavailable_cp(dashboard_client):
+    _login_admin(dashboard_client)
+    resp = dashboard_client.post("/api/projects/proj-x/github/pr-review/config", json={"enabled": True, "bot_id": "bot1"})
+    assert resp.status_code == 502
+
+
 def test_worker_detail_page_loads_when_logged_in(dashboard_client):
     _login_admin(dashboard_client)
     from dashboard.db import get_db

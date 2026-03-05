@@ -18,6 +18,7 @@ async def cp_app(tmp_path):
     from control_plane.keys.key_vault import KeyVault
     from control_plane.chat.chat_manager import ChatManager
     from control_plane.chat.pm_orchestrator import PMOrchestrator
+    from control_plane.github.webhook_store import GitHubWebhookStore
     from control_plane.registry.model_registry import ModelRegistry
     from control_plane.registry.project_registry import ProjectRegistry
     from control_plane.scheduler.scheduler import Scheduler
@@ -45,6 +46,7 @@ async def cp_app(tmp_path):
     chat_manager = ChatManager(db_path=str(tmp_path / "chat.db"))
     vault_manager = VaultManager(db_path=str(tmp_path / "vault.db"))
     mcp_broker = MCPBroker(vault_manager=vault_manager)
+    github_webhook_store = GitHubWebhookStore(db_path=str(tmp_path / "github_webhooks.db"))
     scheduler = Scheduler(
         bot_registry,
         worker_registry,
@@ -67,6 +69,7 @@ async def cp_app(tmp_path):
     app.state.chat_manager = chat_manager
     app.state.vault_manager = vault_manager
     app.state.mcp_broker = mcp_broker
+    app.state.github_webhook_store = github_webhook_store
     app.state.scheduler = scheduler
     app.state.task_manager = task_manager
     app.state.pm_orchestrator = pm_orchestrator

@@ -166,6 +166,40 @@ class CPClient:
     def disconnect_project_github_pat(self, project_id: str) -> bool:
         return self._delete(f"/v1/projects/{project_id}/github/pat")
 
+    def set_project_github_webhook_secret(self, project_id: str, secret: str) -> Optional[Dict[str, Any]]:
+        return self._post(f"/v1/projects/{project_id}/github/webhook/secret", {"secret": secret})
+
+    def delete_project_github_webhook_secret(self, project_id: str) -> bool:
+        return self._delete(f"/v1/projects/{project_id}/github/webhook/secret")
+
+    def list_project_github_webhook_events(
+        self, project_id: str, limit: int = 30
+    ) -> Optional[Dict[str, Any]]:
+        return self._get(f"/v1/projects/{project_id}/github/webhook/events?limit={limit}")
+
+    def sync_project_github_context(
+        self,
+        project_id: str,
+        branch: Optional[str] = None,
+        max_files: int = 25,
+        namespace: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        body: Dict[str, Any] = {"max_files": max_files}
+        if branch:
+            body["branch"] = branch
+        if namespace:
+            body["namespace"] = namespace
+        return self._post(f"/v1/projects/{project_id}/github/context/sync", body)
+
+    def configure_project_github_pr_review(
+        self,
+        project_id: str,
+        enabled: bool,
+        bot_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        body: Dict[str, Any] = {"enabled": enabled, "bot_id": bot_id}
+        return self._post(f"/v1/projects/{project_id}/github/pr-review/config", body)
+
     # Models
     def list_models(self) -> Optional[List[Dict[str, Any]]]:
         return self._get("/v1/models")

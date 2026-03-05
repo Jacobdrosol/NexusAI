@@ -454,9 +454,9 @@ These are confirmed issues that must be fixed before serious testing:
 ### Phase 6 — GitHub Integration
 
 - [x] GitHub OAuth / PAT connection per project
-- [ ] Webhook ingestion: PR, push, issue events
-- [ ] Code-aware bot context: repo file tree + file contents as vault items
-- [ ] PR review bot workflow
+- [x] Webhook ingestion: PR, push, issue events
+- [x] Code-aware bot context: repo file tree + file contents as vault items
+- [x] PR review bot workflow
 
 ---
 
@@ -1252,3 +1252,78 @@ NexusAI/
 
 - `pytest -q tests/test_control_plane_api.py tests/test_dashboard_phase4_pages.py` → **39 passed**
 - `pytest -q` → **109 passed**
+
+---
+
+### 2026-03-05 05:18 — Phase 6: GitHub Webhook Ingestion (Slice 20)
+
+**Status:** Webhook ingestion is implemented for push / pull_request / issues events.
+
+**Changes made:**
+
+- Added durable GitHub webhook event storage (`control_plane/github/webhook_store.py`):
+  - SQLite-backed `github_webhook_events` table
+  - event record + list operations
+- Wired webhook store into app startup and test fixtures:
+  - `control_plane/main.py`
+  - `tests/conftest.py`
+- Expanded project GitHub API (`control_plane/api/projects.py`) with webhook operations:
+  - `POST /v1/projects/{project_id}/github/webhook/secret`
+  - `DELETE /v1/projects/{project_id}/github/webhook/secret`
+  - `POST /v1/projects/{project_id}/github/webhook`
+    - HMAC SHA256 verification via `X-Hub-Signature-256`
+    - supports `push`, `pull_request`, `issues`
+  - `GET /v1/projects/{project_id}/github/webhook/events`
+  - GitHub status response now includes `has_webhook_secret`
+- Extended dashboard control-plane client (`dashboard/cp_client.py`) for webhook secret/event APIs.
+- Added dashboard project proxy routes (`dashboard/routes/projects.py`) for webhook secret and event listing.
+- Upgraded project detail UI (`dashboard/templates/project_detail.html`):
+  - webhook secret set/remove controls
+  - webhook endpoint display
+  - recent webhook events table with refresh action
+- Added tests:
+  - control-plane webhook secret + signed ingestion + listing + bad-signature rejection (`tests/test_control_plane_api.py`)
+  - dashboard webhook secret validation and unavailable-CP behavior (`tests/test_dashboard_phase4_pages.py`)
+
+**Validation:**
+
+- `pytest -q tests/test_control_plane_api.py tests/test_dashboard_phase4_pages.py` → **43 passed**
+- `pytest -q` → **113 passed**
+
+---
+
+### 2026-03-05 05:52 — Phase 6: Repo Context Sync + PR Review Workflow (Slice 21)
+
+**Status:** Phase 6 is fully complete.
+
+**Changes made:**
+
+- Added code-aware GitHub repo context sync API (`control_plane/api/projects.py`):
+  - `POST /v1/projects/{project_id}/github/context/sync`
+  - uses project GitHub PAT + repo to fetch repo tree/content from GitHub
+  - ingests text files into Vault with project-scoped metadata and namespace
+- Added project GitHub PR review workflow config API:
+  - `POST /v1/projects/{project_id}/github/pr-review/config`
+  - stores enabled/bot mapping in project settings
+  - GitHub status now returns `pr_review` config
+- Extended webhook ingestion behavior:
+  - on `pull_request` events, creates review tasks when PR-review workflow is enabled
+  - task payload includes PR metadata and `source=github_pr_review`
+- Extended dashboard CP client (`dashboard/cp_client.py`) with:
+  - `sync_project_github_context`
+  - `configure_project_github_pr_review`
+- Added dashboard project proxy routes (`dashboard/routes/projects.py`) for:
+  - repo context sync
+  - PR review config
+- Upgraded project detail UI (`dashboard/templates/project_detail.html`) with:
+  - repo-context sync controls (branch/max files/namespace + status)
+  - PR review workflow controls (review bot + enable toggle + save)
+- Added tests:
+  - control-plane repo context sync with vault ingestion (`tests/test_control_plane_api.py`)
+  - control-plane PR review task creation from pull request webhook (`tests/test_control_plane_api.py`)
+  - dashboard unavailable-CP route coverage for new APIs (`tests/test_dashboard_phase4_pages.py`)
+
+**Validation:**
+
+- `pytest -q tests/test_control_plane_api.py tests/test_dashboard_phase4_pages.py` → **47 passed**
+- `pytest -q` → **117 passed**

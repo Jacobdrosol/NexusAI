@@ -46,11 +46,87 @@
         <button class="btn" onclick="refreshGithubStatus(true)">Test Connection</button>
         <button class="btn btn-danger" onclick="disconnectGithubPat()">Disconnect</button>
       </div>
+      <hr style="margin:0.8rem 0;">
+      <div class="split-grid" style="grid-template-columns:1fr 120px 1fr; gap:0.5rem;">
+        <input class="form-control" id="gh-sync-branch" placeholder="Branch (optional)">
+        <input class="form-control" id="gh-sync-max-files" type="number" min="1" max="200" value="25">
+        <input class="form-control" id="gh-sync-namespace" placeholder="Namespace (optional)">
+      </div>
+      <div style="margin-top:0.5rem;">
+        <button class="btn btn-primary" onclick="syncGithubContext()">Sync Repo Context to Vault</button>
+      </div>
     </div>
     <div>
       <div><strong>Current Status</strong></div>
       <pre id="github-status-pre" style="white-space:pre-wrap; margin-top:0.35rem;">{}</pre>
+      <div id="github-sync-state" class="state-empty" style="margin-top:0.5rem;">No sync run yet.</div>
+      <hr style="margin:0.8rem 0;">
+      <div><strong>PR Review Workflow</strong></div>
+      <div class="form-group" style="margin-top:0.35rem;">
+        <select class="form-control" id="gh-pr-review-bot">
+          <option value="">Select reviewer bot</option>
+          {% for b in all_bots %}
+          <option value="{{ b.id }}">{{ b.name }} ({{ b.role }})</option>
+          {% endfor %}
+        </select>
+      </div>
+      <label style="display:block; margin-bottom:0.4rem;">
+        <input type="checkbox" id="gh-pr-review-enabled" checked> Enable PR review task creation on pull_request webhooks
+      </label>
+      <div>
+        <button class="btn" onclick="savePrReviewConfig()">Save PR Review Config</button>
+      </div>
+      <div id="gh-pr-review-state" class="state-empty" style="margin-top:0.5rem;">No PR review config update yet.</div>
     </div>
+  </div>
+</section>
+
+<section class="panel" style="margin-bottom:1rem;">
+  <div class="page-header" style="margin-bottom:0.75rem;">
+    <h2 class="panel-title">GitHub Webhooks</h2>
+  </div>
+  <div id="webhook-state" class="state-empty" style="margin-bottom:0.75rem;">No webhook status loaded yet.</div>
+  <div class="split-grid" style="grid-template-columns:1fr 1fr; gap:0.75rem;">
+    <div>
+      <div class="form-group">
+        <label>Webhook Secret</label>
+        <input class="form-control" id="gh-webhook-secret" type="password" placeholder="set a shared secret">
+      </div>
+      <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+        <button class="btn btn-primary" onclick="setWebhookSecret()">Set Secret</button>
+        <button class="btn btn-danger" onclick="deleteWebhookSecret()">Remove Secret</button>
+        <button class="btn" onclick="refreshWebhookEvents()">Refresh Events</button>
+      </div>
+      <div class="mini-note" style="margin-top:0.5rem;">
+        Webhook endpoint: <code>/v1/projects/{{ project.id }}/github/webhook</code>
+      </div>
+    </div>
+    <div>
+      <div><strong>Connection Flags</strong></div>
+      <pre id="webhook-flags-pre" style="white-space:pre-wrap; margin-top:0.35rem;">{{ {
+  "connected": github_status.connected if github_status else false,
+  "has_webhook_secret": github_status.has_webhook_secret if github_status else false
+} | tojson(indent=2) }}</pre>
+    </div>
+  </div>
+  <div style="margin-top:0.9rem;">
+    <h3 style="font-size:0.95rem; margin-bottom:0.45rem;">Recent Webhook Events</h3>
+    <table>
+      <thead><tr><th>Type</th><th>Action</th><th>Repository</th><th>Delivery</th><th>Created</th></tr></thead>
+      <tbody id="webhook-events-body">
+        {% for e in webhook_events %}
+        <tr>
+          <td><code>{{ e.event_type }}</code></td>
+          <td>{{ e.action or '—' }}</td>
+          <td>{{ e.repository_full_name or '—' }}</td>
+          <td><code>{{ e.delivery_id or '—' }}</code></td>
+          <td>{{ (e.created_at[:19] if e.created_at else '') | replace('T',' ') }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="empty">No webhook events received</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
   </div>
 </section>
 
@@ -182,6 +258,13 @@ function setGithubState(cls, text) {
   el.textContent = text;
 }
 
+function setWebhookState(cls, text) {
+  const el = document.getElementById('webhook-state');
+  if (!el) return;
+  el.className = cls;
+  el.textContent = text;
+}
+
 async function refreshGithubStatus(validate) {
   setGithubState('state-loading', 'Loading GitHub status...');
   const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/github/status?validate=' + (validate ? 'true' : 'false'));
@@ -191,12 +274,45 @@ async function refreshGithubStatus(validate) {
   }
   const data = await res.json();
   document.getElementById('github-status-pre').textContent = JSON.stringify(data, null, 2);
+  const prCfg = (data && data.pr_review && typeof data.pr_review === 'object') ? data.pr_review : {};
+  const botSelect = document.getElementById('gh-pr-review-bot');
+  const enabledCheck = document.getElementById('gh-pr-review-enabled');
+  if (botSelect) botSelect.value = (prCfg.bot_id || '');
+  if (enabledCheck) enabledCheck.checked = !!prCfg.enabled;
   if (data.connected) {
     const suffix = data.validated === false ? ' (validation failed)' : '';
     setGithubState('state-info', 'GitHub PAT connected' + suffix + '.');
   } else {
     setGithubState('state-empty', 'No GitHub PAT connected.');
   }
+}
+
+async function savePrReviewConfig() {
+  const botId = (document.getElementById('gh-pr-review-bot')?.value || '').trim();
+  const enabled = !!document.getElementById('gh-pr-review-enabled')?.checked;
+  const stateEl = document.getElementById('gh-pr-review-state');
+  if (stateEl) {
+    stateEl.className = 'state-loading';
+    stateEl.textContent = 'Saving PR review config...';
+  }
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/github/pr-review/config', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify({enabled, bot_id: botId || null}),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    if (stateEl) {
+      stateEl.className = 'state-error';
+      stateEl.textContent = data.error || 'Failed to save PR review config.';
+    }
+    return;
+  }
+  if (stateEl) {
+    stateEl.className = 'state-info';
+    stateEl.textContent = 'PR review config saved.';
+  }
+  await refreshGithubStatus(false);
 }
 
 async function connectGithubPat() {
@@ -235,6 +351,103 @@ async function disconnectGithubPat() {
   await refreshGithubStatus(false);
 }
 
+async function syncGithubContext() {
+  const branch = (document.getElementById('gh-sync-branch')?.value || '').trim();
+  const namespace = (document.getElementById('gh-sync-namespace')?.value || '').trim();
+  const maxFilesRaw = (document.getElementById('gh-sync-max-files')?.value || '25').trim();
+  let maxFiles = parseInt(maxFilesRaw, 10);
+  if (!Number.isFinite(maxFiles) || maxFiles < 1) maxFiles = 25;
+  if (maxFiles > 200) maxFiles = 200;
+
+  const stateEl = document.getElementById('github-sync-state');
+  if (stateEl) {
+    stateEl.className = 'state-loading';
+    stateEl.textContent = 'Syncing repository context...';
+  }
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/github/context/sync', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify({
+      branch: branch || null,
+      namespace: namespace || null,
+      max_files: maxFiles,
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    if (stateEl) {
+      stateEl.className = 'state-error';
+      stateEl.textContent = data.error || 'Repository context sync failed.';
+    }
+    return;
+  }
+  if (stateEl) {
+    stateEl.className = 'state-info';
+    stateEl.textContent = 'Synced ' + (data.ingested_count || 0) + ' file(s) into namespace ' + (data.namespace || '(default)') + '.';
+  }
+}
+
+async function setWebhookSecret() {
+  const secret = (document.getElementById('gh-webhook-secret')?.value || '').trim();
+  if (!secret) {
+    alert('Webhook secret is required.');
+    return;
+  }
+  setWebhookState('state-loading', 'Saving webhook secret...');
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/github/webhook/secret', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify({secret}),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    setWebhookState('state-error', data.error || 'Failed to save webhook secret.');
+    return;
+  }
+  document.getElementById('gh-webhook-secret').value = '';
+  setWebhookState('state-info', 'Webhook secret saved.');
+  await refreshGithubStatus(false);
+}
+
+async function deleteWebhookSecret() {
+  if (!confirm('Remove webhook secret for this project?')) return;
+  setWebhookState('state-loading', 'Removing webhook secret...');
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/github/webhook/secret', {
+    method: 'DELETE',
+    headers: {'X-CSRFToken': getCsrf()},
+  });
+  if (!res.ok) {
+    setWebhookState('state-error', 'Failed to remove webhook secret.');
+    return;
+  }
+  setWebhookState('state-info', 'Webhook secret removed.');
+  await refreshGithubStatus(false);
+}
+
+async function refreshWebhookEvents() {
+  setWebhookState('state-loading', 'Loading webhook events...');
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/github/webhook/events?limit=30');
+  if (!res.ok) {
+    setWebhookState('state-error', 'Failed to load webhook events.');
+    return;
+  }
+  const data = await res.json().catch(() => ({}));
+  const rows = Array.isArray(data.events) ? data.events : [];
+  const body = document.getElementById('webhook-events-body');
+  if (!body) return;
+  body.innerHTML = rows.map((e) => `
+    <tr>
+      <td><code>${e.event_type || ''}</code></td>
+      <td>${e.action || '—'}</td>
+      <td>${e.repository_full_name || '—'}</td>
+      <td><code>${e.delivery_id || '—'}</code></td>
+      <td>${(e.created_at || '').slice(0, 19).replace('T', ' ')}</td>
+    </tr>
+  `).join('') || '<tr><td colspan="5" class="empty">No webhook events received</td></tr>';
+  setWebhookState('state-info', 'Webhook events updated.');
+}
+
 refreshGithubStatus(false);
+refreshWebhookEvents();
 </script>
 {% endblock %}

@@ -55,10 +55,12 @@ def project_detail_page(project_id: str):
         "project_detail.html",
         project=project,
         bots=project_bots,
+        all_bots=bots,
         tasks=project_tasks,
         vault_items=vault_items,
         all_projects=all_projects,
-        github_status=None,
+        github_status=(cp.get_project_github_status(project_id) or {"connected": False}),
+        webhook_events=((cp.list_project_github_webhook_events(project_id, limit=30) or {}).get("events", [])),
         error=None,
     )
 
@@ -152,3 +154,80 @@ def api_disconnect_project_github_pat(project_id: str):
     if not ok:
         return jsonify({"error": "control plane unavailable"}), 502
     return "", 204
+
+
+@bp.post("/api/projects/<project_id>/github/webhook/secret")
+@login_required
+def api_set_project_github_webhook_secret(project_id: str):
+    data: dict[str, Any] = request.get_json(force=True) or {}
+    secret = (data.get("secret") or "").strip()
+    if not secret:
+        return jsonify({"error": "secret is required"}), 400
+    cp = get_cp_client()
+    result = cp.set_project_github_webhook_secret(project_id, secret)
+    if result is None:
+        return jsonify({"error": "control plane unavailable"}), 502
+    return jsonify(result)
+
+
+@bp.delete("/api/projects/<project_id>/github/webhook/secret")
+@login_required
+def api_delete_project_github_webhook_secret(project_id: str):
+    cp = get_cp_client()
+    ok = cp.delete_project_github_webhook_secret(project_id)
+    if not ok:
+        return jsonify({"error": "control plane unavailable"}), 502
+    return "", 204
+
+
+@bp.get("/api/projects/<project_id>/github/webhook/events")
+@login_required
+def api_list_project_github_webhook_events(project_id: str):
+    limit_raw = (request.args.get("limit") or "30").strip()
+    try:
+        limit = max(1, min(int(limit_raw), 200))
+    except Exception:
+        limit = 30
+    cp = get_cp_client()
+    result = cp.list_project_github_webhook_events(project_id, limit=limit)
+    if result is None:
+        return jsonify({"error": "control plane unavailable"}), 502
+    return jsonify(result)
+
+
+@bp.post("/api/projects/<project_id>/github/context/sync")
+@login_required
+def api_sync_project_github_context(project_id: str):
+    data: dict[str, Any] = request.get_json(force=True) or {}
+    max_files_raw = data.get("max_files", 25)
+    try:
+        max_files = max(1, min(int(max_files_raw), 200))
+    except Exception:
+        max_files = 25
+    cp = get_cp_client()
+    result = cp.sync_project_github_context(
+        project_id=project_id,
+        branch=(data.get("branch") or "").strip() or None,
+        max_files=max_files,
+        namespace=(data.get("namespace") or "").strip() or None,
+    )
+    if result is None:
+        return jsonify({"error": "control plane unavailable"}), 502
+    return jsonify(result)
+
+
+@bp.post("/api/projects/<project_id>/github/pr-review/config")
+@login_required
+def api_configure_project_github_pr_review(project_id: str):
+    data: dict[str, Any] = request.get_json(force=True) or {}
+    enabled = bool(data.get("enabled", True))
+    bot_id = (data.get("bot_id") or "").strip() or None
+    cp = get_cp_client()
+    result = cp.configure_project_github_pr_review(
+        project_id=project_id,
+        enabled=enabled,
+        bot_id=bot_id,
+    )
+    if result is None:
+        return jsonify({"error": "control plane unavailable"}), 502
+    return jsonify(result)

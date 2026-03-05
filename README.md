@@ -107,6 +107,8 @@ Vault also includes namespace management and bulk-delete actions, and the dashbo
 `@assign` now triggers PM-driven decomposition into dependency-ordered multi-bot tasks, streams task-status events in chat, and posts an aggregated completion summary back into the same conversation.
 Assignment summary messages now include a `View DAG` action that opens a visual dependency graph for the orchestration.
 Projects now include GitHub PAT connection management (connect/test/disconnect) at the project detail page for per-project repository integration.
+Projects now also support GitHub webhook ingestion for `push`, `pull_request`, and `issues` events with HMAC signature verification and stored event history.
+GitHub integration now also includes repo-context sync into Vault (file tree + selected file contents) and optional PR review task automation via pull request webhooks.
 
 ---
 
