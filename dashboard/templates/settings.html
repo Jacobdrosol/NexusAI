@@ -200,10 +200,10 @@
                 margin-bottom:1.5rem;border:1px solid #2d3045;">
   <h2 style="font-size:1.1rem;margin-bottom:1rem;color:#f0f0f0;">Export / Import</h2>
   <div style="display:flex;gap:0.75rem;flex-wrap:wrap;align-items:center;">
-    <a href="{{ url_for('settings.export_yaml') }}" class="btn">⬇ Export YAML</a>
-    <a href="{{ url_for('settings.export_json_endpoint') }}" class="btn">⬇ Export JSON</a>
+    <a href="{{ url_for('settings.export_yaml') }}" class="btn">Download YAML</a>
+    <a href="{{ url_for('settings.export_json_endpoint') }}" class="btn">Download JSON</a>
     <label class="btn" style="cursor:pointer;">
-      ⬆ Import YAML/JSON
+      Upload YAML/JSON
       <input type="file" id="import-file" accept=".yaml,.yml,.json"
              onchange="previewImport()" style="display:none;">
     </label>
@@ -314,12 +314,12 @@ function saveSection(evt, categoryId) {
   .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
   .then(function(res) {
     if (res.ok) {
-      showToast('✓ Saved ' + res.data.updated + ' setting(s)', true);
+      showToast('Saved ' + res.data.updated + ' setting(s)', true);
     } else {
-      showToast('✗ ' + (res.data.error || 'Save failed'), false);
+      showToast('Error: ' + (res.data.error || 'Save failed'), false);
     }
   })
-  .catch(function(e) { showToast('✗ Network error: ' + e, false); });
+  .catch(function(e) { showToast('Network error: ' + e, false); });
 }
 
 // ---------------------------------------------------------------------------
@@ -365,7 +365,7 @@ function previewImport() {
         JSON.stringify(data, null, 2).slice(0, 2000);
       document.getElementById('import-preview').style.display = '';
     } catch(err) {
-      showToast('✗ Cannot parse file: ' + err, false);
+      showToast('Cannot parse file: ' + err, false);
     }
   };
   reader.readAsText(file);
@@ -384,14 +384,14 @@ function applyImport() {
   .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
   .then(function(res) {
     if (res.ok) {
-      showToast('✓ Imported ' + res.data.imported + ' setting(s)', true);
+      showToast('Imported ' + res.data.imported + ' setting(s)', true);
       document.getElementById('import-preview').style.display = 'none';
       _importData = null;
     } else {
-      showToast('✗ ' + (res.data.error || 'Import failed'), false);
+      showToast('Error: ' + (res.data.error || 'Import failed'), false);
     }
   })
-  .catch(function(e) { showToast('✗ Network error: ' + e, false); });
+  .catch(function(e) { showToast('Network error: ' + e, false); });
 }
 
 function saveApiKey(evt) {
@@ -408,10 +408,10 @@ function saveApiKey(evt) {
   })
   .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, data:d}; }); })
   .then(function(res){
-    if (res.ok) { showToast('✓ API key saved', true); location.reload(); }
-    else { showToast('✗ ' + (res.data.error || 'Save failed'), false); }
+    if (res.ok) { showToast('API key saved', true); location.reload(); }
+    else { showToast('Error: ' + (res.data.error || 'Save failed'), false); }
   })
-  .catch(function(e){ showToast('✗ Network error: ' + e, false); });
+  .catch(function(e){ showToast('Network error: ' + e, false); });
 }
 
 function deleteApiKey(name) {
@@ -421,10 +421,10 @@ function deleteApiKey(name) {
     headers: {'X-CSRFToken': _csrfToken}
   })
   .then(function(r){
-    if (r.ok) { showToast('✓ API key deleted', true); location.reload(); }
-    else { showToast('✗ Delete failed', false); }
+    if (r.ok) { showToast('API key deleted', true); location.reload(); }
+    else { showToast('Delete failed', false); }
   })
-  .catch(function(e){ showToast('✗ Network error: ' + e, false); });
+  .catch(function(e){ showToast('Network error: ' + e, false); });
 }
 
 function saveModel(evt) {
@@ -446,10 +446,10 @@ function saveModel(evt) {
   })
   .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, data:d}; }); })
   .then(function(res){
-    if (res.ok) { showToast('✓ Model saved', true); location.reload(); }
-    else { showToast('✗ ' + (res.data.error || 'Save failed'), false); }
+    if (res.ok) { showToast('Model saved', true); location.reload(); }
+    else { showToast('Error: ' + (res.data.error || 'Save failed'), false); }
   })
-  .catch(function(e){ showToast('✗ Network error: ' + e, false); });
+  .catch(function(e){ showToast('Network error: ' + e, false); });
 }
 
 function deleteModel(modelId) {
@@ -459,10 +459,10 @@ function deleteModel(modelId) {
     headers: {'X-CSRFToken': _csrfToken}
   })
   .then(function(r){
-    if (r.ok) { showToast('✓ Model deleted', true); location.reload(); }
-    else { showToast('✗ Delete failed', false); }
+    if (r.ok) { showToast('Model deleted', true); location.reload(); }
+    else { showToast('Delete failed', false); }
   })
-  .catch(function(e){ showToast('✗ Network error: ' + e, false); });
+  .catch(function(e){ showToast('Network error: ' + e, false); });
 }
 </script>
 {% endblock %}

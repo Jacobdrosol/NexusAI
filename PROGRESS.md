@@ -4,7 +4,7 @@
 
 ---
 
-## 📋 Table of Contents
+## Table of Contents
 
 1. [Vision & Purpose](#vision--purpose)
 2. [Full System Design](#full-system-design)
@@ -49,7 +49,7 @@ NexusAI is a **self-hosted, distributed AI orchestration platform**. It is simul
 ║  ┌─────────────────────────────────────────────────────────────────┐    ║
 ║  │                    DASHBOARD  (port 5000)                        │    ║
 ║  │                                                                  │    ║
-║  │  Nav: Overview │ Projects │ Chat │ Bots │ Workers │ Vault │ ⚙   │    ║
+║  │  Nav: Overview │ Projects │ Chat │ Bots │ Workers │ Vault │ Settings   │    ║
 ║  │                                                                  │    ║
 ║  │  Overview     Live stats, recent tasks, system health            │    ║
 ║  │  Projects     Multi-repo projects, bridged or isolated           │    ║
@@ -322,7 +322,7 @@ NexusAI/
 
 ## What Is Built
 
-### ✅ Fully Built and Working
+### Fully Built and Working
 
 | Component | Files | Notes |
 |---|---|---|
@@ -359,14 +359,14 @@ These are confirmed issues that must be fixed before serious testing:
 
 | # | Issue | Location | Impact |
 |---|---|---|---|
-| 1 | ~~**`shared/` not in Docker build context for some services**~~ ✅ **RESOLVED** | `control_plane/Dockerfile`, `worker_agent/Dockerfile`, `dashboard/Dockerfile` | Added `ENV PYTHONPATH=/app` to all three Dockerfiles so `shared/` is always importable regardless of working directory |
-| 2 | ~~**Settings port mismatch**~~ ✅ **RESOLVED** | `shared/settings_manager.py` line ~65 | `control_plane_port` default changed from `"8080"` to `"8000"`; dashboard CPClient now connects to the correct port |
-| 3 | ~~**`Bot` ORM has `routing_rules` column; shared Pydantic `Bot` model does not**~~ ✅ **RESOLVED** | `dashboard/models.py` vs `shared/models.py` | Added `routing_rules: Optional[Any] = None` to shared Pydantic `Bot` model; field now round-trips correctly |
-| 4 | ~~**`Worker.enabled` in dashboard ORM but not in shared Pydantic `Worker` model**~~ ✅ **RESOLVED** | `dashboard/models.py`, `shared/models.py` | `enabled` now round-trips through shared worker model |
-| 5 | ~~**No `api_key_ref` resolution in Scheduler**~~ ✅ **RESOLVED** | `control_plane/scheduler/scheduler.py` | Scheduler resolves named keys from encrypted key vault with env fallback |
-| 6 | ~~**Task execution has no dependency engine**~~ ✅ **RESOLVED** | `control_plane/task_manager/task_manager.py` | Dependency DAG + blocked/unblocked lifecycle implemented |
-| 7 | ~~**No streaming inference**~~ ✅ **RESOLVED** | `nexus_worker/api/infer_stream.py`, chat stream routes | Streaming interfaces now exist for chat and standalone worker (`/infer/stream`) |
-| 8 | ~~**No control plane authentication**~~ ✅ **RESOLVED** | `control_plane/main.py`, `dashboard/cp_client.py`, `worker_agent/main.py` | Optional token auth added for CP API (`CONTROL_PLANE_API_TOKEN`), with dashboard/worker header support |
+| 1 | ~~**`shared/` not in Docker build context for some services**~~ [RESOLVED] | `control_plane/Dockerfile`, `worker_agent/Dockerfile`, `dashboard/Dockerfile` | Added `ENV PYTHONPATH=/app` to all three Dockerfiles so `shared/` is always importable regardless of working directory |
+| 2 | ~~**Settings port mismatch**~~ [RESOLVED] | `shared/settings_manager.py` line ~65 | `control_plane_port` default changed from `"8080"` to `"8000"`; dashboard CPClient now connects to the correct port |
+| 3 | ~~**`Bot` ORM has `routing_rules` column; shared Pydantic `Bot` model does not**~~ [RESOLVED] | `dashboard/models.py` vs `shared/models.py` | Added `routing_rules: Optional[Any] = None` to shared Pydantic `Bot` model; field now round-trips correctly |
+| 4 | ~~**`Worker.enabled` in dashboard ORM but not in shared Pydantic `Worker` model**~~ [RESOLVED] | `dashboard/models.py`, `shared/models.py` | `enabled` now round-trips through shared worker model |
+| 5 | ~~**No `api_key_ref` resolution in Scheduler**~~ [RESOLVED] | `control_plane/scheduler/scheduler.py` | Scheduler resolves named keys from encrypted key vault with env fallback |
+| 6 | ~~**Task execution has no dependency engine**~~ [RESOLVED] | `control_plane/task_manager/task_manager.py` | Dependency DAG + blocked/unblocked lifecycle implemented |
+| 7 | ~~**No streaming inference**~~ [RESOLVED] | `nexus_worker/api/infer_stream.py`, chat stream routes | Streaming interfaces now exist for chat and standalone worker (`/infer/stream`) |
+| 8 | ~~**No control plane authentication**~~ [RESOLVED] | `control_plane/main.py`, `dashboard/cp_client.py`, `worker_agent/main.py` | Optional token auth added for CP API (`CONTROL_PLANE_API_TOKEN`), with dashboard/worker header support |
 
 ---
 
@@ -1657,3 +1657,32 @@ NexusAI/
 **Validation:**
 
 - `docker compose config` parse attempted; blocked locally because `.env` file is missing in workspace (expected if not yet created from `.env.example`).
+
+---
+
+### 2026-03-05 11:35 — Documentation Expansion + Emoji Cleanup (Slice 32)
+
+**Status:** Added comprehensive onboarding/usage/operations documentation and removed emoji characters from repository content.
+
+**Changes made:**
+
+- Added full newcomer documentation set:
+  - `docs/GETTING_STARTED.md`
+  - `docs/USER_GUIDE.md`
+  - `docs/OPERATIONS.md`
+- Added documentation index section in `README.md` linking all core docs.
+- Cleaned emoji/symbol characters from existing docs and UI templates, including:
+  - `PROGRESS.md`
+  - `config/README.md`
+  - `dashboard/templates/login.html`
+  - `dashboard/templates/onboarding/base.html`
+  - `dashboard/templates/onboarding/step1_welcome.html`
+  - `dashboard/templates/onboarding/step3_llm.html`
+  - `dashboard/templates/onboarding/step5_complete.html`
+  - `dashboard/templates/settings.html`
+- Verified repository-wide emoji scan is clean.
+
+**Validation:**
+
+- `rg -n --pcre2 "[\\x{1F300}-\\x{1FAFF}\\x{2600}-\\x{27BF}]" ...` → no matches
+

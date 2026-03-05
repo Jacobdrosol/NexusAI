@@ -218,7 +218,7 @@
 </head>
 <body>
   <div class="setup-wrapper">
-    <a href="/onboarding/" class="setup-brand">⚡ NexusAI</a>
+    <a href="/onboarding/" class="setup-brand">NexusAI</a>
 
     <!-- Progress bar -->
     <div class="progress-bar" role="navigation" aria-label="Setup steps">
@@ -232,7 +232,7 @@
       {% for num, label in steps %}
         <div class="progress-step {% if num < current_step %}done{% elif num == current_step %}active{% endif %}">
           <div class="circle">
-            {% if num < current_step %}✓{% else %}{{ num }}{% endif %}
+            {% if num < current_step %}OK{% else %}{{ num }}{% endif %}
           </div>
           <span class="label">{{ label }}</span>
         </div>

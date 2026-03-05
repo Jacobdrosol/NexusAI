@@ -16,6 +16,16 @@
 
 ---
 
+## Documentation
+
+- Getting started: `docs/GETTING_STARTED.md`
+- Product usage: `docs/USER_GUIDE.md`
+- Operations and security: `docs/OPERATIONS.md`
+- UAT checklist: `docs/UAT_RUNBOOK.md`
+- Configuration reference: `config/README.md`
+
+---
+
 ## Architecture
 
 | Service | Framework | Port |

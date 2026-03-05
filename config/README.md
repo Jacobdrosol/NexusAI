@@ -36,11 +36,11 @@ Create a new YAML file in `config/workers/`.  The file is validated against the 
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `id` | string | ✅ | Unique worker identifier |
-| `name` | string | ✅ | Human-readable name |
-| `host` | string | ✅ | Hostname or IP address of the worker |
-| `port` | integer | ✅ | Port the worker agent listens on |
-| `capabilities` | list | ✅ | List of capability objects (may be empty `[]`) |
+| `id` | string | Yes | Unique worker identifier |
+| `name` | string | Yes | Human-readable name |
+| `host` | string | Yes | Hostname or IP address of the worker |
+| `port` | integer | Yes | Port the worker agent listens on |
+| `capabilities` | list | Yes | List of capability objects (may be empty `[]`) |
 | `status` | string | — | `"online"`, `"offline"`, or `"degraded"` (default: `"offline"`) |
 | `metrics` | object | — | Optional `WorkerMetrics` object |
 
@@ -48,9 +48,9 @@ Each entry in `capabilities` must include:
 
 | Field | Type | Required |
 |-------|------|----------|
-| `type` | `"llm"` \| `"embedding"` \| `"tool"` \| `"custom"` | ✅ |
-| `provider` | `"ollama"` \| `"vllm"` \| `"lmstudio"` \| `"openai"` \| `"claude"` \| `"gemini"` \| `"cli"` \| `"custom"` | ✅ |
-| `models` | list of strings | ✅ |
+| `type` | `"llm"` \| `"embedding"` \| `"tool"` \| `"custom"` | Yes |
+| `provider` | `"ollama"` \| `"vllm"` \| `"lmstudio"` \| `"openai"` \| `"claude"` \| `"gemini"` \| `"cli"` \| `"custom"` | Yes |
+| `models` | list of strings | Yes |
 | `gpus` | list of strings | — |
 
 Example (`config/workers/local_worker.yaml`):
@@ -70,20 +70,20 @@ Create a new YAML file in `config/bots/`.  The file is validated against the `Bo
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `id` | string | ✅ | Unique bot identifier |
-| `name` | string | ✅ | Human-readable name |
-| `role` | string | ✅ | Role description (e.g. `"coding"`, `"general_assistant"`) |
+| `id` | string | Yes | Unique bot identifier |
+| `name` | string | Yes | Human-readable name |
+| `role` | string | Yes | Role description (e.g. `"coding"`, `"general_assistant"`) |
 | `priority` | integer | — | Scheduling priority (default: `0`) |
 | `enabled` | boolean | — | Whether the bot is active (default: `true`) |
-| `backends` | list | ✅ | Ordered list of `BackendConfig` objects |
+| `backends` | list | Yes | Ordered list of `BackendConfig` objects |
 
 Each entry in `backends` must include:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `type` | `"local_llm"` \| `"remote_llm"` \| `"cloud_api"` \| `"cli"` \| `"custom"` | ✅ | |
-| `provider` | string | ✅ | e.g. `"ollama"`, `"claude"`, `"openai"` |
-| `model` | string | ✅ | Model identifier |
+| `type` | `"local_llm"` \| `"remote_llm"` \| `"cloud_api"` \| `"cli"` \| `"custom"` | Yes | |
+| `provider` | string | Yes | e.g. `"ollama"`, `"claude"`, `"openai"` |
+| `model` | string | Yes | Model identifier |
 | `worker_id` | string | — | ID of the worker that hosts this backend |
 | `gpu_id` | string | — | GPU label on the worker |
 | `api_key_ref` | string | — | Environment variable name holding the API key |
@@ -111,3 +111,4 @@ Set `NEXUS_CONFIG_PATH` to load a different main config file:
 ```bash
 NEXUS_CONFIG_PATH=/etc/nexusai/nexus_config.yaml uvicorn control_plane.main:app
 ```
+
