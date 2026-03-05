@@ -123,6 +123,16 @@ class DeployManager:
 
         return DeployGate(True)
 
+    def _active_color(self) -> str:
+        color_file = self._data_dir / "active_color.txt"
+        try:
+            val = color_file.read_text(encoding="utf-8").strip().lower()
+            if val in {"blue", "green"}:
+                return val
+        except Exception:
+            pass
+        return "unknown"
+
     def status(self, refresh_remote: bool = False) -> dict[str, Any]:
         with self._lock:
             local_commit = self._current_commit()
@@ -130,12 +140,21 @@ class DeployManager:
             deployed_commit = self._state.get("deployed_commit")
             running = bool(self._thread and self._thread.is_alive())
             gate = self._deploy_gate()
+            active_color = self._active_color()
+            if active_color == "blue":
+                next_color = "green"
+            elif active_color == "green":
+                next_color = "blue"
+            else:
+                next_color = "unknown"
             commits_differ = bool(local_commit and remote_commit and local_commit != remote_commit)
             return {
                 **self._state,
                 "state": "running" if running else self._state.get("state", "idle"),
                 "local_commit": local_commit or "unknown",
                 "remote_commit": remote_commit or "unknown",
+                "active_color": active_color,
+                "next_color": next_color,
                 "commits_differ": commits_differ,
                 "deployed_matches_local": bool(deployed_commit and local_commit and deployed_commit == local_commit),
                 "deploy_allowed": gate.ok and not running,

@@ -296,6 +296,8 @@
       <tr><th style="width:240px;">Current Local Commit</th><td><code id="deploy-local">{{ deploy_status.local_commit or "unknown" }}</code></td></tr>
       <tr><th>Latest origin/main Commit</th><td><code id="deploy-remote">{{ deploy_status.remote_commit or "unknown" }}</code></td></tr>
       <tr><th>Last Deployed Commit</th><td><code id="deploy-last">{{ deploy_status.deployed_commit or "unknown" }}</code></td></tr>
+      <tr><th>Active Color</th><td id="deploy-active-color">{{ deploy_status.active_color or "unknown" }}</td></tr>
+      <tr><th>Next Color</th><td id="deploy-next-color">{{ deploy_status.next_color or "unknown" }}</td></tr>
       <tr><th>Commits Differ</th><td id="deploy-diff">{{ "yes" if deploy_status.commits_differ else "no" }}</td></tr>
       <tr><th>Deploy State</th><td id="deploy-state">{{ deploy_status.state or "idle" }}</td></tr>
       <tr><th>Deploy Allowed</th><td id="deploy-allowed">{{ "yes" if deploy_status.deploy_allowed else "no" }}</td></tr>
@@ -523,6 +525,8 @@ function renderDeployStatus(status) {
   document.getElementById('deploy-local').textContent = status.local_commit || 'unknown';
   document.getElementById('deploy-remote').textContent = status.remote_commit || 'unknown';
   document.getElementById('deploy-last').textContent = status.deployed_commit || 'unknown';
+  document.getElementById('deploy-active-color').textContent = status.active_color || 'unknown';
+  document.getElementById('deploy-next-color').textContent = status.next_color || 'unknown';
   document.getElementById('deploy-diff').textContent = status.commits_differ ? 'yes' : 'no';
   document.getElementById('deploy-state').textContent = status.state || 'idle';
   document.getElementById('deploy-allowed').textContent = status.deploy_allowed ? 'yes' : 'no';

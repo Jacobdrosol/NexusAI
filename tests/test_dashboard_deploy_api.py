@@ -34,6 +34,8 @@ def test_deploy_status_endpoint_returns_payload(dashboard_client):
     assert "local_commit" in data
     assert "remote_commit" in data
     assert "deploy_allowed" in data
+    assert "active_color" in data
+    assert "next_color" in data
 
 
 def test_deploy_run_endpoint_blocked_without_explicit_enable(dashboard_client):
