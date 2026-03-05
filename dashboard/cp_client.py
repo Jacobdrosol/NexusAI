@@ -204,6 +204,12 @@ class CPClient:
     def list_vault_chunks(self, item_id: str) -> Optional[List[Dict[str, Any]]]:
         return self._get(f"/v1/vault/items/{item_id}/chunks")
 
+    def delete_vault_item(self, item_id: str) -> bool:
+        return self._delete(f"/v1/vault/items/{item_id}")
+
+    def list_vault_namespaces(self) -> Optional[List[str]]:
+        return self._get("/v1/vault/namespaces")
+
 
 _client: Optional[CPClient] = None
 

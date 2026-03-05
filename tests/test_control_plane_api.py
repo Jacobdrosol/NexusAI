@@ -215,3 +215,29 @@ async def test_vault_context_endpoint(cp_client):
     data = context_resp.json()
     assert "contexts" in data
     assert data["context_count"] >= 1
+
+
+@pytest.mark.anyio
+async def test_vault_delete_item_and_list_namespaces(cp_client):
+    item_a = (
+        await cp_client.post(
+            "/v1/vault/items",
+            json={"title": "A", "content": "alpha", "namespace": "alpha"},
+        )
+    ).json()
+    await cp_client.post(
+        "/v1/vault/items",
+        json={"title": "B", "content": "beta", "namespace": "beta"},
+    )
+
+    ns_resp = await cp_client.get("/v1/vault/namespaces")
+    assert ns_resp.status_code == 200
+    namespaces = ns_resp.json()
+    assert "alpha" in namespaces
+    assert "beta" in namespaces
+
+    del_resp = await cp_client.delete(f"/v1/vault/items/{item_a['id']}")
+    assert del_resp.status_code == 200
+
+    get_resp = await cp_client.get(f"/v1/vault/items/{item_a['id']}")
+    assert get_resp.status_code == 404

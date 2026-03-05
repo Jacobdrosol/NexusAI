@@ -248,6 +248,26 @@ class VaultManager:
                     chunks.append(VaultChunk.model_validate(data))
                 return chunks
 
+    async def delete_item(self, item_id: str) -> None:
+        await self._ensure_db()
+        async with self._lock:
+            async with aiosqlite.connect(self._db_path) as db:
+                await db.execute("PRAGMA foreign_keys = ON")
+                cur = await db.execute("DELETE FROM vault_items WHERE id = ?", (item_id,))
+                await db.commit()
+                if cur.rowcount == 0:
+                    raise VaultItemNotFoundError(f"Vault item not found: {item_id}")
+
+    async def list_namespaces(self) -> List[str]:
+        await self._ensure_db()
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT DISTINCT namespace FROM vault_items ORDER BY namespace ASC"
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [str(row["namespace"]) for row in rows if row["namespace"]]
+
     async def search(
         self,
         query: str,

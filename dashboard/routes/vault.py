@@ -18,7 +18,17 @@ def vault_page() -> str:
     cp = get_cp_client()
     namespace = request.args.get("namespace")
     items = cp.list_vault_items(namespace=namespace, limit=100) or []
-    return render_template("vault.html", items=items, namespace=namespace or "", results=[], error=None)
+    namespaces = cp.list_vault_namespaces() or sorted(
+        list({str(i.get("namespace", "global")) for i in items})
+    )
+    return render_template(
+        "vault.html",
+        items=items,
+        namespaces=namespaces,
+        namespace=namespace or "",
+        results=[],
+        error=None,
+    )
 
 
 @bp.post("/api/vault/ingest")
@@ -145,3 +155,33 @@ def api_vault_item_detail(item_id: str):
             "chunks": chunks[:10],
         }
     )
+
+
+@bp.get("/api/vault/namespaces")
+@login_required
+def api_vault_namespaces():
+    cp = get_cp_client()
+    namespaces = cp.list_vault_namespaces()
+    if namespaces is None:
+        return jsonify({"error": "control plane unavailable"}), 502
+    return jsonify(namespaces)
+
+
+@bp.post("/api/vault/bulk-delete")
+@login_required
+def api_vault_bulk_delete():
+    data: dict[str, Any] = request.get_json(force=True) or {}
+    item_ids = data.get("item_ids") or []
+    if not isinstance(item_ids, list) or not item_ids:
+        return jsonify({"error": "item_ids list is required"}), 400
+    cp = get_cp_client()
+    failed: list[str] = []
+    deleted = 0
+    for item_id in item_ids:
+        if not cp.delete_vault_item(str(item_id)):
+            failed.append(str(item_id))
+        else:
+            deleted += 1
+    if failed:
+        return jsonify({"deleted": deleted, "failed": failed}), 207
+    return jsonify({"deleted": deleted, "failed": []})

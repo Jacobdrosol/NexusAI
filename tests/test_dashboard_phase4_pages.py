@@ -151,6 +151,18 @@ def test_vault_upload_api_validates_required_fields(dashboard_client):
     assert resp.status_code == 400
 
 
+def test_vault_bulk_delete_api_validates_required_fields(dashboard_client):
+    _login_admin(dashboard_client)
+    resp = dashboard_client.post("/api/vault/bulk-delete", json={})
+    assert resp.status_code == 400
+
+
+def test_vault_namespaces_api_handles_unavailable_cp(dashboard_client):
+    _login_admin(dashboard_client)
+    resp = dashboard_client.get("/api/vault/namespaces")
+    assert resp.status_code == 502
+
+
 def test_overview_page_shows_enhanced_sections(dashboard_client):
     _login_admin(dashboard_client)
     resp = dashboard_client.get("/")

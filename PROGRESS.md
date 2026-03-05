@@ -406,7 +406,7 @@ These are confirmed issues that must be fixed before serious testing:
 
 #### 4a. Design System + Navigation Refresh
 - [x] Expand nav: add Projects, Chat, Vault
-- [ ] Consistent dark theme, loading/empty/error states, responsive layout
+- [x] Consistent dark theme, loading/empty/error states, responsive layout
 
 #### 4b. Worker Detail Page
 - [x] Hardware profile card, model capability list, live resource graphs, current task list
@@ -433,7 +433,7 @@ These are confirmed issues that must be fixed before serious testing:
 #### 4f. Vault Page
 - [x] Upload panel (file, URL, paste), vault item list with search/filter
 - [x] Item detail: preview, chunk count, embedding status, metadata
-- [ ] Namespace manager, bulk actions
+- [x] Namespace manager, bulk actions
 - [x] "Ingest this chat" button on chat page
 
 #### 4g. Settings Additions
@@ -1107,3 +1107,34 @@ NexusAI/
 
 - `pytest -q tests/test_dashboard_phase4_pages.py tests/test_dashboard_smoke.py tests/test_dashboard_onboarding.py` → **25 passed**
 - `pytest -q` → **99 passed**
+
+---
+
+### 2026-03-05 03:22 — Phase 4: Design System Finalization + Vault Namespace/Bulk Completion (Slice 16)
+
+**Status:** Phase 4 is fully complete.
+
+**Changes made:**
+
+- Finalized dashboard design-system consistency in `dashboard/static/style.css`:
+  - unified dark-surface palette across nav, tables, cards, panels, forms, and modals
+  - standardized state UI blocks:
+    - `.state-loading`
+    - `.state-empty`
+    - `.state-error`
+  - added reusable tab controls used by Settings/Vault:
+    - `.settings-tabs`
+    - `.tab-btn` (+ `.active`)
+  - retained responsive behavior for nav/layout/kanban/graphs/overview at mobile breakpoints
+- Completed Vault namespace manager and bulk action backend+UI wiring:
+  - control-plane vault delete + namespace listing endpoints and manager methods
+  - dashboard vault namespace refresh and bulk delete actions
+  - vault namespace panel + row-select bulk-delete UX
+- Updated Phase 4 checklist items:
+  - `4a` complete
+  - `4f` namespace manager + bulk actions complete
+
+**Validation:**
+
+- `pytest -q tests/test_dashboard_phase4_pages.py tests/test_control_plane_api.py` → **34 passed**
+- `pytest -q` → **102 passed**

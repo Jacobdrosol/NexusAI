@@ -4,9 +4,45 @@
 {% block content %}
 <div class="page-header">
   <h1>Vault</h1>
-  <button class="btn btn-primary" onclick="showUpload()">+ Upload / Ingest</button>
+  <div style="display:flex; gap:0.5rem;">
+    <button class="btn" onclick="refreshNamespaces()">Refresh Namespaces</button>
+    <button class="btn btn-primary" onclick="showUpload()">+ Upload / Ingest</button>
+  </div>
 </div>
 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+{% if error %}
+<div class="state-error">{{ error }}</div>
+{% endif %}
+
+<section class="panel" style="margin-bottom:0.75rem;">
+  <div class="split-grid" style="grid-template-columns:1fr 1fr; gap:0.75rem;">
+    <div>
+      <h2 class="panel-title">Namespace Manager</h2>
+      <div id="namespace-list" class="list">
+        {% for ns in namespaces %}
+        <a class="list-item {% if namespace == ns %}active{% endif %}" href="{{ url_for('vault.vault_page') }}?namespace={{ ns }}">
+          <div>{{ ns }}</div>
+        </a>
+        {% else %}
+        <div class="state-empty">No namespaces found</div>
+        {% endfor %}
+      </div>
+    </div>
+    <div>
+      <h2 class="panel-title">Bulk Actions</h2>
+      <div class="empty">Select rows in the table and run a bulk action.</div>
+      <div style="margin-top:0.65rem;display:flex;gap:0.5rem;">
+        <button class="btn btn-danger" onclick="bulkDeleteSelected()">Delete Selected</button>
+        <button class="btn" onclick="selectAllRows()">Select All</button>
+        <button class="btn" onclick="clearAllRows()">Clear</button>
+      </div>
+      <div style="margin-top:0.5rem;color:#64748b;font-size:0.85rem;">
+        Selected: <span id="selected-count">0</span>
+      </div>
+    </div>
+  </div>
+</section>
 
 <form id="vault-search-form" class="search-row">
   <input class="form-control" name="query" placeholder="Search vault...">
@@ -14,17 +50,20 @@
   <button class="btn">Search</button>
 </form>
 
+<div id="state-loading" class="state-loading" style="display:none;">Loading…</div>
 <div id="search-results"></div>
 
 <table>
   <thead>
     <tr>
+      <th><input type="checkbox" onclick="toggleAll(this.checked)"></th>
       <th>Title</th><th>Namespace</th><th>Source</th><th>Updated</th><th>Status</th><th>Actions</th>
     </tr>
   </thead>
   <tbody>
     {% for i in items %}
     <tr>
+      <td><input type="checkbox" class="row-check" value="{{ i.id }}" onchange="syncSelectedCount()"></td>
       <td>{{ i.title }}</td>
       <td><code>{{ i.namespace }}</code></td>
       <td>{{ i.source_type }}</td>
@@ -33,7 +72,7 @@
       <td><button class="btn btn-sm" onclick="openItemDetail('{{ i.id }}')">View</button></td>
     </tr>
     {% else %}
-    <tr><td colspan="6" style="text-align:center;color:#7b879a;">Vault is empty</td></tr>
+    <tr><td colspan="7"><div class="state-empty">Vault is empty</div></td></tr>
     {% endfor %}
   </tbody>
 </table>
@@ -85,6 +124,10 @@ function getCsrf() {
 function showUpload() { document.getElementById('modal-upload').style.display = 'flex'; }
 function hideModal(id) { document.getElementById(id).style.display = 'none'; }
 
+function setLoading(on) {
+  document.getElementById('state-loading').style.display = on ? '' : 'none';
+}
+
 function switchUploadMode(btn, mode) {
   document.querySelectorAll('#modal-upload .tab-btn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
@@ -97,12 +140,14 @@ function switchUploadMode(btn, mode) {
 
 document.getElementById('form-upload').addEventListener('submit', async function(e) {
   e.preventDefault();
+  setLoading(true);
   const fd = new FormData(this);
   const res = await fetch('/api/vault/upload', {
     method: 'POST',
     headers: {'X-CSRFToken': getCsrf()},
     body: fd,
   });
+  setLoading(false);
   if (res.ok) location.reload();
   else {
     const data = await res.json().catch(() => ({}));
@@ -115,6 +160,7 @@ document.getElementById('vault-search-form').addEventListener('submit', async fu
   const fd = new FormData(this);
   const query = (fd.get('query') || '').toString().trim();
   if (!query) return;
+  setLoading(true);
   const res = await fetch('/api/vault/search', {
     method: 'POST',
     headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
@@ -124,6 +170,7 @@ document.getElementById('vault-search-form').addEventListener('submit', async fu
       limit: 5
     }),
   });
+  setLoading(false);
   if (!res.ok) { alert('Search failed'); return; }
   const results = await res.json();
   const html = results.map(r => `
@@ -132,11 +179,13 @@ document.getElementById('vault-search-form').addEventListener('submit', async fu
       <div style="white-space:pre-wrap;">${r.content}</div>
     </div>
   `).join('');
-  document.getElementById('search-results').innerHTML = html || '<div class="empty" style="margin:0.75rem 0;">No matches</div>';
+  document.getElementById('search-results').innerHTML = html || '<div class="state-empty" style="margin:0.75rem 0;">No matches</div>';
 });
 
 async function openItemDetail(itemId) {
+  setLoading(true);
   const res = await fetch('/api/vault/items/' + encodeURIComponent(itemId) + '/detail');
+  setLoading(false);
   if (!res.ok) { alert('Failed to load item detail'); return; }
   const data = await res.json();
   const item = data.item || {};
@@ -156,5 +205,64 @@ async function openItemDetail(itemId) {
   document.getElementById('item-detail-body').innerHTML = html;
   document.getElementById('modal-item-detail').style.display = 'flex';
 }
+
+function toggleAll(checked) {
+  document.querySelectorAll('.row-check').forEach(ch => ch.checked = checked);
+  syncSelectedCount();
+}
+
+function selectAllRows() {
+  toggleAll(true);
+}
+
+function clearAllRows() {
+  toggleAll(false);
+}
+
+function selectedIds() {
+  return Array.from(document.querySelectorAll('.row-check:checked')).map(ch => ch.value);
+}
+
+function syncSelectedCount() {
+  document.getElementById('selected-count').textContent = String(selectedIds().length);
+}
+
+async function bulkDeleteSelected() {
+  const ids = selectedIds();
+  if (!ids.length) {
+    alert('No rows selected');
+    return;
+  }
+  if (!confirm('Delete ' + ids.length + ' selected item(s)?')) return;
+  setLoading(true);
+  const res = await fetch('/api/vault/bulk-delete', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify({item_ids: ids})
+  });
+  setLoading(false);
+  if (res.ok || res.status === 207) {
+    const data = await res.json().catch(() => ({}));
+    if (data.failed && data.failed.length) {
+      alert('Deleted ' + (data.deleted || 0) + ', failed: ' + data.failed.join(', '));
+    } else {
+      alert('Deleted ' + (data.deleted || ids.length) + ' item(s).');
+    }
+    location.reload();
+  } else {
+    const data = await res.json().catch(() => ({}));
+    alert(data.error || 'Bulk delete failed');
+  }
+}
+
+async function refreshNamespaces() {
+  setLoading(true);
+  const res = await fetch('/api/vault/namespaces');
+  setLoading(false);
+  if (!res.ok) { alert('Failed to refresh namespaces'); return; }
+  location.reload();
+}
+
+syncSelectedCount();
 </script>
 {% endblock %}

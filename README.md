@@ -103,6 +103,7 @@ Bot detail (`/bots/<bot_id>`) now includes backend chain editing (add/edit/remov
 Projects now include a detail page at `/projects/<project_id>` with bridge management and project-scoped bots/tasks/vault panels.
 Overview now includes system alerts, worker health mini-bars, quick links, and a recent activity feed.
 Chat now supports context picking, stream-send, inline `@assign` task routing, and per-message actions (copy/re-run/send-to-vault). Vault now supports file/URL/paste upload modes plus item detail preview/chunk metadata.
+Vault also includes namespace management and bulk-delete actions, and the dashboard uses a consistent dark theme with reusable loading/empty/error state components.
 
 ---
 

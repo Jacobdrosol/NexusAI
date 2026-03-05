@@ -76,6 +76,16 @@ async def get_item_chunks(item_id: str, request: Request) -> List[VaultChunk]:
         raise HTTPException(status_code=404, detail=str(e))
 
 
+@router.delete("/items/{item_id}")
+async def delete_item(item_id: str, request: Request) -> dict:
+    vault_manager = request.app.state.vault_manager
+    try:
+        await vault_manager.delete_item(item_id)
+        return {"status": "ok"}
+    except VaultItemNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
 @router.post("/search")
 async def search_vault(request: Request, body: VaultSearchRequest) -> List[Dict[str, Any]]:
     vault_manager = request.app.state.vault_manager
@@ -96,3 +106,9 @@ async def pull_context(request: Request, body: VaultSearchRequest) -> Dict[str, 
         project_id=body.project_id,
         limit=body.limit,
     )
+
+
+@router.get("/namespaces")
+async def list_namespaces(request: Request) -> List[str]:
+    vault_manager = request.app.state.vault_manager
+    return await vault_manager.list_namespaces()
