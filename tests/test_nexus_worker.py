@@ -5,11 +5,13 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from nexus_worker.api import capabilities, health, infer, infer_stream, models
+from nexus_worker.observability import install_observability
 
 
 @pytest.fixture
 def nx_worker_app():
     app = FastAPI()
+    install_observability(app)
     app.include_router(health.router)
     app.include_router(capabilities.router)
     app.include_router(models.router)
@@ -65,3 +67,11 @@ async def test_nexus_worker_cloud_context_policy_block(nx_worker_app, monkeypatc
         )
     assert resp.status_code == 403
 
+
+@pytest.mark.anyio
+async def test_nexus_worker_metrics_endpoint(nx_worker_app):
+    async with AsyncClient(transport=ASGITransport(app=nx_worker_app), base_url="http://test") as client:
+        await client.get("/health")
+        resp = await client.get("/metrics")
+    assert resp.status_code == 200
+    assert "nexus_worker_http_requests_total" in resp.text

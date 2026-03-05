@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 
 from nexus_worker.api import capabilities, health, infer, infer_stream, models
 from nexus_worker.hardware.detector import detect_hardware_profile
+from nexus_worker.observability import install_observability
 from shared.config_loader import ConfigLoader
 
 logger = logging.getLogger(__name__)
@@ -59,7 +60,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("nexus_worker registration failed: %s", e)
 
-    heartbeat_task = asyncio.create_task(_send_heartbeats(worker_id))
+    heartbeat_task = asyncio.create_task(_send_heartbeats(worker_id, app))
     yield
     heartbeat_task.cancel()
     try:
@@ -68,7 +69,7 @@ async def lifespan(app: FastAPI):
         pass
 
 
-async def _send_heartbeats(worker_id: str) -> None:
+async def _send_heartbeats(worker_id: str, app: FastAPI) -> None:
     while True:
         await asyncio.sleep(HEARTBEAT_INTERVAL)
         try:
@@ -79,7 +80,7 @@ async def _send_heartbeats(worker_id: str) -> None:
             metrics = {
                 "load": float(cpu.get("usage_percent") or 0.0),
                 "gpu_utilization": gpu_util,
-                "queue_depth": 0,
+                "queue_depth": int(getattr(app.state, "inference_inflight", 0) or 0),
             }
             async with httpx.AsyncClient(timeout=8.0) as client:
                 await client.post(
@@ -93,6 +94,7 @@ async def _send_heartbeats(worker_id: str) -> None:
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Nexus Worker", version="0.1.0", lifespan=lifespan)
+    install_observability(app)
     app.include_router(health.router)
     app.include_router(capabilities.router)
     app.include_router(models.router)
@@ -107,4 +109,3 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
-

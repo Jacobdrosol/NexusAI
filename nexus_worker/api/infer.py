@@ -22,6 +22,9 @@ class InferRequest(BaseModel):
 @router.post("/infer")
 async def infer(request: Request, body: InferRequest) -> dict:
     cfg = getattr(request.app.state, "worker_config", {})
+    request.app.state.inference_inflight = int(
+        getattr(request.app.state, "inference_inflight", 0) or 0
+    ) + 1
     try:
         return await run_inference(
             provider=body.provider,
@@ -36,4 +39,7 @@ async def infer(request: Request, body: InferRequest) -> dict:
     except Exception as e:
         logger.error("nexus_worker inference failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
-
+    finally:
+        request.app.state.inference_inflight = max(
+            0, int(getattr(request.app.state, "inference_inflight", 1)) - 1
+        )

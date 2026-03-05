@@ -1,7 +1,9 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 import base64
 import hashlib
 import hmac
+import os
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -496,7 +498,40 @@ async def ingest_github_webhook(project_id: str, request: Request) -> dict:
     event_type = request.headers.get("X-GitHub-Event", "").strip()
     if event_type not in {"push", "pull_request", "issues"}:
         raise HTTPException(status_code=400, detail="unsupported event type")
-    delivery_id = request.headers.get("X-GitHub-Delivery", "").strip() or None
+    delivery_id = request.headers.get("X-GitHub-Delivery", "").strip()
+    require_delivery_id = os.environ.get("NEXUSAI_GITHUB_WEBHOOK_REQUIRE_DELIVERY_ID", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+    }
+    if require_delivery_id and not delivery_id:
+        raise HTTPException(status_code=400, detail="missing required X-GitHub-Delivery header")
+    if delivery_id and await store.has_delivery_id(project_id=project_id, delivery_id=delivery_id):
+        raise HTTPException(status_code=409, detail="duplicate webhook delivery id")
+
+    max_skew_seconds = int(os.environ.get("NEXUSAI_GITHUB_WEBHOOK_MAX_SKEW_SECONDS", "300"))
+    require_date = os.environ.get("NEXUSAI_GITHUB_WEBHOOK_REQUIRE_DATE_HEADER", "0").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+    date_header = request.headers.get("Date", "").strip()
+    if require_date and not date_header:
+        raise HTTPException(status_code=400, detail="missing required Date header")
+    if date_header:
+        try:
+            sent_at = parsedate_to_datetime(date_header)
+            if sent_at.tzinfo is None:
+                sent_at = sent_at.replace(tzinfo=timezone.utc)
+            sent_at_utc = sent_at.astimezone(timezone.utc)
+            now_utc = datetime.now(timezone.utc)
+            skew = abs((now_utc - sent_at_utc).total_seconds())
+            if skew > max_skew_seconds:
+                raise HTTPException(status_code=401, detail="webhook timestamp outside allowed window")
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(status_code=400, detail="invalid Date header")
 
     try:
         payload: Dict[str, Any] = await request.json()
@@ -512,12 +547,15 @@ async def ingest_github_webhook(project_id: str, request: Request) -> dict:
 
     event = await store.record_event(
         project_id=project_id,
-        delivery_id=delivery_id,
+        delivery_id=delivery_id or None,
         event_type=event_type,
         action=str(action) if action else None,
         repository_full_name=str(repo) if repo else None,
         payload=payload if isinstance(payload, dict) else {},
     )
+    ttl_seconds = int(os.environ.get("NEXUSAI_GITHUB_WEBHOOK_DEDUP_TTL_SECONDS", "86400"))
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=max(60, ttl_seconds))
+    await store.prune_older_than(cutoff.isoformat())
     review_task_id = None
     pr_cfg = github_cfg.get("pr_review") if isinstance(github_cfg.get("pr_review"), dict) else {}
     if (

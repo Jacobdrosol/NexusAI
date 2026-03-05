@@ -26,10 +26,12 @@ async def cp_app(tmp_path):
     from control_plane.task_manager.task_manager import TaskManager
     from control_plane.vault.mcp_broker import MCPBroker
     from control_plane.vault.vault_manager import VaultManager
+    from control_plane.observability import install_observability
     from fastapi import FastAPI
     from control_plane.api import audit, bots, chat, keys, models_catalog, projects, tasks, vault, workers as workers_api
 
     app = FastAPI(title="NexusAI Control Plane Test")
+    install_observability(app)
     app.include_router(tasks.router)
     app.include_router(bots.router)
     app.include_router(workers_api.router)

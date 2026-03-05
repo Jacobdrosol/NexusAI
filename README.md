@@ -137,6 +137,12 @@ Copy `.env.example` to `.env` and set the following variables before starting th
 | `CONTROL_PLANE_API_TOKEN` | — | Optional shared token for control-plane API auth; when set, dashboard/worker send `X-Nexus-API-Key` and CP enforces auth on API routes |
 | `NEXUSAI_CLOUD_CONTEXT_POLICY` | `allow` | Cloud egress policy for context blocks (`allow`, `redact`, `block`) on control-plane scheduler cloud backends |
 | `NEXUS_WORKER_CLOUD_CONTEXT_POLICY` | `redact` | Standalone worker cloud egress policy for context blocks (`allow`, `redact`, `block`) |
+| `NEXUSAI_WORKER_LATENCY_EMA_ALPHA` | `0.30` | Scheduler EMA smoothing factor for worker latency scoring (0.01-1.0) |
+| `NEXUSAI_WORKER_DEFAULT_LATENCY_MS` | `800` | Default worker latency estimate used before dispatch history exists |
+| `NEXUSAI_GITHUB_WEBHOOK_REQUIRE_DELIVERY_ID` | `1` | Require `X-GitHub-Delivery` header for webhook replay protection |
+| `NEXUSAI_GITHUB_WEBHOOK_MAX_SKEW_SECONDS` | `300` | Allowed request timestamp skew when `Date` header is present |
+| `NEXUSAI_GITHUB_WEBHOOK_REQUIRE_DATE_HEADER` | `0` | Require `Date` header on GitHub webhooks (`1`/`true` to enforce) |
+| `NEXUSAI_GITHUB_WEBHOOK_DEDUP_TTL_SECONDS` | `86400` | Retention window for delivery-ID deduplication records |
 | `NEXUS_WORKER_CONFIG_PATH` | `nexus_worker/config.yaml.example` | Path to standalone `nexus_worker` YAML config |
 | `VLLM_MODELS` | — | Optional comma-separated vLLM model names for local model discovery in `nexus_worker` |
 | `CP_MAX_BODY_BYTES_<ROUTE>` | route default | Optional request body size override per guarded route (e.g. `CHAT_MESSAGES`, `CHAT_STREAM`, `VAULT_INGEST`, `GITHUB_WEBHOOK`) |
@@ -158,6 +164,7 @@ Copy `.env.example` to `.env` and set the following variables before starting th
 - Use a strong `NEXUSAI_SECRET_KEY` and rotate it for production environments.
 - Store PAT/API secrets only through encrypted vault endpoints (never in plain YAML committed to repo).
 - Configure GitHub webhook secrets per project and verify signatures (already enforced by the control-plane endpoint).
+- Enforce webhook replay controls by keeping `X-GitHub-Delivery` checks enabled and using a short skew window for signed payloads.
 - For Gemini backends, keep API keys in request headers (`x-goog-api-key`), not URL query params.
 - Keep the control-plane API on private subnets/VPN where possible; do not expose unauthenticated management paths publicly.
 - Run with least-privilege service accounts and file permissions for the `data/` directory.
@@ -333,6 +340,14 @@ curl http://localhost:8000/v1/projects
 
 # Bridge two bridged-mode projects
 curl -X POST http://localhost:8000/v1/projects/proj-a/bridges/proj-b
+
+# Ingest a GitHub webhook event (signature + delivery ID required)
+curl -X POST http://localhost:8000/v1/projects/proj-a/github/webhook \
+  -H "Content-Type: application/json" \
+  -H "X-Hub-Signature-256: sha256=<hmac_hex>" \
+  -H "X-GitHub-Event: pull_request" \
+  -H "X-GitHub-Delivery: <uuid>" \
+  -d '{...event payload...}'
 ```
 
 #### API Keys
@@ -395,6 +410,9 @@ curl -X POST http://localhost:8000/v1/vault/search \
 curl -X POST http://localhost:8000/v1/vault/context \
   -H "Content-Type: application/json" \
   -d '{"query":"refresh token","limit":3}'
+
+# Prometheus-compatible metrics
+curl http://localhost:8000/metrics
 ```
 
 ### Worker Agent (`http://localhost:8001`)
@@ -410,6 +428,9 @@ curl http://localhost:8001/capabilities
 curl -X POST http://localhost:8001/infer \
   -H "Content-Type: application/json" \
   -d '{"model": "llama3-8b-instruct-q4", "provider": "ollama", "messages": [{"role": "user", "content": "Hi"}]}'
+
+# Prometheus-compatible metrics
+curl http://localhost:8001/metrics
 ```
 
 ---
@@ -496,7 +517,7 @@ capabilities:
 ## Next Priorities
 
 - [ ] End-to-end UAT execution and bug triage using `docs/UAT_RUNBOOK.md`
-- [ ] Add robust load-aware scheduling (queue depth/latency weighted worker selection)
-- [ ] Add metrics/observability export (Prometheus + structured latency/error dashboards)
-- [ ] Extend automated security tests for webhook replay protections and secret-rotation workflows
+- [x] Add robust load-aware scheduling (queue depth/latency weighted worker selection)
+- [x] Add metrics/observability export (Prometheus + structured latency/error dashboards)
+- [x] Extend automated security tests for webhook replay protections and secret-rotation workflows
 - [ ] Stabilize deployment profile (compose + reverse proxy reference stack)

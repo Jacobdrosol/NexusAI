@@ -61,6 +61,7 @@ Expected:
 - `nexus_worker` `/health` is `ok`
 - Control-plane token auth is enforced
 - `nexus_worker` cloud-context `block` policy rejects context transfer with `403`
+- Metrics endpoints are reachable (`/metrics` on control-plane/worker services)
 
 ## 5. Manual UI/UAT Flow
 
@@ -101,6 +102,11 @@ Expected:
 - Repeat cloud-backed inference with context.
 - Expected: context is replaced by redaction marker in backend payload path.
 
+### 6.4 GitHub webhook replay protection
+- Send two webhook requests with the same `X-GitHub-Delivery` value.
+- Expected: first request accepted, second rejected with `409`.
+- If `Date` header skew is intentionally outside configured threshold, expected `401`.
+
 ## 7. Go / No-Go Gate
 
 Go to broader testing only if all are true:
@@ -120,4 +126,3 @@ Go to broader testing only if all are true:
   - vault ingest/search
   - one GitHub webhook event
   - one `@assign` DAG flow
-

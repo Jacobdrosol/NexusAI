@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 
 from worker_agent.api import capabilities, health, infer
 from worker_agent.gpu_monitor import get_gpu_info
+from worker_agent.observability import install_observability
 from shared.config_loader import ConfigLoader
 
 logger = logging.getLogger(__name__)
@@ -56,9 +57,7 @@ async def lifespan(app: FastAPI):
         logger.warning("Could not register with control plane: %s", e)
 
     # Background heartbeat
-    heartbeat_task = asyncio.create_task(
-        _send_heartbeats(worker_id)
-    )
+    heartbeat_task = asyncio.create_task(_send_heartbeats(worker_id, app))
 
     logger.info("NexusAI Worker Agent started (id=%s)", worker_id)
     yield
@@ -71,7 +70,7 @@ async def lifespan(app: FastAPI):
     logger.info("NexusAI Worker Agent stopped")
 
 
-async def _send_heartbeats(worker_id: str) -> None:
+async def _send_heartbeats(worker_id: str, app: FastAPI) -> None:
     while True:
         await asyncio.sleep(HEARTBEAT_INTERVAL)
         try:
@@ -80,11 +79,14 @@ async def _send_heartbeats(worker_id: str) -> None:
                 (g["memory_used"] / g["memory_total"] * 100) if g["memory_total"] > 0 else 0.0
                 for g in gpu_info
             ]
-            metrics = {"gpu_utilization": gpu_util} if gpu_util else {}
+            queue_depth = int(getattr(app.state, "inference_inflight", 0) or 0)
+            metrics = {"queue_depth": queue_depth}
+            if gpu_util:
+                metrics["gpu_utilization"] = gpu_util
             async with httpx.AsyncClient(timeout=5.0) as client:
                 await client.post(
                     f"{CONTROL_PLANE_URL}/v1/workers/{worker_id}/heartbeat",
-                    json={"metrics": metrics} if metrics else {},
+                    json={"metrics": metrics},
                     headers=_cp_headers(),
                 )
         except Exception as e:
@@ -97,6 +99,7 @@ def create_app() -> FastAPI:
         version="0.1.0",
         lifespan=lifespan,
     )
+    install_observability(app)
 
     app.include_router(health.router)
     app.include_router(capabilities.router)

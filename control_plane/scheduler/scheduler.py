@@ -1,5 +1,6 @@
 import logging
 import os
+import time
 from typing import Any
 
 import httpx
@@ -22,6 +23,10 @@ class Scheduler:
         self.worker_registry = worker_registry
         self.key_vault = key_vault
         self.model_registry = model_registry
+        self._inflight_by_worker: dict[str, int] = {}
+        self._latency_ema_ms: dict[str, float] = {}
+        self._latency_alpha = float(os.environ.get("NEXUSAI_WORKER_LATENCY_EMA_ALPHA", "0.30"))
+        self._default_latency_ms = float(os.environ.get("NEXUSAI_WORKER_DEFAULT_LATENCY_MS", "800"))
 
     async def schedule(self, task: Task) -> Any:
         try:
@@ -57,15 +62,10 @@ class Scheduler:
         await self._validate_model_if_catalog_present(backend)
         safe_payload = self._apply_cloud_context_policy(backend, payload)
         if backend.type in ("local_llm", "remote_llm"):
-            if not backend.worker_id:
-                raise BackendError("worker_id is required for local_llm/remote_llm backends")
-            try:
-                worker = await self.worker_registry.get(backend.worker_id)
-            except Exception as e:
-                raise BackendError(f"Worker not found: {backend.worker_id}") from e
+            worker = await self._resolve_worker_for_llm_backend(backend)
             if worker.status != "online":
                 raise BackendError(
-                    f"Worker {backend.worker_id} is not online (status={worker.status})"
+                    f"Worker {worker.id} is not online (status={worker.status})"
                 )
             return await self._dispatch_to_worker(worker, backend, safe_payload)
         elif backend.type == "cloud_api":
@@ -146,10 +146,21 @@ class Scheduler:
         }
         if backend.gpu_id:
             body["gpu_id"] = backend.gpu_id
+        self._inflight_by_worker[worker.id] = int(self._inflight_by_worker.get(worker.id, 0)) + 1
+        started = time.perf_counter()
         async with httpx.AsyncClient(timeout=120.0) as client:
-            response = await client.post(url, json=body)
-            response.raise_for_status()
-            return response.json()
+            try:
+                response = await client.post(url, json=body)
+                response.raise_for_status()
+                return response.json()
+            finally:
+                elapsed_ms = (time.perf_counter() - started) * 1000.0
+                prev = float(self._latency_ema_ms.get(worker.id, self._default_latency_ms))
+                alpha = min(max(self._latency_alpha, 0.01), 1.0)
+                self._latency_ema_ms[worker.id] = (alpha * elapsed_ms) + ((1.0 - alpha) * prev)
+                self._inflight_by_worker[worker.id] = max(
+                    0, int(self._inflight_by_worker.get(worker.id, 1)) - 1
+                )
 
     async def _call_openai(self, backend: BackendConfig, payload: Any) -> Any:
         api_key_ref = backend.api_key_ref or "OPENAI_API_KEY"
@@ -285,3 +296,59 @@ class Scheduler:
         except Exception:
             # If model registry lookup fails unexpectedly, avoid blocking execution.
             return
+
+    async def _resolve_worker_for_llm_backend(self, backend: BackendConfig) -> Worker:
+        if backend.worker_id:
+            try:
+                return await self.worker_registry.get(backend.worker_id)
+            except Exception as e:
+                raise BackendError(f"Worker not found: {backend.worker_id}") from e
+
+        workers = await self.worker_registry.list()
+        candidates = [
+            w
+            for w in workers
+            if w.enabled and w.status == "online" and self._worker_supports_backend(w, backend)
+        ]
+        if not candidates:
+            raise BackendError(
+                f"No online worker supports provider={backend.provider} model={backend.model}"
+            )
+        return min(candidates, key=self._score_worker)
+
+    def _worker_supports_backend(self, worker: Worker, backend: BackendConfig) -> bool:
+        backend_provider = str(backend.provider or "").strip().lower()
+        backend_model = str(backend.model or "").strip()
+        for cap in worker.capabilities:
+            if str(cap.type).lower() != "llm":
+                continue
+            if str(cap.provider).lower() != backend_provider:
+                continue
+            if backend_model in (cap.models or []):
+                return True
+        return False
+
+    def _score_worker(self, worker: Worker) -> float:
+        metrics = worker.metrics
+        queue_depth = int(getattr(metrics, "queue_depth", 0) or 0)
+        load = float(getattr(metrics, "load", 0.0) or 0.0)
+        gpu_util = getattr(metrics, "gpu_utilization", None) or []
+        gpu_avg = (sum(gpu_util) / len(gpu_util)) if gpu_util else 0.0
+        inflight = int(self._inflight_by_worker.get(worker.id, 0))
+        latency_ms = float(self._latency_ema_ms.get(worker.id, self._default_latency_ms))
+        return (
+            (queue_depth * 5.0)
+            + (inflight * 4.0)
+            + (load / 20.0)
+            + (gpu_avg / 25.0)
+            + (latency_ms / 500.0)
+        )
+
+    def get_worker_runtime_metrics(self) -> dict[str, dict[str, float]]:
+        out: dict[str, dict[str, float]] = {}
+        for worker_id in set(self._inflight_by_worker.keys()) | set(self._latency_ema_ms.keys()):
+            out[worker_id] = {
+                "inflight": float(self._inflight_by_worker.get(worker_id, 0)),
+                "latency_ema_ms": float(self._latency_ema_ms.get(worker_id, self._default_latency_ms)),
+            }
+        return out

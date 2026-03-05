@@ -1578,3 +1578,54 @@ NexusAI/
 **Validation:**
 
 - `pytest -q tests/test_scheduler_api_keys.py tests/test_worker_agent_backends.py` → **pass**
+
+---
+
+### 2026-03-05 10:55 — Phase 8 Follow-through: Routing, Replay Guards, and Metrics (Slice 30)
+
+**Status:** Completed the three requested next steps end-to-end (scheduler routing, webhook replay hardening, and Prometheus-style observability).
+
+**Changes made:**
+
+- Added load-aware worker routing for unpinned local/remote LLM backends:
+  - scheduler now auto-selects an online capable worker when `worker_id` is not pinned
+  - weighted score uses queue depth, in-flight dispatch count, CPU load, GPU utilization, and latency EMA
+  - added runtime scheduler metrics export hook (`get_worker_runtime_metrics`)
+  - file: `control_plane/scheduler/scheduler.py`
+- Added GitHub webhook replay/timestamp protections:
+  - duplicate `X-GitHub-Delivery` rejection (`409`) via webhook store lookup
+  - optional strict delivery-id requirement (`NEXUSAI_GITHUB_WEBHOOK_REQUIRE_DELIVERY_ID`, default `1`)
+  - signed payload timestamp skew validation via `Date` header (`NEXUSAI_GITHUB_WEBHOOK_MAX_SKEW_SECONDS`)
+  - configurable date-header requirement (`NEXUSAI_GITHUB_WEBHOOK_REQUIRE_DATE_HEADER`)
+  - dedup record TTL pruning (`NEXUSAI_GITHUB_WEBHOOK_DEDUP_TTL_SECONDS`)
+  - files:
+    - `control_plane/api/projects.py`
+    - `control_plane/github/webhook_store.py`
+- Added Prometheus-compatible metrics endpoints and instrumentation:
+  - control plane: `/metrics` with request counters/latency histograms + task/worker/scheduler gauges
+    - files: `control_plane/observability.py`, `control_plane/main.py`
+  - worker_agent: `/metrics`, request counters/latency histograms, in-flight inference gauge, heartbeat queue depth
+    - files: `worker_agent/observability.py`, `worker_agent/main.py`, `worker_agent/api/infer.py`
+  - nexus_worker: `/metrics`, request counters/latency histograms, in-flight inference gauge, heartbeat queue depth
+    - files: `nexus_worker/observability.py`, `nexus_worker/agent.py`, `nexus_worker/api/infer.py`, `nexus_worker/api/infer_stream.py`
+  - shared metrics utility:
+    - `shared/observability/metrics.py`
+    - `shared/observability/__init__.py`
+- Added/updated tests:
+  - scheduler routing and runtime metrics:
+    - `tests/test_scheduler_routing.py`
+  - webhook replay/timestamp and `/metrics` exposure:
+    - `tests/test_control_plane_api.py`
+  - worker/nexus metrics endpoint coverage:
+    - `tests/test_worker_agent_backends.py`
+    - `tests/test_nexus_worker.py`
+  - test fixture wiring for control-plane observability:
+    - `tests/conftest.py`
+- Updated docs/env:
+  - `README.md` (new env vars, webhook header guidance, `/metrics` examples, next-priority checklist)
+  - `.env.example` (new scheduler/webhook security knobs)
+
+**Validation:**
+
+- `pytest -q tests/test_scheduler_routing.py tests/test_control_plane_api.py tests/test_worker_agent_backends.py tests/test_nexus_worker.py` → **47 passed**
+- `pytest -q` → **136 passed**

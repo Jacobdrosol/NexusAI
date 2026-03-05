@@ -95,6 +95,34 @@ class GitHubWebhookStore:
                 await db.commit()
         return row
 
+    async def has_delivery_id(self, project_id: str, delivery_id: str) -> bool:
+        await self._ensure_db()
+        if not delivery_id:
+            return False
+        async with aiosqlite.connect(self._db_path) as db:
+            async with db.execute(
+                """
+                SELECT 1
+                FROM github_webhook_events
+                WHERE project_id = ? AND delivery_id = ?
+                LIMIT 1
+                """,
+                (project_id, delivery_id),
+            ) as cursor:
+                row = await cursor.fetchone()
+                return row is not None
+
+    async def prune_older_than(self, cutoff_iso: str) -> int:
+        await self._ensure_db()
+        async with self._lock:
+            async with aiosqlite.connect(self._db_path) as db:
+                cur = await db.execute(
+                    "DELETE FROM github_webhook_events WHERE created_at < ?",
+                    (cutoff_iso,),
+                )
+                await db.commit()
+                return int(cur.rowcount or 0)
+
     async def list_events(self, project_id: str, limit: int = 50) -> List[Dict[str, Any]]:
         await self._ensure_db()
         async with aiosqlite.connect(self._db_path) as db:

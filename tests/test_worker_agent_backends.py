@@ -179,8 +179,10 @@ def worker_app():
     """Minimal FastAPI app with the infer router, no lifespan."""
     from fastapi import FastAPI
     from worker_agent.api import infer as infer_module
+    from worker_agent.observability import install_observability
 
     app = FastAPI()
+    install_observability(app)
     app.include_router(infer_module.router)
     app.state.worker_config = {"ollama_host": "http://localhost:11434"}
     return app
@@ -245,3 +247,21 @@ async def test_infer_endpoint_cli(worker_app):
             )
     assert resp.status_code == 200
     assert resp.json()["output"] == "result"
+
+
+@pytest.mark.anyio
+async def test_worker_agent_metrics_endpoint(worker_app):
+    async with AsyncClient(
+        transport=ASGITransport(app=worker_app), base_url="http://test"
+    ) as client:
+        await client.post(
+            "/infer",
+            json={
+                "model": "some-model",
+                "provider": "unknown_provider",
+                "messages": [],
+            },
+        )
+        resp = await client.get("/metrics")
+    assert resp.status_code == 200
+    assert "nexus_worker_agent_http_requests_total" in resp.text

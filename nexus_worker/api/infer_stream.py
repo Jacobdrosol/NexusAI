@@ -23,6 +23,9 @@ async def infer_stream(request: Request, body: InferStreamRequest) -> StreamingR
     cfg = getattr(request.app.state, "worker_config", {})
 
     async def event_gen() -> AsyncGenerator[str, None]:
+        request.app.state.inference_inflight = int(
+            getattr(request.app.state, "inference_inflight", 0) or 0
+        ) + 1
         try:
             result = await run_inference(
                 provider=body.provider,
@@ -44,10 +47,13 @@ async def infer_stream(request: Request, body: InferStreamRequest) -> StreamingR
             yield f"event: error\ndata: {json.dumps(payload)}\n\n"
         except Exception as e:
             yield f"event: error\ndata: {json.dumps({'error': str(e)})}\n\n"
+        finally:
+            request.app.state.inference_inflight = max(
+                0, int(getattr(request.app.state, "inference_inflight", 1)) - 1
+            )
 
     return StreamingResponse(
         event_gen(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
     )
-

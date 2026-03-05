@@ -13,6 +13,7 @@ from control_plane.chat.chat_manager import ChatManager
 from control_plane.chat.pm_orchestrator import PMOrchestrator
 from control_plane.github.webhook_store import GitHubWebhookStore
 from control_plane.keys.key_vault import KeyVault
+from control_plane.observability import install_observability
 from control_plane.registry.bot_registry import BotRegistry
 from control_plane.registry.model_registry import ModelRegistry
 from control_plane.registry.project_registry import ProjectRegistry
@@ -140,6 +141,8 @@ def create_app() -> FastAPI:
         version="0.1.0",
         lifespan=lifespan,
     )
+
+    install_observability(app)
 
     app.include_router(tasks.router)
     app.include_router(bots.router)

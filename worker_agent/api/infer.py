@@ -31,6 +31,9 @@ async def infer(request: Request, body: InferRequest) -> dict:
     params = body.params or {}
     worker_config = getattr(request.app.state, "worker_config", {})
     ollama_host = worker_config.get("ollama_host", "http://localhost:11434")
+    request.app.state.inference_inflight = int(
+        getattr(request.app.state, "inference_inflight", 0) or 0
+    ) + 1
 
     try:
         if body.provider == "ollama":
@@ -76,3 +79,7 @@ async def infer(request: Request, body: InferRequest) -> dict:
     except Exception as e:
         logger.error("Inference failed: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        request.app.state.inference_inflight = max(
+            0, int(getattr(request.app.state, "inference_inflight", 1)) - 1
+        )

@@ -2,6 +2,8 @@
 import hashlib
 import hmac
 import json
+from datetime import datetime, timedelta, timezone
+from email.utils import format_datetime
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -12,6 +14,16 @@ async def test_health(cp_client):
     resp = await cp_client.get("/health")
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
+
+
+@pytest.mark.anyio
+async def test_metrics_endpoint_exposes_prometheus_text(cp_client):
+    await cp_client.get("/health")
+    resp = await cp_client.get("/metrics")
+    assert resp.status_code == 200
+    text = resp.text
+    assert "nexus_control_plane_http_requests_total" in text
+    assert "nexus_control_plane_http_request_duration_seconds_bucket" in text
 
 
 @pytest.mark.anyio
@@ -437,6 +449,7 @@ async def test_project_github_webhook_rejects_bad_signature(cp_client):
         headers={
             "X-Hub-Signature-256": "sha256=deadbeef",
             "X-GitHub-Event": "push",
+            "X-GitHub-Delivery": "delivery-bad-sig",
         },
     )
     assert ingest.status_code == 401
@@ -527,6 +540,7 @@ async def test_project_github_pr_review_workflow_creates_task(cp_client):
             "Content-Type": "application/json",
             "X-Hub-Signature-256": f"sha256={sig}",
             "X-GitHub-Event": "pull_request",
+            "X-GitHub-Delivery": "delivery-pr-1",
         },
     )
     assert ingest.status_code == 200
@@ -537,6 +551,60 @@ async def test_project_github_pr_review_workflow_creates_task(cp_client):
     assert tasks.status_code == 200
     rows = tasks.json()
     assert any((r.get("payload") or {}).get("source") == "github_pr_review" for r in rows)
+
+
+@pytest.mark.anyio
+async def test_project_github_webhook_rejects_duplicate_delivery_id(cp_client):
+    await cp_client.post(
+        "/v1/projects",
+        json={"id": "gh-dup", "name": "GitHub Dup", "mode": "isolated"},
+    )
+    await cp_client.post(
+        "/v1/projects/gh-dup/github/webhook/secret",
+        json={"secret": "topsecret"},
+    )
+    payload = {"repository": {"full_name": "owner/repo"}}
+    raw = json.dumps(payload).encode("utf-8")
+    sig = hmac.new(b"topsecret", raw, hashlib.sha256).hexdigest()
+    headers = {
+        "Content-Type": "application/json",
+        "X-Hub-Signature-256": f"sha256={sig}",
+        "X-GitHub-Event": "push",
+        "X-GitHub-Delivery": "delivery-dup-1",
+    }
+    first = await cp_client.post("/v1/projects/gh-dup/github/webhook", content=raw, headers=headers)
+    assert first.status_code == 200
+    second = await cp_client.post("/v1/projects/gh-dup/github/webhook", content=raw, headers=headers)
+    assert second.status_code == 409
+
+
+@pytest.mark.anyio
+async def test_project_github_webhook_rejects_old_date_header(cp_client, monkeypatch):
+    monkeypatch.setenv("NEXUSAI_GITHUB_WEBHOOK_MAX_SKEW_SECONDS", "1")
+    await cp_client.post(
+        "/v1/projects",
+        json={"id": "gh-date", "name": "GitHub Date", "mode": "isolated"},
+    )
+    await cp_client.post(
+        "/v1/projects/gh-date/github/webhook/secret",
+        json={"secret": "topsecret"},
+    )
+    payload = {"repository": {"full_name": "owner/repo"}}
+    raw = json.dumps(payload).encode("utf-8")
+    sig = hmac.new(b"topsecret", raw, hashlib.sha256).hexdigest()
+    old_date = format_datetime(datetime.now(timezone.utc) - timedelta(minutes=10))
+    ingest = await cp_client.post(
+        "/v1/projects/gh-date/github/webhook",
+        content=raw,
+        headers={
+            "Content-Type": "application/json",
+            "X-Hub-Signature-256": f"sha256={sig}",
+            "X-GitHub-Event": "push",
+            "X-GitHub-Delivery": "delivery-date-1",
+            "Date": old_date,
+        },
+    )
+    assert ingest.status_code == 401
 
 
 @pytest.mark.anyio
