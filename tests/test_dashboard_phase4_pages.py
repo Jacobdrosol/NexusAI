@@ -163,6 +163,10 @@ def test_settings_page_loads_for_admin(dashboard_client):
     resp = dashboard_client.get("/settings")
     assert resp.status_code == 200
     assert b"Settings" in resp.data
+    assert b"Export/Import" in resp.data
+    assert b"Audit Log" in resp.data
+    assert b'data-target="section-export-import"' in resp.data
+    assert b'data-target="section-audit-log"' in resp.data
 
 
 def test_worker_live_endpoint_returns_payload(dashboard_client):

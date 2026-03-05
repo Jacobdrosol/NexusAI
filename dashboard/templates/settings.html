@@ -45,6 +45,20 @@
                  background:#1a1d27;color:#e0e0e0;cursor:pointer;font-size:0.85rem;transition:background 0.2s;">
     Projects
   </button>
+  <button class="tab-btn"
+          data-target="section-export-import"
+          onclick="switchTab(this)"
+          style="padding:0.4rem 1rem;border-radius:20px;border:1px solid #2d3045;
+                 background:#1a1d27;color:#e0e0e0;cursor:pointer;font-size:0.85rem;transition:background 0.2s;">
+    Export/Import
+  </button>
+  <button class="tab-btn"
+          data-target="section-audit-log"
+          onclick="switchTab(this)"
+          style="padding:0.4rem 1rem;border-radius:20px;border:1px solid #2d3045;
+                 background:#1a1d27;color:#e0e0e0;cursor:pointer;font-size:0.85rem;transition:background 0.2s;">
+    Audit Log
+  </button>
 </div>
 
 <!-- Hidden CSRF token for JS use -->
@@ -196,7 +210,8 @@
 </section>
 
 <!-- Export / Import -->
-<section style="background:#1a1d27;border-radius:8px;padding:1.5rem;
+<section id="section-export-import"
+         style="display:none;background:#1a1d27;border-radius:8px;padding:1.5rem;
                 margin-bottom:1.5rem;border:1px solid #2d3045;">
   <h2 style="font-size:1.1rem;margin-bottom:1rem;color:#f0f0f0;">Export / Import</h2>
   <div style="display:flex;gap:0.75rem;flex-wrap:wrap;align-items:center;">
@@ -225,7 +240,8 @@
 </section>
 
 <!-- Audit log -->
-<section style="background:#1a1d27;border-radius:8px;padding:1.5rem;border:1px solid #2d3045;">
+<section id="section-audit-log"
+         style="display:none;background:#1a1d27;border-radius:8px;padding:1.5rem;border:1px solid #2d3045;">
   <h2 style="font-size:1.1rem;margin-bottom:1rem;color:#f0f0f0;">
     Audit Log <span style="font-weight:400;color:#718096;font-size:0.85rem;">(last 50 changes)</span>
   </h2>
