@@ -1629,3 +1629,31 @@ NexusAI/
 
 - `pytest -q tests/test_scheduler_routing.py tests/test_control_plane_api.py tests/test_worker_agent_backends.py tests/test_nexus_worker.py` → **47 passed**
 - `pytest -q` → **136 passed**
+
+---
+
+### 2026-03-05 11:08 — Prometheus Compose Integration (Slice 31)
+
+**Status:** Added ready-to-run Prometheus scraping for core NexusAI services.
+
+**Changes made:**
+
+- Added Prometheus scrape configuration:
+  - `monitoring/prometheus.yml`
+  - jobs:
+    - `nexus_control_plane` → `control_plane:8000/metrics`
+    - `nexus_worker_agent` → `worker_agent:8001/metrics`
+- Added Prometheus service to compose stack:
+  - image: `prom/prometheus:v2.54.1`
+  - port mapping: `9090:9090`
+  - mounted config + persistent TSDB volume
+  - depends on healthy `control_plane` and `worker_agent`
+- Added `prometheus-data` volume.
+- Removed obsolete top-level `version` key from `docker-compose.yml` to avoid compose warnings.
+- Updated docs:
+  - `README.md` with Prometheus URL and quick metric checks
+  - `docs/UAT_RUNBOOK.md` with `/targets` verification step
+
+**Validation:**
+
+- `docker compose config` parse attempted; blocked locally because `.env` file is missing in workspace (expected if not yet created from `.env.example`).

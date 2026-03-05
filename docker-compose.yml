@@ -1,11 +1,10 @@
-version: '3.9'
-
 networks:
   nexus-net:
     driver: bridge
 
 volumes:
   nexus-data:
+  prometheus-data:
 
 services:
   control_plane:
@@ -64,3 +63,21 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    ports:
+      - "9090:9090"
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    networks:
+      - nexus-net
+    depends_on:
+      control_plane:
+        condition: service_healthy
+      worker_agent:
+        condition: service_healthy

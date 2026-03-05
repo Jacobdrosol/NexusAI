@@ -12,6 +12,7 @@
 4. Open http://localhost:5000 to access the dashboard
 5. The control plane API is at http://localhost:8000
 6. The worker agent is at http://localhost:8001
+7. Prometheus is at http://localhost:9090
 
 ---
 
@@ -176,6 +177,28 @@ Copy `.env.example` to `.env` and set the following variables before starting th
 - Full step-by-step runbook: `docs/UAT_RUNBOOK.md`
 - Automated preflight script:
   - `scripts/pre_uat_security_checks.ps1`
+
+---
+
+## Observability
+
+Prometheus is included in `docker-compose.yml` and scrapes:
+
+- `control_plane:8000/metrics`
+- `worker_agent:8001/metrics`
+
+Local URLs:
+
+- Control plane metrics: `http://localhost:8000/metrics`
+- Worker agent metrics: `http://localhost:8001/metrics`
+- Prometheus UI: `http://localhost:9090`
+
+Quick checks in Prometheus:
+
+- `nexus_control_plane_http_requests_total`
+- `nexus_control_plane_http_request_duration_seconds_count`
+- `nexus_worker_agent_http_requests_total`
+- `nexus_worker_agent_inference_inflight`
 
 ---
 

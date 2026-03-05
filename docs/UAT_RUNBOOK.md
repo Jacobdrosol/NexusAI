@@ -62,6 +62,7 @@ Expected:
 - Control-plane token auth is enforced
 - `nexus_worker` cloud-context `block` policy rejects context transfer with `403`
 - Metrics endpoints are reachable (`/metrics` on control-plane/worker services)
+- Prometheus target status is `UP` for `nexus_control_plane` and `nexus_worker_agent` (`http://localhost:9090/targets`)
 
 ## 5. Manual UI/UAT Flow
 
