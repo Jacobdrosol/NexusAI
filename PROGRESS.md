@@ -453,7 +453,7 @@ These are confirmed issues that must be fixed before serious testing:
 
 ### Phase 6 — GitHub Integration
 
-- [ ] GitHub OAuth / PAT connection per project
+- [x] GitHub OAuth / PAT connection per project
 - [ ] Webhook ingestion: PR, push, issue events
 - [ ] Code-aware bot context: repo file tree + file contents as vault items
 - [ ] PR review bot workflow
@@ -1215,3 +1215,40 @@ NexusAI/
 
 - `pytest -q tests/test_control_plane_api.py tests/test_chat_api.py tests/test_dashboard_phase4_pages.py` → **40 passed**
 - `pytest -q` → **106 passed**
+
+---
+
+### 2026-03-05 04:55 — Phase 6: Project GitHub PAT Connection (Slice 19)
+
+**Status:** Phase 6 started; project-level GitHub PAT connection is implemented.
+
+**Changes made:**
+
+- Added control-plane project GitHub PAT endpoints (`control_plane/api/projects.py`):
+  - `POST /v1/projects/{project_id}/github/pat` (connect/update PAT, optional live validation)
+  - `GET /v1/projects/{project_id}/github/status` (connection metadata, optional validation probe)
+  - `DELETE /v1/projects/{project_id}/github/pat` (disconnect and remove token reference)
+- Integrated encrypted token storage through existing key vault:
+  - PAT stored under per-project key refs (`github_pat::<project_id>`)
+  - project `settings_overrides.github` now tracks repo + connection metadata
+- Extended dashboard control-plane client (`dashboard/cp_client.py`) for GitHub project operations:
+  - `connect_project_github_pat`
+  - `get_project_github_status`
+  - `disconnect_project_github_pat`
+- Added dashboard project API proxies (`dashboard/routes/projects.py`):
+  - `POST /api/projects/<project_id>/github/pat`
+  - `GET /api/projects/<project_id>/github/status`
+  - `DELETE /api/projects/<project_id>/github/pat`
+- Added GitHub PAT management UI in project detail (`dashboard/templates/project_detail.html`):
+  - connect form (repo + token)
+  - test connection action
+  - disconnect action
+  - live status panel with JSON details
+- Added tests:
+  - control-plane GitHub connect/status/disconnect flow (`tests/test_control_plane_api.py`)
+  - dashboard validation and unavailable-CP behavior (`tests/test_dashboard_phase4_pages.py`)
+
+**Validation:**
+
+- `pytest -q tests/test_control_plane_api.py tests/test_dashboard_phase4_pages.py` → **39 passed**
+- `pytest -q` → **109 passed**

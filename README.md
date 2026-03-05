@@ -106,6 +106,7 @@ Chat now supports context picking, stream-send, inline `@assign` task routing, a
 Vault also includes namespace management and bulk-delete actions, and the dashboard uses a consistent dark theme with reusable loading/empty/error state components.
 `@assign` now triggers PM-driven decomposition into dependency-ordered multi-bot tasks, streams task-status events in chat, and posts an aggregated completion summary back into the same conversation.
 Assignment summary messages now include a `View DAG` action that opens a visual dependency graph for the orchestration.
+Projects now include GitHub PAT connection management (connect/test/disconnect) at the project detail page for per-project repository integration.
 
 ---
 

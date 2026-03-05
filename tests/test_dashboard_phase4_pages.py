@@ -101,6 +101,18 @@ def test_chat_orchestration_graph_api_handles_unavailable_cp(dashboard_client):
     assert resp.status_code == 502
 
 
+def test_project_github_pat_api_validates_required_fields(dashboard_client):
+    _login_admin(dashboard_client)
+    resp = dashboard_client.post("/api/projects/proj-x/github/pat", json={})
+    assert resp.status_code == 400
+
+
+def test_project_github_status_api_handles_unavailable_cp(dashboard_client):
+    _login_admin(dashboard_client)
+    resp = dashboard_client.get("/api/projects/proj-x/github/status")
+    assert resp.status_code == 502
+
+
 def test_worker_detail_page_loads_when_logged_in(dashboard_client):
     _login_admin(dashboard_client)
     from dashboard.db import get_db

@@ -267,3 +267,36 @@ async def test_list_tasks_filtered_by_orchestration_id(cp_client):
     rows = resp.json()
     assert len(rows) >= 1
     assert all((r.get("metadata") or {}).get("orchestration_id") == "orch-1" for r in rows)
+
+
+@pytest.mark.anyio
+async def test_project_github_pat_connect_status_disconnect(cp_client):
+    create_resp = await cp_client.post(
+        "/v1/projects",
+        json={"id": "gh-proj", "name": "GitHub Project", "mode": "isolated"},
+    )
+    assert create_resp.status_code == 200
+
+    connect_resp = await cp_client.post(
+        "/v1/projects/gh-proj/github/pat",
+        json={
+            "token": "ghp_example_token_for_tests_only",
+            "repo_full_name": "owner/repo",
+            "validate": False,
+        },
+    )
+    assert connect_resp.status_code == 200
+    assert connect_resp.json()["status"] == "connected"
+
+    status_resp = await cp_client.get("/v1/projects/gh-proj/github/status")
+    assert status_resp.status_code == 200
+    status = status_resp.json()
+    assert status["connected"] is True
+    assert status["repo_full_name"] == "owner/repo"
+
+    disconnect_resp = await cp_client.delete("/v1/projects/gh-proj/github/pat")
+    assert disconnect_resp.status_code == 200
+
+    status_after = await cp_client.get("/v1/projects/gh-proj/github/status")
+    assert status_after.status_code == 200
+    assert status_after.json()["connected"] is False

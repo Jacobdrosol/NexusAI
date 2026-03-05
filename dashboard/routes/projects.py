@@ -58,6 +58,7 @@ def project_detail_page(project_id: str):
         tasks=project_tasks,
         vault_items=vault_items,
         all_projects=all_projects,
+        github_status=None,
         error=None,
     )
 
@@ -105,6 +106,49 @@ def api_add_project_bridge(project_id: str):
 def api_remove_project_bridge(project_id: str, target_project_id: str):
     cp = get_cp_client()
     ok = cp.remove_project_bridge(project_id, target_project_id)
+    if not ok:
+        return jsonify({"error": "control plane unavailable"}), 502
+    return "", 204
+
+
+@bp.post("/api/projects/<project_id>/github/pat")
+@login_required
+def api_connect_project_github_pat(project_id: str):
+    data: dict[str, Any] = request.get_json(force=True) or {}
+    token = (data.get("token") or "").strip()
+    repo_full_name = (data.get("repo_full_name") or "").strip() or None
+    validate = bool(data.get("validate", True))
+    if not token:
+        return jsonify({"error": "token is required"}), 400
+    cp = get_cp_client()
+    result = cp.connect_project_github_pat(
+        project_id=project_id,
+        token=token,
+        repo_full_name=repo_full_name,
+        validate=validate,
+    )
+    if result is None:
+        return jsonify({"error": "control plane unavailable"}), 502
+    return jsonify(result)
+
+
+@bp.get("/api/projects/<project_id>/github/status")
+@login_required
+def api_project_github_status(project_id: str):
+    validate_arg = (request.args.get("validate") or "false").strip().lower()
+    validate = validate_arg in {"1", "true", "yes", "on"}
+    cp = get_cp_client()
+    result = cp.get_project_github_status(project_id=project_id, validate=validate)
+    if result is None:
+        return jsonify({"error": "control plane unavailable"}), 502
+    return jsonify(result)
+
+
+@bp.delete("/api/projects/<project_id>/github/pat")
+@login_required
+def api_disconnect_project_github_pat(project_id: str):
+    cp = get_cp_client()
+    ok = cp.disconnect_project_github_pat(project_id)
     if not ok:
         return jsonify({"error": "control plane unavailable"}), 502
     return "", 204

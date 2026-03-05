@@ -143,6 +143,29 @@ class CPClient:
     def remove_project_bridge(self, project_id: str, target_project_id: str) -> bool:
         return self._delete(f"/v1/projects/{project_id}/bridges/{target_project_id}")
 
+    def connect_project_github_pat(
+        self,
+        project_id: str,
+        token: str,
+        repo_full_name: Optional[str] = None,
+        validate: bool = True,
+    ) -> Optional[Dict[str, Any]]:
+        body: Dict[str, Any] = {
+            "token": token,
+            "validate": validate,
+        }
+        if repo_full_name:
+            body["repo_full_name"] = repo_full_name
+        return self._post(f"/v1/projects/{project_id}/github/pat", body)
+
+    def get_project_github_status(
+        self, project_id: str, validate: bool = False
+    ) -> Optional[Dict[str, Any]]:
+        return self._get(f"/v1/projects/{project_id}/github/status?validate={'true' if validate else 'false'}")
+
+    def disconnect_project_github_pat(self, project_id: str) -> bool:
+        return self._delete(f"/v1/projects/{project_id}/github/pat")
+
     # Models
     def list_models(self) -> Optional[List[Dict[str, Any]]]:
         return self._get("/v1/models")
