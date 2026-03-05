@@ -116,23 +116,47 @@ gunicorn --bind 0.0.0.0:5000 --workers 2 "dashboard.app:create_app()"
 
 Then open http://localhost:5000 in your browser.
 
-Dashboard navigation now includes `Projects`, `Chat`, and `Vault` pages connected to the control-plane APIs, plus a bot detail/task-board view at `/bots/<bot_id>`.
-The Chat page also supports one-click conversation ingestion into Vault.
-Workers now include a detail view at `/workers/<worker_id>` and Settings includes API Keys / Model Catalog / Projects tabs.
-Worker detail now includes live resource graphs (load, queue, GPU utilization) with periodic polling.
-Bot detail (`/bots/<bot_id>`) now includes backend chain editing (add/edit/remove/reorder) with model/worker/key pickers and a task kanban/detail modal.
-Projects now include a detail page at `/projects/<project_id>` with bridge management and project-scoped bots/tasks/vault panels.
-Overview now includes system alerts, worker health mini-bars, quick links, and a recent activity feed.
-Chat now supports context picking, stream-send, inline `@assign` task routing, and per-message actions (copy/re-run/send-to-vault). Vault now supports file/URL/paste upload modes plus item detail preview/chunk metadata.
-Vault also includes namespace management and bulk-delete actions, and the dashboard uses a consistent dark theme with reusable loading/empty/error state components.
-`@assign` now triggers PM-driven decomposition into dependency-ordered multi-bot tasks, streams task-status events in chat, and posts an aggregated completion summary back into the same conversation.
-Assignment summary messages now include a `View DAG` action that opens a visual dependency graph for the orchestration.
-Projects now include GitHub PAT connection management (connect/test/disconnect) at the project detail page for per-project repository integration.
-Projects now also support GitHub webhook ingestion for `push`, `pull_request`, and `issues` events with HMAC signature verification and stored event history.
-GitHub integration now also includes repo-context sync into Vault (file tree + selected file contents) and optional PR review task automation via pull request webhooks.
-Control-plane privileged write actions are now persisted in a structured audit log and available via `GET /v1/audit/events`.
-Dashboard auth now enforces inactivity expiration based on `session_timeout_minutes` (Settings -> Auth).
-Chat vault context selection now passes vault item IDs and resolves content server-side in control-plane for lower payload bloat and reduced client-side exposure.
+## Implemented Capabilities
+
+Dashboard and workflow:
+
+- Navigation pages: `Overview`, `Projects`, `Chat`, `Bots`, `Workers`, `Vault`, `Settings`.
+- Worker detail pages with live load, queue, and GPU graphs.
+- Bot detail editor with backend chain management and task board.
+- Project detail pages with bridge management and scoped resources.
+
+Chat and orchestration:
+
+- Persistent chat conversations with SSE streaming.
+- Context picker and one-click chat-to-vault ingestion.
+- Inline `@assign` orchestration with PM task decomposition.
+- Task status streaming and DAG viewer actions in chat.
+
+Vault and context:
+
+- File/URL/text ingestion, namespace management, search, preview, and bulk actions.
+- Browser sends vault item IDs; control plane resolves content server-side for privacy.
+
+GitHub integration:
+
+- Per-project PAT connect/disconnect.
+- Webhook ingestion for `push`, `pull_request`, and `issues`.
+- Signature verification, delivery-id deduplication, and timestamp skew checks.
+- Repo context sync into vault and optional PR review task workflow.
+
+Security and ops:
+
+- Optional control-plane token auth.
+- Request-size and rate-limit guards for high-risk endpoints.
+- Structured audit events at `GET /v1/audit/events`.
+- Session inactivity timeout enforcement in dashboard auth.
+- Prometheus-compatible metrics for control plane and workers.
+
+For detailed walkthroughs, use:
+
+- `docs/GETTING_STARTED.md`
+- `docs/USER_GUIDE.md`
+- `docs/OPERATIONS.md`
 
 ---
 

@@ -1686,3 +1686,28 @@ NexusAI/
 
 - `rg -n --pcre2 "[\\x{1F300}-\\x{1FAFF}\\x{2600}-\\x{27BF}]" ...` → no matches
 
+---
+
+### 2026-03-05 11:48 — README Structure and Consistency Polish (Slice 33)
+
+**Status:** Documentation readability improved for first-time users by replacing dense narrative blocks with structured capability sections.
+
+**Changes made:**
+
+- Reworked README post-quickstart section:
+  - removed long unstructured feature paragraph list
+  - added `Implemented Capabilities` section grouped by:
+    - dashboard/workflow
+    - chat/orchestration
+    - vault/context
+    - GitHub integration
+    - security/operations
+- Added explicit links to detailed docs directly under capability summary:
+  - `docs/GETTING_STARTED.md`
+  - `docs/USER_GUIDE.md`
+  - `docs/OPERATIONS.md`
+
+**Validation:**
+
+- Documentation-only structural update (no runtime code path changes).
+
