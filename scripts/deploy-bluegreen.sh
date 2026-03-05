@@ -48,7 +48,8 @@ docker compose -f docker-compose.bluegreen.yml --profile "$NEXT_COLOR" up -d --b
 
 echo "[deploy] waiting for candidate health"
 ATTEMPTS=0
-until docker compose -f docker-compose.bluegreen.yml exec -T dashboard_gateway sh -lc "wget -q -O - http://dashboard_$NEXT_COLOR:5000/health | grep -q '\"status\"'"; do
+TARGET_HOST="dashboard-$NEXT_COLOR"
+until docker compose -f docker-compose.bluegreen.yml exec -T dashboard_gateway sh -lc "wget -q -O - http://$TARGET_HOST:5000/health | grep -q '\"status\"'"; do
   ATTEMPTS=$((ATTEMPTS + 1))
   if [ "$ATTEMPTS" -ge 30 ]; then
     echo "[deploy] candidate dashboard_$NEXT_COLOR failed health check"
