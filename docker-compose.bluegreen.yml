@@ -19,6 +19,7 @@ services:
       retries: 5
 
   dashboard_blue:
+    container_name: nexus-dashboard-blue
     build:
       context: .
       dockerfile: dashboard/Dockerfile
@@ -26,9 +27,7 @@ services:
     volumes:
       - nexus-data:/app/data
     networks:
-      nexus-bluegreen:
-        aliases:
-          - dashboard-blue
+      - nexus-bluegreen
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
       interval: 30s
@@ -37,6 +36,7 @@ services:
     profiles: ["blue"]
 
   dashboard_green:
+    container_name: nexus-dashboard-green
     build:
       context: .
       dockerfile: dashboard/Dockerfile
@@ -44,9 +44,7 @@ services:
     volumes:
       - nexus-data:/app/data
     networks:
-      nexus-bluegreen:
-        aliases:
-          - dashboard-green
+      - nexus-bluegreen
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
       interval: 30s
