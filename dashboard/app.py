@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import os
+import time
+from datetime import timedelta
 from pathlib import Path
 
-from flask import Flask, jsonify, render_template, url_for
-from flask_login import LoginManager, login_required
+from flask import Flask, jsonify, redirect, render_template, request, session, url_for
+from flask_login import LoginManager, current_user, login_required, logout_user
 from flask_wtf.csrf import CSRFProtect
 
 from dashboard.db import get_db, init_db
@@ -31,6 +33,7 @@ def create_app() -> Flask:
     app.config["SESSION_COOKIE_HTTPONLY"] = True
     app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
     app.config["WTF_CSRF_ENABLED"] = True
+    app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(minutes=60)
 
     # Initialise extensions
     csrf = CSRFProtect(app)
@@ -255,6 +258,33 @@ def create_app() -> Flask:
         return {"cp_available": available}
 
     app.register_blueprint(main_bp)
+
+    @app.before_request
+    def enforce_session_inactivity_timeout():
+        if request.endpoint == "static":
+            return None
+        if not current_user.is_authenticated:
+            return None
+
+        timeout_minutes = 60
+        try:
+            timeout_raw = _SM.instance().get("session_timeout_minutes", 60)
+            timeout_minutes = int(timeout_raw)
+        except Exception:
+            timeout_minutes = 60
+        timeout_minutes = max(1, timeout_minutes)
+        app.permanent_session_lifetime = timedelta(minutes=timeout_minutes)
+
+        now_ts = int(time.time())
+        last_ts = int(session.get("last_activity_ts", now_ts))
+        if (now_ts - last_ts) > timeout_minutes * 60:
+            logout_user()
+            session.clear()
+            return redirect(url_for("auth.login_get"))
+
+        session.permanent = True
+        session["last_activity_ts"] = now_ts
+        return None
 
     @app.get("/health")
     def health():

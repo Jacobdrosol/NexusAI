@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
+from control_plane.security.guards import enforce_body_size, enforce_rate_limit
 from shared.exceptions import VaultItemNotFoundError
 from shared.models import VaultChunk, VaultItem
 
@@ -30,6 +31,13 @@ class VaultSearchRequest(BaseModel):
 
 @router.post("/items", response_model=VaultItem)
 async def ingest_item(request: Request, body: IngestVaultItemRequest) -> VaultItem:
+    await enforce_body_size(request, route_name="vault_ingest", default_max_bytes=2_000_000)
+    await enforce_rate_limit(
+        request,
+        route_name="vault_ingest",
+        default_limit=30,
+        default_window_seconds=60,
+    )
     vault_manager = request.app.state.vault_manager
     try:
         return await vault_manager.ingest_text(

@@ -19,6 +19,7 @@ async def cp_app(tmp_path):
     from control_plane.chat.chat_manager import ChatManager
     from control_plane.chat.pm_orchestrator import PMOrchestrator
     from control_plane.github.webhook_store import GitHubWebhookStore
+    from control_plane.audit.audit_log import AuditLog
     from control_plane.registry.model_registry import ModelRegistry
     from control_plane.registry.project_registry import ProjectRegistry
     from control_plane.scheduler.scheduler import Scheduler
@@ -26,7 +27,7 @@ async def cp_app(tmp_path):
     from control_plane.vault.mcp_broker import MCPBroker
     from control_plane.vault.vault_manager import VaultManager
     from fastapi import FastAPI
-    from control_plane.api import bots, chat, keys, models_catalog, projects, tasks, vault, workers as workers_api
+    from control_plane.api import audit, bots, chat, keys, models_catalog, projects, tasks, vault, workers as workers_api
 
     app = FastAPI(title="NexusAI Control Plane Test")
     app.include_router(tasks.router)
@@ -37,6 +38,7 @@ async def cp_app(tmp_path):
     app.include_router(models_catalog.router)
     app.include_router(chat.router)
     app.include_router(vault.router)
+    app.include_router(audit.router)
 
     worker_registry = WorkerRegistry()
     bot_registry = BotRegistry()
@@ -47,6 +49,7 @@ async def cp_app(tmp_path):
     vault_manager = VaultManager(db_path=str(tmp_path / "vault.db"))
     mcp_broker = MCPBroker(vault_manager=vault_manager)
     github_webhook_store = GitHubWebhookStore(db_path=str(tmp_path / "github_webhooks.db"))
+    audit_log = AuditLog(db_path=str(tmp_path / "audit.db"))
     scheduler = Scheduler(
         bot_registry,
         worker_registry,
@@ -70,6 +73,7 @@ async def cp_app(tmp_path):
     app.state.vault_manager = vault_manager
     app.state.mcp_broker = mcp_broker
     app.state.github_webhook_store = github_webhook_store
+    app.state.audit_log = audit_log
     app.state.scheduler = scheduler
     app.state.task_manager = task_manager
     app.state.pm_orchestrator = pm_orchestrator

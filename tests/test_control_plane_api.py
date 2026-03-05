@@ -35,6 +35,60 @@ async def test_control_plane_optional_api_token_auth(cp_app):
 
 
 @pytest.mark.anyio
+async def test_chat_message_rate_limit_guard(cp_client, monkeypatch):
+    monkeypatch.setenv("CP_RATE_LIMIT_CHAT_MESSAGES_COUNT", "1")
+    monkeypatch.setenv("CP_RATE_LIMIT_CHAT_MESSAGES_WINDOW_SECONDS", "60")
+
+    create_resp = await cp_client.post("/v1/chat/conversations", json={"title": "Rate Limit"})
+    conversation_id = create_resp.json()["id"]
+    await cp_client.post(
+        "/v1/bots",
+        json={
+            "id": "bot-rate",
+            "name": "Rate Bot",
+            "role": "assistant",
+            "backends": [],
+            "enabled": True,
+        },
+    )
+
+    first = await cp_client.post(
+        f"/v1/chat/conversations/{conversation_id}/messages",
+        json={"content": "hello", "bot_id": "bot-rate"},
+    )
+    assert first.status_code in (200, 500)
+
+    second = await cp_client.post(
+        f"/v1/chat/conversations/{conversation_id}/messages",
+        json={"content": "again", "bot_id": "bot-rate"},
+    )
+    assert second.status_code == 429
+
+
+@pytest.mark.anyio
+async def test_chat_message_body_size_guard(cp_client, monkeypatch):
+    monkeypatch.setenv("CP_MAX_BODY_BYTES_CHAT_MESSAGES", "60")
+    create_resp = await cp_client.post("/v1/chat/conversations", json={"title": "Body Size"})
+    conversation_id = create_resp.json()["id"]
+    await cp_client.post(
+        "/v1/bots",
+        json={
+            "id": "bot-size",
+            "name": "Size Bot",
+            "role": "assistant",
+            "backends": [],
+            "enabled": True,
+        },
+    )
+    payload = {"content": "x" * 200, "bot_id": "bot-size"}
+    resp = await cp_client.post(
+        f"/v1/chat/conversations/{conversation_id}/messages",
+        json=payload,
+    )
+    assert resp.status_code == 413
+
+
+@pytest.mark.anyio
 async def test_list_workers_empty(cp_client):
     resp = await cp_client.get("/v1/workers")
     assert resp.status_code == 200
@@ -483,3 +537,25 @@ async def test_project_github_pr_review_workflow_creates_task(cp_client):
     assert tasks.status_code == 200
     rows = tasks.json()
     assert any((r.get("payload") or {}).get("source") == "github_pr_review" for r in rows)
+
+
+@pytest.mark.anyio
+async def test_audit_events_record_privileged_actions(cp_client):
+    upsert = await cp_client.post(
+        "/v1/keys",
+        json={"name": "audit-key", "provider": "openai", "value": "sk-test"},
+    )
+    assert upsert.status_code == 200
+
+    create_model = await cp_client.post(
+        "/v1/models",
+        json={"id": "audit-model", "name": "audit-model", "provider": "openai"},
+    )
+    assert create_model.status_code == 200
+
+    events = await cp_client.get("/v1/audit/events?limit=20")
+    assert events.status_code == 200
+    rows = events.json()
+    actions = {r.get("action") for r in rows}
+    assert "keys.upsert" in actions
+    assert "models.create" in actions

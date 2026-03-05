@@ -7,6 +7,7 @@ from flask import (
     redirect,
     render_template,
     request,
+    session,
     url_for,
 )
 from flask_login import login_required, login_user, logout_user
@@ -68,6 +69,8 @@ def login_post():
         return render_template("login.html", form=form), 401
 
     login_user(user, remember=False)
+    import time
+    session["last_activity_ts"] = int(time.time())
     next_url = request.args.get("next") or ""
     # Prevent open-redirect: only allow safe relative paths (no scheme, no netloc)
     from urllib.parse import urlparse

@@ -109,6 +109,8 @@ Assignment summary messages now include a `View DAG` action that opens a visual 
 Projects now include GitHub PAT connection management (connect/test/disconnect) at the project detail page for per-project repository integration.
 Projects now also support GitHub webhook ingestion for `push`, `pull_request`, and `issues` events with HMAC signature verification and stored event history.
 GitHub integration now also includes repo-context sync into Vault (file tree + selected file contents) and optional PR review task automation via pull request webhooks.
+Control-plane privileged write actions are now persisted in a structured audit log and available via `GET /v1/audit/events`.
+Dashboard auth now enforces inactivity expiration based on `session_timeout_minutes` (Settings -> Auth).
 
 ---
 
@@ -122,12 +124,27 @@ Copy `.env.example` to `.env` and set the following variables before starting th
 | `DATABASE_URL` | `sqlite:///data/nexusai.db` | SQLAlchemy connection URL (SQLite or PostgreSQL) |
 | `CONTROL_PLANE_URL` | — | URL the dashboard and worker use to reach the control plane, e.g. `http://localhost:8000` |
 | `CONTROL_PLANE_API_TOKEN` | — | Optional shared token for control-plane API auth; when set, dashboard/worker send `X-Nexus-API-Key` and CP enforces auth on API routes |
+| `CP_MAX_BODY_BYTES_<ROUTE>` | route default | Optional request body size override per guarded route (e.g. `CHAT_MESSAGES`, `CHAT_STREAM`, `VAULT_INGEST`, `GITHUB_WEBHOOK`) |
+| `CP_RATE_LIMIT_<ROUTE>_COUNT` / `CP_RATE_LIMIT_<ROUTE>_WINDOW_SECONDS` | route defaults | Optional per-route rate limit override for guarded control-plane endpoints |
 | `NEXUS_CONFIG_PATH` | — | Path to `nexus_config.yaml` for the control plane |
 | `WORKER_CONFIG_PATH` | — | Path to a worker YAML file for the worker agent |
 | `DASHBOARD_PORT` | `5000` | Port the dashboard listens on (used when running directly) |
 | `OPENAI_API_KEY` | — | OpenAI API key for cloud LLM backends |
 | `ANTHROPIC_API_KEY` | — | Anthropic Claude API key |
 | `GEMINI_API_KEY` | — | Google Gemini API key |
+
+---
+
+## Production Hardening
+
+- Put the dashboard and control-plane behind a reverse proxy (Nginx/Caddy/Traefik) with TLS enabled.
+- Restrict direct access to internal service ports (`8000`, `8001`) at the network layer; expose only the proxy entrypoint.
+- Set `CONTROL_PLANE_API_TOKEN` and require token-authenticated control-plane calls from dashboard/workers.
+- Use a strong `NEXUSAI_SECRET_KEY` and rotate it for production environments.
+- Store PAT/API secrets only through encrypted vault endpoints (never in plain YAML committed to repo).
+- Configure GitHub webhook secrets per project and verify signatures (already enforced by the control-plane endpoint).
+- Keep the control-plane API on private subnets/VPN where possible; do not expose unauthenticated management paths publicly.
+- Run with least-privilege service accounts and file permissions for the `data/` directory.
 
 ---
 

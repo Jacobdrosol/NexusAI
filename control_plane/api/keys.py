@@ -3,6 +3,7 @@ from typing import List
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from control_plane.audit.utils import record_audit_event
 from shared.exceptions import APIKeyNotFoundError
 
 router = APIRouter(prefix="/v1/keys", tags=["keys"])
@@ -19,6 +20,12 @@ async def upsert_key(request: Request, body: UpsertAPIKeyRequest) -> dict:
     key_vault = request.app.state.key_vault
     try:
         await key_vault.set_key(body.name, body.provider, body.value)
+        await record_audit_event(
+            request,
+            action="keys.upsert",
+            resource=f"key:{body.name}",
+            details={"provider": body.provider},
+        )
         return {"status": "ok"}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -44,6 +51,11 @@ async def delete_key(request: Request, name: str) -> dict:
     key_vault = request.app.state.key_vault
     try:
         await key_vault.delete_key(name)
+        await record_audit_event(
+            request,
+            action="keys.delete",
+            resource=f"key:{name}",
+        )
         return {"status": "ok"}
     except APIKeyNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))

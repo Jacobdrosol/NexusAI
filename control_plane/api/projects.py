@@ -8,6 +8,8 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
+from control_plane.audit.utils import record_audit_event
+from control_plane.security.guards import enforce_body_size, enforce_rate_limit
 from shared.exceptions import APIKeyNotFoundError, ProjectNotFoundError
 from shared.models import Project, TaskMetadata
 
@@ -284,6 +286,12 @@ async def connect_github_pat(project_id: str, request: Request, body: ConnectGit
         update={"settings_overrides": _merge_settings(project, {"github": github_settings})}
     )
     await project_registry.update(project_id, updated)
+    await record_audit_event(
+        request,
+        action="projects.github.pat.connect",
+        resource=f"project:{project_id}",
+        details={"repo_full_name": github_settings.get("repo_full_name")},
+    )
     return {
         "status": "connected",
         "project_id": project_id,
@@ -372,6 +380,11 @@ async def disconnect_github_pat(project_id: str, request: Request) -> dict:
         del updated_settings["github"]
     updated = project.model_copy(update={"settings_overrides": updated_settings or None})
     await project_registry.update(project_id, updated)
+    await record_audit_event(
+        request,
+        action="projects.github.pat.disconnect",
+        resource=f"project:{project_id}",
+    )
     return {"status": "disconnected", "project_id": project_id}
 
 
@@ -403,6 +416,11 @@ async def set_github_webhook_secret(
         update={"settings_overrides": _merge_settings(project, {"github": github_settings})}
     )
     await project_registry.update(project_id, updated)
+    await record_audit_event(
+        request,
+        action="projects.github.webhook.secret.set",
+        resource=f"project:{project_id}",
+    )
     return {"status": "ok", "project_id": project_id}
 
 
@@ -435,11 +453,23 @@ async def delete_github_webhook_secret(project_id: str, request: Request) -> dic
             updated_settings.pop("github", None)
     updated = project.model_copy(update={"settings_overrides": updated_settings or None})
     await project_registry.update(project_id, updated)
+    await record_audit_event(
+        request,
+        action="projects.github.webhook.secret.delete",
+        resource=f"project:{project_id}",
+    )
     return {"status": "ok", "project_id": project_id}
 
 
 @router.post("/{project_id}/github/webhook")
 async def ingest_github_webhook(project_id: str, request: Request) -> dict:
+    await enforce_body_size(request, route_name="github_webhook", default_max_bytes=1_000_000)
+    await enforce_rate_limit(
+        request,
+        route_name="github_webhook",
+        default_limit=240,
+        default_window_seconds=60,
+    )
     project_registry = request.app.state.project_registry
     key_vault = request.app.state.key_vault
     store = request.app.state.github_webhook_store
@@ -602,6 +632,17 @@ async def sync_github_repo_context(
         )
         ingested.append({"item_id": item.id, "path": file["path"]})
 
+    await record_audit_event(
+        request,
+        action="projects.github.context.sync",
+        resource=f"project:{project_id}",
+        details={
+            "repo_full_name": result["repo_full_name"],
+            "branch": result["branch"],
+            "ingested_count": len(ingested),
+            "namespace": namespace,
+        },
+    )
     return {
         "status": "ok",
         "project_id": project_id,
@@ -637,4 +678,10 @@ async def configure_github_pr_review(
         update={"settings_overrides": _merge_settings(project, {"github": {"pr_review": review_cfg}})}
     )
     await project_registry.update(project_id, updated)
+    await record_audit_event(
+        request,
+        action="projects.github.pr_review.configure",
+        resource=f"project:{project_id}",
+        details={"enabled": review_cfg["enabled"], "bot_id": review_cfg["bot_id"]},
+    )
     return {"status": "ok", "project_id": project_id, "pr_review": review_cfg}

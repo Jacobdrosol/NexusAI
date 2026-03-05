@@ -1,5 +1,29 @@
 """Smoke tests for the Flask dashboard."""
 
+import bcrypt
+
+
+def _login_admin(dashboard_client):
+    from dashboard.db import get_db
+    from dashboard.models import User
+
+    pw = "password123"
+    pw_hash = bcrypt.hashpw(pw.encode(), bcrypt.gensalt()).decode()
+    db = get_db()
+    try:
+        if db.query(User).count() == 0:
+            db.add(User(email="admin@test.com", password_hash=pw_hash, role="admin", is_active=True))
+            db.commit()
+    finally:
+        db.close()
+
+    resp = dashboard_client.post(
+        "/login",
+        data={"email": "admin@test.com", "password": pw},
+        follow_redirects=False,
+    )
+    assert resp.status_code in (302, 303)
+
 
 def test_health(dashboard_client):
     resp = dashboard_client.get("/health")
@@ -29,3 +53,12 @@ def test_onboarding_index_redirects_to_step1(dashboard_client):
 def test_onboarding_step1_loads(dashboard_client):
     resp = dashboard_client.get("/onboarding/step1")
     assert resp.status_code == 200
+
+
+def test_inactive_session_expires_and_redirects_to_login(dashboard_client):
+    _login_admin(dashboard_client)
+    with dashboard_client.session_transaction() as sess:
+        sess["last_activity_ts"] = 1
+    resp = dashboard_client.get("/", follow_redirects=False)
+    assert resp.status_code in (302, 303)
+    assert "/login" in (resp.headers.get("Location") or "")

@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from control_plane.security.guards import enforce_body_size, enforce_rate_limit
 from shared.exceptions import BotNotFoundError, ConversationNotFoundError
 from shared.models import ChatConversation, ChatMessage, Task
 
@@ -94,6 +95,13 @@ async def list_messages(conversation_id: str, request: Request) -> List[ChatMess
 
 @router.post("/conversations/{conversation_id}/messages")
 async def post_message(conversation_id: str, request: Request, body: PostMessageRequest) -> dict:
+    await enforce_body_size(request, route_name="chat_messages", default_max_bytes=200_000)
+    await enforce_rate_limit(
+        request,
+        route_name="chat_messages",
+        default_limit=120,
+        default_window_seconds=60,
+    )
     chat_manager = request.app.state.chat_manager
     scheduler = request.app.state.scheduler
     pm_orchestrator = request.app.state.pm_orchestrator
@@ -159,6 +167,13 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
 
 @router.post("/conversations/{conversation_id}/stream")
 async def stream_message(conversation_id: str, request: Request, body: PostMessageRequest) -> StreamingResponse:
+    await enforce_body_size(request, route_name="chat_stream", default_max_bytes=200_000)
+    await enforce_rate_limit(
+        request,
+        route_name="chat_stream",
+        default_limit=60,
+        default_window_seconds=60,
+    )
     chat_manager = request.app.state.chat_manager
     scheduler = request.app.state.scheduler
     task_manager = request.app.state.task_manager

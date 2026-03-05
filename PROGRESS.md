@@ -461,10 +461,10 @@ These are confirmed issues that must be fixed before serious testing:
 ### Phase 7 — Security + Operational Hardening
 
 - [x] Control plane API token auth middleware (optional env-gated enforcement)
-- [ ] Rate limiting and request-size guards for high-risk endpoints
-- [ ] Structured audit events for privileged actions
-- [ ] Session timeout + inactivity enforcement in dashboard auth
-- [ ] Hardened deployment docs for reverse proxy/TLS/network segmentation
+- [x] Rate limiting and request-size guards for high-risk endpoints
+- [x] Structured audit events for privileged actions
+- [x] Session timeout + inactivity enforcement in dashboard auth
+- [x] Hardened deployment docs for reverse proxy/TLS/network segmentation
 
 ---
 
@@ -1364,3 +1364,117 @@ NexusAI/
 
 - `pytest -q tests/test_control_plane_api.py tests/test_dashboard_phase4_pages.py` → **48 passed**
 - `pytest -q` → **118 passed**
+
+---
+
+### 2026-03-05 06:44 — Phase 7: Rate Limits + Body Guards (Slice 23)
+
+**Status:** Second Phase 7 hardening slice is complete.
+
+**Changes made:**
+
+- Added reusable request guard utilities (`control_plane/security/guards.py`):
+  - per-route request body-size enforcement (`413`)
+  - per-route in-memory sliding-window rate limiting (`429`)
+  - env-configurable route overrides:
+    - `CP_MAX_BODY_BYTES_<ROUTE>`
+    - `CP_RATE_LIMIT_<ROUTE>_COUNT`
+    - `CP_RATE_LIMIT_<ROUTE>_WINDOW_SECONDS`
+- Applied guards to high-risk control-plane endpoints:
+  - chat message send (`POST /v1/chat/conversations/{id}/messages`)
+  - chat stream send (`POST /v1/chat/conversations/{id}/stream`)
+  - vault ingest (`POST /v1/vault/items`)
+  - GitHub webhook ingest (`POST /v1/projects/{id}/github/webhook`)
+- Added package init for security module:
+  - `control_plane/security/__init__.py`
+- Added control-plane integration tests for guard behavior:
+  - chat rate-limit enforcement
+  - chat request-body size enforcement
+  - (`tests/test_control_plane_api.py`)
+- Updated config/docs:
+  - `.env.example` with hardening override examples
+  - `README.md` environment variable table with guard override variables
+
+**Validation:**
+
+- `pytest -q tests/test_control_plane_api.py tests/test_chat_api.py` → **32 passed**
+- `pytest -q` → **120 passed**
+
+---
+
+### 2026-03-05 07:02 — Phase 7: Structured Audit Events (Slice 24)
+
+**Status:** Third Phase 7 hardening slice is complete.
+
+**Changes made:**
+
+- Added persistent control-plane audit subsystem:
+  - `control_plane/audit/audit_log.py` (SQLite-backed `audit_events` store)
+  - `control_plane/audit/utils.py` (request-aware event recorder)
+  - `control_plane/audit/__init__.py`
+- Added audit API route:
+  - `GET /v1/audit/events` (`control_plane/api/audit.py`)
+- Wired audit log into app startup and test fixture state:
+  - `control_plane/main.py`
+  - `tests/conftest.py`
+- Instrumented privileged actions with structured audit events:
+  - keys upsert/delete (`control_plane/api/keys.py`)
+  - bots create/update/delete/enable/disable (`control_plane/api/bots.py`)
+  - model catalog create/update/delete (`control_plane/api/models_catalog.py`)
+  - project GitHub control actions (`control_plane/api/projects.py`):
+    - PAT connect/disconnect
+    - webhook secret set/delete
+    - repo context sync
+    - PR review workflow config
+- Added audit integration test coverage:
+  - `tests/test_control_plane_api.py` verifies action emission and listing via `/v1/audit/events`
+
+**Validation:**
+
+- `pytest -q tests/test_control_plane_api.py tests/test_chat_api.py` → **33 passed**
+- `pytest -q` → **121 passed**
+
+---
+
+### 2026-03-05 07:24 — Phase 7: Session Timeout + Inactivity Enforcement (Slice 25)
+
+**Status:** Fourth Phase 7 hardening slice is complete.
+
+**Changes made:**
+
+- Added dashboard session inactivity timeout enforcement:
+  - global `before_request` inactivity check in `dashboard/app.py`
+  - timeout value reads from settings key: `session_timeout_minutes`
+  - sessions expire server-side and force redirect to login when idle timeout is exceeded
+  - rolling activity refresh (`last_activity_ts`) on authenticated requests
+- Added session lifetime alignment:
+  - `PERMANENT_SESSION_LIFETIME` set from timeout configuration at runtime
+- Updated login flow to initialize activity timestamp on successful sign-in:
+  - `dashboard/auth.py`
+- Added dashboard test coverage:
+  - expired-session redirect behavior in `tests/test_dashboard_smoke.py`
+
+**Validation:**
+
+- `pytest -q tests/test_dashboard_smoke.py tests/test_dashboard_phase4_pages.py tests/test_control_plane_api.py` → **57 passed**
+- `pytest -q` → **122 passed**
+
+---
+
+### 2026-03-05 07:31 — Phase 7: Deployment Hardening Documentation (Slice 26)
+
+**Status:** Phase 7 is fully complete.
+
+**Changes made:**
+
+- Added production hardening guidance to `README.md`:
+  - reverse proxy + TLS recommendation
+  - internal port exposure constraints
+  - control-plane token auth usage
+  - secret handling and webhook secret practices
+  - private network and least-privilege deployment guidance
+- Marked final Phase 7 checklist item complete.
+
+**Validation:**
+
+- Documentation-only slice (no runtime code changes).
