@@ -242,10 +242,14 @@ class Scheduler:
             body["generationConfig"] = params_dict
         url = (
             f"https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{backend.model}:generateContent?key={api_key}"
+            f"{backend.model}:generateContent"
         )
         async with httpx.AsyncClient(timeout=120.0) as client:
-            response = await client.post(url, json=body)
+            response = await client.post(
+                url,
+                headers={"x-goog-api-key": api_key},
+                json=body,
+            )
             response.raise_for_status()
             data = response.json()
             output = data["candidates"][0]["content"]["parts"][0]["text"]

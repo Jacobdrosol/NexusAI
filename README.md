@@ -158,8 +158,17 @@ Copy `.env.example` to `.env` and set the following variables before starting th
 - Use a strong `NEXUSAI_SECRET_KEY` and rotate it for production environments.
 - Store PAT/API secrets only through encrypted vault endpoints (never in plain YAML committed to repo).
 - Configure GitHub webhook secrets per project and verify signatures (already enforced by the control-plane endpoint).
+- For Gemini backends, keep API keys in request headers (`x-goog-api-key`), not URL query params.
 - Keep the control-plane API on private subnets/VPN where possible; do not expose unauthenticated management paths publicly.
 - Run with least-privilege service accounts and file permissions for the `data/` directory.
+
+---
+
+## Pre-UAT Guide
+
+- Full step-by-step runbook: `docs/UAT_RUNBOOK.md`
+- Automated preflight script:
+  - `scripts/pre_uat_security_checks.ps1`
 
 ---
 
@@ -484,16 +493,10 @@ capabilities:
 
 ---
 
-## Roadmap
+## Next Priorities
 
-- [ ] SQLite persistence for tasks, bots, and workers (via `aiosqlite`)
-- [ ] Load-based routing in scheduler (route to least-loaded worker)
-- [ ] Multi-GPU support with per-GPU queue management
-- [ ] Web dashboard improvements: real-time updates via WebSocket
-- [ ] Authentication / API key support for control plane
-- [ ] Metrics export (Prometheus)
-- [ ] Docker Compose deployment example
-
-NexusAI is a modular, distributed LLM Control Plane that orchestrates multiple machines, GPUs, cloud APIs, and CLI-based models via specialized bots and worker nodes.
-
-> Full implementation coming in the next PR.
+- [ ] End-to-end UAT execution and bug triage using `docs/UAT_RUNBOOK.md`
+- [ ] Add robust load-aware scheduling (queue depth/latency weighted worker selection)
+- [ ] Add metrics/observability export (Prometheus + structured latency/error dashboards)
+- [ ] Extend automated security tests for webhook replay protections and secret-rotation workflows
+- [ ] Stabilize deployment profile (compose + reverse proxy reference stack)

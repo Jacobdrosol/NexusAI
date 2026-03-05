@@ -1527,3 +1527,54 @@ NexusAI/
 
 - `pytest -q tests/test_nexus_worker.py tests/test_chat_api.py tests/test_scheduler_api_keys.py` → **12 passed**
 - `pytest -q tests/test_control_plane_api.py tests/test_dashboard_phase4_pages.py` → **51 passed**
+
+---
+
+### 2026-03-05 08:22 — UAT Runbook + Security Preflight Automation (Slice 28)
+
+**Status:** End-to-end pre-UAT execution guidance and automation were added.
+
+**Changes made:**
+
+- Added full pre-UAT checklist and command runbook:
+  - `docs/UAT_RUNBOOK.md`
+  - includes:
+    - secure environment baseline
+    - startup options
+    - manual UI validation path
+    - privacy/leakage validation path
+    - go/no-go gate criteria
+- Added automated preflight script:
+  - `scripts/pre_uat_security_checks.ps1`
+  - validates:
+    - control-plane/dashboard/nexus_worker health
+    - control-plane API token enforcement (when token provided)
+    - cloud context block policy behavior (`403`) on standalone worker
+- Updated README to include:
+  - Pre-UAT guide section linking runbook and preflight script
+  - standalone worker run instructions and new privacy/security env vars
+
+**Validation:**
+
+- `pytest -q` → **128 passed**
+
+---
+
+### 2026-03-05 08:40 — Cloud Key Transport Hardening (Slice 29)
+
+**Status:** Reduced credential leakage risk for Gemini cloud calls across control-plane and worker paths.
+
+**Changes made:**
+
+- Removed Gemini API key query-string usage (`?key=...`) and moved to header-based auth:
+  - control-plane scheduler Gemini dispatch now sends `x-goog-api-key` header (`control_plane/scheduler/scheduler.py`)
+  - worker Gemini backend now sends `x-goog-api-key` header (`worker_agent/backends/gemini_backend.py`)
+- Added regression tests to enforce header-only key transport:
+  - `tests/test_scheduler_api_keys.py`
+  - `tests/test_worker_agent_backends.py`
+- Updated production hardening docs and next-priority section:
+  - `README.md`
+
+**Validation:**
+
+- `pytest -q tests/test_scheduler_api_keys.py tests/test_worker_agent_backends.py` → **pass**

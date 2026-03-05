@@ -88,3 +88,39 @@ async def test_scheduler_cloud_context_policy_block(monkeypatch):
     monkeypatch.setenv("NEXUSAI_CLOUD_CONTEXT_POLICY", "block")
     with pytest.raises(BackendError):
         scheduler._apply_cloud_context_policy(backend, payload)
+
+
+@pytest.mark.anyio
+async def test_scheduler_gemini_uses_header_api_key_not_query(monkeypatch):
+    from control_plane.scheduler.scheduler import Scheduler
+
+    key_vault = AsyncMock()
+    key_vault.get_secret.return_value = "gemini-secret"
+    scheduler = Scheduler(bot_registry=AsyncMock(), worker_registry=AsyncMock(), key_vault=key_vault)
+
+    backend = BackendConfig(
+        type="cloud_api",
+        model="gemini-1.5-pro",
+        provider="gemini",
+        api_key_ref="GEMINI_API_KEY",
+    )
+    payload = [{"role": "user", "content": "hello"}]
+
+    fake_response = MagicMock()
+    fake_response.raise_for_status.return_value = None
+    fake_response.json.return_value = {
+        "candidates": [{"content": {"parts": [{"text": "ok"}]}}],
+        "usageMetadata": {},
+    }
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__.return_value = mock_client
+    mock_client.__aexit__.return_value = False
+    mock_client.post.return_value = fake_response
+
+    with patch("control_plane.scheduler.scheduler.httpx.AsyncClient", return_value=mock_client):
+        await scheduler._call_gemini(backend, payload)
+
+    args, kwargs = mock_client.post.call_args
+    assert "?key=" not in args[0]
+    assert kwargs["headers"]["x-goog-api-key"] == "gemini-secret"

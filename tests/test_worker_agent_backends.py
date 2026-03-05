@@ -140,6 +140,9 @@ async def test_gemini_backend_infer():
             api_key="test-key",
         )
 
+    args, kwargs = mock_client.post.call_args
+    assert "?key=" not in args[0]
+    assert kwargs["headers"]["x-goog-api-key"] == "test-key"
     assert result["output"] == "Hello from Gemini"
     assert result["usage"]["promptTokenCount"] == 7
 
