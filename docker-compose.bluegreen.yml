@@ -13,7 +13,7 @@ services:
     networks:
       - nexus-bluegreen
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:5000/health"]
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:5000/health"]
       interval: 15s
       timeout: 5s
       retries: 5
