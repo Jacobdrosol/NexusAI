@@ -38,7 +38,7 @@
       <div class="context-picker-list">
         {% for v in vault_items %}
         <label class="context-item">
-          <input type="checkbox" class="context-vault" value="{{ v.content }}">
+          <input type="checkbox" class="context-vault" value="{{ v.id }}">
           <span>{{ v.title }}</span>
         </label>
         {% else %}
@@ -181,13 +181,14 @@ function getCsrf() {
 }
 
 function selectedContextItems() {
+  const contextItemIds = [];
   const contexts = [];
   document.querySelectorAll('.context-vault:checked').forEach((el) => {
-    contexts.push(el.value);
+    contextItemIds.push(el.value);
   });
   const conv = document.getElementById('context-conversation-select')?.value;
   if (conv) contexts.push(conv);
-  return contexts;
+  return {contexts, contextItemIds};
 }
 
 function renderMessageActions(meta) {
@@ -262,10 +263,16 @@ async function sendMessage(streamMode) {
   if (!content) return;
 
   const payload = {
+    ...(function() {
+      const ctx = selectedContextItems();
+      return {
+        context_items: ctx.contexts,
+        context_item_ids: ctx.contextItemIds,
+      };
+    })(),
     conversation_id: fd.get('conversation_id'),
     content,
     bot_id: fd.get('bot_id') || null,
-    context_items: selectedContextItems(),
   };
 
   if (!streamMode) {

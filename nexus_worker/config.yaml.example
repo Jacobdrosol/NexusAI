@@ -1,0 +1,14 @@
+id: nexus-worker-standalone
+name: Nexus Worker Standalone
+host: 0.0.0.0
+port: 8010
+status: offline
+enabled: true
+ollama_host: http://localhost:11434
+capabilities:
+  - type: llm
+    provider: ollama
+    models:
+      - llama3.1:8b
+metrics: {}
+

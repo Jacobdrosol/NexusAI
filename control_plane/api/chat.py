@@ -25,6 +25,7 @@ class PostMessageRequest(BaseModel):
     content: str
     bot_id: Optional[str] = None
     context_items: Optional[List[str]] = None
+    context_item_ids: Optional[List[str]] = None
 
 
 def _messages_to_payload(messages: List[ChatMessage], context_items: Optional[List[str]] = None) -> List[dict]:
@@ -33,6 +34,31 @@ def _messages_to_payload(messages: List[ChatMessage], context_items: Optional[Li
         joined = "\n".join(context_items)
         payload.insert(0, {"role": "system", "content": f"Context:\n{joined}"})
     return payload
+
+
+async def _resolve_context_items(request: Request, body: PostMessageRequest) -> List[str]:
+    # Backward compatible direct context usage.
+    resolved: List[str] = list(body.context_items or [])
+    item_ids = [str(i).strip() for i in (body.context_item_ids or []) if str(i).strip()]
+    if not item_ids:
+        return resolved
+
+    vault_manager = getattr(request.app.state, "vault_manager", None)
+    if vault_manager is None:
+        return resolved
+
+    for item_id in item_ids[:20]:
+        try:
+            item = await vault_manager.get_item(item_id)
+            text = (item.content or "").strip()
+            if not text:
+                continue
+            # Bound payload size to reduce latency and accidental leakage.
+            snippet = text[:4000]
+            resolved.append(f"[vault:{item.id}] {item.title}\n{snippet}")
+        except Exception:
+            continue
+    return resolved
 
 
 def _extract_assign_instruction(content: str) -> Optional[str]:
@@ -114,11 +140,12 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
         )
         assign_instruction = _extract_assign_instruction(body.content)
         if assign_instruction is not None:
+            resolved_context = await _resolve_context_items(request, body)
             assignment = await pm_orchestrator.orchestrate_assignment(
                 conversation_id=conversation_id,
                 instruction=assign_instruction,
                 requested_pm_bot_id=body.bot_id,
-                context_items=body.context_items,
+                context_items=resolved_context,
             )
             completion = await pm_orchestrator.wait_for_completion(assignment)
             assistant_message = await pm_orchestrator.persist_summary_message(
@@ -139,7 +166,8 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
         if not target_bot_id:
             return {"user_message": user_message, "assistant_message": None}
 
-        payload = _messages_to_payload(messages, context_items=body.context_items)
+        resolved_context = await _resolve_context_items(request, body)
+        payload = _messages_to_payload(messages, context_items=resolved_context)
         task = Task(
             id=f"chat-{user_message.id}",
             bot_id=target_bot_id,
@@ -190,11 +218,12 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
             yield f"event: user_message\ndata: {user_message.model_dump_json()}\n\n"
             assign_instruction = _extract_assign_instruction(body.content)
             if assign_instruction is not None:
+                resolved_context = await _resolve_context_items(request, body)
                 assignment = await pm_orchestrator.orchestrate_assignment(
                     conversation_id=conversation_id,
                     instruction=assign_instruction,
                     requested_pm_bot_id=body.bot_id,
-                    context_items=body.context_items,
+                    context_items=resolved_context,
                 )
                 graph_payload = {
                     "orchestration_id": assignment.get("orchestration_id"),
@@ -255,7 +284,8 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                 yield "event: done\ndata: {}\n\n"
                 return
 
-            payload = _messages_to_payload(messages, context_items=body.context_items)
+            resolved_context = await _resolve_context_items(request, body)
+            payload = _messages_to_payload(messages, context_items=resolved_context)
             task = Task(
                 id=f"chat-{user_message.id}",
                 bot_id=target_bot_id,

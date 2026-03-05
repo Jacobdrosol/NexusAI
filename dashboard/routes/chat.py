@@ -78,6 +78,7 @@ def api_send_message():
             "content": content,
             "bot_id": data.get("bot_id"),
             "context_items": data.get("context_items"),
+            "context_item_ids": data.get("context_item_ids"),
         },
     )
     if resp is None:
@@ -105,6 +106,7 @@ def api_send_message_stream():
         "content": content,
         "bot_id": data.get("bot_id"),
         "context_items": data.get("context_items"),
+        "context_item_ids": data.get("context_item_ids"),
     }
 
     def generate() -> Iterable[str]:

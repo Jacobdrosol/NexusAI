@@ -140,3 +140,37 @@ async def test_stream_assign_emits_task_events(cp_app):
         assert "event: task_status" in text
         assert "event: assistant_message" in text
         assert "event: done" in text
+
+
+@pytest.mark.anyio
+async def test_chat_context_item_ids_are_resolved_from_vault(cp_app):
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "ok"})
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        convo = await client.post("/v1/chat/conversations", json={"title": "Context IDs"})
+        conversation_id = convo.json()["id"]
+        await client.post(
+            "/v1/bots",
+            json={"id": "bot-context", "name": "Ctx Bot", "role": "assistant", "backends": [], "enabled": True},
+        )
+        vault_item = await client.post(
+            "/v1/vault/items",
+            json={"title": "Doc", "content": "Secret architecture note", "namespace": "global"},
+        )
+        item_id = vault_item.json()["id"]
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": "Use context",
+                "bot_id": "bot-context",
+                "context_item_ids": [item_id],
+            },
+        )
+        assert resp.status_code == 200
+        # Ensure scheduler received a context system message.
+        assert cp_app.state.scheduler.schedule.await_count == 1
+        task_arg = cp_app.state.scheduler.schedule.await_args[0][0]
+        payload = task_arg.payload
+        assert isinstance(payload, list)
+        assert payload[0]["role"] == "system"
+        assert "Context:\n" in payload[0]["content"]

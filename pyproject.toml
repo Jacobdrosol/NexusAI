@@ -27,7 +27,11 @@ dependencies = [
     "email-validator>=2.0.0",
     "gunicorn>=21.2.0",
     "cryptography>=42.0.0",
+    "psutil>=5.9.0",
 ]
+
+[project.scripts]
+nexus-worker = "nexus_worker.__main__:main"
 
 [project.optional-dependencies]
 test = [
@@ -46,5 +50,5 @@ line-length = 100
 target-version = "py311"
 
 [tool.setuptools.packages.find]
-include = ["control_plane*", "worker_agent*", "dashboard*", "shared*"]
+include = ["control_plane*", "worker_agent*", "nexus_worker*", "dashboard*", "shared*"]
 exclude = ["tests*", "config*", "data*"]

@@ -86,6 +86,16 @@ python -m worker_agent.main
 uvicorn worker_agent.main:app --host 0.0.0.0 --port 8001
 ```
 
+### 4b. Run `nexus_worker` Standalone Package
+
+```bash
+NEXUS_WORKER_CONFIG_PATH=nexus_worker/config.yaml.example \
+CONTROL_PLANE_URL=http://localhost:8000 \
+python -m nexus_worker
+# or, after install:
+nexus-worker
+```
+
 ### 5. Run the Dashboard
 
 ```bash
@@ -111,6 +121,7 @@ Projects now also support GitHub webhook ingestion for `push`, `pull_request`, a
 GitHub integration now also includes repo-context sync into Vault (file tree + selected file contents) and optional PR review task automation via pull request webhooks.
 Control-plane privileged write actions are now persisted in a structured audit log and available via `GET /v1/audit/events`.
 Dashboard auth now enforces inactivity expiration based on `session_timeout_minutes` (Settings -> Auth).
+Chat vault context selection now passes vault item IDs and resolves content server-side in control-plane for lower payload bloat and reduced client-side exposure.
 
 ---
 
@@ -124,6 +135,10 @@ Copy `.env.example` to `.env` and set the following variables before starting th
 | `DATABASE_URL` | `sqlite:///data/nexusai.db` | SQLAlchemy connection URL (SQLite or PostgreSQL) |
 | `CONTROL_PLANE_URL` | — | URL the dashboard and worker use to reach the control plane, e.g. `http://localhost:8000` |
 | `CONTROL_PLANE_API_TOKEN` | — | Optional shared token for control-plane API auth; when set, dashboard/worker send `X-Nexus-API-Key` and CP enforces auth on API routes |
+| `NEXUSAI_CLOUD_CONTEXT_POLICY` | `allow` | Cloud egress policy for context blocks (`allow`, `redact`, `block`) on control-plane scheduler cloud backends |
+| `NEXUS_WORKER_CLOUD_CONTEXT_POLICY` | `redact` | Standalone worker cloud egress policy for context blocks (`allow`, `redact`, `block`) |
+| `NEXUS_WORKER_CONFIG_PATH` | `nexus_worker/config.yaml.example` | Path to standalone `nexus_worker` YAML config |
+| `VLLM_MODELS` | — | Optional comma-separated vLLM model names for local model discovery in `nexus_worker` |
 | `CP_MAX_BODY_BYTES_<ROUTE>` | route default | Optional request body size override per guarded route (e.g. `CHAT_MESSAGES`, `CHAT_STREAM`, `VAULT_INGEST`, `GITHUB_WEBHOOK`) |
 | `CP_RATE_LIMIT_<ROUTE>_COUNT` / `CP_RATE_LIMIT_<ROUTE>_WINDOW_SECONDS` | route defaults | Optional per-route rate limit override for guarded control-plane endpoints |
 | `NEXUS_CONFIG_PATH` | — | Path to `nexus_config.yaml` for the control plane |

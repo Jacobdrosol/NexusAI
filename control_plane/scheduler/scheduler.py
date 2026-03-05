@@ -55,6 +55,7 @@ class Scheduler:
 
     async def _dispatch_backend(self, backend: BackendConfig, payload: Any) -> Any:
         await self._validate_model_if_catalog_present(backend)
+        safe_payload = self._apply_cloud_context_policy(backend, payload)
         if backend.type in ("local_llm", "remote_llm"):
             if not backend.worker_id:
                 raise BackendError("worker_id is required for local_llm/remote_llm backends")
@@ -66,14 +67,14 @@ class Scheduler:
                 raise BackendError(
                     f"Worker {backend.worker_id} is not online (status={worker.status})"
                 )
-            return await self._dispatch_to_worker(worker, backend, payload)
+            return await self._dispatch_to_worker(worker, backend, safe_payload)
         elif backend.type == "cloud_api":
             if backend.provider == "openai":
-                return await self._call_openai(backend, payload)
+                return await self._call_openai(backend, safe_payload)
             elif backend.provider == "claude":
-                return await self._call_claude(backend, payload)
+                return await self._call_claude(backend, safe_payload)
             elif backend.provider == "gemini":
-                return await self._call_gemini(backend, payload)
+                return await self._call_gemini(backend, safe_payload)
             else:
                 raise BackendError(f"Unknown cloud_api provider: {backend.provider}")
         elif backend.type == "cli":
@@ -83,9 +84,54 @@ class Scheduler:
                 worker = await self.worker_registry.get(backend.worker_id)
             except Exception as e:
                 raise BackendError(f"Worker not found: {backend.worker_id}") from e
-            return await self._dispatch_to_worker(worker, backend, payload)
+            return await self._dispatch_to_worker(worker, backend, safe_payload)
         else:
             raise BackendError(f"Unsupported backend type: {backend.type}")
+
+    def _apply_cloud_context_policy(self, backend: BackendConfig, payload: Any) -> Any:
+        # Applies only to cloud backends; local/remote worker execution keeps full payload.
+        if backend.type != "cloud_api":
+            return payload
+        if not isinstance(payload, list):
+            return payload
+
+        policy = os.environ.get("NEXUSAI_CLOUD_CONTEXT_POLICY", "allow").strip().lower()
+        if policy not in {"allow", "redact", "block"}:
+            policy = "allow"
+
+        has_context = any(
+            isinstance(m, dict)
+            and str(m.get("role", "")).lower() == "system"
+            and str(m.get("content", "")).startswith("Context:\n")
+            for m in payload
+        )
+        if not has_context:
+            return payload
+
+        if policy == "allow":
+            return payload
+        if policy == "block":
+            raise BackendError(
+                "Cloud context policy blocks sending context payloads to cloud providers"
+            )
+
+        # redact policy
+        redacted = []
+        for m in payload:
+            if (
+                isinstance(m, dict)
+                and str(m.get("role", "")).lower() == "system"
+                and str(m.get("content", "")).startswith("Context:\n")
+            ):
+                redacted.append(
+                    {
+                        **m,
+                        "content": "Context:\n[REDACTED_BY_POLICY]",
+                    }
+                )
+            else:
+                redacted.append(m)
+        return redacted
 
     async def _dispatch_to_worker(
         self, worker: Worker, backend: BackendConfig, payload: Any

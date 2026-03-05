@@ -60,3 +60,31 @@ async def test_scheduler_falls_back_to_env_when_key_not_in_vault(monkeypatch):
 
     _, kwargs = mock_client.post.call_args
     assert kwargs["headers"]["Authorization"] == "Bearer env-secret"
+
+
+@pytest.mark.anyio
+async def test_scheduler_cloud_context_policy_redact(monkeypatch):
+    from control_plane.scheduler.scheduler import Scheduler
+
+    scheduler = Scheduler(bot_registry=AsyncMock(), worker_registry=AsyncMock(), key_vault=AsyncMock())
+    backend = BackendConfig(type="cloud_api", model="gpt-4o-mini", provider="openai", api_key_ref="OPENAI_API_KEY")
+    payload = [
+        {"role": "system", "content": "Context:\nSensitive notes"},
+        {"role": "user", "content": "hello"},
+    ]
+    monkeypatch.setenv("NEXUSAI_CLOUD_CONTEXT_POLICY", "redact")
+    redacted = scheduler._apply_cloud_context_policy(backend, payload)
+    assert redacted[0]["content"] == "Context:\n[REDACTED_BY_POLICY]"
+
+
+@pytest.mark.anyio
+async def test_scheduler_cloud_context_policy_block(monkeypatch):
+    from control_plane.scheduler.scheduler import Scheduler
+    from shared.exceptions import BackendError
+
+    scheduler = Scheduler(bot_registry=AsyncMock(), worker_registry=AsyncMock(), key_vault=AsyncMock())
+    backend = BackendConfig(type="cloud_api", model="gpt-4o-mini", provider="openai", api_key_ref="OPENAI_API_KEY")
+    payload = [{"role": "system", "content": "Context:\nSensitive notes"}]
+    monkeypatch.setenv("NEXUSAI_CLOUD_CONTEXT_POLICY", "block")
+    with pytest.raises(BackendError):
+        scheduler._apply_cloud_context_policy(backend, payload)

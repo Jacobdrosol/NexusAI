@@ -362,10 +362,10 @@ These are confirmed issues that must be fixed before serious testing:
 | 1 | ~~**`shared/` not in Docker build context for some services**~~ ✅ **RESOLVED** | `control_plane/Dockerfile`, `worker_agent/Dockerfile`, `dashboard/Dockerfile` | Added `ENV PYTHONPATH=/app` to all three Dockerfiles so `shared/` is always importable regardless of working directory |
 | 2 | ~~**Settings port mismatch**~~ ✅ **RESOLVED** | `shared/settings_manager.py` line ~65 | `control_plane_port` default changed from `"8080"` to `"8000"`; dashboard CPClient now connects to the correct port |
 | 3 | ~~**`Bot` ORM has `routing_rules` column; shared Pydantic `Bot` model does not**~~ ✅ **RESOLVED** | `dashboard/models.py` vs `shared/models.py` | Added `routing_rules: Optional[Any] = None` to shared Pydantic `Bot` model; field now round-trips correctly |
-| 4 | **`Worker.enabled` in dashboard ORM but not in shared Pydantic `Worker` model** | `dashboard/models.py` vs `shared/models.py` | Inconsistent model; `enabled` field will not round-trip through CP API |
-| 5 | **No `api_key_ref` resolution in Scheduler** | `control_plane/scheduler/scheduler.py` | `api_key_ref` is stored on `BackendConfig` but the scheduler reads raw env var keys — no vault lookup implemented |
-| 6 | **Task execution has no dependency engine** | `control_plane/task_manager/task_manager.py` | Tasks run immediately on creation; no "wait for Task A before Task B" logic |
-| 7 | **No streaming inference** | `worker_agent/api/infer.py`, `control_plane/scheduler/scheduler.py` | All inference is blocking request/response; chat UI will be unusable without streaming |
+| 4 | ~~**`Worker.enabled` in dashboard ORM but not in shared Pydantic `Worker` model**~~ ✅ **RESOLVED** | `dashboard/models.py`, `shared/models.py` | `enabled` now round-trips through shared worker model |
+| 5 | ~~**No `api_key_ref` resolution in Scheduler**~~ ✅ **RESOLVED** | `control_plane/scheduler/scheduler.py` | Scheduler resolves named keys from encrypted key vault with env fallback |
+| 6 | ~~**Task execution has no dependency engine**~~ ✅ **RESOLVED** | `control_plane/task_manager/task_manager.py` | Dependency DAG + blocked/unblocked lifecycle implemented |
+| 7 | ~~**No streaming inference**~~ ✅ **RESOLVED** | `nexus_worker/api/infer_stream.py`, chat stream routes | Streaming interfaces now exist for chat and standalone worker (`/infer/stream`) |
 | 8 | ~~**No control plane authentication**~~ ✅ **RESOLVED** | `control_plane/main.py`, `dashboard/cp_client.py`, `worker_agent/main.py` | Optional token auth added for CP API (`CONTROL_PLANE_API_TOKEN`), with dashboard/worker header support |
 
 ---
@@ -383,14 +383,14 @@ These are confirmed issues that must be fixed before serious testing:
 
 ### Phase 2 — Worker Node Standalone Program (`nexus-worker`)
 
-- [ ] Create `nexus_worker/` as a standalone Python package
-- [ ] Hardware detection module (CPU, RAM, GPU via psutil + pynvml)
-- [ ] Model compatibility calculator (given hardware → runnable models list)
-- [ ] Task time estimator (prompt tokens + model + hardware → ETA)
-- [ ] Streaming inference: add `/infer/stream` SSE endpoint
-- [ ] Local model manager: query Ollama/vLLM for installed models
-- [ ] Packaging: entry point, `config.yaml.example`, README
-- [ ] Worker detail page in dashboard: hardware card, model list, live CPU/RAM/GPU graphs
+- [x] Create `nexus_worker/` as a standalone Python package
+- [x] Hardware detection module (CPU, RAM, GPU via psutil + pynvml)
+- [x] Model compatibility calculator (given hardware → runnable models list)
+- [x] Task time estimator (prompt tokens + model + hardware → ETA)
+- [x] Streaming inference: add `/infer/stream` SSE endpoint
+- [x] Local model manager: query Ollama/vLLM for installed models
+- [x] Packaging: entry point, `config.yaml.example`, README
+- [x] Worker detail page in dashboard: hardware card, model list, live CPU/RAM/GPU graphs
 
 ### Phase 3 — Data + Chat + Vault Backend
 
@@ -1478,3 +1478,52 @@ NexusAI/
 **Validation:**
 
 - Documentation-only slice (no runtime code changes).
+
+---
+
+### 2026-03-05 08:05 — Phase 2 Completion + Privacy Context Hardening (Slice 27)
+
+**Status:** Standalone `nexus_worker` package is implemented; privacy/data-egress safeguards were strengthened.
+
+**Changes made:**
+
+- Built standalone worker package (`nexus_worker/`):
+  - app entrypoint + server bootstrap:
+    - `nexus_worker/agent.py`
+    - `nexus_worker/__main__.py`
+  - hardware profiling + model compatibility + ETA hints:
+    - `nexus_worker/hardware/detector.py`
+    - `nexus_worker/hardware/model_advisor.py`
+  - local model discovery:
+    - `nexus_worker/manager/local_models.py`
+  - APIs:
+    - `GET /health`
+    - `GET /capabilities`
+    - `GET /models/local`
+    - `POST /infer`
+    - `POST /infer/stream`
+    - (`nexus_worker/api/*`)
+  - packaging/docs artifacts:
+    - `nexus_worker/config.yaml.example`
+    - `nexus_worker/README.md`
+    - `pyproject.toml` script entry point: `nexus-worker`
+- Improved context privacy + performance path for chat:
+  - chat now supports `context_item_ids` and resolves vault content server-side (`control_plane/api/chat.py`)
+  - dashboard chat context picker sends vault IDs, not full content blobs (`dashboard/templates/chat.html`, `dashboard/routes/chat.py`)
+- Added cloud context egress policy in scheduler:
+  - `NEXUSAI_CLOUD_CONTEXT_POLICY=allow|redact|block`
+  - applies to cloud backends when context blocks are present (`control_plane/scheduler/scheduler.py`)
+- Added standalone worker cloud context policy:
+  - `NEXUS_WORKER_CLOUD_CONTEXT_POLICY=allow|redact|block` (`nexus_worker/services/inference.py`)
+- Updated dependencies and packaging:
+  - added `psutil`
+  - included `nexus_worker*` in package discovery (`pyproject.toml`, `requirements.txt`)
+- Added tests:
+  - standalone worker endpoint coverage (`tests/test_nexus_worker.py`)
+  - chat context ID resolution test (`tests/test_chat_api.py`)
+  - scheduler context policy tests (`tests/test_scheduler_api_keys.py`)
+
+**Validation:**
+
+- `pytest -q tests/test_nexus_worker.py tests/test_chat_api.py tests/test_scheduler_api_keys.py` → **12 passed**
+- `pytest -q tests/test_control_plane_api.py tests/test_dashboard_phase4_pages.py` → **51 passed**
