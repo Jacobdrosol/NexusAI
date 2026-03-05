@@ -99,7 +99,9 @@ class CPClient:
         return self._delete(f"/v1/bots/{bot_id}")
 
     # Tasks
-    def list_tasks(self) -> Optional[List[Dict[str, Any]]]:
+    def list_tasks(self, orchestration_id: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
+        if orchestration_id:
+            return self._get(f"/v1/tasks?orchestration_id={orchestration_id}")
         return self._get("/v1/tasks")
 
     def get_task(self, task_id: str) -> Optional[Dict]:

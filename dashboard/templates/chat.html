@@ -67,6 +67,9 @@
           <button class="btn btn-sm" onclick="copyMessage(this)">Copy</button>
           <button class="btn btn-sm" onclick="rerunMessage(this)">Re-run</button>
           <button class="btn btn-sm" onclick="sendMessageToVault(this)">Send to Vault</button>
+          {% if m.metadata and m.metadata.get('orchestration_id') %}
+          <button class="btn btn-sm" onclick="openDagViewer('{{ m.metadata.get('orchestration_id') }}')">View DAG</button>
+          {% endif %}
         </div>
       </div>
       {% else %}
@@ -151,6 +154,17 @@
     </form>
   </div>
 </div>
+
+<div id="modal-dag" class="modal" style="display:none;">
+  <div class="modal-content" style="max-width:960px;">
+    <h2>DAG Viewer</h2>
+    <div id="dag-state" class="state-loading" style="margin-bottom:0.75rem;">Loading graph...</div>
+    <div id="dag-wrap" class="dag-wrap"></div>
+    <div class="modal-actions">
+      <button class="btn" onclick="hideModal('modal-dag')">Close</button>
+    </div>
+  </div>
+</div>
 {% endblock %}
 {% block scripts %}
 <script>
@@ -176,25 +190,43 @@ function selectedContextItems() {
   return contexts;
 }
 
-function appendMessage(role, content, id='temp-' + Date.now()) {
+function renderMessageActions(meta) {
+  const orchestrationId = meta?.orchestration_id;
+  const dagBtn = orchestrationId
+    ? `<button class="btn btn-sm" onclick="openDagViewer('${orchestrationId}')">View DAG</button>`
+    : '';
+  return `
+    <button class="btn btn-sm" onclick="copyMessage(this)">Copy</button>
+    <button class="btn btn-sm" onclick="rerunMessage(this)">Re-run</button>
+    <button class="btn btn-sm" onclick="sendMessageToVault(this)">Send to Vault</button>
+    ${dagBtn}
+  `;
+}
+
+function appendMessage(role, content, id='temp-' + Date.now(), meta=null) {
   const container = document.getElementById('messages');
   if (!container) return;
   const div = document.createElement('div');
   div.className = 'message ' + role;
   div.dataset.messageId = id;
+  if (meta) div.dataset.meta = JSON.stringify(meta);
   div.innerHTML = `
     <div class="message-role">${role}</div>
     <div class="message-body"></div>
     <div class="message-actions">
-      <button class="btn btn-sm" onclick="copyMessage(this)">Copy</button>
-      <button class="btn btn-sm" onclick="rerunMessage(this)">Re-run</button>
-      <button class="btn btn-sm" onclick="sendMessageToVault(this)">Send to Vault</button>
+      ${renderMessageActions(meta)}
     </div>
   `;
   div.querySelector('.message-body').textContent = content;
   container.appendChild(div);
   container.scrollTop = container.scrollHeight;
   return div;
+}
+
+function esc(s) {
+  return (s || '').toString().replace(/[&<>"']/g, (c) => (
+    {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;', "'":'&#39;'}[c]
+  ));
 }
 
 function upsertTaskEvent(task) {
@@ -306,6 +338,11 @@ async function sendMessage(streamMode) {
           }
         } else if (eventType === 'assistant_message' && pending) {
           pending.dataset.messageId = parsed.id || pending.dataset.messageId;
+          if (parsed.metadata) {
+            pending.dataset.meta = JSON.stringify(parsed.metadata);
+            const actions = pending.querySelector('.message-actions');
+            if (actions) actions.innerHTML = renderMessageActions(parsed.metadata);
+          }
           pending.querySelector('.message-body').textContent = parsed.content || '';
         } else if (eventType === 'error') {
           alert(parsed.error || 'Stream error');
@@ -367,11 +404,14 @@ function getMessageData(buttonEl) {
   const content = messageEl?.querySelector('.message-body')?.textContent || '';
   const role = messageEl?.querySelector('.message-role')?.textContent || '';
   const msg = initialMessages.find(m => String(m.id) === String(messageId));
+  let inlineMeta = null;
+  try { inlineMeta = messageEl?.dataset?.meta ? JSON.parse(messageEl.dataset.meta) : null; } catch (_) {}
   return {
     id: messageId,
     role: role || msg?.role || 'assistant',
     content: content || msg?.content || '',
     bot_id: msg?.bot_id || null,
+    metadata: inlineMeta || msg?.metadata || null,
   };
 }
 
@@ -418,6 +458,130 @@ async function ingestConversation(conversationId) {
     const data = await res.json().catch(() => ({}));
     alert(data.error || 'Ingest failed');
   }
+}
+
+function computeLevels(nodes) {
+  const byId = new Map(nodes.map(n => [n.id, n]));
+  const memo = new Map();
+  function level(id) {
+    if (memo.has(id)) return memo.get(id);
+    const node = byId.get(id);
+    if (!node) return 0;
+    const deps = Array.isArray(node.depends_on) ? node.depends_on : [];
+    if (!deps.length) {
+      memo.set(id, 0);
+      return 0;
+    }
+    const lv = 1 + Math.max(...deps.map(d => level(d)));
+    memo.set(id, lv);
+    return lv;
+  }
+  nodes.forEach(n => level(n.id));
+  return memo;
+}
+
+function renderDagGraph(graph) {
+  const wrap = document.getElementById('dag-wrap');
+  const state = document.getElementById('dag-state');
+  if (!wrap || !state) return;
+  const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
+  if (!nodes.length) {
+    state.className = 'state-empty';
+    state.textContent = 'No DAG data available.';
+    wrap.innerHTML = '';
+    return;
+  }
+
+  const levels = computeLevels(nodes);
+  const groups = new Map();
+  nodes.forEach((n) => {
+    const lv = levels.get(n.id) || 0;
+    if (!groups.has(lv)) groups.set(lv, []);
+    groups.get(lv).push(n);
+  });
+  const sortedLevels = Array.from(groups.keys()).sort((a, b) => a - b);
+
+  const nodeW = 220;
+  const nodeH = 86;
+  const xGap = 70;
+  const yGap = 28;
+
+  const positions = new Map();
+  let totalW = 0;
+  let totalH = 0;
+  sortedLevels.forEach((lv, col) => {
+    const colNodes = groups.get(lv) || [];
+    const x = col * (nodeW + xGap);
+    colNodes.forEach((n, idx) => {
+      const y = idx * (nodeH + yGap);
+      positions.set(n.id, {x, y});
+      totalH = Math.max(totalH, y + nodeH);
+    });
+    totalW = Math.max(totalW, x + nodeW);
+  });
+
+  const edges = [];
+  nodes.forEach((n) => {
+    (n.depends_on || []).forEach((dep) => {
+      const a = positions.get(dep);
+      const b = positions.get(n.id);
+      if (!a || !b) return;
+      const x1 = a.x + nodeW;
+      const y1 = a.y + nodeH / 2;
+      const x2 = b.x;
+      const y2 = b.y + nodeH / 2;
+      const cx = (x1 + x2) / 2;
+      edges.push(`M ${x1} ${y1} C ${cx} ${y1}, ${cx} ${y2}, ${x2} ${y2}`);
+    });
+  });
+
+  const edgeSvg = `
+    <svg width="${totalW + 20}" height="${totalH + 20}" viewBox="0 0 ${totalW + 20} ${totalH + 20}" class="dag-canvas">
+      <defs>
+        <marker id="dag-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+          <path d="M0,0 L8,4 L0,8 z" fill="#5b789b"></path>
+        </marker>
+      </defs>
+      ${edges.map((d) => `<path d="${d}" class="dag-edge" marker-end="url(#dag-arrow)"></path>`).join('')}
+    </svg>
+  `;
+
+  const nodesHtml = nodes.map((n) => {
+    const p = positions.get(n.id) || {x: 0, y: 0};
+    const title = esc(n.title || n.id);
+    const bot = esc(n.bot_id || '');
+    const status = esc(n.status || 'queued');
+    return `
+      <div class="dag-node" style="left:${p.x}px;top:${p.y}px;width:${nodeW}px;height:${nodeH}px;">
+        <div class="dag-title">${title}</div>
+        <div class="mini-note">Bot ${bot || 'unknown'}</div>
+        <span class="badge badge-${status}">${status}</span>
+      </div>
+    `;
+  }).join('');
+
+  wrap.innerHTML = `<div class="dag-stage" style="width:${totalW + 20}px;height:${totalH + 20}px;">${edgeSvg}${nodesHtml}</div>`;
+  state.className = 'state-info';
+  state.textContent = `Graph loaded: ${nodes.length} node(s).`;
+}
+
+async function openDagViewer(orchestrationId) {
+  const modal = document.getElementById('modal-dag');
+  const state = document.getElementById('dag-state');
+  const wrap = document.getElementById('dag-wrap');
+  if (!modal || !state || !wrap) return;
+  modal.style.display = 'flex';
+  wrap.innerHTML = '';
+  state.className = 'state-loading';
+  state.textContent = 'Loading graph...';
+  const res = await fetch('/api/chat/orchestrations/' + encodeURIComponent(orchestrationId) + '/graph');
+  if (!res.ok) {
+    state.className = 'state-error';
+    state.textContent = 'Failed to load DAG graph.';
+    return;
+  }
+  const graph = await res.json();
+  renderDagGraph(graph);
 }
 </script>
 {% endblock %}

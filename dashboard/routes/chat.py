@@ -203,3 +203,35 @@ def api_ingest_message_to_vault():
     if ingested is None:
         return jsonify({"error": "vault ingestion failed"}), 502
     return jsonify(ingested), 201
+
+
+@bp.get("/api/chat/orchestrations/<orchestration_id>/graph")
+@login_required
+def api_orchestration_graph(orchestration_id: str):
+    cp = get_cp_client()
+    tasks = cp.list_tasks(orchestration_id=orchestration_id)
+    if tasks is None:
+        return jsonify({"error": "control plane unavailable"}), 502
+
+    nodes = []
+    edges = []
+    for t in tasks:
+        task_id = str(t.get("id"))
+        payload = t.get("payload") or {}
+        title = ""
+        if isinstance(payload, dict):
+            title = str(payload.get("title") or payload.get("instruction") or task_id)
+        depends_on = t.get("depends_on") or []
+        nodes.append(
+            {
+                "id": task_id,
+                "title": title,
+                "status": t.get("status"),
+                "bot_id": t.get("bot_id"),
+                "depends_on": depends_on,
+            }
+        )
+        for dep in depends_on:
+            edges.append({"from": str(dep), "to": task_id})
+
+    return jsonify({"orchestration_id": orchestration_id, "nodes": nodes, "edges": edges})

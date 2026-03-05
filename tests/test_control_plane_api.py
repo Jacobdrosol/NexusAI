@@ -241,3 +241,29 @@ async def test_vault_delete_item_and_list_namespaces(cp_client):
 
     get_resp = await cp_client.get(f"/v1/vault/items/{item_a['id']}")
     assert get_resp.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_list_tasks_filtered_by_orchestration_id(cp_client):
+    await cp_client.post(
+        "/v1/tasks",
+        json={
+            "bot_id": "bot-a",
+            "payload": {"instruction": "a"},
+            "metadata": {"source": "chat_assign", "orchestration_id": "orch-1"},
+        },
+    )
+    await cp_client.post(
+        "/v1/tasks",
+        json={
+            "bot_id": "bot-b",
+            "payload": {"instruction": "b"},
+            "metadata": {"source": "chat_assign", "orchestration_id": "orch-2"},
+        },
+    )
+
+    resp = await cp_client.get("/v1/tasks?orchestration_id=orch-1")
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert len(rows) >= 1
+    assert all((r.get("metadata") or {}).get("orchestration_id") == "orch-1" for r in rows)

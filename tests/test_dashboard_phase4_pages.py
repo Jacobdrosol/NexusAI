@@ -95,6 +95,12 @@ def test_chat_stream_api_validates_required_fields(dashboard_client):
     assert resp.status_code == 400
 
 
+def test_chat_orchestration_graph_api_handles_unavailable_cp(dashboard_client):
+    _login_admin(dashboard_client)
+    resp = dashboard_client.get("/api/chat/orchestrations/test-orch/graph")
+    assert resp.status_code == 502
+
+
 def test_worker_detail_page_loads_when_logged_in(dashboard_client):
     _login_admin(dashboard_client)
     from dashboard.db import get_db

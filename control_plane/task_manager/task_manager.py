@@ -203,10 +203,17 @@ class TaskManager:
                 raise TaskNotFoundError(f"Task not found: {task_id}")
             return self._tasks[task_id]
 
-    async def list_tasks(self) -> List[Task]:
+    async def list_tasks(self, orchestration_id: Optional[str] = None) -> List[Task]:
         await self._ensure_db()
         async with self._lock:
-            return list(self._tasks.values())
+            tasks = list(self._tasks.values())
+        if not orchestration_id:
+            return tasks
+        return [
+            t
+            for t in tasks
+            if t.metadata and t.metadata.orchestration_id == orchestration_id
+        ]
 
     async def update_status(
         self,

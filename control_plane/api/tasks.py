@@ -1,6 +1,6 @@
 from typing import Any, List, Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from shared.exceptions import BotNotFoundError, TaskNotFoundError
@@ -34,9 +34,12 @@ async def create_task(request: Request, body: CreateTaskRequest) -> Task:
 
 
 @router.get("", response_model=List[Task])
-async def list_tasks(request: Request) -> List[Task]:
+async def list_tasks(
+    request: Request,
+    orchestration_id: Optional[str] = Query(default=None),
+) -> List[Task]:
     task_manager = request.app.state.task_manager
-    return await task_manager.list_tasks()
+    return await task_manager.list_tasks(orchestration_id=orchestration_id)
 
 
 @router.get("/{task_id}", response_model=Task)

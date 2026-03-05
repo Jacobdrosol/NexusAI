@@ -721,6 +721,46 @@ select.form-control {
   color: var(--muted);
 }
 
+.dag-wrap {
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-3);
+  min-height: 280px;
+  max-height: 62vh;
+  padding: 0.6rem;
+}
+
+.dag-stage {
+  position: relative;
+}
+
+.dag-canvas {
+  position: absolute;
+  inset: 0;
+}
+
+.dag-edge {
+  fill: none;
+  stroke: #5b789b;
+  stroke-width: 2;
+}
+
+.dag-node {
+  position: absolute;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 0.5rem;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22);
+}
+
+.dag-title {
+  font-size: 0.86rem;
+  font-weight: 600;
+  margin-bottom: 0.2rem;
+}
+
 @media (max-width: 900px) {
   nav {
     gap: 0.75rem;

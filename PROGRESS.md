@@ -449,7 +449,7 @@ These are confirmed issues that must be fixed before serious testing:
 - [x] Chat → PM Bot → dependency graph creation → multi-bot assignment
 - [x] Results aggregation back to originating chat conversation
 - [x] Task status events streamed to chat window in real time
-- [ ] Optional: visual DAG viewer for task dependency graphs
+- [x] Optional: visual DAG viewer for task dependency graphs
 
 ### Phase 6 — GitHub Integration
 
@@ -1182,3 +1182,36 @@ NexusAI/
 
 - `pytest -q tests/test_chat_api.py tests/test_dashboard_phase4_pages.py` → **19 passed**
 - `pytest -q` → **104 passed**
+
+---
+
+### 2026-03-05 04:28 — Phase 5: DAG Viewer + Orchestration Graph API (Slice 18)
+
+**Status:** Phase 5 is fully complete.
+
+**Changes made:**
+
+- Added orchestration graph query capability in control-plane tasks API:
+  - `TaskManager.list_tasks(orchestration_id=...)` filter support (`control_plane/task_manager/task_manager.py`)
+  - `GET /v1/tasks?orchestration_id=<id>` (`control_plane/api/tasks.py`)
+- Extended dashboard CP client task listing with optional orchestration filter:
+  - `CPClient.list_tasks(orchestration_id=...)` (`dashboard/cp_client.py`)
+- Added dashboard chat graph endpoint:
+  - `GET /api/chat/orchestrations/<orchestration_id>/graph`
+  - builds node/edge payload from orchestration task metadata (`dashboard/routes/chat.py`)
+- Implemented interactive DAG Viewer in Chat UI:
+  - `View DAG` message action appears for assignment summary messages
+  - DAG modal with auto layout, status badges, and dependency edges
+  - graph loads via orchestration graph endpoint
+  - (`dashboard/templates/chat.html`)
+- Added DAG styling:
+  - `.dag-wrap`, `.dag-stage`, `.dag-canvas`, `.dag-edge`, `.dag-node`, `.dag-title`
+  - (`dashboard/static/style.css`)
+- Added tests:
+  - task filtering by orchestration id (`tests/test_control_plane_api.py`)
+  - dashboard graph endpoint unavailable-CP behavior (`tests/test_dashboard_phase4_pages.py`)
+
+**Validation:**
+
+- `pytest -q tests/test_control_plane_api.py tests/test_chat_api.py tests/test_dashboard_phase4_pages.py` → **40 passed**
+- `pytest -q` → **106 passed**
