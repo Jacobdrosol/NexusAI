@@ -12,6 +12,8 @@
   --surface-3: #0f1a28;
   --ink: #e2ebf7;
   --muted: #9fb0c8;
+  --link: #93c5fd;
+  --link-hover: #dbeafe;
   --line: #2a3b52;
   --brand: #2dd4bf;
   --brand-strong: #14b8a6;
@@ -25,6 +27,31 @@ body {
   color: var(--ink);
   line-height: 1.5;
   min-height: 100vh;
+}
+
+a {
+  color: var(--link);
+}
+
+a:hover,
+a:focus {
+  color: var(--link-hover);
+}
+
+/* Keep data-table and health-card links readable on dark surfaces */
+td a,
+.health-header a,
+.panel a {
+  color: var(--link);
+}
+
+td a:hover,
+td a:focus,
+.health-header a:hover,
+.health-header a:focus,
+.panel a:hover,
+.panel a:focus {
+  color: var(--link-hover);
 }
 
 .ambient-bg {

@@ -121,6 +121,7 @@ Then open http://localhost:5000 in your browser.
 Dashboard and workflow:
 
 - Navigation pages: `Overview`, `Projects`, `Chat`, `Bots`, `Workers`, `Vault`, `Settings`.
+- Improved dashboard link contrast for worker and bot names on dark tables/cards.
 - Worker detail pages with live load, queue, and GPU graphs.
 - Bot detail editor with backend chain management and task board.
 - Project detail pages with bridge management and scoped resources.
@@ -609,4 +610,5 @@ capabilities:
 - [x] Add robust load-aware scheduling (queue depth/latency weighted worker selection)
 - [x] Add metrics/observability export (Prometheus + structured latency/error dashboards)
 - [x] Extend automated security tests for webhook replay protections and secret-rotation workflows
+- [ ] Add complete in-app password reset/recovery workflows (no direct DB command dependency)
 - [ ] Stabilize deployment profile (compose + reverse proxy reference stack)

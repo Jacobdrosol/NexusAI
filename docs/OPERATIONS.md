@@ -152,3 +152,20 @@ Release cycle:
 - run full regression tests
 - run UAT script and manual flow
 - capture baseline metrics snapshots before deploy
+
+## 9. Planned Security Improvement
+
+Password reset and recovery should move fully into authenticated application workflows.
+
+Planned direction:
+
+- add in-app admin password reset flow with audit logging
+- add secure self-service password change flow for logged-in users
+- add tokenized password reset workflow (time-limited, one-time use) for recovery
+- avoid dependence on direct database command sequences for routine credential operations
+
+Rationale:
+
+- reduces operational risk from manual database access
+- limits accidental secret exposure in shared logs/docs/history
+- provides safer support workflow for open-source users and operators

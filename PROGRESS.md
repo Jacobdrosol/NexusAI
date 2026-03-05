@@ -1765,3 +1765,23 @@ NexusAI/
 - `pytest -q tests/test_scheduler_api_keys.py tests/test_control_plane_api.py tests/test_chat_api.py` → **47 passed**
 - `pytest -q` → **141 passed**
 
+---
+
+### 2026-03-05 13:10 — Password Recovery Roadmap Documentation (Slice 35)
+
+**Status:** Added explicit documentation for secure in-app password reset/recovery direction to reduce manual DB operations.
+
+**Changes made:**
+
+- Added `Planned Security Improvement` section to `docs/OPERATIONS.md`:
+  - admin password reset workflow in app
+  - self-service password change workflow
+  - tokenized password recovery flow
+  - rationale for avoiding direct DB command dependency
+- Added matching roadmap entry in `README.md` next priorities:
+  - in-app password reset/recovery workflows
+
+**Validation:**
+
+- Documentation-only update.
+
