@@ -16,6 +16,13 @@ logger = logging.getLogger(__name__)
 WORKER_CONFIG_PATH = os.environ.get("WORKER_CONFIG_PATH", "config/workers/local_worker.yaml")
 CONTROL_PLANE_URL = os.environ.get("CONTROL_PLANE_URL", "http://localhost:8000")
 HEARTBEAT_INTERVAL = int(os.environ.get("HEARTBEAT_INTERVAL", "15"))
+CONTROL_PLANE_API_TOKEN = os.environ.get("CONTROL_PLANE_API_TOKEN", "").strip()
+
+
+def _cp_headers() -> dict:
+    if not CONTROL_PLANE_API_TOKEN:
+        return {}
+    return {"X-Nexus-API-Key": CONTROL_PLANE_API_TOKEN}
 
 
 @asynccontextmanager
@@ -41,6 +48,7 @@ async def lifespan(app: FastAPI):
             response = await client.post(
                 f"{CONTROL_PLANE_URL}/v1/workers",
                 json=worker_config,
+                headers=_cp_headers(),
             )
             response.raise_for_status()
             logger.info("Registered with control plane as %s", worker_id)
@@ -77,6 +85,7 @@ async def _send_heartbeats(worker_id: str) -> None:
                 await client.post(
                     f"{CONTROL_PLANE_URL}/v1/workers/{worker_id}/heartbeat",
                     json={"metrics": metrics} if metrics else {},
+                    headers=_cp_headers(),
                 )
         except Exception as e:
             logger.warning("Heartbeat failed: %s", e)

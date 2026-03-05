@@ -121,6 +121,7 @@ Copy `.env.example` to `.env` and set the following variables before starting th
 | `NEXUSAI_SECRET_KEY` | `dev-secret-change-in-production` | Flask session secret key — **must be changed in production** |
 | `DATABASE_URL` | `sqlite:///data/nexusai.db` | SQLAlchemy connection URL (SQLite or PostgreSQL) |
 | `CONTROL_PLANE_URL` | — | URL the dashboard and worker use to reach the control plane, e.g. `http://localhost:8000` |
+| `CONTROL_PLANE_API_TOKEN` | — | Optional shared token for control-plane API auth; when set, dashboard/worker send `X-Nexus-API-Key` and CP enforces auth on API routes |
 | `NEXUS_CONFIG_PATH` | — | Path to `nexus_config.yaml` for the control plane |
 | `WORKER_CONFIG_PATH` | — | Path to a worker YAML file for the worker agent |
 | `DASHBOARD_PORT` | `5000` | Port the dashboard listens on (used when running directly) |

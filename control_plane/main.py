@@ -90,6 +90,7 @@ async def lifespan(app: FastAPI):
     app.state.task_manager = task_manager
     app.state.pm_orchestrator = pm_orchestrator
     app.state.config = config
+    app.state.control_plane_api_token = os.environ.get("CONTROL_PLANE_API_TOKEN", "").strip()
 
     # Background heartbeat checker
     heartbeat_timeout = cp_cfg.get("heartbeat_timeout_seconds", 30)
@@ -145,6 +146,27 @@ def create_app() -> FastAPI:
     app.include_router(models_catalog.router)
     app.include_router(chat.router)
     app.include_router(vault.router)
+
+    @app.middleware("http")
+    async def control_plane_auth_middleware(request: Request, call_next):
+        token = (getattr(request.app.state, "control_plane_api_token", "") or "").strip()
+        if not token:
+            return await call_next(request)
+
+        path = request.url.path
+        if path in {"/health", "/docs", "/redoc", "/openapi.json"}:
+            return await call_next(request)
+
+        header_token = (request.headers.get("X-Nexus-API-Key", "") or "").strip()
+        auth_header = (request.headers.get("Authorization", "") or "").strip()
+        bearer = ""
+        if auth_header.lower().startswith("bearer "):
+            bearer = auth_header[7:].strip()
+
+        if header_token == token or bearer == token:
+            return await call_next(request)
+
+        return JSONResponse(status_code=401, content={"detail": "unauthorized"})
 
     @app.exception_handler(Exception)
     async def generic_exception_handler(request: Request, exc: Exception):

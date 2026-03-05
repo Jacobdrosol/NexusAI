@@ -4,6 +4,7 @@ import hmac
 import json
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 
 
 @pytest.mark.anyio
@@ -11,6 +12,26 @@ async def test_health(cp_client):
     resp = await cp_client.get("/health")
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
+
+
+@pytest.mark.anyio
+async def test_control_plane_optional_api_token_auth(cp_app):
+    cp_app.state.control_plane_api_token = "test-token"
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        health = await client.get("/health")
+        assert health.status_code == 200
+
+        unauthorized = await client.get("/v1/workers")
+        assert unauthorized.status_code == 401
+
+        authorized_header = await client.get("/v1/workers", headers={"X-Nexus-API-Key": "test-token"})
+        assert authorized_header.status_code == 200
+
+        authorized_bearer = await client.get(
+            "/v1/workers",
+            headers={"Authorization": "Bearer test-token"},
+        )
+        assert authorized_bearer.status_code == 200
 
 
 @pytest.mark.anyio

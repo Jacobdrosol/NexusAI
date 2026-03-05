@@ -73,6 +73,22 @@ async def cp_app(tmp_path):
     app.state.scheduler = scheduler
     app.state.task_manager = task_manager
     app.state.pm_orchestrator = pm_orchestrator
+    app.state.control_plane_api_token = ""
+
+    @app.middleware("http")
+    async def _auth_middleware(request, call_next):
+        token = (getattr(request.app.state, "control_plane_api_token", "") or "").strip()
+        if not token:
+            return await call_next(request)
+        if request.url.path in {"/health", "/docs", "/redoc", "/openapi.json"}:
+            return await call_next(request)
+        header_token = (request.headers.get("X-Nexus-API-Key", "") or "").strip()
+        auth_header = (request.headers.get("Authorization", "") or "").strip()
+        bearer = auth_header[7:].strip() if auth_header.lower().startswith("bearer ") else ""
+        if header_token == token or bearer == token:
+            return await call_next(request)
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=401, content={"detail": "unauthorized"})
 
     @app.get("/health")
     async def health():

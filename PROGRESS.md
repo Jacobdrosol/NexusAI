@@ -366,7 +366,7 @@ These are confirmed issues that must be fixed before serious testing:
 | 5 | **No `api_key_ref` resolution in Scheduler** | `control_plane/scheduler/scheduler.py` | `api_key_ref` is stored on `BackendConfig` but the scheduler reads raw env var keys — no vault lookup implemented |
 | 6 | **Task execution has no dependency engine** | `control_plane/task_manager/task_manager.py` | Tasks run immediately on creation; no "wait for Task A before Task B" logic |
 | 7 | **No streaming inference** | `worker_agent/api/infer.py`, `control_plane/scheduler/scheduler.py` | All inference is blocking request/response; chat UI will be unusable without streaming |
-| 8 | **No control plane authentication** | `control_plane/api/` | CP API is fully open; any network client can register workers, create bots, submit tasks |
+| 8 | ~~**No control plane authentication**~~ ✅ **RESOLVED** | `control_plane/main.py`, `dashboard/cp_client.py`, `worker_agent/main.py` | Optional token auth added for CP API (`CONTROL_PLANE_API_TOKEN`), with dashboard/worker header support |
 
 ---
 
@@ -457,6 +457,14 @@ These are confirmed issues that must be fixed before serious testing:
 - [x] Webhook ingestion: PR, push, issue events
 - [x] Code-aware bot context: repo file tree + file contents as vault items
 - [x] PR review bot workflow
+
+### Phase 7 — Security + Operational Hardening
+
+- [x] Control plane API token auth middleware (optional env-gated enforcement)
+- [ ] Rate limiting and request-size guards for high-risk endpoints
+- [ ] Structured audit events for privileged actions
+- [ ] Session timeout + inactivity enforcement in dashboard auth
+- [ ] Hardened deployment docs for reverse proxy/TLS/network segmentation
 
 ---
 
@@ -1327,3 +1335,32 @@ NexusAI/
 
 - `pytest -q tests/test_control_plane_api.py tests/test_dashboard_phase4_pages.py` → **47 passed**
 - `pytest -q` → **117 passed**
+
+---
+
+### 2026-03-05 06:18 — Phase 7: Control Plane API Auth (Slice 22)
+
+**Status:** Phase 7 started; first hardening slice is complete.
+
+**Changes made:**
+
+- Added optional control-plane API token authentication middleware:
+  - if `CONTROL_PLANE_API_TOKEN` is set, all control-plane routes except health/docs require auth
+  - accepted auth headers:
+    - `X-Nexus-API-Key: <token>`
+    - `Authorization: Bearer <token>`
+  - implemented in `control_plane/main.py`
+- Wired token propagation to clients:
+  - dashboard CP client now attaches `X-Nexus-API-Key` when `CONTROL_PLANE_API_TOKEN` is configured (`dashboard/cp_client.py`)
+  - worker agent registration/heartbeat now attach token header (`worker_agent/main.py`)
+- Updated test fixtures and coverage:
+  - mirrored auth middleware in test app fixture (`tests/conftest.py`)
+  - added control-plane auth enforcement test (`tests/test_control_plane_api.py`)
+- Updated roadmap and known-issues tracking:
+  - Known Issue #8 marked resolved
+  - introduced explicit Phase 7 hardening checklist in roadmap
+
+**Validation:**
+
+- `pytest -q tests/test_control_plane_api.py tests/test_dashboard_phase4_pages.py` → **48 passed**
+- `pytest -q` → **118 passed**

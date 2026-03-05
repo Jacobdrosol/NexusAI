@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 
 _CP_BASE = os.environ.get("CONTROL_PLANE_URL", "http://control_plane:8000")
 _TIMEOUT = float(os.environ.get("CP_TIMEOUT", "2"))
+_CP_API_TOKEN = os.environ.get("CONTROL_PLANE_API_TOKEN", "").strip()
 
 
 class CPClient:
@@ -19,10 +20,16 @@ class CPClient:
     def __init__(self, base_url: str = _CP_BASE, timeout: float = _TIMEOUT) -> None:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self.api_token = _CP_API_TOKEN
+
+    def _headers(self) -> Dict[str, str]:
+        if not self.api_token:
+            return {}
+        return {"X-Nexus-API-Key": self.api_token}
 
     def _get(self, path: str) -> Optional[Any]:
         try:
-            resp = requests.get(f"{self.base_url}{path}", timeout=self.timeout)
+            resp = requests.get(f"{self.base_url}{path}", timeout=self.timeout, headers=self._headers())
             resp.raise_for_status()
             return resp.json()
         except Exception as exc:
@@ -31,7 +38,12 @@ class CPClient:
 
     def _post(self, path: str, json: Any) -> Optional[Any]:
         try:
-            resp = requests.post(f"{self.base_url}{path}", json=json, timeout=self.timeout)
+            resp = requests.post(
+                f"{self.base_url}{path}",
+                json=json,
+                timeout=self.timeout,
+                headers=self._headers(),
+            )
             resp.raise_for_status()
             return resp.json()
         except Exception as exc:
@@ -40,7 +52,12 @@ class CPClient:
 
     def _put(self, path: str, json: Any) -> Optional[Any]:
         try:
-            resp = requests.put(f"{self.base_url}{path}", json=json, timeout=self.timeout)
+            resp = requests.put(
+                f"{self.base_url}{path}",
+                json=json,
+                timeout=self.timeout,
+                headers=self._headers(),
+            )
             resp.raise_for_status()
             return resp.json()
         except Exception as exc:
@@ -49,7 +66,7 @@ class CPClient:
 
     def _delete(self, path: str) -> bool:
         try:
-            resp = requests.delete(f"{self.base_url}{path}", timeout=self.timeout)
+            resp = requests.delete(f"{self.base_url}{path}", timeout=self.timeout, headers=self._headers())
             resp.raise_for_status()
             return True
         except Exception as exc:
