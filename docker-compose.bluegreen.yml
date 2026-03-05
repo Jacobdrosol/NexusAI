@@ -26,7 +26,8 @@ services:
     env_file: .env
     volumes:
       - nexus-data:/app/data
-      - ./.git:/app/.git:ro
+      - ./.git:/app/.git
+      - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - nexus-bluegreen
     healthcheck:
@@ -44,7 +45,8 @@ services:
     env_file: .env
     volumes:
       - nexus-data:/app/data
-      - ./.git:/app/.git:ro
+      - ./.git:/app/.git
+      - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - nexus-bluegreen
     healthcheck:

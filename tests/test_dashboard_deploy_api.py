@@ -33,6 +33,7 @@ def test_deploy_status_endpoint_returns_payload(dashboard_client):
     assert "state" in data
     assert "local_commit" in data
     assert "remote_commit" in data
+    assert "remote_check_error" in data
     assert "deploy_allowed" in data
     assert "active_color" in data
     assert "next_color" in data

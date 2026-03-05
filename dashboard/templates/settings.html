@@ -295,6 +295,7 @@
     <tbody>
       <tr><th style="width:240px;">Current Local Commit</th><td><code id="deploy-local">{{ deploy_status.local_commit or "unknown" }}</code></td></tr>
       <tr><th>Latest origin/main Commit</th><td><code id="deploy-remote">{{ deploy_status.remote_commit or "unknown" }}</code></td></tr>
+      <tr><th>Remote Check Error</th><td id="deploy-remote-error">{{ deploy_status.remote_check_error or "none" }}</td></tr>
       <tr><th>Last Deployed Commit</th><td><code id="deploy-last">{{ deploy_status.deployed_commit or "unknown" }}</code></td></tr>
       <tr><th>Active Color</th><td id="deploy-active-color">{{ deploy_status.active_color or "unknown" }}</td></tr>
       <tr><th>Next Color</th><td id="deploy-next-color">{{ deploy_status.next_color or "unknown" }}</td></tr>
@@ -524,6 +525,7 @@ function deleteModel(modelId) {
 function renderDeployStatus(status) {
   document.getElementById('deploy-local').textContent = status.local_commit || 'unknown';
   document.getElementById('deploy-remote').textContent = status.remote_commit || 'unknown';
+  document.getElementById('deploy-remote-error').textContent = status.remote_check_error || 'none';
   document.getElementById('deploy-last').textContent = status.deployed_commit || 'unknown';
   document.getElementById('deploy-active-color').textContent = status.active_color || 'unknown';
   document.getElementById('deploy-next-color').textContent = status.next_color || 'unknown';

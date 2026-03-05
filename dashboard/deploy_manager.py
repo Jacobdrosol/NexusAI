@@ -82,7 +82,7 @@ class DeployManager:
         self._state["log_tail"] = logs[-200:]
         self._save_state()
 
-    def _run_git(self, args: list[str]) -> str | None:
+    def _run_git(self, args: list[str]) -> tuple[str | None, str | None]:
         try:
             cp = subprocess.run(
                 ["git", *args],
@@ -91,17 +91,23 @@ class DeployManager:
                 text=True,
                 check=True,
             )
-            return (cp.stdout or "").strip()
-        except Exception:
-            return None
+            return (cp.stdout or "").strip(), None
+        except subprocess.CalledProcessError as exc:
+            err = (exc.stderr or exc.stdout or str(exc)).strip()
+            return None, err or "git command failed"
+        except Exception as exc:
+            return None, str(exc)
 
     def _current_commit(self) -> str | None:
-        return self._run_git(["rev-parse", "HEAD"])
+        out, _ = self._run_git(["rev-parse", "HEAD"])
+        return out
 
-    def _origin_main_commit(self, do_fetch: bool) -> str | None:
+    def _origin_main_commit(self, do_fetch: bool) -> tuple[str | None, str | None]:
+        fetch_error: str | None = None
         if do_fetch:
-            self._run_git(["fetch", "origin", "main"])
-        return self._run_git(["rev-parse", "origin/main"])
+            _, fetch_error = self._run_git(["fetch", "origin", "main"])
+        rev, rev_error = self._run_git(["rev-parse", "origin/main"])
+        return rev, (fetch_error or rev_error)
 
     def _deploy_gate(self) -> DeployGate:
         if os.environ.get("NEXUSAI_DEPLOY_ENABLE", "").strip() != "1":
@@ -136,7 +142,7 @@ class DeployManager:
     def status(self, refresh_remote: bool = False) -> dict[str, Any]:
         with self._lock:
             local_commit = self._current_commit()
-            remote_commit = self._origin_main_commit(refresh_remote)
+            remote_commit, remote_error = self._origin_main_commit(refresh_remote)
             deployed_commit = self._state.get("deployed_commit")
             running = bool(self._thread and self._thread.is_alive())
             gate = self._deploy_gate()
@@ -153,6 +159,7 @@ class DeployManager:
                 "state": "running" if running else self._state.get("state", "idle"),
                 "local_commit": local_commit or "unknown",
                 "remote_commit": remote_commit or "unknown",
+                "remote_check_error": remote_error,
                 "active_color": active_color,
                 "next_color": next_color,
                 "commits_differ": commits_differ,
