@@ -56,6 +56,8 @@
       <button class="btn" type="button" onclick="ingestConversation('{{ selected_conversation.id }}')">Ingest This Chat</button>
       <button class="btn" type="button" onclick="openAssignModal()">Assign Message to PM</button>
     </div>
+    <div id="task-event-state" class="state-empty" style="margin-bottom:0.5rem;">No task events yet.</div>
+    <div id="task-events" class="list" style="margin-bottom:0.75rem;"></div>
     <div id="messages" class="messages">
       {% for m in messages %}
       <div class="message {{ m.role }}" data-message-id="{{ m.id }}">
@@ -154,6 +156,7 @@
 <script>
 const selectedConversationId = {{ (selected_conversation.id if selected_conversation else "")|tojson }};
 const initialMessages = {{ messages|tojson }};
+const taskEventMap = new Map();
 
 function showCreateConversation() { document.getElementById('modal-create-convo').style.display='flex'; }
 function openAssignModal() { document.getElementById('modal-assign').style.display='flex'; }
@@ -194,6 +197,31 @@ function appendMessage(role, content, id='temp-' + Date.now()) {
   return div;
 }
 
+function upsertTaskEvent(task) {
+  if (!task || !task.task_id) return;
+  taskEventMap.set(task.task_id, task);
+  const stateEl = document.getElementById('task-event-state');
+  const listEl = document.getElementById('task-events');
+  if (!listEl || !stateEl) return;
+  stateEl.textContent = 'Task events streaming...';
+  stateEl.className = 'state-loading';
+  const ordered = Array.from(taskEventMap.values());
+  listEl.innerHTML = ordered.map((t) => {
+    const title = t.title || t.task_id;
+    const errorText = t.error?.message ? `<div class="mini-note">Error: ${t.error.message}</div>` : '';
+    return `
+      <div class="list-item">
+        <div style="display:flex;justify-content:space-between;gap:0.5rem;">
+          <strong>${title}</strong>
+          <span class="badge badge-${t.status}">${t.status}</span>
+        </div>
+        <div class="mini-note">Task ${t.task_id} · Bot ${t.bot_id || 'unknown'}</div>
+        ${errorText}
+      </div>
+    `;
+  }).join('');
+}
+
 async function sendMessage(streamMode) {
   const form = document.getElementById('chat-send-form');
   if (!form || !selectedConversationId) return;
@@ -217,8 +245,9 @@ async function sendMessage(streamMode) {
     if (!res.ok) { alert('Send failed'); return; }
     const data = await res.json();
     if (data.mode === 'assign') {
-      alert('Assignment created: ' + (data.assigned_task?.id || 'unknown'));
-      form.reset();
+      const orchestrationId = data.assignment?.orchestration_id || 'unknown';
+      alert('Assignment completed: ' + orchestrationId);
+      location.reload();
       return;
     }
     location.reload();
@@ -256,7 +285,26 @@ async function sendMessage(streamMode) {
       if (!dataText) continue;
       try {
         const parsed = JSON.parse(dataText);
-        if (eventType === 'assistant_message' && pending) {
+        if (eventType === 'task_graph') {
+          (parsed.tasks || []).forEach((t) => {
+            upsertTaskEvent({
+              task_id: t.id,
+              status: t.status || 'queued',
+              bot_id: t.bot_id,
+              title: (t.payload && t.payload.title) || '',
+            });
+          });
+        } else if (eventType === 'task_status') {
+          upsertTaskEvent(parsed);
+          const statuses = Array.from(taskEventMap.values()).map((t) => t.status);
+          if (statuses.length > 0 && statuses.every((s) => s === 'completed' || s === 'failed')) {
+            const stateEl = document.getElementById('task-event-state');
+            if (stateEl) {
+              stateEl.className = 'state-info';
+              stateEl.textContent = 'Task graph completed.';
+            }
+          }
+        } else if (eventType === 'assistant_message' && pending) {
           pending.dataset.messageId = parsed.id || pending.dataset.messageId;
           pending.querySelector('.message-body').textContent = parsed.content || '';
         } else if (eventType === 'error') {
@@ -307,8 +355,10 @@ document.getElementById('form-assign')?.addEventListener('submit', async functio
   });
   if (!res.ok) { alert('Assign failed'); return; }
   const data = await res.json();
-  alert('Assignment created: ' + (data.assigned_task?.id || 'unknown'));
+  const orchestrationId = data.assignment?.orchestration_id || 'unknown';
+  alert('Assignment completed: ' + orchestrationId);
   hideModal('modal-assign');
+  location.reload();
 });
 
 function getMessageData(buttonEl) {

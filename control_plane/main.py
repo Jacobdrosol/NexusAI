@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 
 from control_plane.api import bots, chat, keys, models_catalog, projects, tasks, vault, workers
 from control_plane.chat.chat_manager import ChatManager
+from control_plane.chat.pm_orchestrator import PMOrchestrator
 from control_plane.keys.key_vault import KeyVault
 from control_plane.registry.bot_registry import BotRegistry
 from control_plane.registry.model_registry import ModelRegistry
@@ -66,6 +67,12 @@ async def lifespan(app: FastAPI):
         model_registry=model_registry,
     )
     task_manager = TaskManager(scheduler)
+    pm_orchestrator = PMOrchestrator(
+        bot_registry=bot_registry,
+        scheduler=scheduler,
+        task_manager=task_manager,
+        chat_manager=chat_manager,
+    )
 
     # Store on app state
     app.state.worker_registry = worker_registry
@@ -78,6 +85,7 @@ async def lifespan(app: FastAPI):
     app.state.mcp_broker = mcp_broker
     app.state.scheduler = scheduler
     app.state.task_manager = task_manager
+    app.state.pm_orchestrator = pm_orchestrator
     app.state.config = config
 
     # Background heartbeat checker

@@ -72,34 +72,6 @@ def api_send_message():
         return jsonify({"error": "conversation_id and content are required"}), 400
     cp = get_cp_client()
 
-    # Inline assignment shortcut:
-    #   @assign Build auth tests
-    if content.lower().startswith("@assign"):
-        assignment_payload = content[len("@assign"):].strip()
-        if not assignment_payload:
-            return jsonify({"error": "assignment content is required after @assign"}), 400
-        bots = cp.list_bots() or []
-        pm_bot = next(
-            (
-                b
-                for b in bots
-                if str(b.get("role", "")).lower()
-                in {"pm", "project_manager", "project manager"}
-            ),
-            None,
-        )
-        target_bot_id = data.get("bot_id") or (pm_bot.get("id") if pm_bot else None)
-        if not target_bot_id:
-            return jsonify({"error": "no PM bot available for assignment"}), 400
-        task = cp.create_task_full(
-            bot_id=str(target_bot_id),
-            payload={"instruction": assignment_payload, "source": "chat_assign"},
-            metadata={"source": "chat", "conversation_id": conversation_id},
-        )
-        if task is None:
-            return jsonify({"error": "task assignment failed"}), 502
-        return jsonify({"assigned_task": task, "mode": "assign"})
-
     resp = cp.post_message(
         conversation_id,
         {

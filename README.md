@@ -104,6 +104,7 @@ Projects now include a detail page at `/projects/<project_id>` with bridge manag
 Overview now includes system alerts, worker health mini-bars, quick links, and a recent activity feed.
 Chat now supports context picking, stream-send, inline `@assign` task routing, and per-message actions (copy/re-run/send-to-vault). Vault now supports file/URL/paste upload modes plus item detail preview/chunk metadata.
 Vault also includes namespace management and bulk-delete actions, and the dashboard uses a consistent dark theme with reusable loading/empty/error state components.
+`@assign` now triggers PM-driven decomposition into dependency-ordered multi-bot tasks, streams task-status events in chat, and posts an aggregated completion summary back into the same conversation.
 
 ---
 

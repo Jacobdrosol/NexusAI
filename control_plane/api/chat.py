@@ -1,5 +1,6 @@
+import asyncio
 import json
-from typing import Any, AsyncGenerator, List, Optional
+from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
@@ -31,6 +32,25 @@ def _messages_to_payload(messages: List[ChatMessage], context_items: Optional[Li
         joined = "\n".join(context_items)
         payload.insert(0, {"role": "system", "content": f"Context:\n{joined}"})
     return payload
+
+
+def _extract_assign_instruction(content: str) -> Optional[str]:
+    text = content.strip()
+    if not text.lower().startswith("@assign"):
+        return None
+    instruction = text[len("@assign"):].strip()
+    return instruction or None
+
+
+def _extract_task_output(result: Any) -> str:
+    if isinstance(result, dict):
+        output = result.get("output")
+        if output is not None:
+            return str(output)
+        return json.dumps(result)
+    if result is None:
+        return ""
+    return str(result)
 
 
 @router.post("/conversations", response_model=ChatConversation)
@@ -76,6 +96,7 @@ async def list_messages(conversation_id: str, request: Request) -> List[ChatMess
 async def post_message(conversation_id: str, request: Request, body: PostMessageRequest) -> dict:
     chat_manager = request.app.state.chat_manager
     scheduler = request.app.state.scheduler
+    pm_orchestrator = request.app.state.pm_orchestrator
     try:
         conversation = await chat_manager.get_conversation(conversation_id)
         user_message = await chat_manager.add_message(
@@ -83,6 +104,28 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
             role="user",
             content=body.content,
         )
+        assign_instruction = _extract_assign_instruction(body.content)
+        if assign_instruction is not None:
+            assignment = await pm_orchestrator.orchestrate_assignment(
+                conversation_id=conversation_id,
+                instruction=assign_instruction,
+                requested_pm_bot_id=body.bot_id,
+                context_items=body.context_items,
+            )
+            completion = await pm_orchestrator.wait_for_completion(assignment)
+            assistant_message = await pm_orchestrator.persist_summary_message(
+                conversation_id=conversation_id,
+                assignment=assignment,
+                completion=completion,
+            )
+            return {
+                "mode": "assign",
+                "user_message": user_message,
+                "assistant_message": assistant_message,
+                "assignment": assignment,
+                "completion": completion,
+            }
+
         messages = await chat_manager.list_messages(conversation_id)
         target_bot_id = body.bot_id or conversation.default_bot_id
         if not target_bot_id:
@@ -98,7 +141,7 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
             updated_at=user_message.created_at,
         )
         result = await scheduler.schedule(task)
-        assistant_output = result.get("output", "") if isinstance(result, dict) else str(result)
+        assistant_output = _extract_task_output(result)
         assistant_message = await chat_manager.add_message(
             conversation_id=conversation_id,
             role="assistant",
@@ -118,6 +161,8 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
 async def stream_message(conversation_id: str, request: Request, body: PostMessageRequest) -> StreamingResponse:
     chat_manager = request.app.state.chat_manager
     scheduler = request.app.state.scheduler
+    task_manager = request.app.state.task_manager
+    pm_orchestrator = request.app.state.pm_orchestrator
 
     async def event_gen() -> AsyncGenerator[str, None]:
         try:
@@ -128,6 +173,66 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                 content=body.content,
             )
             yield f"event: user_message\ndata: {user_message.model_dump_json()}\n\n"
+            assign_instruction = _extract_assign_instruction(body.content)
+            if assign_instruction is not None:
+                assignment = await pm_orchestrator.orchestrate_assignment(
+                    conversation_id=conversation_id,
+                    instruction=assign_instruction,
+                    requested_pm_bot_id=body.bot_id,
+                    context_items=body.context_items,
+                )
+                graph_payload = {
+                    "orchestration_id": assignment.get("orchestration_id"),
+                    "tasks": assignment.get("tasks", []),
+                    "plan": assignment.get("plan", {}),
+                }
+                yield f"event: task_graph\ndata: {json.dumps(graph_payload)}\n\n"
+
+                tracked_ids = [
+                    str(t.get("id"))
+                    for t in assignment.get("tasks", [])
+                    if isinstance(t, dict) and t.get("id")
+                ]
+                last_status: Dict[str, str] = {}
+
+                while True:
+                    all_terminal = True
+                    for task_id in tracked_ids:
+                        task = await task_manager.get_task(task_id)
+                        previous = last_status.get(task_id)
+                        if previous != task.status:
+                            title = ""
+                            if isinstance(task.payload, dict):
+                                title = str(task.payload.get("title") or "")
+                            payload = {
+                                "task_id": task.id,
+                                "status": task.status,
+                                "bot_id": task.bot_id,
+                                "title": title,
+                                "result": task.result if task.status == "completed" else None,
+                                "error": (
+                                    task.error.model_dump()
+                                    if task.status == "failed" and task.error
+                                    else None
+                                ),
+                            }
+                            yield f"event: task_status\ndata: {json.dumps(payload)}\n\n"
+                            last_status[task_id] = task.status
+                        if task.status not in {"completed", "failed"}:
+                            all_terminal = False
+                    if all_terminal:
+                        break
+                    await asyncio.sleep(0.4)
+
+                completion = await pm_orchestrator.wait_for_completion(assignment, max_wait_seconds=1.0)
+                assistant_message = await pm_orchestrator.persist_summary_message(
+                    conversation_id=conversation_id,
+                    assignment=assignment,
+                    completion=completion,
+                )
+                yield f"event: assistant_message\ndata: {assistant_message.model_dump_json()}\n\n"
+                yield "event: done\ndata: {}\n\n"
+                return
 
             messages = await chat_manager.list_messages(conversation_id)
             target_bot_id = body.bot_id or conversation.default_bot_id
@@ -145,7 +250,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                 updated_at=user_message.created_at,
             )
             result = await scheduler.schedule(task)
-            assistant_output = result.get("output", "") if isinstance(result, dict) else str(result)
+            assistant_output = _extract_task_output(result)
             assistant_message = await chat_manager.add_message(
                 conversation_id=conversation_id,
                 role="assistant",

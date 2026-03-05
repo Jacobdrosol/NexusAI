@@ -445,10 +445,10 @@ These are confirmed issues that must be fixed before serious testing:
 
 ### Phase 5 — Agentic Workflow
 
-- [ ] PM Bot system prompt + task decomposition logic
-- [ ] Chat → PM Bot → dependency graph creation → multi-bot assignment
-- [ ] Results aggregation back to originating chat conversation
-- [ ] Task status events streamed to chat window in real time
+- [x] PM Bot system prompt + task decomposition logic
+- [x] Chat → PM Bot → dependency graph creation → multi-bot assignment
+- [x] Results aggregation back to originating chat conversation
+- [x] Task status events streamed to chat window in real time
 - [ ] Optional: visual DAG viewer for task dependency graphs
 
 ### Phase 6 — GitHub Integration
@@ -1138,3 +1138,47 @@ NexusAI/
 
 - `pytest -q tests/test_dashboard_phase4_pages.py tests/test_control_plane_api.py` → **34 passed**
 - `pytest -q` → **102 passed**
+
+---
+
+### 2026-03-05 04:05 — Phase 5: PM Orchestration + Chat Task Streaming (Slice 17)
+
+**Status:** Core Phase 5 agentic workflow is implemented (except optional DAG viewer).
+
+**Changes made:**
+
+- Added PM orchestration module (`control_plane/chat/pm_orchestrator.py`):
+  - PM system prompt for decomposition
+  - plan generation via PM bot with JSON parse + heuristic fallback
+  - task graph creation with dependencies and role-based bot targeting
+  - completion wait + assignment summary generation
+  - summary persistence into the originating conversation
+- Extended task metadata schema for orchestration linkage (`shared/models.py`):
+  - `conversation_id`
+  - `orchestration_id`
+  - `step_id`
+- Wired orchestrator into app state:
+  - `control_plane/main.py`
+  - `tests/conftest.py`
+- Upgraded chat APIs (`control_plane/api/chat.py`) to support native `@assign` workflow:
+  - `POST /v1/chat/conversations/{id}/messages` now runs PM orchestration for `@assign ...`
+  - `POST /v1/chat/conversations/{id}/stream` now emits:
+    - `task_graph` events
+    - `task_status` events as task states change
+    - final `assistant_message` summary and `done`
+- Simplified dashboard chat proxy route by removing local assignment shortcut:
+  - `dashboard/routes/chat.py`
+- Updated chat UI stream handling to render live task events:
+  - task event state and list panels
+  - handling of `task_graph` and `task_status` stream events
+  - assignment response handling refreshes chat to show persisted summary
+  - (`dashboard/templates/chat.html`)
+- Added/updated style support for info states:
+  - `.state-info` in `dashboard/static/style.css`
+- Added chat API tests for assignment orchestration and streaming task events:
+  - `tests/test_chat_api.py`
+
+**Validation:**
+
+- `pytest -q tests/test_chat_api.py tests/test_dashboard_phase4_pages.py` → **19 passed**
+- `pytest -q` → **104 passed**
