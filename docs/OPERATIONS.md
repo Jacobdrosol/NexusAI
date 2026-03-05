@@ -198,6 +198,23 @@ docker run --rm \
   sh -lc "./scripts/deploy-bluegreen.sh"
 ```
 
+Recommended environment:
+
+```bash
+NEXUSAI_DEPLOY_ENABLE=1
+NEXUSAI_DEPLOY_STRATEGY=bluegreen
+NEXUSAI_DEPLOY_RUN_CMD=docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v /opt/nexusai:/workspace -w /workspace docker:27-cli sh -lc "./scripts/deploy-bluegreen.sh"
+NEXUSAI_BLUEGREEN_SWITCH_CMD=./scripts/switch-dashboard-color.sh
+```
+
+Blue/green runtime assets:
+
+- `docker-compose.bluegreen.yml` (gateway + blue/green dashboard services)
+- `deploy/nginx/default.blue.conf`
+- `deploy/nginx/default.green.conf`
+- `deploy/nginx/default.conf` (active route config)
+- `scripts/switch-dashboard-color.sh` (atomic route switch + reload)
+
 Operational note:
 
 - the dashboard will refuse to run deployment when guardrails are not satisfied

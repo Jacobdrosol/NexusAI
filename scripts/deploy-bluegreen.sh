@@ -40,12 +40,26 @@ fi
 echo "[deploy] current color: $CURRENT_COLOR"
 echo "[deploy] candidate color: $NEXT_COLOR"
 
-echo "[deploy] building and starting candidate stack"
-docker compose -f docker-compose.bluegreen.yml --profile "$NEXT_COLOR" up -d --build
+echo "[deploy] ensuring gateway is running"
+docker compose -f docker-compose.bluegreen.yml up -d dashboard_gateway
 
-echo "[deploy] waiting for candidate stack health"
-sleep 5
-docker compose -f docker-compose.bluegreen.yml ps
+echo "[deploy] building and starting candidate dashboard"
+docker compose -f docker-compose.bluegreen.yml --profile "$NEXT_COLOR" up -d --build "dashboard_$NEXT_COLOR"
+
+echo "[deploy] waiting for candidate health"
+ATTEMPTS=0
+until docker compose -f docker-compose.bluegreen.yml exec -T dashboard_gateway sh -lc "wget -q -O - http://dashboard_$NEXT_COLOR:5000/health | grep -q '\"status\"'"; do
+  ATTEMPTS=$((ATTEMPTS + 1))
+  if [ "$ATTEMPTS" -ge 30 ]; then
+    echo "[deploy] candidate dashboard_$NEXT_COLOR failed health check"
+    exit 3
+  fi
+  sleep 2
+done
+echo "[deploy] candidate dashboard_$NEXT_COLOR is healthy"
+
+export NEXUSAI_TARGET_COLOR="$NEXT_COLOR"
+export NEXUSAI_PREVIOUS_COLOR="$CURRENT_COLOR"
 
 echo "[deploy] switching traffic to $NEXT_COLOR"
 sh -lc "$NEXUSAI_BLUEGREEN_SWITCH_CMD"
@@ -53,6 +67,6 @@ sh -lc "$NEXUSAI_BLUEGREEN_SWITCH_CMD"
 echo "$NEXT_COLOR" > "$CURRENT_COLOR_FILE"
 
 echo "[deploy] stopping previous color: $CURRENT_COLOR"
-docker compose -f docker-compose.bluegreen.yml --profile "$CURRENT_COLOR" stop || true
+docker compose -f docker-compose.bluegreen.yml --profile "$CURRENT_COLOR" stop "dashboard_$CURRENT_COLOR" || true
 
 echo "[deploy] completed"

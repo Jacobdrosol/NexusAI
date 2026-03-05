@@ -1,0 +1,54 @@
+networks:
+  nexus-bluegreen:
+    driver: bridge
+
+services:
+  dashboard_gateway:
+    image: nginx:1.27-alpine
+    container_name: nexus-dashboard-gateway
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./deploy/nginx/default.conf:/etc/nginx/conf.d/default.conf
+    networks:
+      - nexus-bluegreen
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:5000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  dashboard_blue:
+    build:
+      context: .
+      dockerfile: dashboard/Dockerfile
+    env_file: .env
+    volumes:
+      - nexus-data:/app/data
+    networks:
+      - nexus-bluegreen
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    profiles: ["blue"]
+
+  dashboard_green:
+    build:
+      context: .
+      dockerfile: dashboard/Dockerfile
+    env_file: .env
+    volumes:
+      - nexus-data:/app/data
+    networks:
+      - nexus-bluegreen
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    profiles: ["green"]
+
+volumes:
+  nexus-data:
