@@ -26,6 +26,14 @@ echo "[switch] reloading gateway"
 docker compose -f docker-compose.bluegreen.yml exec -T dashboard_gateway nginx -s reload
 
 echo "[switch] verifying gateway health"
-docker compose -f docker-compose.bluegreen.yml exec -T dashboard_gateway wget -q -O - http://localhost:5000/health >/dev/null
+ATTEMPTS=0
+until docker compose -f docker-compose.bluegreen.yml exec -T dashboard_gateway wget -q -O - http://localhost:5000/health >/dev/null; do
+  ATTEMPTS=$((ATTEMPTS + 1))
+  if [ "$ATTEMPTS" -ge 20 ]; then
+    echo "[switch] health verification failed after reload"
+    exit 3
+  fi
+  sleep 1
+done
 
 echo "[switch] done"

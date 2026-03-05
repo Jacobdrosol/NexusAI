@@ -2,7 +2,14 @@
 set -eu
 
 echo "[bootstrap] running preflight checks"
-python scripts/preflight_deploy.py
+if command -v python3 >/dev/null 2>&1; then
+  python3 scripts/preflight_deploy.py
+elif command -v python >/dev/null 2>&1; then
+  python scripts/preflight_deploy.py
+else
+  echo "[bootstrap] blocked: neither python3 nor python found"
+  exit 2
+fi
 
 mkdir -p data
 if [ ! -f data/active_color.txt ]; then
