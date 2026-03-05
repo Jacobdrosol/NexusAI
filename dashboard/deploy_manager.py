@@ -134,8 +134,8 @@ class DeployManager:
             return {
                 **self._state,
                 "state": "running" if running else self._state.get("state", "idle"),
-                "local_commit": local_commit,
-                "remote_commit": remote_commit,
+                "local_commit": local_commit or "unknown",
+                "remote_commit": remote_commit or "unknown",
                 "commits_differ": commits_differ,
                 "deployed_matches_local": bool(deployed_commit and local_commit and deployed_commit == local_commit),
                 "deploy_allowed": gate.ok and not running,
