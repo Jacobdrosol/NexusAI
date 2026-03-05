@@ -16,6 +16,7 @@ from wtforms import EmailField, PasswordField
 from wtforms.validators import DataRequired, Email
 
 import bcrypt
+from sqlalchemy import func
 
 from dashboard.db import get_db
 from dashboard.models import User
@@ -56,7 +57,7 @@ def login_post():
     email = form.email.data.strip().lower()
     db = get_db()
     try:
-        user = db.query(User).filter_by(email=email).first()
+        user = db.query(User).filter(func.lower(User.email) == email).first()
     finally:
         db.close()
 

@@ -133,7 +133,7 @@ def step2_post():
     if admin_exists():
         return _setup_redirect()
 
-    email = request.form.get("email", "").strip()
+    email = request.form.get("email", "").strip().lower()
     password = request.form.get("password", "")
     confirm_password = request.form.get("confirm_password", "")
 

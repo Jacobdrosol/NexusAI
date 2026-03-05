@@ -1,6 +1,24 @@
 """Tests for the onboarding wizard flow."""
 
 
+def test_onboarding_uppercase_email_can_login(dashboard_client):
+    with dashboard_client.session_transaction() as sess:
+        sess["wizard"] = {"step": 2}
+    create_resp = dashboard_client.post("/onboarding/step2", data={
+        "email": "Admin@Test.com",
+        "password": "password123",
+        "confirm_password": "password123",
+    }, follow_redirects=False)
+    assert create_resp.status_code == 302
+
+    login_resp = dashboard_client.post(
+        "/login",
+        data={"email": "admin@test.com", "password": "password123"},
+        follow_redirects=False,
+    )
+    assert login_resp.status_code in (302, 303)
+
+
 def test_step1_to_step2(dashboard_client):
     with dashboard_client.session_transaction() as sess:
         sess["wizard"] = {"step": 1}

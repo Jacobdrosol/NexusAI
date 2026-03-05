@@ -169,8 +169,9 @@ def create_user(email: str, hashed_password: str, role: str = "admin") -> None:
     from dashboard.db import get_db
     db = get_db()
     try:
+        normalized_email = (email or "").strip().lower()
         db.add(User(
-            email=email,
+            email=normalized_email,
             password_hash=hashed_password,
             role=role,
             is_active=True,
