@@ -21,6 +21,7 @@
 - Getting started: `docs/GETTING_STARTED.md`
 - Product usage: `docs/USER_GUIDE.md`
 - Operations and security: `docs/OPERATIONS.md`
+- Blue/green deployment: `docs/DEPLOY_BLUEGREEN.md`
 - UAT checklist: `docs/UAT_RUNBOOK.md`
 - Configuration reference: `config/README.md`
 
