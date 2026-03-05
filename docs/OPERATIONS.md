@@ -17,6 +17,8 @@ Recommended initial privacy posture:
 - `NEXUSAI_CLOUD_CONTEXT_POLICY=block`
 - `NEXUS_WORKER_CLOUD_CONTEXT_POLICY=block`
 
+Set both values in `.env` before service startup. They are operator-generated shared secrets, not values issued by a third party.
+
 ## 2. Webhook Security Controls
 
 Controls and defaults:
@@ -150,4 +152,3 @@ Release cycle:
 - run full regression tests
 - run UAT script and manual flow
 - capture baseline metrics snapshots before deploy
-

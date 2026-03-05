@@ -18,11 +18,13 @@ class Scheduler:
         worker_registry: Any,
         key_vault: Any = None,
         model_registry: Any = None,
+        project_registry: Any = None,
     ) -> None:
         self.bot_registry = bot_registry
         self.worker_registry = worker_registry
         self.key_vault = key_vault
         self.model_registry = model_registry
+        self.project_registry = project_registry
         self._inflight_by_worker: dict[str, int] = {}
         self._latency_ema_ms: dict[str, float] = {}
         self._latency_alpha = float(os.environ.get("NEXUSAI_WORKER_LATENCY_EMA_ALPHA", "0.30"))
@@ -41,7 +43,7 @@ class Scheduler:
 
         for backend in bot.backends:
             try:
-                result = await self._dispatch_backend(backend, task.payload)
+                result = await self._dispatch_backend(backend, task.payload, task=task)
                 return result
             except Exception as e:
                 logger.warning(
@@ -58,9 +60,9 @@ class Scheduler:
             f"All backends failed for task {task.id}"
         ) from last_error
 
-    async def _dispatch_backend(self, backend: BackendConfig, payload: Any) -> Any:
+    async def _dispatch_backend(self, backend: BackendConfig, payload: Any, task: Task | None = None) -> Any:
         await self._validate_model_if_catalog_present(backend)
-        safe_payload = self._apply_cloud_context_policy(backend, payload)
+        safe_payload = await self._apply_cloud_context_policy(backend, payload, task=task)
         if backend.type in ("local_llm", "remote_llm"):
             worker = await self._resolve_worker_for_llm_backend(backend)
             if worker.status != "online":
@@ -88,16 +90,19 @@ class Scheduler:
         else:
             raise BackendError(f"Unsupported backend type: {backend.type}")
 
-    def _apply_cloud_context_policy(self, backend: BackendConfig, payload: Any) -> Any:
+    async def _apply_cloud_context_policy(
+        self,
+        backend: BackendConfig,
+        payload: Any,
+        task: Task | None = None,
+    ) -> Any:
         # Applies only to cloud backends; local/remote worker execution keeps full payload.
         if backend.type != "cloud_api":
             return payload
         if not isinstance(payload, list):
             return payload
 
-        policy = os.environ.get("NEXUSAI_CLOUD_CONTEXT_POLICY", "allow").strip().lower()
-        if policy not in {"allow", "redact", "block"}:
-            policy = "allow"
+        policy = await self._resolve_cloud_context_policy(backend=backend, task=task)
 
         has_context = any(
             isinstance(m, dict)
@@ -132,6 +137,57 @@ class Scheduler:
             else:
                 redacted.append(m)
         return redacted
+
+    async def _resolve_cloud_context_policy(self, backend: BackendConfig, task: Task | None = None) -> str:
+        default_policy = os.environ.get("NEXUSAI_CLOUD_CONTEXT_POLICY", "allow").strip().lower()
+        if default_policy not in {"allow", "redact", "block"}:
+            default_policy = "allow"
+        if backend.type != "cloud_api":
+            return default_policy
+
+        provider = str(backend.provider or "").strip().lower()
+        if not provider:
+            return default_policy
+        if not task or not task.metadata or not getattr(task.metadata, "project_id", None):
+            return default_policy
+        if self.project_registry is None:
+            return default_policy
+
+        project_id = str(task.metadata.project_id or "").strip()
+        if not project_id:
+            return default_policy
+
+        try:
+            project = await self.project_registry.get(project_id)
+        except Exception:
+            return default_policy
+
+        settings = project.settings_overrides if isinstance(project.settings_overrides, dict) else {}
+        cfg = settings.get("cloud_context_policy") if isinstance(settings.get("cloud_context_policy"), dict) else {}
+        provider_policies = cfg.get("provider_policies") if isinstance(cfg.get("provider_policies"), dict) else {}
+        bot_overrides = cfg.get("bot_overrides") if isinstance(cfg.get("bot_overrides"), dict) else {}
+
+        baseline = str(provider_policies.get(provider, default_policy)).strip().lower()
+        if baseline not in {"allow", "redact", "block"}:
+            baseline = default_policy
+        if baseline == "block":
+            return "block"
+
+        bot_id = str(task.bot_id or "").strip()
+        bot_cfg = bot_overrides.get(bot_id) if isinstance(bot_overrides.get(bot_id), dict) else {}
+        override = str(bot_cfg.get(provider, "")).strip().lower()
+        if override not in {"allow", "redact", "block"}:
+            override = ""
+
+        if baseline == "redact":
+            if override == "block":
+                return "block"
+            return "redact"
+
+        # baseline allow
+        if override:
+            return override
+        return "allow"
 
     async def _dispatch_to_worker(
         self, worker: Worker, backend: BackendConfig, payload: Any

@@ -40,6 +40,115 @@ class ConfigurePRReviewRequest(BaseModel):
     bot_id: Optional[str] = None
 
 
+class UpdateCloudContextPolicyRequest(BaseModel):
+    provider_policies: Dict[str, str] = Field(default_factory=dict)
+    bot_overrides: Dict[str, Dict[str, str]] = Field(default_factory=dict)
+
+
+_CLOUD_POLICY_VALUES = {"allow", "redact", "block"}
+_SUPPORTED_CLOUD_PROVIDERS = {"openai", "claude", "gemini"}
+
+
+def _normalize_cloud_policy_value(value: Any, default: str = "allow") -> str:
+    val = str(value or "").strip().lower()
+    return val if val in _CLOUD_POLICY_VALUES else default
+
+
+def _provider_policy_limits(policy: str) -> set[str]:
+    if policy == "allow":
+        return {"allow", "redact", "block"}
+    if policy == "redact":
+        return {"redact", "block"}
+    return {"block"}
+
+
+def _extract_cloud_context_policy(project: Project) -> Dict[str, Any]:
+    settings = project.settings_overrides if isinstance(project.settings_overrides, dict) else {}
+    raw = settings.get("cloud_context_policy") if isinstance(settings.get("cloud_context_policy"), dict) else {}
+    providers_in = raw.get("provider_policies") if isinstance(raw.get("provider_policies"), dict) else {}
+    bots_in = raw.get("bot_overrides") if isinstance(raw.get("bot_overrides"), dict) else {}
+
+    provider_policies: Dict[str, str] = {}
+    for provider in _SUPPORTED_CLOUD_PROVIDERS:
+        provider_policies[provider] = _normalize_cloud_policy_value(providers_in.get(provider), default="allow")
+
+    bot_overrides: Dict[str, Dict[str, str]] = {}
+    for bot_id, per_provider in bots_in.items():
+        if not isinstance(per_provider, dict):
+            continue
+        bid = str(bot_id or "").strip()
+        if not bid:
+            continue
+        cleaned: Dict[str, str] = {}
+        for provider, policy in per_provider.items():
+            p = str(provider or "").strip().lower()
+            if p not in _SUPPORTED_CLOUD_PROVIDERS:
+                continue
+            cleaned[p] = _normalize_cloud_policy_value(policy, default="")
+        if cleaned:
+            bot_overrides[bid] = cleaned
+
+    for bot_id, per_provider in list(bot_overrides.items()):
+        validated: Dict[str, str] = {}
+        for provider, policy in per_provider.items():
+            allowed = _provider_policy_limits(provider_policies.get(provider, "allow"))
+            if policy in allowed:
+                validated[provider] = policy
+            elif provider_policies.get(provider) == "redact" and policy == "allow":
+                validated[provider] = "redact"
+            else:
+                validated[provider] = "block"
+        if validated:
+            bot_overrides[bot_id] = validated
+        else:
+            bot_overrides.pop(bot_id, None)
+
+    return {
+        "provider_policies": provider_policies,
+        "bot_overrides": bot_overrides,
+    }
+
+
+def _validate_requested_cloud_policy(body: UpdateCloudContextPolicyRequest) -> Dict[str, Any]:
+    provider_policies: Dict[str, str] = {}
+    for provider in _SUPPORTED_CLOUD_PROVIDERS:
+        requested = body.provider_policies.get(provider, "allow")
+        provider_policies[provider] = _normalize_cloud_policy_value(requested, default="allow")
+
+    bot_overrides: Dict[str, Dict[str, str]] = {}
+    for bot_id, per_provider in body.bot_overrides.items():
+        bid = str(bot_id or "").strip()
+        if not bid:
+            continue
+        if not isinstance(per_provider, dict):
+            raise HTTPException(status_code=400, detail=f"bot_overrides.{bid} must be an object")
+        cleaned: Dict[str, str] = {}
+        for provider, policy in per_provider.items():
+            p = str(provider or "").strip().lower()
+            if p not in _SUPPORTED_CLOUD_PROVIDERS:
+                raise HTTPException(status_code=400, detail=f"Unsupported provider in bot override: {provider}")
+            pol = _normalize_cloud_policy_value(policy, default="")
+            if pol not in _CLOUD_POLICY_VALUES:
+                raise HTTPException(status_code=400, detail=f"Invalid policy '{policy}' for bot '{bid}' provider '{p}'")
+            allowed = _provider_policy_limits(provider_policies[p])
+            if pol not in allowed:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Bot override '{pol}' not allowed for provider '{p}' "
+                        f"when provider policy is '{provider_policies[p]}'"
+                    ),
+                )
+            cleaned[p] = pol
+        if cleaned:
+            bot_overrides[bid] = cleaned
+
+    return {
+        "provider_policies": provider_policies,
+        "bot_overrides": bot_overrides,
+    }
+
+
 async def _fetch_github_identity(token: str, repo_full_name: Optional[str] = None) -> Dict[str, Any]:
     headers = {
         "Authorization": f"Bearer {token}",
@@ -582,7 +691,7 @@ async def ingest_github_webhook(project_id: str, request: Request) -> dict:
                     "head_ref": (pr.get("head") or {}).get("ref") if isinstance(pr.get("head"), dict) else None,
                 },
             },
-            metadata=TaskMetadata(source="github_pr_review"),
+            metadata=TaskMetadata(source="github_pr_review", project_id=project_id),
         )
         review_task_id = review_task.id
     return {
@@ -723,3 +832,40 @@ async def configure_github_pr_review(
         details={"enabled": review_cfg["enabled"], "bot_id": review_cfg["bot_id"]},
     )
     return {"status": "ok", "project_id": project_id, "pr_review": review_cfg}
+
+
+@router.get("/{project_id}/cloud-context-policy")
+async def get_project_cloud_context_policy(project_id: str, request: Request) -> dict:
+    project_registry = request.app.state.project_registry
+    try:
+        project = await project_registry.get(project_id)
+    except ProjectNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    cfg = _extract_cloud_context_policy(project)
+    return {"project_id": project_id, **cfg}
+
+
+@router.put("/{project_id}/cloud-context-policy")
+async def update_project_cloud_context_policy(
+    project_id: str,
+    request: Request,
+    body: UpdateCloudContextPolicyRequest,
+) -> dict:
+    project_registry = request.app.state.project_registry
+    try:
+        project = await project_registry.get(project_id)
+    except ProjectNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    validated = _validate_requested_cloud_policy(body)
+    updated = project.model_copy(
+        update={"settings_overrides": _merge_settings(project, {"cloud_context_policy": validated})}
+    )
+    await project_registry.update(project_id, updated)
+    await record_audit_event(
+        request,
+        action="projects.cloud_context_policy.update",
+        resource=f"project:{project_id}",
+        details=validated,
+    )
+    return {"status": "ok", "project_id": project_id, **validated}

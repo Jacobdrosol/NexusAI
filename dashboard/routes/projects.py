@@ -231,3 +231,30 @@ def api_configure_project_github_pr_review(project_id: str):
     if result is None:
         return jsonify({"error": "control plane unavailable"}), 502
     return jsonify(result)
+
+
+@bp.get("/api/projects/<project_id>/cloud-context-policy")
+@login_required
+def api_get_project_cloud_context_policy(project_id: str):
+    cp = get_cp_client()
+    result = cp.get_project_cloud_context_policy(project_id)
+    if result is None:
+        return jsonify({"error": "control plane unavailable"}), 502
+    return jsonify(result)
+
+
+@bp.put("/api/projects/<project_id>/cloud-context-policy")
+@login_required
+def api_update_project_cloud_context_policy(project_id: str):
+    data: dict[str, Any] = request.get_json(force=True) or {}
+    provider_policies = data.get("provider_policies") if isinstance(data.get("provider_policies"), dict) else {}
+    bot_overrides = data.get("bot_overrides") if isinstance(data.get("bot_overrides"), dict) else {}
+    cp = get_cp_client()
+    result = cp.update_project_cloud_context_policy(
+        project_id=project_id,
+        provider_policies=provider_policies,
+        bot_overrides=bot_overrides,
+    )
+    if result is None:
+        return jsonify({"error": "control plane unavailable"}), 502
+    return jsonify(result)

@@ -41,6 +41,24 @@ Minimum recommended values for safe first run:
 - `NEXUSAI_CLOUD_CONTEXT_POLICY=block`
 - `NEXUS_WORKER_CLOUD_CONTEXT_POLICY=block`
 
+Generate both secrets quickly:
+
+Linux/macOS:
+
+```bash
+python - <<'PY'
+import secrets
+print("NEXUSAI_SECRET_KEY=" + secrets.token_urlsafe(64))
+print("CONTROL_PLANE_API_TOKEN=" + secrets.token_urlsafe(64))
+PY
+```
+
+Windows PowerShell:
+
+```powershell
+python -c "import secrets; print('NEXUSAI_SECRET_KEY=' + secrets.token_urlsafe(64)); print('CONTROL_PLANE_API_TOKEN=' + secrets.token_urlsafe(64))"
+```
+
 ## 4. Start the Stack (Docker)
 
 ```bash
@@ -72,6 +90,7 @@ After login:
 
 1. Open `Workers` and confirm at least one worker is online.
 2. Open `Bots` and create or verify a bot with a valid backend.
+   - For cloud providers, add keys in `Settings -> API Keys` and reference by nickname (`api_key_ref`).
 3. Open `Projects` and create one project.
 4. Open `Vault` and ingest a small test document.
 5. Open `Chat`:
@@ -131,4 +150,3 @@ python -m nexus_worker
 - End-to-end feature usage: `docs/USER_GUIDE.md`
 - Security, operations, troubleshooting: `docs/OPERATIONS.md`
 - UAT checklist: `docs/UAT_RUNBOOK.md`
-

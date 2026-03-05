@@ -8,7 +8,7 @@ from pydantic import BaseModel
 
 from control_plane.security.guards import enforce_body_size, enforce_rate_limit
 from shared.exceptions import BotNotFoundError, ConversationNotFoundError
-from shared.models import ChatConversation, ChatMessage, Task
+from shared.models import ChatConversation, ChatMessage, Task, TaskMetadata
 
 router = APIRouter(prefix="/v1/chat", tags=["chat"])
 
@@ -146,6 +146,7 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                 instruction=assign_instruction,
                 requested_pm_bot_id=body.bot_id,
                 context_items=resolved_context,
+                project_id=conversation.project_id,
             )
             completion = await pm_orchestrator.wait_for_completion(assignment)
             assistant_message = await pm_orchestrator.persist_summary_message(
@@ -172,6 +173,11 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
             id=f"chat-{user_message.id}",
             bot_id=target_bot_id,
             payload=payload,
+            metadata=TaskMetadata(
+                source="chat",
+                project_id=conversation.project_id,
+                conversation_id=conversation_id,
+            ),
             status="running",
             created_at=user_message.created_at,
             updated_at=user_message.created_at,
@@ -224,6 +230,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                     instruction=assign_instruction,
                     requested_pm_bot_id=body.bot_id,
                     context_items=resolved_context,
+                    project_id=conversation.project_id,
                 )
                 graph_payload = {
                     "orchestration_id": assignment.get("orchestration_id"),
@@ -290,6 +297,11 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                 id=f"chat-{user_message.id}",
                 bot_id=target_bot_id,
                 payload=payload,
+                metadata=TaskMetadata(
+                    source="chat",
+                    project_id=conversation.project_id,
+                    conversation_id=conversation_id,
+                ),
                 status="running",
                 created_at=user_message.created_at,
                 updated_at=user_message.created_at,

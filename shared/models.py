@@ -63,6 +63,7 @@ class Bot(BaseModel):
 class TaskMetadata(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     user_id: Optional[str] = None
+    project_id: Optional[str] = None
     source: Optional[str] = None
     priority: Optional[int] = None
     conversation_id: Optional[str] = None

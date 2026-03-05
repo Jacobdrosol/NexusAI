@@ -73,7 +73,7 @@ async def test_scheduler_cloud_context_policy_redact(monkeypatch):
         {"role": "user", "content": "hello"},
     ]
     monkeypatch.setenv("NEXUSAI_CLOUD_CONTEXT_POLICY", "redact")
-    redacted = scheduler._apply_cloud_context_policy(backend, payload)
+    redacted = await scheduler._apply_cloud_context_policy(backend, payload)
     assert redacted[0]["content"] == "Context:\n[REDACTED_BY_POLICY]"
 
 
@@ -87,7 +87,7 @@ async def test_scheduler_cloud_context_policy_block(monkeypatch):
     payload = [{"role": "system", "content": "Context:\nSensitive notes"}]
     monkeypatch.setenv("NEXUSAI_CLOUD_CONTEXT_POLICY", "block")
     with pytest.raises(BackendError):
-        scheduler._apply_cloud_context_policy(backend, payload)
+        await scheduler._apply_cloud_context_policy(backend, payload)
 
 
 @pytest.mark.anyio
@@ -124,3 +124,71 @@ async def test_scheduler_gemini_uses_header_api_key_not_query(monkeypatch):
     args, kwargs = mock_client.post.call_args
     assert "?key=" not in args[0]
     assert kwargs["headers"]["x-goog-api-key"] == "gemini-secret"
+
+
+@pytest.mark.anyio
+async def test_scheduler_project_cloud_policy_provider_redact_disallows_bot_allow():
+    from control_plane.scheduler.scheduler import Scheduler
+    from shared.models import Task, TaskMetadata
+
+    project_registry = AsyncMock()
+    project_registry.get.return_value = MagicMock(
+        settings_overrides={
+            "cloud_context_policy": {
+                "provider_policies": {"openai": "redact"},
+                "bot_overrides": {"bot-1": {"openai": "allow"}},
+            }
+        }
+    )
+    scheduler = Scheduler(
+        bot_registry=AsyncMock(),
+        worker_registry=AsyncMock(),
+        key_vault=AsyncMock(),
+        project_registry=project_registry,
+    )
+    backend = BackendConfig(type="cloud_api", model="gpt-4o-mini", provider="openai")
+    task = Task(
+        id="t1",
+        bot_id="bot-1",
+        payload=[],
+        metadata=TaskMetadata(project_id="proj-1"),
+        status="running",
+        created_at="now",
+        updated_at="now",
+    )
+    policy = await scheduler._resolve_cloud_context_policy(backend=backend, task=task)
+    assert policy == "redact"
+
+
+@pytest.mark.anyio
+async def test_scheduler_project_cloud_policy_provider_block_wins():
+    from control_plane.scheduler.scheduler import Scheduler
+    from shared.models import Task, TaskMetadata
+
+    project_registry = AsyncMock()
+    project_registry.get.return_value = MagicMock(
+        settings_overrides={
+            "cloud_context_policy": {
+                "provider_policies": {"openai": "block"},
+                "bot_overrides": {"bot-1": {"openai": "redact"}},
+            }
+        }
+    )
+    scheduler = Scheduler(
+        bot_registry=AsyncMock(),
+        worker_registry=AsyncMock(),
+        key_vault=AsyncMock(),
+        project_registry=project_registry,
+    )
+    backend = BackendConfig(type="cloud_api", model="gpt-4o-mini", provider="openai")
+    task = Task(
+        id="t1",
+        bot_id="bot-1",
+        payload=[],
+        metadata=TaskMetadata(project_id="proj-1"),
+        status="running",
+        created_at="now",
+        updated_at="now",
+    )
+    policy = await scheduler._resolve_cloud_context_policy(backend=backend, task=task)
+    assert policy == "block"

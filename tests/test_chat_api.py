@@ -174,3 +174,26 @@ async def test_chat_context_item_ids_are_resolved_from_vault(cp_app):
         assert isinstance(payload, list)
         assert payload[0]["role"] == "system"
         assert "Context:\n" in payload[0]["content"]
+
+
+@pytest.mark.anyio
+async def test_chat_task_metadata_includes_project_id(cp_app):
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "ok"})
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={"title": "Project Scoped", "project_id": "proj-meta-1"},
+        )
+        conversation_id = convo.json()["id"]
+        await client.post(
+            "/v1/bots",
+            json={"id": "bot-meta", "name": "Meta Bot", "role": "assistant", "backends": [], "enabled": True},
+        )
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={"content": "hello", "bot_id": "bot-meta"},
+        )
+        assert resp.status_code == 200
+        task_arg = cp_app.state.scheduler.schedule.await_args[0][0]
+        assert task_arg.metadata is not None
+        assert task_arg.metadata.project_id == "proj-meta-1"

@@ -130,6 +130,14 @@ Scheduler behavior:
   - GPU utilization
   - latency EMA
 
+Cloud context policy hierarchy (configured per project in Project Detail):
+
+- provider baseline `allow`: bot override may be `allow`, `redact`, or `block`
+- provider baseline `redact`: bot override may be `redact` or `block` (not `allow`)
+- provider baseline `block`: all bot overrides are effectively `block`
+
+This allows strict provider-level controls while preserving per-bot privacy choices.
+
 ## 9. API Usage Patterns
 
 Common sequence:
@@ -158,4 +166,3 @@ Primary endpoints:
 3. Keep cloud context policy at `block` during initial rollout.
 4. Enable `redact` only after validating output quality and data controls.
 5. Use audit logs and metrics as release gates.
-

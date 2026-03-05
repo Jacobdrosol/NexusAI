@@ -57,6 +57,7 @@ async def cp_app(tmp_path):
         worker_registry,
         key_vault=key_vault,
         model_registry=model_registry,
+        project_registry=project_registry,
     )
     task_manager = TaskManager(scheduler, db_path=str(tmp_path / "tasks.db"))
     pm_orchestrator = PMOrchestrator(

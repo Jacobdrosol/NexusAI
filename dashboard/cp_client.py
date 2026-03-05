@@ -217,6 +217,21 @@ class CPClient:
         body: Dict[str, Any] = {"enabled": enabled, "bot_id": bot_id}
         return self._post(f"/v1/projects/{project_id}/github/pr-review/config", body)
 
+    def get_project_cloud_context_policy(self, project_id: str) -> Optional[Dict[str, Any]]:
+        return self._get(f"/v1/projects/{project_id}/cloud-context-policy")
+
+    def update_project_cloud_context_policy(
+        self,
+        project_id: str,
+        provider_policies: Dict[str, str],
+        bot_overrides: Dict[str, Dict[str, str]],
+    ) -> Optional[Dict[str, Any]]:
+        body = {
+            "provider_policies": provider_policies,
+            "bot_overrides": bot_overrides,
+        }
+        return self._put(f"/v1/projects/{project_id}/cloud-context-policy", body)
+
     # Models
     def list_models(self) -> Optional[List[Dict[str, Any]]]:
         return self._get("/v1/models")

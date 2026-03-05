@@ -189,6 +189,38 @@ Copy `.env.example` to `.env` and set the following variables before starting th
 | `ANTHROPIC_API_KEY` | — | Anthropic Claude API key |
 | `GEMINI_API_KEY` | — | Google Gemini API key |
 
+Notes:
+
+- Preferred cloud-key path is Dashboard `Settings -> API Keys` (encrypted at rest, named keys, multi-provider, multiple keys/provider).
+- `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` are fallback-only environment variables.
+
+---
+
+## Bootstrap Secrets
+
+Two values should always be set in `.env` for secure deployments:
+
+- `NEXUSAI_SECRET_KEY`: signs dashboard sessions and CSRF state.
+- `CONTROL_PLANE_API_TOKEN`: protects control-plane API routes (`/v1/*`).
+
+Generate values:
+
+Linux/macOS:
+
+```bash
+python - <<'PY'
+import secrets
+print("NEXUSAI_SECRET_KEY=" + secrets.token_urlsafe(64))
+print("CONTROL_PLANE_API_TOKEN=" + secrets.token_urlsafe(64))
+PY
+```
+
+Windows PowerShell:
+
+```powershell
+python -c "import secrets; print('NEXUSAI_SECRET_KEY=' + secrets.token_urlsafe(64)); print('CONTROL_PLANE_API_TOKEN=' + secrets.token_urlsafe(64))"
+```
+
 ---
 
 ## Production Hardening

@@ -1711,3 +1711,57 @@ NexusAI/
 
 - Documentation-only structural update (no runtime code path changes).
 
+---
+
+### 2026-03-05 12:35 — Project-Level Cloud Policy Hierarchy + Secret Guidance (Slice 34)
+
+**Status:** Implemented provider/bot cloud-context policy hierarchy with project-scoped UI controls, and clarified bootstrap secret usage.
+
+**Changes made:**
+
+- Added project-scoped cloud context policy API:
+  - `GET /v1/projects/{project_id}/cloud-context-policy`
+  - `PUT /v1/projects/{project_id}/cloud-context-policy`
+  - file: `control_plane/api/projects.py`
+- Implemented strict policy hierarchy/validation rules:
+  - provider `allow` -> bot can `allow|redact|block`
+  - provider `redact` -> bot can `redact|block` (reject `allow`)
+  - provider `block` -> effective `block`
+- Updated scheduler policy resolution:
+  - cloud context policy now resolves by:
+    - project provider baseline
+    - project bot override
+    - env fallback (`NEXUSAI_CLOUD_CONTEXT_POLICY`)
+  - file: `control_plane/scheduler/scheduler.py`
+- Passed project context into scheduled chat tasks:
+  - added `project_id` to `TaskMetadata`
+  - chat and PM-orchestrated tasks now include project_id metadata
+  - files:
+    - `shared/models.py`
+    - `control_plane/api/chat.py`
+    - `control_plane/chat/pm_orchestrator.py`
+    - `control_plane/api/projects.py` (PR review tasks)
+- Added dashboard project-detail UI controls for cloud policy:
+  - provider baseline selectors
+  - bot override set/remove controls
+  - policy JSON preview
+  - files:
+    - `dashboard/cp_client.py`
+    - `dashboard/routes/projects.py`
+    - `dashboard/templates/project_detail.html`
+- Documentation clarity updates:
+  - UI-first API key guidance (env keys as fallback)
+  - bootstrap secrets section with Linux/macOS/Windows generation commands
+  - removed misleading global `OLLAMA_HOST` env example
+  - files:
+    - `README.md`
+    - `.env.example`
+    - `docs/GETTING_STARTED.md`
+    - `docs/USER_GUIDE.md`
+    - `docs/OPERATIONS.md`
+
+**Validation:**
+
+- `pytest -q tests/test_scheduler_api_keys.py tests/test_control_plane_api.py tests/test_chat_api.py` → **47 passed**
+- `pytest -q` → **141 passed**
+

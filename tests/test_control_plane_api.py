@@ -394,6 +394,50 @@ async def test_project_github_pat_connect_status_disconnect(cp_client):
 
 
 @pytest.mark.anyio
+async def test_project_cloud_context_policy_update_and_get(cp_client):
+    await cp_client.post(
+        "/v1/projects",
+        json={"id": "p-policy", "name": "Policy Project", "mode": "isolated"},
+    )
+
+    update = await cp_client.put(
+        "/v1/projects/p-policy/cloud-context-policy",
+        json={
+            "provider_policies": {"openai": "redact", "claude": "allow", "gemini": "block"},
+            "bot_overrides": {
+                "bot-a": {"openai": "block", "claude": "allow"},
+            },
+        },
+    )
+    assert update.status_code == 200
+    body = update.json()
+    assert body["provider_policies"]["openai"] == "redact"
+    assert body["bot_overrides"]["bot-a"]["openai"] == "block"
+
+    get_resp = await cp_client.get("/v1/projects/p-policy/cloud-context-policy")
+    assert get_resp.status_code == 200
+    got = get_resp.json()
+    assert got["provider_policies"]["gemini"] == "block"
+
+
+@pytest.mark.anyio
+async def test_project_cloud_context_policy_rejects_invalid_bot_allow_under_redact(cp_client):
+    await cp_client.post(
+        "/v1/projects",
+        json={"id": "p-policy-bad", "name": "Policy Project Bad", "mode": "isolated"},
+    )
+    resp = await cp_client.put(
+        "/v1/projects/p-policy-bad/cloud-context-policy",
+        json={
+            "provider_policies": {"openai": "redact"},
+            "bot_overrides": {"bot-a": {"openai": "allow"}},
+        },
+    )
+    assert resp.status_code == 400
+    assert "not allowed" in (resp.json().get("detail") or "").lower()
+
+
+@pytest.mark.anyio
 async def test_project_github_webhook_ingestion_and_list(cp_client):
     await cp_client.post(
         "/v1/projects",

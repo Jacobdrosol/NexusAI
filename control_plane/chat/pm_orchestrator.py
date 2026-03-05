@@ -35,6 +35,7 @@ class PMOrchestrator:
         instruction: str,
         requested_pm_bot_id: Optional[str] = None,
         context_items: Optional[List[str]] = None,
+        project_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         bots = await self._bot_registry.list()
         pm_bot = self._select_pm_bot(bots, requested_pm_bot_id=requested_pm_bot_id)
@@ -67,11 +68,13 @@ class PMOrchestrator:
                     "title": str(step.get("title") or step_id),
                     "instruction": str(step.get("instruction") or instruction),
                     "source": "chat_assign",
+                    "project_id": project_id,
                     "conversation_id": conversation_id,
                     "orchestration_id": orchestration_id,
                 },
                 metadata=TaskMetadata(
                     source="chat_assign",
+                    project_id=project_id,
                     conversation_id=conversation_id,
                     orchestration_id=orchestration_id,
                     step_id=step_id,

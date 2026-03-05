@@ -28,6 +28,86 @@
 
 <section class="panel" style="margin-bottom:1rem;">
   <div class="page-header" style="margin-bottom:0.75rem;">
+    <h2 class="panel-title">Cloud Context Policy</h2>
+  </div>
+  <div id="cloud-policy-state" class="state-empty" style="margin-bottom:0.75rem;">No policy loaded yet.</div>
+  <div class="split-grid" style="grid-template-columns:1fr 1fr; gap:0.75rem;">
+    <div>
+      <div><strong>Provider Baseline Policies</strong></div>
+      <div class="mini-note" style="margin-bottom:0.5rem;">
+        Baseline constrains bot overrides. `allow` -> allow/redact/block, `redact` -> redact/block, `block` -> block only.
+      </div>
+      <table>
+        <thead><tr><th>Provider</th><th>Policy</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><code>openai</code></td>
+            <td>
+              <select class="form-control" id="policy-provider-openai">
+                <option value="allow">allow</option>
+                <option value="redact">redact</option>
+                <option value="block">block</option>
+              </select>
+            </td>
+          </tr>
+          <tr>
+            <td><code>claude</code></td>
+            <td>
+              <select class="form-control" id="policy-provider-claude">
+                <option value="allow">allow</option>
+                <option value="redact">redact</option>
+                <option value="block">block</option>
+              </select>
+            </td>
+          </tr>
+          <tr>
+            <td><code>gemini</code></td>
+            <td>
+              <select class="form-control" id="policy-provider-gemini">
+                <option value="allow">allow</option>
+                <option value="redact">redact</option>
+                <option value="block">block</option>
+              </select>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <div style="margin-top:0.5rem;">
+        <button class="btn btn-primary" onclick="saveCloudProviderPolicies()">Save Provider Policies</button>
+      </div>
+    </div>
+    <div>
+      <div><strong>Bot Override</strong></div>
+      <div class="split-grid" style="grid-template-columns:1fr 1fr 1fr; gap:0.5rem; margin-top:0.35rem;">
+        <select class="form-control" id="policy-bot-id">
+          <option value="">Select bot</option>
+          {% for b in all_bots %}
+          <option value="{{ b.id }}">{{ b.name }} ({{ b.id }})</option>
+          {% endfor %}
+        </select>
+        <select class="form-control" id="policy-bot-provider">
+          <option value="openai">openai</option>
+          <option value="claude">claude</option>
+          <option value="gemini">gemini</option>
+        </select>
+        <select class="form-control" id="policy-bot-policy">
+          <option value="allow">allow</option>
+          <option value="redact">redact</option>
+          <option value="block">block</option>
+        </select>
+      </div>
+      <div style="margin-top:0.5rem; display:flex; gap:0.5rem;">
+        <button class="btn" onclick="setCloudBotOverride()">Set Override</button>
+        <button class="btn btn-danger" onclick="removeCloudBotOverride()">Remove Override</button>
+      </div>
+      <div class="mini-note" style="margin-top:0.5rem;">Override options will be validated against provider baseline.</div>
+      <pre id="cloud-policy-pre" style="white-space:pre-wrap; margin-top:0.55rem;">{}</pre>
+    </div>
+  </div>
+</section>
+
+<section class="panel" style="margin-bottom:1rem;">
+  <div class="page-header" style="margin-bottom:0.75rem;">
     <h2 class="panel-title">GitHub Integration (PAT)</h2>
   </div>
   <div id="github-state" class="state-empty" style="margin-bottom:0.75rem;">No connection status loaded yet.</div>
@@ -217,6 +297,7 @@
 {% block scripts %}
 <script>
 const PROJECT_ID = {{ project.id|tojson if project else "''" }};
+let CLOUD_POLICY = {provider_policies: {}, bot_overrides: {}};
 
 function getCsrf() {
   const el = document.querySelector('input[name=csrf_token]');
@@ -447,7 +528,120 @@ async function refreshWebhookEvents() {
   setWebhookState('state-info', 'Webhook events updated.');
 }
 
+function _setCloudPolicyState(cls, text) {
+  const el = document.getElementById('cloud-policy-state');
+  if (!el) return;
+  el.className = cls;
+  el.textContent = text;
+}
+
+function _allowedPoliciesForBaseline(baseline) {
+  if (baseline === 'allow') return ['allow', 'redact', 'block'];
+  if (baseline === 'redact') return ['redact', 'block'];
+  return ['block'];
+}
+
+function _syncBotPolicyOptions() {
+  const provider = (document.getElementById('policy-bot-provider')?.value || 'openai');
+  const baseline = (CLOUD_POLICY.provider_policies || {})[provider] || 'allow';
+  const allowed = _allowedPoliciesForBaseline(baseline);
+  const sel = document.getElementById('policy-bot-policy');
+  if (!sel) return;
+  const current = sel.value;
+  sel.innerHTML = allowed.map((p) => `<option value="${p}">${p}</option>`).join('');
+  if (allowed.includes(current)) sel.value = current;
+}
+
+async function refreshCloudContextPolicy() {
+  _setCloudPolicyState('state-loading', 'Loading cloud context policy...');
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/cloud-context-policy');
+  if (!res.ok) {
+    _setCloudPolicyState('state-error', 'Failed to load cloud context policy.');
+    return;
+  }
+  const data = await res.json();
+  CLOUD_POLICY = {
+    provider_policies: data.provider_policies || {},
+    bot_overrides: data.bot_overrides || {},
+  };
+  ['openai', 'claude', 'gemini'].forEach((p) => {
+    const el = document.getElementById('policy-provider-' + p);
+    if (el) el.value = (CLOUD_POLICY.provider_policies[p] || 'allow');
+  });
+  document.getElementById('cloud-policy-pre').textContent = JSON.stringify(CLOUD_POLICY, null, 2);
+  _syncBotPolicyOptions();
+  _setCloudPolicyState('state-info', 'Cloud context policy loaded.');
+}
+
+async function _persistCloudPolicy() {
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/cloud-context-policy', {
+    method: 'PUT',
+    headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify(CLOUD_POLICY),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    _setCloudPolicyState('state-error', data.error || 'Failed to save cloud context policy.');
+    return false;
+  }
+  CLOUD_POLICY = {
+    provider_policies: data.provider_policies || {},
+    bot_overrides: data.bot_overrides || {},
+  };
+  document.getElementById('cloud-policy-pre').textContent = JSON.stringify(CLOUD_POLICY, null, 2);
+  _setCloudPolicyState('state-info', 'Cloud context policy saved.');
+  return true;
+}
+
+async function saveCloudProviderPolicies() {
+  CLOUD_POLICY.provider_policies = {
+    openai: document.getElementById('policy-provider-openai')?.value || 'allow',
+    claude: document.getElementById('policy-provider-claude')?.value || 'allow',
+    gemini: document.getElementById('policy-provider-gemini')?.value || 'allow',
+  };
+  _syncBotPolicyOptions();
+  await _persistCloudPolicy();
+}
+
+async function setCloudBotOverride() {
+  const botId = (document.getElementById('policy-bot-id')?.value || '').trim();
+  const provider = (document.getElementById('policy-bot-provider')?.value || '').trim();
+  const policy = (document.getElementById('policy-bot-policy')?.value || '').trim();
+  if (!botId) {
+    alert('Select a bot first.');
+    return;
+  }
+  if (!CLOUD_POLICY.bot_overrides || typeof CLOUD_POLICY.bot_overrides !== 'object') {
+    CLOUD_POLICY.bot_overrides = {};
+  }
+  if (!CLOUD_POLICY.bot_overrides[botId] || typeof CLOUD_POLICY.bot_overrides[botId] !== 'object') {
+    CLOUD_POLICY.bot_overrides[botId] = {};
+  }
+  CLOUD_POLICY.bot_overrides[botId][provider] = policy;
+  const ok = await _persistCloudPolicy();
+  if (!ok) return;
+}
+
+async function removeCloudBotOverride() {
+  const botId = (document.getElementById('policy-bot-id')?.value || '').trim();
+  const provider = (document.getElementById('policy-bot-provider')?.value || '').trim();
+  if (!botId) {
+    alert('Select a bot first.');
+    return;
+  }
+  if (CLOUD_POLICY.bot_overrides && CLOUD_POLICY.bot_overrides[botId]) {
+    delete CLOUD_POLICY.bot_overrides[botId][provider];
+    if (Object.keys(CLOUD_POLICY.bot_overrides[botId]).length === 0) {
+      delete CLOUD_POLICY.bot_overrides[botId];
+    }
+  }
+  await _persistCloudPolicy();
+}
+
+document.getElementById('policy-bot-provider')?.addEventListener('change', _syncBotPolicyOptions);
+
 refreshGithubStatus(false);
 refreshWebhookEvents();
+refreshCloudContextPolicy();
 </script>
 {% endblock %}
