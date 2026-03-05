@@ -169,3 +169,36 @@ Rationale:
 - reduces operational risk from manual database access
 - limits accidental secret exposure in shared logs/docs/history
 - provides safer support workflow for open-source users and operators
+
+## 10. Deploy Tab (Blue/Green Guardrails)
+
+The Settings `Deploy` tab exposes:
+
+- local commit (`HEAD`)
+- remote commit (`origin/main`)
+- last deployed commit
+- deploy state and log tail
+- `Check For Updates` and `Deploy Latest Commit` actions
+
+Safety behavior:
+
+- deploy execution is disabled by default
+- deploy requires `NEXUSAI_DEPLOY_ENABLE=1`
+- deploy requires `NEXUSAI_DEPLOY_STRATEGY=bluegreen`
+- deploy requires `NEXUSAI_DEPLOY_RUN_CMD` to be explicitly configured
+
+Recommended run command pattern (temporary deploy container):
+
+```bash
+docker run --rm \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /opt/nexusai:/workspace \
+  -w /workspace \
+  docker:27-cli \
+  sh -lc "./scripts/deploy-bluegreen.sh"
+```
+
+Operational note:
+
+- the dashboard will refuse to run deployment when guardrails are not satisfied
+- this prevents accidental in-place restarts that can disrupt running workloads

@@ -28,6 +28,7 @@ from flask import (
 )
 from flask_login import current_user, login_required
 
+from dashboard.deploy_manager import DeployManager
 from shared.settings_manager import SettingsManager
 
 logger = logging.getLogger(__name__)
@@ -104,6 +105,7 @@ def settings_page() -> str:
         api_keys = []
         model_catalog = []
         projects = []
+    deploy_status = DeployManager.instance().status(refresh_remote=False)
     return render_template(
         "settings.html",
         groups=groups,
@@ -111,6 +113,7 @@ def settings_page() -> str:
         api_keys=api_keys,
         model_catalog=model_catalog,
         projects=projects,
+        deploy_status=deploy_status,
         active_page="settings",
     )
 
@@ -284,6 +287,32 @@ def list_projects():
     if projects is None:
         return jsonify({"error": "control plane unavailable"}), 502
     return jsonify(projects)
+
+
+@bp.get("/api/settings/deploy/status")
+@login_required
+def deploy_status():
+    _require_admin()
+    refresh_remote = request.args.get("fetch", "0") in {"1", "true", "yes"}
+    return jsonify(DeployManager.instance().status(refresh_remote=refresh_remote))
+
+
+@bp.post("/api/settings/deploy/check")
+@login_required
+def deploy_check():
+    _require_admin()
+    return jsonify(DeployManager.instance().status(refresh_remote=True))
+
+
+@bp.post("/api/settings/deploy/run")
+@login_required
+def deploy_run():
+    _require_admin()
+    who = getattr(current_user, "email", "admin")
+    ok, message = DeployManager.instance().start(requested_by=who)
+    if not ok:
+        return jsonify({"status": "blocked", "error": message}), 409
+    return jsonify({"status": "started", "message": message}), 202
 
 
 @bp.get("/api/settings/<key>")

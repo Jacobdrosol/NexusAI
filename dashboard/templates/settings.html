@@ -59,6 +59,13 @@
                  background:#1a1d27;color:#e0e0e0;cursor:pointer;font-size:0.85rem;transition:background 0.2s;">
     Audit Log
   </button>
+  <button class="tab-btn"
+          data-target="section-deploy"
+          onclick="switchTab(this)"
+          style="padding:0.4rem 1rem;border-radius:20px;border:1px solid #2d3045;
+                 background:#1a1d27;color:#e0e0e0;cursor:pointer;font-size:0.85rem;transition:background 0.2s;">
+    Deploy
+  </button>
 </div>
 
 <!-- Hidden CSRF token for JS use -->
@@ -272,6 +279,37 @@
   <p style="color:#718096;font-size:0.9rem;">No changes recorded yet.</p>
   {% endif %}
 </section>
+
+<!-- Deploy -->
+<section id="section-deploy"
+         style="display:none;background:#1a1d27;border-radius:8px;padding:1.5rem;border:1px solid #2d3045;">
+  <h2 style="font-size:1.1rem;margin-bottom:1rem;color:#f0f0f0;">Deploy</h2>
+  <p style="font-size:0.85rem;color:#a0aec0;margin-bottom:0.75rem;">
+    Blue/green-only deploy controls. Deployment is blocked unless safe strategy flags are configured.
+  </p>
+  <div style="display:flex;gap:0.75rem;flex-wrap:wrap;margin-bottom:1rem;">
+    <button class="btn" onclick="checkDeployStatus()">Check For Updates</button>
+    <button class="btn btn-primary" onclick="runDeploy()">Deploy Latest Commit</button>
+  </div>
+  <table style="margin-bottom:1rem;">
+    <tbody>
+      <tr><th style="width:240px;">Current Local Commit</th><td><code id="deploy-local">{{ deploy_status.local_commit or "unknown" }}</code></td></tr>
+      <tr><th>Latest origin/main Commit</th><td><code id="deploy-remote">{{ deploy_status.remote_commit or "unknown" }}</code></td></tr>
+      <tr><th>Last Deployed Commit</th><td><code id="deploy-last">{{ deploy_status.deployed_commit or "unknown" }}</code></td></tr>
+      <tr><th>Commits Differ</th><td id="deploy-diff">{{ "yes" if deploy_status.commits_differ else "no" }}</td></tr>
+      <tr><th>Deploy State</th><td id="deploy-state">{{ deploy_status.state or "idle" }}</td></tr>
+      <tr><th>Deploy Allowed</th><td id="deploy-allowed">{{ "yes" if deploy_status.deploy_allowed else "no" }}</td></tr>
+      <tr><th>Blocked Reason</th><td id="deploy-blocked">{{ deploy_status.deploy_blocked_reason or "none" }}</td></tr>
+      <tr><th>Last Run By</th><td id="deploy-run-by">{{ deploy_status.last_run_by or "n/a" }}</td></tr>
+      <tr><th>Started At</th><td id="deploy-started">{{ deploy_status.started_at or "n/a" }}</td></tr>
+      <tr><th>Finished At</th><td id="deploy-finished">{{ deploy_status.finished_at or "n/a" }}</td></tr>
+      <tr><th>Last Error</th><td id="deploy-error">{{ deploy_status.last_error or "none" }}</td></tr>
+    </tbody>
+  </table>
+  <h3 style="font-size:0.95rem;color:#e0e0e0;margin-bottom:0.5rem;">Deploy Log</h3>
+  <pre id="deploy-log"
+       style="background:#12141e;border:1px solid #2d3045;color:#a0aec0;padding:0.75rem;border-radius:6px;font-size:0.8rem;max-height:260px;overflow:auto;">{% if deploy_status.log_tail %}{{ deploy_status.log_tail|join('\n') }}{% else %}No deploy activity yet.{% endif %}</pre>
+</section>
 {% endblock %}
 
 {% block scripts %}
@@ -480,6 +518,67 @@ function deleteModel(modelId) {
   })
   .catch(function(e){ showToast('Network error: ' + e, false); });
 }
+
+function renderDeployStatus(status) {
+  document.getElementById('deploy-local').textContent = status.local_commit || 'unknown';
+  document.getElementById('deploy-remote').textContent = status.remote_commit || 'unknown';
+  document.getElementById('deploy-last').textContent = status.deployed_commit || 'unknown';
+  document.getElementById('deploy-diff').textContent = status.commits_differ ? 'yes' : 'no';
+  document.getElementById('deploy-state').textContent = status.state || 'idle';
+  document.getElementById('deploy-allowed').textContent = status.deploy_allowed ? 'yes' : 'no';
+  document.getElementById('deploy-blocked').textContent = status.deploy_blocked_reason || 'none';
+  document.getElementById('deploy-run-by').textContent = status.last_run_by || 'n/a';
+  document.getElementById('deploy-started').textContent = status.started_at || 'n/a';
+  document.getElementById('deploy-finished').textContent = status.finished_at || 'n/a';
+  document.getElementById('deploy-error').textContent = status.last_error || 'none';
+  document.getElementById('deploy-log').textContent =
+    (status.log_tail && status.log_tail.length) ? status.log_tail.join('\n') : 'No deploy activity yet.';
+}
+
+function checkDeployStatus() {
+  fetch('/api/settings/deploy/check', {
+    method: 'POST',
+    headers: {'X-CSRFToken': _csrfToken}
+  })
+  .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, data:d}; }); })
+  .then(function(res){
+    if (!res.ok) {
+      showToast('Deploy check failed', false);
+      return;
+    }
+    renderDeployStatus(res.data);
+    showToast('Deploy status refreshed', true);
+  })
+  .catch(function(e){ showToast('Network error: ' + e, false); });
+}
+
+function runDeploy() {
+  if (!confirm('Start blue/green deploy now?')) return;
+  fetch('/api/settings/deploy/run', {
+    method: 'POST',
+    headers: {'X-CSRFToken': _csrfToken}
+  })
+  .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, data:d}; }); })
+  .then(function(res){
+    if (!res.ok) {
+      showToast('Deploy blocked: ' + (res.data.error || 'unable to start'), false);
+      return;
+    }
+    showToast('Deploy started', true);
+    setTimeout(checkDeployStatus, 500);
+  })
+  .catch(function(e){ showToast('Network error: ' + e, false); });
+}
+
+setInterval(function() {
+  var section = document.getElementById('section-deploy');
+  if (section && section.style.display !== 'none') {
+    fetch('/api/settings/deploy/status', {headers: {'X-CSRFToken': _csrfToken}})
+      .then(function(r){ return r.json(); })
+      .then(function(data){ renderDeployStatus(data); })
+      .catch(function(){});
+  }
+}, 5000);
 </script>
 {% endblock %}
 
