@@ -16,7 +16,7 @@ This guide explains daily usage of NexusAI from dashboard setup to project workf
 ### 2.1 Registering
 
 - Docker mode: `worker_agent` auto-registers on startup.
-- Standalone mode: run `python -m nexus_worker` with valid control plane URL/token.
+- Standalone mode: run the worker from `worker_node/` with valid control plane URL/token.
 
 ### 2.2 Monitoring
 

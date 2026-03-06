@@ -13,7 +13,7 @@ NexusAI includes these core services:
 
 Optional:
 
-- `nexus_worker` standalone package, useful when splitting worker runtime into a separate repository.
+- `worker_node` standalone project, useful when deploying worker runtime outside the main app repo.
 
 ## 2. Prerequisites
 
@@ -186,7 +186,7 @@ Run in separate terminals:
 python -m control_plane.main
 python -m worker_agent.main
 python -m dashboard.app
-python -m nexus_worker
+(cd worker_node && python -m nexus_worker)
 ```
 
 ## 10. Where to Go Next

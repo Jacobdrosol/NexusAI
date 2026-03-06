@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Tuple
 
 from fastapi import HTTPException
 
-from worker_agent.backends import (
+from nexus_worker.backends import (
     claude_backend,
     cli_backend,
     gemini_backend,
@@ -90,4 +90,3 @@ async def run_inference(
         return await cli_backend.infer(command=command or model, params=params)
 
     raise HTTPException(status_code=400, detail=f"Unsupported provider: {provider}")
-

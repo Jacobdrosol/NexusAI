@@ -9,9 +9,9 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from nexus_worker.api import capabilities, health, infer, infer_stream, models
+from nexus_worker.config_loader import ConfigLoader
 from nexus_worker.hardware.detector import detect_hardware_profile
 from nexus_worker.observability import install_observability
-from shared.config_loader import ConfigLoader
 
 logger = logging.getLogger(__name__)
 

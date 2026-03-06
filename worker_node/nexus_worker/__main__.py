@@ -3,7 +3,7 @@ import os
 import uvicorn
 
 from nexus_worker.agent import WORKER_CONFIG_PATH
-from shared.config_loader import ConfigLoader
+from nexus_worker.config_loader import ConfigLoader
 
 
 def main() -> None:
@@ -22,4 +22,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

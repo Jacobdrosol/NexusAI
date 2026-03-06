@@ -4,7 +4,7 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse
 
-from shared.observability import MetricsStore
+from nexus_worker.metrics import MetricsStore
 
 
 def install_observability(app: FastAPI) -> None:
@@ -63,4 +63,3 @@ def install_observability(app: FastAPI) -> None:
         inflight = int(getattr(request.app.state, "inference_inflight", 0) or 0)
         metrics.set_gauge("nexus_worker_inference_inflight", {}, inflight)
         return PlainTextResponse(metrics.render(), media_type="text/plain; version=0.0.4")
-

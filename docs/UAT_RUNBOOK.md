@@ -40,7 +40,7 @@ Option B: Local processes (separate terminals)
 python -m control_plane.main
 python -m worker_agent.main
 python -m dashboard.app
-python -m nexus_worker
+cd worker_node; python -m nexus_worker
 ```
 
 ## 4. Automated Preflight Checks

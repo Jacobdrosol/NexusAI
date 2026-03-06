@@ -60,4 +60,4 @@ nexus-worker-bootstrap \
   --worker-name "Worker Node 01"
 ```
 
-See `docs/WORKER_NODE_BOOTSTRAP.md` for the full flow.
+See `../docs/WORKER_NODE_BOOTSTRAP.md` for the full flow.

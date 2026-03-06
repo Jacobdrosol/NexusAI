@@ -22,7 +22,7 @@
 - Product usage: `docs/USER_GUIDE.md`
 - Operations and security: `docs/OPERATIONS.md`
 - Blue/green deployment: `docs/DEPLOY_BLUEGREEN.md`
-- Worker node bootstrap: `docs/WORKER_NODE_BOOTSTRAP.md`
+- Worker node bootstrap: `worker_node/docs/WORKER_NODE_BOOTSTRAP.md`
 - UAT checklist: `docs/UAT_RUNBOOK.md`
 - Configuration reference: `config/README.md`
 
@@ -99,9 +99,10 @@ python -m worker_agent.main
 uvicorn worker_agent.main:app --host 0.0.0.0 --port 8001
 ```
 
-### 4b. Run `nexus_worker` Standalone Package
+### 4b. Run the Standalone Worker Node Project
 
 ```bash
+cd worker_node
 NEXUS_WORKER_CONFIG_PATH=nexus_worker/config.yaml.example \
 CONTROL_PLANE_URL=http://localhost:8000 \
 python -m nexus_worker
@@ -183,7 +184,7 @@ Copy `.env.example` to `.env` and set the following variables before starting th
 | `NEXUSAI_GITHUB_WEBHOOK_MAX_SKEW_SECONDS` | `300` | Allowed request timestamp skew when `Date` header is present |
 | `NEXUSAI_GITHUB_WEBHOOK_REQUIRE_DATE_HEADER` | `0` | Require `Date` header on GitHub webhooks (`1`/`true` to enforce) |
 | `NEXUSAI_GITHUB_WEBHOOK_DEDUP_TTL_SECONDS` | `86400` | Retention window for delivery-ID deduplication records |
-| `NEXUS_WORKER_CONFIG_PATH` | `nexus_worker/config.yaml.example` | Path to standalone `nexus_worker` YAML config |
+| `NEXUS_WORKER_CONFIG_PATH` | `worker_node/nexus_worker/config.yaml.example` | Path to standalone worker-node YAML config when running from the repo root |
 | `VLLM_MODELS` | — | Optional comma-separated vLLM model names for local model discovery in `nexus_worker` |
 | `CP_MAX_BODY_BYTES_<ROUTE>` | route default | Optional request body size override per guarded route (e.g. `CHAT_MESSAGES`, `CHAT_STREAM`, `VAULT_INGEST`, `GITHUB_WEBHOOK`) |
 | `CP_RATE_LIMIT_<ROUTE>_COUNT` / `CP_RATE_LIMIT_<ROUTE>_WINDOW_SECONDS` | route defaults | Optional per-route rate limit override for guarded control-plane endpoints |
