@@ -2,6 +2,8 @@
 set -eu
 
 echo "[deploy] starting blue/green deploy runner"
+COMPOSE_PROJECT_NAME="${NEXUSAI_COMPOSE_PROJECT_NAME:-nexusai}"
+COMPOSE_ARGS="-p $COMPOSE_PROJECT_NAME -f docker-compose.bluegreen.yml"
 
 echo "[deploy] checking DB drift guard"
 sh ./scripts/check_db_drift.sh
@@ -41,15 +43,15 @@ echo "[deploy] current color: $CURRENT_COLOR"
 echo "[deploy] candidate color: $NEXT_COLOR"
 
 echo "[deploy] ensuring gateway is running"
-docker compose -f docker-compose.bluegreen.yml up -d dashboard_gateway
+docker compose $COMPOSE_ARGS up -d dashboard_gateway
 
 echo "[deploy] building and starting candidate dashboard"
-docker compose -f docker-compose.bluegreen.yml --profile "$NEXT_COLOR" up -d --build "dashboard_$NEXT_COLOR"
+docker compose $COMPOSE_ARGS --profile "$NEXT_COLOR" up -d --build "dashboard_$NEXT_COLOR"
 
 echo "[deploy] waiting for candidate health"
 ATTEMPTS=0
 TARGET_HOST="nexus-dashboard-$NEXT_COLOR"
-until docker compose -f docker-compose.bluegreen.yml exec -T dashboard_gateway sh -lc "wget -q -O - http://$TARGET_HOST:5000/health | grep -q '\"status\"'"; do
+until docker compose $COMPOSE_ARGS exec -T dashboard_gateway sh -lc "wget -q -O - http://$TARGET_HOST:5000/health | grep -q '\"status\"'"; do
   ATTEMPTS=$((ATTEMPTS + 1))
   if [ "$ATTEMPTS" -ge 30 ]; then
     echo "[deploy] candidate dashboard_$NEXT_COLOR failed health check"
@@ -68,6 +70,6 @@ sh -lc "$SWITCH_CMD"
 echo "$NEXT_COLOR" > "$CURRENT_COLOR_FILE"
 
 echo "[deploy] stopping previous color: $CURRENT_COLOR"
-docker compose -f docker-compose.bluegreen.yml --profile "$CURRENT_COLOR" stop "dashboard_$CURRENT_COLOR" || true
+docker compose $COMPOSE_ARGS --profile "$CURRENT_COLOR" stop "dashboard_$CURRENT_COLOR" || true
 
 echo "[deploy] completed"

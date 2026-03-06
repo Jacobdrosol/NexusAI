@@ -2,6 +2,8 @@
 set -eu
 
 TARGET_COLOR="${1:-${NEXUSAI_TARGET_COLOR:-}}"
+COMPOSE_PROJECT_NAME="${NEXUSAI_COMPOSE_PROJECT_NAME:-nexusai}"
+COMPOSE_ARGS="-p $COMPOSE_PROJECT_NAME -f docker-compose.bluegreen.yml"
 if [ -z "$TARGET_COLOR" ]; then
   echo "[switch] blocked: target color not provided"
   exit 2
@@ -23,11 +25,11 @@ echo "[switch] applying nginx route config for $TARGET_COLOR"
 cp "$SOURCE_CONF" "$ACTIVE_CONF"
 
 echo "[switch] reloading gateway"
-docker compose -f docker-compose.bluegreen.yml exec -T dashboard_gateway nginx -s reload
+docker compose $COMPOSE_ARGS exec -T dashboard_gateway nginx -s reload
 
 echo "[switch] verifying gateway health"
 ATTEMPTS=0
-until docker compose -f docker-compose.bluegreen.yml exec -T dashboard_gateway wget -q -O - http://127.0.0.1:5000/health >/dev/null; do
+until docker compose $COMPOSE_ARGS exec -T dashboard_gateway wget -q -O - http://127.0.0.1:5000/health >/dev/null; do
   ATTEMPTS=$((ATTEMPTS + 1))
   if [ "$ATTEMPTS" -ge 20 ]; then
     echo "[switch] health verification failed after reload"
