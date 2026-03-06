@@ -290,6 +290,7 @@
   <div style="display:flex;gap:0.75rem;flex-wrap:wrap;margin-bottom:1rem;">
     <button class="btn" onclick="checkDeployStatus()">Check For Updates</button>
     <button class="btn btn-primary" onclick="runDeploy()">Deploy Latest Commit</button>
+    <button class="btn" onclick="clearDeployLog()">Clear Deploy Log</button>
   </div>
   <table style="margin-bottom:1rem;">
     <tbody>
@@ -301,11 +302,13 @@
       <tr><th>Next Color</th><td id="deploy-next-color">{{ deploy_status.next_color or "unknown" }}</td></tr>
       <tr><th>Commits Differ</th><td id="deploy-diff">{{ "yes" if deploy_status.commits_differ else "no" }}</td></tr>
       <tr><th>Deploy State</th><td id="deploy-state">{{ deploy_status.state or "idle" }}</td></tr>
+      <tr><th>Run ID</th><td id="deploy-run-id">{{ deploy_status.run_id or "n/a" }}</td></tr>
       <tr><th>Deploy Allowed</th><td id="deploy-allowed">{{ "yes" if deploy_status.deploy_allowed else "no" }}</td></tr>
       <tr><th>Blocked Reason</th><td id="deploy-blocked">{{ deploy_status.deploy_blocked_reason or "none" }}</td></tr>
       <tr><th>Last Run By</th><td id="deploy-run-by">{{ deploy_status.last_run_by or "n/a" }}</td></tr>
       <tr><th>Started At</th><td id="deploy-started">{{ deploy_status.started_at or "n/a" }}</td></tr>
       <tr><th>Finished At</th><td id="deploy-finished">{{ deploy_status.finished_at or "n/a" }}</td></tr>
+      <tr><th>Log Updated At</th><td id="deploy-log-updated">{{ deploy_status.log_updated_at or "n/a" }}</td></tr>
       <tr><th>Last Error</th><td id="deploy-error">{{ deploy_status.last_error or "none" }}</td></tr>
     </tbody>
   </table>
@@ -531,11 +534,13 @@ function renderDeployStatus(status) {
   document.getElementById('deploy-next-color').textContent = status.next_color || 'unknown';
   document.getElementById('deploy-diff').textContent = status.commits_differ ? 'yes' : 'no';
   document.getElementById('deploy-state').textContent = status.state || 'idle';
+  document.getElementById('deploy-run-id').textContent = status.run_id || 'n/a';
   document.getElementById('deploy-allowed').textContent = status.deploy_allowed ? 'yes' : 'no';
   document.getElementById('deploy-blocked').textContent = status.deploy_blocked_reason || 'none';
   document.getElementById('deploy-run-by').textContent = status.last_run_by || 'n/a';
   document.getElementById('deploy-started').textContent = status.started_at || 'n/a';
   document.getElementById('deploy-finished').textContent = status.finished_at || 'n/a';
+  document.getElementById('deploy-log-updated').textContent = status.log_updated_at || 'n/a';
   document.getElementById('deploy-error').textContent = status.last_error || 'none';
   document.getElementById('deploy-log').textContent =
     (status.log_tail && status.log_tail.length) ? status.log_tail.join('\n') : 'No deploy activity yet.';
@@ -572,6 +577,24 @@ function runDeploy() {
     }
     showToast('Deploy started', true);
     setTimeout(checkDeployStatus, 500);
+  })
+  .catch(function(e){ showToast('Network error: ' + e, false); });
+}
+
+function clearDeployLog() {
+  fetch('/api/settings/deploy/log/clear', {
+    method: 'POST',
+    headers: {'X-CSRFToken': _csrfToken}
+  })
+  .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, data:d}; }); })
+  .then(function(res){
+    if (!res.ok) {
+      showToast('Failed to clear deploy log', false);
+      return;
+    }
+    document.getElementById('deploy-log').textContent = 'No deploy activity yet.';
+    document.getElementById('deploy-log-updated').textContent = 'just now';
+    showToast('Deploy log cleared', true);
   })
   .catch(function(e){ showToast('Network error: ' + e, false); });
 }

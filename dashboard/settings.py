@@ -315,6 +315,14 @@ def deploy_run():
     return jsonify({"status": "started", "message": message}), 202
 
 
+@bp.post("/api/settings/deploy/log/clear")
+@login_required
+def deploy_log_clear():
+    _require_admin()
+    DeployManager.instance().clear_log()
+    return jsonify({"status": "ok"})
+
+
 @bp.get("/api/settings/<key>")
 @login_required
 def get_setting(key: str):

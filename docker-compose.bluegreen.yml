@@ -25,7 +25,7 @@ services:
       dockerfile: dashboard/Dockerfile
     env_file: .env
     volumes:
-      - nexus-data:/app/data
+      - ./data:/app/data
       - ./.git:/app/.git
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
@@ -44,7 +44,7 @@ services:
       dockerfile: dashboard/Dockerfile
     env_file: .env
     volumes:
-      - nexus-data:/app/data
+      - ./data:/app/data
       - ./.git:/app/.git
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
@@ -55,6 +55,3 @@ services:
       timeout: 10s
       retries: 5
     profiles: ["green"]
-
-volumes:
-  nexus-data:

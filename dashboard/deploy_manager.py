@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import threading
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -47,9 +48,11 @@ class DeployManager:
     def _default_state(self) -> dict[str, Any]:
         return {
             "state": "idle",
+            "run_id": None,
             "deployed_commit": None,
             "started_at": None,
             "finished_at": None,
+            "log_updated_at": None,
             "last_error": None,
             "last_run_by": None,
             "log_tail": [],
@@ -78,9 +81,17 @@ class DeployManager:
 
     def _append_log(self, line: str) -> None:
         logs = self._state.setdefault("log_tail", [])
-        logs.append(line)
+        stamped = f"[{_utc_now()}] {line}"
+        logs.append(stamped)
         self._state["log_tail"] = logs[-200:]
+        self._state["log_updated_at"] = _utc_now()
         self._save_state()
+
+    def clear_log(self) -> None:
+        with self._lock:
+            self._state["log_tail"] = []
+            self._state["log_updated_at"] = _utc_now()
+            self._save_state()
 
     def _run_git(self, args: list[str]) -> tuple[str | None, str | None]:
         try:
@@ -188,12 +199,13 @@ class DeployManager:
         run_cmd = os.environ.get("NEXUSAI_DEPLOY_RUN_CMD", "").strip()
         with self._lock:
             self._state["state"] = "running"
+            self._state["run_id"] = str(uuid.uuid4())
             self._state["started_at"] = _utc_now()
             self._state["finished_at"] = None
             self._state["last_error"] = None
             self._state["last_run_by"] = requested_by
             self._state["log_tail"] = []
-            self._append_log("deploy: started")
+            self._append_log(f"deploy: started run_id={self._state['run_id']}")
             self._append_log(f"deploy: requested_by={requested_by}")
             self._append_log("deploy: strategy=bluegreen")
 
