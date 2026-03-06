@@ -963,6 +963,82 @@ select.form-control {
   gap: 0.6rem;
 }
 
+.setup-guide-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem 1rem;
+  margin-bottom: 1rem;
+}
+
+.setup-guide-stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  padding: 0.35rem 0.7rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--surface-3);
+}
+
+.setup-guide-stat-label {
+  font-size: 0.76rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.setup-guide-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(220px, 1fr));
+  gap: 0.85rem;
+}
+
+.setup-guide-column {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-3);
+  padding: 0.8rem;
+}
+
+.setup-guide-column-title {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin-bottom: 0.7rem;
+}
+
+.setup-guide-list {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.setup-guide-item {
+  border: 1px solid rgba(42, 59, 82, 0.9);
+  border-radius: 10px;
+  background: rgba(22, 34, 51, 0.8);
+  padding: 0.7rem;
+}
+
+.setup-guide-item-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: flex-start;
+  margin-bottom: 0.35rem;
+}
+
+.setup-guide-action {
+  margin-top: 0.55rem;
+}
+
+.setup-guide-action .quick-link {
+  display: inline-flex;
+  padding: 0.35rem 0.7rem;
+  font-size: 0.8rem;
+}
+
 .health-item {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -1098,6 +1174,10 @@ select.form-control {
   }
 
   .overview-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .setup-guide-grid {
     grid-template-columns: 1fr;
   }
 

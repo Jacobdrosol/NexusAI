@@ -37,29 +37,63 @@
 <div class="overview-grid">
   <section class="panel">
     <h2 class="panel-title">Open-Source Setup Checklist</h2>
-    <div class="mini-note" style="margin-bottom:1rem;">
-      Required complete: {{ setup_required_complete }}/{{ setup_required_total }}
+    <div class="setup-guide-summary">
+      <div class="setup-guide-stat">
+        <span class="setup-guide-stat-label">Required complete</span>
+        <strong>{{ setup_required_complete }}/{{ setup_required_total }}</strong>
+      </div>
       {% if setup_recommended_total %}
-      <span style="margin-left:1rem;">Recommended complete: {{ setup_recommended_complete }}/{{ setup_recommended_total }}</span>
+      <div class="setup-guide-stat">
+        <span class="setup-guide-stat-label">Recommended complete</span>
+        <strong>{{ setup_recommended_complete }}/{{ setup_recommended_total }}</strong>
+      </div>
       {% endif %}
+      <div class="mini-note">Functional first. Finish required items before polishing the rest.</div>
     </div>
-    <div class="health-list">
-      {% for item in setup_checklist %}
-      <div class="health-item">
-        <div class="health-header">
-          <strong>{{ item.label }}</strong>
-          <span class="badge badge-{% if item.ok %}online{% else %}{% if item.required %}error{% else %}warning{% endif %}{% endif %}">
-            {% if item.ok %}ready{% else %}{% if item.required %}required{% else %}next{% endif %}{% endif %}
-          </span>
-        </div>
-        <div class="mini-note" style="margin-top:0.35rem;">{{ item.detail }}</div>
-        <div style="margin-top:0.6rem;">
-          <a class="quick-link" href="{{ item.href }}" style="display:inline-flex;padding:0.35rem 0.7rem;font-size:0.8rem;">
-            {{ item.cta }}
-          </a>
+    <div class="setup-guide-grid">
+      <div class="setup-guide-column">
+        <div class="setup-guide-column-title">Required</div>
+        <div class="setup-guide-list">
+          {% for item in setup_checklist if item.required %}
+          <div class="setup-guide-item">
+            <div class="setup-guide-item-head">
+              <strong>{{ item.label }}</strong>
+              <span class="badge badge-{% if item.ok %}online{% else %}error{% endif %}">
+                {% if item.ok %}ready{% else %}required{% endif %}
+              </span>
+            </div>
+            <div class="mini-note">{{ item.detail }}</div>
+            {% if not item.ok %}
+            <div class="setup-guide-action">
+              <a class="quick-link" href="{{ item.href }}">{{ item.cta }}</a>
+            </div>
+            {% endif %}
+          </div>
+          {% endfor %}
         </div>
       </div>
-      {% endfor %}
+
+      <div class="setup-guide-column">
+        <div class="setup-guide-column-title">Next Up</div>
+        <div class="setup-guide-list">
+          {% for item in setup_checklist if not item.required %}
+          <div class="setup-guide-item">
+            <div class="setup-guide-item-head">
+              <strong>{{ item.label }}</strong>
+              <span class="badge badge-{% if item.ok %}online{% else %}warning{% endif %}">
+                {% if item.ok %}ready{% else %}next{% endif %}
+              </span>
+            </div>
+            <div class="mini-note">{{ item.detail }}</div>
+            {% if not item.ok %}
+            <div class="setup-guide-action">
+              <a class="quick-link" href="{{ item.href }}">{{ item.cta }}</a>
+            </div>
+            {% endif %}
+          </div>
+          {% endfor %}
+        </div>
+      </div>
     </div>
   </section>
 

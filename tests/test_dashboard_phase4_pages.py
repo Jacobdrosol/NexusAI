@@ -263,7 +263,7 @@ def test_overview_page_shows_enhanced_sections(dashboard_client):
     assert b"Control Plane Checks" in resp.data
     assert b"Control plane health and auth" in resp.data
     assert b"/v1/projects" in resp.data
-    assert b"Required complete:" in resp.data
+    assert b"Required complete" in resp.data
     assert b"System Alerts" in resp.data
     assert b"Recent Activity" in resp.data
     assert b"Worker Health" in resp.data
