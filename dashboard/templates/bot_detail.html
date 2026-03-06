@@ -4,7 +4,10 @@
 {% block content %}
 <div class="page-header">
   <h1>Bot Detail</h1>
-  <a class="btn" href="{{ url_for('bots.bots_page') }}">Back to Bots</a>
+  <div style="display:flex;gap:0.5rem;">
+    <a class="btn" href="{{ url_for('connections.bot_connections_page', bot_id=bot.id) }}">Connections</a>
+    <a class="btn" href="{{ url_for('bots.bots_page') }}">Back to Bots</a>
+  </div>
 </div>
 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 

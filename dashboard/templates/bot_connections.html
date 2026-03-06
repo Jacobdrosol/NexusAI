@@ -1,0 +1,224 @@
+{% extends "base.html" %}
+{% set active_page = "bots" %}
+{% block title %}Bot Connections{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Bot Connections</h1>
+  <a class="btn" href="{{ url_for('bots.bot_detail_page', bot_id=bot_id) }}">Back to Bot</a>
+</div>
+<input type="hidden" id="csrf-token" value="{{ csrf_token() }}">
+
+<section class="panel" style="margin-bottom:1rem;">
+  <h2 class="panel-title">Create Connection</h2>
+  <form id="conn-create-form" onsubmit="createConnection(event)">
+    <div class="split-grid" style="grid-template-columns:1fr 1fr;">
+      <div class="form-group"><label>Name</label><input class="form-control" name="name" required></div>
+      <div class="form-group">
+        <label>Kind</label>
+        <select class="form-control" name="kind" onchange="toggleKindFields(this.value)">
+          <option value="http">HTTP / API</option>
+          <option value="database">Database</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-group"><label>Description</label><input class="form-control" name="description"></div>
+
+    <div id="http-fields">
+      <div class="split-grid" style="grid-template-columns:1fr 1fr;">
+        <div class="form-group"><label>Base URL</label><input class="form-control" name="base_url" placeholder="https://api.example.com"></div>
+        <div class="form-group"><label>Timeout Seconds</label><input class="form-control" type="number" name="timeout_seconds" value="15"></div>
+      </div>
+      <div class="split-grid" style="grid-template-columns:1fr 1fr;">
+        <div class="form-group">
+          <label>Auth Type</label>
+          <select class="form-control" name="auth_type" onchange="toggleAuthFields(this.value)">
+            <option value="none">none</option>
+            <option value="api_key">api_key</option>
+            <option value="bearer">bearer</option>
+            <option value="basic">basic</option>
+          </select>
+        </div>
+        <div class="form-group"><label>API Key Header Name</label><input class="form-control" name="auth_name" value="X-API-Key"></div>
+      </div>
+      <div id="auth-api-key" class="form-group"><label>API Key</label><input class="form-control" name="api_key"></div>
+      <div id="auth-bearer" class="form-group" style="display:none;"><label>Bearer Token</label><input class="form-control" name="bearer_token"></div>
+      <div id="auth-basic" style="display:none;">
+        <div class="split-grid" style="grid-template-columns:1fr 1fr;">
+          <div class="form-group"><label>Username</label><input class="form-control" name="username"></div>
+          <div class="form-group"><label>Password</label><input class="form-control" name="password" type="password"></div>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>OpenAPI Schema (YAML or JSON)</label>
+        <textarea class="form-control" name="schema_text" rows="8" placeholder="openapi: 3.1.0 ..."></textarea>
+      </div>
+    </div>
+
+    <div id="database-fields" style="display:none;">
+      <div class="form-group"><label>DSN / Connection String</label><input class="form-control" name="dsn" placeholder="postgresql+psycopg2://user:pass@host:5432/db"></div>
+      <div class="form-group">
+        <label><input type="checkbox" name="readonly" checked> Read-only query mode</label>
+      </div>
+    </div>
+
+    <button class="btn btn-primary" type="submit">Create and Attach</button>
+  </form>
+</section>
+
+<section class="panel">
+  <h2 class="panel-title">Attached Connections</h2>
+  <table>
+    <thead><tr><th>Name</th><th>Kind</th><th>Auth</th><th>Actions</th></tr></thead>
+    <tbody id="connections-tbody">
+      {% for c in connections %}
+      <tr>
+        <td><strong>{{ c.name }}</strong><div class="mini-note">{{ c.description }}</div></td>
+        <td>{{ c.kind }}</td>
+        <td><pre style="white-space:pre-wrap;">{{ c.auth | tojson(indent=2) }}</pre></td>
+        <td class="actions">
+          <button class="btn btn-sm" onclick="openTest({{ c.id }})">Test</button>
+          <button class="btn btn-sm" onclick="showActions({{ c.id }})">Actions</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteConnection({{ c.id }})">Delete</button>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4" class="empty">No connections attached.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<div id="test-modal" class="modal" style="display:none;">
+  <div class="modal-content">
+    <h2>Test Connection</h2>
+    <form id="test-form" onsubmit="runTest(event)">
+      <input type="hidden" name="connection_id">
+      <div class="form-group"><label>Operation ID (HTTP)</label><input class="form-control" name="operation_id"></div>
+      <div class="form-group"><label>Method (optional)</label><input class="form-control" name="method" placeholder="GET"></div>
+      <div class="form-group"><label>Path (optional)</label><input class="form-control" name="path" placeholder="/v1/items"></div>
+      <div class="form-group"><label>Body JSON (optional)</label><textarea class="form-control" name="body_json" rows="4" placeholder='{"q":"hello"}'></textarea></div>
+      <div class="form-group"><label>DB Query (database only)</label><textarea class="form-control" name="query" rows="3" placeholder="SELECT 1"></textarea></div>
+      <div class="modal-actions">
+        <button class="btn btn-primary" type="submit">Run Test</button>
+        <button class="btn" type="button" onclick="closeTest()">Close</button>
+      </div>
+    </form>
+    <pre id="test-result" style="margin-top:0.75rem;max-height:40vh;overflow:auto;"></pre>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const BOT_ID = {{ bot_id|tojson }};
+const CSRF = document.getElementById('csrf-token').value;
+
+function toggleKindFields(kind) {
+  document.getElementById('http-fields').style.display = kind === 'http' ? '' : 'none';
+  document.getElementById('database-fields').style.display = kind === 'database' ? '' : 'none';
+}
+
+function toggleAuthFields(kind) {
+  document.getElementById('auth-api-key').style.display = kind === 'api_key' ? '' : 'none';
+  document.getElementById('auth-bearer').style.display = kind === 'bearer' ? '' : 'none';
+  document.getElementById('auth-basic').style.display = kind === 'basic' ? '' : 'none';
+}
+
+function createConnection(evt) {
+  evt.preventDefault();
+  const fd = new FormData(evt.target);
+  const kind = (fd.get('kind') || 'http').toString();
+  const payload = {
+    name: (fd.get('name') || '').toString().trim(),
+    kind: kind,
+    description: (fd.get('description') || '').toString(),
+    config: {},
+    auth: {},
+    schema_text: ''
+  };
+  if (kind === 'http') {
+    payload.config.base_url = (fd.get('base_url') || '').toString().trim();
+    payload.config.timeout_seconds = parseInt((fd.get('timeout_seconds') || '15').toString(), 10) || 15;
+    payload.schema_text = (fd.get('schema_text') || '').toString();
+    payload.auth.type = (fd.get('auth_type') || 'none').toString();
+    payload.auth.name = (fd.get('auth_name') || 'X-API-Key').toString();
+    payload.auth.api_key = (fd.get('api_key') || '').toString();
+    payload.auth.bearer_token = (fd.get('bearer_token') || '').toString();
+    payload.auth.username = (fd.get('username') || '').toString();
+    payload.auth.password = (fd.get('password') || '').toString();
+  } else {
+    payload.config.dsn = (fd.get('dsn') || '').toString().trim();
+    payload.config.readonly = evt.target.querySelector('input[name=readonly]').checked;
+  }
+
+  fetch('/api/bots/' + encodeURIComponent(BOT_ID) + '/connections', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-CSRFToken': CSRF},
+    body: JSON.stringify(payload),
+  }).then(async (r) => {
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || 'Create failed');
+    location.reload();
+  }).catch((e) => alert(e.message));
+}
+
+function deleteConnection(connectionId) {
+  if (!confirm('Delete this connection?')) return;
+  fetch('/api/connections/' + encodeURIComponent(connectionId), {
+    method: 'DELETE',
+    headers: {'X-CSRFToken': CSRF},
+  }).then((r) => {
+    if (!r.ok) throw new Error('Delete failed');
+    location.reload();
+  }).catch((e) => alert(e.message));
+}
+
+function showActions(connectionId) {
+  fetch('/api/connections/' + encodeURIComponent(connectionId) + '/actions', {
+    headers: {'X-CSRFToken': CSRF},
+  }).then(async (r) => {
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || 'Action discovery failed');
+    alert(JSON.stringify(data.actions || [], null, 2));
+  }).catch((e) => alert(e.message));
+}
+
+function openTest(connectionId) {
+  const form = document.getElementById('test-form');
+  form.reset();
+  form.connection_id.value = connectionId;
+  document.getElementById('test-result').textContent = '';
+  document.getElementById('test-modal').style.display = 'flex';
+}
+
+function closeTest() {
+  document.getElementById('test-modal').style.display = 'none';
+}
+
+function runTest(evt) {
+  evt.preventDefault();
+  const fd = new FormData(evt.target);
+  const connectionId = (fd.get('connection_id') || '').toString();
+  const payload = {};
+  if ((fd.get('operation_id') || '').toString().trim()) payload.operation_id = (fd.get('operation_id') || '').toString().trim();
+  if ((fd.get('method') || '').toString().trim()) payload.method = (fd.get('method') || '').toString().trim();
+  if ((fd.get('path') || '').toString().trim()) payload.path = (fd.get('path') || '').toString().trim();
+  if ((fd.get('query') || '').toString().trim()) payload.query = (fd.get('query') || '').toString().trim();
+  if ((fd.get('body_json') || '').toString().trim()) {
+    try {
+      payload.body_json = JSON.parse((fd.get('body_json') || '').toString());
+    } catch (_e) {
+      alert('Body JSON is invalid.');
+      return;
+    }
+  }
+  fetch('/api/connections/' + encodeURIComponent(connectionId) + '/test', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-CSRFToken': CSRF},
+    body: JSON.stringify(payload),
+  }).then(async (r) => {
+    const data = await r.json().catch(() => ({}));
+    document.getElementById('test-result').textContent = JSON.stringify(data, null, 2);
+  }).catch((e) => alert(e.message));
+}
+</script>
+{% endblock %}

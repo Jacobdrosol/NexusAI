@@ -95,6 +95,45 @@ class Bot(Base):
             return []
 
 
+class Connection(Base):
+    """Reusable external connection definition (HTTP/API or database)."""
+    __tablename__ = "connections"
+
+    id: Mapped[int] = Column(Integer, primary_key=True)
+    name: Mapped[str] = Column(String(255), nullable=False)
+    kind: Mapped[str] = Column(String(50), nullable=False, default="http")
+    description: Mapped[str] = Column(Text, nullable=False, default="")
+    config_json: Mapped[str] = Column(Text, nullable=False, default="{}")
+    auth_json: Mapped[str] = Column(Text, nullable=False, default="{}")
+    schema_text: Mapped[str] = Column(Text, nullable=False, default="")
+    enabled: Mapped[bool] = Column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+    updated_at: Mapped[datetime] = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+
+class BotConnection(Base):
+    """Many-to-many map of bot references to connection IDs."""
+    __tablename__ = "bot_connections"
+
+    id: Mapped[int] = Column(Integer, primary_key=True)
+    bot_ref: Mapped[str] = Column(String(255), nullable=False)
+    connection_id: Mapped[int] = Column(Integer, nullable=False)
+    created_at: Mapped[datetime] = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+
 class Task(Base):
     """Dispatched task record."""
     __tablename__ = "tasks"
