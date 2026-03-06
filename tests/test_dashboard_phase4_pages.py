@@ -197,8 +197,9 @@ def test_worker_detail_page_loads_when_logged_in(dashboard_client):
 
     resp = dashboard_client.get(f"/workers/{worker_id}")
     assert resp.status_code == 200
-    assert b"Live Metrics" in resp.data
-    assert b"Resource Graphs" in resp.data
+    assert b"Resource Snapshot" in resp.data
+    assert b"Recent Signals" in resp.data
+    assert b"GPU Activity" in resp.data
 
 
 def test_settings_page_loads_for_admin(dashboard_client):

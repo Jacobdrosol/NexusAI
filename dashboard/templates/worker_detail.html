@@ -11,14 +11,42 @@
 {% if error %}
 <div class="alert alert-error">{{ error }}</div>
 {% elif worker %}
-<section class="panel" style="margin-bottom:1rem;" id="worker-profile-card">
-  <h2 class="panel-title">{{ worker.name }} <small style="color:#64748b;">({{ worker.id }})</small></h2>
-  <div class="split-grid" style="grid-template-columns:1fr 1fr;">
+<section class="panel worker-hero" id="worker-profile-card">
+  <div class="worker-hero-head">
     <div>
-      <div><strong>Host:</strong> {{ worker.host }}:{{ worker.port }}</div>
-      <div><strong>Status:</strong> <span class="badge badge-{{ worker.status }}">{{ worker.status }}</span></div>
-      <div><strong>Enabled:</strong> <span class="badge badge-{{ 'enabled' if worker.enabled else 'disabled' }}">{{ 'enabled' if worker.enabled else 'disabled' }}</span></div>
-      <div style="margin-top:0.75rem; display:flex; gap:0.5rem; flex-wrap:wrap;">
+      <div class="eyebrow">Worker Node</div>
+      <h2 class="worker-title">{{ worker.name }}</h2>
+      <div class="worker-subtitle">{{ worker.id }}</div>
+    </div>
+    <div class="worker-status-group">
+      <span class="badge badge-{{ worker.status }}">{{ worker.status }}</span>
+      <span class="badge badge-{{ 'enabled' if worker.enabled else 'disabled' }}">{{ 'enabled' if worker.enabled else 'disabled' }}</span>
+    </div>
+  </div>
+
+  <div class="worker-hero-grid">
+    <div class="worker-summary">
+      <div class="worker-meta-list">
+        <div class="worker-meta-item">
+          <span class="worker-meta-label">Bind Address</span>
+          <span class="worker-meta-value">{{ worker.host }}:{{ worker.port }}</span>
+        </div>
+        <div class="worker-meta-item">
+          <span class="worker-meta-label">Reachability</span>
+          <span class="worker-meta-value">
+            {% if worker.host in ['0.0.0.0', '::'] %}
+            Listening on all interfaces
+            {% else %}
+            Bound to {{ worker.host }}
+            {% endif %}
+          </span>
+        </div>
+        <div class="worker-meta-item">
+          <span class="worker-meta-label">Capability Groups</span>
+          <span class="worker-meta-value">{{ worker.capabilities|length }}</span>
+        </div>
+      </div>
+      <div class="worker-action-row">
         <button class="btn" onclick="pingWorker('{{ worker.id }}')">Ping</button>
         <button class="btn" onclick="toggleWorker('{{ worker.id }}', {{ 'false' if worker.enabled else 'true' }})">
           {{ 'Disable' if worker.enabled else 'Enable' }}
@@ -26,59 +54,110 @@
         <button class="btn btn-danger" onclick="deleteWorker('{{ worker.id }}')">Delete</button>
       </div>
     </div>
+
     <div>
-      <div><strong>Capabilities</strong></div>
-      <ul style="margin-top:0.35rem; padding-left:1.2rem;">
+      <h3 class="subsection-title">Capabilities</h3>
+      <div class="capability-groups">
         {% for c in worker.capabilities %}
-        <li>{{ c.provider }} / {{ c.type }} — {{ c.models | join(', ') }}</li>
+        <div class="capability-group">
+          <div class="capability-head">
+            <span class="capability-provider">{{ c.provider }}</span>
+            <span class="capability-type">{{ c.type }}</span>
+          </div>
+          <div class="capability-chip-wrap">
+            {% for model in c.models %}
+            <span class="capability-chip">{{ model }}</span>
+            {% endfor %}
+          </div>
+        </div>
         {% else %}
-        <li class="empty">No capabilities reported</li>
+        <div class="state-empty">No capabilities reported</div>
         {% endfor %}
-      </ul>
+      </div>
     </div>
   </div>
 </section>
 
-<section class="panel" style="margin-bottom:1rem;">
-  <h2 class="panel-title">Live Metrics</h2>
+<section class="panel worker-metrics-panel">
+  <h2 class="panel-title">Resource Snapshot</h2>
   {% set m = worker.metrics or {} %}
-  <div class="cards">
-    <div class="card"><div class="card-label">Load</div><div class="card-value">{{ m.load if m.load is not none else '—' }}</div></div>
-    <div class="card"><div class="card-label">Queue Depth</div><div class="card-value">{{ m.queue_depth if m.queue_depth is not none else '—' }}</div></div>
-    <div class="card"><div class="card-label">GPU Samples</div><div class="card-value">{{ (m.gpu_utilization or []) | length }}</div></div>
+  {% set load_value = m.get('load') %}
+  {% set queue_value = m.get('queue_depth') %}
+  {% set gpu_samples = m.get('gpu_utilization') or [] %}
+  {% set gpu_avg = ((gpu_samples | sum) / (gpu_samples | length)) if gpu_samples else 0 %}
+  <div class="worker-stat-grid">
+    <div class="worker-stat-card">
+      <div class="worker-stat-label">Load</div>
+      <div class="worker-stat-value" id="metric-load-value">{{ '%.1f'|format(load_value) if load_value is not none else '—' }}</div>
+      <div class="meter"><div class="meter-fill meter-fill-teal" id="metric-load-fill" style="width: {{ [load_value or 0, 100]|min }}%;"></div></div>
+    </div>
+    <div class="worker-stat-card">
+      <div class="worker-stat-label">Queue Depth</div>
+      <div class="worker-stat-value" id="metric-queue-value">{{ queue_value if queue_value is not none else '—' }}</div>
+      <div class="meter"><div class="meter-fill meter-fill-blue" id="metric-queue-fill" style="width: {{ [((queue_value or 0) * 10), 100]|min }}%;"></div></div>
+    </div>
+    <div class="worker-stat-card">
+      <div class="worker-stat-label">GPU Average</div>
+      <div class="worker-stat-value" id="metric-gpu-avg-value">{{ '%.1f'|format(gpu_avg) if gpu_samples else '—' }}</div>
+      <div class="meter"><div class="meter-fill meter-fill-amber" id="metric-gpu-avg-fill" style="width: {{ [gpu_avg, 100]|min }}%;"></div></div>
+    </div>
+    <div class="worker-stat-card">
+      <div class="worker-stat-label">GPU Count</div>
+      <div class="worker-stat-value" id="metric-gpu-count-value">{{ gpu_samples | length }}</div>
+      <div class="worker-stat-note">Detected live GPU utilization samples</div>
+    </div>
   </div>
-  {% if m.gpu_utilization %}
-  <table>
-    <thead><tr><th>GPU</th><th>Utilization %</th></tr></thead>
-    <tbody>
-      {% for u in m.gpu_utilization %}
-      <tr><td>GPU {{ loop.index0 }}</td><td>{{ '%.2f'|format(u) }}</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  {% endif %}
-</section>
 
-<section class="panel" style="margin-bottom:1rem;">
-  <h2 class="panel-title">Resource Graphs</h2>
-  <div class="graph-grid">
-    <div class="graph-card">
-      <div class="graph-title">Load</div>
-      <canvas id="graph-load" height="120"></canvas>
+  <div class="worker-insight-grid">
+    <div class="signal-card">
+      <div class="signal-card-head">
+        <h3 class="subsection-title">Recent Signals</h3>
+        <div class="signal-note">Last {{ 30 }} polls</div>
+      </div>
+      <div class="signal-stack">
+        <div class="signal-row">
+          <div class="signal-label">Load</div>
+          <svg class="sparkline" id="graph-load" viewBox="0 0 240 72" preserveAspectRatio="none"></svg>
+        </div>
+        <div class="signal-row">
+          <div class="signal-label">Queue</div>
+          <svg class="sparkline" id="graph-queue" viewBox="0 0 240 72" preserveAspectRatio="none"></svg>
+        </div>
+        <div class="signal-row">
+          <div class="signal-label">GPU Avg</div>
+          <svg class="sparkline" id="graph-gpu" viewBox="0 0 240 72" preserveAspectRatio="none"></svg>
+        </div>
+      </div>
     </div>
-    <div class="graph-card">
-      <div class="graph-title">Queue Depth</div>
-      <canvas id="graph-queue" height="120"></canvas>
-    </div>
-    <div class="graph-card">
-      <div class="graph-title">GPU Utilization Avg (%)</div>
-      <canvas id="graph-gpu" height="120"></canvas>
+
+    <div class="signal-card">
+      <div class="signal-card-head">
+        <h3 class="subsection-title">GPU Activity</h3>
+        <div class="signal-note" id="gpu-summary-note">
+          {% if gpu_samples %}{{ gpu_samples|length }} device{{ '' if gpu_samples|length == 1 else 's' }} reporting{% else %}No GPU samples{% endif %}
+        </div>
+      </div>
+      <div id="gpu-breakdown">
+        {% if gpu_samples %}
+          {% for u in gpu_samples %}
+          <div class="gpu-row">
+            <div class="gpu-row-head">
+              <span>GPU {{ loop.index0 }}</span>
+              <strong>{{ '%.1f'|format(u) }}%</strong>
+            </div>
+            <div class="meter meter-tight"><div class="meter-fill meter-fill-amber" style="width: {{ [u, 100]|min }}%;"></div></div>
+          </div>
+          {% endfor %}
+        {% else %}
+        <div class="state-empty">No GPU utilization reported yet.</div>
+        {% endif %}
+      </div>
     </div>
   </div>
 </section>
 
 <section class="panel">
-  <h2 class="panel-title">Current Running Tasks</h2>
+  <h2 class="panel-title">Running Tasks</h2>
   <table id="running-tasks-table">
     <thead><tr><th>ID</th><th>Bot</th><th>Status</th><th>Updated</th></tr></thead>
     <tbody id="running-tasks-tbody">
@@ -149,47 +228,29 @@ function pushMetric(arr, value) {
   if (arr.length > historyData.maxPoints) arr.shift();
 }
 
-function drawLineGraph(canvasId, points, opts) {
-  const canvas = document.getElementById(canvasId);
-  if (!canvas) return;
-  const width = canvas.clientWidth || 360;
-  const height = canvas.height || 120;
-  canvas.width = width;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return;
-  ctx.clearRect(0, 0, width, height);
-
-  ctx.fillStyle = '#f8fafc';
-  ctx.fillRect(0, 0, width, height);
-
-  const minY = opts.minY;
-  const maxY = Math.max(opts.maxY, minY + 1);
-  const n = Math.max(points.length, 2);
-  const pad = 12;
-  const plotW = width - pad * 2;
-  const plotH = height - pad * 2;
-
-  ctx.strokeStyle = '#e2e8f0';
-  ctx.lineWidth = 1;
-  for (let i = 0; i <= 4; i++) {
-    const y = pad + (plotH * i) / 4;
-    ctx.beginPath();
-    ctx.moveTo(pad, y);
-    ctx.lineTo(width - pad, y);
-    ctx.stroke();
-  }
-
-  ctx.strokeStyle = opts.color;
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  for (let i = 0; i < n; i++) {
-    const v = points[i] ?? points[points.length - 1] ?? 0;
-    const x = pad + (plotW * i) / (n - 1);
-    const y = pad + (1 - (v - minY) / (maxY - minY)) * plotH;
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  }
-  ctx.stroke();
+function drawSparkline(svgId, points, opts) {
+  const svg = document.getElementById(svgId);
+  if (!svg) return;
+  const width = 240;
+  const height = 72;
+  const values = points.length ? points.slice() : [0, 0];
+  const minY = opts.minY ?? 0;
+  const maxY = Math.max(opts.maxY ?? 100, minY + 1);
+  const xStep = values.length > 1 ? width / (values.length - 1) : width;
+  const line = values.map((value, index) => {
+    const x = index * xStep;
+    const y = height - ((Math.max(minY, Math.min(maxY, value)) - minY) / (maxY - minY)) * (height - 8) - 4;
+    return `${x},${y}`;
+  }).join(" ");
+  const area = `0,${height} ${line} ${width},${height}`;
+  svg.innerHTML = `
+    <rect x="0" y="0" width="${width}" height="${height}" rx="10" fill="#0f1a28"></rect>
+    <path d="M 0 ${height * 0.25} H ${width}" stroke="#203247" stroke-width="1"></path>
+    <path d="M 0 ${height * 0.5} H ${width}" stroke="#203247" stroke-width="1"></path>
+    <path d="M 0 ${height * 0.75} H ${width}" stroke="#203247" stroke-width="1"></path>
+    <polygon points="${area}" fill="${opts.fill}" opacity="0.18"></polygon>
+    <polyline points="${line}" fill="none" stroke="${opts.color}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></polyline>
+  `;
 }
 
 function renderRunningTasks(rows) {
@@ -209,6 +270,34 @@ function renderRunningTasks(rows) {
   `).join('');
 }
 
+function updateMetricCard(valueId, fillId, value, max = 100, digits = 1) {
+  const valueEl = document.getElementById(valueId);
+  const fillEl = document.getElementById(fillId);
+  if (valueEl) valueEl.textContent = Number.isFinite(value) ? value.toFixed(digits) : '—';
+  if (fillEl) fillEl.style.width = `${Math.max(0, Math.min(100, (value / max) * 100))}%`;
+}
+
+function renderGpuBreakdown(samples) {
+  const wrap = document.getElementById('gpu-breakdown');
+  const note = document.getElementById('gpu-summary-note');
+  if (!wrap) return;
+  if (!samples || samples.length === 0) {
+    wrap.innerHTML = '<div class="state-empty">No GPU utilization reported yet.</div>';
+    if (note) note.textContent = 'No GPU samples';
+    return;
+  }
+  if (note) note.textContent = `${samples.length} device${samples.length === 1 ? '' : 's'} reporting`;
+  wrap.innerHTML = samples.map((sample, index) => `
+    <div class="gpu-row">
+      <div class="gpu-row-head">
+        <span>GPU ${index}</span>
+        <strong>${Number(sample).toFixed(1)}%</strong>
+      </div>
+      <div class="meter meter-tight"><div class="meter-fill meter-fill-amber" style="width:${Math.max(0, Math.min(100, Number(sample)))}%"></div></div>
+    </div>
+  `).join('');
+}
+
 async function pollLiveWorker() {
   const res = await fetch('/api/workers/' + encodeURIComponent(workerId) + '/live');
   if (!res.ok) return;
@@ -223,11 +312,18 @@ async function pollLiveWorker() {
   pushMetric(historyData.queue, Number(metrics.queue_depth ?? 0));
   pushMetric(historyData.gpu, Number(gpu));
 
-  const qMax = Math.max(10, ...historyData.queue);
-  drawLineGraph('graph-load', historyData.load, {minY: 0, maxY: 100, color: '#0f766e'});
-  drawLineGraph('graph-queue', historyData.queue, {minY: 0, maxY: qMax, color: '#1d4ed8'});
-  drawLineGraph('graph-gpu', historyData.gpu, {minY: 0, maxY: 100, color: '#b45309'});
+  updateMetricCard('metric-load-value', 'metric-load-fill', Number(metrics.load ?? 0), 100, 1);
+  updateMetricCard('metric-queue-value', 'metric-queue-fill', Number(metrics.queue_depth ?? 0), Math.max(10, Number(metrics.queue_depth ?? 0) || 1), 0);
+  updateMetricCard('metric-gpu-avg-value', 'metric-gpu-avg-fill', Number(gpu ?? 0), 100, 1);
+  const gpuCountEl = document.getElementById('metric-gpu-count-value');
+  if (gpuCountEl) gpuCountEl.textContent = String((metrics.gpu_utilization || []).length);
 
+  const qMax = Math.max(10, ...historyData.queue);
+  drawSparkline('graph-load', historyData.load, {minY: 0, maxY: 100, color: '#2dd4bf', fill: '#14b8a6'});
+  drawSparkline('graph-queue', historyData.queue, {minY: 0, maxY: qMax, color: '#60a5fa', fill: '#1d4ed8'});
+  drawSparkline('graph-gpu', historyData.gpu, {minY: 0, maxY: 100, color: '#f59e0b', fill: '#b45309'});
+
+  renderGpuBreakdown(metrics.gpu_utilization || []);
   renderRunningTasks(data.running_tasks || []);
 }
 
