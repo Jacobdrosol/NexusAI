@@ -35,6 +35,14 @@ def _normalize_webhook_events(raw: Any) -> list[dict[str, Any]]:
     return [e for e in events if isinstance(e, dict)]
 
 
+def _cp_error_response(cp, fallback: str = "control plane unavailable") -> tuple[Any, int]:
+    err = cp.last_error() if hasattr(cp, "last_error") else {}
+    detail = ""
+    if isinstance(err, dict):
+        detail = str(err.get("detail") or "").strip()
+    return jsonify({"error": detail or fallback}), 502
+
+
 @bp.get("/projects")
 @login_required
 def projects_page() -> str:
@@ -113,7 +121,7 @@ def api_create_project():
         }
     )
     if created is None:
-        return jsonify({"error": "control plane unavailable"}), 502
+        return _cp_error_response(cp)
     return jsonify(created), 201
 
 
@@ -127,7 +135,7 @@ def api_add_project_bridge(project_id: str):
     cp = get_cp_client()
     result = cp.add_project_bridge(project_id, target_project_id)
     if result is None:
-        return jsonify({"error": "control plane unavailable"}), 502
+        return _cp_error_response(cp)
     return jsonify(result)
 
 
@@ -137,7 +145,7 @@ def api_remove_project_bridge(project_id: str, target_project_id: str):
     cp = get_cp_client()
     ok = cp.remove_project_bridge(project_id, target_project_id)
     if not ok:
-        return jsonify({"error": "control plane unavailable"}), 502
+        return _cp_error_response(cp, "remove bridge failed")
     return "", 204
 
 
@@ -158,7 +166,7 @@ def api_connect_project_github_pat(project_id: str):
         validate=validate,
     )
     if result is None:
-        return jsonify({"error": "control plane unavailable"}), 502
+        return _cp_error_response(cp, "GitHub PAT connect failed")
     return jsonify(result)
 
 
@@ -170,7 +178,7 @@ def api_project_github_status(project_id: str):
     cp = get_cp_client()
     result = cp.get_project_github_status(project_id=project_id, validate=validate)
     if result is None:
-        return jsonify({"error": "control plane unavailable"}), 502
+        return _cp_error_response(cp)
     return jsonify(result)
 
 
@@ -180,7 +188,7 @@ def api_disconnect_project_github_pat(project_id: str):
     cp = get_cp_client()
     ok = cp.disconnect_project_github_pat(project_id)
     if not ok:
-        return jsonify({"error": "control plane unavailable"}), 502
+        return _cp_error_response(cp, "disconnect failed")
     return "", 204
 
 
@@ -194,7 +202,7 @@ def api_set_project_github_webhook_secret(project_id: str):
     cp = get_cp_client()
     result = cp.set_project_github_webhook_secret(project_id, secret)
     if result is None:
-        return jsonify({"error": "control plane unavailable"}), 502
+        return _cp_error_response(cp, "failed to save webhook secret")
     return jsonify(result)
 
 
@@ -204,7 +212,7 @@ def api_delete_project_github_webhook_secret(project_id: str):
     cp = get_cp_client()
     ok = cp.delete_project_github_webhook_secret(project_id)
     if not ok:
-        return jsonify({"error": "control plane unavailable"}), 502
+        return _cp_error_response(cp, "failed to remove webhook secret")
     return "", 204
 
 
@@ -219,7 +227,7 @@ def api_list_project_github_webhook_events(project_id: str):
     cp = get_cp_client()
     result = cp.list_project_github_webhook_events(project_id, limit=limit)
     if result is None:
-        return jsonify({"error": "control plane unavailable"}), 502
+        return _cp_error_response(cp)
     return jsonify(result)
 
 
@@ -240,7 +248,7 @@ def api_sync_project_github_context(project_id: str):
         namespace=(data.get("namespace") or "").strip() or None,
     )
     if result is None:
-        return jsonify({"error": "control plane unavailable"}), 502
+        return _cp_error_response(cp, "Repository context sync failed")
     return jsonify(result)
 
 
@@ -257,7 +265,7 @@ def api_configure_project_github_pr_review(project_id: str):
         bot_id=bot_id,
     )
     if result is None:
-        return jsonify({"error": "control plane unavailable"}), 502
+        return _cp_error_response(cp, "failed to save PR review config")
     return jsonify(result)
 
 
@@ -267,7 +275,7 @@ def api_get_project_cloud_context_policy(project_id: str):
     cp = get_cp_client()
     result = cp.get_project_cloud_context_policy(project_id)
     if result is None:
-        return jsonify({"error": "control plane unavailable"}), 502
+        return _cp_error_response(cp)
     return jsonify(result)
 
 
@@ -284,5 +292,5 @@ def api_update_project_cloud_context_policy(project_id: str):
         bot_overrides=bot_overrides,
     )
     if result is None:
-        return jsonify({"error": "control plane unavailable"}), 502
+        return _cp_error_response(cp, "failed to update cloud context policy")
     return jsonify(result)

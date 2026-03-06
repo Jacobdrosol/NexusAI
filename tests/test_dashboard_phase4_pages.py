@@ -150,6 +150,29 @@ def test_project_github_pat_api_validates_required_fields(dashboard_client):
     assert resp.status_code == 400
 
 
+def test_project_github_pat_api_surfaces_control_plane_error(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def connect_project_github_pat(self, **kwargs):
+            return None
+
+        def last_error(self):
+            return {
+                "status_code": 400,
+                "detail": "GitHub validation failed: 404 Not Found for branch Main",
+            }
+
+    with patch("dashboard.routes.projects.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/projects/proj-x/github/pat",
+            json={"token": "ghp_x", "repo_full_name": "owner/repo", "validate": True},
+        )
+
+    assert resp.status_code == 502
+    assert b"GitHub validation failed" in resp.data
+
+
 def test_project_github_status_api_handles_unavailable_cp(dashboard_client):
     _login_admin(dashboard_client)
     resp = dashboard_client.get("/api/projects/proj-x/github/status")

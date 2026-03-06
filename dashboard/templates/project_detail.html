@@ -115,11 +115,11 @@
     <div>
       <div class="form-group">
         <label>Repository Full Name</label>
-        <input class="form-control" id="gh-repo-full-name" placeholder="owner/repo">
+        <input class="form-control" id="gh-repo-full-name" name="project_github_repo" placeholder="owner/repo" autocomplete="off" autocapitalize="none" spellcheck="false">
       </div>
       <div class="form-group">
         <label>Personal Access Token</label>
-        <input class="form-control" id="gh-pat-token" type="password" placeholder="github_pat_...">
+        <input class="form-control" id="gh-pat-token" name="project_github_pat" type="password" placeholder="github_pat_..." autocomplete="new-password" autocapitalize="none" spellcheck="false">
       </div>
       <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
         <button class="btn btn-primary" onclick="connectGithubPat()">Connect</button>
@@ -128,7 +128,7 @@
       </div>
       <hr style="margin:0.8rem 0;">
       <div class="split-grid" style="grid-template-columns:1fr 120px 1fr; gap:0.5rem;">
-        <input class="form-control" id="gh-sync-branch" placeholder="Branch (optional)">
+        <input class="form-control" id="gh-sync-branch" name="project_github_branch" placeholder="Branch (optional, case-sensitive)" autocomplete="off" autocapitalize="none" spellcheck="false">
         <input class="form-control" id="gh-sync-max-files" type="number" min="1" max="200" value="25">
         <input class="form-control" id="gh-sync-namespace" placeholder="Namespace (optional)">
       </div>
@@ -355,6 +355,10 @@ async function refreshGithubStatus(validate) {
   }
   const data = await res.json();
   document.getElementById('github-status-pre').textContent = JSON.stringify(data, null, 2);
+  const repoInput = document.getElementById('gh-repo-full-name');
+  if (repoInput && data.repo_full_name) {
+    repoInput.value = data.repo_full_name;
+  }
   const prCfg = (data && data.pr_review && typeof data.pr_review === 'object') ? data.pr_review : {};
   const botSelect = document.getElementById('gh-pr-review-bot');
   const enabledCheck = document.getElementById('gh-pr-review-enabled');
