@@ -1,2 +1,0 @@
-"""Standalone Nexus worker package."""
-
