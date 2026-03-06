@@ -11,9 +11,9 @@ This guide prepares NexusAI for repeatable, low-disruption dashboard deployments
 ## 2. Deployment Assets Included
 
 - `docker-compose.bluegreen.yml`
-- `deploy/nginx/default.conf`
 - `deploy/nginx/default.blue.conf`
 - `deploy/nginx/default.green.conf`
+- `data/nginx/default.conf` (runtime-generated active route file)
 - `scripts/check_db_drift.sh`
 - `scripts/bootstrap_bluegreen.sh`
 - `scripts/deploy-bluegreen.sh`
@@ -27,6 +27,7 @@ Set:
 ```bash
 NEXUSAI_DEPLOY_ENABLE=1
 NEXUSAI_DEPLOY_STRATEGY=bluegreen
+NEXUSAI_STOP_PREVIOUS_COLOR=0
 NEXUSAI_BLUEGREEN_SWITCH_CMD=./scripts/switch-dashboard-color.sh
 NEXUSAI_COMPOSE_PROJECT_NAME=nexusai
 NEXUSAI_DEPLOY_RUN_CMD=docker run --rm -e NEXUSAI_DEPLOY_STRATEGY=bluegreen -e NEXUSAI_BLUEGREEN_SWITCH_CMD=./scripts/switch-dashboard-color.sh -e NEXUSAI_COMPOSE_PROJECT_NAME=nexusai -e NEXUSAI_LEGACY_DATA_VOLUME=nexusai_nexus-data -v /var/run/docker.sock:/var/run/docker.sock -v /opt/NexusAI:/opt/NexusAI -w /opt/NexusAI docker:27-cli sh -lc "sh ./scripts/deploy-bluegreen.sh"
@@ -38,6 +39,7 @@ Notes:
 - Update both `/opt/NexusAI` path segments in `NEXUSAI_DEPLOY_RUN_CMD` to your actual host repo path.
 - Use an absolute host path in both `-v` and `-w`; avoid `/workspace` unless that exact path exists on the host.
 - Avoid spaces inside `-e KEY=VALUE` entries in `NEXUSAI_DEPLOY_RUN_CMD` (for example, prefer `./scripts/switch-dashboard-color.sh` over `sh ./scripts/...`).
+- `NEXUSAI_STOP_PREVIOUS_COLOR=0` keeps both colors running after switch for faster rollback and lower disruption risk.
 - The deploy runner now defaults to blue/green strategy and `./scripts/switch-dashboard-color.sh` if unset, but explicit `-e` pass-through is recommended.
 
 ## 4. Run Preflight
@@ -87,7 +89,9 @@ Deployment behavior:
 - starts candidate color container (`blue` or `green`)
 - waits for candidate `/health` to pass
 - switches gateway route atomically
-- stops previous color only after switch succeeds
+- verifies gateway health after switch
+- rolls back traffic to previous color automatically if post-switch checks fail
+- keeps previous color running by default (`NEXUSAI_STOP_PREVIOUS_COLOR=0`)
 
 ## 7. Rollback
 

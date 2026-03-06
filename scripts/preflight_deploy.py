@@ -37,7 +37,6 @@ def main() -> int:
         ROOT / "docker-compose.bluegreen.yml",
         ROOT / "scripts" / "deploy-bluegreen.sh",
         ROOT / "scripts" / "switch-dashboard-color.sh",
-        ROOT / "deploy" / "nginx" / "default.conf",
         ROOT / "deploy" / "nginx" / "default.blue.conf",
         ROOT / "deploy" / "nginx" / "default.green.conf",
     ]
@@ -47,6 +46,12 @@ def main() -> int:
         else:
             _fail(f"missing {path.relative_to(ROOT)}")
             errors += 1
+
+    runtime_conf_dir = ROOT / "data" / "nginx"
+    if runtime_conf_dir.exists():
+        _ok("found data/nginx runtime config directory")
+    else:
+        _warn("data/nginx runtime config directory not found yet (it will be created by bootstrap/deploy)")
 
     if shutil.which("docker"):
         _ok("docker binary found")

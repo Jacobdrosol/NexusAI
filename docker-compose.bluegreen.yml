@@ -9,7 +9,7 @@ services:
     ports:
       - "5000:5000"
     volumes:
-      - ./deploy/nginx/default.conf:/etc/nginx/conf.d/default.conf
+      - ./data/nginx:/etc/nginx/conf.d
     networks:
       - nexus-bluegreen
     healthcheck:

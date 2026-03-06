@@ -203,6 +203,7 @@ Recommended environment:
 ```bash
 NEXUSAI_DEPLOY_ENABLE=1
 NEXUSAI_DEPLOY_STRATEGY=bluegreen
+NEXUSAI_STOP_PREVIOUS_COLOR=0
 NEXUSAI_COMPOSE_PROJECT_NAME=nexusai
 NEXUSAI_DEPLOY_RUN_CMD=docker run --rm -e NEXUSAI_DEPLOY_STRATEGY=bluegreen -e NEXUSAI_BLUEGREEN_SWITCH_CMD=./scripts/switch-dashboard-color.sh -e NEXUSAI_COMPOSE_PROJECT_NAME=nexusai -e NEXUSAI_LEGACY_DATA_VOLUME=nexusai_nexus-data -v /var/run/docker.sock:/var/run/docker.sock -v /opt/NexusAI:/opt/NexusAI -w /opt/NexusAI docker:27-cli sh -lc "sh ./scripts/deploy-bluegreen.sh"
 NEXUSAI_BLUEGREEN_SWITCH_CMD=./scripts/switch-dashboard-color.sh
@@ -213,7 +214,7 @@ Blue/green runtime assets:
 - `docker-compose.bluegreen.yml` (gateway + blue/green dashboard services)
 - `deploy/nginx/default.blue.conf`
 - `deploy/nginx/default.green.conf`
-- `deploy/nginx/default.conf` (active route config)
+- `data/nginx/default.conf` (runtime active route config; generated/updated by switch script)
 - `scripts/check_db_drift.sh` (fail-closed DB consistency guard)
 - `scripts/switch-dashboard-color.sh` (atomic route switch + reload)
 

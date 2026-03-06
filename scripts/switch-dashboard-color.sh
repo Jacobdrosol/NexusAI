@@ -15,13 +15,15 @@ if [ "$TARGET_COLOR" != "blue" ] && [ "$TARGET_COLOR" != "green" ]; then
 fi
 
 SOURCE_CONF="deploy/nginx/default.$TARGET_COLOR.conf"
-ACTIVE_CONF="deploy/nginx/default.conf"
+ACTIVE_CONF_DIR="data/nginx"
+ACTIVE_CONF="$ACTIVE_CONF_DIR/default.conf"
 if [ ! -f "$SOURCE_CONF" ]; then
   echo "[switch] blocked: missing $SOURCE_CONF"
   exit 2
 fi
 
 echo "[switch] applying nginx route config for $TARGET_COLOR"
+mkdir -p "$ACTIVE_CONF_DIR"
 cp "$SOURCE_CONF" "$ACTIVE_CONF"
 
 echo "[switch] reloading gateway"

@@ -15,15 +15,17 @@ echo "[bootstrap] checking DB drift guard"
 sh ./scripts/check_db_drift.sh
 
 mkdir -p data
+mkdir -p data/nginx
 if [ ! -f data/active_color.txt ]; then
   echo "blue" > data/active_color.txt
 fi
+cp deploy/nginx/default.blue.conf data/nginx/default.conf
 
 echo "[bootstrap] starting gateway + blue dashboard"
 docker compose -f docker-compose.bluegreen.yml --profile blue up -d --build dashboard_gateway dashboard_blue
 
 echo "[bootstrap] switching gateway to blue"
-NEXUSAI_TARGET_COLOR=blue ./scripts/switch-dashboard-color.sh blue
+NEXUSAI_TARGET_COLOR=blue sh ./scripts/switch-dashboard-color.sh blue
 
 echo "[bootstrap] done"
 echo "[bootstrap] dashboard is available at http://localhost:5000"

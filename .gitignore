@@ -8,6 +8,10 @@ __pycache__/
 *.log
 data/*.log
 data/*.db
+data/active_color.txt
+data/deploy_status.json
+data/nginx/
+data.backup.*/
 .venv/
 venv/
 env/
