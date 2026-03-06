@@ -148,7 +148,7 @@ Common cause in blue/green mode:
 
 ### 6.5 Blue/Green Deploy Blocked by DB Drift Guard
 
-Error pattern:
+Error pattern (strict mode):
 
 - `[db-check] drift detected: host DB and legacy volume DB differ`
 
@@ -165,6 +165,11 @@ Recovery:
 4. copy canonical to the non-canonical location
 5. rerun `sh ./scripts/check_db_drift.sh` until consistent
 6. rerun deploy
+
+Default behavior:
+
+- `NEXUSAI_DB_DRIFT_AUTO_SYNC=1` auto-reconciles drift and usually avoids manual intervention.
+- strict/manual mode is available via `NEXUSAI_DB_DRIFT_AUTO_SYNC=0`.
 
 ## 7. Pre-UAT and Release Gate
 
@@ -245,8 +250,9 @@ Recommended environment:
 NEXUSAI_DEPLOY_ENABLE=1
 NEXUSAI_DEPLOY_STRATEGY=bluegreen
 NEXUSAI_STOP_PREVIOUS_COLOR=0
+NEXUSAI_DB_DRIFT_AUTO_SYNC=1
 NEXUSAI_COMPOSE_PROJECT_NAME=nexusai
-NEXUSAI_DEPLOY_RUN_CMD=docker run --rm -e NEXUSAI_DEPLOY_STRATEGY=bluegreen -e NEXUSAI_BLUEGREEN_SWITCH_CMD=./scripts/switch-dashboard-color.sh -e NEXUSAI_COMPOSE_PROJECT_NAME=nexusai -e NEXUSAI_LEGACY_DATA_VOLUME=nexusai_nexus-data -v /var/run/docker.sock:/var/run/docker.sock -v /opt/NexusAI:/opt/NexusAI -w /opt/NexusAI docker:27-cli sh -lc "sh ./scripts/deploy-bluegreen.sh"
+NEXUSAI_DEPLOY_RUN_CMD=docker run --rm -e NEXUSAI_DEPLOY_STRATEGY=bluegreen -e NEXUSAI_BLUEGREEN_SWITCH_CMD=./scripts/switch-dashboard-color.sh -e NEXUSAI_COMPOSE_PROJECT_NAME=nexusai -e NEXUSAI_LEGACY_DATA_VOLUME=nexusai_nexus-data -e NEXUSAI_DB_DRIFT_AUTO_SYNC=1 -v /var/run/docker.sock:/var/run/docker.sock -v /opt/NexusAI:/opt/NexusAI -w /opt/NexusAI docker:27-cli sh -lc "sh ./scripts/deploy-bluegreen.sh"
 NEXUSAI_BLUEGREEN_SWITCH_CMD=./scripts/switch-dashboard-color.sh
 ```
 

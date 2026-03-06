@@ -30,9 +30,10 @@ Set:
 NEXUSAI_DEPLOY_ENABLE=1
 NEXUSAI_DEPLOY_STRATEGY=bluegreen
 NEXUSAI_STOP_PREVIOUS_COLOR=0
+NEXUSAI_DB_DRIFT_AUTO_SYNC=1
 NEXUSAI_BLUEGREEN_SWITCH_CMD=./scripts/switch-dashboard-color.sh
 NEXUSAI_COMPOSE_PROJECT_NAME=nexusai
-NEXUSAI_DEPLOY_RUN_CMD=docker run --rm -e NEXUSAI_DEPLOY_STRATEGY=bluegreen -e NEXUSAI_BLUEGREEN_SWITCH_CMD=./scripts/switch-dashboard-color.sh -e NEXUSAI_COMPOSE_PROJECT_NAME=nexusai -e NEXUSAI_LEGACY_DATA_VOLUME=nexusai_nexus-data -v /var/run/docker.sock:/var/run/docker.sock -v /opt/NexusAI:/opt/NexusAI -w /opt/NexusAI docker:27-cli sh -lc "sh ./scripts/deploy-bluegreen.sh"
+NEXUSAI_DEPLOY_RUN_CMD=docker run --rm -e NEXUSAI_DEPLOY_STRATEGY=bluegreen -e NEXUSAI_BLUEGREEN_SWITCH_CMD=./scripts/switch-dashboard-color.sh -e NEXUSAI_COMPOSE_PROJECT_NAME=nexusai -e NEXUSAI_LEGACY_DATA_VOLUME=nexusai_nexus-data -e NEXUSAI_DB_DRIFT_AUTO_SYNC=1 -v /var/run/docker.sock:/var/run/docker.sock -v /opt/NexusAI:/opt/NexusAI -w /opt/NexusAI docker:27-cli sh -lc "sh ./scripts/deploy-bluegreen.sh"
 ```
 
 Notes:
@@ -42,6 +43,7 @@ Notes:
 - Use an absolute host path in both `-v` and `-w`; avoid `/workspace` unless that exact path exists on the host.
 - Avoid spaces inside `-e KEY=VALUE` entries in `NEXUSAI_DEPLOY_RUN_CMD` (for example, prefer `./scripts/switch-dashboard-color.sh` over `sh ./scripts/...`).
 - `NEXUSAI_STOP_PREVIOUS_COLOR=0` keeps both colors running after switch for faster rollback and lower disruption risk.
+- `NEXUSAI_DB_DRIFT_AUTO_SYNC=1` auto-reconciles host/legacy DB copies during deploy to reduce manual operator commands.
 - The deploy runner now defaults to blue/green strategy and `./scripts/switch-dashboard-color.sh` if unset, but explicit `-e` pass-through is recommended.
 - Blue/green compose only controls dashboard/gateway services; control plane and worker services must be managed separately.
 
@@ -61,15 +63,15 @@ Before bootstrap/deploy, NexusAI now runs:
 sh ./scripts/check_db_drift.sh
 ```
 
-Behavior:
+Behavior with default `NEXUSAI_DB_DRIFT_AUTO_SYNC=1`:
 
-- if host DB is missing but legacy volume DB exists -> deployment is blocked
-- if both DBs exist but checksums differ -> deployment is blocked
-- if DBs match or only one canonical DB exists -> deployment continues
+- host missing + volume present -> host DB auto-restored from volume
+- host present + volume missing -> volume auto-seeded from host
+- host and volume differ -> host treated as canonical and copied to volume
 
-This is fail-closed to prevent accidental onboarding against the wrong database.
+Set `NEXUSAI_DB_DRIFT_AUTO_SYNC=0` for strict fail-closed mode (manual reconciliation required).
 
-If drift is reported:
+If strict mode is enabled and drift is reported:
 
 1. back up host `data/` and legacy volume DB
 2. choose canonical DB copy
