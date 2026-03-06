@@ -213,9 +213,11 @@ Blue/green runtime assets:
 - `deploy/nginx/default.blue.conf`
 - `deploy/nginx/default.green.conf`
 - `deploy/nginx/default.conf` (active route config)
+- `scripts/check_db_drift.sh` (fail-closed DB consistency guard)
 - `scripts/switch-dashboard-color.sh` (atomic route switch + reload)
 
 Operational note:
 
 - the dashboard will refuse to run deployment when guardrails are not satisfied
 - this prevents accidental in-place restarts that can disrupt running workloads
+- bootstrap/deploy scripts now block when host DB and legacy volume DB diverge

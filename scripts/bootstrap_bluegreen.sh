@@ -11,6 +11,9 @@ else
   exit 2
 fi
 
+echo "[bootstrap] checking DB drift guard"
+sh ./scripts/check_db_drift.sh
+
 mkdir -p data
 if [ ! -f data/active_color.txt ]; then
   echo "blue" > data/active_color.txt

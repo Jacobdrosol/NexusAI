@@ -14,6 +14,7 @@ This guide prepares NexusAI for repeatable, low-disruption dashboard deployments
 - `deploy/nginx/default.conf`
 - `deploy/nginx/default.blue.conf`
 - `deploy/nginx/default.green.conf`
+- `scripts/check_db_drift.sh`
 - `scripts/bootstrap_bluegreen.sh`
 - `scripts/deploy-bluegreen.sh`
 - `scripts/switch-dashboard-color.sh`
@@ -42,6 +43,22 @@ python scripts/preflight_deploy.py
 ```
 
 Expected result: `Preflight passed.`
+
+## 4b. DB Drift Guard (Critical)
+
+Before bootstrap/deploy, NexusAI now runs:
+
+```bash
+sh ./scripts/check_db_drift.sh
+```
+
+Behavior:
+
+- if host DB is missing but legacy volume DB exists -> deployment is blocked
+- if both DBs exist but checksums differ -> deployment is blocked
+- if DBs match or only one canonical DB exists -> deployment continues
+
+This is fail-closed to prevent accidental onboarding against the wrong database.
 
 ## 5. Bootstrap First Active Color
 

@@ -3,6 +3,9 @@ set -eu
 
 echo "[deploy] starting blue/green deploy runner"
 
+echo "[deploy] checking DB drift guard"
+sh ./scripts/check_db_drift.sh
+
 if [ "${NEXUSAI_DEPLOY_STRATEGY:-}" != "bluegreen" ]; then
   echo "[deploy] blocked: NEXUSAI_DEPLOY_STRATEGY must be 'bluegreen'"
   exit 2
