@@ -27,15 +27,16 @@ Set:
 ```bash
 NEXUSAI_DEPLOY_ENABLE=1
 NEXUSAI_DEPLOY_STRATEGY=bluegreen
-NEXUSAI_BLUEGREEN_SWITCH_CMD=./scripts/switch-dashboard-color.sh
+NEXUSAI_BLUEGREEN_SWITCH_CMD=sh ./scripts/switch-dashboard-color.sh
 NEXUSAI_COMPOSE_PROJECT_NAME=nexusai
-NEXUSAI_DEPLOY_RUN_CMD=docker run --rm -e NEXUSAI_DEPLOY_STRATEGY=bluegreen -e NEXUSAI_BLUEGREEN_SWITCH_CMD=./scripts/switch-dashboard-color.sh -e NEXUSAI_COMPOSE_PROJECT_NAME=nexusai -e NEXUSAI_LEGACY_DATA_VOLUME=nexusai_nexus-data -v /var/run/docker.sock:/var/run/docker.sock -v /opt/NexusAI:/workspace -w /workspace docker:27-cli sh -lc "sh /workspace/scripts/deploy-bluegreen.sh"
+NEXUSAI_DEPLOY_RUN_CMD=docker run --rm -e NEXUSAI_DEPLOY_STRATEGY=bluegreen -e NEXUSAI_BLUEGREEN_SWITCH_CMD=sh ./scripts/switch-dashboard-color.sh -e NEXUSAI_COMPOSE_PROJECT_NAME=nexusai -e NEXUSAI_LEGACY_DATA_VOLUME=nexusai_nexus-data -v /var/run/docker.sock:/var/run/docker.sock -v /opt/NexusAI:/opt/NexusAI -w /opt/NexusAI docker:27-cli sh -lc "sh ./scripts/deploy-bluegreen.sh"
 ```
 
 Notes:
 
 - Keep `NEXUSAI_DEPLOY_ENABLE=0` until you finish preflight.
-- Update `/opt/NexusAI` in `NEXUSAI_DEPLOY_RUN_CMD` to your actual repo path.
+- Update both `/opt/NexusAI` path segments in `NEXUSAI_DEPLOY_RUN_CMD` to your actual host repo path.
+- Use an absolute host path in both `-v` and `-w`; avoid `/workspace` unless that exact path exists on the host.
 - The deploy runner now defaults to blue/green strategy and `./scripts/switch-dashboard-color.sh` if unset, but explicit `-e` pass-through is recommended.
 
 ## 4. Run Preflight

@@ -65,7 +65,15 @@ export NEXUSAI_TARGET_COLOR="$NEXT_COLOR"
 export NEXUSAI_PREVIOUS_COLOR="$CURRENT_COLOR"
 
 echo "[deploy] switching traffic to $NEXT_COLOR"
-sh -lc "$SWITCH_CMD"
+if [ -f "$SWITCH_CMD" ]; then
+  if [ -x "$SWITCH_CMD" ]; then
+    "$SWITCH_CMD"
+  else
+    sh "$SWITCH_CMD"
+  fi
+else
+  sh -lc "$SWITCH_CMD"
+fi
 
 echo "$NEXT_COLOR" > "$CURRENT_COLOR_FILE"
 
