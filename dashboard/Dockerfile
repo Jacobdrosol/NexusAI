@@ -1,7 +1,8 @@
 FROM python:3.11-slim
 WORKDIR /app
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git ca-certificates docker.io \
+    && apt-get install -y --no-install-recommends git ca-certificates docker.io docker-cli \
+    && (command -v docker || (command -v docker.io && ln -s "$(command -v docker.io)" /usr/local/bin/docker)) \
     && docker --version \
     && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt .
