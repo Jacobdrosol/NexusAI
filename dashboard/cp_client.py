@@ -21,57 +21,101 @@ class CPClient:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.api_token = _CP_API_TOKEN
+        self._last_error: Dict[str, Any] = {}
 
     def _headers(self) -> Dict[str, str]:
         if not self.api_token:
             return {}
         return {"X-Nexus-API-Key": self.api_token}
 
-    def _get(self, path: str) -> Optional[Any]:
+    def _record_error(self, *, method: str, path: str, status_code: Optional[int], detail: str) -> None:
+        self._last_error = {
+            "method": method,
+            "path": path,
+            "status_code": status_code,
+            "detail": detail,
+        }
+
+    def _clear_error(self) -> None:
+        self._last_error = {}
+
+    def last_error(self) -> Dict[str, Any]:
+        return dict(self._last_error)
+
+    def unavailable_reason(self) -> str:
+        err = self.last_error()
+        if not err:
+            return "Control plane request failed."
+        code = err.get("status_code")
+        path = err.get("path") or "unknown path"
+        if code == 401:
+            return (
+                f"Control plane auth failed on {path} (401). "
+                "Verify CONTROL_PLANE_API_TOKEN matches control plane."
+            )
+        if code == 403:
+            return (
+                f"Control plane rejected request on {path} (403). "
+                "Verify control-plane auth policy and token permissions."
+            )
+        if code == 404:
+            return (
+                f"Control plane route not found on {path} (404). "
+                "Verify CONTROL_PLANE_URL points to the correct service."
+            )
+        if code:
+            return f"Control plane request failed on {path} (HTTP {code})."
+        return (
+            f"Control plane request failed on {path}. "
+            "Verify CONTROL_PLANE_URL reachability from dashboard container."
+        )
+
+    def _request(self, method: str, path: str, *, json: Any = None) -> Optional[Any]:
+        url = f"{self.base_url}{path}"
         try:
-            resp = requests.get(f"{self.base_url}{path}", timeout=self.timeout, headers=self._headers())
+            if method == "GET":
+                resp = requests.get(url, timeout=self.timeout, headers=self._headers())
+            elif method == "POST":
+                resp = requests.post(url, json=json, timeout=self.timeout, headers=self._headers())
+            elif method == "PUT":
+                resp = requests.put(url, json=json, timeout=self.timeout, headers=self._headers())
+            elif method == "DELETE":
+                resp = requests.delete(url, timeout=self.timeout, headers=self._headers())
+            else:
+                raise ValueError(f"unsupported method {method}")
             resp.raise_for_status()
+            self._clear_error()
+            if not resp.text:
+                return {}
             return resp.json()
-        except Exception as exc:
-            logger.warning("CP GET %s failed: %s", path, exc)
+        except requests.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else None
+            detail = ""
+            try:
+                if exc.response is not None:
+                    detail = (exc.response.text or "")[:500]
+            except Exception:
+                detail = str(exc)
+            self._record_error(method=method, path=path, status_code=status, detail=detail or str(exc))
+            logger.warning("CP %s %s failed: %s", method, path, exc)
             return None
+        except Exception as exc:
+            self._record_error(method=method, path=path, status_code=None, detail=str(exc))
+            logger.warning("CP %s %s failed: %s", method, path, exc)
+            return None
+
+    def _get(self, path: str) -> Optional[Any]:
+        return self._request("GET", path)
 
     def _post(self, path: str, json: Any) -> Optional[Any]:
-        try:
-            resp = requests.post(
-                f"{self.base_url}{path}",
-                json=json,
-                timeout=self.timeout,
-                headers=self._headers(),
-            )
-            resp.raise_for_status()
-            return resp.json()
-        except Exception as exc:
-            logger.warning("CP POST %s failed: %s", path, exc)
-            return None
+        return self._request("POST", path, json=json)
 
     def _put(self, path: str, json: Any) -> Optional[Any]:
-        try:
-            resp = requests.put(
-                f"{self.base_url}{path}",
-                json=json,
-                timeout=self.timeout,
-                headers=self._headers(),
-            )
-            resp.raise_for_status()
-            return resp.json()
-        except Exception as exc:
-            logger.warning("CP PUT %s failed: %s", path, exc)
-            return None
+        return self._request("PUT", path, json=json)
 
     def _delete(self, path: str) -> bool:
-        try:
-            resp = requests.delete(f"{self.base_url}{path}", timeout=self.timeout, headers=self._headers())
-            resp.raise_for_status()
-            return True
-        except Exception as exc:
-            logger.warning("CP DELETE %s failed: %s", path, exc)
-            return False
+        result = self._request("DELETE", path)
+        return result is not None
 
     def health(self) -> bool:
         result = self._get("/health")

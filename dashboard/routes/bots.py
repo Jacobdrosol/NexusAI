@@ -39,7 +39,7 @@ def bots_page() -> str:
     if cp_data is not None:
         return render_template("bots.html", bots=cp_data, error=None)
 
-    flash("Control plane unavailable — showing local data.", "warning")
+    flash(get_cp_client().unavailable_reason(), "warning")
     db = get_db()
     try:
         bots = db.query(Bot).order_by(Bot.priority).all()

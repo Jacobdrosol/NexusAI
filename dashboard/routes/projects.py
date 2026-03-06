@@ -19,7 +19,7 @@ def projects_page() -> str:
     error = None
     if projects is None:
         projects = []
-        error = "Control plane unavailable — projects could not be loaded."
+        error = cp.unavailable_reason()
     return render_template("projects.html", projects=projects, error=error)
 
 

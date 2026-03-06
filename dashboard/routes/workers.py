@@ -40,7 +40,7 @@ def workers_page() -> str:
     if cp_data is not None:
         return render_template("workers.html", workers=cp_data, error=None)
 
-    flash("Control plane unavailable — showing local data.", "warning")
+    flash(get_cp_client().unavailable_reason(), "warning")
     db = get_db()
     try:
         workers = db.query(Worker).all()
@@ -66,7 +66,7 @@ def worker_detail_page(worker_id: str):
     if worker is not None:
         return render_template("worker_detail.html", worker=worker, running_tasks=running_tasks, error=None)
 
-    flash("Control plane unavailable — showing local data.", "warning")
+    flash(get_cp_client().unavailable_reason(), "warning")
     db = get_db()
     try:
         if not str(worker_id).isdigit():
