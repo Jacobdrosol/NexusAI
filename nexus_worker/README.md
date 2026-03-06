@@ -39,3 +39,25 @@ or if installed with entry points:
 nexus-worker
 ```
 
+## Bootstrap a Worker Node
+
+Generate a worker config, env file, discovered capability metadata, and
+background-service install assets:
+
+```bash
+python -m nexus_worker.bootstrap \
+  --control-plane-url http://YOUR_CONTROL_PLANE_HOST:8000 \
+  --control-plane-api-token YOUR_SHARED_TOKEN \
+  --worker-name "Worker Node 01"
+```
+
+or via the installed entry point:
+
+```bash
+nexus-worker-bootstrap \
+  --control-plane-url http://YOUR_CONTROL_PLANE_HOST:8000 \
+  --control-plane-api-token YOUR_SHARED_TOKEN \
+  --worker-name "Worker Node 01"
+```
+
+See `docs/WORKER_NODE_BOOTSTRAP.md` for the full flow.

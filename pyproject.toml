@@ -32,6 +32,7 @@ dependencies = [
 
 [project.scripts]
 nexus-worker = "nexus_worker.__main__:main"
+nexus-worker-bootstrap = "nexus_worker.bootstrap:main"
 
 [project.optional-dependencies]
 test = [

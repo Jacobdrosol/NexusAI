@@ -22,6 +22,7 @@
 - Product usage: `docs/USER_GUIDE.md`
 - Operations and security: `docs/OPERATIONS.md`
 - Blue/green deployment: `docs/DEPLOY_BLUEGREEN.md`
+- Worker node bootstrap: `docs/WORKER_NODE_BOOTSTRAP.md`
 - UAT checklist: `docs/UAT_RUNBOOK.md`
 - Configuration reference: `config/README.md`
 
