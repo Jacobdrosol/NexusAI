@@ -36,6 +36,34 @@
 
 <div class="overview-grid">
   <section class="panel">
+    <h2 class="panel-title">Open-Source Setup Checklist</h2>
+    <div class="mini-note" style="margin-bottom:1rem;">
+      Required complete: {{ setup_required_complete }}/{{ setup_required_total }}
+      {% if setup_recommended_total %}
+      <span style="margin-left:1rem;">Recommended complete: {{ setup_recommended_complete }}/{{ setup_recommended_total }}</span>
+      {% endif %}
+    </div>
+    <div class="health-list">
+      {% for item in setup_checklist %}
+      <div class="health-item">
+        <div class="health-header">
+          <strong>{{ item.label }}</strong>
+          <span class="badge badge-{% if item.ok %}online{% else %}{% if item.required %}error{% else %}warning{% endif %}{% endif %}">
+            {% if item.ok %}ready{% else %}{% if item.required %}required{% else %}next{% endif %}{% endif %}
+          </span>
+        </div>
+        <div class="mini-note" style="margin-top:0.35rem;">{{ item.detail }}</div>
+        <div style="margin-top:0.6rem;">
+          <a class="quick-link" href="{{ item.href }}" style="display:inline-flex;padding:0.35rem 0.7rem;font-size:0.8rem;">
+            {{ item.cta }}
+          </a>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="panel">
     <h2 class="panel-title">System Alerts</h2>
     <div class="alert-list">
       {% for a in system_alerts %}

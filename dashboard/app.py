@@ -98,12 +98,18 @@ def create_app() -> Flask:
     def index():
         """Overview / home page."""
         from dashboard.cp_client import get_cp_client
+        from dashboard.models import User
 
         cp = get_cp_client()
+        cp_health_ok = cp.health()
         cp_workers = cp.list_workers()
         cp_bots = cp.list_bots()
+        cp_projects = cp.list_projects()
         cp_tasks = cp.list_tasks()
-        cp_available = cp_workers is not None or cp_bots is not None or cp_tasks is not None
+        cp_auth_ok = (
+            cp_workers is not None and cp_bots is not None and cp_projects is not None
+        )
+        cp_available = cp_auth_ok or cp_tasks is not None
 
         if cp_available:
             workers = cp_workers or []
@@ -204,6 +210,145 @@ def create_app() -> Flask:
             finally:
                 db.close()
 
+        db = get_db()
+        try:
+            admin_count = db.query(User).filter(User.role == "admin", User.is_active.is_(True)).count()
+            user_count = db.query(User).filter(User.is_active.is_(True)).count()
+        finally:
+            db.close()
+
+        secret_key = (os.environ.get("NEXUSAI_SECRET_KEY", "") or "").strip()
+        cp_token = (os.environ.get("CONTROL_PLANE_API_TOKEN", "") or "").strip()
+        cp_url = (os.environ.get("CONTROL_PLANE_URL", "") or "").strip()
+        dashboard_secret_ok = bool(secret_key and secret_key != "dev-secret-change-in-production")
+        cp_token_ok = bool(cp_token)
+        dashboard_cloud_policy = (os.environ.get("NEXUSAI_CLOUD_CONTEXT_POLICY", "") or "").strip().lower()
+        worker_cloud_policy = (os.environ.get("NEXUS_WORKER_CLOUD_CONTEXT_POLICY", "") or "").strip().lower()
+        safe_cloud_policies = {"block", "redact"}
+        cloud_policy_ok = (
+            dashboard_cloud_policy in safe_cloud_policies
+            and worker_cloud_policy in safe_cloud_policies
+        )
+
+        cp_auth_detail = "Control plane API is reachable and authenticated."
+        if not cp_health_ok:
+            cp_auth_detail = (
+                "Control plane health check failed. Verify CONTROL_PLANE_URL and service reachability."
+            )
+        elif not cp_auth_ok:
+            cp_auth_detail = cp.unavailable_reason()
+
+        setup_checklist = [
+            {
+                "label": "Dashboard session secret configured",
+                "ok": dashboard_secret_ok,
+                "required": True,
+                "detail": (
+                    "NEXUSAI_SECRET_KEY is set."
+                    if dashboard_secret_ok
+                    else "Set NEXUSAI_SECRET_KEY to a long random value before shared use."
+                ),
+                "href": url_for("settings.settings_page"),
+                "cta": "Review Settings",
+            },
+            {
+                "label": "Control plane URL and token configured",
+                "ok": bool(cp_url and cp_token_ok),
+                "required": True,
+                "detail": (
+                    f"CONTROL_PLANE_URL is {cp_url}."
+                    if cp_url and cp_token_ok
+                    else "Set CONTROL_PLANE_URL and CONTROL_PLANE_API_TOKEN in the runtime environment."
+                ),
+                "href": url_for("settings.settings_page"),
+                "cta": "Open Settings",
+            },
+            {
+                "label": "Control plane health and auth",
+                "ok": cp_health_ok and cp_auth_ok,
+                "required": True,
+                "detail": cp_auth_detail,
+                "href": url_for("projects.projects_page"),
+                "cta": "Open Projects",
+            },
+            {
+                "label": "Safe cloud context policy",
+                "ok": cloud_policy_ok,
+                "required": True,
+                "detail": (
+                    f"Dashboard={dashboard_cloud_policy or 'unset'}, worker={worker_cloud_policy or 'unset'}."
+                    if cloud_policy_ok
+                    else "Set both NEXUSAI_CLOUD_CONTEXT_POLICY and NEXUS_WORKER_CLOUD_CONTEXT_POLICY to block or redact."
+                ),
+                "href": url_for("settings.settings_page"),
+                "cta": "Review Settings",
+            },
+            {
+                "label": "Admin account ready",
+                "ok": admin_count > 0,
+                "required": True,
+                "detail": (
+                    f"{admin_count} active admin account(s) available."
+                    if admin_count > 0
+                    else "Complete onboarding or create an admin user."
+                ),
+                "href": url_for("settings.settings_page"),
+                "cta": "Open Settings",
+            },
+            {
+                "label": "Worker registration",
+                "ok": total_workers > 0,
+                "required": False,
+                "detail": (
+                    f"{total_workers} worker(s) registered."
+                    if total_workers > 0
+                    else "Register at least one worker before bot/task UAT."
+                ),
+                "href": url_for("workers.workers_page"),
+                "cta": "Open Workers",
+            },
+            {
+                "label": "Bot configuration",
+                "ok": active_bots > 0,
+                "required": False,
+                "detail": (
+                    f"{active_bots} enabled bot(s) configured."
+                    if active_bots > 0
+                    else "Create at least one bot with a valid backend chain."
+                ),
+                "href": url_for("bots.bots_page"),
+                "cta": "Open Bots",
+            },
+            {
+                "label": "Project bootstrap",
+                "ok": len(cp_projects or []) > 0,
+                "required": False,
+                "detail": (
+                    f"{len(cp_projects or [])} project(s) visible from control plane."
+                    if cp_projects is not None
+                    else "Projects check is blocked until control-plane auth succeeds."
+                ),
+                "href": url_for("projects.projects_page"),
+                "cta": "Open Projects",
+            },
+            {
+                "label": "User access validation",
+                "ok": user_count > 0,
+                "required": False,
+                "detail": f"{user_count} active user account(s) available.",
+                "href": url_for("settings.settings_page"),
+                "cta": "Open Settings",
+            },
+        ]
+        setup_required_total = sum(1 for item in setup_checklist if item["required"])
+        setup_required_complete = sum(
+            1 for item in setup_checklist if item["required"] and item["ok"]
+        )
+        setup_recommended_total = sum(1 for item in setup_checklist if not item["required"])
+        setup_recommended_complete = sum(
+            1 for item in setup_checklist if not item["required"] and item["ok"]
+        )
+
         system_alerts = []
         if not cp_available:
             system_alerts.append(
@@ -248,6 +393,11 @@ def create_app() -> Flask:
             recent_activity=recent_activity,
             system_alerts=system_alerts,
             quick_links=quick_links,
+            setup_checklist=setup_checklist,
+            setup_required_total=setup_required_total,
+            setup_required_complete=setup_required_complete,
+            setup_recommended_total=setup_recommended_total,
+            setup_recommended_complete=setup_recommended_complete,
         )
 
     @app.context_processor

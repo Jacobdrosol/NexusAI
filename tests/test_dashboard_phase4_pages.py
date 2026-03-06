@@ -215,6 +215,9 @@ def test_overview_page_shows_enhanced_sections(dashboard_client):
     _login_admin(dashboard_client)
     resp = dashboard_client.get("/")
     assert resp.status_code == 200
+    assert b"Open-Source Setup Checklist" in resp.data
+    assert b"Control plane health and auth" in resp.data
+    assert b"Required complete:" in resp.data
     assert b"System Alerts" in resp.data
     assert b"Recent Activity" in resp.data
     assert b"Worker Health" in resp.data

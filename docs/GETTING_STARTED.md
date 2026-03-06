@@ -102,17 +102,30 @@ If onboarding is already complete, you will be redirected to login.
 
 After login:
 
-1. Open `Workers` and confirm at least one worker is online.
-2. Open `Bots` and create or verify a bot with a valid backend.
+1. Open `Overview` and review the `Open-Source Setup Checklist`.
+   - Required items cover the first bootstrap gate:
+     - dashboard session secret
+     - control-plane URL/token
+     - control-plane health and `/v1/*` auth
+     - safe cloud-context policy
+     - admin account readiness
+   - Recommended items help you finish first-use setup:
+     - worker registration
+     - bot configuration
+     - project bootstrap
+2. If the checklist shows `Control plane health and auth` as not ready, fix that before continuing.
+   - A green `/health` alone is not enough; the dashboard also validates authenticated `/v1/projects`, `/v1/bots`, and `/v1/workers` access.
+3. Open `Workers` and confirm at least one worker is online.
+4. Open `Bots` and create or verify a bot with a valid backend.
    - For cloud providers, add keys in `Settings -> API Keys` and reference by nickname (`api_key_ref`).
-3. Open `Projects` and create one project.
-4. Open `Vault` and ingest a small test document.
-5. Open `Chat`:
+5. Open `Projects` and create one project.
+6. Open `Vault` and ingest a small test document.
+7. Open `Chat`:
    - create a conversation
    - send a normal message
    - run streaming message
    - test `@assign` task orchestration
-6. Open `Tasks` and verify status transitions.
+8. Open `Tasks` and verify status transitions.
 
 ## 7. Verify Metrics
 

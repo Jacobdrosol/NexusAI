@@ -245,6 +245,7 @@ python -c "import secrets; print('NEXUSAI_SECRET_KEY=' + secrets.token_urlsafe(6
 ## Pre-UAT Guide
 
 - Full step-by-step runbook: `docs/UAT_RUNBOOK.md`
+- First in-app checkpoint: after login, open `Overview` and clear the `Open-Source Setup Checklist` required items before broader UAT.
 - Automated preflight script:
   - `scripts/pre_uat_security_checks.ps1`
 
