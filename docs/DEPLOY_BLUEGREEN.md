@@ -7,6 +7,8 @@ This guide prepares NexusAI for repeatable, low-disruption dashboard deployments
 - Docker + Docker Compose installed on the target host
 - Repository cloned on target host (example path: `/opt/nexusai`)
 - `.env` created from `.env.example`
+- Control plane reachable from dashboard containers (`CONTROL_PLANE_URL`)
+- Matching `CONTROL_PLANE_API_TOKEN` configured on both dashboard and control plane
 
 ## 2. Deployment Assets Included
 
@@ -41,6 +43,7 @@ Notes:
 - Avoid spaces inside `-e KEY=VALUE` entries in `NEXUSAI_DEPLOY_RUN_CMD` (for example, prefer `./scripts/switch-dashboard-color.sh` over `sh ./scripts/...`).
 - `NEXUSAI_STOP_PREVIOUS_COLOR=0` keeps both colors running after switch for faster rollback and lower disruption risk.
 - The deploy runner now defaults to blue/green strategy and `./scripts/switch-dashboard-color.sh` if unset, but explicit `-e` pass-through is recommended.
+- Blue/green compose only controls dashboard/gateway services; control plane and worker services must be managed separately.
 
 ## 4. Run Preflight
 
@@ -65,6 +68,14 @@ Behavior:
 - if DBs match or only one canonical DB exists -> deployment continues
 
 This is fail-closed to prevent accidental onboarding against the wrong database.
+
+If drift is reported:
+
+1. back up host `data/` and legacy volume DB
+2. choose canonical DB copy
+3. synchronize canonical DB to the other location
+4. rerun `sh ./scripts/check_db_drift.sh`
+5. only then rerun deploy
 
 ## 5. Bootstrap First Active Color
 

@@ -59,6 +59,36 @@ For cloud backends:
 - reference them by `api_key_ref`
 - do not hardcode secrets in bot YAML files
 
+### 3.4 Bot Connections (HTTP/OpenAPI and Database)
+
+Each bot now has a `Connections` workspace for external systems.
+
+Supported connection kinds:
+
+- `HTTP / API`: base URL + authentication + optional OpenAPI schema
+- `Database`: DSN connection string + readonly query mode
+
+What you can do:
+
+1. Open `Bots -> <bot> -> Connections`
+2. Create and attach one or more connections to that bot
+3. Paste OpenAPI schema (YAML/JSON) to discover actions
+4. Run test calls/queries directly from the dashboard
+
+Connection behavior:
+
+- multiple connections per bot are supported
+- credentials are encrypted at rest
+- secret values are masked in UI/API responses
+- API action extraction is derived from OpenAPI `paths` and `operationId`
+
+Security guidance:
+
+- prefer least-privilege credentials
+- keep database connections in readonly mode unless writes are explicitly required
+- scope API keys/tokens to the exact endpoints needed by each bot
+- rotate credentials periodically and after any suspected exposure
+
 ## 4. Projects
 
 Project modes:

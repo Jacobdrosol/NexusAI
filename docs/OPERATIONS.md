@@ -106,6 +106,27 @@ Restore minimum:
   - `docker compose logs dashboard`
   - `docker compose logs prometheus`
 
+### 6.1a Dashboard Shows "Control plane unavailable — showing local data"
+
+This means dashboard requests to control plane failed and UI is using local fallback rows.
+
+Check in order:
+
+1. control plane is running and listening:
+   - `ss -lntp | grep 8000`
+   - `curl -fsS http://127.0.0.1:8000/health`
+2. dashboard `.env` has reachable values:
+   - `CONTROL_PLANE_URL=http://<reachable-host>:8000`
+   - `CONTROL_PLANE_API_TOKEN=<matching token>`
+   - `CP_TIMEOUT=5` (or higher for slow links)
+3. inside active dashboard container:
+   - print env vars and call `CONTROL_PLANE_URL/health`
+4. if URL works but `/v1/*` fails, verify token match on both sides
+
+Common cause in blue/green mode:
+
+- dashboard/gateway run in separate compose stack; default `http://control_plane:8000` DNS name is not resolvable unless explicitly networked together.
+
 ### 6.2 Worker offline
 
 - check worker can reach control plane URL
@@ -124,6 +145,26 @@ Restore minimum:
 - verify HMAC signature and secret
 - verify `X-GitHub-Delivery` uniqueness
 - verify event type is supported
+
+### 6.5 Blue/Green Deploy Blocked by DB Drift Guard
+
+Error pattern:
+
+- `[db-check] drift detected: host DB and legacy volume DB differ`
+
+Meaning:
+
+- host `data/nexusai.db` and legacy volume DB are not identical
+- deployment is intentionally blocked to prevent data corruption
+
+Recovery:
+
+1. back up both copies
+2. inspect both DBs (table counts/recent updates)
+3. choose canonical copy
+4. copy canonical to the non-canonical location
+5. rerun `sh ./scripts/check_db_drift.sh` until consistent
+6. rerun deploy
 
 ## 7. Pre-UAT and Release Gate
 

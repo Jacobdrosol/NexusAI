@@ -72,6 +72,20 @@ Open:
 - Worker Agent health: `http://localhost:8001/health`
 - Prometheus: `http://localhost:9090`
 
+Important for blue/green dashboard deployments:
+
+- `docker-compose.bluegreen.yml` runs dashboard + gateway only.
+- Control plane and worker services must be running separately and reachable from dashboard containers.
+- Set `CONTROL_PLANE_URL` and `CONTROL_PLANE_API_TOKEN` in `.env` before recreating the active dashboard color container.
+
+Example (single-host split stack):
+
+```bash
+CONTROL_PLANE_URL=http://100.81.64.82:8000
+CONTROL_PLANE_API_TOKEN=<same token used by control_plane>
+CP_TIMEOUT=5
+```
+
 ## 5. First Login and Onboarding
 
 On first dashboard visit, complete onboarding:
@@ -127,6 +141,22 @@ pytest -q
 ```
 
 Use this before and after local changes.
+
+## 8b. Runtime Verification (Recommended)
+
+After deploy or env changes, verify end-to-end connectivity:
+
+```bash
+curl -fsS http://127.0.0.1:5000/health
+curl -fsS http://127.0.0.1:8000/health
+curl -fsS http://127.0.0.1:8001/health
+```
+
+If dashboard shows `Control plane unavailable — showing local data`, verify:
+
+1. control plane process is listening on `0.0.0.0:8000`
+2. `CONTROL_PLANE_URL` is set to a reachable host from inside dashboard container
+3. `CONTROL_PLANE_API_TOKEN` exactly matches control plane token
 
 ## 9. Local Process Mode (No Docker)
 
