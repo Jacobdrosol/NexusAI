@@ -115,6 +115,7 @@ After login:
      - project bootstrap
 2. If the checklist shows `Control plane health and auth` as not ready, fix that before continuing.
    - A green `/health` alone is not enough; the dashboard also validates authenticated `/v1/projects`, `/v1/bots`, and `/v1/workers` access.
+   - Use the `Control Plane Checks` table on `Overview` to see which endpoint is failing and whether the issue is auth (`401`), routing (`404`), or network reachability.
 3. Open `Workers` and confirm at least one worker is online.
 4. Open `Bots` and create or verify a bot with a valid backend.
    - For cloud providers, add keys in `Settings -> API Keys` and reference by nickname (`api_key_ref`).

@@ -70,6 +70,37 @@ class CPClient:
             "Verify CONTROL_PLANE_URL reachability from dashboard container."
         )
 
+    def probe_paths(self, paths: List[str]) -> List[Dict[str, Any]]:
+        """Probe control-plane paths and return per-endpoint status details."""
+        results: List[Dict[str, Any]] = []
+        for path in paths:
+            url = f"{self.base_url}{path}"
+            try:
+                resp = requests.get(url, timeout=self.timeout, headers=self._headers())
+                detail = ""
+                try:
+                    detail = (resp.text or "")[:160].strip()
+                except Exception:
+                    detail = ""
+                results.append(
+                    {
+                        "path": path,
+                        "ok": 200 <= resp.status_code < 300,
+                        "status_code": resp.status_code,
+                        "detail": detail,
+                    }
+                )
+            except Exception as exc:
+                results.append(
+                    {
+                        "path": path,
+                        "ok": False,
+                        "status_code": None,
+                        "detail": str(exc),
+                    }
+                )
+        return results
+
     def _request(self, method: str, path: str, *, json: Any = None) -> Optional[Any]:
         url = f"{self.base_url}{path}"
         try:

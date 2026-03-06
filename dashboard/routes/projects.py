@@ -11,6 +11,30 @@ from dashboard.cp_client import get_cp_client
 bp = Blueprint("projects", __name__)
 
 
+def _normalize_github_status(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raw = {}
+    return {
+        "connected": bool(raw.get("connected", False)),
+        "has_webhook_secret": bool(raw.get("has_webhook_secret", False)),
+        "repo_full_name": raw.get("repo_full_name"),
+        "validated": raw.get("validated"),
+        "user_login": raw.get("user_login"),
+        "user_id": raw.get("user_id"),
+        "repo": raw.get("repo") if isinstance(raw.get("repo"), dict) else {},
+        "pr_review": raw.get("pr_review") if isinstance(raw.get("pr_review"), dict) else {},
+    }
+
+
+def _normalize_webhook_events(raw: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw, dict):
+        return []
+    events = raw.get("events")
+    if not isinstance(events, list):
+        return []
+    return [e for e in events if isinstance(e, dict)]
+
+
 @bp.get("/projects")
 @login_required
 def projects_page() -> str:
@@ -36,6 +60,8 @@ def project_detail_page(project_id: str):
             tasks=[],
             vault_items=[],
             all_projects=[],
+            github_status=_normalize_github_status(None),
+            webhook_events=[],
             error="Control plane unavailable or project not found.",
         ), 502
 
@@ -59,8 +85,10 @@ def project_detail_page(project_id: str):
         tasks=project_tasks,
         vault_items=vault_items,
         all_projects=all_projects,
-        github_status=(cp.get_project_github_status(project_id) or {"connected": False}),
-        webhook_events=((cp.list_project_github_webhook_events(project_id, limit=30) or {}).get("events", [])),
+        github_status=_normalize_github_status(cp.get_project_github_status(project_id)),
+        webhook_events=_normalize_webhook_events(
+            cp.list_project_github_webhook_events(project_id, limit=30)
+        ),
         error=None,
     )
 

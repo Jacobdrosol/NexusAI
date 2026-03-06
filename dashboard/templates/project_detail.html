@@ -184,8 +184,8 @@
     <div>
       <div><strong>Connection Flags</strong></div>
       <pre id="webhook-flags-pre" style="white-space:pre-wrap; margin-top:0.35rem;">{{ {
-  "connected": github_status.connected if github_status else false,
-  "has_webhook_secret": github_status.has_webhook_secret if github_status else false
+  "connected": github_status.get("connected", false) if github_status else false,
+  "has_webhook_secret": github_status.get("has_webhook_secret", false) if github_status else false
 } | tojson(indent=2) }}</pre>
     </div>
   </div>

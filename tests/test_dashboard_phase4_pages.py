@@ -1,6 +1,7 @@
 """Smoke tests for new Phase 4 dashboard pages."""
 
 import bcrypt
+from unittest.mock import patch
 
 
 def _login_admin(dashboard_client):
@@ -37,6 +38,48 @@ def test_project_detail_page_handles_unavailable_cp(dashboard_client):
     resp = dashboard_client.get("/projects/proj-x")
     assert resp.status_code == 502
     assert b"Project Detail" in resp.data
+
+
+def test_project_detail_page_renders_with_partial_github_status(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def get_project(self, project_id):
+            return {
+                "id": project_id,
+                "name": "GlobeIQ",
+                "mode": "isolated",
+                "enabled": True,
+                "description": "test project",
+                "settings_overrides": {},
+                "bridge_project_ids": [],
+                "bot_ids": [],
+            }
+
+        def list_projects(self):
+            return [{"id": "globeiq", "name": "GlobeIQ", "mode": "isolated", "enabled": True, "bridge_project_ids": [], "bot_ids": []}]
+
+        def list_bots(self):
+            return []
+
+        def list_tasks(self):
+            return []
+
+        def list_vault_items(self, **kwargs):
+            return []
+
+        def get_project_github_status(self, project_id):
+            return {"connected": True}
+
+        def list_project_github_webhook_events(self, project_id, limit=30):
+            return {"events": []}
+
+    with patch("dashboard.routes.projects.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/projects/globeiq")
+
+    assert resp.status_code == 200
+    assert b"GitHub Integration (PAT)" in resp.data
+    assert b"Connection Flags" in resp.data
 
 
 def test_chat_page_loads_when_logged_in(dashboard_client):
@@ -216,7 +259,9 @@ def test_overview_page_shows_enhanced_sections(dashboard_client):
     resp = dashboard_client.get("/")
     assert resp.status_code == 200
     assert b"Open-Source Setup Checklist" in resp.data
+    assert b"Control Plane Checks" in resp.data
     assert b"Control plane health and auth" in resp.data
+    assert b"/v1/projects" in resp.data
     assert b"Required complete:" in resp.data
     assert b"System Alerts" in resp.data
     assert b"Recent Activity" in resp.data

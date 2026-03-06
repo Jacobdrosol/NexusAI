@@ -73,6 +73,36 @@
   </section>
 
   <section class="panel">
+    <h2 class="panel-title">Control Plane Checks</h2>
+    <table>
+      <thead><tr><th>Endpoint</th><th>Status</th><th>Detail</th></tr></thead>
+      <tbody>
+        {% for item in cp_endpoint_checks %}
+        <tr>
+          <td><code>{{ item.path }}</code></td>
+          <td>
+            {% if item.ok %}
+            <span class="badge badge-online">{{ item.status_code }}</span>
+            {% elif item.status_code %}
+            <span class="badge badge-error">{{ item.status_code }}</span>
+            {% else %}
+            <span class="badge badge-warning">error</span>
+            {% endif %}
+          </td>
+          <td style="font-size:0.85rem;color:#a0aec0;">
+            {% if item.detail %}
+            {{ item.detail }}
+            {% else %}
+            no response body
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <section class="panel">
     <h2 class="panel-title">Quick Links</h2>
     <div class="quick-links">
       {% for q in quick_links %}

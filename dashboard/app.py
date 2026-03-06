@@ -106,6 +106,9 @@ def create_app() -> Flask:
         cp_bots = cp.list_bots()
         cp_projects = cp.list_projects()
         cp_tasks = cp.list_tasks()
+        cp_endpoint_checks = cp.probe_paths(
+            ["/health", "/v1/projects", "/v1/bots", "/v1/workers"]
+        )
         cp_auth_ok = (
             cp_workers is not None and cp_bots is not None and cp_projects is not None
         )
@@ -398,6 +401,7 @@ def create_app() -> Flask:
             setup_required_complete=setup_required_complete,
             setup_recommended_total=setup_recommended_total,
             setup_recommended_complete=setup_recommended_complete,
+            cp_endpoint_checks=cp_endpoint_checks,
         )
 
     @app.context_processor
