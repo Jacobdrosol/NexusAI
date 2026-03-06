@@ -6,7 +6,8 @@ echo "[deploy] starting blue/green deploy runner"
 echo "[deploy] checking DB drift guard"
 sh ./scripts/check_db_drift.sh
 
-if [ "${NEXUSAI_DEPLOY_STRATEGY:-}" != "bluegreen" ]; then
+STRATEGY="${NEXUSAI_DEPLOY_STRATEGY:-bluegreen}"
+if [ "$STRATEGY" != "bluegreen" ]; then
   echo "[deploy] blocked: NEXUSAI_DEPLOY_STRATEGY must be 'bluegreen'"
   exit 2
 fi
@@ -17,11 +18,7 @@ if [ ! -f "docker-compose.bluegreen.yml" ]; then
   exit 2
 fi
 
-if [ -z "${NEXUSAI_BLUEGREEN_SWITCH_CMD:-}" ]; then
-  echo "[deploy] blocked: NEXUSAI_BLUEGREEN_SWITCH_CMD is not set"
-  echo "[deploy] this command must atomically switch traffic to the new color"
-  exit 2
-fi
+SWITCH_CMD="${NEXUSAI_BLUEGREEN_SWITCH_CMD:-./scripts/switch-dashboard-color.sh}"
 
 echo "[deploy] fetching latest main"
 git fetch origin main
@@ -66,7 +63,7 @@ export NEXUSAI_TARGET_COLOR="$NEXT_COLOR"
 export NEXUSAI_PREVIOUS_COLOR="$CURRENT_COLOR"
 
 echo "[deploy] switching traffic to $NEXT_COLOR"
-sh -lc "$NEXUSAI_BLUEGREEN_SWITCH_CMD"
+sh -lc "$SWITCH_CMD"
 
 echo "$NEXT_COLOR" > "$CURRENT_COLOR_FILE"
 
