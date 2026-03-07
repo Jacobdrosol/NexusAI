@@ -25,6 +25,19 @@ def _cp_error_response(cp, fallback: str = "control plane unavailable"):
     return jsonify({"error": detail or fallback}), (status_code or 502)
 
 
+def _stream_cp_headers(cp) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    token = ""
+    if hasattr(cp, "api_token"):
+        token = str(getattr(cp, "api_token") or "").strip()
+    if not token:
+        token = (os.environ.get("CONTROL_PLANE_API_TOKEN", "") or "").strip()
+    if token:
+        headers["X-Nexus-API-Key"] = token
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
 @bp.get("/chat")
 @login_required
 def chat_page() -> str:
@@ -126,7 +139,7 @@ def api_send_message_stream():
             with requests.post(
                 stream_url,
                 json=payload,
-                headers=cp._headers() if hasattr(cp, "_headers") else {},
+                headers=_stream_cp_headers(cp),
                 stream=True,
                 timeout=120,
             ) as upstream:
