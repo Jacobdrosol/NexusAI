@@ -139,6 +139,14 @@ class Scheduler:
                 raise BackendError(
                     f"Worker {worker.id} is not online (status={worker.status})"
                 )
+            yield {
+                "event": "dispatch_started",
+                "worker_id": worker.id,
+                "host": worker.host,
+                "port": worker.port,
+                "provider": backend.provider,
+                "model": backend.model,
+            }
             async for event in self._dispatch_to_worker_stream(worker, backend, safe_payload):
                 yield event
             return
@@ -291,6 +299,14 @@ class Scheduler:
             body["gpu_id"] = backend.gpu_id
         self._inflight_by_worker[worker.id] = int(self._inflight_by_worker.get(worker.id, 0)) + 1
         started = time.perf_counter()
+        saw_token = False
+        logger.info(
+            "Dispatching stream task to worker=%s provider=%s model=%s url=%s",
+            worker.id,
+            backend.provider,
+            backend.model,
+            url,
+        )
         async with httpx.AsyncClient(timeout=180.0) as client:
             try:
                 async with client.stream("POST", url, json=body) as response:
@@ -317,8 +333,24 @@ class Scheduler:
                             payload_obj = json.loads(data_text)
                             if isinstance(payload_obj, dict):
                                 payload_obj.setdefault("event", event_type)
+                                if event_type == "token" and not saw_token:
+                                    saw_token = True
+                                    logger.info(
+                                        "First stream token received worker=%s provider=%s model=%s",
+                                        worker.id,
+                                        backend.provider,
+                                        backend.model,
+                                    )
                                 yield payload_obj
             finally:
+                logger.info(
+                    "Stream task finished worker=%s provider=%s model=%s elapsed_ms=%.1f saw_token=%s",
+                    worker.id,
+                    backend.provider,
+                    backend.model,
+                    (time.perf_counter() - started) * 1000.0,
+                    saw_token,
+                )
                 elapsed_ms = (time.perf_counter() - started) * 1000.0
                 prev = float(self._latency_ema_ms.get(worker.id, self._default_latency_ms))
                 alpha = min(max(self._latency_alpha, 0.01), 1.0)

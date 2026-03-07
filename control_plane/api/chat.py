@@ -325,7 +325,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
 
             resolved_context = await _resolve_context_items(request, body)
             payload = _messages_to_payload(messages, context_items=resolved_context)
-            yield 'event: status\ndata: {"phase":"queued","label":"Queued on selected backend..."}\n\n'
+            yield f'event: status\ndata: {json.dumps({"phase":"queued","label":"Queued on selected backend...","conversation_id":conversation_id,"message_count":len(messages)})}\n\n'
             task = Task(
                 id=f"chat-{user_message.id}",
                 bot_id=target_bot_id,
@@ -350,6 +350,14 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                     if worker_id:
                         label += f" on {worker_id}"
                     yield f'event: status\ndata: {json.dumps({"phase": "running", "label": label})}\n\n'
+                elif event_name == "dispatch_started":
+                    worker_id = str(event.get("worker_id") or "").strip()
+                    host = str(event.get("host") or "").strip()
+                    port = event.get("port")
+                    label = f"Worker {worker_id} accepted request"
+                    if host and port:
+                        label += f" ({host}:{port})"
+                    yield f'event: status\ndata: {json.dumps({"phase": "dispatching", "label": label})}\n\n'
                 elif event_name == "token":
                     yield f'event: token\ndata: {json.dumps({"text": str(event.get("text") or "")})}\n\n'
                 elif event_name == "final":
