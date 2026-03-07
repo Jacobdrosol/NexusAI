@@ -5,6 +5,7 @@ import json
 import logging
 from typing import Any
 
+import requests
 from flask import Blueprint, flash, jsonify, render_template, request
 from flask_login import login_required
 
@@ -28,6 +29,14 @@ def _worker_to_dict(w: Worker) -> dict[str, Any]:
         "capabilities": w.capabilities_as_dict(),
         "metrics": w.metrics_as_dict(),
     }
+
+
+def _worker_base_url(worker: dict[str, Any]) -> str:
+    host = str(worker.get("host") or "").strip()
+    port = int(worker.get("port") or 0)
+    if not host or not port:
+        raise ValueError("worker host/port unavailable")
+    return f"http://{host}:{port}"
 
 
 @bp.get("/workers")
@@ -257,3 +266,38 @@ def api_worker_live(worker_id: str):
         return jsonify({"worker": _worker_to_dict(local), "running_tasks": running_tasks})
     finally:
         db.close()
+
+
+@bp.post("/api/workers/<worker_id>/models/pull")
+@login_required
+def api_worker_pull_model(worker_id: str):
+    from dashboard.cp_client import get_cp_client
+
+    data: dict[str, Any] = request.get_json(force=True) or {}
+    model = str(data.get("model") or "").strip()
+    provider = str(data.get("provider") or "ollama").strip().lower() or "ollama"
+    if not model:
+        return jsonify({"error": "model is required"}), 400
+
+    cp = get_cp_client()
+    worker = cp.get_worker(worker_id)
+    if worker is None:
+        return jsonify({"error": "worker lookup failed"}), 502
+
+    try:
+        base_url = _worker_base_url(worker)
+        resp = requests.post(
+            f"{base_url}/models/local/pull",
+            json={"model": model, "provider": provider},
+            timeout=600,
+        )
+        if resp.text:
+            payload = resp.json()
+        else:
+            payload = {}
+        if resp.status_code >= 400:
+            return jsonify({"error": payload.get("detail") or payload.get("error") or "model pull failed"}), resp.status_code
+        return jsonify(payload)
+    except requests.RequestException as exc:
+        logger.warning("Worker model pull failed for %s: %s", worker_id, exc)
+        return jsonify({"error": str(exc)}), 502

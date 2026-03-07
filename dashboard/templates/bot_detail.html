@@ -135,12 +135,13 @@
       <div class="form-group">
         <label>Model</label>
         <select class="form-control" name="model_select" onchange="syncModelInput(this.value)">
-          <option value="">Custom...</option>
-          {% for m in models %}
-          <option value="{{ m.name }}">{{ m.provider }} / {{ m.name }}</option>
-          {% endfor %}
+          <option value="">Select installed model...</option>
         </select>
         <input class="form-control" style="margin-top:0.5rem;" name="model" placeholder="Model name">
+        <div style="margin-top:0.5rem;display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
+          <button id="btn-install-model" type="button" class="btn" style="display:none;" onclick="installModelOnWorker()">Install on Worker</button>
+          <span style="font-size:0.8rem;color:#718096;">For local workers, choose from discovered installed models or install one here.</span>
+        </div>
       </div>
       <div class="form-group">
         <label>Worker</label>
@@ -188,6 +189,8 @@
 const BOT_ID = {{ bot.id|tojson }};
 let BOT = {{ bot|tojson }};
 const TASKS = {{ tasks|tojson }};
+const WORKERS = {{ workers|tojson }};
+const GLOBAL_MODELS = {{ models|tojson }};
 
 function getCsrf() {
   const el = document.querySelector('input[name=csrf_token]');
@@ -217,6 +220,114 @@ function saveBotInfo() {
 function syncModelInput(value) {
   if (!value) return;
   document.querySelector('#form-backend input[name=model]').value = value;
+}
+
+function modelsForWorker(workerId, provider) {
+  const worker = (WORKERS || []).find((w) => String(w.id) === String(workerId));
+  if (!worker) return [];
+  const capabilities = Array.isArray(worker.capabilities) ? worker.capabilities : [];
+  const wantedProvider = String(provider || '').trim().toLowerCase();
+  const names = [];
+  capabilities.forEach((cap) => {
+    if (String(cap.type || '').toLowerCase() !== 'llm') return;
+    if (wantedProvider && String(cap.provider || '').toLowerCase() !== wantedProvider) return;
+    (cap.models || []).forEach((name) => {
+      if (name && !names.includes(name)) names.push(name);
+    });
+  });
+  return names;
+}
+
+function globalModelsForProvider(provider) {
+  const wantedProvider = String(provider || '').trim().toLowerCase();
+  const names = [];
+  (GLOBAL_MODELS || []).forEach((m) => {
+    if (wantedProvider && String(m.provider || '').toLowerCase() !== wantedProvider) return;
+    const name = String(m.name || '').trim();
+    if (name && !names.includes(name)) names.push(name);
+  });
+  return names;
+}
+
+function currentAvailableModels() {
+  const form = document.getElementById('form-backend');
+  const type = String(form.type.value || '').trim().toLowerCase();
+  const provider = String(form.provider.value || '').trim().toLowerCase();
+  const workerId = String(form.worker_id.value || '').trim();
+  if (type === 'local_llm' && workerId) {
+    return modelsForWorker(workerId, provider);
+  }
+  return globalModelsForProvider(provider);
+}
+
+function refreshModelOptions(preferredValue='') {
+  const form = document.getElementById('form-backend');
+  const select = form.model_select;
+  const customInput = form.model;
+  const type = String(form.type.value || '').trim().toLowerCase();
+  const workerId = String(form.worker_id.value || '').trim();
+  const options = Array.from(new Set(currentAvailableModels()));
+  const currentValue = preferredValue || customInput.value || '';
+  const workerBoundLocal = type === 'local_llm' && !!workerId;
+
+  if (options.length === 0) {
+    select.innerHTML = '<option value="">No discovered models</option>';
+  } else {
+    select.innerHTML = '<option value="">Select installed model...</option>' +
+      options.map((name) => `<option value="${name}">${name}</option>`).join('');
+  }
+
+  const installBtn = document.getElementById('btn-install-model');
+  if (installBtn) {
+    const provider = String(form.provider.value || '').trim().toLowerCase();
+    installBtn.style.display = (workerId && provider === 'ollama') ? '' : 'none';
+  }
+  customInput.readOnly = workerBoundLocal;
+
+  if (currentValue && options.includes(currentValue)) {
+    select.value = currentValue;
+    customInput.value = currentValue;
+  } else if (!currentValue && options.length === 1) {
+    select.value = options[0];
+    customInput.value = options[0];
+  } else if (currentValue && options.length === 0) {
+    customInput.value = currentValue;
+  } else if (!options.includes(currentValue)) {
+    select.value = '';
+    if (workerBoundLocal) customInput.value = '';
+  }
+}
+
+async function installModelOnWorker() {
+  const form = document.getElementById('form-backend');
+  const workerId = String(form.worker_id.value || '').trim();
+  const provider = String(form.provider.value || '').trim().toLowerCase();
+  if (!workerId || provider !== 'ollama') {
+    alert('Choose an Ollama worker first.');
+    return;
+  }
+  const suggested = String(form.model.value || '').trim();
+  const model = prompt('Ollama model to install on this worker:', suggested || 'llama3.1:8b');
+  if (!model) return;
+  const button = document.getElementById('btn-install-model');
+  if (button) button.disabled = true;
+  try {
+    const res = await fetch('/api/workers/' + encodeURIComponent(workerId) + '/models/pull', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
+      body: JSON.stringify({model, provider}),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Model install failed');
+    refreshModelOptions(model);
+    form.model.value = model;
+    form.model_select.value = model;
+    alert('Model install completed: ' + model);
+  } catch (e) {
+    alert(e.message || 'Model install failed');
+  } finally {
+    if (button) button.disabled = false;
+  }
 }
 
 function renderBackendChain() {
@@ -250,6 +361,7 @@ function openAddBackend() {
   form.reset();
   form.index.value = '';
   document.getElementById('backend-modal-title').textContent = 'Add Backend';
+  refreshModelOptions('');
   document.getElementById('modal-backend').style.display = 'flex';
 }
 
@@ -265,6 +377,7 @@ function editBackend(index) {
   form.api_key_ref.value = b.api_key_ref || '';
   form.temperature.value = b.params?.temperature ?? '';
   form.max_tokens.value = b.params?.max_tokens ?? '';
+  refreshModelOptions(b.model || '');
   document.getElementById('backend-modal-title').textContent = 'Edit Backend';
   document.getElementById('modal-backend').style.display = 'flex';
 }
@@ -289,6 +402,13 @@ function saveBackendForm() {
   if (!backend.type || !backend.provider || !backend.model) {
     alert('Type, provider, and model are required.');
     return;
+  }
+  if (backend.type === 'local_llm' && backend.worker_id) {
+    const available = modelsForWorker(backend.worker_id, backend.provider);
+    if (!available.includes(backend.model)) {
+      alert('Choose a model that is installed on the selected worker, or install it first.');
+      return;
+    }
   }
   const idxRaw = (fd.get('index') || '').toString();
   if (idxRaw === '') BOT.backends.push(backend);
@@ -343,5 +463,8 @@ function openTaskModal(taskId) {
 }
 
 renderBackendChain();
+document.querySelector('#form-backend select[name=worker_id]')?.addEventListener('change', () => refreshModelOptions());
+document.querySelector('#form-backend input[name=provider]')?.addEventListener('input', () => refreshModelOptions());
+document.querySelector('#form-backend select[name=type]')?.addEventListener('change', () => refreshModelOptions());
 </script>
 {% endblock %}

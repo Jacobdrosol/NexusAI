@@ -356,6 +356,31 @@ def test_worker_live_endpoint_returns_payload(dashboard_client):
     assert "running_tasks" in data
 
 
+def test_worker_model_pull_proxy_returns_payload(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def get_worker(self, worker_id):
+            return {"id": worker_id, "host": "127.0.0.1", "port": 8011}
+
+    class FakeResponse:
+        status_code = 200
+        text = '{"model":"llama3.1:8b","status":"success"}'
+
+        def json(self):
+            return {"model": "llama3.1:8b", "status": "success"}
+
+    with patch("dashboard.cp_client.get_cp_client", return_value=FakeCP()), \
+         patch("dashboard.routes.workers.requests.post", return_value=FakeResponse()):
+        resp = dashboard_client.post(
+            "/api/workers/nasa1-windows/models/pull",
+            json={"model": "llama3.1:8b", "provider": "ollama"},
+        )
+
+    assert resp.status_code == 200
+    assert resp.get_json()["model"] == "llama3.1:8b"
+
+
 def test_create_bot_uses_control_plane_when_available(dashboard_client):
     _login_admin(dashboard_client)
 
