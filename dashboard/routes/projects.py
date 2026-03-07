@@ -7,6 +7,13 @@ from flask import Blueprint, jsonify, render_template, request
 from flask_login import login_required
 
 from dashboard.cp_client import get_cp_client
+from dashboard.project_data import (
+    build_project_data_tree,
+    create_project_data_folder,
+    ensure_project_data_layout,
+    list_project_data_files,
+    save_project_data_upload,
+)
 
 bp = Blueprint("projects", __name__)
 
@@ -74,6 +81,8 @@ def project_detail_page(project_id: str):
             all_projects=[],
             github_status=_normalize_github_status(None),
             webhook_events=[],
+            project_data_root=None,
+            project_data_tree=None,
             error="Control plane unavailable or project not found.",
         ), 502
 
@@ -89,6 +98,7 @@ def project_detail_page(project_id: str):
         md = t.get("metadata") or {}
         if isinstance(md, dict) and str(md.get("project_id", "")) == str(project_id):
             project_tasks.append(t)
+    project_data_root = ensure_project_data_layout(project_id)
     return render_template(
         "project_detail.html",
         project=project,
@@ -101,6 +111,8 @@ def project_detail_page(project_id: str):
         webhook_events=_normalize_webhook_events(
             cp.list_project_github_webhook_events(project_id, limit=30)
         ),
+        project_data_root=str(project_data_root),
+        project_data_tree=build_project_data_tree(project_id),
         error=None,
     )
 
@@ -240,16 +252,46 @@ def api_list_project_github_webhook_events(project_id: str):
 def api_sync_project_github_context(project_id: str):
     data: dict[str, Any] = request.get_json(force=True) or {}
     max_files_raw = data.get("max_files", 25)
+    max_commits_raw = data.get("max_commits", 25)
+    max_pull_requests_raw = data.get("max_pull_requests", 15)
+    max_issues_raw = data.get("max_issues", 15)
+    max_comments_raw = data.get("max_conversation_comments", 50)
     try:
-        max_files = max(1, min(int(max_files_raw), 200))
+        max_files = max(1, min(int(max_files_raw), 5000))
     except Exception:
         max_files = 25
+    try:
+        max_commits = max(1, min(int(max_commits_raw), 250))
+    except Exception:
+        max_commits = 25
+    try:
+        max_pull_requests = max(1, min(int(max_pull_requests_raw), 100))
+    except Exception:
+        max_pull_requests = 15
+    try:
+        max_issues = max(1, min(int(max_issues_raw), 100))
+    except Exception:
+        max_issues = 15
+    try:
+        max_conversation_comments = max(1, min(int(max_comments_raw), 200))
+    except Exception:
+        max_conversation_comments = 50
     cp = get_cp_client()
     result = cp.sync_project_github_context(
         project_id=project_id,
         branch=(data.get("branch") or "").strip() or None,
         max_files=max_files,
         namespace=(data.get("namespace") or "").strip() or None,
+        sync_scope=(data.get("sync_scope") or "sample").strip().lower() or "sample",
+        include_repo_files=bool(data.get("include_repo_files", True)),
+        include_commits=bool(data.get("include_commits", False)),
+        include_pull_requests=bool(data.get("include_pull_requests", False)),
+        include_issues=bool(data.get("include_issues", False)),
+        include_conversations=bool(data.get("include_conversations", False)),
+        max_commits=max_commits,
+        max_pull_requests=max_pull_requests,
+        max_issues=max_issues,
+        max_conversation_comments=max_conversation_comments,
     )
     if result is None:
         return _cp_error_response(cp, "Repository context sync failed")
@@ -298,3 +340,73 @@ def api_update_project_cloud_context_policy(project_id: str):
     if result is None:
         return _cp_error_response(cp, "failed to update cloud context policy")
     return jsonify(result)
+
+
+@bp.get("/api/projects/<project_id>/data/files")
+@login_required
+def api_list_project_data_files(project_id: str):
+    cp = get_cp_client()
+    if cp.get_project(project_id) is None:
+        return _cp_error_response(cp, "project not found")
+    return jsonify(
+        {
+            "project_id": project_id,
+            "root": str(ensure_project_data_layout(project_id)),
+            "tree": build_project_data_tree(project_id),
+            "entries": list_project_data_files(project_id),
+        }
+    )
+
+
+@bp.post("/api/projects/<project_id>/data/folders")
+@login_required
+def api_create_project_data_folder(project_id: str):
+    cp = get_cp_client()
+    if cp.get_project(project_id) is None:
+        return _cp_error_response(cp, "project not found")
+    data: dict[str, Any] = request.get_json(force=True) or {}
+    try:
+        folder = create_project_data_folder(
+            project_id=project_id,
+            parent_path=(data.get("parent_path") or "").strip(),
+            folder_name=(data.get("folder_name") or "").strip(),
+        )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify(
+        {
+            "project_id": project_id,
+            "created": folder.name,
+            "path": folder.relative_to(ensure_project_data_layout(project_id)).as_posix(),
+        }
+    ), 201
+
+
+@bp.post("/api/projects/<project_id>/data/upload")
+@login_required
+def api_upload_project_data_file(project_id: str):
+    cp = get_cp_client()
+    if cp.get_project(project_id) is None:
+        return _cp_error_response(cp, "project not found")
+    target_path = (request.form.get("target_path") or "").strip()
+    files = request.files.getlist("files")
+    if not files:
+        single = request.files.get("file")
+        if single is not None:
+            files = [single]
+    if not files:
+        return jsonify({"error": "at least one file is required"}), 400
+
+    uploaded: list[dict[str, str]] = []
+    for storage in files:
+        try:
+            saved = save_project_data_upload(project_id, target_path, storage)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        uploaded.append(
+            {
+                "name": saved.name,
+                "path": saved.relative_to(ensure_project_data_layout(project_id)).as_posix(),
+            }
+        )
+    return jsonify({"project_id": project_id, "uploaded": uploaded}), 201

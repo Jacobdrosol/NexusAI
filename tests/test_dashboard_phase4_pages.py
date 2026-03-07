@@ -334,6 +334,53 @@ def test_project_github_context_sync_api_handles_unavailable_cp(dashboard_client
     assert resp.status_code == 502
 
 
+def test_project_github_context_sync_api_forwards_full_ingestion_fields(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def __init__(self):
+            self.kwargs = None
+
+        def sync_project_github_context(self, **kwargs):
+            self.kwargs = kwargs
+            return {"status": "ok", "ingested_count": 3, "counts": {"files": 1, "commits": 1, "pull_requests": 1}}
+
+    fake_cp = FakeCP()
+    with patch("dashboard.routes.projects.get_cp_client", return_value=fake_cp):
+        resp = dashboard_client.post(
+            "/api/projects/proj-x/github/context/sync",
+            json={
+                "branch": "main",
+                "namespace": "project:test",
+                "sync_scope": "full",
+                "max_files": 500,
+                "include_repo_files": True,
+                "include_commits": True,
+                "include_pull_requests": True,
+                "include_issues": True,
+                "include_conversations": True,
+                "max_commits": 75,
+                "max_pull_requests": 25,
+                "max_issues": 20,
+                "max_conversation_comments": 60,
+            },
+        )
+
+    assert resp.status_code == 200
+    assert fake_cp.kwargs is not None
+    assert fake_cp.kwargs["project_id"] == "proj-x"
+    assert fake_cp.kwargs["sync_scope"] == "full"
+    assert fake_cp.kwargs["max_files"] == 500
+    assert fake_cp.kwargs["include_commits"] is True
+    assert fake_cp.kwargs["include_pull_requests"] is True
+    assert fake_cp.kwargs["include_issues"] is True
+    assert fake_cp.kwargs["include_conversations"] is True
+    assert fake_cp.kwargs["max_commits"] == 75
+    assert fake_cp.kwargs["max_pull_requests"] == 25
+    assert fake_cp.kwargs["max_issues"] == 20
+    assert fake_cp.kwargs["max_conversation_comments"] == 60
+
+
 def test_project_pr_review_config_api_handles_unavailable_cp(dashboard_client):
     _login_admin(dashboard_client)
     resp = dashboard_client.post("/api/projects/proj-x/github/pr-review/config", json={"enabled": True, "bot_id": "bot1"})
@@ -477,6 +524,8 @@ def test_overview_page_shows_enhanced_sections(dashboard_client):
     resp = dashboard_client.get("/")
     assert resp.status_code == 200
     assert b"Open-Source Setup Checklist" in resp.data
+    assert b"Check items off to hide them" in resp.data
+    assert b"Show Hidden" in resp.data
     assert b"Control Plane Checks" in resp.data
     assert b"Control plane health and auth" in resp.data
     assert b"/v1/projects" in resp.data

@@ -243,6 +243,7 @@ def create_app() -> Flask:
 
         setup_checklist = [
             {
+                "key": "dashboard-session-secret",
                 "label": "Dashboard session secret configured",
                 "ok": dashboard_secret_ok,
                 "required": True,
@@ -255,6 +256,7 @@ def create_app() -> Flask:
                 "cta": "Review Settings",
             },
             {
+                "key": "control-plane-config",
                 "label": "Control plane URL and token configured",
                 "ok": bool(cp_url and cp_token_ok),
                 "required": True,
@@ -267,6 +269,7 @@ def create_app() -> Flask:
                 "cta": "Open Settings",
             },
             {
+                "key": "control-plane-health-auth",
                 "label": "Control plane health and auth",
                 "ok": cp_health_ok and cp_auth_ok,
                 "required": True,
@@ -275,6 +278,7 @@ def create_app() -> Flask:
                 "cta": "Open Projects",
             },
             {
+                "key": "safe-cloud-context-policy",
                 "label": "Safe cloud context policy",
                 "ok": cloud_policy_ok,
                 "required": True,
@@ -287,6 +291,7 @@ def create_app() -> Flask:
                 "cta": "Review Settings",
             },
             {
+                "key": "admin-account-ready",
                 "label": "Admin account ready",
                 "ok": admin_count > 0,
                 "required": True,
@@ -299,6 +304,7 @@ def create_app() -> Flask:
                 "cta": "Open Settings",
             },
             {
+                "key": "worker-registration",
                 "label": "Worker registration",
                 "ok": total_workers > 0,
                 "required": False,
@@ -311,6 +317,7 @@ def create_app() -> Flask:
                 "cta": "Open Workers",
             },
             {
+                "key": "bot-configuration",
                 "label": "Bot configuration",
                 "ok": active_bots > 0,
                 "required": False,
@@ -323,6 +330,7 @@ def create_app() -> Flask:
                 "cta": "Open Bots",
             },
             {
+                "key": "project-bootstrap",
                 "label": "Project bootstrap",
                 "ok": len(cp_projects or []) > 0,
                 "required": False,
@@ -335,6 +343,7 @@ def create_app() -> Flask:
                 "cta": "Open Projects",
             },
             {
+                "key": "user-access-validation",
                 "label": "User access validation",
                 "ok": user_count > 0,
                 "required": False,

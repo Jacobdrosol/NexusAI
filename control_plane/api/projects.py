@@ -4,7 +4,7 @@ import base64
 import hashlib
 import hmac
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Literal
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
@@ -31,7 +31,17 @@ class SetGitHubWebhookSecretRequest(BaseModel):
 
 class SyncGitHubContextRequest(BaseModel):
     branch: Optional[str] = None
+    sync_scope: Literal["sample", "full"] = "sample"
     max_files: int = 25
+    include_repo_files: bool = True
+    include_commits: bool = False
+    include_pull_requests: bool = False
+    include_issues: bool = False
+    include_conversations: bool = False
+    max_commits: int = 25
+    max_pull_requests: int = 15
+    max_issues: int = 15
+    max_conversation_comments: int = 50
     namespace: Optional[str] = None
 
 
@@ -194,6 +204,7 @@ async def _fetch_repo_context_files(
     repo_full_name: str,
     branch: Optional[str],
     max_files: int,
+    sync_scope: str = "sample",
 ) -> Dict[str, Any]:
     headers = {
         "Authorization": f"Bearer {token}",
@@ -224,14 +235,18 @@ async def _fetch_repo_context_files(
                 continue
             path = str(node.get("path") or "")
             size = int(node.get("size") or 0)
-            if not path or size <= 0 or size > 150_000:
+            if not path or size <= 0 or size > 250_000:
                 continue
             if not _is_probably_text_path(path):
                 continue
             candidates.append({"path": path, "size": size})
 
         files = []
-        for item in candidates[: max(1, min(max_files, 200))]:
+        if sync_scope == "full":
+            file_limit = max(1, min(max_files, 5000))
+        else:
+            file_limit = max(1, min(max_files, 200))
+        for item in candidates[:file_limit]:
             path = item["path"]
             content_resp = await client.get(
                 f"https://api.github.com/repos/{repo_full_name}/contents/{path}?ref={ref}",
@@ -266,6 +281,309 @@ async def _fetch_repo_context_files(
             "branch": ref,
             "files": files,
         }
+
+
+def _github_headers(token: str) -> Dict[str, str]:
+    return {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+
+async def _fetch_repo_commits(
+    token: str,
+    repo_full_name: str,
+    branch: Optional[str],
+    max_commits: int,
+) -> Dict[str, Any]:
+    headers = _github_headers(token)
+    commit_limit = max(1, min(max_commits, 250))
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        repo_resp = await client.get(f"https://api.github.com/repos/{repo_full_name}", headers=headers)
+        repo_resp.raise_for_status()
+        repo_data = repo_resp.json()
+        ref = branch or str(repo_data.get("default_branch") or "main")
+        commits_resp = await client.get(
+            f"https://api.github.com/repos/{repo_full_name}/commits",
+            headers=headers,
+            params={"sha": ref, "per_page": commit_limit},
+        )
+        commits_resp.raise_for_status()
+        rows = commits_resp.json()
+        commits = []
+        if isinstance(rows, list):
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                commit = row.get("commit") if isinstance(row.get("commit"), dict) else {}
+                author = commit.get("author") if isinstance(commit.get("author"), dict) else {}
+                commits.append(
+                    {
+                        "sha": row.get("sha"),
+                        "html_url": row.get("html_url"),
+                        "message": commit.get("message"),
+                        "author_name": author.get("name"),
+                        "authored_at": author.get("date"),
+                    }
+                )
+        return {"repo_full_name": repo_full_name, "branch": ref, "commits": commits}
+
+
+async def _fetch_issue_comments(
+    client: httpx.AsyncClient,
+    headers: Dict[str, str],
+    repo_full_name: str,
+    issue_number: int,
+    max_comments: int,
+) -> List[Dict[str, Any]]:
+    if max_comments <= 0:
+        return []
+    comments_resp = await client.get(
+        f"https://api.github.com/repos/{repo_full_name}/issues/{issue_number}/comments",
+        headers=headers,
+        params={"per_page": max(1, min(max_comments, 100))},
+    )
+    comments_resp.raise_for_status()
+    rows = comments_resp.json()
+    comments: List[Dict[str, Any]] = []
+    if isinstance(rows, list):
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            user = row.get("user") if isinstance(row.get("user"), dict) else {}
+            comments.append(
+                {
+                    "user": user.get("login"),
+                    "created_at": row.get("created_at"),
+                    "body": row.get("body"),
+                    "html_url": row.get("html_url"),
+                }
+            )
+    return comments
+
+
+async def _fetch_pr_review_comments(
+    client: httpx.AsyncClient,
+    headers: Dict[str, str],
+    repo_full_name: str,
+    pull_number: int,
+    max_comments: int,
+) -> List[Dict[str, Any]]:
+    if max_comments <= 0:
+        return []
+    comments_resp = await client.get(
+        f"https://api.github.com/repos/{repo_full_name}/pulls/{pull_number}/comments",
+        headers=headers,
+        params={"per_page": max(1, min(max_comments, 100))},
+    )
+    comments_resp.raise_for_status()
+    rows = comments_resp.json()
+    comments: List[Dict[str, Any]] = []
+    if isinstance(rows, list):
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            user = row.get("user") if isinstance(row.get("user"), dict) else {}
+            comments.append(
+                {
+                    "user": user.get("login"),
+                    "created_at": row.get("created_at"),
+                    "path": row.get("path"),
+                    "body": row.get("body"),
+                    "html_url": row.get("html_url"),
+                }
+            )
+    return comments
+
+
+async def _fetch_repo_pull_requests(
+    token: str,
+    repo_full_name: str,
+    max_pull_requests: int,
+    include_conversations: bool,
+    max_comments: int,
+) -> List[Dict[str, Any]]:
+    headers = _github_headers(token)
+    pr_limit = max(1, min(max_pull_requests, 100))
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        prs_resp = await client.get(
+            f"https://api.github.com/repos/{repo_full_name}/pulls",
+            headers=headers,
+            params={"state": "all", "sort": "updated", "direction": "desc", "per_page": pr_limit},
+        )
+        prs_resp.raise_for_status()
+        rows = prs_resp.json()
+        pulls: List[Dict[str, Any]] = []
+        if not isinstance(rows, list):
+            return pulls
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            pr_number = int(row.get("number") or 0)
+            issue_comments: List[Dict[str, Any]] = []
+            review_comments: List[Dict[str, Any]] = []
+            if include_conversations and pr_number > 0:
+                issue_comments = await _fetch_issue_comments(
+                    client, headers, repo_full_name, pr_number, max_comments
+                )
+                review_comments = await _fetch_pr_review_comments(
+                    client, headers, repo_full_name, pr_number, max_comments
+                )
+            user = row.get("user") if isinstance(row.get("user"), dict) else {}
+            base = row.get("base") if isinstance(row.get("base"), dict) else {}
+            head = row.get("head") if isinstance(row.get("head"), dict) else {}
+            pulls.append(
+                {
+                    "number": pr_number,
+                    "title": row.get("title"),
+                    "body": row.get("body"),
+                    "state": row.get("state"),
+                    "draft": bool(row.get("draft", False)),
+                    "html_url": row.get("html_url"),
+                    "user": user.get("login"),
+                    "created_at": row.get("created_at"),
+                    "updated_at": row.get("updated_at"),
+                    "merged_at": row.get("merged_at"),
+                    "base_ref": base.get("ref"),
+                    "head_ref": head.get("ref"),
+                    "issue_comments": issue_comments,
+                    "review_comments": review_comments,
+                }
+            )
+        return pulls
+
+
+async def _fetch_repo_issues(
+    token: str,
+    repo_full_name: str,
+    max_issues: int,
+    include_conversations: bool,
+    max_comments: int,
+) -> List[Dict[str, Any]]:
+    headers = _github_headers(token)
+    issue_limit = max(1, min(max_issues, 100))
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        issues_resp = await client.get(
+            f"https://api.github.com/repos/{repo_full_name}/issues",
+            headers=headers,
+            params={"state": "all", "sort": "updated", "direction": "desc", "per_page": issue_limit},
+        )
+        issues_resp.raise_for_status()
+        rows = issues_resp.json()
+        issues: List[Dict[str, Any]] = []
+        if not isinstance(rows, list):
+            return issues
+        for row in rows:
+            if not isinstance(row, dict) or row.get("pull_request"):
+                continue
+            issue_number = int(row.get("number") or 0)
+            comments: List[Dict[str, Any]] = []
+            if include_conversations and issue_number > 0:
+                comments = await _fetch_issue_comments(
+                    client, headers, repo_full_name, issue_number, max_comments
+                )
+            user = row.get("user") if isinstance(row.get("user"), dict) else {}
+            issues.append(
+                {
+                    "number": issue_number,
+                    "title": row.get("title"),
+                    "body": row.get("body"),
+                    "state": row.get("state"),
+                    "html_url": row.get("html_url"),
+                    "user": user.get("login"),
+                    "created_at": row.get("created_at"),
+                    "updated_at": row.get("updated_at"),
+                    "comments": comments,
+                }
+            )
+        return issues
+
+
+def _build_commit_text(repo_full_name: str, branch: str, commit: Dict[str, Any]) -> str:
+    return (
+        f"Repository: {repo_full_name}\n"
+        f"Branch: {branch}\n"
+        f"Commit: {commit.get('sha') or ''}\n"
+        f"Author: {commit.get('author_name') or ''}\n"
+        f"Authored At: {commit.get('authored_at') or ''}\n"
+        f"URL: {commit.get('html_url') or ''}\n\n"
+        f"{commit.get('message') or ''}"
+    ).strip()
+
+
+def _build_pull_request_text(repo_full_name: str, pr: Dict[str, Any], include_conversations: bool) -> str:
+    lines = [
+        f"Repository: {repo_full_name}",
+        f"Pull Request: #{pr.get('number') or ''}",
+        f"Title: {pr.get('title') or ''}",
+        f"State: {pr.get('state') or ''}",
+        f"Draft: {'yes' if pr.get('draft') else 'no'}",
+        f"Author: {pr.get('user') or ''}",
+        f"Base: {pr.get('base_ref') or ''}",
+        f"Head: {pr.get('head_ref') or ''}",
+        f"Created At: {pr.get('created_at') or ''}",
+        f"Updated At: {pr.get('updated_at') or ''}",
+        f"Merged At: {pr.get('merged_at') or ''}",
+        f"URL: {pr.get('html_url') or ''}",
+        "",
+        "Body:",
+        pr.get("body") or "",
+    ]
+    if include_conversations:
+        issue_comments = pr.get("issue_comments") or []
+        review_comments = pr.get("review_comments") or []
+        lines.extend(["", "Issue Comments:"])
+        if issue_comments:
+            for comment in issue_comments:
+                lines.extend(
+                    [
+                        f"- {comment.get('user') or 'unknown'} @ {comment.get('created_at') or ''}",
+                        comment.get("body") or "",
+                    ]
+                )
+        else:
+            lines.append("(none)")
+        lines.extend(["", "Review Comments:"])
+        if review_comments:
+            for comment in review_comments:
+                header = f"- {comment.get('user') or 'unknown'} @ {comment.get('created_at') or ''}"
+                if comment.get("path"):
+                    header += f" on {comment.get('path')}"
+                lines.extend([header, comment.get("body") or ""])
+        else:
+            lines.append("(none)")
+    return "\n".join(lines).strip()
+
+
+def _build_issue_text(repo_full_name: str, issue: Dict[str, Any], include_conversations: bool) -> str:
+    lines = [
+        f"Repository: {repo_full_name}",
+        f"Issue: #{issue.get('number') or ''}",
+        f"Title: {issue.get('title') or ''}",
+        f"State: {issue.get('state') or ''}",
+        f"Author: {issue.get('user') or ''}",
+        f"Created At: {issue.get('created_at') or ''}",
+        f"Updated At: {issue.get('updated_at') or ''}",
+        f"URL: {issue.get('html_url') or ''}",
+        "",
+        "Body:",
+        issue.get("body") or "",
+    ]
+    if include_conversations:
+        lines.extend(["", "Comments:"])
+        comments = issue.get("comments") or []
+        if comments:
+            for comment in comments:
+                lines.extend(
+                    [
+                        f"- {comment.get('user') or 'unknown'} @ {comment.get('created_at') or ''}",
+                        comment.get("body") or "",
+                    ]
+                )
+        else:
+            lines.append("(none)")
+    return "\n".join(lines).strip()
 
 
 def _merge_settings(project: Project, patch: Dict[str, Any]) -> Dict[str, Any]:
@@ -748,56 +1066,195 @@ async def sync_github_repo_context(
     except APIKeyNotFoundError:
         raise HTTPException(status_code=400, detail="configured PAT key not found")
 
-    try:
-        result = await _fetch_repo_context_files(
-            token=token,
-            repo_full_name=str(repo_full_name),
-            branch=body.branch,
-            max_files=body.max_files,
-        )
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"GitHub context sync failed: {e}")
+    sync_scope = (body.sync_scope or "sample").strip().lower()
+    if sync_scope not in {"sample", "full"}:
+        raise HTTPException(status_code=400, detail="sync_scope must be sample or full")
 
     namespace = (body.namespace or f"project:{project_id}:repo").strip() or f"project:{project_id}:repo"
     ingested = []
-    for file in result["files"]:
-        item = await vault_manager.ingest_text(
-            title=f"{result['repo_full_name']}:{file['path']}",
-            content=file["content"],
-            namespace=namespace,
-            project_id=project_id,
-            source_type="file",
-            source_ref=f"github://{result['repo_full_name']}/{file['path']}",
-            metadata={
-                "provider": "github",
-                "repo_full_name": result["repo_full_name"],
-                "branch": result["branch"],
-                "path": file["path"],
-                "sha": file.get("sha"),
-                "size": file.get("size"),
-            },
-        )
-        ingested.append({"item_id": item.id, "path": file["path"]})
+    counts = {
+        "files": 0,
+        "commits": 0,
+        "pull_requests": 0,
+        "issues": 0,
+        "conversations": 0,
+    }
+    warnings: List[str] = []
+
+    repo_full_name_str = str(repo_full_name)
+    branch_name = body.branch
+    repo_file_result = None
+    if body.include_repo_files:
+        try:
+            repo_file_result = await _fetch_repo_context_files(
+                token=token,
+                repo_full_name=repo_full_name_str,
+                branch=branch_name,
+                max_files=body.max_files,
+                sync_scope=sync_scope,
+            )
+            branch_name = repo_file_result["branch"]
+            for file in repo_file_result["files"]:
+                item = await vault_manager.ingest_text(
+                    title=f"{repo_file_result['repo_full_name']}:{file['path']}",
+                    content=file["content"],
+                    namespace=namespace,
+                    project_id=project_id,
+                    source_type="file",
+                    source_ref=f"github://{repo_file_result['repo_full_name']}/{file['path']}",
+                    metadata={
+                        "provider": "github",
+                        "repo_full_name": repo_file_result["repo_full_name"],
+                        "branch": repo_file_result["branch"],
+                        "path": file["path"],
+                        "sha": file.get("sha"),
+                        "size": file.get("size"),
+                        "ingest_kind": "repo_file",
+                    },
+                )
+                ingested.append({"item_id": item.id, "type": "file", "path": file["path"]})
+                counts["files"] += 1
+        except Exception as e:
+            if not any(
+                [
+                    body.include_commits,
+                    body.include_pull_requests,
+                    body.include_issues,
+                ]
+            ):
+                raise HTTPException(status_code=400, detail=f"GitHub context sync failed: {e}")
+            warnings.append(f"repo files failed: {e}")
+
+    if body.include_commits:
+        try:
+            commit_result = await _fetch_repo_commits(
+                token=token,
+                repo_full_name=repo_full_name_str,
+                branch=branch_name,
+                max_commits=body.max_commits,
+            )
+            branch_name = commit_result["branch"]
+            for commit in commit_result["commits"]:
+                item = await vault_manager.ingest_text(
+                    title=f"{repo_full_name_str}:commit:{str(commit.get('sha') or '')[:12]}",
+                    content=_build_commit_text(repo_full_name_str, branch_name or "", commit),
+                    namespace=namespace,
+                    project_id=project_id,
+                    source_type="custom",
+                    source_ref=f"github://{repo_full_name_str}/commit/{commit.get('sha') or ''}",
+                    metadata={
+                        "provider": "github",
+                        "repo_full_name": repo_full_name_str,
+                        "branch": branch_name,
+                        "sha": commit.get("sha"),
+                        "author_name": commit.get("author_name"),
+                        "authored_at": commit.get("authored_at"),
+                        "ingest_kind": "commit",
+                    },
+                )
+                ingested.append({"item_id": item.id, "type": "commit", "sha": commit.get("sha")})
+                counts["commits"] += 1
+        except Exception as e:
+            warnings.append(f"commits failed: {e}")
+
+    if body.include_pull_requests:
+        try:
+            pulls = await _fetch_repo_pull_requests(
+                token=token,
+                repo_full_name=repo_full_name_str,
+                max_pull_requests=body.max_pull_requests,
+                include_conversations=body.include_conversations,
+                max_comments=body.max_conversation_comments,
+            )
+            for pr in pulls:
+                item = await vault_manager.ingest_text(
+                    title=f"{repo_full_name_str}:pr:{pr.get('number')}",
+                    content=_build_pull_request_text(
+                        repo_full_name_str,
+                        pr,
+                        include_conversations=body.include_conversations,
+                    ),
+                    namespace=namespace,
+                    project_id=project_id,
+                    source_type="custom",
+                    source_ref=f"github://{repo_full_name_str}/pull/{pr.get('number')}",
+                    metadata={
+                        "provider": "github",
+                        "repo_full_name": repo_full_name_str,
+                        "number": pr.get("number"),
+                        "state": pr.get("state"),
+                        "draft": pr.get("draft"),
+                        "base_ref": pr.get("base_ref"),
+                        "head_ref": pr.get("head_ref"),
+                        "ingest_kind": "pull_request",
+                    },
+                )
+                ingested.append({"item_id": item.id, "type": "pull_request", "number": pr.get("number")})
+                counts["pull_requests"] += 1
+                counts["conversations"] += len(pr.get("issue_comments") or []) + len(pr.get("review_comments") or [])
+        except Exception as e:
+            warnings.append(f"pull requests failed: {e}")
+
+    if body.include_issues:
+        try:
+            issues = await _fetch_repo_issues(
+                token=token,
+                repo_full_name=repo_full_name_str,
+                max_issues=body.max_issues,
+                include_conversations=body.include_conversations,
+                max_comments=body.max_conversation_comments,
+            )
+            for issue in issues:
+                item = await vault_manager.ingest_text(
+                    title=f"{repo_full_name_str}:issue:{issue.get('number')}",
+                    content=_build_issue_text(
+                        repo_full_name_str,
+                        issue,
+                        include_conversations=body.include_conversations,
+                    ),
+                    namespace=namespace,
+                    project_id=project_id,
+                    source_type="custom",
+                    source_ref=f"github://{repo_full_name_str}/issues/{issue.get('number')}",
+                    metadata={
+                        "provider": "github",
+                        "repo_full_name": repo_full_name_str,
+                        "number": issue.get("number"),
+                        "state": issue.get("state"),
+                        "ingest_kind": "issue",
+                    },
+                )
+                ingested.append({"item_id": item.id, "type": "issue", "number": issue.get("number")})
+                counts["issues"] += 1
+                counts["conversations"] += len(issue.get("comments") or [])
+        except Exception as e:
+            warnings.append(f"issues failed: {e}")
 
     await record_audit_event(
         request,
         action="projects.github.context.sync",
         resource=f"project:{project_id}",
         details={
-            "repo_full_name": result["repo_full_name"],
-            "branch": result["branch"],
+            "repo_full_name": repo_full_name_str,
+            "branch": branch_name,
             "ingested_count": len(ingested),
             "namespace": namespace,
+            "sync_scope": sync_scope,
+            "counts": counts,
+            "warnings": warnings,
         },
     )
     return {
         "status": "ok",
         "project_id": project_id,
-        "repo_full_name": result["repo_full_name"],
-        "branch": result["branch"],
+        "repo_full_name": repo_full_name_str,
+        "branch": branch_name,
         "namespace": namespace,
         "ingested_count": len(ingested),
         "ingested": ingested,
+        "sync_scope": sync_scope,
+        "counts": counts,
+        "warnings": warnings,
     }
 
 

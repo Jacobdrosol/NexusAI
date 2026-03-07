@@ -35,7 +35,7 @@
 </div>
 
 <div class="overview-grid">
-  <section class="panel">
+  <section class="panel" id="overview-checklist-panel">
     <h2 class="panel-title">Open-Source Setup Checklist</h2>
     <div class="setup-guide-summary">
       <div class="setup-guide-stat">
@@ -48,16 +48,38 @@
         <strong>{{ setup_recommended_complete }}/{{ setup_recommended_total }}</strong>
       </div>
       {% endif %}
-      <div class="mini-note">Functional first. Finish required items before polishing the rest.</div>
+      <div class="mini-note">Check items off to hide them. Ready items disappear automatically.</div>
     </div>
-    <div class="setup-guide-grid">
+    <div id="setup-checklist-empty" class="empty" style="display:none; margin-bottom:0.75rem;">
+      No remaining checklist items. Hidden items can be restored at any time.
+    </div>
+    <div style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-bottom:0.75rem;">
+      <button class="btn" type="button" id="setup-show-hidden-btn">Show Hidden</button>
+      <button class="btn" type="button" id="setup-reset-hidden-btn">Reset Checklist</button>
+    </div>
+    <div class="setup-guide-grid" id="setup-guide-grid">
       <div class="setup-guide-column">
         <div class="setup-guide-column-title">Required</div>
-        <div class="setup-guide-list">
+        <div class="setup-guide-list" id="setup-guide-required">
           {% for item in setup_checklist if item.required %}
-          <div class="setup-guide-item">
+          <div
+            class="setup-guide-item"
+            data-checklist-item="true"
+            data-checklist-key="{{ item.key }}"
+            data-checklist-auto-hidden="{{ 'true' if item.ok else 'false' }}"
+          >
             <div class="setup-guide-item-head">
-              <strong>{{ item.label }}</strong>
+              <label style="display:flex; align-items:flex-start; gap:0.55rem; cursor:pointer;">
+                <input
+                  type="checkbox"
+                  class="setup-checklist-toggle"
+                  data-checklist-toggle="{{ item.key }}"
+                  {% if item.ok %}checked{% endif %}
+                >
+                <span>
+                  <strong>{{ item.label }}</strong>
+                </span>
+              </label>
               <span class="badge badge-{% if item.ok %}online{% else %}error{% endif %}">
                 {% if item.ok %}ready{% else %}required{% endif %}
               </span>
@@ -75,11 +97,26 @@
 
       <div class="setup-guide-column">
         <div class="setup-guide-column-title">Next Up</div>
-        <div class="setup-guide-list">
+        <div class="setup-guide-list" id="setup-guide-next">
           {% for item in setup_checklist if not item.required %}
-          <div class="setup-guide-item">
+          <div
+            class="setup-guide-item"
+            data-checklist-item="true"
+            data-checklist-key="{{ item.key }}"
+            data-checklist-auto-hidden="{{ 'true' if item.ok else 'false' }}"
+          >
             <div class="setup-guide-item-head">
-              <strong>{{ item.label }}</strong>
+              <label style="display:flex; align-items:flex-start; gap:0.55rem; cursor:pointer;">
+                <input
+                  type="checkbox"
+                  class="setup-checklist-toggle"
+                  data-checklist-toggle="{{ item.key }}"
+                  {% if item.ok %}checked{% endif %}
+                >
+                <span>
+                  <strong>{{ item.label }}</strong>
+                </span>
+              </label>
               <span class="badge badge-{% if item.ok %}online{% else %}warning{% endif %}">
                 {% if item.ok %}ready{% else %}next{% endif %}
               </span>
@@ -203,5 +240,64 @@ evtSrc.onmessage = function(e) {
   document.getElementById("stat-tasks-completed").textContent = d.tasks.completed;
   document.getElementById("stat-tasks-failed").textContent    = d.tasks.failed;
 };
+
+const checklistStorageKey = 'nexus.overviewChecklist.hidden.v1';
+
+function loadHiddenChecklistKeys() {
+  try {
+    const raw = localStorage.getItem(checklistStorageKey);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? new Set(parsed) : new Set();
+  } catch (_) {
+    return new Set();
+  }
+}
+
+function saveHiddenChecklistKeys(hiddenKeys) {
+  localStorage.setItem(checklistStorageKey, JSON.stringify(Array.from(hiddenKeys)));
+}
+
+function renderChecklistVisibility(showHidden = false) {
+  const hiddenKeys = loadHiddenChecklistKeys();
+  const items = Array.from(document.querySelectorAll('[data-checklist-item="true"]'));
+  let visibleCount = 0;
+  for (const item of items) {
+    const key = item.dataset.checklistKey || '';
+    const autoHidden = item.dataset.checklistAutoHidden === 'true';
+    const shouldHide = !showHidden && (autoHidden || hiddenKeys.has(key));
+    item.style.display = shouldHide ? 'none' : '';
+    if (!shouldHide) visibleCount += 1;
+  }
+  const emptyEl = document.getElementById('setup-checklist-empty');
+  if (emptyEl) {
+    emptyEl.style.display = visibleCount === 0 ? '' : 'none';
+  }
+}
+
+for (const toggle of document.querySelectorAll('.setup-checklist-toggle')) {
+  toggle.addEventListener('change', (event) => {
+    const key = event.target.dataset.checklistToggle || '';
+    if (!key) return;
+    const hiddenKeys = loadHiddenChecklistKeys();
+    if (event.target.checked) hiddenKeys.add(key);
+    else hiddenKeys.delete(key);
+    saveHiddenChecklistKeys(hiddenKeys);
+    renderChecklistVisibility(false);
+  });
+}
+
+document.getElementById('setup-show-hidden-btn')?.addEventListener('click', () => {
+  renderChecklistVisibility(true);
+});
+
+document.getElementById('setup-reset-hidden-btn')?.addEventListener('click', () => {
+  localStorage.removeItem(checklistStorageKey);
+  for (const toggle of document.querySelectorAll('.setup-checklist-toggle')) {
+    toggle.checked = toggle.closest('[data-checklist-item="true"]')?.dataset.checklistAutoHidden === 'true';
+  }
+  renderChecklistVisibility(false);
+});
+
+renderChecklistVisibility(false);
 </script>
 {% endblock %}

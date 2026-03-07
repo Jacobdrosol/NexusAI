@@ -127,13 +127,33 @@
         <button class="btn btn-danger" onclick="disconnectGithubPat()">Disconnect</button>
       </div>
       <hr style="margin:0.8rem 0;">
-      <div class="split-grid" style="grid-template-columns:1fr 120px 1fr; gap:0.5rem;">
+      <div class="split-grid" style="grid-template-columns:1fr 160px 1fr; gap:0.5rem;">
         <input class="form-control" id="gh-sync-branch" name="project_github_branch" placeholder="Branch (optional, case-sensitive)" autocomplete="off" autocapitalize="none" spellcheck="false">
-        <input class="form-control" id="gh-sync-max-files" type="number" min="1" max="200" value="25">
+        <select class="form-control" id="gh-sync-scope">
+          <option value="full" selected>Full ingest</option>
+          <option value="sample">Sample ingest</option>
+        </select>
+        <input class="form-control" id="gh-sync-max-files" type="number" min="1" max="5000" value="500">
         <input class="form-control" id="gh-sync-namespace" placeholder="Namespace (optional)">
       </div>
+      <div class="split-grid" style="grid-template-columns:repeat(4, 1fr); gap:0.5rem; margin-top:0.5rem;">
+        <input class="form-control" id="gh-sync-max-commits" type="number" min="1" max="250" value="75" placeholder="Max commits">
+        <input class="form-control" id="gh-sync-max-prs" type="number" min="1" max="100" value="25" placeholder="Max PRs">
+        <input class="form-control" id="gh-sync-max-issues" type="number" min="1" max="100" value="25" placeholder="Max issues">
+        <input class="form-control" id="gh-sync-max-comments" type="number" min="1" max="200" value="60" placeholder="Max comments">
+      </div>
+      <div class="split-grid" style="grid-template-columns:repeat(2, 1fr); gap:0.5rem; margin-top:0.5rem;">
+        <label><input type="checkbox" id="gh-sync-include-files" checked> Repo files + docs</label>
+        <label><input type="checkbox" id="gh-sync-include-commits" checked> Commit history</label>
+        <label><input type="checkbox" id="gh-sync-include-prs" checked> Pull requests</label>
+        <label><input type="checkbox" id="gh-sync-include-issues" checked> Issues</label>
+        <label><input type="checkbox" id="gh-sync-include-conversations" checked> PR and issue conversations</label>
+      </div>
+      <div class="mini-note" style="margin-top:0.5rem;">
+        Full ingest creates vault entries for source files, commits, PRs, issues, and their discussion threads so they can be embedded and searched.
+      </div>
       <div style="margin-top:0.5rem;">
-        <button class="btn btn-primary" onclick="syncGithubContext()">Sync Repo Context to Vault</button>
+        <button class="btn btn-primary" onclick="syncGithubContext()">Run Project Ingestion</button>
       </div>
     </div>
     <div>
@@ -439,15 +459,41 @@ async function disconnectGithubPat() {
 async function syncGithubContext() {
   const branch = (document.getElementById('gh-sync-branch')?.value || '').trim();
   const namespace = (document.getElementById('gh-sync-namespace')?.value || '').trim();
-  const maxFilesRaw = (document.getElementById('gh-sync-max-files')?.value || '25').trim();
+  const syncScope = (document.getElementById('gh-sync-scope')?.value || 'sample').trim();
+  const maxFilesRaw = (document.getElementById('gh-sync-max-files')?.value || '500').trim();
+  const maxCommitsRaw = (document.getElementById('gh-sync-max-commits')?.value || '75').trim();
+  const maxPrsRaw = (document.getElementById('gh-sync-max-prs')?.value || '25').trim();
+  const maxIssuesRaw = (document.getElementById('gh-sync-max-issues')?.value || '25').trim();
+  const maxCommentsRaw = (document.getElementById('gh-sync-max-comments')?.value || '60').trim();
+  const includeRepoFiles = !!document.getElementById('gh-sync-include-files')?.checked;
+  const includeCommits = !!document.getElementById('gh-sync-include-commits')?.checked;
+  const includePullRequests = !!document.getElementById('gh-sync-include-prs')?.checked;
+  const includeIssues = !!document.getElementById('gh-sync-include-issues')?.checked;
+  const includeConversations = !!document.getElementById('gh-sync-include-conversations')?.checked;
   let maxFiles = parseInt(maxFilesRaw, 10);
-  if (!Number.isFinite(maxFiles) || maxFiles < 1) maxFiles = 25;
-  if (maxFiles > 200) maxFiles = 200;
+  let maxCommits = parseInt(maxCommitsRaw, 10);
+  let maxPullRequests = parseInt(maxPrsRaw, 10);
+  let maxIssues = parseInt(maxIssuesRaw, 10);
+  let maxConversationComments = parseInt(maxCommentsRaw, 10);
+  if (!Number.isFinite(maxFiles) || maxFiles < 1) maxFiles = 500;
+  if (maxFiles > 5000) maxFiles = 5000;
+  if (!Number.isFinite(maxCommits) || maxCommits < 1) maxCommits = 75;
+  if (maxCommits > 250) maxCommits = 250;
+  if (!Number.isFinite(maxPullRequests) || maxPullRequests < 1) maxPullRequests = 25;
+  if (maxPullRequests > 100) maxPullRequests = 100;
+  if (!Number.isFinite(maxIssues) || maxIssues < 1) maxIssues = 25;
+  if (maxIssues > 100) maxIssues = 100;
+  if (!Number.isFinite(maxConversationComments) || maxConversationComments < 1) maxConversationComments = 60;
+  if (maxConversationComments > 200) maxConversationComments = 200;
+  if (!includeRepoFiles && !includeCommits && !includePullRequests && !includeIssues) {
+    alert('Select at least one ingestion source.');
+    return;
+  }
 
   const stateEl = document.getElementById('github-sync-state');
   if (stateEl) {
     stateEl.className = 'state-loading';
-    stateEl.textContent = 'Syncing repository context...';
+    stateEl.textContent = 'Running project ingestion...';
   }
   const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/github/context/sync', {
     method: 'POST',
@@ -456,6 +502,16 @@ async function syncGithubContext() {
       branch: branch || null,
       namespace: namespace || null,
       max_files: maxFiles,
+      sync_scope: syncScope || 'sample',
+      include_repo_files: includeRepoFiles,
+      include_commits: includeCommits,
+      include_pull_requests: includePullRequests,
+      include_issues: includeIssues,
+      include_conversations: includeConversations,
+      max_commits: maxCommits,
+      max_pull_requests: maxPullRequests,
+      max_issues: maxIssues,
+      max_conversation_comments: maxConversationComments,
     }),
   });
   const data = await res.json().catch(() => ({}));
@@ -468,7 +524,16 @@ async function syncGithubContext() {
   }
   if (stateEl) {
     stateEl.className = 'state-info';
-    stateEl.textContent = 'Synced ' + (data.ingested_count || 0) + ' file(s) into namespace ' + (data.namespace || '(default)') + '.';
+    const counts = data.counts || {};
+    const parts = [];
+    if (counts.files) parts.push(counts.files + ' file(s)');
+    if (counts.commits) parts.push(counts.commits + ' commit(s)');
+    if (counts.pull_requests) parts.push(counts.pull_requests + ' PR(s)');
+    if (counts.issues) parts.push(counts.issues + ' issue(s)');
+    if (counts.conversations) parts.push(counts.conversations + ' conversation item(s)');
+    const summary = parts.length ? parts.join(', ') : ((data.ingested_count || 0) + ' item(s)');
+    const warningText = Array.isArray(data.warnings) && data.warnings.length ? ' Warnings: ' + data.warnings.join(' | ') : '';
+    stateEl.textContent = 'Ingested ' + summary + ' into namespace ' + (data.namespace || '(default)') + '.' + warningText;
   }
 }
 
