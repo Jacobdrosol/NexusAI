@@ -308,7 +308,7 @@
   <h2 style="font-size:1.1rem;margin-bottom:1rem;color:#f0f0f0;">Deploy</h2>
   <p style="font-size:0.85rem;color:#a0aec0;margin-bottom:0.75rem;">
     Blue/green dashboard switch with runtime refresh. Deployment is blocked unless safe strategy flags are configured.
-    By default the deploy runner also recreates core runtime services so control plane, workers, chats, projects, and bots stay on the same persistent state path.
+    By default the deploy runner also recreates core runtime services and the dashboard gateway, then verifies health before and after switching traffic so chats, projects, bots, and routing changes are applied together.
   </p>
   <div style="display:flex;gap:0.75rem;flex-wrap:wrap;margin-bottom:1rem;">
     <button class="btn" onclick="checkDeployStatus()">Check For Updates</button>

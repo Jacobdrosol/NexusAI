@@ -11,6 +11,7 @@ sh ./scripts/check_db_drift.sh
 
 CORE_RECREATE="${NEXUSAI_DEPLOY_RECREATE_CORE:-1}"
 CORE_SERVICES="${NEXUSAI_DEPLOY_CORE_SERVICES:-control_plane worker_agent}"
+GATEWAY_RECREATE="${NEXUSAI_DEPLOY_RECREATE_GATEWAY:-1}"
 
 STRATEGY="${NEXUSAI_DEPLOY_STRATEGY:-bluegreen}"
 if [ "$STRATEGY" != "bluegreen" ]; then
@@ -93,17 +94,35 @@ else
   echo "[deploy] skipping core runtime recreate (NEXUSAI_DEPLOY_RECREATE_CORE=$CORE_RECREATE)"
 fi
 
+if [ "$CORE_RECREATE" = "1" ] && [ -f "docker-compose.yml" ]; then
+  echo "[deploy] verifying core runtime health"
+  ATTEMPTS=0
+  until docker compose exec -T control_plane sh -lc "python - <<'PY'\nimport urllib.request\nurllib.request.urlopen('http://127.0.0.1:8000/health')\nprint('ok')\nPY" >/dev/null 2>&1; do
+    ATTEMPTS=$((ATTEMPTS + 1))
+    if [ "$ATTEMPTS" -ge 30 ]; then
+      echo "[deploy] control_plane health check failed"
+      exit 5
+    fi
+    sleep 2
+  done
+fi
+
 echo "[deploy] current color: $CURRENT_COLOR"
 echo "[deploy] candidate color: $NEXT_COLOR"
 
-echo "[deploy] ensuring gateway is running (no recreate)"
-GATEWAY_ID="$(docker compose $COMPOSE_ARGS ps -q dashboard_gateway || true)"
-if [ -z "$GATEWAY_ID" ]; then
-  docker compose $COMPOSE_ARGS up -d dashboard_gateway
+if [ "$GATEWAY_RECREATE" = "1" ]; then
+  echo "[deploy] recreating dashboard gateway"
+  docker compose $COMPOSE_ARGS up -d --force-recreate dashboard_gateway
 else
-  GATEWAY_RUNNING="$(docker inspect -f '{{.State.Running}}' "$GATEWAY_ID" 2>/dev/null || echo false)"
-  if [ "$GATEWAY_RUNNING" != "true" ]; then
+  echo "[deploy] ensuring gateway is running (no recreate)"
+  GATEWAY_ID="$(docker compose $COMPOSE_ARGS ps -q dashboard_gateway || true)"
+  if [ -z "$GATEWAY_ID" ]; then
     docker compose $COMPOSE_ARGS up -d dashboard_gateway
+  else
+    GATEWAY_RUNNING="$(docker inspect -f '{{.State.Running}}' "$GATEWAY_ID" 2>/dev/null || echo false)"
+    if [ "$GATEWAY_RUNNING" != "true" ]; then
+      docker compose $COMPOSE_ARGS up -d dashboard_gateway
+    fi
   fi
 fi
 
@@ -137,6 +156,17 @@ until docker compose $COMPOSE_ARGS exec -T dashboard_gateway sh -lc "wget -q -O 
   if [ "$ATTEMPTS" -ge 20 ]; then
     echo "[deploy] post-switch gateway health check failed"
     exit 4
+  fi
+  sleep 1
+done
+
+echo "[deploy] verifying active dashboard route via gateway"
+ATTEMPTS=0
+until docker compose $COMPOSE_ARGS exec -T dashboard_gateway sh -lc "wget -q -O - http://127.0.0.1:5000/health | grep -q '\"status\"'"; do
+  ATTEMPTS=$((ATTEMPTS + 1))
+  if [ "$ATTEMPTS" -ge 20 ]; then
+    echo "[deploy] active dashboard route failed verification"
+    exit 6
   fi
   sleep 1
 done
