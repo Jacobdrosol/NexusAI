@@ -122,6 +122,15 @@
     <form id="form-backend">
       <input type="hidden" name="index" value="">
       <div class="form-group">
+        <label>Worker</label>
+        <select class="form-control" name="worker_id">
+          <option value="">None</option>
+          {% for w in workers %}
+          <option value="{{ w.id }}">{{ w.name }} ({{ w.id }})</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-group">
         <label>Type</label>
         <select class="form-control" name="type">
           <option value="local_llm">local_llm</option>
@@ -131,7 +140,7 @@
           <option value="custom">custom</option>
         </select>
       </div>
-      <div class="form-group"><label>Provider</label><input class="form-control" name="provider" placeholder="openai / ollama / claude"></div>
+      <div class="form-group"><label>Provider / CLI</label><input class="form-control" name="provider" placeholder="ollama / openai / claude / codex / gh"></div>
       <div class="form-group">
         <label>Model</label>
         <select class="form-control" name="model_select" onchange="syncModelInput(this.value)">
@@ -140,17 +149,8 @@
         <input class="form-control" style="margin-top:0.5rem;" name="model" placeholder="Model name">
         <div style="margin-top:0.5rem;display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
           <button id="btn-install-model" type="button" class="btn" style="display:none;" onclick="installModelOnWorker()">Install on Worker</button>
-          <span style="font-size:0.8rem;color:#718096;">For local workers, choose from discovered installed models or install one here.</span>
+          <span style="font-size:0.8rem;color:#718096;">Choose the worker first. Local backends then use that worker's installed model inventory.</span>
         </div>
-      </div>
-      <div class="form-group">
-        <label>Worker</label>
-        <select class="form-control" name="worker_id">
-          <option value="">None</option>
-          {% for w in workers %}
-          <option value="{{ w.id }}">{{ w.name }} ({{ w.id }})</option>
-          {% endfor %}
-        </select>
       </div>
       <div class="form-group">
         <label>API Key Ref</label>
@@ -271,7 +271,9 @@ function refreshModelOptions(preferredValue='') {
   const workerBoundLocal = type === 'local_llm' && !!workerId;
 
   if (options.length === 0) {
-    select.innerHTML = '<option value="">No discovered models</option>';
+    select.innerHTML = workerBoundLocal
+      ? '<option value="">No installed models found on worker</option>'
+      : '<option value="">No discovered models</option>';
   } else {
     select.innerHTML = '<option value="">Select installed model...</option>' +
       options.map((name) => `<option value="${name}">${name}</option>`).join('');
@@ -283,6 +285,7 @@ function refreshModelOptions(preferredValue='') {
     installBtn.style.display = (workerId && provider === 'ollama') ? '' : 'none';
   }
   customInput.readOnly = workerBoundLocal;
+  customInput.placeholder = workerBoundLocal ? 'Choose installed model' : 'Model name';
 
   if (currentValue && options.includes(currentValue)) {
     select.value = currentValue;
