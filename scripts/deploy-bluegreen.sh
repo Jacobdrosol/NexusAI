@@ -9,6 +9,9 @@ STOP_PREVIOUS_COLOR="${NEXUSAI_STOP_PREVIOUS_COLOR:-0}"
 echo "[deploy] checking DB drift guard"
 sh ./scripts/check_db_drift.sh
 
+CORE_RECREATE="${NEXUSAI_DEPLOY_RECREATE_CORE:-1}"
+CORE_SERVICES="${NEXUSAI_DEPLOY_CORE_SERVICES:-control_plane worker_agent}"
+
 STRATEGY="${NEXUSAI_DEPLOY_STRATEGY:-bluegreen}"
 if [ "$STRATEGY" != "bluegreen" ]; then
   echo "[deploy] blocked: NEXUSAI_DEPLOY_STRATEGY must be 'bluegreen'"
@@ -82,6 +85,13 @@ echo "[deploy] fetching latest main"
 git fetch origin main
 git checkout main
 git pull --ff-only origin main
+
+if [ "$CORE_RECREATE" = "1" ] && [ -f "docker-compose.yml" ]; then
+  echo "[deploy] recreating core runtime services against persistent ./data state"
+  docker compose up -d --build $CORE_SERVICES
+else
+  echo "[deploy] skipping core runtime recreate (NEXUSAI_DEPLOY_RECREATE_CORE=$CORE_RECREATE)"
+fi
 
 echo "[deploy] current color: $CURRENT_COLOR"
 echo "[deploy] candidate color: $NEXT_COLOR"

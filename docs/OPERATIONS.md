@@ -85,7 +85,7 @@ Primary persistent data:
 Backup minimum:
 
 1. stop writes (or stop services)
-2. copy `data/` and persistent volumes
+2. copy `data/` and Prometheus volume data if needed
 3. store encrypted off-host
 
 Restore minimum:
@@ -169,6 +169,7 @@ Recovery:
 Default behavior:
 
 - `NEXUSAI_DB_DRIFT_AUTO_SYNC=1` auto-reconciles drift and usually avoids manual intervention.
+- newer DB copy is synchronized to older copy; host `./data/nexusai.db` is no longer blindly treated as canonical
 - strict/manual mode is available via `NEXUSAI_DB_DRIFT_AUTO_SYNC=0`.
 
 ## 7. Pre-UAT and Release Gate
@@ -251,6 +252,7 @@ NEXUSAI_DEPLOY_ENABLE=1
 NEXUSAI_DEPLOY_STRATEGY=bluegreen
 NEXUSAI_STOP_PREVIOUS_COLOR=0
 NEXUSAI_DB_DRIFT_AUTO_SYNC=1
+NEXUSAI_DEPLOY_RECREATE_CORE=1
 NEXUSAI_COMPOSE_PROJECT_NAME=nexusai
 NEXUSAI_DEPLOY_RUN_CMD=docker run --rm -e NEXUSAI_DEPLOY_STRATEGY=bluegreen -e NEXUSAI_BLUEGREEN_SWITCH_CMD=./scripts/switch-dashboard-color.sh -e NEXUSAI_COMPOSE_PROJECT_NAME=nexusai -e NEXUSAI_LEGACY_DATA_VOLUME=nexusai_nexus-data -e NEXUSAI_DB_DRIFT_AUTO_SYNC=1 -v /var/run/docker.sock:/var/run/docker.sock -v /opt/NexusAI:/opt/NexusAI -w /opt/NexusAI docker:27-cli sh -lc "sh ./scripts/deploy-bluegreen.sh"
 NEXUSAI_BLUEGREEN_SWITCH_CMD=./scripts/switch-dashboard-color.sh
@@ -270,3 +272,4 @@ Operational note:
 - the dashboard will refuse to run deployment when guardrails are not satisfied
 - this prevents accidental in-place restarts that can disrupt running workloads
 - bootstrap/deploy scripts now block when host DB and legacy volume DB diverge
+- the deploy runner now recreates core runtime services by default so control plane and workers are refreshed against the same persistent `./data/nexusai.db` used by blue/green dashboard services

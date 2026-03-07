@@ -45,7 +45,8 @@ Notes:
 - `NEXUSAI_STOP_PREVIOUS_COLOR=0` keeps both colors running after switch for faster rollback and lower disruption risk.
 - `NEXUSAI_DB_DRIFT_AUTO_SYNC=1` auto-reconciles host/legacy DB copies during deploy to reduce manual operator commands.
 - The deploy runner now defaults to blue/green strategy and `./scripts/switch-dashboard-color.sh` if unset, but explicit `-e` pass-through is recommended.
-- Blue/green compose only controls dashboard/gateway services; control plane and worker services must be managed separately.
+- `NEXUSAI_DEPLOY_RECREATE_CORE=1` is the default and recreates `control_plane` and `worker_agent` from `docker-compose.yml` before switching dashboard traffic.
+- Set `NEXUSAI_DEPLOY_CORE_SERVICES` if you need a different core service list.
 
 ## 4. Run Preflight
 
@@ -67,7 +68,7 @@ Behavior with default `NEXUSAI_DB_DRIFT_AUTO_SYNC=1`:
 
 - host missing + volume present -> host DB auto-restored from volume
 - host present + volume missing -> volume auto-seeded from host
-- host and volume differ -> host treated as canonical and copied to volume
+- host and volume differ -> newer DB copy is treated as canonical and synchronized to the older copy
 
 Set `NEXUSAI_DB_DRIFT_AUTO_SYNC=0` for strict fail-closed mode (manual reconciliation required).
 
@@ -99,6 +100,7 @@ This starts:
 
 Deployment behavior:
 
+- refreshes core runtime services first (`control_plane`, `worker_agent` by default)
 - starts candidate color container (`blue` or `green`)
 - waits for candidate `/health` to pass
 - switches gateway route atomically
@@ -118,7 +120,7 @@ NEXUSAI_TARGET_COLOR=green sh ./scripts/switch-dashboard-color.sh green
 
 ## 8. Operational Caveat
 
-This implementation blue/greens dashboard traffic path. For full-stack no-disruption cutover (control plane + workers), add:
+This implementation now refreshes the core runtime before switching the dashboard traffic path. For full-stack no-disruption cutover beyond simple recreate, add:
 
 - task draining and quiesce checks
 - backend state compatibility checks
