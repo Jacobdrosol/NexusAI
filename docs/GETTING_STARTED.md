@@ -131,7 +131,7 @@ After login:
 3. Open `Workers` and confirm at least one worker is online.
 4. Open `Bots` and create or verify a bot with a valid backend.
    - For cloud providers, add keys in `Settings -> API Keys` and reference by nickname (`api_key_ref`).
-   - The control plane now persists bots in SQLite; shipped example YAML bots are not auto-seeded unless you explicitly enable `control_plane.seed_bots_from_config: true`.
+   - The control plane now persists workers and bots in SQLite; shipped example YAML files are not auto-seeded unless you explicitly enable `control_plane.seed_workers_from_config: true` and/or `control_plane.seed_bots_from_config: true`.
 5. Open `Projects` and create one project.
 6. Open `Vault` and ingest a small test document.
 7. Open `Chat`:

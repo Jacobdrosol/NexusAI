@@ -3,6 +3,7 @@ control_plane:
   port: 8000
   workers_config_dir: config/workers
   bots_config_dir: config/bots
+  seed_workers_from_config: false
   seed_bots_from_config: false
   heartbeat_timeout_seconds: 30
 

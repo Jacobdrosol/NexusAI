@@ -27,13 +27,16 @@ Top-level keys:
 | `control_plane.port` | TCP port for the API server |
 | `control_plane.workers_config_dir` | Directory scanned for worker YAMLs |
 | `control_plane.bots_config_dir` | Directory scanned for bot YAMLs |
+| `control_plane.seed_workers_from_config` | If `true`, seed missing workers from YAML files at startup. Defaults to `false` for UI-first installs. |
 | `control_plane.seed_bots_from_config` | If `true`, seed missing bots from YAML files at startup. Defaults to `false` for UI-first installs. |
 | `control_plane.heartbeat_timeout_seconds` | Seconds before a silent worker is marked offline |
 | `logging.level` | Python logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
 
 ## Adding a Worker
 
-Create a new YAML file in `config/workers/`.  The file is validated against the `Worker` model (`shared/models.py`):
+For normal installs, create and manage workers in the UI or let standalone worker nodes self-register. YAML worker files are optional bootstrap inputs only when `control_plane.seed_workers_from_config: true`.
+
+If you do want declarative worker seeding, create a new YAML file in `config/workers/`. The file is validated against the `Worker` model (`shared/models.py`):
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|

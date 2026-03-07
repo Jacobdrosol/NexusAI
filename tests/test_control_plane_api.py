@@ -1,6 +1,8 @@
 """Integration tests for control plane FastAPI routes."""
+import asyncio
 import hashlib
 import hmac
+import importlib
 import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
@@ -8,6 +10,7 @@ from email.utils import format_datetime
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from fastapi.testclient import TestClient
 
 
 @pytest.mark.anyio
@@ -106,6 +109,100 @@ async def test_list_workers_empty(cp_client):
     resp = await cp_client.get("/v1/workers")
     assert resp.status_code == 200
     assert resp.json() == []
+
+
+def test_create_app_does_not_seed_workers_from_config_by_default(tmp_path, monkeypatch):
+    config_dir = tmp_path / "config"
+    workers_dir = config_dir / "workers"
+    workers_dir.mkdir(parents=True)
+    (workers_dir / "seeded-worker.yaml").write_text(
+        "\n".join(
+            [
+                'id: "seeded-worker"',
+                'name: "Seeded Worker"',
+                'host: "127.0.0.1"',
+                "port: 8001",
+                'status: "offline"',
+                "capabilities: []",
+                "enabled: true",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (config_dir / "bots").mkdir(parents=True)
+    (config_dir / "nexus_config.yaml").write_text(
+        "\n".join(
+            [
+                "control_plane:",
+                "  host: 0.0.0.0",
+                "  port: 8000",
+                f"  workers_config_dir: {workers_dir.as_posix()}",
+                f"  bots_config_dir: {(config_dir / 'bots').as_posix()}",
+                "  seed_bots_from_config: false",
+                "  heartbeat_timeout_seconds: 30",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("NEXUS_CONFIG_PATH", str(config_dir / "nexus_config.yaml"))
+
+    import control_plane.main as main_module
+    importlib.reload(main_module)
+
+    create_app = main_module.create_app
+    app = create_app()
+    with TestClient(app):
+        workers = asyncio.run(app.state.worker_registry.list())
+        assert workers == []
+    monkeypatch.delenv("NEXUS_CONFIG_PATH", raising=False)
+
+
+def test_create_app_can_seed_workers_from_config_when_enabled(tmp_path, monkeypatch):
+    config_dir = tmp_path / "config"
+    workers_dir = config_dir / "workers"
+    workers_dir.mkdir(parents=True)
+    (workers_dir / "seeded-worker.yaml").write_text(
+        "\n".join(
+            [
+                'id: "seeded-worker"',
+                'name: "Seeded Worker"',
+                'host: "127.0.0.1"',
+                "port: 8001",
+                'status: "offline"',
+                "capabilities: []",
+                "enabled: true",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (config_dir / "bots").mkdir(parents=True)
+    (config_dir / "nexus_config.yaml").write_text(
+        "\n".join(
+            [
+                "control_plane:",
+                "  host: 0.0.0.0",
+                "  port: 8000",
+                f"  workers_config_dir: {workers_dir.as_posix()}",
+                f"  bots_config_dir: {(config_dir / 'bots').as_posix()}",
+                "  seed_workers_from_config: true",
+                "  seed_bots_from_config: false",
+                "  heartbeat_timeout_seconds: 30",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("NEXUS_CONFIG_PATH", str(config_dir / "nexus_config.yaml"))
+
+    import control_plane.main as main_module
+    importlib.reload(main_module)
+
+    create_app = main_module.create_app
+    app = create_app()
+    with TestClient(app):
+        workers = asyncio.run(app.state.worker_registry.list())
+        assert len(workers) == 1
+        assert workers[0].id == "seeded-worker"
+    monkeypatch.delenv("NEXUS_CONFIG_PATH", raising=False)
 
 
 @pytest.mark.anyio
