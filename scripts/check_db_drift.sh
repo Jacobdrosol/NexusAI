@@ -40,17 +40,7 @@ sync_host_to_vol() {
 }
 
 host_mtime() {
-  if has_cmd python3; then
-    python3 - <<'PY'
-import os
-print(int(os.path.getmtime("data/nexusai.db")))
-PY
-    return
-  fi
-  python - <<'PY'
-import os
-print(int(os.path.getmtime("data/nexusai.db")))
-PY
+  docker run --rm -v "$(pwd)/data:/from" alpine sh -lc "stat -c %Y /from/nexusai.db"
 }
 
 vol_mtime() {
