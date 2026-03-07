@@ -127,6 +127,43 @@ async def test_scheduler_gemini_uses_header_api_key_not_query(monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_scheduler_ollama_cloud_uses_bearer_key_and_chat_endpoint(monkeypatch):
+    from control_plane.scheduler.scheduler import Scheduler
+
+    key_vault = AsyncMock()
+    key_vault.get_secret.return_value = "ollama-secret"
+    scheduler = Scheduler(bot_registry=AsyncMock(), worker_registry=AsyncMock(), key_vault=key_vault)
+    backend = BackendConfig(
+        type="cloud_api",
+        model="llama3.2",
+        provider="ollama_cloud",
+        api_key_ref="OLLAMA_API_KEY",
+    )
+    payload = [{"role": "user", "content": "hello"}]
+
+    fake_response = MagicMock()
+    fake_response.raise_for_status.return_value = None
+    fake_response.json.return_value = {
+        "message": {"content": "ok"},
+        "prompt_eval_count": 3,
+        "eval_count": 5,
+    }
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__.return_value = mock_client
+    mock_client.__aexit__.return_value = False
+    mock_client.post.return_value = fake_response
+
+    with patch("control_plane.scheduler.scheduler.httpx.AsyncClient", return_value=mock_client):
+        result = await scheduler._call_ollama_cloud(backend, payload)
+
+    args, kwargs = mock_client.post.call_args
+    assert args[0] == "https://ollama.com/api/chat"
+    assert kwargs["headers"]["Authorization"] == "Bearer ollama-secret"
+    assert result["output"] == "ok"
+
+
+@pytest.mark.anyio
 async def test_scheduler_project_cloud_policy_provider_redact_disallows_bot_allow():
     from control_plane.scheduler.scheduler import Scheduler
     from shared.models import Task, TaskMetadata

@@ -111,6 +111,8 @@ class Scheduler:
         elif backend.type == "cloud_api":
             if backend.provider == "openai":
                 return await self._call_openai(backend, safe_payload)
+            elif backend.provider == "ollama_cloud":
+                return await self._call_ollama_cloud(backend, safe_payload)
             elif backend.provider == "claude":
                 return await self._call_claude(backend, safe_payload)
             elif backend.provider == "gemini":
@@ -388,6 +390,42 @@ class Scheduler:
             data = response.json()
             output = data["choices"][0]["message"]["content"]
             return {"output": output, "usage": data.get("usage", {})}
+
+    async def _call_ollama_cloud(self, backend: BackendConfig, payload: Any) -> Any:
+        api_key_ref = backend.api_key_ref or "OLLAMA_API_KEY"
+        api_key = await self._resolve_api_key(api_key_ref, "OLLAMA_API_KEY")
+        if not api_key:
+            raise BackendError(
+                f"API key not found. Set the environment variable '{api_key_ref}' "
+                f"with your Ollama API key before starting the service."
+            )
+        messages = (
+            payload
+            if isinstance(payload, list)
+            else [{"role": "user", "content": str(payload)}]
+        )
+        params_dict = backend.params.model_dump(exclude_none=True) if backend.params else {}
+        body: dict = {
+            "model": backend.model,
+            "messages": messages,
+            "stream": False,
+            "options": params_dict,
+        }
+        base_url = os.environ.get("OLLAMA_CLOUD_BASE_URL", "https://ollama.com/api").rstrip("/")
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            response = await client.post(
+                f"{base_url}/chat",
+                headers={"Authorization": f"Bearer {api_key}"},
+                json=body,
+            )
+            response.raise_for_status()
+            data = response.json()
+            output = data.get("message", {}).get("content", "")
+            usage = {
+                "prompt_tokens": data.get("prompt_eval_count", 0),
+                "completion_tokens": data.get("eval_count", 0),
+            }
+            return {"output": output, "usage": usage}
 
     async def _call_claude(self, backend: BackendConfig, payload: Any) -> Any:
         api_key_ref = backend.api_key_ref or "ANTHROPIC_API_KEY"

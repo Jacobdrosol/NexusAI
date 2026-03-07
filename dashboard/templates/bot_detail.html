@@ -140,7 +140,20 @@
           <option value="custom">custom</option>
         </select>
       </div>
-      <div class="form-group"><label>Provider / CLI</label><input class="form-control" name="provider" placeholder="ollama / openai / claude / codex / gh"></div>
+      <div class="form-group">
+        <label>Provider / CLI</label>
+        <input class="form-control" name="provider" list="bot-provider-options" placeholder="ollama / ollama_cloud / openai / claude / gemini / codex / gh">
+        <datalist id="bot-provider-options">
+          <option value="ollama"></option>
+          <option value="ollama_cloud"></option>
+          <option value="openai"></option>
+          <option value="claude"></option>
+          <option value="gemini"></option>
+          <option value="cli"></option>
+          <option value="codex"></option>
+          <option value="gh"></option>
+        </datalist>
+      </div>
       <div class="form-group">
         <label>Model</label>
         <select class="form-control" name="model_select" onchange="syncModelInput(this.value)">

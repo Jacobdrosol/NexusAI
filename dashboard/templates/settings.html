@@ -144,7 +144,17 @@
   <h2 style="font-size:1.1rem;margin-bottom:1rem;color:#f0f0f0;">API Keys</h2>
   <form id="form-api-key" onsubmit="saveApiKey(event)" style="margin-bottom:1rem;">
     <div class="form-group"><label>Name</label><input class="form-control" name="name" required></div>
-    <div class="form-group"><label>Provider</label><input class="form-control" name="provider" placeholder="openai | claude | gemini" required></div>
+    <div class="form-group">
+      <label>Provider</label>
+      <input class="form-control" name="provider" list="api-key-provider-options" placeholder="openai | ollama_cloud | claude | gemini" required>
+      <datalist id="api-key-provider-options">
+        <option value="openai"></option>
+        <option value="ollama_cloud"></option>
+        <option value="claude"></option>
+        <option value="gemini"></option>
+        <option value="github"></option>
+      </datalist>
+    </div>
     <div class="form-group"><label>Key Value</label><input type="password" class="form-control" name="value" required></div>
     <button class="btn btn-primary" type="submit">Save Key</button>
   </form>
