@@ -1,6 +1,30 @@
 {% extends "base.html" %}
 {% set active_page = "projects" %}
 {% block title %}Project Detail{% endblock %}
+{% macro render_project_data_node(node) -%}
+  {% if node.type == "directory" %}
+    <details class="project-data-node" {% if not node.path %}open{% endif %}>
+      <summary>
+        <strong>{{ node.name }}</strong>
+        {% if node.path %}<code style="margin-left:0.35rem;">{{ node.path }}</code>{% endif %}
+      </summary>
+      {% if node.children %}
+      <div style="margin-left:1rem; margin-top:0.35rem; display:grid; gap:0.35rem;">
+        {% for child in node.children %}
+          {{ render_project_data_node(child) }}
+        {% endfor %}
+      </div>
+      {% else %}
+      <div class="empty" style="margin:0.35rem 0 0 1rem;">Folder is empty</div>
+      {% endif %}
+    </details>
+  {% else %}
+    <div class="project-data-file" style="margin-left:1rem;">
+      <code>{{ node.path }}</code>
+      <span style="color:#64748b; margin-left:0.35rem;">{{ node.size or 0 }} bytes</span>
+    </div>
+  {% endif %}
+{%- endmacro %}
 {% block content %}
 <div class="page-header">
   <h1>Project Detail</h1>
@@ -102,6 +126,60 @@
       </div>
       <div class="mini-note" style="margin-top:0.5rem;">Override options will be validated against provider baseline.</div>
       <pre id="cloud-policy-pre" style="white-space:pre-wrap; margin-top:0.55rem;">{}</pre>
+    </div>
+  </div>
+</section>
+
+<section class="panel" style="margin-bottom:1rem;">
+  <div class="page-header" style="margin-bottom:0.75rem;">
+    <h2 class="panel-title">Project Data Vault</h2>
+  </div>
+  <div class="mini-note" style="margin-bottom:0.75rem;">
+    Store project documents, notes, exports, and other source material here, then run the ingest program to push that data into the searchable vector-backed vault.
+  </div>
+  <div class="split-grid" style="grid-template-columns:1.2fr 0.8fr; gap:0.75rem;">
+    <div>
+      <div><strong>Filesystem Root</strong></div>
+      <div class="mini-note" style="margin-top:0.35rem;"><code>{{ project_data_root }}</code></div>
+      <div style="margin-top:0.75rem;"><strong>Explorer</strong></div>
+      <div id="project-data-tree" style="margin-top:0.5rem; max-height:24rem; overflow:auto;">
+        {{ render_project_data_node(project_data_tree) if project_data_tree else '<div class="empty">No project data root available</div>' }}
+      </div>
+    </div>
+    <div>
+      <div><strong>Create Folder</strong></div>
+      <div class="form-group" style="margin-top:0.35rem;">
+        <label>Parent Path</label>
+        <input class="form-control" id="project-data-parent-path" placeholder="docs">
+      </div>
+      <div class="form-group">
+        <label>Folder Name</label>
+        <input class="form-control" id="project-data-folder-name" placeholder="product-specs">
+      </div>
+      <div style="display:flex; gap:0.5rem;">
+        <button class="btn" type="button" onclick="createProjectDataFolder()">Create Folder</button>
+        <button class="btn" type="button" onclick="refreshProjectDataFiles()">Refresh</button>
+      </div>
+      <hr style="margin:0.8rem 0;">
+      <div><strong>Upload Files</strong></div>
+      <div class="form-group" style="margin-top:0.35rem;">
+        <label>Target Path</label>
+        <input class="form-control" id="project-data-target-path" placeholder="docs">
+      </div>
+      <div class="form-group">
+        <label>Files</label>
+        <input class="form-control" id="project-data-files" type="file" multiple>
+      </div>
+      <div style="display:flex; gap:0.5rem;">
+        <button class="btn btn-primary" type="button" onclick="uploadProjectDataFiles()">Upload</button>
+      </div>
+      <div id="project-data-state" class="state-empty" style="margin-top:0.6rem;">No filesystem action yet.</div>
+      <hr style="margin:0.8rem 0;">
+      <div><strong>Ingest Command</strong></div>
+      <pre style="white-space:pre-wrap; margin-top:0.35rem;">python scripts/ingest_project_data.py --project-id {{ project.id }} --namespace project:{{ project.id }}:data</pre>
+      <div class="mini-note">
+        Default folders are created automatically: <code>docs</code>, <code>inbox</code>, <code>exports</code>, <code>notes</code>.
+      </div>
     </div>
   </div>
 </section>
@@ -357,6 +435,72 @@ function setGithubState(cls, text) {
   if (!el) return;
   el.className = cls;
   el.textContent = text;
+}
+
+function setProjectDataState(cls, text) {
+  const el = document.getElementById('project-data-state');
+  if (!el) return;
+  el.className = cls;
+  el.textContent = text;
+}
+
+async function refreshProjectDataFiles() {
+  setProjectDataState('state-loading', 'Refreshing project data tree...');
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/data/files');
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    setProjectDataState('state-error', data.error || 'Failed to refresh project data.');
+    return;
+  }
+  location.reload();
+}
+
+async function createProjectDataFolder() {
+  const parentPath = (document.getElementById('project-data-parent-path')?.value || '').trim();
+  const folderName = (document.getElementById('project-data-folder-name')?.value || '').trim();
+  if (!folderName) {
+    alert('Folder name is required.');
+    return;
+  }
+  setProjectDataState('state-loading', 'Creating folder...');
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/data/folders', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify({parent_path: parentPath || null, folder_name: folderName}),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    setProjectDataState('state-error', data.error || 'Failed to create folder.');
+    return;
+  }
+  setProjectDataState('state-info', 'Created folder ' + (data.path || folderName) + '.');
+  location.reload();
+}
+
+async function uploadProjectDataFiles() {
+  const filesInput = document.getElementById('project-data-files');
+  const targetPath = (document.getElementById('project-data-target-path')?.value || '').trim();
+  const files = filesInput?.files ? Array.from(filesInput.files) : [];
+  if (!files.length) {
+    alert('Select at least one file.');
+    return;
+  }
+  const fd = new FormData();
+  fd.append('target_path', targetPath);
+  for (const file of files) fd.append('files', file);
+  setProjectDataState('state-loading', 'Uploading files...');
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/data/upload', {
+    method: 'POST',
+    headers: {'X-CSRFToken': getCsrf()},
+    body: fd,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    setProjectDataState('state-error', data.error || 'Upload failed.');
+    return;
+  }
+  setProjectDataState('state-info', 'Uploaded ' + ((data.uploaded || []).length) + ' file(s).');
+  location.reload();
 }
 
 function setWebhookState(cls, text) {
