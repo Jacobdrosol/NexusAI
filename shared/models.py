@@ -125,6 +125,7 @@ class ChatConversation(BaseModel):
     scope: Literal["global", "project", "bridged"] = "global"
     default_bot_id: Optional[str] = None
     default_model_id: Optional[str] = None
+    archived_at: Optional[str] = None
     created_at: str
     updated_at: str
 

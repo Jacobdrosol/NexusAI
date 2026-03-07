@@ -59,11 +59,49 @@ async def test_delete_conversation_removes_messages(cp_app):
             json={"content": "hello", "bot_id": "bot-delete"},
         )
 
+        not_archived_delete = await client.delete(f"/v1/chat/conversations/{conversation_id}")
+        assert not_archived_delete.status_code == 400
+
+        archive_resp = await client.post(f"/v1/chat/conversations/{conversation_id}/archive")
+        assert archive_resp.status_code == 200
+        assert archive_resp.json()["archived_at"] is not None
+
         delete_resp = await client.delete(f"/v1/chat/conversations/{conversation_id}")
         assert delete_resp.status_code == 204
 
         missing_resp = await client.get(f"/v1/chat/conversations/{conversation_id}/messages")
         assert missing_resp.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_archive_and_restore_conversation_visibility(cp_app):
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        create_resp = await client.post("/v1/chat/conversations", json={"title": "Archive Me"})
+        assert create_resp.status_code == 200
+        conversation_id = create_resp.json()["id"]
+
+        active_resp = await client.get("/v1/chat/conversations")
+        assert active_resp.status_code == 200
+        assert len(active_resp.json()) == 1
+
+        archive_resp = await client.post(f"/v1/chat/conversations/{conversation_id}/archive")
+        assert archive_resp.status_code == 200
+
+        active_after_archive = await client.get("/v1/chat/conversations")
+        assert active_after_archive.status_code == 200
+        assert active_after_archive.json() == []
+
+        archived_resp = await client.get("/v1/chat/conversations?archived=archived")
+        assert archived_resp.status_code == 200
+        assert len(archived_resp.json()) == 1
+
+        restore_resp = await client.post(f"/v1/chat/conversations/{conversation_id}/restore")
+        assert restore_resp.status_code == 200
+        assert restore_resp.json()["archived_at"] is None
+
+        active_after_restore = await client.get("/v1/chat/conversations")
+        assert active_after_restore.status_code == 200
+        assert len(active_after_restore.json()) == 1
 
 
 @pytest.mark.anyio

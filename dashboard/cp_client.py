@@ -330,10 +330,19 @@ class CPClient:
         return self._delete(f"/v1/keys/{name}")
 
     # Chat
-    def list_conversations(self, project_id: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
+    def list_conversations(
+        self,
+        project_id: Optional[str] = None,
+        archived: str = "active",
+    ) -> Optional[List[Dict[str, Any]]]:
         path = "/v1/chat/conversations"
+        parts = []
         if project_id:
-            path = f"{path}?project_id={project_id}"
+            parts.append(f"project_id={project_id}")
+        if archived:
+            parts.append(f"archived={archived}")
+        if parts:
+            path = f"{path}?{'&'.join(parts)}"
         return self._get(path)
 
     def create_conversation(self, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -341,6 +350,12 @@ class CPClient:
 
     def delete_conversation(self, conversation_id: str) -> bool:
         return self._delete(f"/v1/chat/conversations/{conversation_id}")
+
+    def archive_conversation(self, conversation_id: str) -> Optional[Dict[str, Any]]:
+        return self._post(f"/v1/chat/conversations/{conversation_id}/archive", {})
+
+    def restore_conversation(self, conversation_id: str) -> Optional[Dict[str, Any]]:
+        return self._post(f"/v1/chat/conversations/{conversation_id}/restore", {})
 
     def list_messages(self, conversation_id: str) -> Optional[List[Dict[str, Any]]]:
         return self._get(f"/v1/chat/conversations/{conversation_id}/messages")

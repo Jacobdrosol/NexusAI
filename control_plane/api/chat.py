@@ -1,6 +1,6 @@
 import asyncio
 import json
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import Any, AsyncGenerator, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
@@ -96,9 +96,10 @@ async def create_conversation(request: Request, body: CreateConversationRequest)
 async def list_conversations(
     request: Request,
     project_id: Optional[str] = Query(default=None),
+    archived: Literal["active", "archived", "all"] = Query(default="active"),
 ) -> List[ChatConversation]:
     chat_manager = request.app.state.chat_manager
-    return await chat_manager.list_conversations(project_id=project_id)
+    return await chat_manager.list_conversations(project_id=project_id, archived=archived)
 
 
 @router.get("/conversations/{conversation_id}", response_model=ChatConversation)
@@ -115,6 +116,26 @@ async def delete_conversation(conversation_id: str, request: Request) -> None:
     chat_manager = request.app.state.chat_manager
     try:
         await chat_manager.delete_conversation(conversation_id)
+    except ConversationNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/conversations/{conversation_id}/archive", response_model=ChatConversation)
+async def archive_conversation(conversation_id: str, request: Request) -> ChatConversation:
+    chat_manager = request.app.state.chat_manager
+    try:
+        return await chat_manager.archive_conversation(conversation_id)
+    except ConversationNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/conversations/{conversation_id}/restore", response_model=ChatConversation)
+async def restore_conversation(conversation_id: str, request: Request) -> ChatConversation:
+    chat_manager = request.app.state.chat_manager
+    try:
+        return await chat_manager.restore_conversation(conversation_id)
     except ConversationNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
 

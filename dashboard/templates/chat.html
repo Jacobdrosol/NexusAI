@@ -17,12 +17,43 @@
           <div>{{ c.title }}</div>
           <small>{{ (c.updated_at[:19] if c.updated_at else '') | replace('T', ' ') }}</small>
         </a>
-        <button type="button" class="btn btn-sm btn-danger" onclick="deleteConversation('{{ c.id }}', {{ c.title|tojson }})">Delete</button>
+        <button
+          type="button"
+          class="btn btn-sm archive-conversation-btn"
+          data-conversation-id="{{ c.id }}"
+          data-conversation-title="{{ c.title }}"
+        >Archive</button>
       </div>
       {% else %}
       <div class="empty">No conversations yet</div>
       {% endfor %}
     </div>
+
+    <hr style="margin:0.9rem 0;">
+    <details {% if selected_conversation and selected_conversation.archived_at %}open{% endif %}>
+      <summary style="cursor:pointer;">Archived Conversations ({{ archived_conversations|length }})</summary>
+      <div class="list" style="margin-top:0.75rem;">
+        {% for c in archived_conversations %}
+        <div class="list-item {% if selected_conversation and selected_conversation.id == c.id %}active{% endif %}" style="display:flex;align-items:flex-start;justify-content:space-between;gap:0.75rem;">
+          <a href="{{ url_for('chat.chat_page') }}?conversation_id={{ c.id }}" style="flex:1;min-width:0;color:inherit;text-decoration:none;">
+            <div>{{ c.title }}</div>
+            <small>Archived {{ (c.archived_at[:19] if c.archived_at else '') | replace('T', ' ') }}</small>
+          </a>
+          <div style="display:flex;gap:0.4rem;flex-wrap:wrap;">
+            <button type="button" class="btn btn-sm restore-conversation-btn" data-conversation-id="{{ c.id }}">Restore</button>
+            <button
+              type="button"
+              class="btn btn-sm btn-danger delete-conversation-btn"
+              data-conversation-id="{{ c.id }}"
+              data-conversation-title="{{ c.title }}"
+            >Delete</button>
+          </div>
+        </div>
+        {% else %}
+        <div class="empty">No archived conversations</div>
+        {% endfor %}
+      </div>
+    </details>
 
     {% if selected_conversation %}
     <hr style="margin:0.9rem 0;">
@@ -300,9 +331,41 @@ function startMessagePolling() {
   refreshTimer = window.setInterval(refreshMessages, 3000);
 }
 
+async function archiveConversation(conversationId, title) {
+  const label = title || conversationId;
+  if (!confirm('Archive conversation "' + label + '"?')) return;
+  const res = await fetch('/api/chat/conversations/' + encodeURIComponent(conversationId) + '/archive', {
+    method: 'POST',
+    headers: {'X-CSRFToken': getCsrf()},
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    alert(data.error || 'Conversation archive failed');
+    return;
+  }
+  if (selectedConversationId && String(selectedConversationId) === String(conversationId)) {
+    window.location = '/chat';
+    return;
+  }
+  window.location.reload();
+}
+
+async function restoreConversation(conversationId) {
+  const res = await fetch('/api/chat/conversations/' + encodeURIComponent(conversationId) + '/restore', {
+    method: 'POST',
+    headers: {'X-CSRFToken': getCsrf()},
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    alert(data.error || 'Conversation restore failed');
+    return;
+  }
+  window.location.reload();
+}
+
 async function deleteConversation(conversationId, title) {
   const label = title || conversationId;
-  if (!confirm('Delete conversation "' + label + '"? This cannot be undone.')) return;
+  if (!confirm('Delete archived conversation "' + label + '"? This cannot be undone.')) return;
   const res = await fetch('/api/chat/conversations/' + encodeURIComponent(conversationId), {
     method: 'DELETE',
     headers: {'X-CSRFToken': getCsrf()},
@@ -317,6 +380,18 @@ async function deleteConversation(conversationId, title) {
     return;
   }
   window.location.reload();
+}
+
+function bindConversationActions() {
+  document.querySelectorAll('.archive-conversation-btn').forEach((btn) => {
+    btn.addEventListener('click', () => archiveConversation(btn.dataset.conversationId, btn.dataset.conversationTitle));
+  });
+  document.querySelectorAll('.restore-conversation-btn').forEach((btn) => {
+    btn.addEventListener('click', () => restoreConversation(btn.dataset.conversationId));
+  });
+  document.querySelectorAll('.delete-conversation-btn').forEach((btn) => {
+    btn.addEventListener('click', () => deleteConversation(btn.dataset.conversationId, btn.dataset.conversationTitle));
+  });
 }
 
 function esc(s) {
@@ -718,5 +793,6 @@ async function openDagViewer(orchestrationId) {
 }
 
 startMessagePolling();
+bindConversationActions();
 </script>
 {% endblock %}

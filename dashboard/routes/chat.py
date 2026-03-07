@@ -42,7 +42,7 @@ def _stream_cp_headers(cp) -> dict[str, str]:
 @login_required
 def chat_page() -> str:
     cp = get_cp_client()
-    conversations = cp.list_conversations() or []
+    conversations = cp.list_conversations(archived="all") or []
     bots = cp.list_bots() or []
     vault_items = cp.list_vault_items(limit=50) or []
     selected_id = request.args.get("conversation_id")
@@ -56,7 +56,8 @@ def chat_page() -> str:
         messages = cp.list_messages(selected_id) or []
     return render_template(
         "chat.html",
-        conversations=conversations,
+        conversations=[c for c in conversations if not c.get("archived_at")],
+        archived_conversations=[c for c in conversations if c.get("archived_at")],
         selected_conversation=selected,
         messages=messages,
         bots=bots,
@@ -95,6 +96,26 @@ def api_delete_conversation(conversation_id: str):
     if not ok:
         return _cp_error_response(cp, "conversation delete failed")
     return "", 204
+
+
+@bp.post("/api/chat/conversations/<conversation_id>/archive")
+@login_required
+def api_archive_conversation(conversation_id: str):
+    cp = get_cp_client()
+    archived = cp.archive_conversation(conversation_id)
+    if archived is None:
+        return _cp_error_response(cp, "conversation archive failed")
+    return jsonify(archived)
+
+
+@bp.post("/api/chat/conversations/<conversation_id>/restore")
+@login_required
+def api_restore_conversation(conversation_id: str):
+    cp = get_cp_client()
+    restored = cp.restore_conversation(conversation_id)
+    if restored is None:
+        return _cp_error_response(cp, "conversation restore failed")
+    return jsonify(restored)
 
 
 @bp.post("/api/chat/messages")

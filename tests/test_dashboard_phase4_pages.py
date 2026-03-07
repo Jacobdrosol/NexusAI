@@ -202,6 +202,26 @@ def test_chat_delete_conversation_api_surfaces_success(dashboard_client):
     assert resp.status_code == 204
 
 
+def test_chat_archive_restore_conversation_apis_surface_success(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def archive_conversation(self, conversation_id):
+            return {"id": conversation_id, "archived_at": "2026-03-07T00:00:00+00:00"}
+
+        def restore_conversation(self, conversation_id):
+            return {"id": conversation_id, "archived_at": None}
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        archive_resp = dashboard_client.post("/api/chat/conversations/c1/archive")
+        restore_resp = dashboard_client.post("/api/chat/conversations/c1/restore")
+
+    assert archive_resp.status_code == 200
+    assert archive_resp.get_json()["archived_at"] is not None
+    assert restore_resp.status_code == 200
+    assert restore_resp.get_json()["archived_at"] is None
+
+
 def test_chat_stream_forwards_control_plane_auth_header(dashboard_client):
     _login_admin(dashboard_client)
 

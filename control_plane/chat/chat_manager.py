@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     scope TEXT NOT NULL,
     default_bot_id TEXT,
     default_model_id TEXT,
+    archived_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 )
@@ -68,8 +69,15 @@ class ChatManager:
                 await db.execute("PRAGMA foreign_keys = ON")
                 await db.execute(_CREATE_CONVERSATIONS)
                 await db.execute(_CREATE_MESSAGES)
+                await self._ensure_conversation_columns(db)
                 await db.commit()
             self._db_ready = True
+
+    async def _ensure_conversation_columns(self, db: aiosqlite.Connection) -> None:
+        async with db.execute("PRAGMA table_info(conversations)") as cursor:
+            columns = {row[1] for row in await cursor.fetchall()}
+        if "archived_at" not in columns:
+            await db.execute("ALTER TABLE conversations ADD COLUMN archived_at TEXT")
 
     async def create_conversation(
         self,
@@ -88,6 +96,7 @@ class ChatManager:
             scope=scope,
             default_bot_id=default_bot_id,
             default_model_id=default_model_id,
+            archived_at=None,
             created_at=now,
             updated_at=now,
         )
@@ -96,9 +105,9 @@ class ChatManager:
                 await db.execute(
                     """
                     INSERT INTO conversations (
-                        id, title, project_id, scope, default_bot_id, default_model_id, created_at, updated_at
+                        id, title, project_id, scope, default_bot_id, default_model_id, archived_at, created_at, updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         conversation.id,
@@ -107,6 +116,7 @@ class ChatManager:
                         conversation.scope,
                         conversation.default_bot_id,
                         conversation.default_model_id,
+                        conversation.archived_at,
                         conversation.created_at,
                         conversation.updated_at,
                     ),
@@ -114,20 +124,25 @@ class ChatManager:
                 await db.commit()
         return conversation
 
-    async def list_conversations(self, project_id: Optional[str] = None) -> List[ChatConversation]:
+    async def list_conversations(
+        self,
+        project_id: Optional[str] = None,
+        archived: str = "active",
+    ) -> List[ChatConversation]:
         await self._ensure_db()
         async with aiosqlite.connect(self._db_path) as db:
             db.row_factory = aiosqlite.Row
+            clauses: list[str] = []
+            params: list[Any] = []
             if project_id:
-                query = """
-                    SELECT * FROM conversations
-                    WHERE project_id = ?
-                    ORDER BY updated_at DESC
-                """
-                params = (project_id,)
-            else:
-                query = "SELECT * FROM conversations ORDER BY updated_at DESC"
-                params = ()
+                clauses.append("project_id = ?")
+                params.append(project_id)
+            if archived == "active":
+                clauses.append("archived_at IS NULL")
+            elif archived == "archived":
+                clauses.append("archived_at IS NOT NULL")
+            where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+            query = f"SELECT * FROM conversations{where} ORDER BY updated_at DESC"
             async with db.execute(query, params) as cursor:
                 rows = await cursor.fetchall()
                 return [ChatConversation.model_validate(dict(row)) for row in rows]
@@ -146,12 +161,42 @@ class ChatManager:
                 return ChatConversation.model_validate(dict(row))
 
     async def delete_conversation(self, conversation_id: str) -> None:
-        await self.get_conversation(conversation_id)
+        conversation = await self.get_conversation(conversation_id)
+        if not conversation.archived_at:
+            raise ValueError("conversation must be archived before deletion")
         async with self._lock:
             async with aiosqlite.connect(self._db_path) as db:
                 await db.execute("PRAGMA foreign_keys = ON")
                 await db.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
                 await db.commit()
+
+    async def archive_conversation(self, conversation_id: str) -> ChatConversation:
+        conversation = await self.get_conversation(conversation_id)
+        if conversation.archived_at:
+            return conversation
+        now = datetime.now(timezone.utc).isoformat()
+        async with self._lock:
+            async with aiosqlite.connect(self._db_path) as db:
+                await db.execute(
+                    "UPDATE conversations SET archived_at = ?, updated_at = ? WHERE id = ?",
+                    (now, now, conversation_id),
+                )
+                await db.commit()
+        return await self.get_conversation(conversation_id)
+
+    async def restore_conversation(self, conversation_id: str) -> ChatConversation:
+        conversation = await self.get_conversation(conversation_id)
+        if not conversation.archived_at:
+            return conversation
+        now = datetime.now(timezone.utc).isoformat()
+        async with self._lock:
+            async with aiosqlite.connect(self._db_path) as db:
+                await db.execute(
+                    "UPDATE conversations SET archived_at = NULL, updated_at = ? WHERE id = ?",
+                    (now, conversation_id),
+                )
+                await db.commit()
+        return await self.get_conversation(conversation_id)
 
     async def add_message(
         self,
