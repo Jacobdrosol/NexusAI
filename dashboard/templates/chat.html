@@ -268,7 +268,19 @@ function setPendingAssistantStatus(text) {
   const pending = document.querySelector('.message[data-pending-assistant="true"]');
   if (!pending) return;
   const bodyEl = pending.querySelector('.message-body');
-  if (bodyEl) bodyEl.textContent = text;
+  if (bodyEl && !(pending.dataset.streamingStarted === 'true')) bodyEl.textContent = text;
+}
+
+function appendPendingAssistantToken(text) {
+  const pending = document.querySelector('.message[data-pending-assistant="true"]');
+  if (!pending) return;
+  const bodyEl = pending.querySelector('.message-body');
+  if (!bodyEl) return;
+  if (pending.dataset.streamingStarted !== 'true') {
+    bodyEl.textContent = '';
+    pending.dataset.streamingStarted = 'true';
+  }
+  bodyEl.textContent += text;
 }
 
 function reconcilePendingElement(message) {
@@ -556,6 +568,8 @@ async function sendMessage(streamMode) {
           }
         } else if (eventType === 'status') {
           setPendingAssistantStatus(parsed.label || 'Working...');
+        } else if (eventType === 'token') {
+          appendPendingAssistantToken(parsed.text || '');
         } else if (eventType === 'user_message') {
           upsertMessage(parsed);
         } else if (eventType === 'assistant_message' && pending) {

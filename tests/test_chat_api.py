@@ -106,7 +106,13 @@ async def test_archive_and_restore_conversation_visibility(cp_app):
 
 @pytest.mark.anyio
 async def test_stream_message_endpoint(cp_app):
-    cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "stream reply"})
+    async def _stream(_task):
+        yield {"event": "backend_selected", "provider": "ollama", "model": "llama3.1:8b", "worker_id": "w1"}
+        yield {"event": "token", "text": "stream "}
+        yield {"event": "token", "text": "reply"}
+        yield {"event": "final", "output": "stream reply", "usage": {"prompt_tokens": 1, "completion_tokens": 2}}
+
+    cp_app.state.scheduler.stream = _stream
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
         create_resp = await client.post("/v1/chat/conversations", json={"title": "Chat Stream"})
         conversation_id = create_resp.json()["id"]
@@ -129,6 +135,7 @@ async def test_stream_message_endpoint(cp_app):
         assert stream_resp.status_code == 200
         assert "event: user_message" in stream_resp.text
         assert "event: status" in stream_resp.text
+        assert "event: token" in stream_resp.text
         assert "event: assistant_message" in stream_resp.text
         assert "event: done" in stream_resp.text
 

@@ -1,7 +1,8 @@
 import logging
 import os
 import time
-from typing import Any
+import json
+from typing import Any, AsyncGenerator
 
 import httpx
 
@@ -60,6 +61,43 @@ class Scheduler:
             f"All backends failed for task {task.id}"
         ) from last_error
 
+    async def stream(self, task: Task) -> AsyncGenerator[dict[str, Any], None]:
+        try:
+            bot = await self.bot_registry.get(task.bot_id)
+        except BotNotFoundError:
+            raise
+
+        if not bot.enabled:
+            raise NoViableBackendError(f"Bot {task.bot_id} is disabled")
+
+        last_error: Exception = NoViableBackendError("No backends configured")
+
+        for backend in bot.backends:
+            try:
+                yield {
+                    "event": "backend_selected",
+                    "provider": backend.provider,
+                    "model": backend.model,
+                    "worker_id": backend.worker_id,
+                }
+                async for event in self._dispatch_backend_stream(backend, task.payload, task=task):
+                    yield event
+                return
+            except Exception as e:
+                logger.warning(
+                    "Backend %s/%s failed for stream task %s: %s",
+                    backend.provider,
+                    backend.model,
+                    task.id,
+                    e,
+                )
+                last_error = e
+                continue
+
+        raise NoViableBackendError(
+            f"All backends failed for task {task.id}"
+        ) from last_error
+
     async def _dispatch_backend(self, backend: BackendConfig, payload: Any, task: Task | None = None) -> Any:
         await self._validate_model_if_catalog_present(backend)
         safe_payload = await self._apply_cloud_context_policy(backend, payload, task=task)
@@ -89,6 +127,26 @@ class Scheduler:
             return await self._dispatch_to_worker(worker, backend, safe_payload)
         else:
             raise BackendError(f"Unsupported backend type: {backend.type}")
+
+    async def _dispatch_backend_stream(
+        self, backend: BackendConfig, payload: Any, task: Task | None = None
+    ) -> AsyncGenerator[dict[str, Any], None]:
+        await self._validate_model_if_catalog_present(backend)
+        safe_payload = await self._apply_cloud_context_policy(backend, payload, task=task)
+        if backend.type in ("local_llm", "remote_llm", "cli"):
+            worker = await self._resolve_worker_for_llm_backend(backend) if backend.type != "cli" else await self.worker_registry.get(backend.worker_id)  # type: ignore[arg-type]
+            if worker.status != "online":
+                raise BackendError(
+                    f"Worker {worker.id} is not online (status={worker.status})"
+                )
+            async for event in self._dispatch_to_worker_stream(worker, backend, safe_payload):
+                yield event
+            return
+        if backend.type == "cloud_api":
+            result = await self._dispatch_backend(backend, payload, task=task)
+            yield {"event": "final", **result}
+            return
+        raise BackendError(f"Unsupported backend type: {backend.type}")
 
     async def _apply_cloud_context_policy(
         self,
@@ -209,6 +267,57 @@ class Scheduler:
                 response = await client.post(url, json=body)
                 response.raise_for_status()
                 return response.json()
+            finally:
+                elapsed_ms = (time.perf_counter() - started) * 1000.0
+                prev = float(self._latency_ema_ms.get(worker.id, self._default_latency_ms))
+                alpha = min(max(self._latency_alpha, 0.01), 1.0)
+                self._latency_ema_ms[worker.id] = (alpha * elapsed_ms) + ((1.0 - alpha) * prev)
+                self._inflight_by_worker[worker.id] = max(
+                    0, int(self._inflight_by_worker.get(worker.id, 1)) - 1
+                )
+
+    async def _dispatch_to_worker_stream(
+        self, worker: Worker, backend: BackendConfig, payload: Any
+    ) -> AsyncGenerator[dict[str, Any], None]:
+        url = f"http://{worker.host}:{worker.port}/infer/stream"
+        params_dict = backend.params.model_dump(exclude_none=True) if backend.params else {}
+        body = {
+            "model": backend.model,
+            "provider": backend.provider,
+            "messages": payload if isinstance(payload, list) else [{"role": "user", "content": str(payload)}],
+            "params": params_dict,
+        }
+        if backend.gpu_id:
+            body["gpu_id"] = backend.gpu_id
+        self._inflight_by_worker[worker.id] = int(self._inflight_by_worker.get(worker.id, 0)) + 1
+        started = time.perf_counter()
+        async with httpx.AsyncClient(timeout=180.0) as client:
+            try:
+                async with client.stream("POST", url, json=body) as response:
+                    response.raise_for_status()
+                    buffer = ""
+                    event_type = "message"
+                    async for chunk in response.aiter_text():
+                        if not chunk:
+                            continue
+                        buffer += chunk
+                        while "\n\n" in buffer:
+                            block, buffer = buffer.split("\n\n", 1)
+                            if not block.strip():
+                                continue
+                            event_type = "message"
+                            data_text = ""
+                            for line in block.splitlines():
+                                if line.startswith("event:"):
+                                    event_type = line[6:].strip()
+                                elif line.startswith("data:"):
+                                    data_text += line[5:].strip()
+                            if not data_text:
+                                continue
+                            payload_obj = json.loads(data_text)
+                            if isinstance(payload_obj, dict):
+                                payload_obj.setdefault("event", event_type)
+                                yield payload_obj
             finally:
                 elapsed_ms = (time.perf_counter() - started) * 1000.0
                 prev = float(self._latency_ema_ms.get(worker.id, self._default_latency_ms))

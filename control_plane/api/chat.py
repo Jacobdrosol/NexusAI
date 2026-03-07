@@ -339,8 +339,25 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                 created_at=user_message.created_at,
                 updated_at=user_message.created_at,
             )
-            yield 'event: status\ndata: {"phase":"running","label":"Generating response..."}\n\n'
-            result = await scheduler.schedule(task)
+            result = None
+            async for event in scheduler.stream(task):
+                event_name = str(event.get("event") or "")
+                if event_name == "backend_selected":
+                    provider = str(event.get("provider") or "unknown")
+                    model = str(event.get("model") or "unknown")
+                    worker_id = str(event.get("worker_id") or "").strip()
+                    label = f"Using {provider}/{model}"
+                    if worker_id:
+                        label += f" on {worker_id}"
+                    yield f'event: status\ndata: {json.dumps({"phase": "running", "label": label})}\n\n'
+                elif event_name == "token":
+                    yield f'event: token\ndata: {json.dumps({"text": str(event.get("text") or "")})}\n\n'
+                elif event_name == "final":
+                    result = dict(event)
+                elif event_name == "error":
+                    payload = json.dumps({"error": event.get("error") or "stream_error"})
+                    yield f"event: error\ndata: {payload}\n\n"
+                    return
             assistant_output = _extract_task_output(result)
             yield 'event: status\ndata: {"phase":"persisting","label":"Saving response..."}\n\n'
             assistant_message = await chat_manager.add_message(
@@ -348,6 +365,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                 role="assistant",
                 content=assistant_output,
                 bot_id=target_bot_id,
+                metadata={"usage": (result or {}).get("usage", {})} if isinstance(result, dict) else None,
             )
             yield f"event: assistant_message\ndata: {assistant_message.model_dump_json()}\n\n"
             yield "event: done\ndata: {}\n\n"
