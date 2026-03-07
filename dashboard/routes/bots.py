@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 from flask import Blueprint, flash, jsonify, render_template, request
@@ -14,6 +15,11 @@ from dashboard.models import Bot, Task
 logger = logging.getLogger(__name__)
 
 bp = Blueprint("bots", __name__)
+
+
+def _slugify_bot_id(name: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", str(name or "").strip().lower()).strip("-")
+    return slug or "bot"
 
 
 def _bot_to_dict(b: Bot) -> dict[str, Any]:
@@ -131,9 +137,43 @@ def api_list_bots():
 @login_required
 def api_create_bot():
     """Create a new bot."""
+    from dashboard.cp_client import get_cp_client
+
     data: dict[str, Any] = request.get_json(force=True) or {}
     if not data.get("name"):
         return jsonify({"error": "name is required"}), 400
+    cp = get_cp_client()
+    cp_bots = cp.list_bots()
+    if cp_bots is not None:
+        requested_id = str(data.get("id") or "").strip()
+        bot_id = requested_id or _slugify_bot_id(str(data["name"]))
+        existing_ids = {str(b.get("id")) for b in cp_bots if isinstance(b, dict)}
+        if bot_id in existing_ids and not requested_id:
+            base = bot_id
+            suffix = 2
+            while f"{base}-{suffix}" in existing_ids:
+                suffix += 1
+            bot_id = f"{base}-{suffix}"
+        created = cp.create_bot(
+            {
+                "id": bot_id,
+                "name": data["name"],
+                "role": data.get("role", "") or "assistant",
+                "priority": int(data.get("priority", 0)),
+                "enabled": bool(data.get("enabled", True)),
+                "system_prompt": data.get("system_prompt"),
+                "backends": data.get("backends", []),
+                "routing_rules": data.get("routing_rules"),
+            }
+        )
+        if created is None:
+            err = cp.last_error()
+            detail = str((err or {}).get("detail") or "create failed")
+            status = int((err or {}).get("status_code") or 502)
+            if status < 400 or status > 599:
+                status = 502
+            return jsonify({"error": detail}), status
+        return jsonify(created), 201
     db = get_db()
     try:
         bot = Bot(

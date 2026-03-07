@@ -27,6 +27,7 @@ Top-level keys:
 | `control_plane.port` | TCP port for the API server |
 | `control_plane.workers_config_dir` | Directory scanned for worker YAMLs |
 | `control_plane.bots_config_dir` | Directory scanned for bot YAMLs |
+| `control_plane.seed_bots_from_config` | If `true`, seed missing bots from YAML files at startup. Defaults to `false` for UI-first installs. |
 | `control_plane.heartbeat_timeout_seconds` | Seconds before a silent worker is marked offline |
 | `logging.level` | Python logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
 
@@ -66,7 +67,9 @@ capabilities: []
 
 ## Adding a Bot
 
-Create a new YAML file in `config/bots/`.  The file is validated against the `Bot` model (`shared/models.py`):
+For normal installs, create and manage bots in the UI. YAML bot files are optional bootstrap inputs only when `control_plane.seed_bots_from_config: true`.
+
+If you do want declarative bot seeding, create a new YAML file in `config/bots/`. The file is validated against the `Bot` model (`shared/models.py`):
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|

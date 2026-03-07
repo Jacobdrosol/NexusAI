@@ -43,7 +43,7 @@ async def cp_app(tmp_path):
     app.include_router(audit.router)
 
     worker_registry = WorkerRegistry()
-    bot_registry = BotRegistry()
+    bot_registry = BotRegistry(db_path=str(tmp_path / "bots.db"))
     project_registry = ProjectRegistry(db_path=str(tmp_path / "projects.db"))
     model_registry = ModelRegistry(db_path=str(tmp_path / "models.db"))
     key_vault = KeyVault(db_path=str(tmp_path / "keys.db"), master_key="test-master-key")

@@ -62,7 +62,8 @@ async def lifespan(app: FastAPI):
 
     worker_registry.load_from_configs(worker_configs)
     worker_ids = set(await worker_registry.get_worker_ids())
-    bot_registry.load_from_configs(bot_configs, worker_ids)
+    if cp_cfg.get("seed_bots_from_config", False):
+        await bot_registry.seed_from_configs(bot_configs, worker_ids)
 
     # Initialize scheduler and task manager
     scheduler = Scheduler(

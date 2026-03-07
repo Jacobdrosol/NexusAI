@@ -260,6 +260,34 @@ def test_worker_live_endpoint_returns_payload(dashboard_client):
     assert "running_tasks" in data
 
 
+def test_create_bot_uses_control_plane_when_available(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def __init__(self):
+            self.created = None
+
+        def list_bots(self):
+            return [{"id": "assistant-bot"}]
+
+        def create_bot(self, body):
+            self.created = body
+            return body
+
+    fake_cp = FakeCP()
+    with patch("dashboard.cp_client.get_cp_client", return_value=fake_cp):
+        resp = dashboard_client.post(
+            "/api/bots",
+            json={"name": "My Test Bot", "role": "assistant", "priority": 3},
+        )
+
+    assert resp.status_code == 201
+    data = resp.get_json()
+    assert data["id"] == "my-test-bot"
+    assert data["name"] == "My Test Bot"
+    assert fake_cp.created["backends"] == []
+
+
 def test_vault_upload_api_validates_required_fields(dashboard_client):
     _login_admin(dashboard_client)
     resp = dashboard_client.post("/api/vault/upload", data={"source_mode": "paste"})
