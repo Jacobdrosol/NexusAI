@@ -359,6 +359,10 @@ def test_settings_page_loads_for_admin(dashboard_client):
     resp = dashboard_client.get("/settings")
     assert resp.status_code == 200
     assert b"Settings" in resp.data
+    assert b'id="form-api-key"' in resp.data
+    assert b'autocomplete="off"' in resp.data
+    assert b'fake_username' in resp.data
+    assert b'autocomplete="new-password"' in resp.data
     assert b"Export/Import" in resp.data
     assert b"Audit Log" in resp.data
     assert b"Deploy" in resp.data
