@@ -176,7 +176,10 @@
       </div>
       <div class="split-grid" style="grid-template-columns:1fr 1fr;">
         <div class="form-group"><label>Temperature</label><input class="form-control" type="number" step="any" name="temperature"></div>
-        <div class="form-group"><label>Max Tokens</label><input class="form-control" type="number" name="max_tokens"></div>
+        <div class="form-group">
+          <label>Max Tokens</label>
+          <input class="form-control" type="number" name="max_tokens" placeholder="Auto: 1024 for local Ollama chat">
+        </div>
       </div>
       <div class="modal-actions">
         <button type="button" class="btn btn-primary" onclick="saveBackendForm()">Apply</button>
@@ -265,6 +268,7 @@ function saveBotInfo() {
 function syncModelInput(value) {
   if (!value) return;
   document.querySelector('#form-backend input[name=model]').value = value;
+  applyBackendDefaults();
 }
 
 function modelsForWorker(workerId, provider) {
@@ -327,6 +331,29 @@ function currentAvailableModels() {
   const catalogModels = globalModelsForProvider(provider);
   if (catalogModels.length > 0) return catalogModels;
   return suggestedModelsForProvider(provider);
+}
+
+function suggestedMaxTokens() {
+  const form = document.getElementById('form-backend');
+  const type = String(form.type.value || '').trim().toLowerCase();
+  const provider = String(form.provider.value || '').trim().toLowerCase();
+  if (type === 'local_llm' && provider === 'ollama') {
+    return 1024;
+  }
+  return '';
+}
+
+function applyBackendDefaults(force=false) {
+  const form = document.getElementById('form-backend');
+  if (!form) return;
+  const maxTokensInput = form.max_tokens;
+  if (!maxTokensInput) return;
+  const current = String(maxTokensInput.value || '').trim();
+  if (!force && current) return;
+  const suggested = suggestedMaxTokens();
+  if (suggested) {
+    maxTokensInput.value = suggested;
+  }
 }
 
 function refreshModelOptions(preferredValue='') {
@@ -435,6 +462,7 @@ function openAddBackend() {
   document.getElementById('backend-modal-title').textContent = 'Add Backend';
   refreshApiKeyOptions('');
   refreshModelOptions('');
+  applyBackendDefaults(true);
   document.getElementById('modal-backend').style.display = 'flex';
 }
 
@@ -540,7 +568,11 @@ document.querySelector('#form-backend select[name=worker_id]')?.addEventListener
 document.querySelector('#form-backend select[name=provider]')?.addEventListener('change', () => {
   refreshApiKeyOptions();
   refreshModelOptions();
+  applyBackendDefaults();
 });
-document.querySelector('#form-backend select[name=type]')?.addEventListener('change', () => refreshModelOptions());
+document.querySelector('#form-backend select[name=type]')?.addEventListener('change', () => {
+  refreshModelOptions();
+  applyBackendDefaults();
+});
 </script>
 {% endblock %}
