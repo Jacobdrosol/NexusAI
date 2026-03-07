@@ -300,6 +300,151 @@ function renderMessageActions(meta) {
   `;
 }
 
+function escapeHtml(text) {
+  return String(text || '').replace(/[&<>"']/g, (c) => (
+    {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;', "'":'&#39;'}[c]
+  ));
+}
+
+function sanitizeHref(url) {
+  const value = String(url || '').trim();
+  if (/^(https?:|mailto:)/i.test(value)) return value;
+  return '#';
+}
+
+function renderInlineMarkdown(text) {
+  let html = escapeHtml(text);
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, href) => (
+    `<a href="${sanitizeHref(href)}" target="_blank" rel="noopener noreferrer">${label}</a>`
+  ));
+  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/\*([^*\n]+)\*/g, '<em>$1</em>');
+  return html;
+}
+
+function renderMarkdown(text) {
+  const lines = String(text || '').replace(/\r\n/g, '\n').split('\n');
+  const out = [];
+  let i = 0;
+
+  function isBlank(line) {
+    return !String(line || '').trim();
+  }
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    if (isBlank(line)) {
+      i += 1;
+      continue;
+    }
+
+    const fenceMatch = line.match(/^```([\w-]+)?\s*$/);
+    if (fenceMatch) {
+      const lang = fenceMatch[1] ? ` class="language-${escapeHtml(fenceMatch[1])}"` : '';
+      i += 1;
+      const codeLines = [];
+      while (i < lines.length && !/^```/.test(lines[i])) {
+        codeLines.push(lines[i]);
+        i += 1;
+      }
+      if (i < lines.length && /^```/.test(lines[i])) i += 1;
+      out.push(`<pre><code${lang}>${escapeHtml(codeLines.join('\n'))}</code></pre>`);
+      continue;
+    }
+
+    if (/^\|.+\|$/.test(line) && i + 1 < lines.length && /^\|?[\s:-|]+\|?$/.test(lines[i + 1])) {
+      const headerCells = line.split('|').slice(1, -1).map((cell) => renderInlineMarkdown(cell.trim()));
+      i += 2;
+      const rows = [];
+      while (i < lines.length && /^\|.+\|$/.test(lines[i])) {
+        rows.push(lines[i].split('|').slice(1, -1).map((cell) => renderInlineMarkdown(cell.trim())));
+        i += 1;
+      }
+      out.push(
+        `<table class="md-table"><thead><tr>${headerCells.map((cell) => `<th>${cell}</th>`).join('')}</tr></thead>` +
+        `<tbody>${rows.map((row) => `<tr>${row.map((cell) => `<td>${cell}</td>`).join('')}</tr>`).join('')}</tbody></table>`
+      );
+      continue;
+    }
+
+    const headingMatch = line.match(/^(#{1,6})\s+(.*)$/);
+    if (headingMatch) {
+      const level = headingMatch[1].length;
+      out.push(`<h${level}>${renderInlineMarkdown(headingMatch[2])}</h${level}>`);
+      i += 1;
+      continue;
+    }
+
+    if (/^---+$/.test(line.trim())) {
+      out.push('<hr>');
+      i += 1;
+      continue;
+    }
+
+    if (/^>\s?/.test(line)) {
+      const quoteLines = [];
+      while (i < lines.length && /^>\s?/.test(lines[i])) {
+        quoteLines.push(renderInlineMarkdown(lines[i].replace(/^>\s?/, '')));
+        i += 1;
+      }
+      out.push(`<blockquote>${quoteLines.map((q) => `<p>${q}</p>`).join('')}</blockquote>`);
+      continue;
+    }
+
+    const orderedMatch = line.match(/^\d+\.\s+(.*)$/);
+    if (orderedMatch) {
+      const items = [];
+      while (i < lines.length) {
+        const match = lines[i].match(/^\d+\.\s+(.*)$/);
+        if (!match) break;
+        items.push(`<li>${renderInlineMarkdown(match[1])}</li>`);
+        i += 1;
+      }
+      out.push(`<ol>${items.join('')}</ol>`);
+      continue;
+    }
+
+    const unorderedMatch = line.match(/^[-*]\s+(.*)$/);
+    if (unorderedMatch) {
+      const items = [];
+      while (i < lines.length) {
+        const match = lines[i].match(/^[-*]\s+(.*)$/);
+        if (!match) break;
+        items.push(`<li>${renderInlineMarkdown(match[1])}</li>`);
+        i += 1;
+      }
+      out.push(`<ul>${items.join('')}</ul>`);
+      continue;
+    }
+
+    const paragraphLines = [];
+    while (
+      i < lines.length &&
+      !isBlank(lines[i]) &&
+      !/^```/.test(lines[i]) &&
+      !/^\|.+\|$/.test(lines[i]) &&
+      !/^(#{1,6})\s+/.test(lines[i]) &&
+      !/^---+$/.test(lines[i].trim()) &&
+      !/^>\s?/.test(lines[i]) &&
+      !/^\d+\.\s+/.test(lines[i]) &&
+      !/^[-*]\s+/.test(lines[i])
+    ) {
+      paragraphLines.push(renderInlineMarkdown(lines[i]));
+      i += 1;
+    }
+    out.push(`<p>${paragraphLines.join('<br>')}</p>`);
+  }
+
+  return out.join('');
+}
+
+function renderMessageBody(bodyEl, content) {
+  if (!bodyEl) return;
+  bodyEl.innerHTML = renderMarkdown(content);
+}
+
 function appendMessage(role, content, id='temp-' + Date.now(), meta=null) {
   const container = document.getElementById('messages');
   if (!container) return;
@@ -318,7 +463,7 @@ function appendMessage(role, content, id='temp-' + Date.now(), meta=null) {
       ${renderMessageActions(meta)}
     </div>
   `;
-  div.querySelector('.message-body').textContent = content;
+  renderMessageBody(div.querySelector('.message-body'), content);
   container.appendChild(div);
   container.scrollTop = container.scrollHeight;
   return div;
@@ -328,7 +473,7 @@ function setPendingAssistantStatus(text) {
   const pending = document.querySelector('.message[data-pending-assistant="true"]');
   if (!pending) return;
   const bodyEl = pending.querySelector('.message-body');
-  if (bodyEl && !(pending.dataset.streamingStarted === 'true')) bodyEl.textContent = text;
+  if (bodyEl && !(pending.dataset.streamingStarted === 'true')) renderMessageBody(bodyEl, text);
 }
 
 function appendPendingAssistantToken(text) {
@@ -337,10 +482,11 @@ function appendPendingAssistantToken(text) {
   const bodyEl = pending.querySelector('.message-body');
   if (!bodyEl) return;
   if (pending.dataset.streamingStarted !== 'true') {
-    bodyEl.textContent = '';
+    bodyEl.innerHTML = '';
     pending.dataset.streamingStarted = 'true';
   }
-  bodyEl.textContent += text;
+  const current = bodyEl.textContent || '';
+  renderMessageBody(bodyEl, current + text);
 }
 
 function reconcilePendingElement(message) {
@@ -387,7 +533,7 @@ function upsertMessage(message) {
   const bodyEl = el.querySelector('.message-body');
   const actionsEl = el.querySelector('.message-actions');
   if (roleEl) roleEl.textContent = message.role || 'assistant';
-  if (bodyEl) bodyEl.textContent = message.content || '';
+  if (bodyEl) renderMessageBody(bodyEl, message.content || '');
   if (actionsEl) actionsEl.innerHTML = renderMessageActions(message.metadata || null);
   return el;
 }
@@ -915,5 +1061,6 @@ bindConversationActions();
 document.getElementById('create-convo-scope')?.addEventListener('change', syncConversationScopeFields);
 syncConversationScopeFields();
 startMessagePolling();
+document.querySelectorAll('#messages .message-body').forEach((el) => renderMessageBody(el, el.textContent || ''));
 </script>
 {% endblock %}
