@@ -166,6 +166,44 @@ async def test_scheduler_ollama_cloud_uses_bearer_key_and_chat_endpoint(monkeypa
 
 
 @pytest.mark.anyio
+async def test_scheduler_ollama_cloud_maps_max_tokens_to_num_predict():
+    from control_plane.scheduler.scheduler import Scheduler
+
+    key_vault = AsyncMock()
+    key_vault.get_secret.return_value = "ollama-secret"
+    scheduler = Scheduler(bot_registry=AsyncMock(), worker_registry=AsyncMock(), key_vault=key_vault)
+    backend = BackendConfig(
+        type="cloud_api",
+        model="qwen3.5:cloud",
+        provider="ollama_cloud",
+        api_key_ref="OLLAMA_API_KEY",
+        params={"max_tokens": 768, "temperature": 0.3},
+    )
+    payload = [{"role": "user", "content": "hello"}]
+
+    fake_response = MagicMock()
+    fake_response.raise_for_status.return_value = None
+    fake_response.json.return_value = {
+        "message": {"content": "ok"},
+        "prompt_eval_count": 3,
+        "eval_count": 5,
+    }
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__.return_value = mock_client
+    mock_client.__aexit__.return_value = False
+    mock_client.post.return_value = fake_response
+
+    with patch("control_plane.scheduler.scheduler.httpx.AsyncClient", return_value=mock_client):
+        await scheduler._call_ollama_cloud(backend, payload)
+
+    _, kwargs = mock_client.post.call_args
+    assert kwargs["json"]["options"]["num_predict"] == 768
+    assert "max_tokens" not in kwargs["json"]["options"]
+    assert kwargs["json"]["options"]["temperature"] == 0.3
+
+
+@pytest.mark.anyio
 async def test_scheduler_ollama_cloud_surfaces_provider_error_detail():
     from control_plane.scheduler.scheduler import Scheduler
     from shared.exceptions import BackendError

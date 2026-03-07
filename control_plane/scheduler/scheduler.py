@@ -19,6 +19,14 @@ def _backend_failure_message(task_id: str, last_error: Exception) -> str:
     return f"All backends failed for task {task_id}"
 
 
+def _ollama_options(params: dict[str, Any]) -> dict[str, Any]:
+    options = dict(params or {})
+    max_tokens = options.pop("max_tokens", None)
+    if max_tokens is not None and "num_predict" not in options:
+        options["num_predict"] = max_tokens
+    return options
+
+
 class Scheduler:
     def __init__(
         self,
@@ -412,7 +420,7 @@ class Scheduler:
             "model": backend.model,
             "messages": messages,
             "stream": False,
-            "options": params_dict,
+            "options": _ollama_options(params_dict),
         }
         base_url = os.environ.get("OLLAMA_CLOUD_BASE_URL", "https://ollama.com/api").rstrip("/")
         async with httpx.AsyncClient(timeout=120.0) as client:
