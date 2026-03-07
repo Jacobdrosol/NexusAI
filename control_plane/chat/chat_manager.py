@@ -145,6 +145,14 @@ class ChatManager:
                     raise ConversationNotFoundError(f"Conversation not found: {conversation_id}")
                 return ChatConversation.model_validate(dict(row))
 
+    async def delete_conversation(self, conversation_id: str) -> None:
+        await self.get_conversation(conversation_id)
+        async with self._lock:
+            async with aiosqlite.connect(self._db_path) as db:
+                await db.execute("PRAGMA foreign_keys = ON")
+                await db.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
+                await db.commit()
+
     async def add_message(
         self,
         conversation_id: str,

@@ -37,6 +37,36 @@ async def test_create_conversation_and_post_message(cp_app):
 
 
 @pytest.mark.anyio
+async def test_delete_conversation_removes_messages(cp_app):
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "assistant reply"})
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        create_resp = await client.post("/v1/chat/conversations", json={"title": "Delete Me"})
+        assert create_resp.status_code == 200
+        conversation_id = create_resp.json()["id"]
+
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-delete",
+                "name": "Delete Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+            },
+        )
+        await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={"content": "hello", "bot_id": "bot-delete"},
+        )
+
+        delete_resp = await client.delete(f"/v1/chat/conversations/{conversation_id}")
+        assert delete_resp.status_code == 204
+
+        missing_resp = await client.get(f"/v1/chat/conversations/{conversation_id}/messages")
+        assert missing_resp.status_code == 404
+
+
+@pytest.mark.anyio
 async def test_stream_message_endpoint(cp_app):
     cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "stream reply"})
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:

@@ -189,6 +189,19 @@ def test_chat_messages_api_surfaces_control_plane_error(dashboard_client):
     assert b"conversation missing" in resp.data
 
 
+def test_chat_delete_conversation_api_surfaces_success(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def delete_conversation(self, conversation_id):
+            return True
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.delete("/api/chat/conversations/c1")
+
+    assert resp.status_code == 204
+
+
 def test_chat_stream_forwards_control_plane_auth_header(dashboard_client):
     _login_admin(dashboard_client)
 

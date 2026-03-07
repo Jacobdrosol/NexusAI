@@ -339,6 +339,9 @@ class CPClient:
     def create_conversation(self, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return self._post("/v1/chat/conversations", body, timeout=_CHAT_TIMEOUT)
 
+    def delete_conversation(self, conversation_id: str) -> bool:
+        return self._delete(f"/v1/chat/conversations/{conversation_id}")
+
     def list_messages(self, conversation_id: str) -> Optional[List[Dict[str, Any]]]:
         return self._get(f"/v1/chat/conversations/{conversation_id}/messages")
 

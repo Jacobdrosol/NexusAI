@@ -110,6 +110,15 @@ async def get_conversation(conversation_id: str, request: Request) -> ChatConver
         raise HTTPException(status_code=404, detail=str(e))
 
 
+@router.delete("/conversations/{conversation_id}", status_code=204)
+async def delete_conversation(conversation_id: str, request: Request) -> None:
+    chat_manager = request.app.state.chat_manager
+    try:
+        await chat_manager.delete_conversation(conversation_id)
+    except ConversationNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
 @router.get("/conversations/{conversation_id}/messages", response_model=List[ChatMessage])
 async def list_messages(conversation_id: str, request: Request) -> List[ChatMessage]:
     chat_manager = request.app.state.chat_manager

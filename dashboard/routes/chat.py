@@ -87,6 +87,16 @@ def api_create_conversation():
     return jsonify(created), 201
 
 
+@bp.delete("/api/chat/conversations/<conversation_id>")
+@login_required
+def api_delete_conversation(conversation_id: str):
+    cp = get_cp_client()
+    ok = cp.delete_conversation(conversation_id)
+    if not ok:
+        return _cp_error_response(cp, "conversation delete failed")
+    return "", 204
+
+
 @bp.post("/api/chat/messages")
 @login_required
 def api_send_message():
