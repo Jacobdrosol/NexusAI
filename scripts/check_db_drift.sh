@@ -2,10 +2,13 @@
 set -eu
 
 # DB drift guard: detect drift between host-mounted data and legacy volume data.
-# Default behavior auto-synchronizes to reduce operator friction:
+# Current runtime should use host-mounted ./data as the primary storage path.
+# This guard exists to migrate safely from older installs that still used
+# the legacy Docker volume. Default behavior auto-synchronizes using the newer
+# copy as canonical:
 # - host missing + volume present => restore host from volume
 # - host present + volume missing => seed volume from host
-# - both present + differ => host is treated as canonical and copied to volume
+# - both present + differ => copy newer DB over older DB
 # Set NEXUSAI_DB_DRIFT_AUTO_SYNC=0 for strict fail-closed behavior.
 
 HOST_DB="data/nexusai.db"
@@ -34,6 +37,24 @@ sync_vol_to_host() {
 
 sync_host_to_vol() {
   docker run --rm -v "$(pwd)/data:/from" -v "$LEGACY_VOL:/to" alpine sh -lc "cp -av /from/nexusai.db /to/nexusai.db"
+}
+
+host_mtime() {
+  if has_cmd python3; then
+    python3 - <<'PY'
+import os
+print(int(os.path.getmtime("data/nexusai.db")))
+PY
+    return
+  fi
+  python - <<'PY'
+import os
+print(int(os.path.getmtime("data/nexusai.db")))
+PY
+}
+
+vol_mtime() {
+  docker run --rm -v "$LEGACY_VOL:/from" alpine sh -lc "stat -c %Y /from/nexusai.db"
 }
 
 HOST_EXISTS=0
@@ -79,11 +100,20 @@ VOL_SHA="$(docker run --rm -v "$LEGACY_VOL:/from" alpine sh -lc "sha256sum /from
 
 if [ "$HOST_SHA" != "$VOL_SHA" ]; then
   if [ "$AUTO_SYNC" = "1" ]; then
+    HOST_MTIME="$(host_mtime)"
+    VOL_MTIME="$(vol_mtime)"
     echo "[db-check] drift detected: host DB and legacy volume DB differ"
     echo "[db-check] host sha:   $HOST_SHA"
     echo "[db-check] volume sha: $VOL_SHA"
-    echo "[db-check] auto-sync enabled: treating host DB as canonical and updating legacy volume"
-    sync_host_to_vol
+    echo "[db-check] host mtime: $HOST_MTIME"
+    echo "[db-check] volume mtime: $VOL_MTIME"
+    if [ "$HOST_MTIME" -ge "$VOL_MTIME" ]; then
+      echo "[db-check] auto-sync enabled: host DB is newer; updating legacy volume"
+      sync_host_to_vol
+    else
+      echo "[db-check] auto-sync enabled: legacy volume DB is newer; restoring host DB"
+      sync_vol_to_host
+    fi
     echo "[db-check] auto-sync complete"
     exit 0
   fi
@@ -91,7 +121,7 @@ if [ "$HOST_SHA" != "$VOL_SHA" ]; then
   echo "[db-check] host sha:   $HOST_SHA"
   echo "[db-check] volume sha: $VOL_SHA"
   echo "[db-check] choose canonical DB and synchronize before continuing"
-  echo "[db-check] or set NEXUSAI_DB_DRIFT_AUTO_SYNC=1 to auto-sync host -> volume"
+  echo "[db-check] or set NEXUSAI_DB_DRIFT_AUTO_SYNC=1 to auto-sync newer -> older"
   exit 4
 fi
 

@@ -3,7 +3,6 @@ networks:
     driver: bridge
 
 volumes:
-  nexus-data:
   prometheus-data:
 
 services:
@@ -15,7 +14,7 @@ services:
       - "8000:8000"
     env_file: .env
     volumes:
-      - nexus-data:/app/data
+      - ./data:/app/data
     networks:
       - nexus-net
     healthcheck:
@@ -32,7 +31,7 @@ services:
       - "8001:8001"
     env_file: .env
     volumes:
-      - nexus-data:/app/data
+      - ./data:/app/data
     networks:
       - nexus-net
     depends_on:
@@ -52,7 +51,7 @@ services:
       - "5000:5000"
     env_file: .env
     volumes:
-      - nexus-data:/app/data
+      - ./data:/app/data
     networks:
       - nexus-net
     depends_on:

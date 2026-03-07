@@ -65,6 +65,17 @@ python -c "import secrets; print('NEXUSAI_SECRET_KEY=' + secrets.token_urlsafe(6
 docker compose up --build
 ```
 
+Persistent runtime state now lives in `./data` by default.
+That includes:
+
+- chat history
+- projects
+- bots
+- vault content
+- settings
+
+Do not delete or replace `./data/nexusai.db` unless you intentionally want to reset the installation.
+
 Open:
 
 - Dashboard: `http://localhost:5000`
@@ -77,6 +88,7 @@ Important for blue/green dashboard deployments:
 - `docker-compose.bluegreen.yml` runs dashboard + gateway only.
 - Control plane and worker services must be running separately and reachable from dashboard containers.
 - Set `CONTROL_PLANE_URL` and `CONTROL_PLANE_API_TOKEN` in `.env` before recreating the active dashboard color container.
+- Keep the control plane on the same `./data/nexusai.db` runtime state path so deploys do not revert chat or project data.
 
 Example (single-host split stack):
 

@@ -171,6 +171,8 @@
 const selectedConversationId = {{ (selected_conversation.id if selected_conversation else "")|tojson }};
 const initialMessages = {{ messages|tojson }};
 const taskEventMap = new Map();
+const messageMap = new Map((initialMessages || []).map((m) => [String(m.id), m]));
+let refreshTimer = null;
 
 function showCreateConversation() { document.getElementById('modal-create-convo').style.display='flex'; }
 function openAssignModal() { document.getElementById('modal-assign').style.display='flex'; }
@@ -207,9 +209,13 @@ function renderMessageActions(meta) {
 function appendMessage(role, content, id='temp-' + Date.now(), meta=null) {
   const container = document.getElementById('messages');
   if (!container) return;
+  const empty = container.querySelector('.empty');
+  if (empty) empty.remove();
   const div = document.createElement('div');
   div.className = 'message ' + role;
   div.dataset.messageId = id;
+  div.dataset.role = role;
+  div.dataset.content = content;
   if (meta) div.dataset.meta = JSON.stringify(meta);
   div.innerHTML = `
     <div class="message-role">${role}</div>
@@ -222,6 +228,73 @@ function appendMessage(role, content, id='temp-' + Date.now(), meta=null) {
   container.appendChild(div);
   container.scrollTop = container.scrollHeight;
   return div;
+}
+
+function reconcilePendingElement(message) {
+  const role = String(message?.role || '');
+  const content = String(message?.content || '');
+  if (!role) return null;
+
+  if (role === 'assistant') {
+    return document.querySelector('.message[data-pending-assistant="true"]');
+  }
+
+  return Array.from(document.querySelectorAll('.message[data-pending="true"]')).find((el) => (
+    el.dataset.role === role && (el.dataset.content || '') === content
+  )) || null;
+}
+
+function upsertMessage(message) {
+  if (!message || !message.id) return null;
+  const id = String(message.id);
+  messageMap.set(id, message);
+
+  let el = document.querySelector(`.message[data-message-id="${id}"]`);
+  if (!el) {
+    el = reconcilePendingElement(message);
+  }
+  if (!el) {
+    el = appendMessage(message.role || 'assistant', message.content || '', id, message.metadata || null);
+  }
+  if (!el) return null;
+
+  el.className = 'message ' + (message.role || 'assistant');
+  el.dataset.messageId = id;
+  el.dataset.role = message.role || 'assistant';
+  el.dataset.content = message.content || '';
+  delete el.dataset.pending;
+  delete el.dataset.pendingAssistant;
+  if (message.metadata) {
+    el.dataset.meta = JSON.stringify(message.metadata);
+  } else {
+    delete el.dataset.meta;
+  }
+
+  const roleEl = el.querySelector('.message-role');
+  const bodyEl = el.querySelector('.message-body');
+  const actionsEl = el.querySelector('.message-actions');
+  if (roleEl) roleEl.textContent = message.role || 'assistant';
+  if (bodyEl) bodyEl.textContent = message.content || '';
+  if (actionsEl) actionsEl.innerHTML = renderMessageActions(message.metadata || null);
+  return el;
+}
+
+async function refreshMessages() {
+  if (!selectedConversationId) return;
+  try {
+    const res = await fetch('/api/chat/conversations/' + encodeURIComponent(selectedConversationId) + '/messages');
+    if (!res.ok) return;
+    const messages = await res.json();
+    if (!Array.isArray(messages)) return;
+    messages.forEach((message) => upsertMessage(message));
+  } catch (_) {
+    // leave current view intact; next poll can recover
+  }
+}
+
+function startMessagePolling() {
+  if (!selectedConversationId || refreshTimer) return;
+  refreshTimer = window.setInterval(refreshMessages, 3000);
 }
 
 function esc(s) {
@@ -276,6 +349,17 @@ async function sendMessage(streamMode) {
   };
 
   if (!streamMode) {
+    const tempUser = appendMessage('user', content);
+    if (tempUser) {
+      tempUser.dataset.pending = 'true';
+    }
+    const pending = appendMessage('assistant', 'Thinking...');
+    if (pending) {
+      pending.dataset.pendingAssistant = 'true';
+    }
+    form.querySelector('textarea[name=content]').value = '';
+    startMessagePolling();
+
     const res = await fetch('/api/chat/messages', {
       method: 'POST',
       headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
@@ -283,17 +367,25 @@ async function sendMessage(streamMode) {
     });
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      alert(data.error || 'Send failed');
+      if (pending) {
+        pending.querySelector('.message-body').textContent = 'Still waiting on a reply. Rechecking conversation state...';
+      }
+      setTimeout(refreshMessages, 1200);
+      const error = (data.error || '').toString().trim();
+      if (error) {
+        alert(error);
+      }
       return;
     }
     const data = await res.json();
+    if (data.user_message) upsertMessage(data.user_message);
+    if (data.assistant_message) upsertMessage(data.assistant_message);
     if (data.mode === 'assign') {
       const orchestrationId = data.assignment?.orchestration_id || 'unknown';
       alert('Assignment completed: ' + orchestrationId);
-      location.reload();
       return;
     }
-    location.reload();
+    setTimeout(refreshMessages, 250);
     return;
   }
 
@@ -602,5 +694,7 @@ async function openDagViewer(orchestrationId) {
   const graph = await res.json();
   renderDagGraph(graph);
 }
+
+startMessagePolling();
 </script>
 {% endblock %}

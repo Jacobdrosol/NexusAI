@@ -111,6 +111,16 @@ def api_send_message():
     return jsonify(resp)
 
 
+@bp.get("/api/chat/conversations/<conversation_id>/messages")
+@login_required
+def api_list_messages(conversation_id: str):
+    cp = get_cp_client()
+    messages = cp.list_messages(conversation_id)
+    if messages is None:
+        return _cp_error_response(cp, "chat messages unavailable")
+    return jsonify(messages)
+
+
 @bp.post("/api/chat/stream")
 @login_required
 def api_send_message_stream():

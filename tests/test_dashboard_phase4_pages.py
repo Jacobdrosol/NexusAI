@@ -158,6 +158,37 @@ def test_chat_message_api_surfaces_control_plane_error(dashboard_client):
     assert b"Bot backend chain is empty" in resp.data
 
 
+def test_chat_messages_api_proxies_control_plane_messages(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_messages(self, conversation_id):
+            return [{"id": "m1", "role": "assistant", "content": "hello"}]
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/api/chat/conversations/c1/messages")
+
+    assert resp.status_code == 200
+    assert resp.get_json()[0]["content"] == "hello"
+
+
+def test_chat_messages_api_surfaces_control_plane_error(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_messages(self, conversation_id):
+            return None
+
+        def last_error(self):
+            return {"status_code": 404, "detail": "conversation missing"}
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/api/chat/conversations/c1/messages")
+
+    assert resp.status_code == 404
+    assert b"conversation missing" in resp.data
+
+
 def test_chat_stream_forwards_control_plane_auth_header(dashboard_client):
     _login_admin(dashboard_client)
 
