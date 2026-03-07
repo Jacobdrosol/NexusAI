@@ -162,7 +162,7 @@
         <input class="form-control" style="margin-top:0.5rem;" name="model" placeholder="Model name">
         <div style="margin-top:0.5rem;display:flex;gap:0.5rem;align-items:center;flex-wrap:wrap;">
           <button id="btn-install-model" type="button" class="btn" style="display:none;" onclick="installModelOnWorker()">Install on Worker</button>
-          <span style="font-size:0.8rem;color:#718096;">Choose the worker first. Local backends then use that worker's installed model inventory.</span>
+          <span id="backend-model-help" style="font-size:0.8rem;color:#718096;">Choose the worker first. Local backends then use that worker's installed model inventory.</span>
         </div>
       </div>
       <div class="form-group">
@@ -408,10 +408,13 @@ function refreshModelOptions(preferredValue='') {
   const select = form.model_select;
   const customInput = form.model;
   const type = String(form.type.value || '').trim().toLowerCase();
+  const provider = String(form.provider.value || '').trim().toLowerCase();
   const workerId = String(form.worker_id.value || '').trim();
   const options = Array.from(new Set(currentAvailableModels()));
   const currentValue = preferredValue || customInput.value || '';
   const workerBoundLocal = type === 'local_llm' && !!workerId;
+  const providerSuggested = type === 'cloud_api' && suggestedModelsForProvider(provider).length > 0;
+  const help = document.getElementById('backend-model-help');
 
   if (options.length === 0) {
     select.innerHTML = workerBoundLocal
@@ -424,11 +427,21 @@ function refreshModelOptions(preferredValue='') {
 
   const installBtn = document.getElementById('btn-install-model');
   if (installBtn) {
-    const provider = String(form.provider.value || '').trim().toLowerCase();
     installBtn.style.display = (workerId && provider === 'ollama') ? '' : 'none';
   }
-  customInput.readOnly = workerBoundLocal;
-  customInput.placeholder = workerBoundLocal ? 'Choose installed model' : 'Model name';
+  customInput.readOnly = workerBoundLocal || providerSuggested;
+  customInput.placeholder = workerBoundLocal
+    ? 'Choose installed model'
+    : (providerSuggested ? 'Choose a supported cloud model' : 'Model name');
+  if (help) {
+    if (workerBoundLocal) {
+      help.textContent = "This worker's installed local models are shown here.";
+    } else if (providerSuggested) {
+      help.textContent = 'Select a supported provider model from the dropdown.';
+    } else {
+      help.textContent = 'Choose the worker first. Local backends then use that worker\'s installed model inventory.';
+    }
+  }
 
   if (currentValue && options.includes(currentValue)) {
     select.value = currentValue;
@@ -436,11 +449,14 @@ function refreshModelOptions(preferredValue='') {
   } else if (!currentValue && options.length === 1) {
     select.value = options[0];
     customInput.value = options[0];
+  } else if (!currentValue && providerSuggested && options.length > 0) {
+    select.value = options[0];
+    customInput.value = options[0];
   } else if (currentValue && options.length === 0) {
     customInput.value = currentValue;
   } else if (!options.includes(currentValue)) {
     select.value = '';
-    if (workerBoundLocal) customInput.value = '';
+    if (workerBoundLocal || providerSuggested) customInput.value = '';
   }
 }
 
@@ -573,6 +589,13 @@ function saveBackendForm() {
     const available = modelsForWorker(backend.worker_id, backend.provider);
     if (!available.includes(backend.model)) {
       alert('Choose a model that is installed on the selected worker, or install it first.');
+      return;
+    }
+  }
+  if (backend.type === 'cloud_api') {
+    const suggested = suggestedModelsForProvider(backend.provider);
+    if (suggested.length > 0 && !suggested.includes(backend.model)) {
+      alert('Choose a supported model from the dropdown for this cloud provider.');
       return;
     }
   }

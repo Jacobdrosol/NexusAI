@@ -235,6 +235,16 @@ const taskEventMap = new Map();
 const messageMap = new Map((initialMessages || []).map((m) => [String(m.id), m]));
 let refreshTimer = null;
 
+async function refreshMessagesUntilSettled(maxAttempts = 6, delayMs = 600) {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    await refreshMessages();
+    const pending = document.querySelector('.message[data-pending-assistant="true"]');
+    if (!pending) return true;
+    await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+  }
+  return false;
+}
+
 function showCreateConversation() { document.getElementById('modal-create-convo').style.display='flex'; }
 function openAssignModal() { document.getElementById('modal-assign').style.display='flex'; }
 function hideModal(id) { document.getElementById(id).style.display='none'; }
@@ -626,6 +636,7 @@ async function sendMessage(streamMode) {
         } else if (eventType === 'assistant_message' && pending) {
           upsertMessage(parsed);
         } else if (eventType === 'error') {
+          setPendingAssistantStatus(parsed.error || 'Stream error');
           alert(parsed.error || 'Stream error');
         } else if (eventType === 'done') {
           sawDone = true;
@@ -638,7 +649,10 @@ async function sendMessage(streamMode) {
   }
   if (!sawDone) {
     setPendingAssistantStatus('Stream closed unexpectedly. Rechecking saved response...');
-    setTimeout(refreshMessages, 250);
+    const recovered = await refreshMessagesUntilSettled();
+    if (!recovered) {
+      setPendingAssistantStatus('Generation stopped before completion. Partial output was kept if anything was saved.');
+    }
   }
 }
 
