@@ -181,6 +181,36 @@
           <input class="form-control" type="number" name="max_tokens" placeholder="Auto: 1024 for local Ollama chat">
         </div>
       </div>
+      <details style="margin-top:0.5rem;">
+        <summary style="cursor:pointer;">Advanced Local Runtime</summary>
+        <div class="split-grid" style="grid-template-columns:1fr 1fr;margin-top:0.75rem;">
+          <div class="form-group">
+            <label>Context Window</label>
+            <input class="form-control" type="number" name="num_ctx" placeholder="Auto: 8192 for local Ollama chat">
+          </div>
+          <div class="form-group">
+            <label>GPU Layers</label>
+            <input class="form-control" type="number" name="num_gpu" placeholder="Auto / Ollama default">
+          </div>
+          <div class="form-group">
+            <label>Main GPU Index</label>
+            <input class="form-control" type="number" name="main_gpu" placeholder="0">
+          </div>
+          <div class="form-group">
+            <label>CPU Threads</label>
+            <input class="form-control" type="number" name="num_thread" placeholder="Auto">
+          </div>
+          <div class="form-group">
+            <label>Top P</label>
+            <input class="form-control" type="number" step="any" name="top_p">
+          </div>
+          <div class="form-group">
+            <label>Repeat Penalty</label>
+            <input class="form-control" type="number" step="any" name="repeat_penalty">
+          </div>
+        </div>
+        <p class="mini-note">Use these for Ollama-backed workers when you need longer context or want to push more inference work onto the GPU.</p>
+      </details>
       <div class="modal-actions">
         <button type="button" class="btn btn-primary" onclick="saveBackendForm()">Apply</button>
         <button type="button" class="btn" onclick="closeModal('modal-backend')">Cancel</button>
@@ -343,16 +373,33 @@ function suggestedMaxTokens() {
   return '';
 }
 
+function suggestedContextWindow() {
+  const form = document.getElementById('form-backend');
+  const type = String(form.type.value || '').trim().toLowerCase();
+  const provider = String(form.provider.value || '').trim().toLowerCase();
+  if (type === 'local_llm' && provider === 'ollama') {
+    return 8192;
+  }
+  return '';
+}
+
 function applyBackendDefaults(force=false) {
   const form = document.getElementById('form-backend');
   if (!form) return;
   const maxTokensInput = form.max_tokens;
+  const contextInput = form.num_ctx;
   if (!maxTokensInput) return;
   const current = String(maxTokensInput.value || '').trim();
-  if (!force && current) return;
   const suggested = suggestedMaxTokens();
-  if (suggested) {
+  if ((force || !current) && suggested) {
     maxTokensInput.value = suggested;
+  }
+  if (contextInput) {
+    const currentContext = String(contextInput.value || '').trim();
+    const suggestedContext = suggestedContextWindow();
+    if ((force || !currentContext) && suggestedContext) {
+      contextInput.value = suggestedContext;
+    }
   }
 }
 
@@ -477,6 +524,12 @@ function editBackend(index) {
   form.worker_id.value = b.worker_id || '';
   form.temperature.value = b.params?.temperature ?? '';
   form.max_tokens.value = b.params?.max_tokens ?? '';
+  form.num_ctx.value = b.params?.num_ctx ?? '';
+  form.num_gpu.value = b.params?.num_gpu ?? '';
+  form.main_gpu.value = b.params?.main_gpu ?? '';
+  form.num_thread.value = b.params?.num_thread ?? '';
+  form.top_p.value = b.params?.top_p ?? '';
+  form.repeat_penalty.value = b.params?.repeat_penalty ?? '';
   refreshApiKeyOptions(b.api_key_ref || '');
   refreshModelOptions(b.model || '');
   document.getElementById('backend-modal-title').textContent = 'Edit Backend';
@@ -495,10 +548,22 @@ function saveBackendForm() {
   };
   const temp = (fd.get('temperature') || '').toString().trim();
   const maxTokens = (fd.get('max_tokens') || '').toString().trim();
-  if (temp || maxTokens) {
+  const numCtx = (fd.get('num_ctx') || '').toString().trim();
+  const numGpu = (fd.get('num_gpu') || '').toString().trim();
+  const mainGpu = (fd.get('main_gpu') || '').toString().trim();
+  const numThread = (fd.get('num_thread') || '').toString().trim();
+  const topP = (fd.get('top_p') || '').toString().trim();
+  const repeatPenalty = (fd.get('repeat_penalty') || '').toString().trim();
+  if (temp || maxTokens || numCtx || numGpu || mainGpu || numThread || topP || repeatPenalty) {
     backend.params = {};
     if (temp) backend.params.temperature = Number(temp);
     if (maxTokens) backend.params.max_tokens = parseInt(maxTokens, 10);
+    if (numCtx) backend.params.num_ctx = parseInt(numCtx, 10);
+    if (numGpu) backend.params.num_gpu = parseInt(numGpu, 10);
+    if (mainGpu) backend.params.main_gpu = parseInt(mainGpu, 10);
+    if (numThread) backend.params.num_thread = parseInt(numThread, 10);
+    if (topP) backend.params.top_p = Number(topP);
+    if (repeatPenalty) backend.params.repeat_penalty = Number(repeatPenalty);
   }
   if (!backend.type || !backend.provider || !backend.model) {
     alert('Type, provider, and model are required.');

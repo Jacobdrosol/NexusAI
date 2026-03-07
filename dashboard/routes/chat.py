@@ -185,7 +185,7 @@ def api_send_message_stream():
                 json=payload,
                 headers=_stream_cp_headers(cp),
                 stream=True,
-                timeout=120,
+                timeout=(10, None),
             ) as upstream:
                 upstream.raise_for_status()
                 for line in upstream.iter_lines(decode_unicode=True):

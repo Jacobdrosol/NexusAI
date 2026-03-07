@@ -27,6 +27,10 @@ def _ollama_options(params: dict[str, Any]) -> dict[str, Any]:
     return options
 
 
+def _worker_timeout() -> httpx.Timeout:
+    return httpx.Timeout(connect=10.0, read=None, write=120.0, pool=30.0)
+
+
 class Scheduler:
     def __init__(
         self,
@@ -283,7 +287,7 @@ class Scheduler:
             body["gpu_id"] = backend.gpu_id
         self._inflight_by_worker[worker.id] = int(self._inflight_by_worker.get(worker.id, 0)) + 1
         started = time.perf_counter()
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=_worker_timeout()) as client:
             try:
                 response = await client.post(url, json=body)
                 response.raise_for_status()
@@ -320,7 +324,7 @@ class Scheduler:
             backend.model,
             url,
         )
-        async with httpx.AsyncClient(timeout=180.0) as client:
+        async with httpx.AsyncClient(timeout=_worker_timeout()) as client:
             try:
                 async with client.stream("POST", url, json=body) as response:
                     response.raise_for_status()

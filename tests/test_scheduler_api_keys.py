@@ -204,6 +204,16 @@ async def test_scheduler_ollama_cloud_maps_max_tokens_to_num_predict():
 
 
 @pytest.mark.anyio
+async def test_scheduler_worker_timeout_disables_read_deadline():
+    from control_plane.scheduler.scheduler import _worker_timeout
+
+    timeout = _worker_timeout()
+    assert timeout.connect == 10.0
+    assert timeout.read is None
+    assert timeout.write == 120.0
+
+
+@pytest.mark.anyio
 async def test_scheduler_ollama_cloud_surfaces_provider_error_detail():
     from control_plane.scheduler.scheduler import Scheduler
     from shared.exceptions import BackendError
