@@ -1,6 +1,7 @@
 """Smoke tests for new Phase 4 dashboard pages."""
 
 import bcrypt
+import io
 from unittest.mock import patch
 
 
@@ -78,8 +79,42 @@ def test_project_detail_page_renders_with_partial_github_status(dashboard_client
         resp = dashboard_client.get("/projects/globeiq")
 
     assert resp.status_code == 200
+    assert b"Project Data Vault" in resp.data
     assert b"GitHub Integration (PAT)" in resp.data
     assert b"Connection Flags" in resp.data
+
+
+def test_project_data_folder_and_upload_apis_write_files(dashboard_client, tmp_path, monkeypatch):
+    _login_admin(dashboard_client)
+    monkeypatch.setenv("NEXUSAI_PROJECT_DATA_ROOT", str(tmp_path))
+
+    class FakeCP:
+        def get_project(self, project_id):
+            return {"id": project_id, "name": project_id}
+
+    with patch("dashboard.routes.projects.get_cp_client", return_value=FakeCP()):
+        folder_resp = dashboard_client.post(
+            "/api/projects/proj-data/data/folders",
+            json={"parent_path": "docs", "folder_name": "specs"},
+        )
+        assert folder_resp.status_code == 201
+
+        upload_resp = dashboard_client.post(
+            "/api/projects/proj-data/data/upload",
+            data={
+                "target_path": "docs/specs",
+                "files": (io.BytesIO(b"hello project vault"), "overview.md"),
+            },
+            content_type="multipart/form-data",
+        )
+        assert upload_resp.status_code == 201
+
+        files_resp = dashboard_client.get("/api/projects/proj-data/data/files")
+        assert files_resp.status_code == 200
+        body = files_resp.get_json()
+        entries = body["entries"]
+        assert any(e["path"] == "docs/specs" and e["type"] == "directory" for e in entries)
+        assert any(e["path"] == "docs/specs/overview.md" and e["type"] == "file" for e in entries)
 
 
 def test_chat_page_loads_when_logged_in(dashboard_client):

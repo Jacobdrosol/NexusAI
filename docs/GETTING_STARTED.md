@@ -134,12 +134,15 @@ After login:
    - The control plane now persists workers and bots in SQLite; shipped example YAML files are not auto-seeded unless you explicitly enable `control_plane.seed_workers_from_config: true` and/or `control_plane.seed_bots_from_config: true`.
 5. Open `Projects` and create one project.
 6. Open `Vault` and ingest a small test document.
-7. Open `Chat`:
+7. Open `Projects -> <project>` and use `Project Data Vault` to create folders or upload a few test files.
+8. Run:
+   - `python scripts/ingest_project_data.py --project-id <project_id> --namespace project:<project_id>:data`
+8. Open `Chat`:
    - create a conversation
    - send a normal message
    - run streaming message
    - test `@assign` task orchestration
-8. Open `Tasks` and verify status transitions.
+9. Open `Tasks` and verify status transitions.
 
 ## 7. Verify Metrics
 

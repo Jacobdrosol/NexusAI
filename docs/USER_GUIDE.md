@@ -98,6 +98,37 @@ Project modes:
 
 Use projects to separate environments (for example, `prod-assistant`, `dev-assistant`, `research`).
 
+### 4.1 Project Data Vault
+
+Each project includes a filesystem-backed data area for source material that should later become searchable context.
+
+Use it for:
+
+- product docs
+- exported notes
+- research files
+- API references
+- architecture decisions
+- repository-adjacent documents that should not live in the app database first
+
+In dashboard:
+
+1. Open `Projects -> <project>`.
+2. Use `Project Data Vault` to create folders and upload files.
+3. Keep material organized under the default folders:
+   - `docs`
+   - `inbox`
+   - `exports`
+   - `notes`
+
+The filesystem root defaults to:
+
+- `data/project_data/<project_id>/`
+
+You can move that root with:
+
+- `NEXUSAI_PROJECT_DATA_ROOT`
+
 ## 5. Vault
 
 ### 5.1 Ingestion
@@ -108,6 +139,29 @@ Vault supports:
 - file upload
 - URL import
 - chat and task outputs
+- project data vault ingestion via local runner
+
+### 5.3 Project Data Ingest Runner
+
+After placing files into a project's data vault, run:
+
+```bash
+python scripts/ingest_project_data.py --project-id <project_id> --namespace project:<project_id>:data
+```
+
+What it does:
+
+- scans the project's filesystem data area
+- skips common binary/build folders
+- uploads text-like files into the control-plane vault
+- stores source references as `project-data://<project_id>/<relative_path>`
+- triggers normal chunking and embedding on ingest
+
+Recommended pattern:
+
+1. Keep raw documents in the project data vault.
+2. Run the ingest script after adding or updating files.
+3. Use the project namespace in retrieval and chat context selection.
 
 ### 5.2 Search and Retrieval
 

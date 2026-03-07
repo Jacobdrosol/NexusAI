@@ -141,6 +141,7 @@ Chat and orchestration:
 Vault and context:
 
 - File/URL/text ingestion, namespace management, search, preview, and bulk actions.
+- Filesystem-backed project data vault per project with uploadable folders and local ingest runner.
 - Browser sends vault item IDs; control plane resolves content server-side for privacy.
 
 GitHub integration:
@@ -184,6 +185,7 @@ Copy `.env.example` to `.env` and set the following variables before starting th
 | `NEXUSAI_GITHUB_WEBHOOK_MAX_SKEW_SECONDS` | `300` | Allowed request timestamp skew when `Date` header is present |
 | `NEXUSAI_GITHUB_WEBHOOK_REQUIRE_DATE_HEADER` | `0` | Require `Date` header on GitHub webhooks (`1`/`true` to enforce) |
 | `NEXUSAI_GITHUB_WEBHOOK_DEDUP_TTL_SECONDS` | `86400` | Retention window for delivery-ID deduplication records |
+| `NEXUSAI_PROJECT_DATA_ROOT` | `data/project_data` | Filesystem root for per-project data vault folders shown in Project Detail |
 | `NEXUS_WORKER_CONFIG_PATH` | `worker_node/nexus_worker/config.yaml.example` | Path to standalone worker-node YAML config when running from the repo root |
 | `VLLM_MODELS` | — | Optional comma-separated vLLM model names for local model discovery in `nexus_worker` |
 | `CP_MAX_BODY_BYTES_<ROUTE>` | route default | Optional request body size override per guarded route (e.g. `CHAT_MESSAGES`, `CHAT_STREAM`, `VAULT_INGEST`, `GITHUB_WEBHOOK`) |
@@ -199,6 +201,35 @@ Notes:
 
 - Preferred cloud-key path is Dashboard `Settings -> API Keys` (encrypted at rest, named keys, multi-provider, multiple keys/provider).
 - `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` are fallback-only environment variables.
+
+---
+
+## Project Data Vault
+
+Each project now has a filesystem-backed data area intended for docs, exports, notes, and other source material before ingestion.
+
+Default location:
+
+- `data/project_data/<project_id>/`
+
+Default folders created automatically:
+
+- `docs`
+- `inbox`
+- `exports`
+- `notes`
+
+Workflow:
+
+1. Open `Projects -> <project>`.
+2. Use `Project Data Vault` to create folders and upload files.
+3. Run the ingest program:
+
+```bash
+python scripts/ingest_project_data.py --project-id <project_id> --namespace project:<project_id>:data
+```
+
+The ingest runner reads the project data files from disk and posts them into the control-plane vault so they are chunked and embedded for retrieval.
 
 ---
 
