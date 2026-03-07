@@ -142,17 +142,17 @@
       </div>
       <div class="form-group">
         <label>Provider / CLI</label>
-        <input class="form-control" name="provider" list="bot-provider-options" placeholder="ollama / ollama_cloud / openai / claude / gemini / codex / gh">
-        <datalist id="bot-provider-options">
-          <option value="ollama"></option>
-          <option value="ollama_cloud"></option>
-          <option value="openai"></option>
-          <option value="claude"></option>
-          <option value="gemini"></option>
-          <option value="cli"></option>
-          <option value="codex"></option>
-          <option value="gh"></option>
-        </datalist>
+        <select class="form-control" name="provider">
+          <option value="">Select provider</option>
+          <option value="ollama">ollama</option>
+          <option value="ollama_cloud">ollama_cloud</option>
+          <option value="openai">openai</option>
+          <option value="claude">claude</option>
+          <option value="gemini">gemini</option>
+          <option value="cli">cli</option>
+          <option value="codex">codex</option>
+          <option value="gh">gh</option>
+        </select>
       </div>
       <div class="form-group">
         <label>Model</label>
@@ -204,6 +204,38 @@ let BOT = {{ bot|tojson }};
 const TASKS = {{ tasks|tojson }};
 const WORKERS = {{ workers|tojson }};
 const GLOBAL_MODELS = {{ models|tojson }};
+const API_KEYS = {{ api_keys|tojson }};
+const PROVIDER_MODEL_SUGGESTIONS = {
+  ollama_cloud: [
+    'qwen3.5:cloud',
+    'qwen3.5:397b-cloud',
+    'qwen3-coder:480b-cloud',
+    'qwen3-coder-next:cloud',
+    'gpt-oss:20b-cloud',
+    'gpt-oss:120b-cloud',
+    'glm-4.6:cloud',
+    'glm-5:cloud',
+    'deepseek-v3.1:671b-cloud',
+    'cogito-2.1:671b-cloud',
+    'gemma3:27b-cloud'
+  ],
+  openai: [
+    'gpt-4o',
+    'gpt-4o-mini',
+    'gpt-5',
+    'gpt-5-mini'
+  ],
+  claude: [
+    'claude-3-5-sonnet',
+    'claude-3-7-sonnet',
+    'claude-4-sonnet'
+  ],
+  gemini: [
+    'gemini-1.5-pro',
+    'gemini-1.5-flash',
+    'gemini-2.0-flash'
+  ]
+};
 
 function getCsrf() {
   const el = document.querySelector('input[name=csrf_token]');
@@ -262,6 +294,28 @@ function globalModelsForProvider(provider) {
   return names;
 }
 
+function suggestedModelsForProvider(provider) {
+  const wantedProvider = String(provider || '').trim().toLowerCase();
+  return Array.isArray(PROVIDER_MODEL_SUGGESTIONS[wantedProvider]) ? PROVIDER_MODEL_SUGGESTIONS[wantedProvider] : [];
+}
+
+function refreshApiKeyOptions(preferredValue='') {
+  const form = document.getElementById('form-backend');
+  const select = form.api_key_ref;
+  const provider = String(form.provider.value || '').trim().toLowerCase();
+  const currentValue = preferredValue || String(select.value || '').trim();
+  const matching = (API_KEYS || []).filter((k) => {
+    const keyProvider = String(k.provider || '').trim().toLowerCase();
+    return !provider || provider === 'cli' || keyProvider === provider;
+  });
+  select.innerHTML = '<option value="">None</option>' + matching.map((k) => (
+    `<option value="${k.name}">${k.name} (${k.provider})</option>`
+  )).join('');
+  if (currentValue && matching.some((k) => String(k.name) === currentValue)) {
+    select.value = currentValue;
+  }
+}
+
 function currentAvailableModels() {
   const form = document.getElementById('form-backend');
   const type = String(form.type.value || '').trim().toLowerCase();
@@ -270,7 +324,9 @@ function currentAvailableModels() {
   if (type === 'local_llm' && workerId) {
     return modelsForWorker(workerId, provider);
   }
-  return globalModelsForProvider(provider);
+  const catalogModels = globalModelsForProvider(provider);
+  if (catalogModels.length > 0) return catalogModels;
+  return suggestedModelsForProvider(provider);
 }
 
 function refreshModelOptions(preferredValue='') {
@@ -377,6 +433,7 @@ function openAddBackend() {
   form.reset();
   form.index.value = '';
   document.getElementById('backend-modal-title').textContent = 'Add Backend';
+  refreshApiKeyOptions('');
   refreshModelOptions('');
   document.getElementById('modal-backend').style.display = 'flex';
 }
@@ -390,9 +447,9 @@ function editBackend(index) {
   form.provider.value = b.provider || '';
   form.model.value = b.model || '';
   form.worker_id.value = b.worker_id || '';
-  form.api_key_ref.value = b.api_key_ref || '';
   form.temperature.value = b.params?.temperature ?? '';
   form.max_tokens.value = b.params?.max_tokens ?? '';
+  refreshApiKeyOptions(b.api_key_ref || '');
   refreshModelOptions(b.model || '');
   document.getElementById('backend-modal-title').textContent = 'Edit Backend';
   document.getElementById('modal-backend').style.display = 'flex';
@@ -480,7 +537,10 @@ function openTaskModal(taskId) {
 
 renderBackendChain();
 document.querySelector('#form-backend select[name=worker_id]')?.addEventListener('change', () => refreshModelOptions());
-document.querySelector('#form-backend input[name=provider]')?.addEventListener('input', () => refreshModelOptions());
+document.querySelector('#form-backend select[name=provider]')?.addEventListener('change', () => {
+  refreshApiKeyOptions();
+  refreshModelOptions();
+});
 document.querySelector('#form-backend select[name=type]')?.addEventListener('change', () => refreshModelOptions());
 </script>
 {% endblock %}

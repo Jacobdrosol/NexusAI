@@ -121,6 +121,8 @@ def test_bot_detail_page_loads_when_logged_in(dashboard_client):
     assert b"Task Board" in resp.data
     assert b"Backend Chain Editor" in resp.data
     assert b"Backlog" in resp.data
+    assert b"ollama_cloud" in resp.data
+    assert b"qwen3.5:cloud" in resp.data
 
 
 def test_chat_ingest_api_validates_required_fields(dashboard_client):
