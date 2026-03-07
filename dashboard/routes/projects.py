@@ -38,9 +38,13 @@ def _normalize_webhook_events(raw: Any) -> list[dict[str, Any]]:
 def _cp_error_response(cp, fallback: str = "control plane unavailable") -> tuple[Any, int]:
     err = cp.last_error() if hasattr(cp, "last_error") else {}
     detail = ""
+    status_code = None
     if isinstance(err, dict):
         detail = str(err.get("detail") or "").strip()
-    return jsonify({"error": detail or fallback}), 502
+        raw_code = err.get("status_code")
+        if isinstance(raw_code, int) and 400 <= raw_code <= 599:
+            status_code = raw_code
+    return jsonify({"error": detail or fallback}), (status_code or 502)
 
 
 @bp.get("/projects")

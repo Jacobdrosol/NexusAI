@@ -23,6 +23,17 @@ CREATE TABLE IF NOT EXISTS github_webhook_events (
 )
 """
 
+_EXPECTED_COLUMNS = {
+    "id": "TEXT",
+    "project_id": "TEXT",
+    "delivery_id": "TEXT",
+    "event_type": "TEXT",
+    "action": "TEXT",
+    "repository_full_name": "TEXT",
+    "payload": "TEXT",
+    "created_at": "TEXT",
+}
+
 
 class GitHubWebhookStore:
     def __init__(self, db_path: Optional[str] = None) -> None:
@@ -48,8 +59,59 @@ class GitHubWebhookStore:
             Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
             async with aiosqlite.connect(self._db_path) as db:
                 await db.execute(_CREATE_GITHUB_WEBHOOK_EVENTS)
+                await self._ensure_schema(db)
                 await db.commit()
             self._db_ready = True
+
+    async def _ensure_schema(self, db: aiosqlite.Connection) -> None:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("PRAGMA table_info(github_webhook_events)") as cursor:
+            rows = await cursor.fetchall()
+        columns = {str(row["name"]): row for row in rows}
+
+        if not columns:
+            return
+
+        if "payload" not in columns:
+            await db.execute("ALTER TABLE github_webhook_events ADD COLUMN payload TEXT NOT NULL DEFAULT '{}'")
+            if "payload_json" in columns:
+                await db.execute(
+                    """
+                    UPDATE github_webhook_events
+                    SET payload = COALESCE(NULLIF(payload_json, ''), '{}')
+                    """
+                )
+            columns["payload"] = {"name": "payload"}
+
+        nullable_columns = {
+            "delivery_id": "TEXT",
+            "action": "TEXT",
+            "repository_full_name": "TEXT",
+        }
+        required_columns = {
+            "project_id": "TEXT NOT NULL DEFAULT ''",
+            "event_type": "TEXT NOT NULL DEFAULT ''",
+            "created_at": "TEXT NOT NULL DEFAULT ''",
+        }
+        for name, ddl in nullable_columns.items():
+            if name not in columns:
+                await db.execute(f"ALTER TABLE github_webhook_events ADD COLUMN {name} {ddl}")
+        for name, ddl in required_columns.items():
+            if name not in columns:
+                await db.execute(f"ALTER TABLE github_webhook_events ADD COLUMN {name} {ddl}")
+
+        await db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_github_webhook_events_project_created
+            ON github_webhook_events(project_id, created_at DESC)
+            """
+        )
+        await db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_github_webhook_events_project_delivery
+            ON github_webhook_events(project_id, delivery_id)
+            """
+        )
 
     async def record_event(
         self,

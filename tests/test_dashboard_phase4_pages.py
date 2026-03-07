@@ -169,7 +169,7 @@ def test_project_github_pat_api_surfaces_control_plane_error(dashboard_client):
             json={"token": "ghp_x", "repo_full_name": "owner/repo", "validate": True},
         )
 
-    assert resp.status_code == 502
+    assert resp.status_code == 400
     assert b"GitHub validation failed" in resp.data
 
 

@@ -2,6 +2,7 @@
 import hashlib
 import hmac
 import json
+import sqlite3
 from datetime import datetime, timedelta, timezone
 from email.utils import format_datetime
 
@@ -649,6 +650,62 @@ async def test_project_github_webhook_rejects_old_date_header(cp_client, monkeyp
         },
     )
     assert ingest.status_code == 401
+
+
+@pytest.mark.anyio
+async def test_project_github_webhook_events_self_heal_legacy_payload_json_schema(cp_app, tmp_path):
+    legacy_db = tmp_path / "legacy_webhooks.db"
+    conn = sqlite3.connect(legacy_db)
+    conn.execute(
+        """
+        CREATE TABLE github_webhook_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id TEXT NOT NULL,
+            delivery_id TEXT,
+            event_type TEXT NOT NULL,
+            action TEXT,
+            repository_full_name TEXT,
+            payload_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO github_webhook_events
+            (project_id, delivery_id, event_type, action, repository_full_name, payload_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "gh-legacy",
+            "delivery-legacy",
+            "push",
+            "synchronize",
+            "owner/repo",
+            json.dumps({"hello": "world"}),
+            datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    from control_plane.github.webhook_store import GitHubWebhookStore
+
+    cp_app.state.github_webhook_store = GitHubWebhookStore(db_path=str(legacy_db))
+
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        create_resp = await client.post(
+            "/v1/projects",
+            json={"id": "gh-legacy", "name": "Legacy GH", "mode": "isolated"},
+        )
+        assert create_resp.status_code == 200
+
+        events = await client.get("/v1/projects/gh-legacy/github/webhook/events")
+        assert events.status_code == 200
+        rows = events.json()["events"]
+        assert len(rows) == 1
+        assert rows[0]["event_type"] == "push"
+        assert rows[0]["payload"] == {"hello": "world"}
 
 
 @pytest.mark.anyio
