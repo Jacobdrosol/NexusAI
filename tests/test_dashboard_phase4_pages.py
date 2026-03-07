@@ -138,6 +138,69 @@ def test_chat_stream_api_validates_required_fields(dashboard_client):
     assert resp.status_code == 400
 
 
+def test_chat_message_api_surfaces_control_plane_error(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def post_message(self, conversation_id, body):
+            return None
+
+        def last_error(self):
+            return {"status_code": 400, "detail": "Bot backend chain is empty"}
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/chat/messages",
+            json={"conversation_id": "c1", "content": "hello"},
+        )
+
+    assert resp.status_code == 400
+    assert b"Bot backend chain is empty" in resp.data
+
+
+def test_chat_stream_forwards_control_plane_auth_header(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeStreamResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def raise_for_status(self):
+            return None
+
+        def iter_lines(self, decode_unicode=True):
+            yield "event: done"
+            yield 'data: {"ok":true}'
+
+    class FakeCP:
+        base_url = "http://100.81.64.82:8000"
+
+        def _headers(self):
+            return {"X-Nexus-API-Key": "cp-token"}
+
+    fake_cp = FakeCP()
+    captured = {}
+
+    def _fake_post(url, json=None, headers=None, stream=None, timeout=None):
+        captured["url"] = url
+        captured["headers"] = headers
+        return FakeStreamResponse()
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=fake_cp), \
+         patch("dashboard.routes.chat.requests.post", side_effect=_fake_post):
+        resp = dashboard_client.post(
+            "/api/chat/stream",
+            json={"conversation_id": "c1", "content": "hello"},
+        )
+
+    assert resp.status_code == 200
+    assert captured["url"].endswith("/v1/chat/conversations/c1/stream")
+    assert captured["headers"]["X-Nexus-API-Key"] == "cp-token"
+
+
 def test_chat_orchestration_graph_api_handles_unavailable_cp(dashboard_client):
     _login_admin(dashboard_client)
     resp = dashboard_client.get("/api/chat/orchestrations/test-orch/graph")

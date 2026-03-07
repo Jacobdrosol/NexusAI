@@ -13,6 +13,18 @@ from dashboard.cp_client import get_cp_client
 bp = Blueprint("chat", __name__)
 
 
+def _cp_error_response(cp, fallback: str = "control plane unavailable"):
+    err = cp.last_error() if hasattr(cp, "last_error") else {}
+    detail = ""
+    status_code = None
+    if isinstance(err, dict):
+        detail = str(err.get("detail") or "").strip()
+        raw_code = err.get("status_code")
+        if isinstance(raw_code, int) and 400 <= raw_code <= 599:
+            status_code = raw_code
+    return jsonify({"error": detail or fallback}), (status_code or 502)
+
+
 @bp.get("/chat")
 @login_required
 def chat_page() -> str:
@@ -58,7 +70,7 @@ def api_create_conversation():
         }
     )
     if created is None:
-        return jsonify({"error": "control plane unavailable"}), 502
+        return _cp_error_response(cp)
     return jsonify(created), 201
 
 
@@ -82,7 +94,7 @@ def api_send_message():
         },
     )
     if resp is None:
-        return jsonify({"error": "control plane unavailable"}), 502
+        return _cp_error_response(cp, "chat message failed")
     return jsonify(resp)
 
 
@@ -112,7 +124,11 @@ def api_send_message_stream():
     def generate() -> Iterable[str]:
         try:
             with requests.post(
-                stream_url, json=payload, stream=True, timeout=120
+                stream_url,
+                json=payload,
+                headers=cp._headers() if hasattr(cp, "_headers") else {},
+                stream=True,
+                timeout=120,
             ) as upstream:
                 upstream.raise_for_status()
                 for line in upstream.iter_lines(decode_unicode=True):
