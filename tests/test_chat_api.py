@@ -128,6 +128,7 @@ async def test_stream_message_endpoint(cp_app):
         )
         assert stream_resp.status_code == 200
         assert "event: user_message" in stream_resp.text
+        assert "event: status" in stream_resp.text
         assert "event: assistant_message" in stream_resp.text
         assert "event: done" in stream_resp.text
 

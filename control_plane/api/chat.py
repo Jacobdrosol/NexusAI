@@ -254,6 +254,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
             yield f"event: user_message\ndata: {user_message.model_dump_json()}\n\n"
             assign_instruction = _extract_assign_instruction(body.content)
             if assign_instruction is not None:
+                yield 'event: status\ndata: {"phase":"planning","label":"Planning task graph..."}\n\n'
                 resolved_context = await _resolve_context_items(request, body)
                 assignment = await pm_orchestrator.orchestrate_assignment(
                     conversation_id=conversation_id,
@@ -305,6 +306,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                         break
                     await asyncio.sleep(0.4)
 
+                yield 'event: status\ndata: {"phase":"summarizing","label":"Summarizing results..."}\n\n'
                 completion = await pm_orchestrator.wait_for_completion(assignment, max_wait_seconds=1.0)
                 assistant_message = await pm_orchestrator.persist_summary_message(
                     conversation_id=conversation_id,
@@ -323,6 +325,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
 
             resolved_context = await _resolve_context_items(request, body)
             payload = _messages_to_payload(messages, context_items=resolved_context)
+            yield 'event: status\ndata: {"phase":"queued","label":"Queued on selected backend..."}\n\n'
             task = Task(
                 id=f"chat-{user_message.id}",
                 bot_id=target_bot_id,
@@ -336,8 +339,10 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                 created_at=user_message.created_at,
                 updated_at=user_message.created_at,
             )
+            yield 'event: status\ndata: {"phase":"running","label":"Generating response..."}\n\n'
             result = await scheduler.schedule(task)
             assistant_output = _extract_task_output(result)
+            yield 'event: status\ndata: {"phase":"persisting","label":"Saving response..."}\n\n'
             assistant_message = await chat_manager.add_message(
                 conversation_id=conversation_id,
                 role="assistant",

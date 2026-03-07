@@ -264,6 +264,13 @@ function appendMessage(role, content, id='temp-' + Date.now(), meta=null) {
   return div;
 }
 
+function setPendingAssistantStatus(text) {
+  const pending = document.querySelector('.message[data-pending-assistant="true"]');
+  if (!pending) return;
+  const bodyEl = pending.querySelector('.message-body');
+  if (bodyEl) bodyEl.textContent = text;
+}
+
 function reconcilePendingElement(message) {
   const role = String(message?.role || '');
   const content = String(message?.content || '');
@@ -273,7 +280,7 @@ function reconcilePendingElement(message) {
     return document.querySelector('.message[data-pending-assistant="true"]');
   }
 
-  return Array.from(document.querySelectorAll('.message[data-pending="true"]')).find((el) => (
+  return Array.from(document.querySelectorAll('.message[data-pending="true"], .message[data-pending-user="true"]')).find((el) => (
     el.dataset.role === role && (el.dataset.content || '') === content
   )) || null;
 }
@@ -486,8 +493,15 @@ async function sendMessage(streamMode) {
     return;
   }
 
-  appendMessage('user', content);
+  const tempUser = appendMessage('user', content);
+  if (tempUser) {
+    tempUser.dataset.pending = 'true';
+    tempUser.dataset.pendingUser = 'true';
+  }
   const pending = appendMessage('assistant', '...');
+  if (pending) {
+    pending.dataset.pendingAssistant = 'true';
+  }
   form.reset();
 
   const res = await fetch('/api/chat/stream', {
@@ -540,16 +554,16 @@ async function sendMessage(streamMode) {
               stateEl.textContent = 'Task graph completed.';
             }
           }
+        } else if (eventType === 'status') {
+          setPendingAssistantStatus(parsed.label || 'Working...');
+        } else if (eventType === 'user_message') {
+          upsertMessage(parsed);
         } else if (eventType === 'assistant_message' && pending) {
-          pending.dataset.messageId = parsed.id || pending.dataset.messageId;
-          if (parsed.metadata) {
-            pending.dataset.meta = JSON.stringify(parsed.metadata);
-            const actions = pending.querySelector('.message-actions');
-            if (actions) actions.innerHTML = renderMessageActions(parsed.metadata);
-          }
-          pending.querySelector('.message-body').textContent = parsed.content || '';
+          upsertMessage(parsed);
         } else if (eventType === 'error') {
           alert(parsed.error || 'Stream error');
+        } else if (eventType === 'done') {
+          setTimeout(refreshMessages, 150);
         }
       } catch (_) {
         // ignore malformed frames
