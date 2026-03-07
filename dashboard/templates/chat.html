@@ -530,6 +530,7 @@ async function sendMessage(streamMode) {
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+  let sawDone = false;
   while (true) {
     const {done, value} = await reader.read();
     if (done) break;
@@ -577,12 +578,17 @@ async function sendMessage(streamMode) {
         } else if (eventType === 'error') {
           alert(parsed.error || 'Stream error');
         } else if (eventType === 'done') {
+          sawDone = true;
           setTimeout(refreshMessages, 150);
         }
       } catch (_) {
         // ignore malformed frames
       }
     }
+  }
+  if (!sawDone) {
+    setPendingAssistantStatus('Stream closed unexpectedly. Rechecking saved response...');
+    setTimeout(refreshMessages, 250);
   }
 }
 

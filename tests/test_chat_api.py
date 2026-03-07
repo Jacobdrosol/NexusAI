@@ -141,6 +141,42 @@ async def test_stream_message_endpoint(cp_app):
 
 
 @pytest.mark.anyio
+async def test_stream_message_persists_partial_when_final_missing(cp_app):
+    async def _stream(_task):
+        yield {"event": "backend_selected", "provider": "ollama", "model": "llama3.1:8b", "worker_id": "w1"}
+        yield {"event": "token", "text": "partial "}
+        yield {"event": "token", "text": "reply"}
+
+    cp_app.state.scheduler.stream = _stream
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        create_resp = await client.post("/v1/chat/conversations", json={"title": "Chat Partial"})
+        conversation_id = create_resp.json()["id"]
+
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-partial",
+                "name": "Partial Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+            },
+        )
+
+        stream_resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/stream",
+            json={"content": "hello", "bot_id": "bot-partial"},
+        )
+        assert stream_resp.status_code == 200
+        assert "event: assistant_message" in stream_resp.text
+
+        messages_resp = await client.get(f"/v1/chat/conversations/{conversation_id}/messages")
+        messages = messages_resp.json()
+        assert messages[-1]["content"] == "partial reply"
+        assert messages[-1]["metadata"]["partial"] is True
+
+
+@pytest.mark.anyio
 async def test_assign_message_creates_task_graph_and_summary(cp_app):
     cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "ok"})
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:

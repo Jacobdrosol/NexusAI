@@ -340,6 +340,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                 updated_at=user_message.created_at,
             )
             result = None
+            streamed_chunks: list[str] = []
             async for event in scheduler.stream(task):
                 event_name = str(event.get("event") or "")
                 if event_name == "backend_selected":
@@ -359,21 +360,37 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                         label += f" ({host}:{port})"
                     yield f'event: status\ndata: {json.dumps({"phase": "dispatching", "label": label})}\n\n'
                 elif event_name == "token":
-                    yield f'event: token\ndata: {json.dumps({"text": str(event.get("text") or "")})}\n\n'
+                    chunk = str(event.get("text") or "")
+                    if chunk:
+                        streamed_chunks.append(chunk)
+                    yield f'event: token\ndata: {json.dumps({"text": chunk})}\n\n'
                 elif event_name == "final":
                     result = dict(event)
                 elif event_name == "error":
                     payload = json.dumps({"error": event.get("error") or "stream_error"})
                     yield f"event: error\ndata: {payload}\n\n"
                     return
+            if result is None and streamed_chunks:
+                result = {
+                    "output": "".join(streamed_chunks),
+                    "usage": {},
+                    "partial": True,
+                }
+            if result is None:
+                payload = json.dumps({"error": "stream ended before final response"})
+                yield f"event: error\ndata: {payload}\n\n"
+                return
             assistant_output = _extract_task_output(result)
             yield 'event: status\ndata: {"phase":"persisting","label":"Saving response..."}\n\n'
+            metadata = {"usage": (result or {}).get("usage", {})} if isinstance(result, dict) else {}
+            if isinstance(result, dict) and result.get("partial"):
+                metadata["partial"] = True
             assistant_message = await chat_manager.add_message(
                 conversation_id=conversation_id,
                 role="assistant",
                 content=assistant_output,
                 bot_id=target_bot_id,
-                metadata={"usage": (result or {}).get("usage", {})} if isinstance(result, dict) else None,
+                metadata=metadata or None,
             )
             yield f"event: assistant_message\ndata: {assistant_message.model_dump_json()}\n\n"
             yield "event: done\ndata: {}\n\n"
