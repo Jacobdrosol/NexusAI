@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 
 _CP_BASE = os.environ.get("CONTROL_PLANE_URL", "http://control_plane:8000")
 _TIMEOUT = float(os.environ.get("CP_TIMEOUT", "2"))
+_CHAT_TIMEOUT = float(os.environ.get("CP_CHAT_TIMEOUT", "180"))
 _CP_API_TOKEN = os.environ.get("CONTROL_PLANE_API_TOKEN", "").strip()
 
 
@@ -101,17 +102,18 @@ class CPClient:
                 )
         return results
 
-    def _request(self, method: str, path: str, *, json: Any = None) -> Optional[Any]:
+    def _request(self, method: str, path: str, *, json: Any = None, timeout: Optional[float] = None) -> Optional[Any]:
         url = f"{self.base_url}{path}"
+        req_timeout = self.timeout if timeout is None else timeout
         try:
             if method == "GET":
-                resp = requests.get(url, timeout=self.timeout, headers=self._headers())
+                resp = requests.get(url, timeout=req_timeout, headers=self._headers())
             elif method == "POST":
-                resp = requests.post(url, json=json, timeout=self.timeout, headers=self._headers())
+                resp = requests.post(url, json=json, timeout=req_timeout, headers=self._headers())
             elif method == "PUT":
-                resp = requests.put(url, json=json, timeout=self.timeout, headers=self._headers())
+                resp = requests.put(url, json=json, timeout=req_timeout, headers=self._headers())
             elif method == "DELETE":
-                resp = requests.delete(url, timeout=self.timeout, headers=self._headers())
+                resp = requests.delete(url, timeout=req_timeout, headers=self._headers())
             else:
                 raise ValueError(f"unsupported method {method}")
             resp.raise_for_status()
@@ -138,8 +140,8 @@ class CPClient:
     def _get(self, path: str) -> Optional[Any]:
         return self._request("GET", path)
 
-    def _post(self, path: str, json: Any) -> Optional[Any]:
-        return self._request("POST", path, json=json)
+    def _post(self, path: str, json: Any, *, timeout: Optional[float] = None) -> Optional[Any]:
+        return self._request("POST", path, json=json, timeout=timeout)
 
     def _put(self, path: str, json: Any) -> Optional[Any]:
         return self._request("PUT", path, json=json)
@@ -335,13 +337,13 @@ class CPClient:
         return self._get(path)
 
     def create_conversation(self, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        return self._post("/v1/chat/conversations", body)
+        return self._post("/v1/chat/conversations", body, timeout=_CHAT_TIMEOUT)
 
     def list_messages(self, conversation_id: str) -> Optional[List[Dict[str, Any]]]:
         return self._get(f"/v1/chat/conversations/{conversation_id}/messages")
 
     def post_message(self, conversation_id: str, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        return self._post(f"/v1/chat/conversations/{conversation_id}/messages", body)
+        return self._post(f"/v1/chat/conversations/{conversation_id}/messages", body, timeout=_CHAT_TIMEOUT)
 
     # Vault
     def list_vault_items(

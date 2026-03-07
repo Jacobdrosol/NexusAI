@@ -2,7 +2,7 @@
 
 from unittest.mock import Mock, patch
 
-from dashboard.cp_client import CPClient
+from dashboard.cp_client import CPClient, _CHAT_TIMEOUT
 
 
 def test_unavailable_reason_for_unauthorized():
@@ -48,3 +48,17 @@ def test_probe_paths_reports_status_codes_and_errors():
     assert results[2]["ok"] is False
     assert results[2]["status_code"] is None
     assert "timed out" in results[2]["detail"]
+
+
+def test_post_message_uses_chat_timeout():
+    cp = CPClient(base_url="http://example.invalid", timeout=0.1)
+
+    ok_resp = Mock()
+    ok_resp.raise_for_status.return_value = None
+    ok_resp.text = '{"assistant_message":{"id":"m1"}}'
+    ok_resp.json.return_value = {"assistant_message": {"id": "m1"}}
+
+    with patch("dashboard.cp_client.requests.post", return_value=ok_resp) as post_mock:
+        cp.post_message("conv-1", {"content": "hello"})
+
+    assert post_mock.call_args.kwargs["timeout"] == _CHAT_TIMEOUT

@@ -281,7 +281,11 @@ async function sendMessage(streamMode) {
       headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
       body: JSON.stringify(payload),
     });
-    if (!res.ok) { alert('Send failed'); return; }
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      alert(data.error || 'Send failed');
+      return;
+    }
     const data = await res.json();
     if (data.mode === 'assign') {
       const orchestrationId = data.assignment?.orchestration_id || 'unknown';
@@ -302,7 +306,11 @@ async function sendMessage(streamMode) {
     headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
     body: JSON.stringify(payload),
   });
-  if (!res.ok || !res.body) { alert('Stream send failed'); return; }
+  if (!res.ok || !res.body) {
+    const data = await res.json().catch(() => ({}));
+    alert(data.error || 'Stream send failed');
+    return;
+  }
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -397,7 +405,11 @@ document.getElementById('form-assign')?.addEventListener('submit', async functio
       bot_id: fd.get('bot_id') || null
     }),
   });
-  if (!res.ok) { alert('Assign failed'); return; }
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    alert(data.error || 'Assign failed');
+    return;
+  }
   const data = await res.json();
   const orchestrationId = data.assignment?.orchestration_id || 'unknown';
   alert('Assignment completed: ' + orchestrationId);
