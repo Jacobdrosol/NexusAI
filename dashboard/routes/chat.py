@@ -44,6 +44,7 @@ def chat_page() -> str:
     cp = get_cp_client()
     conversations = cp.list_conversations(archived="all") or []
     bots = cp.list_bots() or []
+    projects = cp.list_projects() or []
     vault_items = cp.list_vault_items(limit=50) or []
     selected_id = request.args.get("conversation_id")
     selected = None
@@ -61,6 +62,7 @@ def chat_page() -> str:
         selected_conversation=selected,
         messages=messages,
         bots=bots,
+        projects=projects,
         vault_items=vault_items,
         error=None,
     )
@@ -78,6 +80,7 @@ def api_create_conversation():
         {
             "title": title,
             "project_id": data.get("project_id"),
+            "bridge_project_ids": data.get("bridge_project_ids") or [],
             "scope": data.get("scope", "global"),
             "default_bot_id": data.get("default_bot_id"),
             "default_model_id": data.get("default_model_id"),

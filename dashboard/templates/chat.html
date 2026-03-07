@@ -139,11 +139,38 @@
       <div class="form-group"><label>Title</label><input class="form-control" name="title" required></div>
       <div class="form-group">
         <label>Scope</label>
-        <select class="form-control" name="scope">
+        <select class="form-control" name="scope" id="create-convo-scope">
           <option value="global">global</option>
           <option value="project">project</option>
           <option value="bridged">bridged</option>
         </select>
+      </div>
+      <div class="form-group" id="create-convo-project-wrap" style="display:none;">
+        <label>Project</label>
+        <select class="form-control" name="project_id" id="create-convo-project-id">
+          <option value="">Select project</option>
+          {% for p in projects if p.enabled %}
+          <option value="{{ p.id }}">{{ p.name }} ({{ p.id }})</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-group" id="create-convo-bridged-primary-wrap" style="display:none;">
+        <label>Primary Bridged Project</label>
+        <select class="form-control" name="bridged_primary_project_id" id="create-convo-bridged-primary">
+          <option value="">Select primary bridged project</option>
+          {% for p in projects if p.enabled and p.mode == 'bridged' %}
+          <option value="{{ p.id }}">{{ p.name }} ({{ p.id }})</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-group" id="create-convo-bridged-projects-wrap" style="display:none;">
+        <label>Additional Bridged Projects</label>
+        <select class="form-control" name="bridge_project_ids" id="create-convo-bridge-project-ids" multiple size="5">
+          {% for p in projects if p.enabled and p.mode == 'bridged' %}
+          <option value="{{ p.id }}">{{ p.name }} ({{ p.id }})</option>
+          {% endfor %}
+        </select>
+        <p class="mini-note">Only projects with bridge mode enabled are available here.</p>
       </div>
       <div class="form-group">
         <label>Default Bot</label>
@@ -211,6 +238,29 @@ let refreshTimer = null;
 function showCreateConversation() { document.getElementById('modal-create-convo').style.display='flex'; }
 function openAssignModal() { document.getElementById('modal-assign').style.display='flex'; }
 function hideModal(id) { document.getElementById(id).style.display='none'; }
+
+function syncConversationScopeFields() {
+  const scope = document.getElementById('create-convo-scope')?.value || 'global';
+  const projectWrap = document.getElementById('create-convo-project-wrap');
+  const bridgedPrimaryWrap = document.getElementById('create-convo-bridged-primary-wrap');
+  const bridgedProjectsWrap = document.getElementById('create-convo-bridged-projects-wrap');
+  const projectSelect = document.getElementById('create-convo-project-id');
+  const bridgedPrimary = document.getElementById('create-convo-bridged-primary');
+  const bridgeProjects = document.getElementById('create-convo-bridge-project-ids');
+
+  if (projectWrap) projectWrap.style.display = scope === 'project' ? '' : 'none';
+  if (bridgedPrimaryWrap) bridgedPrimaryWrap.style.display = scope === 'bridged' ? '' : 'none';
+  if (bridgedProjectsWrap) bridgedProjectsWrap.style.display = scope === 'bridged' ? '' : 'none';
+
+  if (projectSelect) projectSelect.required = scope === 'project';
+  if (bridgedPrimary) bridgedPrimary.required = scope === 'bridged';
+
+  if (scope !== 'project' && projectSelect) projectSelect.value = '';
+  if (scope !== 'bridged' && bridgedPrimary) bridgedPrimary.value = '';
+  if (scope !== 'bridged' && bridgeProjects) {
+    Array.from(bridgeProjects.options).forEach((opt) => { opt.selected = false; });
+  }
+}
 
 function getCsrf() {
   return document.querySelector('input[name=csrf_token]')?.value || '';
@@ -600,16 +650,33 @@ document.getElementById('chat-send-form')?.addEventListener('submit', function(e
 document.getElementById('form-create-convo')?.addEventListener('submit', async function(e) {
   e.preventDefault();
   const fd = new FormData(this);
+  const scope = (fd.get('scope') || 'global').toString();
+  let projectId = null;
+  let bridgeProjectIds = [];
+  if (scope === 'project') {
+    projectId = (fd.get('project_id') || '').toString() || null;
+  } else if (scope === 'bridged') {
+    projectId = (fd.get('bridged_primary_project_id') || '').toString() || null;
+    bridgeProjectIds = Array.from(document.getElementById('create-convo-bridge-project-ids')?.selectedOptions || [])
+      .map((opt) => opt.value)
+      .filter((value) => value && value !== projectId);
+  }
   const res = await fetch('/api/chat/conversations', {
     method: 'POST',
     headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
     body: JSON.stringify({
       title: fd.get('title'),
-      scope: fd.get('scope'),
+      project_id: projectId,
+      bridge_project_ids: bridgeProjectIds,
+      scope,
       default_bot_id: fd.get('default_bot_id') || null
     }),
   });
-  if (!res.ok) { alert('Create failed'); return; }
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    alert(data.error || 'Create failed');
+    return;
+  }
   const created = await res.json();
   window.location = '/chat?conversation_id=' + encodeURIComponent(created.id);
 });
@@ -826,7 +893,9 @@ async function openDagViewer(orchestrationId) {
   renderDagGraph(graph);
 }
 
-startMessagePolling();
 bindConversationActions();
+document.getElementById('create-convo-scope')?.addEventListener('change', syncConversationScopeFields);
+syncConversationScopeFields();
+startMessagePolling();
 </script>
 {% endblock %}

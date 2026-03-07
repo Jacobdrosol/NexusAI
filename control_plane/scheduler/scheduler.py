@@ -12,6 +12,13 @@ from shared.models import BackendConfig, Task, Worker
 logger = logging.getLogger(__name__)
 
 
+def _backend_failure_message(task_id: str, last_error: Exception) -> str:
+    detail = str(last_error or "").strip()
+    if detail:
+        return f"All backends failed for task {task_id}: {detail}"
+    return f"All backends failed for task {task_id}"
+
+
 class Scheduler:
     def __init__(
         self,
@@ -57,9 +64,7 @@ class Scheduler:
                 last_error = e
                 continue
 
-        raise NoViableBackendError(
-            f"All backends failed for task {task.id}"
-        ) from last_error
+        raise NoViableBackendError(_backend_failure_message(task.id, last_error)) from last_error
 
     async def stream(self, task: Task) -> AsyncGenerator[dict[str, Any], None]:
         try:
@@ -94,9 +99,7 @@ class Scheduler:
                 last_error = e
                 continue
 
-        raise NoViableBackendError(
-            f"All backends failed for task {task.id}"
-        ) from last_error
+        raise NoViableBackendError(_backend_failure_message(task.id, last_error)) from last_error
 
     async def _dispatch_backend(self, backend: BackendConfig, payload: Any, task: Task | None = None) -> Any:
         await self._validate_model_if_catalog_present(backend)
@@ -418,7 +421,25 @@ class Scheduler:
                 headers={"Authorization": f"Bearer {api_key}"},
                 json=body,
             )
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                detail = ""
+                try:
+                    payload_data = response.json()
+                    if isinstance(payload_data, dict):
+                        detail = str(
+                            payload_data.get("error")
+                            or payload_data.get("detail")
+                            or payload_data.get("message")
+                            or ""
+                        ).strip()
+                except Exception:
+                    detail = (response.text or "").strip()
+                status = response.status_code
+                if detail:
+                    raise BackendError(f"Ollama Cloud request failed ({status}): {detail}") from e
+                raise BackendError(f"Ollama Cloud request failed ({status})") from e
             data = response.json()
             output = data.get("message", {}).get("content", "")
             usage = {

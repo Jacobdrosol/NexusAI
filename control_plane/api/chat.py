@@ -4,7 +4,7 @@ from typing import Any, AsyncGenerator, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from control_plane.security.guards import enforce_body_size, enforce_rate_limit
 from shared.exceptions import BotNotFoundError, ConversationNotFoundError
@@ -16,6 +16,7 @@ router = APIRouter(prefix="/v1/chat", tags=["chat"])
 class CreateConversationRequest(BaseModel):
     title: str
     project_id: Optional[str] = None
+    bridge_project_ids: List[str] = Field(default_factory=list)
     scope: str = "global"
     default_bot_id: Optional[str] = None
     default_model_id: Optional[str] = None
@@ -83,9 +84,21 @@ def _extract_task_output(result: Any) -> str:
 @router.post("/conversations", response_model=ChatConversation)
 async def create_conversation(request: Request, body: CreateConversationRequest) -> ChatConversation:
     chat_manager = request.app.state.chat_manager
+    project_id = (body.project_id or "").strip() or None
+    bridge_project_ids = [str(pid).strip() for pid in body.bridge_project_ids if str(pid).strip()]
+    bridge_project_ids = list(dict.fromkeys(bridge_project_ids))
+
+    if body.scope == "project" and not project_id:
+        raise HTTPException(status_code=400, detail="project_id is required for project-scoped conversations")
+    if body.scope == "bridged":
+        if not project_id:
+            raise HTTPException(status_code=400, detail="project_id is required for bridged conversations")
+        bridge_project_ids = [pid for pid in bridge_project_ids if pid != project_id]
+
     return await chat_manager.create_conversation(
         title=body.title,
-        project_id=body.project_id,
+        project_id=project_id,
+        bridge_project_ids=bridge_project_ids,
         scope=body.scope,
         default_bot_id=body.default_bot_id,
         default_model_id=body.default_model_id,

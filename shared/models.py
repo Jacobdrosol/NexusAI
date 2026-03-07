@@ -122,6 +122,7 @@ class ChatConversation(BaseModel):
     id: str
     title: str
     project_id: Optional[str] = None
+    bridge_project_ids: List[str] = Field(default_factory=list)
     scope: Literal["global", "project", "bridged"] = "global"
     default_bot_id: Optional[str] = None
     default_model_id: Optional[str] = None

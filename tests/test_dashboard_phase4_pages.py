@@ -88,6 +88,9 @@ def test_chat_page_loads_when_logged_in(dashboard_client):
     assert resp.status_code == 200
     assert b"Chat" in resp.data
     assert b"New Conversation" in resp.data
+    assert b"create-convo-scope" in resp.data
+    assert b"create-convo-project-id" in resp.data
+    assert b"create-convo-bridge-project-ids" in resp.data
 
 
 def test_vault_page_loads_when_logged_in(dashboard_client):

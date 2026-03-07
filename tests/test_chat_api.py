@@ -37,6 +37,24 @@ async def test_create_conversation_and_post_message(cp_app):
 
 
 @pytest.mark.anyio
+async def test_create_bridged_conversation_stores_bridge_projects(cp_app):
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        create_resp = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Bridge Chat",
+                "scope": "bridged",
+                "project_id": "proj-a",
+                "bridge_project_ids": ["proj-b", "proj-c", "proj-a"],
+            },
+        )
+        assert create_resp.status_code == 200
+        data = create_resp.json()
+        assert data["project_id"] == "proj-a"
+        assert data["bridge_project_ids"] == ["proj-b", "proj-c"]
+
+
+@pytest.mark.anyio
 async def test_delete_conversation_removes_messages(cp_app):
     cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "assistant reply"})
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:

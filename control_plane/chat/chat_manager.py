@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
     project_id TEXT,
+    bridge_project_ids TEXT,
     scope TEXT NOT NULL,
     default_bot_id TEXT,
     default_model_id TEXT,
@@ -78,11 +79,14 @@ class ChatManager:
             columns = {row[1] for row in await cursor.fetchall()}
         if "archived_at" not in columns:
             await db.execute("ALTER TABLE conversations ADD COLUMN archived_at TEXT")
+        if "bridge_project_ids" not in columns:
+            await db.execute("ALTER TABLE conversations ADD COLUMN bridge_project_ids TEXT")
 
     async def create_conversation(
         self,
         title: str,
         project_id: Optional[str] = None,
+        bridge_project_ids: Optional[List[str]] = None,
         scope: str = "global",
         default_bot_id: Optional[str] = None,
         default_model_id: Optional[str] = None,
@@ -93,6 +97,7 @@ class ChatManager:
             id=str(uuid.uuid4()),
             title=title.strip() or "New Conversation",
             project_id=project_id,
+            bridge_project_ids=list(bridge_project_ids or []),
             scope=scope,
             default_bot_id=default_bot_id,
             default_model_id=default_model_id,
@@ -105,14 +110,15 @@ class ChatManager:
                 await db.execute(
                     """
                     INSERT INTO conversations (
-                        id, title, project_id, scope, default_bot_id, default_model_id, archived_at, created_at, updated_at
+                        id, title, project_id, bridge_project_ids, scope, default_bot_id, default_model_id, archived_at, created_at, updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         conversation.id,
                         conversation.title,
                         conversation.project_id,
+                        json.dumps(conversation.bridge_project_ids),
                         conversation.scope,
                         conversation.default_bot_id,
                         conversation.default_model_id,
@@ -145,7 +151,19 @@ class ChatManager:
             query = f"SELECT * FROM conversations{where} ORDER BY updated_at DESC"
             async with db.execute(query, params) as cursor:
                 rows = await cursor.fetchall()
-                return [ChatConversation.model_validate(dict(row)) for row in rows]
+                result: List[ChatConversation] = []
+                for row in rows:
+                    data = dict(row)
+                    raw_bridges = data.get("bridge_project_ids")
+                    if raw_bridges:
+                        try:
+                            data["bridge_project_ids"] = json.loads(raw_bridges)
+                        except Exception:
+                            data["bridge_project_ids"] = []
+                    else:
+                        data["bridge_project_ids"] = []
+                    result.append(ChatConversation.model_validate(data))
+                return result
 
     async def get_conversation(self, conversation_id: str) -> ChatConversation:
         await self._ensure_db()
@@ -158,7 +176,16 @@ class ChatManager:
                 row = await cursor.fetchone()
                 if row is None:
                     raise ConversationNotFoundError(f"Conversation not found: {conversation_id}")
-                return ChatConversation.model_validate(dict(row))
+                data = dict(row)
+                raw_bridges = data.get("bridge_project_ids")
+                if raw_bridges:
+                    try:
+                        data["bridge_project_ids"] = json.loads(raw_bridges)
+                    except Exception:
+                        data["bridge_project_ids"] = []
+                else:
+                    data["bridge_project_ids"] = []
+                return ChatConversation.model_validate(data)
 
     async def delete_conversation(self, conversation_id: str) -> None:
         conversation = await self.get_conversation(conversation_id)

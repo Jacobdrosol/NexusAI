@@ -2,6 +2,8 @@
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
+
 import pytest
 
 from shared.models import BackendConfig
@@ -161,6 +163,43 @@ async def test_scheduler_ollama_cloud_uses_bearer_key_and_chat_endpoint(monkeypa
     assert args[0] == "https://ollama.com/api/chat"
     assert kwargs["headers"]["Authorization"] == "Bearer ollama-secret"
     assert result["output"] == "ok"
+
+
+@pytest.mark.anyio
+async def test_scheduler_ollama_cloud_surfaces_provider_error_detail():
+    from control_plane.scheduler.scheduler import Scheduler
+    from shared.exceptions import BackendError
+
+    key_vault = AsyncMock()
+    key_vault.get_secret.return_value = "ollama-secret"
+    scheduler = Scheduler(bot_registry=AsyncMock(), worker_registry=AsyncMock(), key_vault=key_vault)
+    backend = BackendConfig(
+        type="cloud_api",
+        model="qwen3.5:cloud",
+        provider="ollama_cloud",
+        api_key_ref="OLLAMA_API_KEY",
+    )
+    payload = [{"role": "user", "content": "hello"}]
+
+    fake_response = MagicMock()
+    fake_response.status_code = 404
+    fake_response.json.return_value = {"error": "model not found"}
+    fake_response.text = '{"error":"model not found"}'
+    request = MagicMock()
+    fake_response.raise_for_status.side_effect = httpx.HTTPStatusError(
+        "not found",
+        request=request,
+        response=fake_response,
+    )
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__.return_value = mock_client
+    mock_client.__aexit__.return_value = False
+    mock_client.post.return_value = fake_response
+
+    with patch("control_plane.scheduler.scheduler.httpx.AsyncClient", return_value=mock_client):
+        with pytest.raises(BackendError, match="Ollama Cloud request failed \\(404\\): model not found"):
+            await scheduler._call_ollama_cloud(backend, payload)
 
 
 @pytest.mark.anyio
