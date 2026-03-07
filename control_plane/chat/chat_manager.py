@@ -270,3 +270,53 @@ class ChatManager:
                         data["metadata"] = json.loads(data["metadata"])
                     result.append(ChatMessage.model_validate(data))
                 return result
+
+    async def update_message(
+        self,
+        message_id: str,
+        *,
+        content: Optional[str] = None,
+        metadata: Optional[Any] = None,
+        model: Optional[str] = None,
+        provider: Optional[str] = None,
+    ) -> ChatMessage:
+        await self._ensure_db()
+        async with self._lock:
+            async with aiosqlite.connect(self._db_path) as db:
+                db.row_factory = aiosqlite.Row
+                async with db.execute(
+                    "SELECT * FROM messages WHERE id = ?",
+                    (message_id,),
+                ) as cursor:
+                    row = await cursor.fetchone()
+                    if row is None:
+                        raise ConversationNotFoundError(f"Message not found: {message_id}")
+                    data = dict(row)
+                    existing_metadata = json.loads(data["metadata"]) if data.get("metadata") else None
+                    updated = {
+                        "content": data["content"] if content is None else content,
+                        "metadata": existing_metadata if metadata is None else metadata,
+                        "model": data.get("model") if model is None else model,
+                        "provider": data.get("provider") if provider is None else provider,
+                    }
+                    await db.execute(
+                        """
+                        UPDATE messages
+                        SET content = ?, metadata = ?, model = ?, provider = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            updated["content"],
+                            json.dumps(updated["metadata"]) if updated["metadata"] is not None else None,
+                            updated["model"],
+                            updated["provider"],
+                            message_id,
+                        ),
+                    )
+                    await db.execute(
+                        "UPDATE conversations SET updated_at = ? WHERE id = ?",
+                        (datetime.now(timezone.utc).isoformat(), data["conversation_id"]),
+                    )
+                    await db.commit()
+                    data.update(updated)
+                    return ChatMessage.model_validate(data)

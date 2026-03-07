@@ -341,11 +341,16 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
             )
             result = None
             streamed_chunks: list[str] = []
+            assistant_message: Optional[ChatMessage] = None
+            stream_provider: Optional[str] = None
+            stream_model: Optional[str] = None
             async for event in scheduler.stream(task):
                 event_name = str(event.get("event") or "")
                 if event_name == "backend_selected":
                     provider = str(event.get("provider") or "unknown")
                     model = str(event.get("model") or "unknown")
+                    stream_provider = provider
+                    stream_model = model
                     worker_id = str(event.get("worker_id") or "").strip()
                     label = f"Using {provider}/{model}"
                     if worker_id:
@@ -363,6 +368,26 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                     chunk = str(event.get("text") or "")
                     if chunk:
                         streamed_chunks.append(chunk)
+                        partial_content = "".join(streamed_chunks)
+                        partial_metadata = {"streaming": True}
+                        if assistant_message is None:
+                            assistant_message = await chat_manager.add_message(
+                                conversation_id=conversation_id,
+                                role="assistant",
+                                content=partial_content,
+                                bot_id=target_bot_id,
+                                model=stream_model,
+                                provider=stream_provider,
+                                metadata=partial_metadata,
+                            )
+                        else:
+                            assistant_message = await chat_manager.update_message(
+                                assistant_message.id,
+                                content=partial_content,
+                                metadata=partial_metadata,
+                                model=stream_model,
+                                provider=stream_provider,
+                            )
                     yield f'event: token\ndata: {json.dumps({"text": chunk})}\n\n'
                 elif event_name == "final":
                     result = dict(event)
@@ -383,15 +408,27 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
             assistant_output = _extract_task_output(result)
             yield 'event: status\ndata: {"phase":"persisting","label":"Saving response..."}\n\n'
             metadata = {"usage": (result or {}).get("usage", {})} if isinstance(result, dict) else {}
+            metadata["streaming"] = False
             if isinstance(result, dict) and result.get("partial"):
                 metadata["partial"] = True
-            assistant_message = await chat_manager.add_message(
-                conversation_id=conversation_id,
-                role="assistant",
-                content=assistant_output,
-                bot_id=target_bot_id,
-                metadata=metadata or None,
-            )
+            if assistant_message is None:
+                assistant_message = await chat_manager.add_message(
+                    conversation_id=conversation_id,
+                    role="assistant",
+                    content=assistant_output,
+                    bot_id=target_bot_id,
+                    model=stream_model,
+                    provider=stream_provider,
+                    metadata=metadata or None,
+                )
+            else:
+                assistant_message = await chat_manager.update_message(
+                    assistant_message.id,
+                    content=assistant_output,
+                    metadata=metadata or None,
+                    model=stream_model,
+                    provider=stream_provider,
+                )
             yield f"event: assistant_message\ndata: {assistant_message.model_dump_json()}\n\n"
             yield "event: done\ndata: {}\n\n"
         except ConversationNotFoundError:

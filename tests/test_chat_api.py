@@ -139,6 +139,14 @@ async def test_stream_message_endpoint(cp_app):
         assert "event: assistant_message" in stream_resp.text
         assert "event: done" in stream_resp.text
 
+        messages_resp = await client.get(f"/v1/chat/conversations/{conversation_id}/messages")
+        messages = messages_resp.json()
+        assert len(messages) == 2
+        assert messages[-1]["content"] == "stream reply"
+        assert messages[-1]["model"] == "llama3.1:8b"
+        assert messages[-1]["provider"] == "ollama"
+        assert messages[-1]["metadata"]["streaming"] is False
+
 
 @pytest.mark.anyio
 async def test_stream_message_persists_partial_when_final_missing(cp_app):
@@ -172,8 +180,12 @@ async def test_stream_message_persists_partial_when_final_missing(cp_app):
 
         messages_resp = await client.get(f"/v1/chat/conversations/{conversation_id}/messages")
         messages = messages_resp.json()
+        assert len(messages) == 2
         assert messages[-1]["content"] == "partial reply"
+        assert messages[-1]["model"] == "llama3.1:8b"
+        assert messages[-1]["provider"] == "ollama"
         assert messages[-1]["metadata"]["partial"] is True
+        assert messages[-1]["metadata"]["streaming"] is False
 
 
 @pytest.mark.anyio
