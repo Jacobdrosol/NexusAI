@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 _CP_BASE = os.environ.get("CONTROL_PLANE_URL", "http://control_plane:8000")
 _TIMEOUT = float(os.environ.get("CP_TIMEOUT", "2"))
-_CHAT_TIMEOUT = float(os.environ.get("CP_CHAT_TIMEOUT", "180"))
+_CHAT_TIMEOUT = float(os.environ.get("CP_CHAT_TIMEOUT", "900"))
 _CP_API_TOKEN = os.environ.get("CONTROL_PLANE_API_TOKEN", "").strip()
 
 

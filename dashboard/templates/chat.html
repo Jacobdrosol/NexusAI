@@ -546,7 +546,11 @@ async function sendMessage(streamMode) {
       if (pending) {
         pending.querySelector('.message-body').textContent = 'Still waiting on a reply. Rechecking conversation state...';
       }
-      setTimeout(refreshMessages, 1200);
+      refreshMessagesUntilSettled(12, 1000).then((recovered) => {
+        if (!recovered && pending) {
+          pending.querySelector('.message-body').textContent = 'Request timed out locally. If the backend eventually finishes, the saved reply will appear here automatically.';
+        }
+      });
       const error = (data.error || '').toString().trim();
       if (error) {
         alert(error);
