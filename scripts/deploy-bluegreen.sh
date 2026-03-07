@@ -82,6 +82,33 @@ trap 'rollback_on_error' EXIT
 
 ensure_runtime_nginx_conf
 
+print_control_plane_diagnostics() {
+  echo "[deploy] control_plane diagnostics:"
+  docker compose ps control_plane || true
+  docker compose logs --tail=120 control_plane || true
+}
+
+wait_for_control_plane_health() {
+  ATTEMPTS=0
+  while true; do
+    CONTAINER_ID="$(docker compose ps -q control_plane 2>/dev/null || true)"
+    if [ -n "$CONTAINER_ID" ]; then
+      HEALTH_STATUS="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$CONTAINER_ID" 2>/dev/null || true)"
+      if [ "$HEALTH_STATUS" = "healthy" ] || [ "$HEALTH_STATUS" = "running" ]; then
+        return 0
+      fi
+    fi
+
+    ATTEMPTS=$((ATTEMPTS + 1))
+    if [ "$ATTEMPTS" -ge 30 ]; then
+      echo "[deploy] control_plane health check failed"
+      print_control_plane_diagnostics
+      exit 5
+    fi
+    sleep 2
+  done
+}
+
 echo "[deploy] fetching latest main"
 git fetch origin main
 git checkout main
@@ -96,15 +123,7 @@ fi
 
 if [ "$CORE_RECREATE" = "1" ] && [ -f "docker-compose.yml" ]; then
   echo "[deploy] verifying core runtime health"
-  ATTEMPTS=0
-  until docker compose exec -T control_plane sh -lc "python - <<'PY'\nimport urllib.request\nurllib.request.urlopen('http://127.0.0.1:8000/health')\nprint('ok')\nPY" >/dev/null 2>&1; do
-    ATTEMPTS=$((ATTEMPTS + 1))
-    if [ "$ATTEMPTS" -ge 30 ]; then
-      echo "[deploy] control_plane health check failed"
-      exit 5
-    fi
-    sleep 2
-  done
+  wait_for_control_plane_health
 fi
 
 echo "[deploy] current color: $CURRENT_COLOR"
