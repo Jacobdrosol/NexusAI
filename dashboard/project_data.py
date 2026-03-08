@@ -21,9 +21,11 @@ def project_data_base_dir() -> Path:
 
 def ensure_project_data_layout(project_id: str) -> Path:
     root = (project_data_base_dir() / project_id).resolve()
+    created = not root.exists()
     root.mkdir(parents=True, exist_ok=True)
-    for name in _DEFAULT_SUBDIRECTORIES:
-        (root / name).mkdir(parents=True, exist_ok=True)
+    if created:
+        for name in _DEFAULT_SUBDIRECTORIES:
+            (root / name).mkdir(parents=True, exist_ok=True)
     return root
 
 
