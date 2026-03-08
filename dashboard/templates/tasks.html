@@ -49,7 +49,7 @@
                 <td>{{ task.bot_id }}</td>
                 <td><span class="badge badge-{{ task.status }}">{{ task.status }}</span></td>
                 <td>{{ (task.created_at[:19] if task.created_at else '') | replace('T', ' ') }}</td>
-                <td><code>{{ task.id[:8] }}…</code></td>
+                <td><code>{{ task.id[:8] }}...</code></td>
               </tr>
               {% else %}
               <tr><td colspan="4" class="empty">No tasks currently running</td></tr>
@@ -77,7 +77,7 @@
                 <td>{{ task.bot_id }}</td>
                 <td><span class="badge badge-{{ task.status }}">{{ task.status }}</span></td>
                 <td>{{ (task.created_at[:19] if task.created_at else '') | replace('T', ' ') }}</td>
-                <td><code>{{ task.id[:8] }}…</code></td>
+                <td><code>{{ task.id[:8] }}...</code></td>
               </tr>
               {% else %}
               <tr><td colspan="4" class="empty">No tasks waiting in queue</td></tr>
@@ -104,7 +104,7 @@
               <tr class="task-row" data-task-id="{{ task.id }}">
                 <td>{{ task.bot_id }}</td>
                 <td>{{ (task.updated_at[:19] if task.updated_at else '') | replace('T', ' ') }}</td>
-                <td><code>{{ task.id[:8] }}…</code></td>
+                <td><code>{{ task.id[:8] }}...</code></td>
               </tr>
               {% else %}
               <tr><td colspan="3" class="empty">No completed tasks in the last 24 hours</td></tr>
@@ -131,7 +131,7 @@
               <tr class="task-row" data-task-id="{{ task.id }}">
                 <td>{{ task.bot_id }}</td>
                 <td>{{ (task.updated_at[:19] if task.updated_at else '') | replace('T', ' ') }}</td>
-                <td><code>{{ task.id[:8] }}…</code></td>
+                <td><code>{{ task.id[:8] }}...</code></td>
               </tr>
               {% else %}
               <tr><td colspan="3" class="empty">No failed tasks in the last 24 hours</td></tr>
@@ -154,6 +154,17 @@
     </div>
   </div>
 </section>
+
+<div id="modal-task-section" class="modal" style="display:none;">
+  <div class="modal-content">
+    <h2 id="task-section-title">Task Section</h2>
+    <pre id="task-section-pre" style="max-height:60vh;overflow:auto;white-space:pre-wrap;"></pre>
+    <div class="modal-actions">
+      <button class="btn" id="task-section-download-btn" type="button">Download</button>
+      <button class="btn" type="button" onclick="closeTaskSectionModal()">Close</button>
+    </div>
+  </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -185,6 +196,11 @@ function taskById(taskId) {
   return TASKS.find((task) => String(task.id) === String(taskId)) || null;
 }
 
+function closeTaskSectionModal() {
+  const modal = document.getElementById('modal-task-section');
+  if (modal) modal.style.display = 'none';
+}
+
 function renderTaskDetail(task) {
   const statusEl = document.getElementById('task-detail-status');
   const summaryEl = document.getElementById('task-detail-summary');
@@ -199,31 +215,27 @@ function renderTaskDetail(task) {
   statusEl.textContent = task.status + ' · ' + task.bot_id;
   summaryEl.textContent = 'Task ' + task.id;
   const sections = [
-    ['Task', JSON.stringify({
-      id: task.id,
-      bot_id: task.bot_id,
-      status: task.status,
-      created_at: task.created_at,
-      updated_at: task.updated_at,
-      metadata: task.metadata || null
-    }, null, 2)]
+    ['Task', 'Task identity, status, timestamps, and metadata.']
   ];
-  if (task.payload !== undefined && task.payload !== null) {
-    sections.push(['Payload', JSON.stringify(task.payload, null, 2)]);
+  if (task.has_payload) {
+    sections.push(['Payload', 'Queued input for this task. Load only when needed.']);
   }
-  if (task.result !== undefined && task.result !== null) {
-    sections.push(['Result', JSON.stringify(task.result, null, 2)]);
+  if (task.has_result) {
+    sections.push(['Result', 'Completed output for this task. Load only when needed.']);
   }
-  if (task.error !== undefined && task.error !== null) {
-    sections.push(['Error', JSON.stringify(task.error, null, 2)]);
+  if (task.has_error) {
+    sections.push(['Error', 'Failure details for this task. Load only when needed.']);
   }
   gridEl.innerHTML = sections.map(([label, body]) => `
     <section class="panel" style="margin:0;">
       <div class="page-header" style="margin-bottom:0.5rem;">
         <h3 style="margin:0;">${label}</h3>
-        <button class="btn btn-sm" type="button" onclick="downloadTaskSection(${JSON.stringify(task.id)}, ${JSON.stringify(label.toLowerCase())})">Download</button>
+        <div style="display:flex;gap:0.5rem;">
+          <button class="btn btn-sm" type="button" onclick="viewTaskSection(${JSON.stringify(task.id)}, ${JSON.stringify(label.toLowerCase())})">View</button>
+          <button class="btn btn-sm" type="button" onclick="downloadTaskSection(${JSON.stringify(task.id)}, ${JSON.stringify(label.toLowerCase())})">Download</button>
+        </div>
       </div>
-      <pre style="max-height:18rem;overflow:auto;white-space:pre-wrap;">${escapeHtml(body)}</pre>
+      <div class="mini-note">${escapeHtml(body)}</div>
     </section>
   `).join('');
 }
@@ -236,27 +248,26 @@ function escapeHtml(value) {
 }
 
 function downloadTaskSection(taskId, section) {
-  const task = taskById(taskId);
-  if (!task) return;
-  let body = '';
-  if (section === 'payload') {
-    body = JSON.stringify(task.payload ?? null, null, 2);
-  } else if (section === 'result') {
-    body = JSON.stringify(task.result ?? null, null, 2);
-  } else if (section === 'error') {
-    body = JSON.stringify(task.error ?? null, null, 2);
-  } else {
-    body = JSON.stringify(task, null, 2);
-  }
-  const blob = new Blob([body], {type: 'application/json;charset=utf-8'});
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = taskId + '-' + section + '.json';
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
+  window.location.href = '/api/tasks/' + encodeURIComponent(taskId) + '/download?section=' + encodeURIComponent(section);
+}
+
+function viewTaskSection(taskId, section) {
+  fetch('/api/tasks/' + encodeURIComponent(taskId) + '?section=' + encodeURIComponent(section))
+    .then(async (response) => {
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Task section load failed');
+      const title = document.getElementById('task-section-title');
+      const pre = document.getElementById('task-section-pre');
+      const downloadBtn = document.getElementById('task-section-download-btn');
+      if (title) title.textContent = (section.charAt(0).toUpperCase() + section.slice(1)) + ' · ' + taskId;
+      if (pre) pre.textContent = JSON.stringify(data.content ?? null, null, 2);
+      if (downloadBtn) {
+        downloadBtn.onclick = () => downloadTaskSection(taskId, section);
+      }
+      const modal = document.getElementById('modal-task-section');
+      if (modal) modal.style.display = 'flex';
+    })
+    .catch((error) => alert(error.message || 'Task section load failed'));
 }
 
 function selectTask(taskId) {

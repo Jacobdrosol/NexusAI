@@ -1,12 +1,13 @@
 """Tasks blueprint — page + JSON API."""
 from __future__ import annotations
 
+import io
 import json
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
-from flask import Blueprint, flash, jsonify, render_template, request
+from flask import Blueprint, flash, jsonify, render_template, request, send_file
 from flask_login import login_required
 
 from dashboard.cp_client import get_cp_client
@@ -50,6 +51,44 @@ def _task_to_dict(t: Task) -> dict[str, Any]:
         "error": json.loads(t.error) if t.error else None,
         "created_at": t.created_at.isoformat() if t.created_at else "",
         "updated_at": t.updated_at.isoformat() if t.updated_at else "",
+    }
+
+
+def _task_summary(task: dict[str, Any]) -> dict[str, Any]:
+    payload = task.get("payload")
+    result = task.get("result")
+    error = task.get("error")
+    return {
+        "id": task.get("id"),
+        "bot_id": task.get("bot_id"),
+        "status": task.get("status"),
+        "created_at": task.get("created_at"),
+        "updated_at": task.get("updated_at"),
+        "metadata": task.get("metadata"),
+        "has_payload": payload is not None,
+        "has_result": result is not None,
+        "has_error": error is not None,
+        "payload_type": type(payload).__name__ if payload is not None else None,
+        "result_type": type(result).__name__ if result is not None else None,
+        "error_type": type(error).__name__ if error is not None else None,
+    }
+
+
+def _task_section(task: dict[str, Any], section: str) -> Any:
+    normalized = str(section or "").strip().lower()
+    if normalized == "payload":
+        return task.get("payload")
+    if normalized == "result":
+        return task.get("result")
+    if normalized == "error":
+        return task.get("error")
+    return {
+        "id": task.get("id"),
+        "bot_id": task.get("bot_id"),
+        "status": task.get("status"),
+        "created_at": task.get("created_at"),
+        "updated_at": task.get("updated_at"),
+        "metadata": task.get("metadata"),
     }
 
 
@@ -150,16 +189,50 @@ def api_list_tasks():
 @login_required
 def api_get_task(task_id: str):
     """Get a single task by ID."""
+    section = request.args.get("section")
+    include_content = str(request.args.get("include_content") or "").strip().lower() == "true"
     cp = get_cp_client()
     cp_task = cp.get_task(task_id)
     if cp_task is not None:
-        return jsonify(cp_task)
+        if section:
+            return jsonify({"task_id": task_id, "section": section, "content": _task_section(cp_task, section)})
+        if include_content:
+            return jsonify(cp_task)
+        return jsonify(_task_summary(cp_task))
 
     db = get_db()
     try:
         task = db.get(Task, task_id)
         if not task:
             return jsonify({"error": "not found"}), 404
-        return jsonify(_task_to_dict(task))
+        task_dict = _task_to_dict(task)
+        if section:
+            return jsonify({"task_id": task_id, "section": section, "content": _task_section(task_dict, section)})
+        if include_content:
+            return jsonify(task_dict)
+        return jsonify(_task_summary(task_dict))
     finally:
         db.close()
+
+
+@bp.get("/api/tasks/<task_id>/download")
+@login_required
+def api_download_task_section(task_id: str):
+    section = request.args.get("section", "task")
+    cp = get_cp_client()
+    cp_task = cp.get_task(task_id)
+    task_dict: Optional[dict[str, Any]] = cp_task
+    if task_dict is None:
+        db = get_db()
+        try:
+            task = db.get(Task, task_id)
+            if not task:
+                return jsonify({"error": "not found"}), 404
+            task_dict = _task_to_dict(task)
+        finally:
+            db.close()
+
+    content = json.dumps(_task_section(task_dict, section), indent=2, sort_keys=True, default=str)
+    buffer = io.BytesIO(content.encode("utf-8"))
+    filename = f"{task_id}-{section}.json"
+    return send_file(buffer, as_attachment=True, download_name=filename, mimetype="application/json")

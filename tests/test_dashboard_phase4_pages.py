@@ -411,6 +411,38 @@ def test_tasks_page_shows_quick_launch_buttons(dashboard_client):
     assert b"Queued / Blocked" in resp.data
     assert b"Recent Completed (24h)" in resp.data
     assert b"Task Detail" in resp.data
+    assert b"Load only when needed" in resp.data
+
+
+def test_tasks_api_summary_and_download(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def get_task(self, task_id):
+            return {
+                "id": task_id,
+                "bot_id": "course-outline",
+                "status": "completed",
+                "payload": {"instruction": "go"},
+                "result": {"course_structure": {"units": []}},
+                "error": None,
+                "created_at": "2026-03-08T10:00:00+00:00",
+                "updated_at": "2026-03-08T10:01:00+00:00",
+                "metadata": {"project_id": "proj-1"},
+            }
+
+    with patch("dashboard.routes.tasks.get_cp_client", return_value=FakeCP()):
+        summary_resp = dashboard_client.get("/api/tasks/task-1")
+        section_resp = dashboard_client.get("/api/tasks/task-1?section=result")
+        download_resp = dashboard_client.get("/api/tasks/task-1/download?section=payload")
+
+    assert summary_resp.status_code == 200
+    assert summary_resp.get_json()["has_payload"] is True
+    assert "payload" not in summary_resp.get_json()
+    assert section_resp.status_code == 200
+    assert section_resp.get_json()["content"]["course_structure"]["units"] == []
+    assert download_resp.status_code == 200
+    assert "attachment" in download_resp.headers.get("Content-Disposition", "")
 
 
 def test_chat_ingest_api_validates_required_fields(dashboard_client):
