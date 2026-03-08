@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -96,6 +97,33 @@ def _parse_iso_dt(value: Optional[str]) -> Optional[datetime]:
         return datetime.fromisoformat(raw.replace("Z", "+00:00"))
     except ValueError:
         return None
+
+
+def _extract_json_payload(text: str) -> Any:
+    raw = str(text or "").strip()
+    if not raw:
+        raise ValueError("empty output")
+    candidates = [raw]
+    fence_matches = re.findall(r"```(?:json)?\s*(.*?)```", raw, flags=re.DOTALL | re.IGNORECASE)
+    candidates.extend(match.strip() for match in fence_matches if match.strip())
+    decoder = json.JSONDecoder()
+    for candidate in candidates:
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            pass
+        for start_char in ("{", "["):
+            start = candidate.find(start_char)
+            if start < 0:
+                continue
+            try:
+                parsed, end = decoder.raw_decode(candidate[start:])
+                if candidate[start + end :].strip():
+                    continue
+                return parsed
+            except json.JSONDecodeError:
+                continue
+    raise ValueError("no valid JSON object or array found")
 
 
 def _result_usage(task: Task) -> dict[str, Any]:
@@ -762,6 +790,73 @@ class TaskManager:
             created_at=row["created_at"],
         )
 
+    async def _bot_output_contract(self, bot_id: str) -> dict[str, Any]:
+        if self._bot_registry is None:
+            return {}
+        try:
+            bot = await self._bot_registry.get(bot_id)
+        except Exception:
+            return {}
+        routing_rules = getattr(bot, "routing_rules", None)
+        if isinstance(routing_rules, dict):
+            contract = routing_rules.get("output_contract")
+            if isinstance(contract, dict):
+                return contract
+        return {}
+
+    async def _normalize_task_result(self, task: Task, result: Any) -> Any:
+        contract = await self._bot_output_contract(task.bot_id)
+        if not contract:
+            return result
+
+        enabled = bool(contract.get("enabled", True))
+        output_format = str(contract.get("format") or "any").strip().lower()
+        required_fields = contract.get("required_fields") if isinstance(contract.get("required_fields"), list) else []
+        if not enabled or (output_format == "any" and not required_fields):
+            return result
+
+        normalized = result
+        raw_text = ""
+        if isinstance(result, dict):
+            for key in ("output", "content", "text", "result"):
+                value = result.get(key)
+                if isinstance(value, str) and value.strip():
+                    raw_text = value
+                    break
+        elif isinstance(result, str):
+            raw_text = result
+
+        if output_format in {"json_object", "json_array"} or required_fields:
+            parsed = None
+            if isinstance(result, (dict, list)) and output_format == "json_array" and isinstance(result, list):
+                parsed = result
+            elif raw_text:
+                parsed = _extract_json_payload(raw_text)
+            elif isinstance(result, dict) and output_format in {"json_object", "any"} and required_fields:
+                parsed = result
+            if parsed is None:
+                raise ValueError("output contract requires structured JSON output")
+            normalized = parsed
+
+        if output_format == "json_object" and not isinstance(normalized, dict):
+            raise ValueError("output contract requires a JSON object")
+        if output_format == "json_array" and not isinstance(normalized, list):
+            raise ValueError("output contract requires a JSON array")
+
+        if required_fields:
+            if not isinstance(normalized, dict):
+                raise ValueError("required fields can only be validated on JSON objects")
+            missing = [field for field in required_fields if str(field) not in normalized]
+            if missing:
+                raise ValueError(f"output contract missing required fields: {', '.join(str(field) for field in missing)}")
+
+        if isinstance(result, dict) and isinstance(normalized, dict):
+            if "usage" in result and "usage" not in normalized:
+                normalized["usage"] = result.get("usage")
+            if "artifacts" in result and "artifacts" not in normalized:
+                normalized["artifacts"] = result.get("artifacts")
+        return normalized
+
     async def update_status(
         self,
         task_id: str,
@@ -794,7 +889,8 @@ class TaskManager:
         try:
             await self.update_status(task_id, "running")
             task = await self.get_task(task_id)
-            result = await self._scheduler.schedule(task)
+            raw_result = await self._scheduler.schedule(task)
+            result = await self._normalize_task_result(task, raw_result)
             await self.update_status(task_id, "completed", result=result)
         except Exception as e:
             logger.error("Task %s failed: %s", task_id, e)

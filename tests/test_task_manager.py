@@ -332,6 +332,96 @@ async def test_run_reports_capture_usage_metadata(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_output_contract_extracts_json_from_text_result(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {
+                "output": "```json\n{\"status\":\"pass\",\"items\":[{\"title\":\"Unit 1\"}]}\n```",
+                "usage": {"prompt_tokens": 5, "completion_tokens": 7, "total_tokens": 12},
+            }
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "contract-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="structured-bot",
+            name="Structured",
+            role="assistant",
+            backends=[],
+            routing_rules={
+                "output_contract": {
+                    "enabled": True,
+                    "format": "json_object",
+                    "required_fields": ["status", "items"],
+                }
+            },
+        )
+    )
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "contract.db"), bot_registry=bot_registry)
+    task = await tm.create_task(bot_id="structured-bot", payload={"instruction": "go"})
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.1)
+
+    assert updated.status == "completed"
+    assert updated.result["status"] == "pass"
+    assert updated.result["items"][0]["title"] == "Unit 1"
+    assert updated.result["usage"]["total_tokens"] == 12
+
+
+@pytest.mark.anyio
+async def test_output_contract_fails_when_required_fields_are_missing(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {"output": "{\"summary\":\"missing status\"}"}
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "missing-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="strict-bot",
+            name="Strict",
+            role="assistant",
+            backends=[],
+            routing_rules={
+                "output_contract": {
+                    "enabled": True,
+                    "format": "json_object",
+                    "required_fields": ["qc_status"],
+                }
+            },
+        )
+    )
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "missing.db"), bot_registry=bot_registry)
+    task = await tm.create_task(bot_id="strict-bot", payload={"instruction": "go"})
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.1)
+
+    assert updated.status == "failed"
+    assert updated.error is not None
+    assert "missing required fields" in updated.error.message
+
+
+@pytest.mark.anyio
 async def test_task_manager_migrates_legacy_task_table_without_metadata(tmp_path):
     import asyncio
     import sqlite3

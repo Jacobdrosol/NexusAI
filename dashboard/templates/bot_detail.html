@@ -140,6 +140,41 @@
 
 <section class="panel" style="margin-bottom:1rem;">
   <div class="page-header" style="margin-bottom:0.75rem;">
+    <h2 class="panel-title">Output Contract</h2>
+    <div>
+      <button class="btn btn-primary" onclick="saveOutputContract()">Save Output Contract</button>
+    </div>
+  </div>
+  <p class="mini-note" style="margin-bottom:0.75rem;">Define generic output expectations for this bot. The platform can extract JSON from model text and validate required fields before triggers and fan-out execute.</p>
+  <div class="form-group">
+    <label><input type="checkbox" id="output-contract-enabled" checked> Enforce output contract</label>
+  </div>
+  <div class="split-grid" style="grid-template-columns:1fr 1fr;">
+    <div class="form-group">
+      <label>Format</label>
+      <select class="form-control" id="output-contract-format">
+        <option value="any">Any</option>
+        <option value="json_object">JSON Object</option>
+        <option value="json_array">JSON Array</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Required Fields (JSON array, optional)</label>
+      <input class="form-control" id="output-contract-required-fields" placeholder='["status","items"]'>
+    </div>
+  </div>
+  <div class="form-group">
+    <label>Operator Notes</label>
+    <textarea class="form-control" id="output-contract-description" rows="3" placeholder="Describe what this bot must return so downstream steps can consume it safely."></textarea>
+  </div>
+  <div class="form-group">
+    <label>Example Output JSON (optional)</label>
+    <textarea class="form-control" id="output-contract-example" rows="8" placeholder='{"status":"ready","items":[]}'></textarea>
+  </div>
+</section>
+
+<section class="panel" style="margin-bottom:1rem;">
+  <div class="page-header" style="margin-bottom:0.75rem;">
     <h2 class="panel-title">Saved Launch Profile</h2>
     <div>
       <button class="btn" onclick="queueSavedLaunch()">Queue Saved Launch</button>
@@ -526,6 +561,11 @@ BOT.input_contract = BOT.input_contract && typeof BOT.input_contract === 'object
   : ((BOT.routing_rules && typeof BOT.routing_rules === 'object' && BOT.routing_rules.input_contract && typeof BOT.routing_rules.input_contract === 'object')
     ? BOT.routing_rules.input_contract
     : {description: '', form_fields: [], default_payload: {}});
+BOT.output_contract = BOT.output_contract && typeof BOT.output_contract === 'object'
+  ? BOT.output_contract
+  : ((BOT.routing_rules && typeof BOT.routing_rules === 'object' && BOT.routing_rules.output_contract && typeof BOT.routing_rules.output_contract === 'object')
+    ? BOT.routing_rules.output_contract
+    : {enabled: false, format: 'any', required_fields: [], description: '', example_output: {}});
 BOT.launch_profile = BOT.launch_profile && typeof BOT.launch_profile === 'object'
   ? BOT.launch_profile
   : ((BOT.routing_rules && typeof BOT.routing_rules === 'object' && BOT.routing_rules.launch_profile && typeof BOT.routing_rules.launch_profile === 'object')
@@ -577,6 +617,7 @@ function botPayloadForSave() {
     : {};
   routingRules.workflow = BOT.workflow;
   routingRules.input_contract = normalizedInputContract();
+  routingRules.output_contract = normalizedOutputContract();
   routingRules.launch_profile = normalizedLaunchProfile();
   payload.routing_rules = routingRules;
   payload.workflow = BOT.workflow;
@@ -629,6 +670,68 @@ function saveInputContract() {
     default_payload: defaultPayload,
   };
   persistBot('Input contract saved.');
+}
+
+function normalizedOutputContract() {
+  const contract = BOT.output_contract && typeof BOT.output_contract === 'object' ? BOT.output_contract : {};
+  const exampleOutput = contract.example_output && typeof contract.example_output === 'object' && !Array.isArray(contract.example_output)
+    ? contract.example_output
+    : {};
+  return {
+    enabled: contract.enabled === true,
+    format: ['any', 'json_object', 'json_array'].includes(String(contract.format || '').trim()) ? String(contract.format || '').trim() : 'any',
+    required_fields: Array.isArray(contract.required_fields) ? contract.required_fields : [],
+    description: String(contract.description || '').trim(),
+    example_output: exampleOutput,
+  };
+}
+
+function loadOutputContractEditor() {
+  const contract = normalizedOutputContract();
+  document.getElementById('output-contract-enabled').checked = contract.enabled === true;
+  document.getElementById('output-contract-format').value = contract.format || 'any';
+  document.getElementById('output-contract-required-fields').value = JSON.stringify(contract.required_fields || []);
+  document.getElementById('output-contract-description').value = contract.description || '';
+  document.getElementById('output-contract-example').value = JSON.stringify(contract.example_output || {}, null, 2);
+}
+
+function saveOutputContract() {
+  const rawRequiredFields = String(document.getElementById('output-contract-required-fields')?.value || '').trim();
+  const rawExample = String(document.getElementById('output-contract-example')?.value || '').trim();
+  let requiredFields = [];
+  let exampleOutput = {};
+  if (rawRequiredFields) {
+    try {
+      requiredFields = JSON.parse(rawRequiredFields);
+    } catch (err) {
+      alert('Required fields must be valid JSON.');
+      return;
+    }
+  }
+  if (!Array.isArray(requiredFields)) {
+    alert('Required fields must be a JSON array.');
+    return;
+  }
+  if (rawExample) {
+    try {
+      exampleOutput = JSON.parse(rawExample);
+    } catch (err) {
+      alert('Example output must be valid JSON.');
+      return;
+    }
+  }
+  if (exampleOutput === null || Array.isArray(exampleOutput) || typeof exampleOutput !== 'object') {
+    alert('Example output must be a JSON object.');
+    return;
+  }
+  BOT.output_contract = {
+    enabled: document.getElementById('output-contract-enabled').checked,
+    format: String(document.getElementById('output-contract-format')?.value || 'any'),
+    required_fields: requiredFields,
+    description: String(document.getElementById('output-contract-description')?.value || '').trim(),
+    example_output: exampleOutput,
+  };
+  persistBot('Output contract saved.');
 }
 
 function normalizedLaunchProfile() {
@@ -1359,6 +1462,7 @@ function submitTestRun() {
 renderBackendChain();
 renderWorkflowTriggers();
 loadInputContractEditor();
+loadOutputContractEditor();
 loadLaunchProfileEditor();
 if (RUNS.length) {
   selectRunArtifacts(RUNS[0].task_id);
