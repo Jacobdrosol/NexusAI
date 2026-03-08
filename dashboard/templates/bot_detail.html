@@ -193,13 +193,13 @@
         </thead>
         <tbody>
           {% for run in runs %}
-          <tr>
+          <tr class="run-row" data-run-task-id="{{ run.task_id }}">
             <td>{{ run.status }}</td>
             <td>{{ ((run.started_at or run.created_at or '')[:19]) | replace('T',' ') }}</td>
             <td>{{ (run.metadata.source if run.metadata else '') or 'manual' }}</td>
             <td>{{ run.trigger_rule_id or '—' }}</td>
-            <td><button class="btn btn-sm" onclick="selectRunArtifacts('{{ run.task_id|e }}')">Artifacts</button></td>
-            <td><button class="btn btn-sm" onclick="openTaskModal('{{ run.task_id|e }}')">{{ run.task_id[:8] }}…</button></td>
+            <td><span class="badge badge-blue">{{ artifacts | selectattr("task_id", "equalto", run.task_id) | list | length }}</span></td>
+            <td><button class="btn btn-sm" onclick="event.stopPropagation(); openTaskModal('{{ run.task_id|e }}')">{{ run.task_id[:8] }}…</button></td>
           </tr>
           {% else %}
           <tr><td colspan="6" class="empty">No recorded runs yet</td></tr>
@@ -1207,6 +1207,13 @@ function selectRunArtifacts(taskId) {
   if (labelEl) {
     labelEl.textContent = taskId ? `Task ${String(taskId).slice(0, 8)}…` : '';
   }
+  document.querySelectorAll('.run-row').forEach((row) => {
+    const selected = String(row.getAttribute('data-run-task-id') || '') === SELECTED_RUN_TASK_ID;
+    row.style.outline = selected ? '2px solid #2dd4bf' : '';
+    row.style.outlineOffset = selected ? '-2px' : '';
+    row.style.background = selected ? 'rgba(45,212,191,0.08)' : '';
+    row.style.cursor = 'pointer';
+  });
   if (!listEl || !summaryEl) return;
   if (!artifacts.length) {
     summaryEl.textContent = 'No artifacts recorded for this run.';
@@ -1356,6 +1363,11 @@ loadLaunchProfileEditor();
 if (RUNS.length) {
   selectRunArtifacts(RUNS[0].task_id);
 }
+document.querySelectorAll('.run-row').forEach((row) => {
+  row.addEventListener('click', () => {
+    selectRunArtifacts(row.getAttribute('data-run-task-id') || '');
+  });
+});
 document.querySelector('#form-backend select[name=worker_id]')?.addEventListener('change', () => refreshModelOptions());
 document.querySelector('#form-backend select[name=provider]')?.addEventListener('change', () => {
   refreshApiKeyOptions();
