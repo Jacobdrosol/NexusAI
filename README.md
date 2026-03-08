@@ -239,6 +239,8 @@ The ingest runner reads the project data files from disk and posts them into the
 
 Projects can also store database connections directly on the project page. Use `Project Database Context` to save a DSN / connection string, run a test query, and ingest a schema snapshot so bots can retrieve table, column, key, and foreign-key structure as project context.
 
+For self-hosted deployments, the bundled dashboard nginx gateway now sets `client_max_body_size 0` so large project-data uploads are not capped by a hidden default at the app gateway layer. If you place NexusAI behind another proxy or CDN, that outer layer may still impose its own upload limit.
+
 ---
 
 ## Bot Orchestration
