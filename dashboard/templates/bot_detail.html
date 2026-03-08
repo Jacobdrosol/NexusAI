@@ -134,7 +134,7 @@
   </div>
   <div class="form-group">
     <label>Default JSON Payload (optional)</label>
-    <textarea class="form-control" id="input-contract-default-payload" rows="6" placeholder='{"project_id":"demo","scope":"analysis"}'></textarea>
+    <textarea class="form-control" id="input-contract-default-payload" rows="6" placeholder='{"instruction":"Start the workflow","context":"default"}'></textarea>
   </div>
 </section>
 
@@ -153,11 +153,11 @@
   <div class="split-grid" style="grid-template-columns:1fr 1fr;">
     <div class="form-group">
       <label>Launch Label</label>
-      <input class="form-control" id="launch-profile-label" placeholder="Run AP World History Pipeline">
+      <input class="form-control" id="launch-profile-label" placeholder="Run saved workflow">
     </div>
     <div class="form-group">
       <label>Project ID (optional)</label>
-      <input class="form-control" id="launch-profile-project-id" placeholder="globeiq">
+      <input class="form-control" id="launch-profile-project-id" placeholder="project-id">
     </div>
   </div>
   <div class="split-grid" style="grid-template-columns:1fr 1fr;">
@@ -176,7 +176,7 @@
   </div>
   <div class="form-group">
     <label>Launch Payload JSON</label>
-    <textarea class="form-control" id="launch-profile-payload" rows="14" placeholder='{"topic":"...","units_json":"[...]"}'></textarea>
+    <textarea class="form-control" id="launch-profile-payload" rows="14" placeholder='{"instruction":"Run the saved workflow","input":{"key":"value"}}'></textarea>
     <div class="mini-note">This payload is queued exactly as stored. Use it for large one-click workflow runs that would be painful to fill out manually.</div>
   </div>
 </section>
@@ -375,7 +375,7 @@
     <h2 id="trigger-modal-title">Add Trigger</h2>
     <form id="form-trigger">
       <input type="hidden" name="index" value="">
-      <div class="form-group"><label>Title</label><input class="form-control" name="title" placeholder="Summarize outputs"></div>
+      <div class="form-group"><label>Title</label><input class="form-control" name="title" placeholder="Route to next step"></div>
       <div class="split-grid" style="grid-template-columns:1fr 1fr;">
         <div class="form-group">
           <label>Event</label>
@@ -395,35 +395,35 @@
       </div>
       <div class="form-group">
         <label>Target Bot</label>
-        <input class="form-control" name="target_bot_id" placeholder="bot-reviewer or {{source_bot_id}}">
-        <div class="mini-note">Use <code>{{source_bot_id}}</code> to send failed QC back to the bot that produced the source work.</div>
+        <input class="form-control" name="target_bot_id" placeholder="target-bot-id or {{source_bot_id}}">
+        <div class="mini-note">Use <code>{{source_bot_id}}</code> when this trigger should route back to the bot referenced in the current task payload.</div>
       </div>
       <div class="split-grid" style="grid-template-columns:1fr 1fr;">
         <div class="form-group">
           <label>Result Field (optional)</label>
-          <input class="form-control" name="result_field" placeholder="qc_status">
+          <input class="form-control" name="result_field" placeholder="status">
         </div>
         <div class="form-group">
           <label>Result Equals (optional)</label>
-          <input class="form-control" name="result_equals" placeholder="pass">
+          <input class="form-control" name="result_equals" placeholder="ready">
         </div>
       </div>
       <div class="form-group">
         <label>Payload Template (JSON object, optional)</label>
-        <textarea class="form-control" rows="6" name="payload_template" placeholder='{"instruction":"Run QC on the source result and return qc_status=pass or fail"}'></textarea>
+        <textarea class="form-control" rows="6" name="payload_template" placeholder='{"instruction":"Process the source result and continue the workflow"}'></textarea>
       </div>
       <div class="split-grid" style="grid-template-columns:1fr 1fr 1fr;">
         <div class="form-group">
           <label>Fan-out Field (optional)</label>
-          <input class="form-control" name="fan_out_field" placeholder="source_result.units">
+          <input class="form-control" name="fan_out_field" placeholder="source_result.items">
         </div>
         <div class="form-group">
           <label>Item Alias (optional)</label>
-          <input class="form-control" name="fan_out_alias" placeholder="unit">
+          <input class="form-control" name="fan_out_alias" placeholder="item">
         </div>
         <div class="form-group">
           <label>Index Alias (optional)</label>
-          <input class="form-control" name="fan_out_index_alias" placeholder="unit_index">
+          <input class="form-control" name="fan_out_index_alias" placeholder="item_index">
         </div>
       </div>
       <div class="mini-note" style="margin-top:-0.25rem;margin-bottom:0.75rem;">Set <code>Fan-out Field</code> to an array path inside the built trigger payload when one upstream result should spawn many downstream tasks.</div>
@@ -451,7 +451,7 @@
       </div>
       <div class="form-group">
         <label>Extra Payload (JSON object, optional)</label>
-        <textarea class="form-control" name="extra_payload" rows="6" placeholder='{"project_id":"demo","scope":"analysis"}'></textarea>
+        <textarea class="form-control" name="extra_payload" rows="6" placeholder='{"context":"override","flags":{"dry_run":true}}'></textarea>
       </div>
       <div class="modal-actions">
         <button type="button" class="btn btn-primary" onclick="submitTestRun()">Queue Test Run</button>
