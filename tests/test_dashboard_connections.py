@@ -160,3 +160,11 @@ def test_normalize_database_dsn_supports_postgres_keyword_string():
     )
     assert dsn.startswith("postgresql+psycopg2://jacob:secret@db.example.com:5432/globeiq")
     assert "sslmode=require" in dsn
+
+
+def test_normalize_database_dsn_supports_npgsql_style_string():
+    dsn = normalize_database_dsn(
+        "Host=localhost;Port=5432;Database=globeiq;Username=globeiq;Password=CHANGE_ME;Ssl Mode=Require;Trust Server Certificate=true"
+    )
+    assert dsn.startswith("postgresql+psycopg2://globeiq:CHANGE_ME@localhost:5432/globeiq")
+    assert "sslmode=require" in dsn

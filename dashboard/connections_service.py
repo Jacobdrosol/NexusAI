@@ -427,6 +427,21 @@ def _parse_key_value_dsn(raw: str) -> dict[str, str]:
     return pairs
 
 
+def _normalize_postgres_sslmode(raw: str) -> str:
+    value = str(raw or "").strip().lower().replace("_", "-")
+    mapping = {
+        "disable": "disable",
+        "allow": "allow",
+        "prefer": "prefer",
+        "require": "require",
+        "verifyca": "verify-ca",
+        "verify-ca": "verify-ca",
+        "verifyfull": "verify-full",
+        "verify-full": "verify-full",
+    }
+    return mapping.get(value, value)
+
+
 def normalize_database_dsn(raw: str) -> str:
     """Accept common DB connection-string variants and return a SQLAlchemy DSN."""
     dsn = str(raw or "").strip()
@@ -454,9 +469,18 @@ def normalize_database_dsn(raw: str) -> str:
         password = parts.get("password") or parts.get("pwd")
         port_raw = parts.get("port")
         port = int(port_raw) if port_raw and str(port_raw).isdigit() else None
-        sslmode = parts.get("sslmode") or parts.get("ssl mode")
+        sslmode = _normalize_postgres_sslmode(parts.get("sslmode") or parts.get("ssl mode") or "")
+        trust_server_certificate = str(
+            parts.get("trust server certificate") or parts.get("trustservercertificate") or ""
+        ).strip().lower() in {"1", "true", "yes", "on"}
 
         if server and database:
+            query: dict[str, str] = {}
+            if sslmode:
+                query["sslmode"] = sslmode
+            if trust_server_certificate and sslmode in {"verify-ca", "verify-full"}:
+                # Npgsql-style trust_server_certificate disables certificate verification.
+                query["sslmode"] = "require"
             url = URL.create(
                 "postgresql+psycopg2",
                 username=username or None,
@@ -464,7 +488,7 @@ def normalize_database_dsn(raw: str) -> str:
                 host=server or None,
                 port=port,
                 database=database or None,
-                query={"sslmode": sslmode} if sslmode else {},
+                query=query,
             )
             return url.render_as_string(hide_password=False)
 
