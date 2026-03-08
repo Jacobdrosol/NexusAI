@@ -10,8 +10,10 @@ from flask_login import login_required
 
 from dashboard.connections_service import (
     inspect_database_schema,
+    normalize_database_dsn,
     render_database_schema_document,
     test_database_connection,
+    _mask_dsn_password,
 )
 from dashboard.cp_client import get_cp_client
 from dashboard.db import get_db
@@ -49,7 +51,7 @@ def _project_connection_to_dict(row: Connection) -> dict[str, Any]:
         "description": row.description or "",
         "config": {
             "readonly": bool(config.get("readonly", True)),
-            "dsn_preview": str(config.get("dsn") or ""),
+            "dsn_preview": _mask_dsn_password(str(config.get("dsn") or "")),
         },
         "schema_text": schema_text,
         "schema_totals": schema_totals if isinstance(schema_totals, dict) else {},
@@ -537,6 +539,10 @@ def api_create_project_connection(project_id: str):
         return jsonify({"error": "name is required"}), 400
     if not dsn:
         return jsonify({"error": "dsn is required"}), 400
+    try:
+        normalized_dsn = normalize_database_dsn(dsn)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
 
     db = get_db()
     try:
@@ -544,7 +550,7 @@ def api_create_project_connection(project_id: str):
             name=name,
             kind="database",
             description=str(body.get("description") or ""),
-            config_json=json.dumps({"dsn": dsn, "readonly": bool(body.get("readonly", True))}),
+            config_json=json.dumps({"dsn": normalized_dsn, "readonly": bool(body.get("readonly", True))}),
             auth_json="{}",
             schema_text="",
             enabled=bool(body.get("enabled", True)),

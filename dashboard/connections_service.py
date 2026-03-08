@@ -5,6 +5,7 @@ import base64
 import hashlib
 import json
 import os
+import shlex
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -13,9 +14,23 @@ from typing import Any
 import yaml
 from cryptography.fernet import Fernet
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.engine import URL, make_url
 
 
 _SECRET_KEYS = {"api_key", "bearer_token", "password"}
+
+
+def _mask_dsn_password(dsn: str) -> str:
+    raw = str(dsn or "").strip()
+    if not raw:
+        return ""
+    try:
+        url = make_url(raw)
+        if url.password:
+            return url.render_as_string(hide_password=True)
+        return raw
+    except Exception:
+        return raw
 
 
 def _fernet() -> Fernet:
@@ -220,7 +235,7 @@ def test_http_connection(
 
 def test_database_connection(*, config: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     """Run a DB connectivity/query test using SQLAlchemy engine."""
-    dsn = str(config.get("dsn") or "").strip()
+    dsn = normalize_database_dsn(str(config.get("dsn") or "").strip())
     if not dsn:
         return {"ok": False, "error": "dsn is required"}
     readonly = bool(config.get("readonly", True))
@@ -241,7 +256,7 @@ def test_database_connection(*, config: dict[str, Any], payload: dict[str, Any])
 
 def inspect_database_schema(*, config: dict[str, Any]) -> dict[str, Any]:
     """Return a schema snapshot suitable for project-level context ingestion."""
-    dsn = str(config.get("dsn") or "").strip()
+    dsn = normalize_database_dsn(str(config.get("dsn") or "").strip())
     if not dsn:
         return {"ok": False, "error": "dsn is required"}
 
@@ -396,3 +411,63 @@ def render_database_schema_document(*, connection_name: str, snapshot: dict[str,
                 if isinstance(view, dict):
                     lines.append(f"- {view.get('name') or 'unknown'}")
     return "\n".join(lines).strip() + "\n"
+
+
+def _parse_key_value_dsn(raw: str) -> dict[str, str]:
+    pairs: dict[str, str] = {}
+    if ";" in raw and "=" in raw:
+        chunks = [chunk.strip() for chunk in raw.split(";") if chunk.strip()]
+    else:
+        chunks = shlex.split(raw)
+    for chunk in chunks:
+        if "=" not in chunk:
+            continue
+        key, value = chunk.split("=", 1)
+        pairs[key.strip().lower()] = value.strip().strip("'").strip('"')
+    return pairs
+
+
+def normalize_database_dsn(raw: str) -> str:
+    """Accept common DB connection-string variants and return a SQLAlchemy DSN."""
+    dsn = str(raw or "").strip()
+    if not dsn:
+        return ""
+
+    if dsn.startswith("postgres://"):
+        dsn = "postgresql+psycopg2://" + dsn[len("postgres://"):]
+    elif dsn.startswith("postgresql://"):
+        dsn = "postgresql+psycopg2://" + dsn[len("postgresql://"):]
+
+    try:
+        make_url(dsn)
+        return dsn
+    except Exception:
+        pass
+
+    parts = _parse_key_value_dsn(dsn)
+    if parts:
+        server = parts.get("server") or parts.get("host")
+        if server and server.startswith("tcp:"):
+            server = server[4:]
+        database = parts.get("database") or parts.get("dbname")
+        username = parts.get("user") or parts.get("uid") or parts.get("user id") or parts.get("username")
+        password = parts.get("password") or parts.get("pwd")
+        port_raw = parts.get("port")
+        port = int(port_raw) if port_raw and str(port_raw).isdigit() else None
+        sslmode = parts.get("sslmode") or parts.get("ssl mode")
+
+        if server and database:
+            url = URL.create(
+                "postgresql+psycopg2",
+                username=username or None,
+                password=password or None,
+                host=server or None,
+                port=port,
+                database=database or None,
+                query={"sslmode": sslmode} if sslmode else {},
+            )
+            return url.render_as_string(hide_password=False)
+
+    raise ValueError(
+        "Could not parse database connection string. Use a SQLAlchemy URL or PostgreSQL key=value string."
+    )

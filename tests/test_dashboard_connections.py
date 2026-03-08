@@ -3,6 +3,8 @@
 import bcrypt
 from unittest.mock import patch
 
+from dashboard.connections_service import normalize_database_dsn
+
 
 def _login_admin(client):
     from dashboard.db import get_db
@@ -150,3 +152,11 @@ def test_project_database_connection_create_test_and_schema_ingest(dashboard_cli
         assert body["ok"] is True
         assert body["vault_item"]["namespace"] == "project:proj-db:data"
         assert body["connection"]["schema_totals"]["tables"] >= 0
+
+
+def test_normalize_database_dsn_supports_postgres_keyword_string():
+    dsn = normalize_database_dsn(
+        "host=db.example.com port=5432 dbname=globeiq user=jacob password=secret sslmode=require"
+    )
+    assert dsn.startswith("postgresql+psycopg2://jacob:secret@db.example.com:5432/globeiq")
+    assert "sslmode=require" in dsn
