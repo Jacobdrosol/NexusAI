@@ -73,6 +73,7 @@ def test_project_context_sync_uses_ingest_timeout():
     ok_resp.json.return_value = {"status": "ok"}
 
     with patch("dashboard.cp_client.requests.post", return_value=ok_resp) as post_mock:
-        cp.sync_project_github_context(project_id="proj-1", sync_scope="full", max_files=500)
+        cp.sync_project_github_context(project_id="proj-1", sync_mode="full")
 
     assert post_mock.call_args.kwargs["timeout"] == _INGEST_TIMEOUT
+    assert post_mock.call_args.kwargs["json"]["sync_mode"] == "full"

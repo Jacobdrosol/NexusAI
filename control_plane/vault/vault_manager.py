@@ -105,6 +105,76 @@ class VaultManager:
         await self._ensure_db()
         now = datetime.now(timezone.utc).isoformat()
         item_id = str(uuid.uuid4())
+        return await self._write_item(
+            item_id=item_id,
+            title=title,
+            content=content,
+            namespace=namespace,
+            project_id=project_id,
+            source_type=source_type,
+            source_ref=source_ref,
+            metadata=metadata,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            created_at=now,
+            updated_at=now,
+            replace_existing=False,
+        )
+
+    async def upsert_text(
+        self,
+        title: str,
+        content: str,
+        namespace: str = "global",
+        project_id: Optional[str] = None,
+        source_type: str = "text",
+        source_ref: Optional[str] = None,
+        metadata: Optional[Any] = None,
+        chunk_size: int = 1000,
+        chunk_overlap: int = 150,
+    ) -> VaultItem:
+        await self._ensure_db()
+        now = datetime.now(timezone.utc).isoformat()
+        existing = await self.find_item_by_source_ref(
+            source_ref=source_ref,
+            namespace=namespace,
+            project_id=project_id,
+        ) if source_ref else None
+        item_id = existing.id if existing else str(uuid.uuid4())
+        created_at = existing.created_at if existing else now
+        return await self._write_item(
+            item_id=item_id,
+            title=title,
+            content=content,
+            namespace=namespace,
+            project_id=project_id,
+            source_type=source_type,
+            source_ref=source_ref,
+            metadata=metadata,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            created_at=created_at,
+            updated_at=now,
+            replace_existing=existing is not None,
+        )
+
+    async def _write_item(
+        self,
+        *,
+        item_id: str,
+        title: str,
+        content: str,
+        namespace: str,
+        project_id: Optional[str],
+        source_type: str,
+        source_ref: Optional[str],
+        metadata: Optional[Any],
+        chunk_size: int,
+        chunk_overlap: int,
+        created_at: str,
+        updated_at: str,
+        replace_existing: bool,
+    ) -> VaultItem:
         item = VaultItem(
             id=item_id,
             source_type=source_type,
@@ -115,8 +185,8 @@ class VaultManager:
             project_id=project_id,
             metadata=metadata,
             embedding_status="completed",
-            created_at=now,
-            updated_at=now,
+            created_at=created_at,
+            updated_at=updated_at,
         )
 
         chunks = chunk_text(content, chunk_size=chunk_size, overlap=chunk_overlap)
@@ -129,34 +199,58 @@ class VaultManager:
                     chunk_index=idx,
                     content=chunk,
                     embedding=self._embed(chunk),
-                    created_at=now,
+                    created_at=updated_at,
                 )
             )
 
         async with self._lock:
             async with aiosqlite.connect(self._db_path) as db:
                 await db.execute("PRAGMA foreign_keys = ON")
-                await db.execute(
-                    """
-                    INSERT INTO vault_items (
-                        id, source_type, source_ref, title, content, namespace, project_id,
-                        metadata, embedding_status, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        item.id,
-                        item.source_type,
-                        item.source_ref,
-                        item.title,
-                        item.content,
-                        item.namespace,
-                        item.project_id,
-                        json.dumps(item.metadata) if item.metadata is not None else None,
-                        item.embedding_status,
-                        item.created_at,
-                        item.updated_at,
-                    ),
-                )
+                if replace_existing:
+                    await db.execute("DELETE FROM vault_chunks WHERE item_id = ?", (item.id,))
+                    await db.execute(
+                        """
+                        UPDATE vault_items
+                        SET source_type = ?, source_ref = ?, title = ?, content = ?, namespace = ?, project_id = ?,
+                            metadata = ?, embedding_status = ?, created_at = ?, updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            item.source_type,
+                            item.source_ref,
+                            item.title,
+                            item.content,
+                            item.namespace,
+                            item.project_id,
+                            json.dumps(item.metadata) if item.metadata is not None else None,
+                            item.embedding_status,
+                            item.created_at,
+                            item.updated_at,
+                            item.id,
+                        ),
+                    )
+                else:
+                    await db.execute(
+                        """
+                        INSERT INTO vault_items (
+                            id, source_type, source_ref, title, content, namespace, project_id,
+                            metadata, embedding_status, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            item.id,
+                            item.source_type,
+                            item.source_ref,
+                            item.title,
+                            item.content,
+                            item.namespace,
+                            item.project_id,
+                            json.dumps(item.metadata) if item.metadata is not None else None,
+                            item.embedding_status,
+                            item.created_at,
+                            item.updated_at,
+                        ),
+                    )
                 for chunk in chunk_models:
                     await db.execute(
                         """
@@ -170,12 +264,44 @@ class VaultManager:
                             chunk.chunk_index,
                             chunk.content,
                             json.dumps(chunk.embedding),
-                            json.dumps(chunk.metadata) if chunk.metadata is not None else None,
-                            chunk.created_at,
-                        ),
-                    )
+                        json.dumps(chunk.metadata) if chunk.metadata is not None else None,
+                        chunk.created_at,
+                    ),
+                )
                 await db.commit()
         return item
+
+    async def find_item_by_source_ref(
+        self,
+        source_ref: str,
+        namespace: Optional[str] = None,
+        project_id: Optional[str] = None,
+    ) -> Optional[VaultItem]:
+        await self._ensure_db()
+        clauses = ["source_ref = ?"]
+        params: List[Any] = [source_ref]
+        if namespace:
+            clauses.append("namespace = ?")
+            params.append(namespace)
+        if project_id:
+            clauses.append("project_id = ?")
+            params.append(project_id)
+        query = f"""
+            SELECT * FROM vault_items
+            WHERE {' AND '.join(clauses)}
+            ORDER BY updated_at DESC
+            LIMIT 1
+        """
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(query, tuple(params)) as cursor:
+                row = await cursor.fetchone()
+                if row is None:
+                    return None
+                data: Dict[str, Any] = dict(row)
+                if data.get("metadata"):
+                    data["metadata"] = json.loads(data["metadata"])
+                return VaultItem.model_validate(data)
 
     async def get_item(self, item_id: str) -> VaultItem:
         await self._ensure_db()

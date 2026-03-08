@@ -644,21 +644,21 @@ async def test_project_github_context_sync_ingests_vault_items(cp_client, monkey
         },
     )
 
-    async def _fake_fetch(token, repo_full_name, branch, max_files, sync_scope="sample"):
+    async def _fake_fetch(token, repo_full_name, branch):
         return {
             "repo_full_name": repo_full_name,
             "branch": branch or "main",
             "files": [
                 {"path": "README.md", "content": "# test", "size": 6, "sha": "abc"},
                 {"path": "src/app.py", "content": "print('ok')", "size": 11, "sha": "def"},
-            ][:max_files],
+            ],
         }
 
     monkeypatch.setattr("control_plane.api.projects._fetch_repo_context_files", _fake_fetch)
 
     sync_resp = await cp_client.post(
         "/v1/projects/gh-sync/github/context/sync",
-        json={"max_files": 10},
+        json={"sync_mode": "full"},
     )
     assert sync_resp.status_code == 200
     body = sync_resp.json()
@@ -684,7 +684,7 @@ async def test_project_github_context_sync_can_ingest_commits_prs_and_issues(cp_
         },
     )
 
-    async def _fake_fetch_files(token, repo_full_name, branch, max_files, sync_scope="sample"):
+    async def _fake_fetch_files(token, repo_full_name, branch):
         return {
             "repo_full_name": repo_full_name,
             "branch": branch or "main",
@@ -693,7 +693,7 @@ async def test_project_github_context_sync_can_ingest_commits_prs_and_issues(cp_
             ],
         }
 
-    async def _fake_fetch_commits(token, repo_full_name, branch, max_commits):
+    async def _fake_fetch_commits(token, repo_full_name, branch, since=None):
         return {
             "repo_full_name": repo_full_name,
             "branch": branch or "main",
@@ -702,7 +702,7 @@ async def test_project_github_context_sync_can_ingest_commits_prs_and_issues(cp_
             ],
         }
 
-    async def _fake_fetch_pulls(token, repo_full_name, max_pull_requests, include_conversations, max_comments):
+    async def _fake_fetch_pulls(token, repo_full_name, include_conversations, updated_after=None):
         return [
             {
                 "number": 12,
@@ -722,7 +722,7 @@ async def test_project_github_context_sync_can_ingest_commits_prs_and_issues(cp_
             }
         ]
 
-    async def _fake_fetch_issues(token, repo_full_name, max_issues, include_conversations, max_comments):
+    async def _fake_fetch_issues(token, repo_full_name, include_conversations, updated_after=None):
         return [
             {
                 "number": 8,
@@ -745,17 +745,7 @@ async def test_project_github_context_sync_can_ingest_commits_prs_and_issues(cp_
     sync_resp = await cp_client.post(
         "/v1/projects/gh-full-sync/github/context/sync",
         json={
-            "sync_scope": "full",
-            "max_files": 500,
-            "include_repo_files": True,
-            "include_commits": True,
-            "include_pull_requests": True,
-            "include_issues": True,
-            "include_conversations": True,
-            "max_commits": 75,
-            "max_pull_requests": 25,
-            "max_issues": 25,
-            "max_conversation_comments": 60,
+            "sync_mode": "full",
         },
     )
     assert sync_resp.status_code == 200
@@ -770,6 +760,75 @@ async def test_project_github_context_sync_can_ingest_commits_prs_and_issues(cp_
     items_resp = await cp_client.get("/v1/vault/items?project_id=gh-full-sync&limit=20")
     assert items_resp.status_code == 200
     assert len(items_resp.json()) >= 4
+
+
+@pytest.mark.anyio
+async def test_project_github_context_update_ingests_only_newer_items(cp_client, monkeypatch):
+    await cp_client.post(
+        "/v1/projects",
+        json={"id": "gh-update", "name": "GitHub Update", "mode": "isolated"},
+    )
+    await cp_client.post(
+        "/v1/projects/gh-update/github/pat",
+        json={
+            "token": "ghp_example_token_for_tests_only",
+            "repo_full_name": "owner/repo",
+            "validate": False,
+        },
+    )
+
+    file_versions = [
+        [{"path": "README.md", "content": "# v1", "size": 4, "sha": "sha-1"}],
+        [{"path": "README.md", "content": "# v2", "size": 4, "sha": "sha-2"}],
+    ]
+    commit_versions = [
+        [{"sha": "aaa", "html_url": "https://example/commit/aaa", "message": "one", "author_name": "Jake", "authored_at": "2026-03-07T00:00:00Z"}],
+        [{"sha": "bbb", "html_url": "https://example/commit/bbb", "message": "two", "author_name": "Jake", "authored_at": "2026-03-08T00:00:00Z"}],
+    ]
+    pr_versions = [
+        [{"number": 1, "title": "One", "body": "body", "state": "open", "draft": False, "html_url": "https://example/pull/1", "user": "octocat", "created_at": "2026-03-07T00:00:00Z", "updated_at": "2026-03-07T00:00:00Z", "merged_at": None, "base_ref": "main", "head_ref": "feat/one", "issue_comments": [], "review_comments": []}],
+        [{"number": 2, "title": "Two", "body": "body", "state": "open", "draft": False, "html_url": "https://example/pull/2", "user": "octocat", "created_at": "2026-03-08T00:00:00Z", "updated_at": "2026-03-08T00:00:00Z", "merged_at": None, "base_ref": "main", "head_ref": "feat/two", "issue_comments": [], "review_comments": []}],
+    ]
+    issue_versions = [
+        [{"number": 8, "title": "Old", "body": "body", "state": "open", "html_url": "https://example/issues/8", "user": "octocat", "created_at": "2026-03-07T00:00:00Z", "updated_at": "2026-03-07T00:00:00Z", "comments": []}],
+        [{"number": 9, "title": "New", "body": "body", "state": "open", "html_url": "https://example/issues/9", "user": "octocat", "created_at": "2026-03-08T00:00:00Z", "updated_at": "2026-03-08T00:00:00Z", "comments": []}],
+    ]
+    state = {"index": 0}
+
+    async def _fake_fetch_files(token, repo_full_name, branch):
+        return {"repo_full_name": repo_full_name, "branch": branch or "main", "files": file_versions[state["index"]]}
+
+    async def _fake_fetch_commits(token, repo_full_name, branch, since=None):
+        return {"repo_full_name": repo_full_name, "branch": branch or "main", "commits": commit_versions[state["index"]]}
+
+    async def _fake_fetch_pulls(token, repo_full_name, include_conversations, updated_after=None):
+        return pr_versions[state["index"]]
+
+    async def _fake_fetch_issues(token, repo_full_name, include_conversations, updated_after=None):
+        return issue_versions[state["index"]]
+
+    monkeypatch.setattr("control_plane.api.projects._fetch_repo_context_files", _fake_fetch_files)
+    monkeypatch.setattr("control_plane.api.projects._fetch_repo_commits", _fake_fetch_commits)
+    monkeypatch.setattr("control_plane.api.projects._fetch_repo_pull_requests", _fake_fetch_pulls)
+    monkeypatch.setattr("control_plane.api.projects._fetch_repo_issues", _fake_fetch_issues)
+
+    first = await cp_client.post("/v1/projects/gh-update/github/context/sync", json={"sync_mode": "full"})
+    assert first.status_code == 200
+    assert first.json()["ingested_count"] == 4
+
+    state["index"] = 1
+    second = await cp_client.post("/v1/projects/gh-update/github/context/sync", json={"sync_mode": "update"})
+    assert second.status_code == 200
+    assert second.json()["ingested_count"] == 4
+    assert second.json()["sync_mode"] == "update"
+
+    items_resp = await cp_client.get("/v1/vault/items?project_id=gh-update&limit=20")
+    assert items_resp.status_code == 200
+    items = items_resp.json()
+    titles = {item["title"] for item in items}
+    assert "owner/repo:commit:bbb" in titles
+    assert "owner/repo:pr:2" in titles
+    assert "owner/repo:issue:9" in titles
 
 
 @pytest.mark.anyio

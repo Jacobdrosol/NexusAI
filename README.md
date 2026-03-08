@@ -149,7 +149,10 @@ GitHub integration:
 - Per-project PAT connect/disconnect.
 - Webhook ingestion for `push`, `pull_request`, and `issues`.
 - Signature verification, delivery-id deduplication, and timestamp skew checks.
-- Repo context sync into vault and optional PR review task workflow.
+- Repo context sync into vault with two operator modes:
+  - `Full Ingest`: all repo files, commits, PRs, issues, and discussion threads
+  - `Update Ingest`: only changed/newer repository data since the last successful sync
+- Optional PR review task workflow.
 
 Security and ops:
 

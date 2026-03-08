@@ -281,32 +281,12 @@ class CPClient:
     def sync_project_github_context(
         self,
         project_id: str,
+        sync_mode: str = "full",
         branch: Optional[str] = None,
-        max_files: int = 25,
         namespace: Optional[str] = None,
-        sync_scope: str = "sample",
-        include_repo_files: bool = True,
-        include_commits: bool = False,
-        include_pull_requests: bool = False,
-        include_issues: bool = False,
-        include_conversations: bool = False,
-        max_commits: int = 25,
-        max_pull_requests: int = 15,
-        max_issues: int = 15,
-        max_conversation_comments: int = 50,
     ) -> Optional[Dict[str, Any]]:
         body: Dict[str, Any] = {
-            "max_files": max_files,
-            "sync_scope": sync_scope,
-            "include_repo_files": include_repo_files,
-            "include_commits": include_commits,
-            "include_pull_requests": include_pull_requests,
-            "include_issues": include_issues,
-            "include_conversations": include_conversations,
-            "max_commits": max_commits,
-            "max_pull_requests": max_pull_requests,
-            "max_issues": max_issues,
-            "max_conversation_comments": max_conversation_comments,
+            "sync_mode": sync_mode,
         }
         if branch:
             body["branch"] = branch

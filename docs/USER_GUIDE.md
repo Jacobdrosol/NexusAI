@@ -237,8 +237,16 @@ Per project you can:
 
 - connect PAT
 - set webhook secret
-- sync repository context into vault
+- run `Full Ingest` to pull the entire repo corpus into the project vault namespace
+- run `Update Ingest` to refresh only changed/newer files, commits, PRs, issues, and discussion threads
 - enable PR review workflow with bot assignment
+
+GitHub ingest behavior:
+
+- `Full Ingest` walks the full repository dataset, not just a user-entered sample cap
+- `Update Ingest` uses the last successful sync state stored on the project to decide what needs to be refreshed
+- file refresh is SHA-aware, so unchanged repo files are skipped on update
+- commits, pull requests, and issues are upserted by GitHub source reference instead of duplicated
 
 Webhook security controls include:
 

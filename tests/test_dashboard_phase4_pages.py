@@ -406,35 +406,18 @@ def test_project_github_context_sync_api_forwards_full_ingestion_fields(dashboar
         resp = dashboard_client.post(
             "/api/projects/proj-x/github/context/sync",
             json={
+                "sync_mode": "full",
                 "branch": "main",
                 "namespace": "project:test",
-                "sync_scope": "full",
-                "max_files": 500,
-                "include_repo_files": True,
-                "include_commits": True,
-                "include_pull_requests": True,
-                "include_issues": True,
-                "include_conversations": True,
-                "max_commits": 75,
-                "max_pull_requests": 25,
-                "max_issues": 20,
-                "max_conversation_comments": 60,
             },
         )
 
     assert resp.status_code == 200
     assert fake_cp.kwargs is not None
     assert fake_cp.kwargs["project_id"] == "proj-x"
-    assert fake_cp.kwargs["sync_scope"] == "full"
-    assert fake_cp.kwargs["max_files"] == 500
-    assert fake_cp.kwargs["include_commits"] is True
-    assert fake_cp.kwargs["include_pull_requests"] is True
-    assert fake_cp.kwargs["include_issues"] is True
-    assert fake_cp.kwargs["include_conversations"] is True
-    assert fake_cp.kwargs["max_commits"] == 75
-    assert fake_cp.kwargs["max_pull_requests"] == 25
-    assert fake_cp.kwargs["max_issues"] == 20
-    assert fake_cp.kwargs["max_conversation_comments"] == 60
+    assert fake_cp.kwargs["sync_mode"] == "full"
+    assert fake_cp.kwargs["branch"] == "main"
+    assert fake_cp.kwargs["namespace"] == "project:test"
 
 
 def test_project_pr_review_config_api_handles_unavailable_cp(dashboard_client):

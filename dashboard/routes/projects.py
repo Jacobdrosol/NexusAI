@@ -30,6 +30,7 @@ def _normalize_github_status(raw: Any) -> dict[str, Any]:
         "user_id": raw.get("user_id"),
         "repo": raw.get("repo") if isinstance(raw.get("repo"), dict) else {},
         "pr_review": raw.get("pr_review") if isinstance(raw.get("pr_review"), dict) else {},
+        "context_sync": raw.get("context_sync") if isinstance(raw.get("context_sync"), dict) else {},
     }
 
 
@@ -251,47 +252,15 @@ def api_list_project_github_webhook_events(project_id: str):
 @login_required
 def api_sync_project_github_context(project_id: str):
     data: dict[str, Any] = request.get_json(force=True) or {}
-    max_files_raw = data.get("max_files", 25)
-    max_commits_raw = data.get("max_commits", 25)
-    max_pull_requests_raw = data.get("max_pull_requests", 15)
-    max_issues_raw = data.get("max_issues", 15)
-    max_comments_raw = data.get("max_conversation_comments", 50)
-    try:
-        max_files = max(1, min(int(max_files_raw), 5000))
-    except Exception:
-        max_files = 25
-    try:
-        max_commits = max(1, min(int(max_commits_raw), 250))
-    except Exception:
-        max_commits = 25
-    try:
-        max_pull_requests = max(1, min(int(max_pull_requests_raw), 100))
-    except Exception:
-        max_pull_requests = 15
-    try:
-        max_issues = max(1, min(int(max_issues_raw), 100))
-    except Exception:
-        max_issues = 15
-    try:
-        max_conversation_comments = max(1, min(int(max_comments_raw), 200))
-    except Exception:
-        max_conversation_comments = 50
+    sync_mode = (data.get("sync_mode") or "full").strip().lower()
+    if sync_mode not in {"full", "update"}:
+        return jsonify({"error": "sync_mode must be full or update"}), 400
     cp = get_cp_client()
     result = cp.sync_project_github_context(
         project_id=project_id,
+        sync_mode=sync_mode,
         branch=(data.get("branch") or "").strip() or None,
-        max_files=max_files,
         namespace=(data.get("namespace") or "").strip() or None,
-        sync_scope=(data.get("sync_scope") or "sample").strip().lower() or "sample",
-        include_repo_files=bool(data.get("include_repo_files", True)),
-        include_commits=bool(data.get("include_commits", False)),
-        include_pull_requests=bool(data.get("include_pull_requests", False)),
-        include_issues=bool(data.get("include_issues", False)),
-        include_conversations=bool(data.get("include_conversations", False)),
-        max_commits=max_commits,
-        max_pull_requests=max_pull_requests,
-        max_issues=max_issues,
-        max_conversation_comments=max_conversation_comments,
     )
     if result is None:
         return _cp_error_response(cp, "Repository context sync failed")
