@@ -126,7 +126,7 @@ Dashboard and workflow:
 - Navigation pages: `Overview`, `Projects`, `Chat`, `Bots`, `Workers`, `Vault`, `Settings`.
 - Improved dashboard link contrast for worker and bot names on dark tables/cards.
 - Worker detail pages with live load, queue, and GPU graphs.
-- Bot detail editor with backend chain management, workflow triggers, test runs, run history, and task board.
+- Bot detail editor with backend chain management, workflow triggers, saved input contracts, test runs, run history, and task board.
 - Bot-scoped external Connections workspace for HTTP/OpenAPI and database integration setup.
 - OpenAPI action discovery and in-dashboard connection test runner for bot connections.
 - Project detail pages with bridge management and scoped resources.
@@ -143,7 +143,6 @@ Vault and context:
 - File/URL/text ingestion, namespace management, search, preview, and bulk actions.
 - Filesystem-backed project data vault per project with individual-file upload, recursive folder upload, and in-UI ingest tracking.
 - Project-scoped database connections with schema snapshot ingestion into the vault.
-- Project-scoped workflow templates for seeded course-generation and PR-review bot pipelines.
 - Automatic run-report artifacts and project-level report visibility for long-running bot work.
 - Browser sends vault item IDs; control plane resolves content server-side for privacy.
 

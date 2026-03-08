@@ -115,6 +115,29 @@
 </section>
 
 <section class="panel" style="margin-bottom:1rem;">
+  <div class="page-header" style="margin-bottom:0.75rem;">
+    <h2 class="panel-title">Run Input Contract</h2>
+    <div>
+      <button class="btn btn-primary" onclick="saveInputContract()">Save Input Contract</button>
+    </div>
+  </div>
+  <p class="mini-note" style="margin-bottom:0.75rem;">Define operator-facing fields for this bot's task input. The same contract is used in the test-run modal, and advanced users can still send raw JSON overrides.</p>
+  <div class="form-group">
+    <label>Operator Notes</label>
+    <textarea class="form-control" id="input-contract-description" rows="3" placeholder="Describe what this bot expects and how operators should fill it out."></textarea>
+  </div>
+  <div class="form-group">
+    <label>Form Fields (JSON array)</label>
+    <textarea class="form-control" id="input-contract-fields" rows="10" placeholder='[{"key":"course_title","label":"Course Title","type":"text","required":true},{"key":"audience","label":"Audience","type":"textarea"}]'></textarea>
+    <div class="mini-note">Supported field types: <code>text</code>, <code>textarea</code>, <code>number</code>, <code>checkbox</code>, and <code>select</code>. Select fields can include an <code>options</code> array.</div>
+  </div>
+  <div class="form-group">
+    <label>Default JSON Payload (optional)</label>
+    <textarea class="form-control" id="input-contract-default-payload" rows="6" placeholder='{"project_id":"demo","scope":"analysis"}'></textarea>
+  </div>
+</section>
+
+<section class="panel" style="margin-bottom:1rem;">
   <h2 class="panel-title">Run History</h2>
   <div class="split-grid" style="grid-template-columns:1.4fr 1fr;gap:1rem;">
     <div>
@@ -361,6 +384,8 @@
   <div class="modal-content">
     <h2>Run Test Task</h2>
     <form id="form-test-run">
+      <div id="test-run-contract-notes" class="mini-note" style="margin-bottom:0.75rem;display:none;"></div>
+      <div id="test-run-contract-fields" style="display:grid;gap:0.75rem;margin-bottom:0.75rem;"></div>
       <div class="form-group">
         <label>Instruction</label>
         <textarea class="form-control" name="instruction" rows="5" placeholder="Tell this bot what to do."></textarea>
@@ -433,6 +458,11 @@ BOT.backends = Array.isArray(BOT.backends) ? BOT.backends : [];
 BOT.workflow = BOT.workflow && Array.isArray(BOT.workflow.triggers)
   ? BOT.workflow
   : {triggers: [], notes: ''};
+BOT.input_contract = BOT.input_contract && typeof BOT.input_contract === 'object'
+  ? BOT.input_contract
+  : ((BOT.routing_rules && typeof BOT.routing_rules === 'object' && BOT.routing_rules.input_contract && typeof BOT.routing_rules.input_contract === 'object')
+    ? BOT.routing_rules.input_contract
+    : {description: '', form_fields: [], default_payload: {}});
 
 function getCsrf() {
   const el = document.querySelector('input[name=csrf_token]');
@@ -449,7 +479,79 @@ function openBotEdit() {
 }
 
 function openTestRun() {
+  renderTestRunForm();
   document.getElementById('modal-test-run').style.display = 'flex';
+}
+
+function normalizedInputContract() {
+  const contract = BOT.input_contract && typeof BOT.input_contract === 'object' ? BOT.input_contract : {};
+  return {
+    description: String(contract.description || '').trim(),
+    form_fields: Array.isArray(contract.form_fields) ? contract.form_fields : [],
+    default_payload: contract.default_payload && typeof contract.default_payload === 'object' && !Array.isArray(contract.default_payload)
+      ? contract.default_payload
+      : {},
+  };
+}
+
+function botPayloadForSave() {
+  const payload = Object.assign({}, BOT);
+  const routingRules = payload.routing_rules && typeof payload.routing_rules === 'object'
+    ? Object.assign({}, payload.routing_rules)
+    : {};
+  routingRules.workflow = BOT.workflow;
+  routingRules.input_contract = normalizedInputContract();
+  payload.routing_rules = routingRules;
+  payload.workflow = BOT.workflow;
+  return payload;
+}
+
+function loadInputContractEditor() {
+  const contract = normalizedInputContract();
+  const description = document.getElementById('input-contract-description');
+  const fields = document.getElementById('input-contract-fields');
+  const defaults = document.getElementById('input-contract-default-payload');
+  if (description) description.value = contract.description;
+  if (fields) fields.value = JSON.stringify(contract.form_fields, null, 2);
+  if (defaults) defaults.value = JSON.stringify(contract.default_payload, null, 2);
+}
+
+function saveInputContract() {
+  const description = String(document.getElementById('input-contract-description')?.value || '').trim();
+  const rawFields = String(document.getElementById('input-contract-fields')?.value || '').trim();
+  const rawDefaults = String(document.getElementById('input-contract-default-payload')?.value || '').trim();
+  let formFields = [];
+  let defaultPayload = {};
+  if (rawFields) {
+    try {
+      formFields = JSON.parse(rawFields);
+    } catch (err) {
+      alert('Form fields must be valid JSON.');
+      return;
+    }
+  }
+  if (!Array.isArray(formFields)) {
+    alert('Form fields must be a JSON array.');
+    return;
+  }
+  if (rawDefaults) {
+    try {
+      defaultPayload = JSON.parse(rawDefaults);
+    } catch (err) {
+      alert('Default payload must be valid JSON.');
+      return;
+    }
+  }
+  if (defaultPayload === null || Array.isArray(defaultPayload) || typeof defaultPayload !== 'object') {
+    alert('Default payload must be a JSON object.');
+    return;
+  }
+  BOT.input_contract = {
+    description,
+    form_fields: formFields,
+    default_payload: defaultPayload,
+  };
+  persistBot('Input contract saved.');
 }
 
 function saveBotInfo() {
@@ -906,7 +1008,7 @@ function persistBot(successMessage) {
   fetch('/api/bots/' + encodeURIComponent(BOT_ID), {
     method: 'PUT',
     headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
-    body: JSON.stringify(BOT)
+    body: JSON.stringify(botPayloadForSave())
   })
   .then(async (r) => {
     const data = await r.json().catch(() => ({}));
@@ -924,13 +1026,72 @@ function openTaskModal(taskId) {
   document.getElementById('modal-task-detail').style.display = 'flex';
 }
 
+function renderContractField(field, idx) {
+  const key = String(field.key || '').trim();
+  if (!key) return '';
+  const label = escapeHtml(field.label || key);
+  const type = String(field.type || 'text').trim().toLowerCase();
+  const required = field.required ? ' required' : '';
+  const placeholder = escapeHtml(field.placeholder || '');
+  const help = field.help ? `<div class="mini-note">${escapeHtml(field.help)}</div>` : '';
+  const value = field.default;
+  if (type === 'textarea') {
+    return `<div class="form-group"><label>${label}</label><textarea class="form-control" rows="4" data-contract-key="${escapeHtml(key)}" data-contract-type="textarea" placeholder="${placeholder}"${required}>${escapeHtml(value || '')}</textarea>${help}</div>`;
+  }
+  if (type === 'number') {
+    return `<div class="form-group"><label>${label}</label><input class="form-control" type="number" data-contract-key="${escapeHtml(key)}" data-contract-type="number" value="${escapeHtml(value ?? '')}" placeholder="${placeholder}"${required}>${help}</div>`;
+  }
+  if (type === 'checkbox') {
+    return `<div class="form-group"><label><input type="checkbox" data-contract-key="${escapeHtml(key)}" data-contract-type="checkbox"${value ? ' checked' : ''}> ${label}</label>${help}</div>`;
+  }
+  if (type === 'select') {
+    const options = Array.isArray(field.options) ? field.options : [];
+    const optionMarkup = options.map((option) => {
+      const optionValue = typeof option === 'object' && option !== null ? option.value : option;
+      const optionLabel = typeof option === 'object' && option !== null ? option.label : option;
+      const selected = String(optionValue ?? '') === String(value ?? '') ? ' selected' : '';
+      return `<option value="${escapeHtml(optionValue ?? '')}"${selected}>${escapeHtml(optionLabel ?? optionValue ?? '')}</option>`;
+    }).join('');
+    return `<div class="form-group"><label>${label}</label><select class="form-control" data-contract-key="${escapeHtml(key)}" data-contract-type="select"${required}>${optionMarkup}</select>${help}</div>`;
+  }
+  return `<div class="form-group"><label>${label}</label><input class="form-control" type="text" data-contract-key="${escapeHtml(key)}" data-contract-type="text" value="${escapeHtml(value ?? '')}" placeholder="${placeholder}"${required}>${help}</div>`;
+}
+
+function renderTestRunForm() {
+  const contract = normalizedInputContract();
+  const notes = document.getElementById('test-run-contract-notes');
+  const fieldsHost = document.getElementById('test-run-contract-fields');
+  if (notes) {
+    if (contract.description) {
+      notes.textContent = contract.description;
+      notes.style.display = '';
+    } else {
+      notes.textContent = '';
+      notes.style.display = 'none';
+    }
+  }
+  if (!fieldsHost) return;
+  fieldsHost.innerHTML = contract.form_fields.map(renderContractField).join('');
+}
+
+function collectContractPayload() {
+  const payload = Object.assign({}, normalizedInputContract().default_payload);
+  document.querySelectorAll('[data-contract-key]').forEach((el) => {
+    const key = String(el.getAttribute('data-contract-key') || '').trim();
+    if (!key) return;
+    const type = String(el.getAttribute('data-contract-type') || 'text');
+    let value;
+    if (type === 'checkbox') value = !!el.checked;
+    else if (type === 'number') value = el.value === '' ? null : Number(el.value);
+    else value = el.value;
+    if (value !== null && value !== '') payload[key] = value;
+  });
+  return payload;
+}
+
 function submitTestRun() {
   const form = document.getElementById('form-test-run');
   const instruction = String(form.instruction.value || '').trim();
-  if (!instruction) {
-    alert('Instruction is required.');
-    return;
-  }
   let extraPayload = {};
   const raw = String(form.extra_payload.value || '').trim();
   if (raw) {
@@ -941,7 +1102,13 @@ function submitTestRun() {
       return;
     }
   }
-  const payload = Object.assign({}, extraPayload, {instruction});
+  const contractPayload = collectContractPayload();
+  const payload = Object.assign({}, contractPayload, extraPayload);
+  if (instruction) payload.instruction = instruction;
+  if (!Object.keys(payload).length) {
+    alert('Provide either an instruction, contract field values, or JSON payload.');
+    return;
+  }
   fetch('/api/bots/' + encodeURIComponent(BOT_ID) + '/test-run', {
     method: 'POST',
     headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
@@ -958,6 +1125,7 @@ function submitTestRun() {
 
 renderBackendChain();
 renderWorkflowTriggers();
+loadInputContractEditor();
 document.querySelector('#form-backend select[name=worker_id]')?.addEventListener('change', () => refreshModelOptions());
 document.querySelector('#form-backend select[name=provider]')?.addEventListener('change', () => {
   refreshApiKeyOptions();

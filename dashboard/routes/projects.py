@@ -28,7 +28,6 @@ from dashboard.project_data import (
     save_project_data_upload,
 )
 from dashboard.project_data_ingest import latest_job_for_project, start_project_data_ingest
-from dashboard.workflow_templates import available_workflow_templates
 
 bp = Blueprint("projects", __name__)
 
@@ -510,60 +509,6 @@ def api_delete_project_data_paths(project_id: str):
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     return jsonify({"project_id": project_id, "deleted": deleted})
-
-
-@bp.post("/api/projects/<project_id>/workflow-templates/install")
-@login_required
-def api_install_project_workflow_template(project_id: str):
-    cp = get_cp_client()
-    project = cp.get_project(project_id)
-    if project is None:
-        return _cp_error_response(cp, "project not found")
-    body: dict[str, Any] = request.get_json(force=True) or {}
-    template_id = str(body.get("template_id") or "").strip()
-    source_bot_id = str(body.get("source_bot_id") or "").strip()
-    all_bots = cp.list_bots() or []
-    source_bot = None
-    if source_bot_id:
-        source_bot = next((bot for bot in all_bots if str(bot.get("id")) == source_bot_id), None)
-        if source_bot is None:
-            return jsonify({"error": "source_bot_id not found"}), 400
-    else:
-        source_bot = next((bot for bot in all_bots if isinstance(bot.get("backends"), list) and bot.get("backends")), None)
-
-    templates = {item["template_id"]: item for item in available_workflow_templates(project_id, source_bot)}
-    template = templates.get(template_id)
-    if template is None:
-        return jsonify({"error": "unsupported template_id"}), 400
-
-    created_or_updated: list[str] = []
-    for bot_def in template["bots"]:
-        bot_id = str(bot_def["id"])
-        existing = cp.get_bot(bot_id)
-        result = cp.update_bot(bot_id, bot_def) if existing is not None else cp.create_bot(bot_def)
-        if result is None:
-            return _cp_error_response(cp, f"failed to install bot {bot_id}")
-        created_or_updated.append(bot_id)
-
-    merged_project = dict(project)
-    current_bot_ids = [str(bot_id) for bot_id in (project.get("bot_ids") or [])]
-    for bot_id in created_or_updated:
-        if bot_id not in current_bot_ids:
-            current_bot_ids.append(bot_id)
-    merged_project["bot_ids"] = current_bot_ids
-    updated_project = cp.update_project(project_id, merged_project)
-    if updated_project is None:
-        return _cp_error_response(cp, "failed to update project bot assignments")
-
-    return jsonify(
-        {
-            "project_id": project_id,
-            "template_id": template_id,
-            "entry_bot_id": template["entry_bot_id"],
-            "bot_ids": created_or_updated,
-            "source_bot_id": source_bot.get("id") if isinstance(source_bot, dict) else None,
-        }
-    )
 
 
 @bp.post("/api/projects/<project_id>/data/ingest")

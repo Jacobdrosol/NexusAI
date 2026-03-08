@@ -36,6 +36,8 @@ def _merge_routing_rules(data: dict[str, Any], existing: Any = None) -> dict[str
         merged.update(data["routing_rules"])
     if "workflow" in data:
         merged["workflow"] = data.get("workflow")
+    if "input_contract" in data:
+        merged["input_contract"] = data.get("input_contract")
     return merged
 
 
@@ -51,6 +53,7 @@ def _bot_to_dict(b: Bot) -> dict[str, Any]:
         "backends": b.backends_as_list(),
         "routing_rules": routing_rules,
         "workflow": routing_rules.get("workflow") if isinstance(routing_rules, dict) else None,
+        "input_contract": routing_rules.get("input_contract") if isinstance(routing_rules, dict) else None,
     }
 
 

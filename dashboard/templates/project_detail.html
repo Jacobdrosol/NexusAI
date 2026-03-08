@@ -430,49 +430,6 @@
 </section>
 
 <section class="panel" style="margin-bottom:1rem;">
-  <div class="page-header" style="margin-bottom:0.75rem;">
-    <h2 class="panel-title">Workflow Templates</h2>
-  </div>
-  <div class="split-grid" style="grid-template-columns:1fr 1fr; gap:0.75rem;">
-    <div>
-      <div class="form-group">
-        <label>Source Bot Backend Chain</label>
-        <select class="form-control" id="workflow-template-source-bot">
-          <option value="">Auto-select first runnable bot</option>
-          {% for b in all_bots %}
-          <option value="{{ b.id }}">{{ b.name }} ({{ b.id }})</option>
-          {% endfor %}
-        </select>
-      </div>
-      <div class="mini-note">
-        Installed template bots inherit the selected source bot's backend chain so they can run immediately instead of being created as empty shells.
-      </div>
-      <div id="workflow-template-state" class="state-empty" style="margin-top:0.6rem;">No workflow template action yet.</div>
-    </div>
-    <div style="display:grid; gap:0.75rem;">
-      <div style="border:1px solid rgba(148,163,184,0.2); border-radius:12px; padding:0.9rem;">
-        <div style="display:flex; justify-content:space-between; gap:0.5rem; align-items:flex-start;">
-          <div>
-            <strong>Course Generation Pipeline</strong>
-            <div class="mini-note" style="margin-top:0.35rem;">Shell, structure, units, lessons, images, question bank, badges, and final packaging with QC at each major step.</div>
-          </div>
-          <button class="btn btn-primary" type="button" onclick="installWorkflowTemplate('course_generation_pipeline')">Install</button>
-        </div>
-      </div>
-      <div style="border:1px solid rgba(148,163,184,0.2); border-radius:12px; padding:0.9rem;">
-        <div style="display:flex; justify-content:space-between; gap:0.5rem; align-items:flex-start;">
-          <div>
-            <strong>PR Review Pipeline</strong>
-            <div class="mini-note" style="margin-top:0.35rem;">PR triage, deep review, QC, and final operator-ready report generation.</div>
-          </div>
-          <button class="btn btn-primary" type="button" onclick="installWorkflowTemplate('pr_review_pipeline')">Install</button>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
-
-<section class="panel" style="margin-bottom:1rem;">
   <h2 class="panel-title">Project Bots</h2>
   <table>
     <thead><tr><th>ID</th><th>Name</th><th>Role</th><th>Priority</th></tr></thead>
@@ -605,13 +562,6 @@ function setProjectDataState(cls, text) {
   el.textContent = text;
 }
 
-function setWorkflowTemplateState(cls, text) {
-  const el = document.getElementById('workflow-template-state');
-  if (!el) return;
-  el.className = cls;
-  el.textContent = text;
-}
-
 async function refreshProjectDataFiles() {
   setProjectDataState('state-loading', 'Refreshing project data tree...');
   const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/data/files');
@@ -685,26 +635,6 @@ async function deleteSelectedProjectData() {
     return;
   }
   setProjectDataState('state-info', 'Deleted ' + ((data.deleted || []).length) + ' item(s).');
-  location.reload();
-}
-
-async function installWorkflowTemplate(templateId) {
-  const sourceBotId = (document.getElementById('workflow-template-source-bot')?.value || '').trim();
-  setWorkflowTemplateState('state-loading', 'Installing workflow template...');
-  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/workflow-templates/install', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
-    body: JSON.stringify({template_id: templateId, source_bot_id: sourceBotId || null}),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    setWorkflowTemplateState('state-error', data.error || 'Failed to install workflow template.');
-    return;
-  }
-  setWorkflowTemplateState(
-    'state-info',
-    'Installed ' + (data.bot_ids || []).length + ' bot(s). Entry bot: ' + (data.entry_bot_id || 'unknown') + '.'
-  );
   location.reload();
 }
 
