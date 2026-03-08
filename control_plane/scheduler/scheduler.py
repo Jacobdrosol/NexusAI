@@ -63,6 +63,47 @@ def _inject_system_prompt(system_prompt: str | None, payload: Any) -> Any:
     return [{"role": "system", "content": prompt}, *messages]
 
 
+def _lookup_payload_path(payload: Any, path: str) -> Any:
+    current: Any = payload
+    for part in str(path or "").split("."):
+        key = part.strip()
+        if not key:
+            continue
+        if not isinstance(current, dict) or key not in current:
+            return None
+        current = current[key]
+    return current
+
+
+def _transform_template_value(template: Any, payload: Any) -> Any:
+    if isinstance(template, dict):
+        return {str(key): _transform_template_value(value, payload) for key, value in template.items()}
+    if isinstance(template, list):
+        return [_transform_template_value(item, payload) for item in template]
+    if not isinstance(template, str):
+        return template
+
+    raw = template.strip()
+    if raw.startswith("{{") and raw.endswith("}}"):
+        expr = raw[2:-2].strip()
+        mode = "value"
+        path = expr
+        if expr.startswith("json:"):
+            mode = "json"
+            path = expr[5:].strip()
+        if path.startswith("payload."):
+            path = path[8:].strip()
+        value = _lookup_payload_path(payload, path)
+        if mode == "json":
+            if value in (None, ""):
+                return None
+            if isinstance(value, (dict, list)):
+                return value
+            return json.loads(str(value))
+        return value
+    return template
+
+
 class Scheduler:
     def __init__(
         self,
@@ -92,7 +133,8 @@ class Scheduler:
             raise NoViableBackendError(f"Bot {task.bot_id} is disabled")
 
         last_error: Exception = NoViableBackendError("No backends configured")
-        prepared_payload = _inject_system_prompt(getattr(bot, "system_prompt", None), task.payload)
+        transformed_payload = self._apply_input_transform(bot, task.payload)
+        prepared_payload = _inject_system_prompt(getattr(bot, "system_prompt", None), transformed_payload)
 
         for backend in bot.backends:
             try:
@@ -121,7 +163,8 @@ class Scheduler:
             raise NoViableBackendError(f"Bot {task.bot_id} is disabled")
 
         last_error: Exception = NoViableBackendError("No backends configured")
-        prepared_payload = _inject_system_prompt(getattr(bot, "system_prompt", None), task.payload)
+        transformed_payload = self._apply_input_transform(bot, task.payload)
+        prepared_payload = _inject_system_prompt(getattr(bot, "system_prompt", None), transformed_payload)
 
         for backend in bot.backends:
             try:
@@ -178,6 +221,18 @@ class Scheduler:
             return await self._dispatch_to_worker(worker, backend, safe_payload)
         else:
             raise BackendError(f"Unsupported backend type: {backend.type}")
+
+    def _apply_input_transform(self, bot: Any, payload: Any) -> Any:
+        routing_rules = getattr(bot, "routing_rules", None)
+        if not isinstance(routing_rules, dict):
+            return payload
+        config = routing_rules.get("input_transform")
+        if not isinstance(config, dict) or not bool(config.get("enabled", False)):
+            return payload
+        template = config.get("template")
+        if template is None:
+            return payload
+        return _transform_template_value(template, payload)
 
     async def _dispatch_backend_stream(
         self, backend: BackendConfig, payload: Any, task: Task | None = None

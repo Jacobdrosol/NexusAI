@@ -189,6 +189,28 @@
 
 <section class="panel" style="margin-bottom:1rem;">
   <div class="page-header" style="margin-bottom:0.75rem;">
+    <h2 class="panel-title">Input Transform</h2>
+    <div>
+      <button class="btn btn-primary" onclick="saveInputTransform()">Save Input Transform</button>
+    </div>
+  </div>
+  <p class="mini-note" style="margin-bottom:0.75rem;">Optionally reshape the incoming task payload before the model sees it. Use this to narrow trigger payloads into a clean, deterministic bot-specific input object.</p>
+  <div class="form-group">
+    <label><input type="checkbox" id="input-transform-enabled"> Enable input transform</label>
+  </div>
+  <div class="form-group">
+    <label>Operator Notes</label>
+    <textarea class="form-control" id="input-transform-description" rows="3" placeholder="Describe how this bot's incoming payload should be narrowed before execution."></textarea>
+  </div>
+  <div class="form-group">
+    <label>Transform Template JSON</label>
+    <textarea class="form-control" id="input-transform-template" rows="8" placeholder='{"instruction":"&#123;&#123;payload.instruction&#125;&#125;","course_brief":"&#123;&#123;payload.source_result.course_brief&#125;&#125;"}'></textarea>
+    <div class="mini-note">Tokens: <code>&#123;&#123;payload.field&#125;&#125;</code> and <code>&#123;&#123;json:payload.field&#125;&#125;</code>. Nested paths are supported, for example <code>&#123;&#123;payload.source_result.course_brief&#125;&#125;</code>.</div>
+  </div>
+</section>
+
+<section class="panel" style="margin-bottom:1rem;">
+  <div class="page-header" style="margin-bottom:0.75rem;">
     <h2 class="panel-title">Saved Launch Profile</h2>
     <div>
       <button class="btn" onclick="queueSavedLaunch()">Queue Saved Launch</button>
@@ -580,6 +602,11 @@ BOT.output_contract = BOT.output_contract && typeof BOT.output_contract === 'obj
   : ((BOT.routing_rules && typeof BOT.routing_rules === 'object' && BOT.routing_rules.output_contract && typeof BOT.routing_rules.output_contract === 'object')
     ? BOT.routing_rules.output_contract
     : {enabled: false, mode: 'model_output', format: 'any', required_fields: [], description: '', example_output: {}, template: null});
+BOT.input_transform = BOT.input_transform && typeof BOT.input_transform === 'object'
+  ? BOT.input_transform
+  : ((BOT.routing_rules && typeof BOT.routing_rules === 'object' && BOT.routing_rules.input_transform && typeof BOT.routing_rules.input_transform === 'object')
+    ? BOT.routing_rules.input_transform
+    : {enabled: false, description: '', template: null});
 BOT.launch_profile = BOT.launch_profile && typeof BOT.launch_profile === 'object'
   ? BOT.launch_profile
   : ((BOT.routing_rules && typeof BOT.routing_rules === 'object' && BOT.routing_rules.launch_profile && typeof BOT.routing_rules.launch_profile === 'object')
@@ -631,6 +658,7 @@ function botPayloadForSave() {
     : {};
   routingRules.workflow = BOT.workflow;
   routingRules.input_contract = normalizedInputContract();
+  routingRules.input_transform = normalizedInputTransform();
   routingRules.output_contract = normalizedOutputContract();
   routingRules.launch_profile = normalizedLaunchProfile();
   payload.routing_rules = routingRules;
@@ -703,6 +731,48 @@ function normalizedOutputContract() {
     example_output: exampleOutput,
     template: template,
   };
+}
+
+function normalizedInputTransform() {
+  const transform = BOT.input_transform && typeof BOT.input_transform === 'object' ? BOT.input_transform : {};
+  const template = transform.template && typeof transform.template === 'object' && !Array.isArray(transform.template)
+    ? transform.template
+    : null;
+  return {
+    enabled: transform.enabled === true,
+    description: String(transform.description || '').trim(),
+    template: template,
+  };
+}
+
+function loadInputTransformEditor() {
+  const transform = normalizedInputTransform();
+  document.getElementById('input-transform-enabled').checked = transform.enabled === true;
+  document.getElementById('input-transform-description').value = transform.description || '';
+  document.getElementById('input-transform-template').value = JSON.stringify(transform.template || {}, null, 2);
+}
+
+function saveInputTransform() {
+  const rawTemplate = String(document.getElementById('input-transform-template')?.value || '').trim();
+  let template = null;
+  if (rawTemplate) {
+    try {
+      template = JSON.parse(rawTemplate);
+    } catch (err) {
+      alert('Input transform template must be valid JSON.');
+      return;
+    }
+    if (template === null || Array.isArray(template) || typeof template !== 'object') {
+      alert('Input transform template must be a JSON object.');
+      return;
+    }
+  }
+  BOT.input_transform = {
+    enabled: document.getElementById('input-transform-enabled').checked,
+    description: String(document.getElementById('input-transform-description')?.value || '').trim(),
+    template: template,
+  };
+  persistBot('Input transform saved.');
 }
 
 function loadOutputContractEditor() {
@@ -1499,6 +1569,7 @@ function submitTestRun() {
 renderBackendChain();
 renderWorkflowTriggers();
 loadInputContractEditor();
+loadInputTransformEditor();
 loadOutputContractEditor();
 loadLaunchProfileEditor();
 if (RUNS.length) {

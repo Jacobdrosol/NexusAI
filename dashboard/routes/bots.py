@@ -39,6 +39,8 @@ def _merge_routing_rules(data: dict[str, Any], existing: Any = None) -> dict[str
         merged["workflow"] = data.get("workflow")
     if "input_contract" in data:
         merged["input_contract"] = data.get("input_contract")
+    if "input_transform" in data:
+        merged["input_transform"] = data.get("input_transform")
     if "output_contract" in data:
         merged["output_contract"] = data.get("output_contract")
     if "launch_profile" in data:
@@ -59,6 +61,7 @@ def _bot_to_dict(b: Bot) -> dict[str, Any]:
         "routing_rules": routing_rules,
         "workflow": routing_rules.get("workflow") if isinstance(routing_rules, dict) else None,
         "input_contract": routing_rules.get("input_contract") if isinstance(routing_rules, dict) else None,
+        "input_transform": routing_rules.get("input_transform") if isinstance(routing_rules, dict) else None,
         "output_contract": routing_rules.get("output_contract") if isinstance(routing_rules, dict) else None,
         "launch_profile": routing_rules.get("launch_profile") if isinstance(routing_rules, dict) else None,
     }

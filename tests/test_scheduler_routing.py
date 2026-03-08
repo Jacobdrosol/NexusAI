@@ -1,3 +1,4 @@
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -144,3 +145,54 @@ async def test_scheduler_does_not_duplicate_existing_system_prompt():
         {"role": "system", "content": "Return only strict JSON."},
         {"role": "user", "content": "build outline"},
     ]
+
+
+@pytest.mark.anyio
+async def test_scheduler_applies_bot_input_transform_before_system_prompt():
+    from control_plane.scheduler.scheduler import Scheduler
+
+    bot_registry = AsyncMock()
+    bot_registry.get.return_value = Bot(
+        id="course-outline",
+        name="Course Outline",
+        role="planner",
+        system_prompt="Return only strict JSON.",
+        backends=[BackendConfig(type="cloud_api", provider="openai", model="gpt-4o-mini")],
+        routing_rules={
+            "input_transform": {
+                "enabled": True,
+                "template": {
+                    "instruction": "{{payload.instruction}}",
+                    "course_brief": "{{payload.source_result.course_brief}}",
+                },
+            }
+        },
+    )
+    scheduler = Scheduler(bot_registry=bot_registry, worker_registry=AsyncMock())
+    task = Task(
+        id="task-3",
+        bot_id="course-outline",
+        payload={
+            "instruction": "Build outline",
+            "source_result": {
+                "course_brief": {"topic": "AP World History", "subject": "History"}
+            },
+            "source_payload": {"noisy": True},
+        },
+        status="queued",
+        created_at="now",
+        updated_at="now",
+    )
+
+    async def fake_dispatch(backend, payload, task=None):
+        return {"payload": payload}
+
+    scheduler._dispatch_backend = fake_dispatch  # type: ignore[method-assign]
+    result = await scheduler.schedule(task)
+
+    assert result["payload"][0] == {"role": "system", "content": "Return only strict JSON."}
+    transformed = json.loads(result["payload"][1]["content"])
+    assert transformed == {
+        "instruction": "Build outline",
+        "course_brief": {"topic": "AP World History", "subject": "History"},
+    }

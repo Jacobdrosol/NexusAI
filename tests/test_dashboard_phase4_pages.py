@@ -257,6 +257,7 @@ def test_bot_detail_page_loads_when_logged_in(dashboard_client):
     assert b"Task Board" in resp.data
     assert b"Backend Chain Editor" in resp.data
     assert b"Run Input Contract" in resp.data
+    assert b"Input Transform" in resp.data
     assert b"Output Contract" in resp.data
     assert b"Payload Transform" in resp.data
     assert b"Saved Launch Profile" in resp.data
