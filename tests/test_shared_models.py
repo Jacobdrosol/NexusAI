@@ -64,3 +64,26 @@ def test_bot_model_has_system_prompt_field():
     assert b.system_prompt is None
     b2 = Bot(id="bot2", name="Bot2", role="coder", backends=[], system_prompt="You are a helpful coder.")
     assert b2.system_prompt == "You are a helpful coder."
+
+
+def test_bot_model_supports_workflow_triggers():
+    from shared.models import Bot
+    bot = Bot(
+        id="bot-workflow",
+        name="Workflow Bot",
+        role="assistant",
+        backends=[],
+        workflow={
+            "triggers": [
+                {
+                    "id": "handoff",
+                    "event": "task_completed",
+                    "target_bot_id": "bot-reviewer",
+                    "condition": "has_result",
+                }
+            ]
+        },
+    )
+    assert bot.workflow is not None
+    assert len(bot.workflow.triggers) == 1
+    assert bot.workflow.triggers[0].target_bot_id == "bot-reviewer"

@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 import aiosqlite
 
 from shared.exceptions import TaskNotFoundError
-from shared.models import Task, TaskError, TaskMetadata
+from shared.models import BotRun, BotRunArtifact, Task, TaskError, TaskMetadata
 from control_plane.scheduler.dependency_engine import DependencyEngine
 
 logger = logging.getLogger(__name__)
@@ -40,13 +40,48 @@ CREATE TABLE IF NOT EXISTS task_dependencies (
 )
 """
 
+_CREATE_BOT_RUNS = """
+CREATE TABLE IF NOT EXISTS bot_runs (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL UNIQUE,
+    bot_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    payload TEXT,
+    metadata TEXT,
+    result TEXT,
+    error TEXT,
+    triggered_by_task_id TEXT,
+    trigger_rule_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    started_at TEXT,
+    completed_at TEXT
+)
+"""
+
+_CREATE_BOT_RUN_ARTIFACTS = """
+CREATE TABLE IF NOT EXISTS bot_run_artifacts (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    bot_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    label TEXT NOT NULL,
+    content TEXT,
+    path TEXT,
+    metadata TEXT,
+    created_at TEXT NOT NULL
+)
+"""
+
 
 class TaskManager:
-    def __init__(self, scheduler: Any, db_path: Optional[str] = None) -> None:
+    def __init__(self, scheduler: Any, db_path: Optional[str] = None, bot_registry: Optional[Any] = None) -> None:
         self._tasks: Dict[str, Task] = {}
         self._lock = asyncio.Lock()
         self._init_lock = asyncio.Lock()
         self._scheduler = scheduler
+        self._bot_registry = bot_registry
         self._db_ready = False
         if db_path is not None:
             self._db_path = db_path
@@ -69,6 +104,8 @@ class TaskManager:
                 db.row_factory = aiosqlite.Row
                 await db.execute(_CREATE_TASKS)
                 await db.execute(_CREATE_TASK_DEPENDENCIES)
+                await db.execute(_CREATE_BOT_RUNS)
+                await db.execute(_CREATE_BOT_RUN_ARTIFACTS)
                 await self._migrate_tasks_table(db)
                 await db.commit()
                 dep_map: Dict[str, List[str]] = {}
@@ -149,6 +186,145 @@ class TaskManager:
             )
             await db.commit()
 
+    async def _upsert_bot_run(self, task: Task) -> None:
+        metadata = task.metadata.model_dump() if task.metadata else None
+        started_at = task.updated_at if task.status == "running" else None
+        completed_at = task.updated_at if task.status in {"completed", "failed"} else None
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.execute(
+                """
+                INSERT INTO bot_runs
+                    (id, task_id, bot_id, status, payload, metadata, result, error,
+                     triggered_by_task_id, trigger_rule_id, created_at, updated_at,
+                     started_at, completed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(task_id) DO UPDATE SET
+                    status = excluded.status,
+                    payload = excluded.payload,
+                    metadata = excluded.metadata,
+                    result = excluded.result,
+                    error = excluded.error,
+                    triggered_by_task_id = excluded.triggered_by_task_id,
+                    trigger_rule_id = excluded.trigger_rule_id,
+                    updated_at = excluded.updated_at,
+                    started_at = COALESCE(bot_runs.started_at, excluded.started_at),
+                    completed_at = excluded.completed_at
+                """,
+                (
+                    task.id,
+                    task.id,
+                    task.bot_id,
+                    task.status,
+                    json.dumps(task.payload),
+                    json.dumps(metadata) if metadata is not None else None,
+                    json.dumps(task.result) if task.result is not None else None,
+                    json.dumps(task.error.model_dump()) if task.error else None,
+                    getattr(task.metadata, "parent_task_id", None),
+                    getattr(task.metadata, "trigger_rule_id", None),
+                    task.created_at,
+                    task.updated_at,
+                    started_at,
+                    completed_at,
+                ),
+            )
+            await db.commit()
+
+    async def _upsert_artifact(self, artifact: BotRunArtifact) -> None:
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.execute(
+                """
+                INSERT INTO bot_run_artifacts
+                    (id, run_id, task_id, bot_id, kind, label, content, path, metadata, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    label = excluded.label,
+                    content = excluded.content,
+                    path = excluded.path,
+                    metadata = excluded.metadata,
+                    created_at = excluded.created_at
+                """,
+                (
+                    artifact.id,
+                    artifact.run_id,
+                    artifact.task_id,
+                    artifact.bot_id,
+                    artifact.kind,
+                    artifact.label,
+                    artifact.content,
+                    artifact.path,
+                    json.dumps(artifact.metadata),
+                    artifact.created_at,
+                ),
+            )
+            await db.commit()
+
+    async def _record_artifacts_for_task(self, task: Task) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        artifacts: List[BotRunArtifact] = [
+            BotRunArtifact(
+                id=f"{task.id}:payload",
+                run_id=task.id,
+                task_id=task.id,
+                bot_id=task.bot_id,
+                kind="payload",
+                label="Task Payload",
+                content=json.dumps(task.payload, indent=2, sort_keys=True),
+                metadata={},
+                created_at=now,
+            )
+        ]
+        if task.result is not None:
+            artifacts.append(
+                BotRunArtifact(
+                    id=f"{task.id}:result",
+                    run_id=task.id,
+                    task_id=task.id,
+                    bot_id=task.bot_id,
+                    kind="result",
+                    label="Task Result",
+                    content=json.dumps(task.result, indent=2, sort_keys=True),
+                    metadata={},
+                    created_at=now,
+                )
+            )
+        if task.error is not None:
+            artifacts.append(
+                BotRunArtifact(
+                    id=f"{task.id}:error",
+                    run_id=task.id,
+                    task_id=task.id,
+                    bot_id=task.bot_id,
+                    kind="error",
+                    label="Task Error",
+                    content=json.dumps(task.error.model_dump(), indent=2, sort_keys=True),
+                    metadata={},
+                    created_at=now,
+                )
+            )
+
+        explicit_artifacts = task.result.get("artifacts") if isinstance(task.result, dict) else None
+        if isinstance(explicit_artifacts, list):
+            for idx, item in enumerate(explicit_artifacts):
+                if not isinstance(item, dict):
+                    continue
+                artifacts.append(
+                    BotRunArtifact(
+                        id=f"{task.id}:artifact:{idx}",
+                        run_id=task.id,
+                        task_id=task.id,
+                        bot_id=task.bot_id,
+                        kind="file" if item.get("path") else "note",
+                        label=str(item.get("label") or item.get("name") or f"Artifact {idx + 1}"),
+                        content=(item.get("content") if isinstance(item.get("content"), str) else json.dumps(item.get("content"), indent=2, sort_keys=True) if item.get("content") is not None else None),
+                        path=item.get("path"),
+                        metadata={k: v for k, v in item.items() if k not in {"label", "name", "content", "path"}},
+                        created_at=now,
+                    )
+                )
+
+        for artifact in artifacts:
+            await self._upsert_artifact(artifact)
+
     async def _persist_dependencies(self, task: Task) -> None:
         async with aiosqlite.connect(self._db_path) as db:
             await db.execute("DELETE FROM task_dependencies WHERE task_id = ?", (task.id,))
@@ -192,6 +368,7 @@ class TaskManager:
             self._tasks[task_id] = task
         await self._persist_task(task)
         await self._persist_dependencies(task)
+        await self._upsert_bot_run(task)
         if task.status == "queued":
             asyncio.create_task(self._run_task(task_id))
         return task
@@ -213,6 +390,70 @@ class TaskManager:
             t
             for t in tasks
             if t.metadata and t.metadata.orchestration_id == orchestration_id
+        ]
+
+    async def list_bot_runs(self, bot_id: str, limit: int = 50) -> List[BotRun]:
+        await self._ensure_db()
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                """
+                SELECT * FROM bot_runs
+                WHERE bot_id = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (bot_id, max(1, int(limit))),
+            ) as cursor:
+                rows = await cursor.fetchall()
+        return [
+            BotRun(
+                id=row["id"],
+                task_id=row["task_id"],
+                bot_id=row["bot_id"],
+                status=row["status"],
+                payload=json.loads(row["payload"]) if row["payload"] else {},
+                metadata=TaskMetadata(**json.loads(row["metadata"])) if row["metadata"] else None,
+                result=json.loads(row["result"]) if row["result"] else None,
+                error=TaskError(**json.loads(row["error"])) if row["error"] else None,
+                triggered_by_task_id=row["triggered_by_task_id"],
+                trigger_rule_id=row["trigger_rule_id"],
+                created_at=row["created_at"],
+                updated_at=row["updated_at"],
+                started_at=row["started_at"],
+                completed_at=row["completed_at"],
+            )
+            for row in rows
+        ]
+
+    async def list_bot_run_artifacts(self, bot_id: str, limit: int = 100) -> List[BotRunArtifact]:
+        await self._ensure_db()
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                """
+                SELECT * FROM bot_run_artifacts
+                WHERE bot_id = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (bot_id, max(1, int(limit))),
+            ) as cursor:
+                rows = await cursor.fetchall()
+        return [
+            BotRunArtifact(
+                id=row["id"],
+                run_id=row["run_id"],
+                task_id=row["task_id"],
+                bot_id=row["bot_id"],
+                kind=row["kind"],
+                label=row["label"],
+                content=row["content"],
+                path=row["path"],
+                metadata=json.loads(row["metadata"]) if row["metadata"] else {},
+                created_at=row["created_at"],
+            )
+            for row in rows
         ]
 
     async def update_status(
@@ -237,7 +478,10 @@ class TaskManager:
             )
             updated_task = self._tasks[task_id]
         await self._persist_task(updated_task)
+        await self._upsert_bot_run(updated_task)
         if status in {"completed", "failed"}:
+            await self._record_artifacts_for_task(updated_task)
+            await self._dispatch_triggers(updated_task)
             await self._try_unblock_tasks()
 
     async def _run_task(self, task_id: str) -> None:
@@ -268,5 +512,69 @@ class TaskManager:
 
         for t in tasks_to_persist:
             await self._persist_task(t)
+            await self._upsert_bot_run(t)
         for task_id in ready_ids:
             asyncio.create_task(self._run_task(task_id))
+
+    async def _dispatch_triggers(self, task: Task) -> None:
+        if self._bot_registry is None:
+            return
+        try:
+            bot = await self._bot_registry.get(task.bot_id)
+        except Exception:
+            return
+        workflow = getattr(bot, "workflow", None)
+        if workflow is None or not workflow.triggers:
+            return
+
+        metadata = task.metadata or TaskMetadata()
+        trigger_depth = int(metadata.trigger_depth or 0)
+        max_depth = int(os.environ.get("NEXUSAI_BOT_TRIGGER_MAX_DEPTH", "6"))
+        if trigger_depth >= max_depth:
+            logger.warning("Skipping bot triggers for task %s due to depth cap %s", task.id, max_depth)
+            return
+
+        event = "task_completed" if task.status == "completed" else "task_failed"
+        for trigger in workflow.triggers:
+            if not trigger.enabled or trigger.event != event:
+                continue
+            if trigger.condition == "has_result" and task.result is None:
+                continue
+            if trigger.condition == "has_error" and task.error is None:
+                continue
+            payload = self._build_trigger_payload(task, trigger)
+            next_metadata = TaskMetadata(
+                user_id=metadata.user_id if trigger.inherit_metadata else None,
+                project_id=metadata.project_id if trigger.inherit_metadata else None,
+                source="bot_trigger",
+                priority=metadata.priority if trigger.inherit_metadata else None,
+                conversation_id=metadata.conversation_id if trigger.inherit_metadata else None,
+                orchestration_id=metadata.orchestration_id if trigger.inherit_metadata else None,
+                parent_task_id=task.id,
+                trigger_rule_id=trigger.id,
+                trigger_depth=trigger_depth + 1,
+            )
+            await self.create_task(
+                bot_id=trigger.target_bot_id,
+                payload=payload,
+                metadata=next_metadata,
+            )
+
+    def _build_trigger_payload(self, task: Task, trigger: Any) -> Any:
+        payload_template = trigger.payload_template
+        base_payload: Dict[str, Any] = {
+            "source_bot_id": task.bot_id,
+            "source_task_id": task.id,
+            "source_status": task.status,
+            "source_payload": task.payload,
+            "source_result": task.result,
+            "source_error": task.error.model_dump() if task.error else None,
+            "instruction": f"Triggered by bot {task.bot_id} task {task.id}",
+        }
+        if isinstance(payload_template, dict):
+            merged = dict(base_payload)
+            merged.update(payload_template)
+            return merged
+        if payload_template is not None:
+            return payload_template
+        return base_payload

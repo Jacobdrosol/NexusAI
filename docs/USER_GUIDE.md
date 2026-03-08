@@ -89,6 +89,31 @@ Security guidance:
 - scope API keys/tokens to the exact endpoints needed by each bot
 - rotate credentials periodically and after any suspected exposure
 
+### 3.5 Bot Workflows, Triggers, and Run History
+
+Open `Bots -> <bot>` to configure orchestration for that bot.
+
+Available actions:
+
+1. Add or reorder backend chains as before.
+2. Add workflow triggers that launch another bot when a run completes or fails.
+3. Queue a manual `Run Test` task to validate prompts, backends, and downstream triggers.
+4. Inspect `Run History` to see status, source, trigger rule, and task linkage.
+5. Inspect `Artifacts` to review stored payloads, results, errors, and explicit file-style outputs reported by the run.
+
+Trigger guidance:
+
+- use `task_completed` when a downstream bot should process successful output
+- use `task_failed` for fallback, escalation, or recovery bots
+- use `has_result` or `has_error` conditions to avoid noisy follow-on runs
+- keep trigger chains linear at first; add branching only after you trust each handoff
+
+Safety behavior:
+
+- triggered runs inherit project and conversation metadata by default
+- trigger chains are capped to prevent accidental infinite loops
+- every run is recorded even when the scheduler fails
+
 ## 4. Projects
 
 Project modes:
@@ -247,6 +272,8 @@ Primary endpoints:
 
 1. One project per repository or major initiative.
 2. One PM bot plus specialist bots per project.
-3. Keep cloud context policy at `block` during initial rollout.
-4. Enable `redact` only after validating output quality and data controls.
-5. Use audit logs and metrics as release gates.
+3. Use the Project Data Vault for docs, exports, notes, and source material before ingestion.
+4. Start bot orchestration with simple trigger chains and verify run history before adding branching logic.
+5. Keep cloud context policy at `block` during initial rollout.
+6. Enable `redact` only after validating output quality and data controls.
+7. Use audit logs, run history, and metrics as release gates.

@@ -44,6 +44,7 @@
     <h2 class="panel-title">Backend Chain Editor</h2>
     <div>
       <button class="btn" onclick="openBotEdit()">Edit Bot Info</button>
+      <button class="btn" onclick="openTestRun()">Run Test</button>
       <button class="btn btn-primary" onclick="openAddBackend()">+ Add Backend</button>
       <button class="btn btn-primary" onclick="saveBackendChain()">Save Chain</button>
     </div>
@@ -75,6 +76,88 @@
       {% endfor %}
     </tbody>
   </table>
+</section>
+
+<section class="panel" style="margin-bottom:1rem;">
+  <div class="page-header" style="margin-bottom:0.75rem;">
+    <h2 class="panel-title">Workflow Orchestration</h2>
+    <div>
+      <button class="btn btn-primary" onclick="openTriggerModal()">+ Add Trigger</button>
+      <button class="btn btn-primary" onclick="saveWorkflow()">Save Workflow</button>
+    </div>
+  </div>
+  <p class="mini-note" style="margin-bottom:0.75rem;">Use triggers to hand work from this bot to another bot after a task completes or fails. Triggered runs inherit project and conversation metadata by default and are capped to prevent accidental loops.</p>
+  <table>
+    <thead>
+      <tr>
+        <th>Title</th><th>Event</th><th>Condition</th><th>Target Bot</th><th>Enabled</th><th>Actions</th>
+      </tr>
+    </thead>
+    <tbody id="workflow-trigger-tbody">
+      {% for trigger in (bot.workflow.triggers if bot.workflow and bot.workflow.triggers else []) %}
+      <tr data-index="{{ loop.index0 }}">
+        <td>{{ trigger.title or trigger.id }}</td>
+        <td>{{ trigger.event }}</td>
+        <td>{{ trigger.condition }}</td>
+        <td>{{ trigger.target_bot_id }}</td>
+        <td>{{ 'yes' if trigger.enabled else 'no' }}</td>
+        <td class="actions">
+          <button class="btn btn-sm" onclick="editTrigger({{ loop.index0 }})">Edit</button>
+          <button class="btn btn-sm btn-danger" onclick="removeTrigger({{ loop.index0 }})">Remove</button>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="empty">No triggers configured</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="panel" style="margin-bottom:1rem;">
+  <h2 class="panel-title">Run History</h2>
+  <div class="split-grid" style="grid-template-columns:1.4fr 1fr;gap:1rem;">
+    <div>
+      <table>
+        <thead>
+          <tr>
+            <th>Status</th><th>Started</th><th>Source</th><th>Trigger</th><th>Task</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for run in runs %}
+          <tr>
+            <td>{{ run.status }}</td>
+            <td>{{ ((run.started_at or run.created_at or '')[:19]) | replace('T',' ') }}</td>
+            <td>{{ (run.metadata.source if run.metadata else '') or 'manual' }}</td>
+            <td>{{ run.trigger_rule_id or '—' }}</td>
+            <td><button class="btn btn-sm" onclick="openTaskModal('{{ run.task_id|e }}')">{{ run.task_id[:8] }}…</button></td>
+          </tr>
+          {% else %}
+          <tr><td colspan="5" class="empty">No recorded runs yet</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div>
+      <h3 style="margin-top:0;">Artifacts</h3>
+      <ul style="list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:0.5rem;">
+        {% for artifact in artifacts %}
+        <li style="border:1px solid #e2e8f0;border-radius:10px;padding:0.75rem;">
+          <div style="display:flex;justify-content:space-between;gap:0.75rem;">
+            <strong>{{ artifact.label }}</strong>
+            <span style="color:#64748b;font-size:0.85rem;">{{ artifact.kind }}</span>
+          </div>
+          <div style="color:#64748b;font-size:0.85rem;margin-top:0.25rem;">Task {{ artifact.task_id[:8] }}…{% if artifact.path %} · {{ artifact.path }}{% endif %}</div>
+          {% if artifact.content %}
+          <pre style="margin-top:0.5rem;white-space:pre-wrap;max-height:12rem;overflow:auto;">{{ artifact.content }}</pre>
+          {% endif %}
+        </li>
+        {% else %}
+        <li class="empty">No artifacts recorded yet</li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
 </section>
 
 <section class="panel">
@@ -219,6 +302,69 @@
   </div>
 </div>
 
+<div id="modal-trigger" class="modal" style="display:none;">
+  <div class="modal-content">
+    <h2 id="trigger-modal-title">Add Trigger</h2>
+    <form id="form-trigger">
+      <input type="hidden" name="index" value="">
+      <div class="form-group"><label>Title</label><input class="form-control" name="title" placeholder="Summarize outputs"></div>
+      <div class="split-grid" style="grid-template-columns:1fr 1fr;">
+        <div class="form-group">
+          <label>Event</label>
+          <select class="form-control" name="event">
+            <option value="task_completed">On completion</option>
+            <option value="task_failed">On failure</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Condition</label>
+          <select class="form-control" name="condition">
+            <option value="always">Always</option>
+            <option value="has_result">Only when result exists</option>
+            <option value="has_error">Only when error exists</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Target Bot</label>
+        <input class="form-control" name="target_bot_id" placeholder="bot-reviewer">
+      </div>
+      <div class="form-group">
+        <label>Payload Template (JSON object, optional)</label>
+        <textarea class="form-control" rows="6" name="payload_template" placeholder='{"instruction":"Summarize the source result"}'></textarea>
+      </div>
+      <div class="form-group">
+        <label><input type="checkbox" name="enabled" checked> Enabled</label>
+        <label style="margin-left:1rem;"><input type="checkbox" name="inherit_metadata" checked> Inherit project / conversation context</label>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-primary" onclick="saveTriggerForm()">Apply</button>
+        <button type="button" class="btn" onclick="closeModal('modal-trigger')">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="modal-test-run" class="modal" style="display:none;">
+  <div class="modal-content">
+    <h2>Run Test Task</h2>
+    <form id="form-test-run">
+      <div class="form-group">
+        <label>Instruction</label>
+        <textarea class="form-control" name="instruction" rows="5" placeholder="Tell this bot what to do."></textarea>
+      </div>
+      <div class="form-group">
+        <label>Extra Payload (JSON object, optional)</label>
+        <textarea class="form-control" name="extra_payload" rows="6" placeholder='{"project_id":"demo","scope":"analysis"}'></textarea>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-primary" onclick="submitTestRun()">Queue Test Run</button>
+        <button type="button" class="btn" onclick="closeModal('modal-test-run')">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
 <div id="modal-task-detail" class="modal" style="display:none;">
   <div class="modal-content">
     <h2>Task Detail</h2>
@@ -235,6 +381,8 @@
 const BOT_ID = {{ bot.id|tojson }};
 let BOT = {{ bot|tojson }};
 const TASKS = {{ tasks|tojson }};
+const RUNS = {{ runs|tojson }};
+const ARTIFACTS = {{ artifacts|tojson }};
 const WORKERS = {{ workers|tojson }};
 const GLOBAL_MODELS = {{ models|tojson }};
 const API_KEYS = {{ api_keys|tojson }};
@@ -269,6 +417,10 @@ const PROVIDER_MODEL_SUGGESTIONS = {
     'gemini-2.0-flash'
   ]
 };
+BOT.backends = Array.isArray(BOT.backends) ? BOT.backends : [];
+BOT.workflow = BOT.workflow && Array.isArray(BOT.workflow.triggers)
+  ? BOT.workflow
+  : {triggers: [], notes: ''};
 
 function getCsrf() {
   const el = document.querySelector('input[name=csrf_token]');
@@ -282,6 +434,10 @@ function closeModal(id) {
 
 function openBotEdit() {
   document.getElementById('modal-edit-bot').style.display = 'flex';
+}
+
+function openTestRun() {
+  document.getElementById('modal-test-run').style.display = 'flex';
 }
 
 function saveBotInfo() {
@@ -518,6 +674,106 @@ function renderBackendChain() {
   `).join('');
 }
 
+function renderWorkflowTriggers() {
+  const tbody = document.getElementById('workflow-trigger-tbody');
+  if (!tbody) return;
+  const list = Array.isArray(BOT.workflow?.triggers) ? BOT.workflow.triggers : [];
+  if (!list.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="empty">No triggers configured</td></tr>';
+    return;
+  }
+  tbody.innerHTML = list.map((trigger, idx) => `
+    <tr data-index="${idx}">
+      <td>${escapeHtml(trigger.title || trigger.id || ('trigger-' + (idx + 1)))}</td>
+      <td>${escapeHtml(trigger.event || '')}</td>
+      <td>${escapeHtml(trigger.condition || 'always')}</td>
+      <td>${escapeHtml(trigger.target_bot_id || '')}</td>
+      <td>${trigger.enabled ? 'yes' : 'no'}</td>
+      <td class="actions">
+        <button class="btn btn-sm" onclick="editTrigger(${idx})">Edit</button>
+        <button class="btn btn-sm btn-danger" onclick="removeTrigger(${idx})">Remove</button>
+      </td>
+    </tr>
+  `).join('');
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function openTriggerModal() {
+  const form = document.getElementById('form-trigger');
+  form.reset();
+  form.index.value = '';
+  document.getElementById('trigger-modal-title').textContent = 'Add Trigger';
+  document.getElementById('modal-trigger').style.display = 'flex';
+}
+
+function editTrigger(index) {
+  const trigger = BOT.workflow?.triggers?.[index];
+  if (!trigger) return;
+  const form = document.getElementById('form-trigger');
+  form.index.value = String(index);
+  form.title.value = trigger.title || '';
+  form.event.value = trigger.event || 'task_completed';
+  form.condition.value = trigger.condition || 'always';
+  form.target_bot_id.value = trigger.target_bot_id || '';
+  form.payload_template.value = trigger.payload_template ? JSON.stringify(trigger.payload_template, null, 2) : '';
+  form.enabled.checked = trigger.enabled !== false;
+  form.inherit_metadata.checked = trigger.inherit_metadata !== false;
+  document.getElementById('trigger-modal-title').textContent = 'Edit Trigger';
+  document.getElementById('modal-trigger').style.display = 'flex';
+}
+
+function removeTrigger(index) {
+  BOT.workflow.triggers.splice(index, 1);
+  renderWorkflowTriggers();
+}
+
+function saveTriggerForm() {
+  const form = document.getElementById('form-trigger');
+  const fd = new FormData(form);
+  const targetBotId = String(fd.get('target_bot_id') || '').trim();
+  if (!targetBotId) {
+    alert('Target bot ID is required.');
+    return;
+  }
+  let payloadTemplate = null;
+  const rawTemplate = String(fd.get('payload_template') || '').trim();
+  if (rawTemplate) {
+    try {
+      payloadTemplate = JSON.parse(rawTemplate);
+    } catch (err) {
+      alert('Payload template must be valid JSON.');
+      return;
+    }
+  }
+  const next = {
+    id: String(fd.get('title') || targetBotId || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || ('trigger-' + Date.now()),
+    title: String(fd.get('title') || '').trim() || null,
+    event: String(fd.get('event') || 'task_completed'),
+    condition: String(fd.get('condition') || 'always'),
+    target_bot_id: targetBotId,
+    enabled: form.querySelector('input[name=enabled]').checked,
+    inherit_metadata: form.querySelector('input[name=inherit_metadata]').checked,
+    payload_template: payloadTemplate,
+  };
+  const idxRaw = String(fd.get('index') || '');
+  if (idxRaw === '') BOT.workflow.triggers.push(next);
+  else BOT.workflow.triggers[parseInt(idxRaw, 10)] = next;
+  renderWorkflowTriggers();
+  closeModal('modal-trigger');
+}
+
+function saveWorkflow() {
+  persistBot('Workflow saved.');
+}
+
 function openAddBackend() {
   const form = document.getElementById('form-backend');
   form.reset();
@@ -645,13 +901,46 @@ function persistBot(successMessage) {
 }
 
 function openTaskModal(taskId) {
-  const task = TASKS.find(t => String(t.id) === String(taskId));
+  const task = TASKS.find(t => String(t.id) === String(taskId)) || RUNS.find(t => String(t.task_id) === String(taskId));
   if (!task) return;
   document.getElementById('task-detail-pre').textContent = JSON.stringify(task, null, 2);
   document.getElementById('modal-task-detail').style.display = 'flex';
 }
 
+function submitTestRun() {
+  const form = document.getElementById('form-test-run');
+  const instruction = String(form.instruction.value || '').trim();
+  if (!instruction) {
+    alert('Instruction is required.');
+    return;
+  }
+  let extraPayload = {};
+  const raw = String(form.extra_payload.value || '').trim();
+  if (raw) {
+    try {
+      extraPayload = JSON.parse(raw);
+    } catch (err) {
+      alert('Extra payload must be valid JSON.');
+      return;
+    }
+  }
+  const payload = Object.assign({}, extraPayload, {instruction});
+  fetch('/api/bots/' + encodeURIComponent(BOT_ID) + '/test-run', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify({payload})
+  })
+  .then(async (r) => {
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || 'Test run failed');
+    alert('Test run queued: ' + data.id);
+    location.reload();
+  })
+  .catch((e) => alert(e.message || 'Test run failed'));
+}
+
 renderBackendChain();
+renderWorkflowTriggers();
 document.querySelector('#form-backend select[name=worker_id]')?.addEventListener('change', () => refreshModelOptions());
 document.querySelector('#form-backend select[name=provider]')?.addEventListener('change', () => {
   refreshApiKeyOptions();

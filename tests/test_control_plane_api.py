@@ -459,6 +459,38 @@ async def test_list_tasks_filtered_by_orchestration_id(cp_client):
 
 
 @pytest.mark.anyio
+async def test_bot_runs_and_artifacts_endpoints_expose_task_history(cp_client):
+    await cp_client.post(
+        "/v1/bots",
+        json={"id": "bot-history", "name": "Bot History", "role": "assistant", "backends": []},
+    )
+    await cp_client.post(
+        "/v1/tasks",
+        json={"bot_id": "bot-history", "payload": {"instruction": "hello"}},
+    )
+
+    for _ in range(30):
+        runs = await cp_client.get("/v1/bots/bot-history/runs")
+        if runs.status_code == 200 and runs.json():
+            first = runs.json()[0]
+            if first["status"] in {"completed", "failed"}:
+                break
+        await asyncio.sleep(0.1)
+
+    runs = await cp_client.get("/v1/bots/bot-history/runs")
+    assert runs.status_code == 200
+    run_rows = runs.json()
+    assert len(run_rows) >= 1
+    assert run_rows[0]["task_id"]
+
+    artifacts = await cp_client.get("/v1/bots/bot-history/artifacts")
+    assert artifacts.status_code == 200
+    artifact_rows = artifacts.json()
+    labels = {row["label"] for row in artifact_rows}
+    assert "Task Payload" in labels
+
+
+@pytest.mark.anyio
 async def test_project_github_pat_connect_status_disconnect(cp_client):
     create_resp = await cp_client.post(
         "/v1/projects",

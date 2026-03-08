@@ -154,6 +154,9 @@ def test_bot_detail_page_loads_when_logged_in(dashboard_client):
 
     resp = dashboard_client.get(f"/bots/{bot_id}")
     assert resp.status_code == 200
+    assert b"Workflow Orchestration" in resp.data
+    assert b"Run History" in resp.data
+    assert b"Run Test" in resp.data
     assert b"Task Board" in resp.data
     assert b"Backend Chain Editor" in resp.data
     assert b"Backlog" in resp.data
@@ -162,6 +165,23 @@ def test_bot_detail_page_loads_when_logged_in(dashboard_client):
     assert b"Auto: 1024 for local Ollama chat" in resp.data
     assert b"Context Window" in resp.data
     assert b"GPU Layers" in resp.data
+
+
+def test_bot_test_run_api_proxies_to_control_plane(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def create_task_full(self, bot_id, payload, metadata=None, depends_on=None):
+            return {"id": "task-123", "bot_id": bot_id, "payload": payload, "metadata": metadata}
+
+    with patch("dashboard.cp_client.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/bots/bot-1/test-run",
+            json={"payload": {"instruction": "hello"}},
+        )
+
+    assert resp.status_code == 201
+    assert resp.get_json()["id"] == "task-123"
 
 
 def test_chat_ingest_api_validates_required_fields(dashboard_client):

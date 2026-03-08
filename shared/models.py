@@ -1,4 +1,4 @@
-from typing import Any, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -53,6 +53,24 @@ class BackendConfig(BaseModel):
     params: Optional[BackendParams] = None
 
 
+class BotWorkflowTrigger(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    event: Literal["task_completed", "task_failed"]
+    target_bot_id: str
+    enabled: bool = True
+    condition: Literal["always", "has_result", "has_error"] = "always"
+    payload_template: Optional[Any] = None
+    inherit_metadata: bool = True
+    title: Optional[str] = None
+
+
+class BotWorkflow(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    triggers: List[BotWorkflowTrigger] = Field(default_factory=list)
+    notes: Optional[str] = None
+
+
 class Bot(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str
@@ -63,6 +81,7 @@ class Bot(BaseModel):
     enabled: bool = True
     backends: List[BackendConfig]
     routing_rules: Optional[Any] = None
+    workflow: Optional[BotWorkflow] = None
 
 
 class TaskMetadata(BaseModel):
@@ -74,6 +93,9 @@ class TaskMetadata(BaseModel):
     conversation_id: Optional[str] = None
     orchestration_id: Optional[str] = None
     step_id: Optional[str] = None
+    parent_task_id: Optional[str] = None
+    trigger_rule_id: Optional[str] = None
+    trigger_depth: Optional[int] = None
 
 
 class TaskError(BaseModel):
@@ -95,6 +117,38 @@ class Task(BaseModel):
     error: Optional[TaskError] = None
     created_at: str
     updated_at: str
+
+
+class BotRun(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    task_id: str
+    bot_id: str
+    status: Literal["queued", "blocked", "running", "completed", "failed"] = "queued"
+    payload: Any
+    metadata: Optional[TaskMetadata] = None
+    result: Optional[Any] = None
+    error: Optional[TaskError] = None
+    triggered_by_task_id: Optional[str] = None
+    trigger_rule_id: Optional[str] = None
+    created_at: str
+    updated_at: str
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+
+
+class BotRunArtifact(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    run_id: str
+    task_id: str
+    bot_id: str
+    kind: Literal["payload", "result", "error", "file", "note"] = "note"
+    label: str
+    content: Optional[str] = None
+    path: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    created_at: str
 
 
 class Project(BaseModel):

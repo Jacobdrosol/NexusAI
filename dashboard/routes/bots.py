@@ -22,8 +22,26 @@ def _slugify_bot_id(name: str) -> str:
     return slug or "bot"
 
 
+def _merge_routing_rules(data: dict[str, Any], existing: Any = None) -> dict[str, Any]:
+    merged: dict[str, Any] = {}
+    if isinstance(existing, str) and existing.strip():
+        try:
+            merged = json.loads(existing)
+        except json.JSONDecodeError:
+            merged = {}
+    elif isinstance(existing, dict):
+        merged = dict(existing)
+
+    if isinstance(data.get("routing_rules"), dict):
+        merged.update(data["routing_rules"])
+    if "workflow" in data:
+        merged["workflow"] = data.get("workflow")
+    return merged
+
+
 def _bot_to_dict(b: Bot) -> dict[str, Any]:
     """Serialise a Bot ORM row to a plain dict."""
+    routing_rules = json.loads(b.routing_rules) if b.routing_rules else {}
     return {
         "id": b.id,
         "name": b.name,
@@ -31,7 +49,8 @@ def _bot_to_dict(b: Bot) -> dict[str, Any]:
         "priority": b.priority,
         "enabled": b.enabled,
         "backends": b.backends_as_list(),
-        "routing_rules": json.loads(b.routing_rules) if b.routing_rules else {},
+        "routing_rules": routing_rules,
+        "workflow": routing_rules.get("workflow") if isinstance(routing_rules, dict) else None,
     }
 
 
@@ -67,6 +86,8 @@ def bot_detail_page(bot_id: str):
     cp = get_cp_client()
     cp_bot = cp.get_bot(bot_id)
     cp_tasks = cp.list_tasks()
+    cp_runs = cp.list_bot_runs(bot_id) or []
+    cp_artifacts = cp.list_bot_artifacts(bot_id, limit=150) or []
     cp_workers = cp.list_workers() or []
     cp_models = cp.list_models() or []
     cp_keys = cp.list_keys() or []
@@ -77,6 +98,8 @@ def bot_detail_page(bot_id: str):
             "bot_detail.html",
             bot=cp_bot,
             tasks=tasks,
+            runs=cp_runs,
+            artifacts=cp_artifacts,
             workers=cp_workers,
             models=cp_models,
             api_keys=cp_keys,
@@ -110,6 +133,8 @@ def bot_detail_page(bot_id: str):
             "bot_detail.html",
             bot=_bot_to_dict(bot),
             tasks=tasks,
+            runs=[],
+            artifacts=[],
             workers=[],
             models=[],
             api_keys=[],
@@ -163,7 +188,8 @@ def api_create_bot():
                 "enabled": bool(data.get("enabled", True)),
                 "system_prompt": data.get("system_prompt"),
                 "backends": data.get("backends", []),
-                "routing_rules": data.get("routing_rules"),
+                "routing_rules": _merge_routing_rules(data),
+                "workflow": data.get("workflow"),
             }
         )
         if created is None:
@@ -182,7 +208,7 @@ def api_create_bot():
             priority=int(data.get("priority", 0)),
             enabled=bool(data.get("enabled", True)),
             backends=json.dumps(data.get("backends", [])),
-            routing_rules=json.dumps(data.get("routing_rules", {})),
+            routing_rules=json.dumps(_merge_routing_rules(data)),
         )
         db.add(bot)
         db.commit()
@@ -244,8 +270,8 @@ def api_update_bot(bot_id: str):
             bot.enabled = bool(data["enabled"])
         if "backends" in data:
             bot.backends = json.dumps(data["backends"])
-        if "routing_rules" in data:
-            bot.routing_rules = json.dumps(data["routing_rules"])
+        if "routing_rules" in data or "workflow" in data:
+            bot.routing_rules = json.dumps(_merge_routing_rules(data, existing=bot.routing_rules))
         db.commit()
         db.refresh(bot)
         return jsonify(_bot_to_dict(bot))
@@ -278,3 +304,33 @@ def api_delete_bot(bot_id: str):
         return "", 204
     finally:
         db.close()
+
+
+@bp.post("/api/bots/<bot_id>/test-run")
+@login_required
+def api_test_run_bot(bot_id: str):
+    from dashboard.cp_client import get_cp_client
+
+    data: dict[str, Any] = request.get_json(force=True) or {}
+    payload = data.get("payload")
+    if not isinstance(payload, dict):
+        return jsonify({"error": "payload object is required"}), 400
+
+    cp = get_cp_client()
+    task = cp.create_task_full(
+        bot_id=bot_id,
+        payload=payload,
+        metadata={
+            "source": "bot_test",
+            "project_id": data.get("project_id"),
+            "conversation_id": data.get("conversation_id"),
+            "priority": data.get("priority"),
+        },
+    )
+    if task is None:
+        err = cp.last_error()
+        status = int((err or {}).get("status_code") or 502)
+        if status < 400 or status > 599:
+            status = 502
+        return jsonify({"error": str((err or {}).get("detail") or "control plane unavailable")}), status
+    return jsonify(task), 201

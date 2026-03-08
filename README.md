@@ -126,7 +126,7 @@ Dashboard and workflow:
 - Navigation pages: `Overview`, `Projects`, `Chat`, `Bots`, `Workers`, `Vault`, `Settings`.
 - Improved dashboard link contrast for worker and bot names on dark tables/cards.
 - Worker detail pages with live load, queue, and GPU graphs.
-- Bot detail editor with backend chain management and task board.
+- Bot detail editor with backend chain management, workflow triggers, test runs, run history, and task board.
 - Bot-scoped external Connections workspace for HTTP/OpenAPI and database integration setup.
 - OpenAPI action discovery and in-dashboard connection test runner for bot connections.
 - Project detail pages with bridge management and scoped resources.
@@ -230,6 +230,29 @@ python scripts/ingest_project_data.py --project-id <project_id> --namespace proj
 ```
 
 The ingest runner reads the project data files from disk and posts them into the control-plane vault so they are chunked and embedded for retrieval.
+
+---
+
+## Bot Orchestration
+
+Bots can now be configured with simple trigger-based orchestration directly from the bot detail page.
+
+Current capabilities:
+
+- Trigger another bot when a task completes or fails.
+- Gate triggers on `always`, `has_result`, or `has_error`.
+- Preserve project/conversation metadata across triggered runs.
+- Queue one-off bot test runs from the dashboard.
+- Inspect run history and generated artifacts per bot.
+
+Loop safety:
+
+- Trigger chains are capped by `NEXUSAI_BOT_TRIGGER_MAX_DEPTH` (default `6`) to prevent accidental infinite handoff loops.
+
+API endpoints:
+
+- `GET /v1/bots/{bot_id}/runs`
+- `GET /v1/bots/{bot_id}/artifacts`
 
 ---
 
@@ -434,6 +457,12 @@ curl -X POST http://localhost:8000/v1/bots/{bot_id}/disable
 
 # Delete bot
 curl -X DELETE http://localhost:8000/v1/bots/{bot_id}
+
+# List bot run history
+curl http://localhost:8000/v1/bots/{bot_id}/runs
+
+# List bot artifacts
+curl http://localhost:8000/v1/bots/{bot_id}/artifacts
 ```
 
 #### Workers
@@ -614,6 +643,21 @@ backends:
 ```
 
 2. Restart the control plane (or `POST /v1/bots` to register at runtime).
+
+Optional workflow trigger example:
+
+```yaml
+workflow:
+  triggers:
+    - id: summarize-output
+      title: Summarize output
+      event: task_completed
+      condition: has_result
+      target_bot_id: bot-summarizer
+      inherit_metadata: true
+      payload_template:
+        instruction: Summarize the source bot result for the operator.
+```
 
 ---
 

@@ -1,10 +1,10 @@
 from typing import List
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from control_plane.audit.utils import record_audit_event
 from shared.exceptions import BotNotFoundError
-from shared.models import Bot
+from shared.models import Bot, BotRun, BotRunArtifact
 
 router = APIRouter(prefix="/v1/bots", tags=["bots"])
 
@@ -74,3 +74,33 @@ async def disable_bot(bot_id: str, request: Request) -> Bot:
         return await bot_registry.get(bot_id)
     except BotNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/{bot_id}/runs", response_model=List[BotRun])
+async def list_bot_runs(
+    bot_id: str,
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=200),
+) -> List[BotRun]:
+    bot_registry = request.app.state.bot_registry
+    task_manager = request.app.state.task_manager
+    try:
+        await bot_registry.get(bot_id)
+    except BotNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return await task_manager.list_bot_runs(bot_id=bot_id, limit=limit)
+
+
+@router.get("/{bot_id}/artifacts", response_model=List[BotRunArtifact])
+async def list_bot_artifacts(
+    bot_id: str,
+    request: Request,
+    limit: int = Query(default=100, ge=1, le=300),
+) -> List[BotRunArtifact]:
+    bot_registry = request.app.state.bot_registry
+    task_manager = request.app.state.task_manager
+    try:
+        await bot_registry.get(bot_id)
+    except BotNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return await task_manager.list_bot_run_artifacts(bot_id=bot_id, limit=limit)

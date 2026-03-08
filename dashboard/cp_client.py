@@ -192,6 +192,12 @@ class CPClient:
     def delete_bot(self, bot_id: str) -> bool:
         return self._delete(f"/v1/bots/{bot_id}")
 
+    def list_bot_runs(self, bot_id: str, limit: int = 50) -> Optional[List[Dict[str, Any]]]:
+        return self._get(f"/v1/bots/{bot_id}/runs?limit={int(limit)}")
+
+    def list_bot_artifacts(self, bot_id: str, limit: int = 100) -> Optional[List[Dict[str, Any]]]:
+        return self._get(f"/v1/bots/{bot_id}/artifacts?limit={int(limit)}")
+
     # Tasks
     def list_tasks(self, orchestration_id: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
         if orchestration_id:

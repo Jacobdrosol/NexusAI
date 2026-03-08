@@ -74,7 +74,7 @@ async def lifespan(app: FastAPI):
         model_registry=model_registry,
         project_registry=project_registry,
     )
-    task_manager = TaskManager(scheduler)
+    task_manager = TaskManager(scheduler, bot_registry=bot_registry)
     pm_orchestrator = PMOrchestrator(
         bot_registry=bot_registry,
         scheduler=scheduler,

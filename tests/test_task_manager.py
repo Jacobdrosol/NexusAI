@@ -85,3 +85,59 @@ async def test_dependent_task_unblocks_after_dependency_completes():
 
     assert dep_latest.status == "completed"
     assert dep_latest.result == {"ok": "child"}
+
+
+@pytest.mark.anyio
+async def test_bot_trigger_creates_follow_on_run_and_artifacts(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {
+                "answer": f"done:{task.bot_id}",
+                "artifacts": [{"label": "summary.txt", "path": "runs/summary.txt", "content": "ok"}],
+            }
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "bots.db"))
+    await bot_registry.register(Bot(id="bot-a", name="Bot A", role="assistant", backends=[], workflow={
+        "triggers": [
+            {
+                "id": "handoff",
+                "event": "task_completed",
+                "target_bot_id": "bot-b",
+                "condition": "has_result",
+            }
+        ]
+    }))
+    await bot_registry.register(Bot(id="bot-b", name="Bot B", role="assistant", backends=[]))
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "tasks.db"), bot_registry=bot_registry)
+    root = await tm.create_task(bot_id="bot-a", payload={"instruction": "start"})
+
+    for _ in range(40):
+        tasks = await tm.list_tasks()
+        if len(tasks) >= 2 and all(t.status == "completed" for t in tasks):
+            break
+        await asyncio.sleep(0.1)
+
+    tasks = await tm.list_tasks()
+    assert len(tasks) == 2
+    triggered = next(t for t in tasks if t.id != root.id)
+    assert triggered.bot_id == "bot-b"
+    assert triggered.metadata is not None
+    assert triggered.metadata.parent_task_id == root.id
+    assert triggered.metadata.trigger_rule_id == "handoff"
+
+    runs = await tm.list_bot_runs("bot-a")
+    assert len(runs) == 1
+    assert runs[0].status == "completed"
+
+    artifacts = await tm.list_bot_run_artifacts("bot-a")
+    labels = {artifact.label for artifact in artifacts}
+    assert "Task Payload" in labels
+    assert "Task Result" in labels
+    assert "summary.txt" in labels
