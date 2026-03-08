@@ -8,6 +8,24 @@
 {% if error %}
 <div class="alert alert-error">{{ error }}</div>
 {% endif %}
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+{% if launchable_bots %}
+<section class="panel" style="margin-bottom:1rem;">
+  <div class="page-header" style="margin-bottom:0.75rem;">
+    <h2 class="panel-title">Quick Launch</h2>
+  </div>
+  <div class="quick-links">
+    {% for bot in launchable_bots %}
+    <button
+      class="quick-link"
+      type="button"
+      onclick="queueSavedLaunch({{ bot.id|tojson }}, {{ bot.launch_profile.label|tojson }})"
+      title="{{ bot.launch_profile.description or bot.role }}"
+    >{{ bot.launch_profile.label }}</button>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
 <table>
   <thead>
     <tr>
@@ -45,9 +63,29 @@
 {% endblock %}
 {% block scripts %}
 <script>
+function getCsrf() {
+  const el = document.querySelector('input[name=csrf_token]');
+  return el ? el.value : '';
+}
+
 function toggleDetail(id) {
   const el = document.getElementById('detail-' + id);
   if (el) el.classList.toggle('open');
+}
+
+function queueSavedLaunch(botId, label) {
+  fetch('/api/bots/' + encodeURIComponent(botId) + '/launch', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify({})
+  })
+  .then(async (r) => {
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || 'Launch failed');
+    alert((label || 'Launch') + ' queued: ' + data.id);
+    location.reload();
+  })
+  .catch((e) => alert(e.message || 'Launch failed'));
 }
 </script>
 {% endblock %}

@@ -97,6 +97,7 @@ def create_app() -> Flask:
     @login_required
     def index():
         """Overview / home page."""
+        from dashboard.bot_launch import launchable_bots
         from dashboard.cp_client import get_cp_client
         from dashboard.models import User
 
@@ -113,6 +114,7 @@ def create_app() -> Flask:
             cp_workers is not None and cp_bots is not None and cp_projects is not None
         )
         cp_available = cp_auth_ok or cp_tasks is not None
+        overview_launch_bots = launchable_bots(cp_bots or [], surface="overview")
 
         if cp_available:
             workers = cp_workers or []
@@ -403,6 +405,7 @@ def create_app() -> Flask:
             },
             worker_health=worker_health,
             recent_activity=recent_activity,
+            launchable_bots=overview_launch_bots,
             system_alerts=system_alerts,
             quick_links=quick_links,
             setup_checklist=setup_checklist,

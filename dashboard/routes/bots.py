@@ -38,6 +38,8 @@ def _merge_routing_rules(data: dict[str, Any], existing: Any = None) -> dict[str
         merged["workflow"] = data.get("workflow")
     if "input_contract" in data:
         merged["input_contract"] = data.get("input_contract")
+    if "launch_profile" in data:
+        merged["launch_profile"] = data.get("launch_profile")
     return merged
 
 
@@ -54,6 +56,7 @@ def _bot_to_dict(b: Bot) -> dict[str, Any]:
         "routing_rules": routing_rules,
         "workflow": routing_rules.get("workflow") if isinstance(routing_rules, dict) else None,
         "input_contract": routing_rules.get("input_contract") if isinstance(routing_rules, dict) else None,
+        "launch_profile": routing_rules.get("launch_profile") if isinstance(routing_rules, dict) else None,
     }
 
 
@@ -336,4 +339,49 @@ def api_test_run_bot(bot_id: str):
         if status < 400 or status > 599:
             status = 502
         return jsonify({"error": str((err or {}).get("detail") or "control plane unavailable")}), status
+    return jsonify(task), 201
+
+
+@bp.post("/api/bots/<bot_id>/launch")
+@login_required
+def api_launch_bot(bot_id: str):
+    from dashboard.bot_launch import normalize_launch_profile
+    from dashboard.cp_client import get_cp_client
+
+    cp = get_cp_client()
+    bot = cp.get_bot(bot_id)
+    if bot is None:
+        err = cp.last_error()
+        status = int((err or {}).get("status_code") or 502)
+        if status < 400 or status > 599:
+            status = 502
+        return jsonify({"error": str((err or {}).get("detail") or "bot not found")}), status
+
+    launch_profile = normalize_launch_profile(bot)
+    if launch_profile is None:
+        return jsonify({"error": "bot does not have a saved launch profile"}), 400
+
+    data: dict[str, Any] = request.get_json(silent=True) or {}
+    payload = data.get("payload")
+    if payload is None:
+        payload = launch_profile["payload"]
+    if not isinstance(payload, dict):
+        return jsonify({"error": "launch payload must be a JSON object"}), 400
+
+    metadata = {
+        "source": "saved_launch",
+        "project_id": data.get("project_id", launch_profile.get("project_id")),
+        "priority": data.get("priority", launch_profile.get("priority")),
+    }
+    task = cp.create_task_full(
+        bot_id=bot_id,
+        payload=payload,
+        metadata=metadata,
+    )
+    if task is None:
+        err = cp.last_error()
+        status = int((err or {}).get("status_code") or 502)
+        if status < 400 or status > 599:
+            status = 502
+        return jsonify({"error": str((err or {}).get("detail") or "launch failed")}), status
     return jsonify(task), 201

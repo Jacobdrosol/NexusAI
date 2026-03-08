@@ -34,11 +34,18 @@ def _task_to_dict(t: Task) -> dict[str, Any]:
 @login_required
 def tasks_page() -> str:
     """Render the tasks table page."""
+    from dashboard.bot_launch import launchable_bots
     from dashboard.cp_client import get_cp_client
 
-    cp_data = get_cp_client().list_tasks()
+    cp = get_cp_client()
+    cp_data = cp.list_tasks()
     if cp_data is not None:
-        return render_template("tasks.html", tasks=cp_data, error=None)
+        return render_template(
+            "tasks.html",
+            tasks=cp_data,
+            launchable_bots=launchable_bots(cp.list_bots() or [], surface="tasks"),
+            error=None,
+        )
 
     flash("Control plane unavailable — showing local data.", "warning")
     db = get_db()
@@ -47,6 +54,7 @@ def tasks_page() -> str:
         return render_template(
             "tasks.html",
             tasks=[_task_to_dict(t) for t in tasks],
+            launchable_bots=[],
             error=None,
         )
     finally:

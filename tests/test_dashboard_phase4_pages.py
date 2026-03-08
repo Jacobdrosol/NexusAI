@@ -257,6 +257,7 @@ def test_bot_detail_page_loads_when_logged_in(dashboard_client):
     assert b"Task Board" in resp.data
     assert b"Backend Chain Editor" in resp.data
     assert b"Run Input Contract" in resp.data
+    assert b"Saved Launch Profile" in resp.data
     assert b"Backlog" in resp.data
     assert b"ollama_cloud" in resp.data
     assert b"qwen3.5:cloud" in resp.data
@@ -280,6 +281,70 @@ def test_bot_test_run_api_proxies_to_control_plane(dashboard_client):
 
     assert resp.status_code == 201
     assert resp.get_json()["id"] == "task-123"
+
+
+def test_bot_launch_api_uses_saved_launch_profile(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def get_bot(self, bot_id):
+            return {
+                "id": bot_id,
+                "name": "Course Intake",
+                "role": "assistant",
+                "routing_rules": {
+                    "launch_profile": {
+                        "enabled": True,
+                        "label": "Run Course Pipeline",
+                        "payload": {"topic": "AP World History"},
+                        "project_id": "globeiq",
+                        "priority": 2,
+                    }
+                },
+            }
+
+        def create_task_full(self, bot_id, payload, metadata=None, depends_on=None):
+            return {"id": "task-launch-1", "bot_id": bot_id, "payload": payload, "metadata": metadata}
+
+    with patch("dashboard.cp_client.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post("/api/bots/course-intake/launch", json={})
+
+    assert resp.status_code == 201
+    body = resp.get_json()
+    assert body["payload"]["topic"] == "AP World History"
+    assert body["metadata"]["project_id"] == "globeiq"
+
+
+def test_tasks_page_shows_quick_launch_buttons(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_tasks(self):
+            return []
+
+        def list_bots(self):
+            return [
+                {
+                    "id": "course-intake",
+                    "name": "Course Intake",
+                    "role": "assistant",
+                    "routing_rules": {
+                        "launch_profile": {
+                            "enabled": True,
+                            "label": "Run Course Pipeline",
+                            "payload": {"topic": "AP World History"},
+                            "show_on_tasks": True,
+                        }
+                    },
+                }
+            ]
+
+    with patch("dashboard.cp_client.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/tasks")
+
+    assert resp.status_code == 200
+    assert b"Quick Launch" in resp.data
+    assert b"Run Course Pipeline" in resp.data
 
 
 def test_chat_ingest_api_validates_required_fields(dashboard_client):
@@ -671,3 +736,48 @@ def test_overview_page_shows_enhanced_sections(dashboard_client):
     assert b"Recent Activity" in resp.data
     assert b"Worker Health" in resp.data
     assert b"Quick Links" in resp.data
+    assert b"Workflow Launch" in resp.data
+
+
+def test_overview_page_shows_saved_launch_profiles(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def health(self):
+            return True
+
+        def list_workers(self):
+            return []
+
+        def list_bots(self):
+            return [
+                {
+                    "id": "course-intake",
+                    "name": "Course Intake",
+                    "role": "assistant",
+                    "enabled": True,
+                    "routing_rules": {
+                        "launch_profile": {
+                            "enabled": True,
+                            "label": "Run Course Pipeline",
+                            "payload": {"topic": "AP World History"},
+                            "show_on_overview": True,
+                        }
+                    },
+                }
+            ]
+
+        def list_projects(self):
+            return []
+
+        def list_tasks(self):
+            return []
+
+        def probe_paths(self, paths):
+            return [{"path": p, "ok": True, "status_code": 200, "detail": "ok"} for p in paths]
+
+    with patch("dashboard.cp_client.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/")
+
+    assert resp.status_code == 200
+    assert b"Run Course Pipeline" in resp.data

@@ -141,6 +141,8 @@ async def test_bot_trigger_creates_follow_on_run_and_artifacts(tmp_path):
     assert "Task Payload" in labels
     assert "Task Result" in labels
     assert "Run Report" in labels
+    assert "Execution Report" in labels
+    assert "Usage Report" in labels
     assert "summary.txt" in labels
 
 
@@ -203,3 +205,36 @@ async def test_qc_bot_can_route_failures_back_to_source_bot(tmp_path):
     assert retry_task.metadata is not None
     assert retry_task.metadata.parent_task_id == qc_task.id
     assert retry_task.metadata.trigger_rule_id == "return-for-fix"
+
+
+@pytest.mark.anyio
+async def test_run_reports_capture_usage_metadata(tmp_path):
+    import asyncio
+
+    from control_plane.task_manager.task_manager import TaskManager
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {
+                "output": "done",
+                "usage": {
+                    "prompt_tokens": 11,
+                    "completion_tokens": 7,
+                    "total_tokens": 18,
+                },
+            }
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "usage.db"))
+    task = await tm.create_task(bot_id="usage-bot", payload={"instruction": "go"})
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status == "completed":
+            break
+        await asyncio.sleep(0.1)
+
+    artifacts = await tm.list_bot_run_artifacts("usage-bot")
+    usage_artifact = next(a for a in artifacts if a.label == "Usage Report")
+    assert '"prompt_tokens": 11' in str(usage_artifact.content)
+    execution_artifact = next(a for a in artifacts if a.label == "Execution Report")
+    assert execution_artifact.metadata["usage"]["total_tokens"] == 18

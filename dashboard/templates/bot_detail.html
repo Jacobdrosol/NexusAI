@@ -138,6 +138,49 @@
 </section>
 
 <section class="panel" style="margin-bottom:1rem;">
+  <div class="page-header" style="margin-bottom:0.75rem;">
+    <h2 class="panel-title">Saved Launch Profile</h2>
+    <div>
+      <button class="btn" onclick="queueSavedLaunch()">Queue Saved Launch</button>
+      <button class="btn btn-primary" onclick="saveLaunchProfile()">Save Launch Profile</button>
+    </div>
+  </div>
+  <p class="mini-note" style="margin-bottom:0.75rem;">Store one reusable launch payload here, then queue this bot directly from Overview or Tasks without filling the contract form every time.</p>
+  <div class="form-group">
+    <label><input type="checkbox" id="launch-profile-enabled" checked> Enable saved launch profile</label>
+  </div>
+  <div class="split-grid" style="grid-template-columns:1fr 1fr;">
+    <div class="form-group">
+      <label>Launch Label</label>
+      <input class="form-control" id="launch-profile-label" placeholder="Run AP World History Pipeline">
+    </div>
+    <div class="form-group">
+      <label>Project ID (optional)</label>
+      <input class="form-control" id="launch-profile-project-id" placeholder="globeiq">
+    </div>
+  </div>
+  <div class="split-grid" style="grid-template-columns:1fr 1fr;">
+    <div class="form-group">
+      <label>Priority (optional)</label>
+      <input class="form-control" id="launch-profile-priority" type="number" placeholder="2">
+    </div>
+    <div class="form-group" style="display:flex;gap:1rem;align-items:flex-end;flex-wrap:wrap;">
+      <label><input type="checkbox" id="launch-profile-show-overview" checked> Show on Overview</label>
+      <label><input type="checkbox" id="launch-profile-show-tasks" checked> Show on Tasks</label>
+    </div>
+  </div>
+  <div class="form-group">
+    <label>Description</label>
+    <textarea class="form-control" id="launch-profile-description" rows="3" placeholder="Explain what this saved launch does and what operators should expect."></textarea>
+  </div>
+  <div class="form-group">
+    <label>Launch Payload JSON</label>
+    <textarea class="form-control" id="launch-profile-payload" rows="14" placeholder='{"topic":"...","units_json":"[...]"}'></textarea>
+    <div class="mini-note">This payload is queued exactly as stored. Use it for large one-click workflow runs that would be painful to fill out manually.</div>
+  </div>
+</section>
+
+<section class="panel" style="margin-bottom:1rem;">
   <h2 class="panel-title">Run History</h2>
   <div class="split-grid" style="grid-template-columns:1.4fr 1fr;gap:1rem;">
     <div>
@@ -463,6 +506,11 @@ BOT.input_contract = BOT.input_contract && typeof BOT.input_contract === 'object
   : ((BOT.routing_rules && typeof BOT.routing_rules === 'object' && BOT.routing_rules.input_contract && typeof BOT.routing_rules.input_contract === 'object')
     ? BOT.routing_rules.input_contract
     : {description: '', form_fields: [], default_payload: {}});
+BOT.launch_profile = BOT.launch_profile && typeof BOT.launch_profile === 'object'
+  ? BOT.launch_profile
+  : ((BOT.routing_rules && typeof BOT.routing_rules === 'object' && BOT.routing_rules.launch_profile && typeof BOT.routing_rules.launch_profile === 'object')
+    ? BOT.routing_rules.launch_profile
+    : null);
 
 function getCsrf() {
   const el = document.querySelector('input[name=csrf_token]');
@@ -501,6 +549,7 @@ function botPayloadForSave() {
     : {};
   routingRules.workflow = BOT.workflow;
   routingRules.input_contract = normalizedInputContract();
+  routingRules.launch_profile = normalizedLaunchProfile();
   payload.routing_rules = routingRules;
   payload.workflow = BOT.workflow;
   return payload;
@@ -552,6 +601,85 @@ function saveInputContract() {
     default_payload: defaultPayload,
   };
   persistBot('Input contract saved.');
+}
+
+function normalizedLaunchProfile() {
+  const profile = BOT.launch_profile && typeof BOT.launch_profile === 'object' ? BOT.launch_profile : {};
+  const contractDefaults = normalizedInputContract().default_payload;
+  const payload = profile.payload && typeof profile.payload === 'object' && !Array.isArray(profile.payload)
+    ? profile.payload
+    : contractDefaults;
+  return {
+    enabled: profile.enabled !== false,
+    label: String(profile.label || BOT.name || BOT.id || 'Launch Bot').trim(),
+    description: String(profile.description || '').trim(),
+    payload: payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {},
+    project_id: String(profile.project_id || '').trim() || null,
+    priority: profile.priority === null || profile.priority === undefined || profile.priority === ''
+      ? null
+      : parseInt(profile.priority, 10),
+    show_on_overview: profile.show_on_overview !== false,
+    show_on_tasks: profile.show_on_tasks !== false,
+  };
+}
+
+function loadLaunchProfileEditor() {
+  const profile = normalizedLaunchProfile();
+  document.getElementById('launch-profile-enabled').checked = profile.enabled !== false;
+  document.getElementById('launch-profile-label').value = profile.label || '';
+  document.getElementById('launch-profile-description').value = profile.description || '';
+  document.getElementById('launch-profile-project-id').value = profile.project_id || '';
+  document.getElementById('launch-profile-priority').value = profile.priority ?? '';
+  document.getElementById('launch-profile-show-overview').checked = profile.show_on_overview !== false;
+  document.getElementById('launch-profile-show-tasks').checked = profile.show_on_tasks !== false;
+  document.getElementById('launch-profile-payload').value = JSON.stringify(profile.payload || {}, null, 2);
+}
+
+function saveLaunchProfile() {
+  const rawPayload = String(document.getElementById('launch-profile-payload')?.value || '').trim();
+  let payload = {};
+  try {
+    payload = rawPayload ? JSON.parse(rawPayload) : {};
+  } catch (err) {
+    alert('Launch payload must be valid JSON.');
+    return;
+  }
+  if (payload === null || Array.isArray(payload) || typeof payload !== 'object') {
+    alert('Launch payload must be a JSON object.');
+    return;
+  }
+  const priorityRaw = String(document.getElementById('launch-profile-priority')?.value || '').trim();
+  BOT.launch_profile = {
+    enabled: document.getElementById('launch-profile-enabled').checked,
+    label: String(document.getElementById('launch-profile-label')?.value || '').trim() || BOT.name || BOT.id,
+    description: String(document.getElementById('launch-profile-description')?.value || '').trim(),
+    project_id: String(document.getElementById('launch-profile-project-id')?.value || '').trim() || null,
+    priority: priorityRaw ? parseInt(priorityRaw, 10) : null,
+    show_on_overview: document.getElementById('launch-profile-show-overview').checked,
+    show_on_tasks: document.getElementById('launch-profile-show-tasks').checked,
+    payload,
+  };
+  persistBot('Launch profile saved.');
+}
+
+function queueSavedLaunch() {
+  const profile = normalizedLaunchProfile();
+  if (!profile.payload || Object.keys(profile.payload).length === 0) {
+    alert('Save a non-empty launch payload first.');
+    return;
+  }
+  fetch('/api/bots/' + encodeURIComponent(BOT_ID) + '/launch', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify({})
+  })
+  .then(async (r) => {
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || 'Launch failed');
+    alert('Launch queued: ' + data.id);
+    location.reload();
+  })
+  .catch((e) => alert(e.message || 'Launch failed'));
 }
 
 function saveBotInfo() {
@@ -1126,6 +1254,7 @@ function submitTestRun() {
 renderBackendChain();
 renderWorkflowTriggers();
 loadInputContractEditor();
+loadLaunchProfileEditor();
 document.querySelector('#form-backend select[name=worker_id]')?.addEventListener('change', () => refreshModelOptions());
 document.querySelector('#form-backend select[name=provider]')?.addEventListener('change', () => {
   refreshApiKeyOptions();

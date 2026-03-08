@@ -3,6 +3,7 @@
 {% block title %}Overview{% endblock %}
 {% block content %}
 <h1>Overview</h1>
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 <div class="cards">
   <div class="card">
     <div class="card-label">Workers online</div>
@@ -135,6 +136,24 @@
   </section>
 
   <section class="panel">
+    <h2 class="panel-title">Workflow Launch</h2>
+    {% if launchable_bots %}
+    <div class="quick-links">
+      {% for bot in launchable_bots %}
+      <button
+        class="quick-link"
+        type="button"
+        onclick="queueSavedLaunch({{ bot.id|tojson }}, {{ bot.launch_profile.label|tojson }})"
+        title="{{ bot.launch_profile.description or bot.role }}"
+      >{{ bot.launch_profile.label }}</button>
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty">No saved launch profiles yet. Save one on an entry bot to queue it from the overview.</div>
+    {% endif %}
+  </section>
+
+  <section class="panel">
     <h2 class="panel-title">System Alerts</h2>
     <div class="alert-list">
       {% for a in system_alerts %}
@@ -229,6 +248,26 @@
 {% endblock %}
 {% block scripts %}
 <script>
+function getCsrf() {
+  const el = document.querySelector('input[name=csrf_token]');
+  return el ? el.value : '';
+}
+
+function queueSavedLaunch(botId, label) {
+  fetch('/api/bots/' + encodeURIComponent(botId) + '/launch', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify({})
+  })
+  .then(async (r) => {
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || 'Launch failed');
+    alert((label || 'Launch') + ' queued: ' + data.id);
+    location.reload();
+  })
+  .catch((e) => alert(e.message || 'Launch failed'));
+}
+
 const evtSrc = new EventSource("/events");
 evtSrc.onmessage = function(e) {
   const d = JSON.parse(e.data);

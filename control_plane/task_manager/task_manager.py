@@ -84,7 +84,107 @@ def _summarize_payload(payload: Any) -> str:
     return str(type(payload).__name__)
 
 
+def _parse_iso_dt(value: Optional[str]) -> Optional[datetime]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _result_usage(task: Task) -> dict[str, Any]:
+    if not isinstance(task.result, dict):
+        return {}
+    usage = task.result.get("usage")
+    return usage if isinstance(usage, dict) else {}
+
+
+def _usage_summary(usage: dict[str, Any]) -> dict[str, Any]:
+    prompt = usage.get("prompt_tokens")
+    completion = usage.get("completion_tokens")
+    if prompt is None and "input_tokens" in usage:
+        prompt = usage.get("input_tokens")
+    if completion is None and "output_tokens" in usage:
+        completion = usage.get("output_tokens")
+    if prompt is None and "promptTokenCount" in usage:
+        prompt = usage.get("promptTokenCount")
+    if completion is None and "candidatesTokenCount" in usage:
+        completion = usage.get("candidatesTokenCount")
+
+    total = usage.get("total_tokens")
+    if total is None:
+        try:
+            total = int(prompt or 0) + int(completion or 0)
+        except (TypeError, ValueError):
+            total = None
+
+    summary = {
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "total_tokens": total,
+    }
+    for key, value in usage.items():
+        if key not in summary:
+            summary[key] = value
+    return {key: value for key, value in summary.items() if value not in (None, "")}
+
+
+def _execution_summary(task: Task) -> dict[str, Any]:
+    created = _parse_iso_dt(task.created_at)
+    updated = _parse_iso_dt(task.updated_at)
+    duration_ms = None
+    if created is not None and updated is not None:
+        duration_ms = max(0, int((updated - created).total_seconds() * 1000))
+
+    usage_summary = _usage_summary(_result_usage(task))
+    metadata = task.metadata.model_dump() if task.metadata else {}
+    return {
+        "task_id": task.id,
+        "bot_id": task.bot_id,
+        "status": task.status,
+        "created_at": task.created_at,
+        "updated_at": task.updated_at,
+        "duration_ms": duration_ms,
+        "metadata": metadata,
+        "usage": usage_summary,
+        "has_result": task.result is not None,
+        "has_error": task.error is not None,
+    }
+
+
+def _execution_report_markdown(task: Task) -> str:
+    summary = _execution_summary(task)
+    usage = summary.get("usage") or {}
+    lines = [
+        f"# Execution Report: {task.bot_id}",
+        "",
+        f"- Task ID: {task.id}",
+        f"- Status: {task.status}",
+        f"- Created: {task.created_at}",
+        f"- Updated: {task.updated_at}",
+        f"- Duration (ms): {summary.get('duration_ms') if summary.get('duration_ms') is not None else '—'}",
+        f"- Project: {summary['metadata'].get('project_id') or '—'}",
+        f"- Source: {summary['metadata'].get('source') or '—'}",
+        f"- Orchestration: {summary['metadata'].get('orchestration_id') or '—'}",
+    ]
+    if usage:
+        lines.extend(
+            [
+                "",
+                "## Token Usage",
+                f"- Prompt Tokens: {usage.get('prompt_tokens', '—')}",
+                f"- Completion Tokens: {usage.get('completion_tokens', '—')}",
+                f"- Total Tokens: {usage.get('total_tokens', '—')}",
+            ]
+        )
+    return "\n".join(lines).strip() + "\n"
+
+
 def _task_report_markdown(task: Task) -> str:
+    execution = _execution_summary(task)
+    usage = execution.get("usage") or {}
     lines = [
         f"# Run Report: {task.bot_id}",
         "",
@@ -92,6 +192,7 @@ def _task_report_markdown(task: Task) -> str:
         f"- Task ID: {task.id}",
         f"- Created: {task.created_at}",
         f"- Updated: {task.updated_at}",
+        f"- Duration (ms): {execution.get('duration_ms') if execution.get('duration_ms') is not None else '—'}",
     ]
     if task.metadata:
         if task.metadata.project_id:
@@ -104,8 +205,20 @@ def _task_report_markdown(task: Task) -> str:
             lines.append(f"- Trigger Rule: {task.metadata.trigger_rule_id}")
         if task.metadata.trigger_depth is not None:
             lines.append(f"- Trigger Depth: {task.metadata.trigger_depth}")
+        if task.metadata.orchestration_id:
+            lines.append(f"- Orchestration ID: {task.metadata.orchestration_id}")
 
     lines.extend(["", "## Payload", _summarize_payload(task.payload)])
+    if usage:
+        lines.extend(
+            [
+                "",
+                "## Usage",
+                f"- Prompt Tokens: {usage.get('prompt_tokens', '—')}",
+                f"- Completion Tokens: {usage.get('completion_tokens', '—')}",
+                f"- Total Tokens: {usage.get('total_tokens', '—')}",
+            ]
+        )
 
     if task.error is not None:
         lines.extend(
@@ -359,6 +472,35 @@ class TaskManager:
                     label="Task Result",
                     content=json.dumps(task.result, indent=2, sort_keys=True),
                     metadata={},
+                    created_at=now,
+                )
+            )
+        execution_summary = _execution_summary(task)
+        artifacts.append(
+            BotRunArtifact(
+                id=f"{task.id}:execution-report",
+                run_id=task.id,
+                task_id=task.id,
+                bot_id=task.bot_id,
+                kind="note",
+                label="Execution Report",
+                content=_execution_report_markdown(task),
+                metadata=execution_summary,
+                created_at=now,
+            )
+        )
+        usage = _usage_summary(_result_usage(task))
+        if usage:
+            artifacts.append(
+                BotRunArtifact(
+                    id=f"{task.id}:usage",
+                    run_id=task.id,
+                    task_id=task.id,
+                    bot_id=task.bot_id,
+                    kind="note",
+                    label="Usage Report",
+                    content=json.dumps(usage, indent=2, sort_keys=True),
+                    metadata=usage,
                     created_at=now,
                 )
             )
