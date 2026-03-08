@@ -231,13 +231,19 @@ function renderTaskDetail(task) {
       <div class="page-header" style="margin-bottom:0.5rem;">
         <h3 style="margin:0;">${label}</h3>
         <div style="display:flex;gap:0.5rem;">
-          <button class="btn btn-sm" type="button" onclick="viewTaskSection(${JSON.stringify(task.id)}, ${JSON.stringify(label.toLowerCase())})">View</button>
-          <button class="btn btn-sm" type="button" onclick="downloadTaskSection(${JSON.stringify(task.id)}, ${JSON.stringify(label.toLowerCase())})">Download</button>
+          <button class="btn btn-sm task-section-view" type="button" data-task-id="${escapeHtml(task.id)}" data-section="${escapeHtml(label.toLowerCase())}">View</button>
+          <button class="btn btn-sm task-section-download" type="button" data-task-id="${escapeHtml(task.id)}" data-section="${escapeHtml(label.toLowerCase())}">Download</button>
         </div>
       </div>
       <div class="mini-note">${escapeHtml(body)}</div>
     </section>
   `).join('');
+  gridEl.querySelectorAll('.task-section-view').forEach((button) => {
+    button.addEventListener('click', () => viewTaskSection(button.dataset.taskId, button.dataset.section));
+  });
+  gridEl.querySelectorAll('.task-section-download').forEach((button) => {
+    button.addEventListener('click', () => downloadTaskSection(button.dataset.taskId, button.dataset.section));
+  });
 }
 
 function escapeHtml(value) {
