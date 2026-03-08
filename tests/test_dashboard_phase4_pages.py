@@ -113,6 +113,17 @@ def test_project_data_folder_and_upload_apis_write_files(dashboard_client, tmp_p
         )
         assert upload_resp.status_code == 201
 
+        duplicate_upload_resp = dashboard_client.post(
+            "/api/projects/proj-data/data/upload",
+            data={
+                "target_path": "docs/specs",
+                "files": (io.BytesIO(b"hello project vault duplicate"), "overview.md"),
+                "relative_paths": "",
+            },
+            content_type="multipart/form-data",
+        )
+        assert duplicate_upload_resp.status_code == 201
+
         folder_upload_resp = dashboard_client.post(
             "/api/projects/proj-data/data/upload",
             data={
@@ -136,26 +147,25 @@ def test_project_data_folder_and_upload_apis_write_files(dashboard_client, tmp_p
         entries = body["entries"]
         assert any(e["path"] == "docs/specs" and e["type"] == "directory" for e in entries)
         assert any(e["path"] == "docs/specs/overview.md" and e["type"] == "file" for e in entries)
+        assert any(e["path"] == "docs/specs/(1) overview.md" and e["type"] == "file" for e in entries)
         assert any(e["path"] == "docs/product-specs/roadmap.md" and e["type"] == "file" for e in entries)
         assert any(e["path"] == "docs/product-specs/diagrams/schema.txt" and e["type"] == "file" for e in entries)
 
-        delete_file_resp = dashboard_client.delete(
-            "/api/projects/proj-data/data/path?path=docs/specs/overview.md",
+        delete_resp = dashboard_client.post(
+            "/api/projects/proj-data/data/delete",
+            json={"paths": ["docs/specs/overview.md", "docs/product-specs"]},
         )
-        assert delete_file_resp.status_code == 200
-        assert delete_file_resp.get_json()["deleted"]["type"] == "file"
-
-        delete_dir_resp = dashboard_client.delete(
-            "/api/projects/proj-data/data/path?path=docs/product-specs",
-        )
-        assert delete_dir_resp.status_code == 200
-        assert delete_dir_resp.get_json()["deleted"]["type"] == "directory"
+        assert delete_resp.status_code == 200
+        deleted = delete_resp.get_json()["deleted"]
+        assert any(item["type"] == "file" and item["path"] == "docs/specs/overview.md" for item in deleted)
+        assert any(item["type"] == "directory" and item["path"] == "docs/product-specs" for item in deleted)
 
         files_resp = dashboard_client.get("/api/projects/proj-data/data/files")
         assert files_resp.status_code == 200
         entries = files_resp.get_json()["entries"]
         assert not any(e["path"] == "docs/specs/overview.md" for e in entries)
         assert not any(e["path"].startswith("docs/product-specs") for e in entries)
+        assert any(e["path"] == "docs/specs/(1) overview.md" for e in entries)
 
 
 def test_project_data_ingest_status_and_start_apis(dashboard_client, tmp_path, monkeypatch):

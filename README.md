@@ -241,6 +241,8 @@ Projects can also store database connections directly on the project page. Use `
 
 For self-hosted deployments, the bundled dashboard nginx gateway now sets `client_max_body_size 0` so large project-data uploads are not capped by a hidden default at the app gateway layer. If you place NexusAI behind another proxy or CDN, that outer layer may still impose its own upload limit.
 
+The project-data explorer also supports edit-mode batch deletion with confirmation, shows item timestamps, and preserves older files by auto-renaming newer duplicates instead of overwriting them.
+
 ---
 
 ## Bot Orchestration

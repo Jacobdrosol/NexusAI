@@ -5,11 +5,12 @@
   {% if node.type == "directory" %}
     <details class="project-data-node" {% if not node.path %}open{% endif %}>
       <summary>
+        {% if node.path %}
+        <input class="project-data-select" type="checkbox" data-path="{{ node.path }}" data-kind="directory" style="display:none; margin-right:0.35rem;">
+        {% endif %}
         <strong>{{ node.name }}</strong>
         {% if node.path %}<code style="margin-left:0.35rem;">{{ node.path }}</code>{% endif %}
-        {% if node.path %}
-        <button class="btn btn-sm btn-danger" type="button" style="margin-left:0.5rem;" onclick='deleteProjectDataPath({{ node.path|tojson }}, "directory")'>Delete</button>
-        {% endif %}
+        <span class="mini-note project-data-age" data-ts="{{ node.modified_at }}" style="margin-left:0.5rem;"></span>
       </summary>
       {% if node.children %}
       <div style="margin-left:1rem; margin-top:0.35rem; display:grid; gap:0.35rem;">
@@ -23,9 +24,10 @@
     </details>
   {% else %}
     <div class="project-data-file" style="margin-left:1rem;">
+      <input class="project-data-select" type="checkbox" data-path="{{ node.path }}" data-kind="file" style="display:none; margin-right:0.35rem;">
       <code>{{ node.path }}</code>
       <span style="color:#64748b; margin-left:0.35rem;">{{ node.size or 0 }} bytes</span>
-      <button class="btn btn-sm btn-danger" type="button" style="margin-left:0.5rem;" onclick='deleteProjectDataPath({{ node.path|tojson }}, "file")'>Delete</button>
+      <span class="mini-note project-data-age" data-ts="{{ node.modified_at }}" style="margin-left:0.5rem;"></span>
     </div>
   {% endif %}
 {%- endmacro %}
@@ -145,7 +147,12 @@
     <div>
       <div><strong>Filesystem Root</strong></div>
       <div class="mini-note" style="margin-top:0.35rem;"><code>{{ project_data_root }}</code></div>
-      <div style="margin-top:0.75rem;"><strong>Explorer</strong></div>
+      <div style="margin-top:0.75rem; display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;">
+        <strong>Explorer</strong>
+        <button class="btn btn-sm" type="button" id="project-data-edit-button" onclick="toggleProjectDataEditMode()">Edit</button>
+        <button class="btn btn-sm btn-danger" type="button" id="project-data-delete-selected-button" style="display:none;" onclick="deleteSelectedProjectData()">Delete Selected</button>
+        <span class="mini-note" id="project-data-selection-count" style="display:none;">0 selected</span>
+      </div>
       <div id="project-data-tree" style="margin-top:0.5rem; max-height:24rem; overflow:auto;">
         {{ render_project_data_node(project_data_tree) if project_data_tree else '<div class="empty">No project data root available</div>' }}
       </div>
@@ -486,6 +493,7 @@ const PROJECT_ID = {{ project.id|tojson if project else "''" }};
 let CLOUD_POLICY = {provider_policies: {}, bot_overrides: {}};
 let GITHUB_SYNC_POLL = null;
 let PROJECT_DATA_INGEST_POLL = null;
+let PROJECT_DATA_EDIT_MODE = false;
 
 function getCsrf() {
   const el = document.querySelector('input[name=csrf_token]');
@@ -545,23 +553,68 @@ async function refreshProjectDataFiles() {
   location.reload();
 }
 
-async function deleteProjectDataPath(path, kind) {
-  if (!path) return;
-  if (!confirm('Delete this ' + kind + '?\n\n' + path)) return;
-  setProjectDataState('state-loading', 'Deleting ' + kind + '...');
-  const res = await fetch(
-    '/api/projects/' + encodeURIComponent(PROJECT_ID) + '/data/path?path=' + encodeURIComponent(path),
-    {
-      method: 'DELETE',
-      headers: {'X-CSRFToken': getCsrf()},
+function formatProjectDataTimestamps() {
+  document.querySelectorAll('.project-data-age').forEach((el) => {
+    const raw = Number(el.getAttribute('data-ts') || '0');
+    if (!raw) return;
+    const date = new Date(raw * 1000);
+    if (Number.isNaN(date.getTime())) return;
+    el.textContent = 'updated ' + date.toLocaleString();
+  });
+}
+
+function updateProjectDataSelectionState() {
+  const selected = Array.from(document.querySelectorAll('.project-data-select:checked'));
+  const deleteButton = document.getElementById('project-data-delete-selected-button');
+  const countEl = document.getElementById('project-data-selection-count');
+  if (deleteButton) {
+    deleteButton.style.display = PROJECT_DATA_EDIT_MODE ? '' : 'none';
+    deleteButton.disabled = selected.length === 0;
+  }
+  if (countEl) {
+    countEl.style.display = PROJECT_DATA_EDIT_MODE ? '' : 'none';
+    countEl.textContent = selected.length + ' selected';
+  }
+}
+
+function toggleProjectDataEditMode() {
+  PROJECT_DATA_EDIT_MODE = !PROJECT_DATA_EDIT_MODE;
+  const editButton = document.getElementById('project-data-edit-button');
+  document.querySelectorAll('.project-data-select').forEach((el) => {
+    el.style.display = PROJECT_DATA_EDIT_MODE ? '' : 'none';
+    if (!PROJECT_DATA_EDIT_MODE) {
+      el.checked = false;
     }
-  );
+  });
+  if (editButton) {
+    editButton.textContent = PROJECT_DATA_EDIT_MODE ? 'Done' : 'Edit';
+  }
+  updateProjectDataSelectionState();
+}
+
+async function deleteSelectedProjectData() {
+  const paths = Array.from(document.querySelectorAll('.project-data-select:checked'))
+    .map((el) => el.getAttribute('data-path') || '')
+    .filter(Boolean);
+  if (!paths.length) {
+    setProjectDataState('state-error', 'Select at least one file or folder to delete.');
+    return;
+  }
+  const preview = paths.slice(0, 8).join('\n');
+  const extra = paths.length > 8 ? '\n...' : '';
+  if (!confirm('Delete the selected project data?\n\n' + preview + extra)) return;
+  setProjectDataState('state-loading', 'Deleting selected files and folders...');
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/data/delete', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify({paths}),
+  });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     setProjectDataState('state-error', data.error || 'Delete failed.');
     return;
   }
-  setProjectDataState('state-info', 'Deleted ' + kind + ' ' + path + '.');
+  setProjectDataState('state-info', 'Deleted ' + ((data.deleted || []).length) + ' item(s).');
   location.reload();
 }
 
@@ -613,7 +666,8 @@ async function uploadProjectDataFiles() {
       setProjectDataState('state-error', data.error || 'Upload failed.');
       return;
     }
-    setProjectDataState('state-info', 'Uploaded ' + ((data.uploaded || []).length) + ' file(s).');
+    const names = (data.uploaded || []).map((item) => item.path || item.name).slice(0, 3).join(', ');
+    setProjectDataState('state-info', 'Uploaded ' + ((data.uploaded || []).length) + ' file(s).' + (names ? ' Latest: ' + names : ''));
     location.reload();
   } catch (err) {
     setProjectDataState('state-error', (err && err.message) ? err.message : 'Upload failed.');
@@ -646,7 +700,8 @@ async function uploadProjectDataFolder() {
       setProjectDataState('state-error', data.error || 'Folder upload failed.');
       return;
     }
-    setProjectDataState('state-info', 'Uploaded folder contents: ' + ((data.uploaded || []).length) + ' file(s).');
+    const names = (data.uploaded || []).map((item) => item.path || item.name).slice(0, 3).join(', ');
+    setProjectDataState('state-info', 'Uploaded folder contents: ' + ((data.uploaded || []).length) + ' file(s).' + (names ? ' Latest: ' + names : ''));
     location.reload();
   } catch (err) {
     setProjectDataState('state-error', (err && err.message) ? err.message : 'Folder upload failed.');
@@ -1203,6 +1258,11 @@ async function removeCloudBotOverride() {
 
 document.getElementById('policy-bot-provider')?.addEventListener('change', _syncBotPolicyOptions);
 
+formatProjectDataTimestamps();
+document.querySelectorAll('.project-data-select').forEach((el) => {
+  el.addEventListener('change', updateProjectDataSelectionState);
+});
+updateProjectDataSelectionState();
 refreshGithubStatus(false);
 refreshGithubSyncStatus().catch(() => {});
 refreshWebhookEvents();

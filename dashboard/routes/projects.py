@@ -20,6 +20,7 @@ from dashboard.project_data import (
     build_project_data_tree,
     create_project_data_folder,
     delete_project_data_path,
+    delete_project_data_paths,
     ensure_project_data_layout,
     list_project_data_files,
     save_project_data_upload,
@@ -464,6 +465,21 @@ def api_delete_project_data_path(project_id: str):
         return jsonify({"error": "path is required"}), 400
     try:
         deleted = delete_project_data_path(project_id, raw_path)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify({"project_id": project_id, "deleted": deleted})
+
+
+@bp.post("/api/projects/<project_id>/data/delete")
+@login_required
+def api_delete_project_data_paths(project_id: str):
+    cp = get_cp_client()
+    if cp.get_project(project_id) is None:
+        return _cp_error_response(cp, "project not found")
+    body: dict[str, Any] = request.get_json(force=True) or {}
+    paths = body.get("paths") if isinstance(body.get("paths"), list) else []
+    try:
+        deleted = delete_project_data_paths(project_id, [str(path or "") for path in paths])
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     return jsonify({"project_id": project_id, "deleted": deleted})

@@ -180,6 +180,9 @@ Project Data Vault ingest:
 - the UI now shows a live status object with discovered, ingested, skipped, and failed counts
 - rerunning ingest is safe for the same file paths because project-data items are upserted by `project-data://...` source reference
 - file-size safeguards are now backend-managed; users do not need to tune a max-bytes field in the UI
+- the explorer shows file timestamps so you can see how old a file or folder is
+- use `Edit` in the explorer to select multiple files or folders, then confirm before deletion
+- if you upload a file with the same name into the same path, the new file is preserved with an auto-generated name such as `(1) filename.ext`
 
 ### 4.2 Project Database Context
 

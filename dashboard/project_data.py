@@ -61,6 +61,20 @@ def _sanitize_upload_relative_path(relative_path: str, fallback_name: str) -> Pa
     return Path(fallback)
 
 
+def _dedupe_target_path(target: Path) -> Path:
+    if not target.exists():
+        return target
+    parent = target.parent
+    stem = target.stem
+    suffix = target.suffix
+    index = 1
+    while True:
+        candidate = parent / f"({index}) {stem}{suffix}"
+        if not candidate.exists():
+            return candidate
+        index += 1
+
+
 def save_project_data_upload(
     project_id: str,
     target_path: str,
@@ -73,6 +87,7 @@ def save_project_data_upload(
     target = (target_dir / relative_target).resolve()
     if target_dir != target and target_dir not in target.parents:
         raise ValueError("upload path escapes target")
+    target = _dedupe_target_path(target)
     target.parent.mkdir(parents=True, exist_ok=True)
     storage.save(target)
     return target
@@ -90,6 +105,24 @@ def delete_project_data_path(project_id: str, relative_path: str) -> dict[str, A
         return {"path": relative_path, "type": "directory"}
     target.unlink()
     return {"path": relative_path, "type": "file"}
+
+
+def delete_project_data_paths(project_id: str, relative_paths: list[str]) -> list[dict[str, Any]]:
+    cleaned = sorted(
+        {
+            str(path or "").strip().strip("/")
+            for path in relative_paths
+            if str(path or "").strip().strip("/")
+        },
+        key=lambda item: (item.count("/"), len(item)),
+        reverse=True,
+    )
+    if not cleaned:
+        raise ValueError("at least one path is required")
+    deleted: list[dict[str, Any]] = []
+    for path in cleaned:
+        deleted.append(delete_project_data_path(project_id, path))
+    return deleted
 
 
 def build_project_data_tree(project_id: str, max_depth: int = 6, max_entries: int = 500) -> dict[str, Any]:
