@@ -149,6 +149,11 @@
       </div>
       <div class="panel" style="margin:0;">
         <div id="task-detail-summary" class="mini-note">Running and queued work is surfaced here. Older bot-specific history stays on the bot page.</div>
+        <div id="task-detail-actions" style="display:none;gap:0.5rem;margin-top:0.75rem;flex-wrap:wrap;">
+          <button class="btn btn-sm" id="task-retry-btn" type="button">Retry Failed Branch</button>
+          <button class="btn btn-sm" id="task-rerun-btn" type="button">Rerun as New</button>
+          <button class="btn btn-sm" id="task-edit-rerun-btn" type="button">Edit Payload &amp; Rerun</button>
+        </div>
         <div id="task-detail-grid" style="display:grid;gap:0.75rem;margin-top:0.75rem;"></div>
       </div>
     </div>
@@ -162,6 +167,17 @@
     <div class="modal-actions">
       <button class="btn" id="task-section-download-btn" type="button">Download</button>
       <button class="btn" type="button" onclick="closeTaskSectionModal()">Close</button>
+    </div>
+  </div>
+</div>
+
+<div id="modal-task-rerun" class="modal" style="display:none;">
+  <div class="modal-content">
+    <h2 id="task-rerun-title">Edit Payload &amp; Rerun</h2>
+    <textarea id="task-rerun-payload" class="form-control" style="min-height:18rem;font-family:monospace;white-space:pre;"></textarea>
+    <div class="modal-actions">
+      <button class="btn btn-primary" id="task-rerun-submit-btn" type="button">Queue Rerun</button>
+      <button class="btn" type="button" onclick="closeTaskRerunModal()">Cancel</button>
     </div>
   </div>
 </div>
@@ -201,19 +217,42 @@ function closeTaskSectionModal() {
   if (modal) modal.style.display = 'none';
 }
 
+function closeTaskRerunModal() {
+  const modal = document.getElementById('modal-task-rerun');
+  if (modal) modal.style.display = 'none';
+}
+
 function renderTaskDetail(task) {
   const statusEl = document.getElementById('task-detail-status');
   const summaryEl = document.getElementById('task-detail-summary');
   const gridEl = document.getElementById('task-detail-grid');
+  const actionsEl = document.getElementById('task-detail-actions');
+  const retryBtn = document.getElementById('task-retry-btn');
+  const rerunBtn = document.getElementById('task-rerun-btn');
+  const editRerunBtn = document.getElementById('task-edit-rerun-btn');
   if (!statusEl || !summaryEl || !gridEl) return;
   if (!task) {
     statusEl.textContent = 'Select a task row';
     summaryEl.textContent = 'Running and queued work is surfaced here. Older bot-specific history stays on the bot page.';
     gridEl.innerHTML = '';
+    if (actionsEl) actionsEl.style.display = 'none';
     return;
   }
   statusEl.textContent = task.status + ' · ' + task.bot_id;
   summaryEl.textContent = 'Task ' + task.id;
+  if (actionsEl) actionsEl.style.display = 'flex';
+  if (retryBtn) {
+    retryBtn.style.display = task.status === 'failed' ? 'inline-flex' : 'none';
+    retryBtn.onclick = () => retryTask(task.id, null, 'Retry Failed Branch');
+  }
+  if (rerunBtn) {
+    rerunBtn.style.display = ['completed', 'failed'].includes(task.status) ? 'inline-flex' : 'none';
+    rerunBtn.onclick = () => retryTask(task.id, null, 'Rerun as New');
+  }
+  if (editRerunBtn) {
+    editRerunBtn.style.display = ['completed', 'failed'].includes(task.status) ? 'inline-flex' : 'none';
+    editRerunBtn.onclick = () => openTaskRerunModal(task);
+  }
   const sections = [
     ['Task', 'Task identity, status, timestamps, and metadata.']
   ];
@@ -255,6 +294,40 @@ function escapeHtml(value) {
 
 function downloadTaskSection(taskId, section) {
   window.location.href = '/api/tasks/' + encodeURIComponent(taskId) + '/download?section=' + encodeURIComponent(section);
+}
+
+function retryTask(taskId, payload, label) {
+  fetch('/api/tasks/' + encodeURIComponent(taskId) + '/retry', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify(payload !== null ? {payload} : {})
+  })
+  .then(async (response) => {
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Task retry failed');
+    alert((label || 'Task retry') + ' queued: ' + data.id);
+    location.reload();
+  })
+  .catch((error) => alert(error.message || 'Task retry failed'));
+}
+
+function openTaskRerunModal(task) {
+  const textarea = document.getElementById('task-rerun-payload');
+  const submitBtn = document.getElementById('task-rerun-submit-btn');
+  const modal = document.getElementById('modal-task-rerun');
+  if (!textarea || !submitBtn || !modal) return;
+  textarea.value = JSON.stringify(task.payload ?? {}, null, 2);
+  submitBtn.onclick = () => {
+    let payload;
+    try {
+      payload = JSON.parse(textarea.value || '{}');
+    } catch (error) {
+      alert('Payload JSON is invalid');
+      return;
+    }
+    retryTask(task.id, payload, 'Edited rerun');
+  };
+  modal.style.display = 'flex';
 }
 
 function viewTaskSection(taskId, section) {

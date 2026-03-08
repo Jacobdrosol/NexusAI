@@ -233,6 +233,12 @@ class CPClient:
     def get_task(self, task_id: str) -> Optional[Dict]:
         return self._get(f"/v1/tasks/{task_id}")
 
+    def retry_task(self, task_id: str, payload: Any = None) -> Optional[Dict[str, Any]]:
+        body: Dict[str, Any] = {}
+        if payload is not None:
+            body["payload"] = payload
+        return self._post(f"/v1/tasks/{task_id}/retry", body)
+
     def create_task(self, bot_id: str, payload: Any) -> Optional[Dict]:
         return self._post("/v1/tasks", {"bot_id": bot_id, "payload": payload})
 

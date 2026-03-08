@@ -447,6 +447,53 @@ def test_tasks_api_summary_and_download(dashboard_client):
     assert "attachment" in download_resp.headers.get("Content-Disposition", "")
 
 
+def test_tasks_api_retry_proxies_control_plane(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def retry_task(self, task_id, payload=None):
+            return {"id": "retried-1", "bot_id": "course-lesson-writer", "payload": payload or {"same": True}}
+
+        def last_error(self):
+            return {}
+
+    with patch("dashboard.routes.tasks.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post("/api/tasks/task-1/retry", json={"payload": {"fixed": True}})
+
+    assert resp.status_code == 201
+    assert resp.get_json()["id"] == "retried-1"
+
+
+def test_tasks_page_shows_retry_actions(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_tasks(self, **kwargs):
+            return [
+                {
+                    "id": "task-failed-1",
+                    "bot_id": "course-lesson-writer",
+                    "status": "failed",
+                    "payload": {"instruction": "go"},
+                    "result": None,
+                    "error": {"message": "Internal Server Error"},
+                    "created_at": "2026-03-08T10:00:00+00:00",
+                    "updated_at": "2026-03-08T10:01:00+00:00",
+                    "metadata": {"project_id": "proj-1"},
+                }
+            ]
+
+        def list_bots(self):
+            return []
+
+    with patch("dashboard.routes.tasks.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/tasks")
+
+    assert resp.status_code == 200
+    assert b"Retry Failed Branch" in resp.data
+    assert b"Edit Payload &amp; Rerun" in resp.data
+
+
 def test_chat_ingest_api_validates_required_fields(dashboard_client):
     _login_admin(dashboard_client)
     resp = dashboard_client.post("/api/chat/ingest", json={})

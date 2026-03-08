@@ -101,6 +101,9 @@ class TaskMetadata(BaseModel):
     parent_task_id: Optional[str] = None
     trigger_rule_id: Optional[str] = None
     trigger_depth: Optional[int] = None
+    retry_attempt: Optional[int] = None
+    original_task_id: Optional[str] = None
+    retry_of_task_id: Optional[str] = None
 
 
 class TaskError(BaseModel):

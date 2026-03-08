@@ -236,3 +236,18 @@ def api_download_task_section(task_id: str):
     buffer = io.BytesIO(content.encode("utf-8"))
     filename = f"{task_id}-{section}.json"
     return send_file(buffer, as_attachment=True, download_name=filename, mimetype="application/json")
+
+
+@bp.post("/api/tasks/<task_id>/retry")
+@login_required
+def api_retry_task(task_id: str):
+    body = request.get_json(silent=True) or {}
+    payload = body.get("payload") if isinstance(body, dict) else None
+    cp = get_cp_client()
+    retried = cp.retry_task(task_id, payload=payload)
+    if retried is None:
+        error = cp.last_error()
+        status = int(error.get("status_code") or 502)
+        detail = error.get("detail") or "Task retry failed"
+        return jsonify({"error": detail}), status
+    return jsonify(retried), 201

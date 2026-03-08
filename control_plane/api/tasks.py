@@ -16,6 +16,10 @@ class CreateTaskRequest(BaseModel):
     depends_on: Optional[List[str]] = None
 
 
+class RetryTaskRequest(BaseModel):
+    payload: Optional[Any] = None
+
+
 @router.post("", response_model=Task)
 async def create_task(request: Request, body: CreateTaskRequest) -> Task:
     task_manager = request.app.state.task_manager
@@ -58,3 +62,14 @@ async def get_task(task_id: str, request: Request) -> Task:
         return await task_manager.get_task(task_id)
     except TaskNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/{task_id}/retry", response_model=Task)
+async def retry_task(task_id: str, request: Request, body: RetryTaskRequest) -> Task:
+    task_manager = request.app.state.task_manager
+    try:
+        return await task_manager.retry_task(task_id, payload_override=body.payload)
+    except TaskNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

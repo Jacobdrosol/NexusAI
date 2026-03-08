@@ -12,6 +12,7 @@ import aiosqlite
 
 from shared.exceptions import TaskNotFoundError
 from shared.models import BotRun, BotRunArtifact, Task, TaskError, TaskMetadata
+from shared.settings_manager import SettingsManager
 from control_plane.scheduler.dependency_engine import DependencyEngine
 
 logger = logging.getLogger(__name__)
@@ -257,6 +258,46 @@ def _execution_report_markdown(task: Task) -> str:
             ]
         )
     return "\n".join(lines).strip() + "\n"
+
+
+def _settings_int(name: str, default: int) -> int:
+    try:
+        return int(SettingsManager.instance().get(name, default))
+    except Exception:
+        return default
+
+
+def _settings_float(name: str, default: float) -> float:
+    try:
+        return float(SettingsManager.instance().get(name, default))
+    except Exception:
+        return default
+
+
+def _is_retryable_error_message(message: str) -> bool:
+    normalized = str(message or "").strip().lower()
+    if not normalized:
+        return False
+    retryable_markers = [
+        "timeout",
+        "timed out",
+        "readtimeout",
+        "connecttimeout",
+        "internal server error",
+        "server error",
+        "bad gateway",
+        "service unavailable",
+        "gateway timeout",
+        "too many requests",
+        "rate limit",
+        "connection reset",
+        "temporarily unavailable",
+        "http 500",
+        "http 502",
+        "http 503",
+        "http 504",
+    ]
+    return any(marker in normalized for marker in retryable_markers)
 
 
 def _task_report_markdown(task: Task) -> str:
@@ -709,6 +750,26 @@ class TaskManager:
                 raise TaskNotFoundError(f"Task not found: {task_id}")
             return self._tasks[task_id]
 
+    async def retry_task(self, task_id: str, payload_override: Any = None) -> Task:
+        await self._ensure_db()
+        original = await self.get_task(task_id)
+        metadata = original.metadata or TaskMetadata()
+        retry_attempt = int(metadata.retry_attempt or 0) + 1
+        next_metadata = metadata.model_copy(
+            update={
+                "retry_attempt": retry_attempt,
+                "original_task_id": metadata.original_task_id or original.id,
+                "retry_of_task_id": original.id,
+                "source": "manual_retry",
+            }
+        )
+        return await self.create_task(
+            bot_id=original.bot_id,
+            payload=original.payload if payload_override is None else payload_override,
+            metadata=next_metadata,
+            depends_on=[],
+        )
+
     async def list_tasks(
         self,
         orchestration_id: Optional[str] = None,
@@ -955,12 +1016,63 @@ class TaskManager:
             await self.update_status(task_id, "completed", result=result)
         except Exception as e:
             logger.error("Task %s failed: %s", task_id, e)
+            task = await self.get_task(task_id)
             task_error = TaskError(message=str(e))
-            await self.update_status(task_id, "failed", error=task_error)
+            if await self._requeue_for_retry(task, task_error):
+                logger.info("Task %s queued for automatic retry", task_id)
+            else:
+                await self.update_status(task_id, "failed", error=task_error)
         finally:
             async with self._lock:
                 self._running_task_ids.discard(task_id)
             await self._schedule_ready_tasks()
+
+    async def _requeue_for_retry(self, task: Task, task_error: TaskError) -> bool:
+        max_retries = max(0, _settings_int("max_task_retries", 3))
+        if max_retries <= 0:
+            return False
+        if not _is_retryable_error_message(task_error.message):
+            return False
+
+        metadata = task.metadata or TaskMetadata()
+        current_attempt = int(metadata.retry_attempt or 0)
+        if current_attempt >= max_retries:
+            return False
+
+        delay_seconds = max(0.0, _settings_float("task_retry_delay", 5.0))
+        next_attempt = current_attempt + 1
+
+        async def _delayed_requeue() -> None:
+            if delay_seconds:
+                await asyncio.sleep(delay_seconds)
+            now = datetime.now(timezone.utc).isoformat()
+            async with self._lock:
+                existing = self._tasks.get(task.id)
+                if existing is None:
+                    return
+                next_metadata = (existing.metadata or TaskMetadata()).model_copy(
+                    update={
+                        "retry_attempt": next_attempt,
+                        "original_task_id": (existing.metadata.original_task_id if existing.metadata and existing.metadata.original_task_id else existing.id),
+                        "retry_of_task_id": existing.id,
+                        "source": "auto_retry",
+                    }
+                )
+                self._tasks[task.id] = existing.model_copy(
+                    update={
+                        "status": "queued",
+                        "metadata": next_metadata,
+                        "error": task_error,
+                        "updated_at": now,
+                    }
+                )
+                updated = self._tasks[task.id]
+            await self._persist_task(updated)
+            await self._upsert_bot_run(updated)
+            await self._schedule_ready_tasks()
+
+        asyncio.create_task(_delayed_requeue())
+        return True
 
     async def _try_unblock_tasks(self) -> None:
         """Move ready blocked tasks into queued state and schedule them."""
