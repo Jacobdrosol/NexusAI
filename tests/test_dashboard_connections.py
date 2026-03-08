@@ -1,6 +1,7 @@
 """Tests for bot connections APIs in dashboard."""
 
 import bcrypt
+from unittest.mock import patch
 
 
 def _login_admin(client):
@@ -98,3 +99,54 @@ def test_database_connection_test_endpoint(dashboard_client):
     payload = test_resp.get_json()
     assert payload["ok"] is True
     assert payload["row_count"] >= 1
+
+
+def test_project_database_connection_create_test_and_schema_ingest(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def get_project(self, project_id):
+            return {"id": project_id, "name": project_id}
+
+        def upsert_vault_item(self, body):
+            return {"id": "vault-db-schema", **body}
+
+        def last_error(self):
+            return {}
+
+    with patch("dashboard.routes.projects.get_cp_client", return_value=FakeCP()):
+        create_resp = dashboard_client.post(
+            "/api/projects/proj-db/connections",
+            json={
+                "name": "Project SQLite",
+                "dsn": "sqlite:///:memory:",
+                "description": "project db",
+                "readonly": True,
+            },
+        )
+        assert create_resp.status_code == 201
+        connection = create_resp.get_json()
+        connection_id = connection["id"]
+
+        list_resp = dashboard_client.get("/api/projects/proj-db/connections")
+        assert list_resp.status_code == 200
+        rows = list_resp.get_json()
+        assert len(rows) == 1
+        assert rows[0]["name"] == "Project SQLite"
+
+        test_resp = dashboard_client.post(
+            f"/api/projects/proj-db/connections/{connection_id}/test",
+            json={"query": "SELECT 1 AS ok"},
+        )
+        assert test_resp.status_code == 200
+        assert test_resp.get_json()["ok"] is True
+
+        schema_resp = dashboard_client.post(
+            f"/api/projects/proj-db/connections/{connection_id}/schema-ingest",
+            json={"namespace": "project:proj-db:data"},
+        )
+        assert schema_resp.status_code == 200
+        body = schema_resp.get_json()
+        assert body["ok"] is True
+        assert body["vault_item"]["namespace"] == "project:proj-db:data"
+        assert body["connection"]["schema_totals"]["tables"] >= 0

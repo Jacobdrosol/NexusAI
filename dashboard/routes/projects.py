@@ -1,12 +1,21 @@
 """Projects dashboard page and lightweight proxy API."""
 from __future__ import annotations
 
+import json
+from datetime import datetime, timezone
 from typing import Any
 
 from flask import Blueprint, jsonify, render_template, request
 from flask_login import login_required
 
+from dashboard.connections_service import (
+    inspect_database_schema,
+    render_database_schema_document,
+    test_database_connection,
+)
 from dashboard.cp_client import get_cp_client
+from dashboard.db import get_db
+from dashboard.models import Connection, ProjectConnection
 from dashboard.project_data import (
     build_project_data_tree,
     create_project_data_folder,
@@ -17,6 +26,48 @@ from dashboard.project_data import (
 from dashboard.project_data_ingest import latest_job_for_project, start_project_data_ingest
 
 bp = Blueprint("projects", __name__)
+
+
+def _parse_json(raw: str, default: Any) -> Any:
+    try:
+        return json.loads(raw)
+    except Exception:
+        return default
+
+
+def _project_connection_to_dict(row: Connection) -> dict[str, Any]:
+    config = _parse_json(row.config_json or "{}", {})
+    schema_text = row.schema_text or ""
+    schema_snapshot = _parse_json(schema_text, {}) if schema_text else {}
+    schema_totals = schema_snapshot.get("totals") if isinstance(schema_snapshot, dict) else {}
+    return {
+        "id": row.id,
+        "name": row.name,
+        "kind": row.kind,
+        "description": row.description or "",
+        "config": {
+            "readonly": bool(config.get("readonly", True)),
+            "dsn_preview": str(config.get("dsn") or ""),
+        },
+        "schema_text": schema_text,
+        "schema_totals": schema_totals if isinstance(schema_totals, dict) else {},
+        "enabled": bool(row.enabled),
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+def _project_connections(project_id: str) -> list[dict[str, Any]]:
+    db = get_db()
+    try:
+        links = db.query(ProjectConnection).filter(ProjectConnection.project_ref == str(project_id)).all()
+        ids = [link.connection_id for link in links]
+        if not ids:
+            return []
+        rows = db.query(Connection).filter(Connection.id.in_(ids)).order_by(Connection.name.asc()).all()
+        return [_project_connection_to_dict(row) for row in rows]
+    finally:
+        db.close()
 
 
 def _normalize_github_status(raw: Any) -> dict[str, Any]:
@@ -85,6 +136,7 @@ def project_detail_page(project_id: str):
             webhook_events=[],
             project_data_root=None,
             project_data_tree=None,
+            project_connections=[],
             error="Control plane unavailable or project not found.",
         )
 
@@ -115,6 +167,7 @@ def project_detail_page(project_id: str):
         ),
         project_data_root=str(project_data_root),
         project_data_tree=build_project_data_tree(project_id),
+        project_connections=_project_connections(project_id),
         error=None,
     )
 
@@ -377,10 +430,17 @@ def api_upload_project_data_file(project_id: str):
     if not files:
         return jsonify({"error": "at least one file is required"}), 400
 
+    relative_paths = request.form.getlist("relative_paths")
     uploaded: list[dict[str, str]] = []
-    for storage in files:
+    for idx, storage in enumerate(files):
+        relative_path = relative_paths[idx] if idx < len(relative_paths) else ""
         try:
-            saved = save_project_data_upload(project_id, target_path, storage)
+            saved = save_project_data_upload(
+                project_id,
+                target_path,
+                storage,
+                relative_path=relative_path,
+            )
         except ValueError as e:
             return jsonify({"error": str(e)}), 400
         uploaded.append(
@@ -420,3 +480,176 @@ def api_get_project_data_ingest_status(project_id: str):
         "errors": [],
     }
     return jsonify(job)
+
+
+@bp.get("/api/projects/<project_id>/connections")
+@login_required
+def api_list_project_connections(project_id: str):
+    cp = get_cp_client()
+    if cp.get_project(project_id) is None:
+        return _cp_error_response(cp, "project not found")
+    return jsonify(_project_connections(project_id))
+
+
+@bp.post("/api/projects/<project_id>/connections")
+@login_required
+def api_create_project_connection(project_id: str):
+    cp = get_cp_client()
+    if cp.get_project(project_id) is None:
+        return _cp_error_response(cp, "project not found")
+    body: dict[str, Any] = request.get_json(force=True) or {}
+    name = str(body.get("name") or "").strip()
+    dsn = str(body.get("dsn") or "").strip()
+    if not name:
+        return jsonify({"error": "name is required"}), 400
+    if not dsn:
+        return jsonify({"error": "dsn is required"}), 400
+
+    db = get_db()
+    try:
+        row = Connection(
+            name=name,
+            kind="database",
+            description=str(body.get("description") or ""),
+            config_json=json.dumps({"dsn": dsn, "readonly": bool(body.get("readonly", True))}),
+            auth_json="{}",
+            schema_text="",
+            enabled=bool(body.get("enabled", True)),
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        db.add(
+            ProjectConnection(
+                project_ref=str(project_id),
+                connection_id=row.id,
+                created_at=datetime.now(timezone.utc),
+            )
+        )
+        db.commit()
+        return jsonify(_project_connection_to_dict(row)), 201
+    finally:
+        db.close()
+
+
+@bp.delete("/api/projects/<project_id>/connections/<int:connection_id>")
+@login_required
+def api_delete_project_connection(project_id: str, connection_id: int):
+    cp = get_cp_client()
+    if cp.get_project(project_id) is None:
+        return _cp_error_response(cp, "project not found")
+    db = get_db()
+    try:
+        link = (
+            db.query(ProjectConnection)
+            .filter(
+                ProjectConnection.project_ref == str(project_id),
+                ProjectConnection.connection_id == connection_id,
+            )
+            .first()
+        )
+        if not link:
+            return jsonify({"error": "not found"}), 404
+        row = db.get(Connection, connection_id)
+        db.delete(link)
+        if row is not None:
+            db.delete(row)
+        db.commit()
+        return "", 204
+    finally:
+        db.close()
+
+
+@bp.post("/api/projects/<project_id>/connections/<int:connection_id>/test")
+@login_required
+def api_test_project_connection(project_id: str, connection_id: int):
+    cp = get_cp_client()
+    if cp.get_project(project_id) is None:
+        return _cp_error_response(cp, "project not found")
+    body: dict[str, Any] = request.get_json(force=True) or {}
+    db = get_db()
+    try:
+        link = (
+            db.query(ProjectConnection)
+            .filter(
+                ProjectConnection.project_ref == str(project_id),
+                ProjectConnection.connection_id == connection_id,
+            )
+            .first()
+        )
+        if not link:
+            return jsonify({"error": "not found"}), 404
+        row = db.get(Connection, connection_id)
+        if row is None or row.kind != "database":
+            return jsonify({"error": "not found"}), 404
+        config = _parse_json(row.config_json or "{}", {})
+        try:
+            result = test_database_connection(config=config if isinstance(config, dict) else {}, payload=body)
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 500
+        status = 200 if result.get("ok") else 400
+        return jsonify(result), status
+    finally:
+        db.close()
+
+
+@bp.post("/api/projects/<project_id>/connections/<int:connection_id>/schema-ingest")
+@login_required
+def api_ingest_project_connection_schema(project_id: str, connection_id: int):
+    cp = get_cp_client()
+    if cp.get_project(project_id) is None:
+        return _cp_error_response(cp, "project not found")
+    body: dict[str, Any] = request.get_json(force=True) or {}
+    namespace = str(body.get("namespace") or "").strip() or f"project:{project_id}:data"
+    db = get_db()
+    try:
+        link = (
+            db.query(ProjectConnection)
+            .filter(
+                ProjectConnection.project_ref == str(project_id),
+                ProjectConnection.connection_id == connection_id,
+            )
+            .first()
+        )
+        if not link:
+            return jsonify({"error": "not found"}), 404
+        row = db.get(Connection, connection_id)
+        if row is None or row.kind != "database":
+            return jsonify({"error": "not found"}), 404
+        config = _parse_json(row.config_json or "{}", {})
+        try:
+            snapshot = inspect_database_schema(config=config if isinstance(config, dict) else {})
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 500
+        if not snapshot.get("ok"):
+            return jsonify(snapshot), 400
+        schema_text = json.dumps(snapshot, indent=2)
+        row.schema_text = schema_text
+        row.updated_at = datetime.now(timezone.utc)
+        db.commit()
+        content = render_database_schema_document(connection_name=row.name, snapshot=snapshot)
+        item = cp.upsert_vault_item(
+            {
+                "source_type": "project_database_schema",
+                "source_ref": f"project-db://{project_id}/{connection_id}/schema",
+                "title": f"{project_id} database schema: {row.name}",
+                "content": content,
+                "namespace": namespace,
+                "project_id": project_id,
+            }
+        )
+        if item is None:
+            return _cp_error_response(cp, "database schema ingest failed")
+        return jsonify(
+            {
+                "ok": True,
+                "connection": _project_connection_to_dict(row),
+                "vault_item": item,
+                "namespace": namespace,
+                "snapshot": snapshot,
+            }
+        )
+    finally:
+        db.close()

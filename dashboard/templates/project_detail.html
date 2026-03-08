@@ -167,11 +167,19 @@
         <input class="form-control" id="project-data-target-path" placeholder="docs">
       </div>
       <div class="form-group">
-        <label>Files</label>
+        <label>Individual Files</label>
         <input class="form-control" id="project-data-files" type="file" multiple>
       </div>
+      <div class="form-group">
+        <label>Folder Upload</label>
+        <input class="form-control" id="project-data-folder-files" type="file" webkitdirectory directory multiple>
+      </div>
+      <div class="mini-note">
+        Use individual file upload for a few files, or folder upload to preserve nested paths under the selected target path.
+      </div>
       <div style="display:flex; gap:0.5rem;">
-        <button class="btn btn-primary" type="button" onclick="uploadProjectDataFiles()">Upload</button>
+        <button class="btn btn-primary" type="button" onclick="uploadProjectDataFiles()">Upload Files</button>
+        <button class="btn" type="button" onclick="uploadProjectDataFolder()">Upload Folder</button>
       </div>
       <div id="project-data-state" class="state-empty" style="margin-top:0.6rem;">No filesystem action yet.</div>
       <hr style="margin:0.8rem 0;">
@@ -201,6 +209,79 @@
         Default folders are created automatically: <code>docs</code>, <code>inbox</code>, <code>exports</code>, <code>notes</code>.
       </div>
     </div>
+  </div>
+</section>
+
+<section class="panel" style="margin-bottom:1rem;">
+  <div class="page-header" style="margin-bottom:0.75rem;">
+    <h2 class="panel-title">Project Database Context</h2>
+  </div>
+  <div class="split-grid" style="grid-template-columns:1fr 1fr; gap:0.75rem;">
+    <div>
+      <div class="form-group">
+        <label>Connection Name</label>
+        <input class="form-control" id="project-db-name" placeholder="Primary Postgres">
+      </div>
+      <div class="form-group">
+        <label>Connection String</label>
+        <input class="form-control" id="project-db-dsn" type="password" placeholder="postgresql+psycopg2://user:pass@host:5432/db">
+      </div>
+      <div class="form-group">
+        <label>Description</label>
+        <textarea class="form-control" id="project-db-description" rows="3" placeholder="Production analytics database"></textarea>
+      </div>
+      <label style="display:block; margin-bottom:0.5rem;">
+        <input type="checkbox" id="project-db-readonly" checked> Readonly connection
+      </label>
+      <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+        <button class="btn btn-primary" type="button" onclick="createProjectDatabaseConnection()">Save Database Connection</button>
+      </div>
+      <div id="project-db-state" class="state-empty" style="margin-top:0.6rem;">No project database action yet.</div>
+    </div>
+    <div>
+      <div class="form-group">
+        <label>Test Query</label>
+        <textarea class="form-control" id="project-db-test-query" rows="3" placeholder="SELECT 1 AS ok">SELECT 1 AS ok</textarea>
+      </div>
+      <div class="form-group">
+        <label>Schema Ingest Namespace</label>
+        <input class="form-control" id="project-db-namespace" value="project:{{ project.id }}:data" placeholder="project:{{ project.id }}:data">
+      </div>
+      <div class="mini-note">
+        Save the database connection here, test it from the project page, then ingest schema structure into the project vault so bots can search tables, columns, keys, and joins.
+      </div>
+    </div>
+  </div>
+  <div style="margin-top:0.9rem;">
+    <table>
+      <thead><tr><th>Name</th><th>Readonly</th><th>Schema Snapshot</th><th>Updated</th><th>Actions</th></tr></thead>
+      <tbody>
+        {% for c in project_connections %}
+        <tr>
+          <td>
+            <div><strong>{{ c.name }}</strong></div>
+            {% if c.description %}<div class="mini-note">{{ c.description }}</div>{% endif %}
+          </td>
+          <td>{{ "Yes" if c.config.readonly else "No" }}</td>
+          <td>
+            {% if c.schema_totals %}
+            <div>{{ c.schema_totals.get("tables", 0) }} table(s), {{ c.schema_totals.get("columns", 0) }} column(s)</div>
+            {% else %}
+            <span class="empty">No schema ingest yet</span>
+            {% endif %}
+          </td>
+          <td>{{ (c.updated_at[:19] if c.updated_at else '') | replace('T',' ') }}</td>
+          <td style="display:flex; gap:0.4rem; flex-wrap:wrap;">
+            <button class="btn btn-sm" type="button" onclick="testProjectDatabaseConnection({{ c.id|tojson }})">Test</button>
+            <button class="btn btn-sm btn-primary" type="button" onclick="ingestProjectDatabaseSchema({{ c.id|tojson }})">Ingest Schema</button>
+            <button class="btn btn-sm btn-danger" type="button" onclick="deleteProjectDatabaseConnection({{ c.id|tojson }})">Delete</button>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="empty">No project database connections yet</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
   </div>
 </section>
 
@@ -492,19 +573,146 @@ async function uploadProjectDataFiles() {
   }
   const fd = new FormData();
   fd.append('target_path', targetPath);
-  for (const file of files) fd.append('files', file);
+  for (const file of files) {
+    fd.append('files', file);
+    fd.append('relative_paths', '');
+  }
   setProjectDataState('state-loading', 'Uploading files...');
-  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/data/upload', {
+  try {
+    const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/data/upload', {
+      method: 'POST',
+      headers: {'X-CSRFToken': getCsrf()},
+      body: fd,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setProjectDataState('state-error', data.error || 'Upload failed.');
+      return;
+    }
+    setProjectDataState('state-info', 'Uploaded ' + ((data.uploaded || []).length) + ' file(s).');
+    location.reload();
+  } catch (err) {
+    setProjectDataState('state-error', (err && err.message) ? err.message : 'Upload failed.');
+  }
+}
+
+async function uploadProjectDataFolder() {
+  const filesInput = document.getElementById('project-data-folder-files');
+  const targetPath = (document.getElementById('project-data-target-path')?.value || '').trim();
+  const files = filesInput?.files ? Array.from(filesInput.files) : [];
+  if (!files.length) {
+    alert('Select a folder first.');
+    return;
+  }
+  const fd = new FormData();
+  fd.append('target_path', targetPath);
+  for (const file of files) {
+    fd.append('files', file);
+    fd.append('relative_paths', file.webkitRelativePath || file.name || '');
+  }
+  setProjectDataState('state-loading', 'Uploading folder...');
+  try {
+    const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/data/upload', {
+      method: 'POST',
+      headers: {'X-CSRFToken': getCsrf()},
+      body: fd,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      setProjectDataState('state-error', data.error || 'Folder upload failed.');
+      return;
+    }
+    setProjectDataState('state-info', 'Uploaded folder contents: ' + ((data.uploaded || []).length) + ' file(s).');
+    location.reload();
+  } catch (err) {
+    setProjectDataState('state-error', (err && err.message) ? err.message : 'Folder upload failed.');
+  }
+}
+
+function setProjectDbState(cls, text) {
+  const el = document.getElementById('project-db-state');
+  if (!el) return;
+  el.className = cls;
+  el.textContent = text;
+}
+
+async function createProjectDatabaseConnection() {
+  const name = (document.getElementById('project-db-name')?.value || '').trim();
+  const dsn = (document.getElementById('project-db-dsn')?.value || '').trim();
+  const description = (document.getElementById('project-db-description')?.value || '').trim();
+  const readonly = !!document.getElementById('project-db-readonly')?.checked;
+  if (!name || !dsn) {
+    alert('Connection name and connection string are required.');
+    return;
+  }
+  setProjectDbState('state-loading', 'Saving database connection...');
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/connections', {
     method: 'POST',
-    headers: {'X-CSRFToken': getCsrf()},
-    body: fd,
+    headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify({name, dsn, description, readonly}),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    setProjectDataState('state-error', data.error || 'Upload failed.');
+    setProjectDbState('state-error', data.error || 'Failed to save project database connection.');
     return;
   }
-  setProjectDataState('state-info', 'Uploaded ' + ((data.uploaded || []).length) + ' file(s).');
+  setProjectDbState('state-info', 'Saved database connection ' + (data.name || name) + '.');
+  location.reload();
+}
+
+async function testProjectDatabaseConnection(connectionId) {
+  const query = (document.getElementById('project-db-test-query')?.value || '').trim() || 'SELECT 1 AS ok';
+  setProjectDbState('state-loading', 'Testing database connection...');
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/connections/' + encodeURIComponent(connectionId) + '/test', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify({query}),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    setProjectDbState('state-error', data.error || 'Database connection test failed.');
+    return;
+  }
+  setProjectDbState('state-info', 'Database connection passed. Returned ' + (data.row_count || 0) + ' row(s).');
+}
+
+async function ingestProjectDatabaseSchema(connectionId) {
+  const namespace = (document.getElementById('project-db-namespace')?.value || '').trim();
+  setProjectDbState('state-loading', 'Inspecting database schema and ingesting it into the project vault...');
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/connections/' + encodeURIComponent(connectionId) + '/schema-ingest', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify({namespace: namespace || null}),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    setProjectDbState('state-error', data.error || 'Database schema ingest failed.');
+    return;
+  }
+  const totals = data.snapshot?.totals || {};
+  setProjectDbState(
+    'state-info',
+    'Database schema ingested. ' +
+      (totals.tables || 0) + ' table(s), ' +
+      (totals.columns || 0) + ' column(s), ' +
+      (totals.foreign_keys || 0) + ' foreign key(s).'
+  );
+  location.reload();
+}
+
+async function deleteProjectDatabaseConnection(connectionId) {
+  if (!confirm('Delete this project database connection?')) return;
+  setProjectDbState('state-loading', 'Deleting database connection...');
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/connections/' + encodeURIComponent(connectionId), {
+    method: 'DELETE',
+    headers: {'X-CSRFToken': getCsrf()},
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    setProjectDbState('state-error', data.error || 'Failed to delete database connection.');
+    return;
+  }
+  setProjectDbState('state-info', 'Database connection deleted.');
   location.reload();
 }
 

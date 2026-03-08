@@ -134,6 +134,20 @@ class BotConnection(Base):
     )
 
 
+class ProjectConnection(Base):
+    """Many-to-many map of project references to connection IDs."""
+    __tablename__ = "project_connections"
+
+    id: Mapped[int] = Column(Integer, primary_key=True)
+    project_ref: Mapped[str] = Column(String(255), nullable=False)
+    connection_id: Mapped[int] = Column(Integer, nullable=False)
+    created_at: Mapped[datetime] = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=lambda: datetime.now(timezone.utc),
+    )
+
+
 class Task(Base):
     """Dispatched task record."""
     __tablename__ = "tasks"

@@ -159,7 +159,7 @@ Use it for:
 In dashboard:
 
 1. Open `Projects -> <project>`.
-2. Use `Project Data Vault` to create folders and upload files.
+2. Use `Project Data Vault` to create folders and upload files or an entire folder tree.
 3. Keep material organized under the default folders:
    - `docs`
    - `inbox`
@@ -180,6 +180,36 @@ Project Data Vault ingest:
 - the UI now shows a live status object with discovered, ingested, skipped, and failed counts
 - rerunning ingest is safe for the same file paths because project-data items are upserted by `project-data://...` source reference
 - file-size safeguards are now backend-managed; users do not need to tune a max-bytes field in the UI
+
+### 4.2 Project Database Context
+
+Projects can also store database connections directly on the project page.
+
+Use this for:
+
+- project-specific Postgres/MySQL/SQLite or compatible databases
+- schema snapshots that should become searchable context
+- table, column, primary-key, and foreign-key structure that bots should understand
+
+In dashboard:
+
+1. Open `Projects -> <project>`.
+2. In `Project Database Context`, save a connection name and DSN / connection string.
+3. Keep the connection in readonly mode unless you explicitly need writes.
+4. Run `Test` to confirm the query path works.
+5. Run `Ingest Schema` to inspect the database structure and push a schema snapshot into the project vault namespace.
+
+What schema ingest captures:
+
+- dialect
+- schemas
+- tables
+- columns and types
+- primary keys
+- foreign keys
+- views
+
+That snapshot is stored as a vault document so project bots can retrieve it during task execution or chat.
 
 ## 5. Vault
 

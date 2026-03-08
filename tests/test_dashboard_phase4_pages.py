@@ -81,6 +81,7 @@ def test_project_detail_page_renders_with_partial_github_status(dashboard_client
 
     assert resp.status_code == 200
     assert b"Project Data Vault" in resp.data
+    assert b"Project Database Context" in resp.data
     assert b"GitHub Integration (PAT)" in resp.data
     assert b"Connection Flags" in resp.data
     assert b"Run Data Ingest" in resp.data
@@ -106,10 +107,28 @@ def test_project_data_folder_and_upload_apis_write_files(dashboard_client, tmp_p
             data={
                 "target_path": "docs/specs",
                 "files": (io.BytesIO(b"hello project vault"), "overview.md"),
+                "relative_paths": "",
             },
             content_type="multipart/form-data",
         )
         assert upload_resp.status_code == 201
+
+        folder_upload_resp = dashboard_client.post(
+            "/api/projects/proj-data/data/upload",
+            data={
+                "target_path": "docs",
+                "files": [
+                    (io.BytesIO(b"# Roadmap"), "roadmap.md"),
+                    (io.BytesIO(b"ERD"), "schema.txt"),
+                ],
+                "relative_paths": [
+                    "product-specs/roadmap.md",
+                    "product-specs/diagrams/schema.txt",
+                ],
+            },
+            content_type="multipart/form-data",
+        )
+        assert folder_upload_resp.status_code == 201
 
         files_resp = dashboard_client.get("/api/projects/proj-data/data/files")
         assert files_resp.status_code == 200
@@ -117,6 +136,8 @@ def test_project_data_folder_and_upload_apis_write_files(dashboard_client, tmp_p
         entries = body["entries"]
         assert any(e["path"] == "docs/specs" and e["type"] == "directory" for e in entries)
         assert any(e["path"] == "docs/specs/overview.md" and e["type"] == "file" for e in entries)
+        assert any(e["path"] == "docs/product-specs/roadmap.md" and e["type"] == "file" for e in entries)
+        assert any(e["path"] == "docs/product-specs/diagrams/schema.txt" and e["type"] == "file" for e in entries)
 
 
 def test_project_data_ingest_status_and_start_apis(dashboard_client, tmp_path, monkeypatch):

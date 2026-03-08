@@ -12,7 +12,7 @@ from typing import Any
 
 import yaml
 from cryptography.fernet import Fernet
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, inspect, text
 
 
 _SECRET_KEYS = {"api_key", "bearer_token", "password"}
@@ -238,3 +238,161 @@ def test_database_connection(*, config: dict[str, Any], payload: dict[str, Any])
         conn.commit()
         return {"ok": True, "rows": [], "row_count": 0}
 
+
+def inspect_database_schema(*, config: dict[str, Any]) -> dict[str, Any]:
+    """Return a schema snapshot suitable for project-level context ingestion."""
+    dsn = str(config.get("dsn") or "").strip()
+    if not dsn:
+        return {"ok": False, "error": "dsn is required"}
+
+    engine = create_engine(dsn)
+    inspector = inspect(engine)
+    default_schema = getattr(inspector, "default_schema_name", None)
+    try:
+        schema_names = inspector.get_schema_names()
+    except Exception:
+        schema_names = [default_schema] if default_schema else [None]
+
+    blocked = {"information_schema", "pg_catalog", "pg_toast", "mysql", "performance_schema", "sys"}
+    selected_schemas: list[str | None] = []
+    for schema in schema_names or [None]:
+        if schema and schema.lower() in blocked:
+            continue
+        selected_schemas.append(schema)
+    if not selected_schemas:
+        selected_schemas = [default_schema] if default_schema else [None]
+
+    snapshot: dict[str, Any] = {
+        "ok": True,
+        "dialect": engine.dialect.name,
+        "default_schema": default_schema,
+        "schemas": [],
+    }
+    totals = {"tables": 0, "views": 0, "columns": 0, "foreign_keys": 0}
+
+    with engine.connect():
+        for schema in selected_schemas:
+            schema_entry: dict[str, Any] = {
+                "name": schema or default_schema or "default",
+                "tables": [],
+                "views": [],
+            }
+            table_names = inspector.get_table_names(schema=schema)
+            view_names = inspector.get_view_names(schema=schema)
+
+            for table_name in table_names:
+                columns = inspector.get_columns(table_name, schema=schema)
+                pk = inspector.get_pk_constraint(table_name, schema=schema) or {}
+                foreign_keys = inspector.get_foreign_keys(table_name, schema=schema) or []
+                indexes = inspector.get_indexes(table_name, schema=schema) or []
+                schema_entry["tables"].append(
+                    {
+                        "name": table_name,
+                        "columns": [
+                            {
+                                "name": str(column.get("name") or ""),
+                                "type": str(column.get("type") or ""),
+                                "nullable": bool(column.get("nullable", True)),
+                                "default": column.get("default"),
+                            }
+                            for column in columns
+                        ],
+                        "primary_key": list(pk.get("constrained_columns") or []),
+                        "foreign_keys": [
+                            {
+                                "constrained_columns": list(fk.get("constrained_columns") or []),
+                                "referred_schema": fk.get("referred_schema"),
+                                "referred_table": fk.get("referred_table"),
+                                "referred_columns": list(fk.get("referred_columns") or []),
+                            }
+                            for fk in foreign_keys
+                        ],
+                        "indexes": [
+                            {
+                                "name": idx.get("name"),
+                                "columns": list(idx.get("column_names") or []),
+                                "unique": bool(idx.get("unique", False)),
+                            }
+                            for idx in indexes
+                        ],
+                    }
+                )
+                totals["tables"] += 1
+                totals["columns"] += len(columns)
+                totals["foreign_keys"] += len(foreign_keys)
+
+            for view_name in view_names:
+                schema_entry["views"].append({"name": view_name})
+                totals["views"] += 1
+
+            snapshot["schemas"].append(schema_entry)
+
+    snapshot["totals"] = totals
+    return snapshot
+
+
+def render_database_schema_document(*, connection_name: str, snapshot: dict[str, Any]) -> str:
+    """Render a schema snapshot into a readable vault document."""
+    lines = [
+        f"# Database Schema Snapshot: {connection_name}",
+        "",
+        f"Dialect: {snapshot.get('dialect') or 'unknown'}",
+        f"Default schema: {snapshot.get('default_schema') or 'default'}",
+    ]
+    totals = snapshot.get("totals") if isinstance(snapshot.get("totals"), dict) else {}
+    lines.extend(
+        [
+            "",
+            "## Totals",
+            f"- Tables: {int(totals.get('tables') or 0)}",
+            f"- Views: {int(totals.get('views') or 0)}",
+            f"- Columns: {int(totals.get('columns') or 0)}",
+            f"- Foreign keys: {int(totals.get('foreign_keys') or 0)}",
+        ]
+    )
+    schemas = snapshot.get("schemas") if isinstance(snapshot.get("schemas"), list) else []
+    for schema in schemas:
+        if not isinstance(schema, dict):
+            continue
+        lines.extend(["", f"## Schema: {schema.get('name') or 'default'}"])
+        for table in schema.get("tables") or []:
+            if not isinstance(table, dict):
+                continue
+            lines.extend(["", f"### Table: {table.get('name') or 'unknown'}"])
+            primary_key = table.get("primary_key") or []
+            if primary_key:
+                lines.append(f"- Primary key: {', '.join(str(col) for col in primary_key)}")
+            columns = table.get("columns") if isinstance(table.get("columns"), list) else []
+            if columns:
+                lines.append("- Columns:")
+                for column in columns:
+                    if not isinstance(column, dict):
+                        continue
+                    default = column.get("default")
+                    default_text = f", default={default}" if default is not None else ""
+                    lines.append(
+                        "  - "
+                        + f"{column.get('name')}: {column.get('type')} "
+                        + ("NULL" if column.get("nullable", True) else "NOT NULL")
+                        + default_text
+                    )
+            foreign_keys = table.get("foreign_keys") if isinstance(table.get("foreign_keys"), list) else []
+            if foreign_keys:
+                lines.append("- Foreign keys:")
+                for fk in foreign_keys:
+                    if not isinstance(fk, dict):
+                        continue
+                    source_cols = ", ".join(str(col) for col in fk.get("constrained_columns") or [])
+                    target_cols = ", ".join(str(col) for col in fk.get("referred_columns") or [])
+                    target_table = fk.get("referred_table") or "unknown"
+                    target_schema = fk.get("referred_schema")
+                    target_ref = f"{target_schema}.{target_table}" if target_schema else str(target_table)
+                    lines.append(f"  - ({source_cols}) -> {target_ref} ({target_cols})")
+        views = schema.get("views") if isinstance(schema.get("views"), list) else []
+        if views:
+            lines.append("")
+            lines.append("### Views")
+            for view in views:
+                if isinstance(view, dict):
+                    lines.append(f"- {view.get('name') or 'unknown'}")
+    return "\n".join(lines).strip() + "\n"

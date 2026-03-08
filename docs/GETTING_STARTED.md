@@ -135,15 +135,16 @@ After login:
    - Use the bot detail page to add workflow triggers, queue a manual test run, and inspect run history/artifacts.
 5. Open `Projects` and create one project.
 6. Open `Vault` and ingest a small test document.
-7. Open `Projects -> <project>` and use `Project Data Vault` to create folders or upload a few test files.
-8. Run:
+7. Open `Projects -> <project>` and use `Project Data Vault` to create folders or upload a few test files or a whole folder tree.
+8. Run `Run Data Ingest` on the project page, or use:
    - `python scripts/ingest_project_data.py --project-id <project_id> --namespace project:<project_id>:data`
-8. Open `Chat`:
+9. Optional: add a project database connection in `Project Database Context`, test it, and ingest a schema snapshot into the same project namespace.
+10. Open `Chat`:
    - create a conversation
    - send a normal message
    - run streaming message
    - test `@assign` task orchestration
-9. Open `Tasks` and verify status transitions.
+11. Open `Tasks` and verify status transitions.
 
 ## 7. Verify Metrics
 

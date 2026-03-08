@@ -47,15 +47,32 @@ def create_project_data_folder(project_id: str, parent_path: str, folder_name: s
     return target
 
 
-def save_project_data_upload(project_id: str, target_path: str, storage: FileStorage) -> Path:
-    filename = secure_filename(storage.filename or "")
-    if not filename:
+def _sanitize_upload_relative_path(relative_path: str, fallback_name: str) -> Path:
+    raw = (relative_path or "").replace("\\", "/").strip("/")
+    raw_parts = [part for part in raw.split("/") if part and part not in {".", ".."}]
+    safe_parts = [secure_filename(part) for part in raw_parts]
+    safe_parts = [part for part in safe_parts if part]
+    if safe_parts:
+        return Path(*safe_parts)
+    fallback = secure_filename(fallback_name or "")
+    if not fallback:
         raise ValueError("file is required")
+    return Path(fallback)
+
+
+def save_project_data_upload(
+    project_id: str,
+    target_path: str,
+    storage: FileStorage,
+    *,
+    relative_path: str = "",
+) -> Path:
+    relative_target = _sanitize_upload_relative_path(relative_path, storage.filename or "")
     target_dir = resolve_project_data_path(project_id, target_path)
-    target_dir.mkdir(parents=True, exist_ok=True)
-    target = (target_dir / filename).resolve()
-    if target != target_dir and target_dir not in target.parents:
+    target = (target_dir / relative_target).resolve()
+    if target_dir != target and target_dir not in target.parents:
         raise ValueError("upload path escapes target")
+    target.parent.mkdir(parents=True, exist_ok=True)
     storage.save(target)
     return target
 

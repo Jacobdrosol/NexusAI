@@ -141,7 +141,8 @@ Chat and orchestration:
 Vault and context:
 
 - File/URL/text ingestion, namespace management, search, preview, and bulk actions.
-- Filesystem-backed project data vault per project with uploadable folders and local ingest runner.
+- Filesystem-backed project data vault per project with individual-file upload, recursive folder upload, and in-UI ingest tracking.
+- Project-scoped database connections with schema snapshot ingestion into the vault.
 - Browser sends vault item IDs; control plane resolves content server-side for privacy.
 
 GitHub integration:
@@ -227,14 +228,16 @@ Default folders created automatically:
 Workflow:
 
 1. Open `Projects -> <project>`.
-2. Use `Project Data Vault` to create folders and upload files.
-3. Run the ingest program:
+2. Use `Project Data Vault` to create folders and upload files or a whole folder tree.
+3. Run `Run Data Ingest` on the project page or use the CLI fallback:
 
 ```bash
 python scripts/ingest_project_data.py --project-id <project_id> --namespace project:<project_id>:data
 ```
 
 The ingest runner reads the project data files from disk and posts them into the control-plane vault so they are chunked and embedded for retrieval.
+
+Projects can also store database connections directly on the project page. Use `Project Database Context` to save a DSN / connection string, run a test query, and ingest a schema snapshot so bots can retrieve table, column, key, and foreign-key structure as project context.
 
 ---
 
