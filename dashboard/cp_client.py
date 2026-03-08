@@ -196,8 +196,20 @@ class CPClient:
     def list_bot_runs(self, bot_id: str, limit: int = 50) -> Optional[List[Dict[str, Any]]]:
         return self._get(f"/v1/bots/{bot_id}/runs?limit={int(limit)}")
 
-    def list_bot_artifacts(self, bot_id: str, limit: int = 100) -> Optional[List[Dict[str, Any]]]:
-        return self._get(f"/v1/bots/{bot_id}/artifacts?limit={int(limit)}")
+    def list_bot_artifacts(
+        self,
+        bot_id: str,
+        limit: int = 100,
+        task_id: Optional[str] = None,
+        include_content: bool = False,
+    ) -> Optional[List[Dict[str, Any]]]:
+        path = f"/v1/bots/{bot_id}/artifacts?limit={int(limit)}&include_content={'true' if include_content else 'false'}"
+        if task_id:
+            path += f"&task_id={task_id}"
+        return self._get(path)
+
+    def get_bot_artifact(self, bot_id: str, artifact_id: str) -> Optional[Dict[str, Any]]:
+        return self._get(f"/v1/bots/{bot_id}/artifacts/{artifact_id}")
 
     # Tasks
     def list_tasks(self, orchestration_id: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:

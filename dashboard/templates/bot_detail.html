@@ -188,7 +188,7 @@
       <table>
         <thead>
           <tr>
-            <th>Status</th><th>Started</th><th>Source</th><th>Trigger</th><th>Task</th>
+            <th>Status</th><th>Started</th><th>Source</th><th>Trigger</th><th>Artifacts</th><th>Task</th>
           </tr>
         </thead>
         <tbody>
@@ -198,31 +198,23 @@
             <td>{{ ((run.started_at or run.created_at or '')[:19]) | replace('T',' ') }}</td>
             <td>{{ (run.metadata.source if run.metadata else '') or 'manual' }}</td>
             <td>{{ run.trigger_rule_id or '—' }}</td>
+            <td><button class="btn btn-sm" onclick="selectRunArtifacts('{{ run.task_id|e }}')">Artifacts</button></td>
             <td><button class="btn btn-sm" onclick="openTaskModal('{{ run.task_id|e }}')">{{ run.task_id[:8] }}…</button></td>
           </tr>
           {% else %}
-          <tr><td colspan="5" class="empty">No recorded runs yet</td></tr>
+          <tr><td colspan="6" class="empty">No recorded runs yet</td></tr>
           {% endfor %}
         </tbody>
       </table>
     </div>
     <div>
-      <h3 style="margin-top:0;">Artifacts</h3>
-      <ul style="list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:0.5rem;">
-        {% for artifact in artifacts %}
-        <li style="border:1px solid #e2e8f0;border-radius:10px;padding:0.75rem;">
-          <div style="display:flex;justify-content:space-between;gap:0.75rem;">
-            <strong>{{ artifact.label }}</strong>
-            <span style="color:#64748b;font-size:0.85rem;">{{ artifact.kind }}</span>
-          </div>
-          <div style="color:#64748b;font-size:0.85rem;margin-top:0.25rem;">Task {{ artifact.task_id[:8] }}…{% if artifact.path %} · {{ artifact.path }}{% endif %}</div>
-          {% if artifact.content %}
-          <pre style="margin-top:0.5rem;white-space:pre-wrap;max-height:12rem;overflow:auto;">{{ artifact.content }}</pre>
-          {% endif %}
-        </li>
-        {% else %}
-        <li class="empty">No artifacts recorded yet</li>
-        {% endfor %}
+      <div class="page-header" style="margin-bottom:0.5rem;">
+        <h3 style="margin:0;">Artifacts</h3>
+        <div id="artifact-run-label" class="mini-note"></div>
+      </div>
+      <div id="artifact-summary" class="mini-note" style="margin-bottom:0.75rem;">Select a run to inspect its artifacts.</div>
+      <ul id="artifact-list" style="list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:0.5rem;">
+        <li class="empty">No artifacts loaded.</li>
       </ul>
     </div>
   </div>
@@ -470,6 +462,18 @@
     </div>
   </div>
 </div>
+
+<div id="modal-artifact-detail" class="modal" style="display:none;">
+  <div class="modal-content">
+    <h2 id="artifact-detail-title">Artifact</h2>
+    <div id="artifact-detail-meta" class="mini-note" style="margin-bottom:0.75rem;"></div>
+    <pre id="artifact-detail-pre" style="max-height:60vh;overflow:auto;white-space:pre-wrap;"></pre>
+    <div class="modal-actions">
+      <button class="btn" id="artifact-download-btn" type="button">Download</button>
+      <button class="btn" onclick="closeModal('modal-artifact-detail')">Close</button>
+    </div>
+  </div>
+</div>
 {% endif %}
 {% endblock %}
 {% block scripts %}
@@ -527,6 +531,14 @@ BOT.launch_profile = BOT.launch_profile && typeof BOT.launch_profile === 'object
   : ((BOT.routing_rules && typeof BOT.routing_rules === 'object' && BOT.routing_rules.launch_profile && typeof BOT.routing_rules.launch_profile === 'object')
     ? BOT.routing_rules.launch_profile
     : null);
+const ARTIFACTS_BY_TASK = ARTIFACTS.reduce((acc, artifact) => {
+  const taskId = String(artifact.task_id || '');
+  if (!taskId) return acc;
+  if (!acc[taskId]) acc[taskId] = [];
+  acc[taskId].push(artifact);
+  return acc;
+}, {});
+let SELECTED_RUN_TASK_ID = '';
 
 function getCsrf() {
   const el = document.querySelector('input[name=csrf_token]');
@@ -1177,6 +1189,69 @@ function openTaskModal(taskId) {
   document.getElementById('modal-task-detail').style.display = 'flex';
 }
 
+function artifactsForTask(taskId) {
+  return Array.isArray(ARTIFACTS_BY_TASK[String(taskId) || '']) ? ARTIFACTS_BY_TASK[String(taskId)] : [];
+}
+
+function artifactKindLabel(artifact) {
+  return String(artifact.kind || 'artifact');
+}
+
+function selectRunArtifacts(taskId) {
+  SELECTED_RUN_TASK_ID = String(taskId || '');
+  const listEl = document.getElementById('artifact-list');
+  const summaryEl = document.getElementById('artifact-summary');
+  const labelEl = document.getElementById('artifact-run-label');
+  const artifacts = artifactsForTask(taskId);
+  const run = RUNS.find((item) => String(item.task_id) === String(taskId));
+  if (labelEl) {
+    labelEl.textContent = taskId ? `Task ${String(taskId).slice(0, 8)}…` : '';
+  }
+  if (!listEl || !summaryEl) return;
+  if (!artifacts.length) {
+    summaryEl.textContent = 'No artifacts recorded for this run.';
+    listEl.innerHTML = '<li class="empty">No artifacts available.</li>';
+    return;
+  }
+  summaryEl.textContent = `${artifacts.length} artifact(s) for ${run?.bot_id || BOT_ID}.`;
+  listEl.innerHTML = artifacts.map((artifact) => `
+    <li style="border:1px solid #e2e8f0;border-radius:10px;padding:0.75rem;">
+      <div style="display:flex;justify-content:space-between;gap:0.75rem;align-items:flex-start;">
+        <div>
+          <strong>${escapeHtml(artifact.label || 'Artifact')}</strong>
+          <div style="color:#64748b;font-size:0.85rem;margin-top:0.2rem;">
+            ${escapeHtml(artifactKindLabel(artifact))}${artifact.path ? ' · ' + escapeHtml(artifact.path) : ''}
+          </div>
+        </div>
+        <div style="display:flex;gap:0.35rem;flex-wrap:wrap;justify-content:flex-end;">
+          <button class="btn btn-sm" onclick="openArtifactDetail('${escapeHtml(artifact.id)}')">View</button>
+          <button class="btn btn-sm" onclick="downloadArtifact('${escapeHtml(artifact.id)}')">Download</button>
+        </div>
+      </div>
+    </li>
+  `).join('');
+}
+
+function openArtifactDetail(artifactId) {
+  fetch('/api/bots/' + encodeURIComponent(BOT_ID) + '/artifacts/' + encodeURIComponent(artifactId), {
+    headers: {'X-CSRFToken': getCsrf()}
+  })
+  .then(async (r) => {
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || 'Artifact load failed');
+    document.getElementById('artifact-detail-title').textContent = data.label || 'Artifact';
+    document.getElementById('artifact-detail-meta').textContent = `Task ${String(data.task_id || '').slice(0, 8)}… · ${data.kind || 'artifact'}${data.path ? ' · ' + data.path : ''}`;
+    document.getElementById('artifact-detail-pre').textContent = String(data.content || '');
+    document.getElementById('artifact-download-btn').onclick = () => downloadArtifact(artifactId);
+    document.getElementById('modal-artifact-detail').style.display = 'flex';
+  })
+  .catch((e) => alert(e.message || 'Artifact load failed'));
+}
+
+function downloadArtifact(artifactId) {
+  window.location.href = '/api/bots/' + encodeURIComponent(BOT_ID) + '/artifacts/' + encodeURIComponent(artifactId) + '/download';
+}
+
 function renderContractField(field, idx) {
   const key = String(field.key || '').trim();
   if (!key) return '';
@@ -1278,6 +1353,9 @@ renderBackendChain();
 renderWorkflowTriggers();
 loadInputContractEditor();
 loadLaunchProfileEditor();
+if (RUNS.length) {
+  selectRunArtifacts(RUNS[0].task_id);
+}
 document.querySelector('#form-backend select[name=worker_id]')?.addEventListener('change', () => refreshModelOptions());
 document.querySelector('#form-backend select[name=provider]')?.addEventListener('change', () => {
   refreshApiKeyOptions();

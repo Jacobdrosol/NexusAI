@@ -1,12 +1,13 @@
 """Bots blueprint — page + JSON API."""
 from __future__ import annotations
 
+import io
 import json
 import logging
 import re
 from typing import Any
 
-from flask import Blueprint, flash, jsonify, render_template, request
+from flask import Blueprint, flash, jsonify, render_template, request, send_file
 from flask_login import login_required
 
 from dashboard.db import get_db
@@ -93,7 +94,7 @@ def bot_detail_page(bot_id: str):
     cp_bot = cp.get_bot(bot_id)
     cp_tasks = cp.list_tasks()
     cp_runs = cp.list_bot_runs(bot_id) or []
-    cp_artifacts = cp.list_bot_artifacts(bot_id, limit=150) or []
+    cp_artifacts = cp.list_bot_artifacts(bot_id, limit=300, include_content=False) or []
     cp_workers = cp.list_workers() or []
     cp_models = cp.list_models() or []
     cp_keys = cp.list_keys() or []
@@ -385,3 +386,47 @@ def api_launch_bot(bot_id: str):
             status = 502
         return jsonify({"error": str((err or {}).get("detail") or "launch failed")}), status
     return jsonify(task), 201
+
+
+@bp.get("/api/bots/<bot_id>/artifacts/<artifact_id>")
+@login_required
+def api_get_bot_artifact(bot_id: str, artifact_id: str):
+    from dashboard.cp_client import get_cp_client
+
+    cp = get_cp_client()
+    artifact = cp.get_bot_artifact(bot_id, artifact_id)
+    if artifact is None:
+        err = cp.last_error()
+        status = int((err or {}).get("status_code") or 502)
+        if status < 400 or status > 599:
+            status = 502
+        return jsonify({"error": str((err or {}).get("detail") or "artifact not found")}), status
+    return jsonify(artifact)
+
+
+@bp.get("/api/bots/<bot_id>/artifacts/<artifact_id>/download")
+@login_required
+def api_download_bot_artifact(bot_id: str, artifact_id: str):
+    from dashboard.cp_client import get_cp_client
+
+    cp = get_cp_client()
+    artifact = cp.get_bot_artifact(bot_id, artifact_id)
+    if artifact is None:
+        err = cp.last_error()
+        status = int((err or {}).get("status_code") or 502)
+        if status < 400 or status > 599:
+            status = 502
+        return jsonify({"error": str((err or {}).get("detail") or "artifact not found")}), status
+
+    content = artifact.get("content")
+    if content is None:
+        content = ""
+    filename_label = str(artifact.get("label") or artifact_id).strip() or artifact_id
+    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", filename_label).strip("._") or "artifact"
+    ext = ".json" if str(artifact.get("kind") or "") in {"payload", "result", "error"} else ".txt"
+    return send_file(
+        io.BytesIO(str(content).encode("utf-8")),
+        mimetype="text/plain; charset=utf-8",
+        as_attachment=True,
+        download_name=f"{safe_name}{ext}",
+    )

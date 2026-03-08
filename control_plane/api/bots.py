@@ -96,6 +96,8 @@ async def list_bot_artifacts(
     bot_id: str,
     request: Request,
     limit: int = Query(default=100, ge=1, le=300),
+    task_id: str | None = Query(default=None),
+    include_content: bool = Query(default=False),
 ) -> List[BotRunArtifact]:
     bot_registry = request.app.state.bot_registry
     task_manager = request.app.state.task_manager
@@ -103,4 +105,27 @@ async def list_bot_artifacts(
         await bot_registry.get(bot_id)
     except BotNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    return await task_manager.list_bot_run_artifacts(bot_id=bot_id, limit=limit)
+    return await task_manager.list_bot_run_artifacts(
+        bot_id=bot_id,
+        limit=limit,
+        task_id=task_id,
+        include_content=include_content,
+    )
+
+
+@router.get("/{bot_id}/artifacts/{artifact_id}", response_model=BotRunArtifact)
+async def get_bot_artifact(
+    bot_id: str,
+    artifact_id: str,
+    request: Request,
+) -> BotRunArtifact:
+    bot_registry = request.app.state.bot_registry
+    task_manager = request.app.state.task_manager
+    try:
+        await bot_registry.get(bot_id)
+    except BotNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    try:
+        return await task_manager.get_bot_run_artifact(bot_id=bot_id, artifact_id=artifact_id)
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e))

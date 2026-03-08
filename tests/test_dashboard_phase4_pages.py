@@ -315,6 +315,33 @@ def test_bot_launch_api_uses_saved_launch_profile(dashboard_client):
     assert body["metadata"]["project_id"] == "globeiq"
 
 
+def test_bot_artifact_api_and_download_proxy_control_plane(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def get_bot_artifact(self, bot_id, artifact_id):
+            return {
+                "id": artifact_id,
+                "task_id": "task-1",
+                "bot_id": bot_id,
+                "kind": "result",
+                "label": "Task Result",
+                "content": '{"ok":true}',
+                "path": None,
+                "metadata": {},
+                "created_at": "2026-03-08T00:00:00+00:00",
+            }
+
+    with patch("dashboard.cp_client.get_cp_client", return_value=FakeCP()):
+        artifact_resp = dashboard_client.get("/api/bots/bot-1/artifacts/art-1")
+        download_resp = dashboard_client.get("/api/bots/bot-1/artifacts/art-1/download")
+
+    assert artifact_resp.status_code == 200
+    assert artifact_resp.get_json()["id"] == "art-1"
+    assert download_resp.status_code == 200
+    assert "attachment" in download_resp.headers.get("Content-Disposition", "")
+
+
 def test_tasks_page_shows_quick_launch_buttons(dashboard_client):
     _login_admin(dashboard_client)
 

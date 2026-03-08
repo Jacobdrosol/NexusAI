@@ -680,19 +680,27 @@ class TaskManager:
             for row in rows
         ]
 
-    async def list_bot_run_artifacts(self, bot_id: str, limit: int = 100) -> List[BotRunArtifact]:
+    async def list_bot_run_artifacts(
+        self,
+        bot_id: str,
+        limit: int = 100,
+        task_id: Optional[str] = None,
+        include_content: bool = True,
+    ) -> List[BotRunArtifact]:
         await self._ensure_db()
+        sql = f"""
+                SELECT * FROM {_BOT_RUN_ARTIFACTS_TABLE}
+                WHERE bot_id = ?
+            """
+        params: List[Any] = [bot_id]
+        if task_id:
+            sql += " AND task_id = ?"
+            params.append(task_id)
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        params.append(max(1, int(limit)))
         async with aiosqlite.connect(self._db_path) as db:
             db.row_factory = aiosqlite.Row
-            async with db.execute(
-                """
-                SELECT * FROM cp_bot_run_artifacts
-                WHERE bot_id = ?
-                ORDER BY created_at DESC
-                LIMIT ?
-                """,
-                (bot_id, max(1, int(limit))),
-            ) as cursor:
+            async with db.execute(sql, tuple(params)) as cursor:
                 rows = await cursor.fetchall()
         return [
             BotRunArtifact(
@@ -702,13 +710,41 @@ class TaskManager:
                 bot_id=row["bot_id"],
                 kind=row["kind"],
                 label=row["label"],
-                content=row["content"],
+                content=row["content"] if include_content else None,
                 path=row["path"],
                 metadata=json.loads(row["metadata"]) if row["metadata"] else {},
                 created_at=row["created_at"],
             )
             for row in rows
         ]
+
+    async def get_bot_run_artifact(self, bot_id: str, artifact_id: str) -> BotRunArtifact:
+        await self._ensure_db()
+        async with aiosqlite.connect(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                f"""
+                SELECT * FROM {_BOT_RUN_ARTIFACTS_TABLE}
+                WHERE bot_id = ? AND id = ?
+                LIMIT 1
+                """,
+                (bot_id, artifact_id),
+            ) as cursor:
+                row = await cursor.fetchone()
+        if row is None:
+            raise TaskNotFoundError(f"Artifact not found: {artifact_id}")
+        return BotRunArtifact(
+            id=row["id"],
+            run_id=row["run_id"],
+            task_id=row["task_id"],
+            bot_id=row["bot_id"],
+            kind=row["kind"],
+            label=row["label"],
+            content=row["content"],
+            path=row["path"],
+            metadata=json.loads(row["metadata"]) if row["metadata"] else {},
+            created_at=row["created_at"],
+        )
 
     async def update_status(
         self,
