@@ -180,10 +180,6 @@
         <label>Namespace</label>
         <input class="form-control" id="project-data-ingest-namespace" value="project:{{ project.id }}:data" placeholder="project:{{ project.id }}:data">
       </div>
-      <div class="form-group">
-        <label>Max File Size (bytes)</label>
-        <input class="form-control" id="project-data-ingest-max-bytes" type="number" min="1024" max="5000000" value="200000">
-      </div>
       <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
         <button class="btn btn-primary" type="button" onclick="startProjectDataIngest()">Run Data Ingest</button>
         <button class="btn" type="button" onclick="refreshProjectDataIngestStatus()">Refresh Status</button>
@@ -514,9 +510,6 @@ async function uploadProjectDataFiles() {
 
 async function startProjectDataIngest() {
   const namespace = (document.getElementById('project-data-ingest-namespace')?.value || '').trim();
-  const maxBytesRaw = (document.getElementById('project-data-ingest-max-bytes')?.value || '200000').trim();
-  let maxBytes = parseInt(maxBytesRaw, 10);
-  if (!Number.isFinite(maxBytes) || maxBytes < 1024) maxBytes = 200000;
   const stateEl = document.getElementById('project-data-ingest-state');
   if (stateEl) {
     stateEl.className = 'state-loading';
@@ -525,7 +518,7 @@ async function startProjectDataIngest() {
   const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/data/ingest', {
     method: 'POST',
     headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
-    body: JSON.stringify({namespace: namespace || null, max_bytes: maxBytes}),
+    body: JSON.stringify({namespace: namespace || null}),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {

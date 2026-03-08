@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -18,6 +19,8 @@ _BINARY_SUFFIXES = {
 
 _JOBS: dict[str, dict[str, Any]] = {}
 _LOCK = threading.Lock()
+_DEFAULT_MAX_BYTES = int(os.environ.get("NEXUSAI_PROJECT_DATA_INGEST_DEFAULT_MAX_BYTES", "5000000"))
+_HARD_MAX_BYTES = int(os.environ.get("NEXUSAI_PROJECT_DATA_INGEST_HARD_MAX_BYTES", "25000000"))
 
 
 def _iter_files(root: Path) -> Iterable[Path]:
@@ -57,10 +60,11 @@ def latest_job_for_project(project_id: str) -> Optional[dict[str, Any]]:
     return dict(jobs[0])
 
 
-def start_project_data_ingest(project_id: str, namespace: Optional[str] = None, max_bytes: int = 200_000) -> dict[str, Any]:
+def start_project_data_ingest(project_id: str, namespace: Optional[str] = None, max_bytes: Optional[int] = None) -> dict[str, Any]:
     existing = latest_job_for_project(project_id)
     if existing and existing.get("status") in {"queued", "running"}:
         return existing
+    effective_max_bytes = _DEFAULT_MAX_BYTES if max_bytes is None else max(1_024, min(int(max_bytes), _HARD_MAX_BYTES))
 
     job = _set_job(
         {
@@ -74,6 +78,11 @@ def start_project_data_ingest(project_id: str, namespace: Optional[str] = None, 
             "counts": {"discovered": 0, "ingested": 0, "skipped": 0, "failed": 0},
             "current_path": None,
             "errors": [],
+            "safeguards": {
+                "default_max_bytes": _DEFAULT_MAX_BYTES,
+                "hard_max_bytes": _HARD_MAX_BYTES,
+                "effective_max_bytes": effective_max_bytes,
+            },
         }
     )
 
@@ -89,9 +98,10 @@ def start_project_data_ingest(project_id: str, namespace: Optional[str] = None, 
                 relative_path = path.relative_to(root).as_posix()
                 runtime = _set_job({**runtime, "counts": counts, "current_path": relative_path})
                 size = path.stat().st_size
-                if size > max_bytes:
+                if size > effective_max_bytes:
                     counts["skipped"] += 1
-                    runtime = _set_job({**runtime, "counts": counts})
+                    errors.append(f"{relative_path}: skipped because file size {size} exceeds safeguard limit {effective_max_bytes}")
+                    runtime = _set_job({**runtime, "counts": counts, "errors": errors[-20:]})
                     continue
 
                 text = _read_text(path)

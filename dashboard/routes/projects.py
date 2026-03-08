@@ -400,12 +400,7 @@ def api_start_project_data_ingest(project_id: str):
         return _cp_error_response(cp, "project not found")
     data: dict[str, Any] = request.get_json(force=True) or {}
     namespace = (data.get("namespace") or "").strip() or None
-    max_bytes_raw = data.get("max_bytes", 200_000)
-    try:
-        max_bytes = max(1_024, min(int(max_bytes_raw), 5_000_000))
-    except Exception:
-        max_bytes = 200_000
-    job = start_project_data_ingest(project_id=project_id, namespace=namespace, max_bytes=max_bytes)
+    job = start_project_data_ingest(project_id=project_id, namespace=namespace, max_bytes=None)
     return jsonify(job)
 
 

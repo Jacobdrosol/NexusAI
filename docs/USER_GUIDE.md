@@ -179,6 +179,7 @@ Project Data Vault ingest:
 - use `Run Data Ingest` from the project page to push vault files into the searchable backend
 - the UI now shows a live status object with discovered, ingested, skipped, and failed counts
 - rerunning ingest is safe for the same file paths because project-data items are upserted by `project-data://...` source reference
+- file-size safeguards are now backend-managed; users do not need to tune a max-bytes field in the UI
 
 ## 5. Vault
 
