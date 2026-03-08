@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from shared.models import BackendConfig, Capability, Worker, WorkerMetrics
+from shared.models import BackendConfig, Bot, Capability, Task, Worker, WorkerMetrics
 
 
 @pytest.mark.anyio
@@ -74,3 +74,73 @@ async def test_scheduler_dispatch_tracks_latency_and_inflight():
     assert runtime["w-lat"]["inflight"] == 0.0
     assert runtime["w-lat"]["latency_ema_ms"] > 0.0
 
+
+@pytest.mark.anyio
+async def test_scheduler_injects_bot_system_prompt_into_payload():
+    from control_plane.scheduler.scheduler import Scheduler
+
+    bot_registry = AsyncMock()
+    bot_registry.get.return_value = Bot(
+        id="course-outline",
+        name="Course Outline",
+        role="planner",
+        system_prompt="Return only strict JSON.",
+        backends=[BackendConfig(type="cloud_api", provider="openai", model="gpt-4o-mini")],
+    )
+    scheduler = Scheduler(bot_registry=bot_registry, worker_registry=AsyncMock())
+    task = Task(
+        id="task-1",
+        bot_id="course-outline",
+        payload={"instruction": "build outline"},
+        status="queued",
+        created_at="now",
+        updated_at="now",
+    )
+
+    async def fake_dispatch(backend, payload, task=None):
+        return {"payload": payload}
+
+    scheduler._dispatch_backend = fake_dispatch  # type: ignore[method-assign]
+    result = await scheduler.schedule(task)
+
+    assert isinstance(result["payload"], list)
+    assert result["payload"][0] == {"role": "system", "content": "Return only strict JSON."}
+    assert result["payload"][1]["role"] == "user"
+    assert '"instruction": "build outline"' in result["payload"][1]["content"]
+
+
+@pytest.mark.anyio
+async def test_scheduler_does_not_duplicate_existing_system_prompt():
+    from control_plane.scheduler.scheduler import Scheduler
+
+    bot_registry = AsyncMock()
+    bot_registry.get.return_value = Bot(
+        id="course-outline",
+        name="Course Outline",
+        role="planner",
+        system_prompt="Return only strict JSON.",
+        backends=[BackendConfig(type="cloud_api", provider="openai", model="gpt-4o-mini")],
+    )
+    scheduler = Scheduler(bot_registry=bot_registry, worker_registry=AsyncMock())
+    task = Task(
+        id="task-2",
+        bot_id="course-outline",
+        payload=[
+            {"role": "system", "content": "Return only strict JSON."},
+            {"role": "user", "content": "build outline"},
+        ],
+        status="queued",
+        created_at="now",
+        updated_at="now",
+    )
+
+    async def fake_dispatch(backend, payload, task=None):
+        return {"payload": payload}
+
+    scheduler._dispatch_backend = fake_dispatch  # type: ignore[method-assign]
+    result = await scheduler.schedule(task)
+
+    assert result["payload"] == [
+        {"role": "system", "content": "Return only strict JSON."},
+        {"role": "user", "content": "build outline"},
+    ]

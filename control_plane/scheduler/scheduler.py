@@ -31,6 +31,38 @@ def _worker_timeout() -> httpx.Timeout:
     return httpx.Timeout(connect=10.0, read=None, write=120.0, pool=30.0)
 
 
+def _payload_to_messages(payload: Any) -> list[dict[str, str]]:
+    if isinstance(payload, list):
+        normalized: list[dict[str, str]] = []
+        for item in payload:
+            if isinstance(item, dict):
+                role = str(item.get("role") or "user")
+                content = item.get("content")
+                if isinstance(content, str):
+                    normalized.append({"role": role, "content": content})
+                else:
+                    normalized.append({"role": role, "content": json.dumps(content if content is not None else "", ensure_ascii=False)})
+            else:
+                normalized.append({"role": "user", "content": str(item)})
+        return normalized
+    if isinstance(payload, dict):
+        return [{"role": "user", "content": json.dumps(payload, ensure_ascii=False)}]
+    return [{"role": "user", "content": str(payload)}]
+
+
+def _inject_system_prompt(system_prompt: str | None, payload: Any) -> Any:
+    prompt = str(system_prompt or "").strip()
+    if not prompt:
+        return payload
+
+    messages = _payload_to_messages(payload)
+    if messages and str(messages[0].get("role") or "").lower() == "system":
+        existing = str(messages[0].get("content") or "").strip()
+        if existing == prompt:
+            return messages
+    return [{"role": "system", "content": prompt}, *messages]
+
+
 class Scheduler:
     def __init__(
         self,
@@ -60,10 +92,11 @@ class Scheduler:
             raise NoViableBackendError(f"Bot {task.bot_id} is disabled")
 
         last_error: Exception = NoViableBackendError("No backends configured")
+        prepared_payload = _inject_system_prompt(getattr(bot, "system_prompt", None), task.payload)
 
         for backend in bot.backends:
             try:
-                result = await self._dispatch_backend(backend, task.payload, task=task)
+                result = await self._dispatch_backend(backend, prepared_payload, task=task)
                 return result
             except Exception as e:
                 logger.warning(
@@ -88,6 +121,7 @@ class Scheduler:
             raise NoViableBackendError(f"Bot {task.bot_id} is disabled")
 
         last_error: Exception = NoViableBackendError("No backends configured")
+        prepared_payload = _inject_system_prompt(getattr(bot, "system_prompt", None), task.payload)
 
         for backend in bot.backends:
             try:
@@ -97,7 +131,7 @@ class Scheduler:
                     "model": backend.model,
                     "worker_id": backend.worker_id,
                 }
-                async for event in self._dispatch_backend_stream(backend, task.payload, task=task):
+                async for event in self._dispatch_backend_stream(backend, prepared_payload, task=task):
                     yield event
                 return
             except Exception as e:
