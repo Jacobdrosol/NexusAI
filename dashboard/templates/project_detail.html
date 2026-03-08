@@ -7,6 +7,9 @@
       <summary>
         <strong>{{ node.name }}</strong>
         {% if node.path %}<code style="margin-left:0.35rem;">{{ node.path }}</code>{% endif %}
+        {% if node.path %}
+        <button class="btn btn-sm btn-danger" type="button" style="margin-left:0.5rem;" onclick='deleteProjectDataPath({{ node.path|tojson }}, "directory")'>Delete</button>
+        {% endif %}
       </summary>
       {% if node.children %}
       <div style="margin-left:1rem; margin-top:0.35rem; display:grid; gap:0.35rem;">
@@ -22,6 +25,7 @@
     <div class="project-data-file" style="margin-left:1rem;">
       <code>{{ node.path }}</code>
       <span style="color:#64748b; margin-left:0.35rem;">{{ node.size or 0 }} bytes</span>
+      <button class="btn btn-sm btn-danger" type="button" style="margin-left:0.5rem;" onclick='deleteProjectDataPath({{ node.path|tojson }}, "file")'>Delete</button>
     </div>
   {% endif %}
 {%- endmacro %}
@@ -538,6 +542,26 @@ async function refreshProjectDataFiles() {
     setProjectDataState('state-error', data.error || 'Failed to refresh project data.');
     return;
   }
+  location.reload();
+}
+
+async function deleteProjectDataPath(path, kind) {
+  if (!path) return;
+  if (!confirm('Delete this ' + kind + '?\n\n' + path)) return;
+  setProjectDataState('state-loading', 'Deleting ' + kind + '...');
+  const res = await fetch(
+    '/api/projects/' + encodeURIComponent(PROJECT_ID) + '/data/path?path=' + encodeURIComponent(path),
+    {
+      method: 'DELETE',
+      headers: {'X-CSRFToken': getCsrf()},
+    }
+  );
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    setProjectDataState('state-error', data.error || 'Delete failed.');
+    return;
+  }
+  setProjectDataState('state-info', 'Deleted ' + kind + ' ' + path + '.');
   location.reload();
 }
 

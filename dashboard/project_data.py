@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -75,6 +76,20 @@ def save_project_data_upload(
     target.parent.mkdir(parents=True, exist_ok=True)
     storage.save(target)
     return target
+
+
+def delete_project_data_path(project_id: str, relative_path: str) -> dict[str, Any]:
+    target = resolve_project_data_path(project_id, relative_path)
+    root = ensure_project_data_layout(project_id)
+    if target == root:
+        raise ValueError("cannot delete project data root")
+    if not target.exists():
+        raise ValueError("path not found")
+    if target.is_dir():
+        shutil.rmtree(target)
+        return {"path": relative_path, "type": "directory"}
+    target.unlink()
+    return {"path": relative_path, "type": "file"}
 
 
 def build_project_data_tree(project_id: str, max_depth: int = 6, max_entries: int = 500) -> dict[str, Any]:

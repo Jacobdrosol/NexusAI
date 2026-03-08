@@ -19,6 +19,7 @@ from dashboard.models import Connection, ProjectConnection
 from dashboard.project_data import (
     build_project_data_tree,
     create_project_data_folder,
+    delete_project_data_path,
     ensure_project_data_layout,
     list_project_data_files,
     save_project_data_upload,
@@ -450,6 +451,22 @@ def api_upload_project_data_file(project_id: str):
             }
         )
     return jsonify({"project_id": project_id, "uploaded": uploaded}), 201
+
+
+@bp.delete("/api/projects/<project_id>/data/path")
+@login_required
+def api_delete_project_data_path(project_id: str):
+    cp = get_cp_client()
+    if cp.get_project(project_id) is None:
+        return _cp_error_response(cp, "project not found")
+    raw_path = (request.args.get("path") or "").strip()
+    if not raw_path:
+        return jsonify({"error": "path is required"}), 400
+    try:
+        deleted = delete_project_data_path(project_id, raw_path)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify({"project_id": project_id, "deleted": deleted})
 
 
 @bp.post("/api/projects/<project_id>/data/ingest")

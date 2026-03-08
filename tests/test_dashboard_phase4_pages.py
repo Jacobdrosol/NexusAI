@@ -139,6 +139,24 @@ def test_project_data_folder_and_upload_apis_write_files(dashboard_client, tmp_p
         assert any(e["path"] == "docs/product-specs/roadmap.md" and e["type"] == "file" for e in entries)
         assert any(e["path"] == "docs/product-specs/diagrams/schema.txt" and e["type"] == "file" for e in entries)
 
+        delete_file_resp = dashboard_client.delete(
+            "/api/projects/proj-data/data/path?path=docs/specs/overview.md",
+        )
+        assert delete_file_resp.status_code == 200
+        assert delete_file_resp.get_json()["deleted"]["type"] == "file"
+
+        delete_dir_resp = dashboard_client.delete(
+            "/api/projects/proj-data/data/path?path=docs/product-specs",
+        )
+        assert delete_dir_resp.status_code == 200
+        assert delete_dir_resp.get_json()["deleted"]["type"] == "directory"
+
+        files_resp = dashboard_client.get("/api/projects/proj-data/data/files")
+        assert files_resp.status_code == 200
+        entries = files_resp.get_json()["entries"]
+        assert not any(e["path"] == "docs/specs/overview.md" for e in entries)
+        assert not any(e["path"].startswith("docs/product-specs") for e in entries)
+
 
 def test_project_data_ingest_status_and_start_apis(dashboard_client, tmp_path, monkeypatch):
     _login_admin(dashboard_client)
