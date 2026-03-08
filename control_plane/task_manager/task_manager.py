@@ -16,9 +16,13 @@ from control_plane.scheduler.dependency_engine import DependencyEngine
 logger = logging.getLogger(__name__)
 
 _DEFAULT_DB_PATH = str(Path(__file__).parent.parent.parent / "data" / "nexusai.db")
+_TASKS_TABLE = "cp_tasks"
+_TASK_DEPENDENCIES_TABLE = "cp_task_dependencies"
+_BOT_RUNS_TABLE = "cp_bot_runs"
+_BOT_RUN_ARTIFACTS_TABLE = "cp_bot_run_artifacts"
 
-_CREATE_TASKS = """
-CREATE TABLE IF NOT EXISTS tasks (
+_CREATE_TASKS = f"""
+CREATE TABLE IF NOT EXISTS {_TASKS_TABLE} (
     id         TEXT PRIMARY KEY,
     bot_id     TEXT,
     payload    TEXT,
@@ -32,16 +36,16 @@ CREATE TABLE IF NOT EXISTS tasks (
 )
 """
 
-_CREATE_TASK_DEPENDENCIES = """
-CREATE TABLE IF NOT EXISTS task_dependencies (
+_CREATE_TASK_DEPENDENCIES = f"""
+CREATE TABLE IF NOT EXISTS {_TASK_DEPENDENCIES_TABLE} (
     task_id TEXT NOT NULL,
     depends_on_task_id TEXT NOT NULL,
     PRIMARY KEY (task_id, depends_on_task_id)
 )
 """
 
-_CREATE_BOT_RUNS = """
-CREATE TABLE IF NOT EXISTS bot_runs (
+_CREATE_BOT_RUNS = f"""
+CREATE TABLE IF NOT EXISTS {_BOT_RUNS_TABLE} (
     id TEXT PRIMARY KEY,
     task_id TEXT NOT NULL UNIQUE,
     bot_id TEXT NOT NULL,
@@ -59,8 +63,8 @@ CREATE TABLE IF NOT EXISTS bot_runs (
 )
 """
 
-_CREATE_BOT_RUN_ARTIFACTS = """
-CREATE TABLE IF NOT EXISTS bot_run_artifacts (
+_CREATE_BOT_RUN_ARTIFACTS = f"""
+CREATE TABLE IF NOT EXISTS {_BOT_RUN_ARTIFACTS_TABLE} (
     id TEXT PRIMARY KEY,
     run_id TEXT NOT NULL,
     task_id TEXT NOT NULL,
@@ -283,13 +287,13 @@ class TaskManager:
                 await db.commit()
                 dep_map: Dict[str, List[str]] = {}
                 async with db.execute(
-                    "SELECT task_id, depends_on_task_id FROM task_dependencies"
+                    f"SELECT task_id, depends_on_task_id FROM {_TASK_DEPENDENCIES_TABLE}"
                 ) as dep_cursor:
                     dep_rows = await dep_cursor.fetchall()
                     for dep_row in dep_rows:
                         dep_map.setdefault(dep_row["task_id"], []).append(dep_row["depends_on_task_id"])
 
-                async with db.execute("SELECT * FROM tasks") as cursor:
+                async with db.execute(f"SELECT * FROM {_TASKS_TABLE}") as cursor:
                     rows = await cursor.fetchall()
                     for row in rows:
                         depends_on = []
@@ -323,7 +327,7 @@ class TaskManager:
     async def _migrate_tasks_table(self, db: aiosqlite.Connection) -> None:
         """Ensure new table columns exist for upgraded installations."""
         table_columns = {
-            "tasks": {
+            _TASKS_TABLE: {
                 "bot_id": "TEXT",
                 "payload": "TEXT",
                 "metadata": "TEXT",
@@ -334,7 +338,7 @@ class TaskManager:
                 "created_at": "TEXT",
                 "updated_at": "TEXT",
             },
-            "bot_runs": {
+            _BOT_RUNS_TABLE: {
                 "payload": "TEXT",
                 "metadata": "TEXT",
                 "result": "TEXT",
@@ -344,7 +348,7 @@ class TaskManager:
                 "started_at": "TEXT",
                 "completed_at": "TEXT",
             },
-            "bot_run_artifacts": {
+            _BOT_RUN_ARTIFACTS_TABLE: {
                 "content": "TEXT",
                 "path": "TEXT",
                 "metadata": "TEXT",
@@ -366,7 +370,7 @@ class TaskManager:
         async with aiosqlite.connect(self._db_path) as db:
             await db.execute(
                 """
-                INSERT INTO tasks
+                INSERT INTO cp_tasks
                     (id, bot_id, payload, metadata, depends_on, status, result, error,
                      created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -399,7 +403,7 @@ class TaskManager:
         async with aiosqlite.connect(self._db_path) as db:
             await db.execute(
                 """
-                INSERT INTO bot_runs
+                INSERT INTO cp_bot_runs
                     (id, task_id, bot_id, status, payload, metadata, result, error,
                      triggered_by_task_id, trigger_rule_id, created_at, updated_at,
                      started_at, completed_at)
@@ -413,7 +417,7 @@ class TaskManager:
                     triggered_by_task_id = excluded.triggered_by_task_id,
                     trigger_rule_id = excluded.trigger_rule_id,
                     updated_at = excluded.updated_at,
-                    started_at = COALESCE(bot_runs.started_at, excluded.started_at),
+                    started_at = COALESCE(cp_bot_runs.started_at, excluded.started_at),
                     completed_at = excluded.completed_at
                 """,
                 (
@@ -439,7 +443,7 @@ class TaskManager:
         async with aiosqlite.connect(self._db_path) as db:
             await db.execute(
                 """
-                INSERT INTO bot_run_artifacts
+                INSERT INTO cp_bot_run_artifacts
                     (id, run_id, task_id, bot_id, kind, label, content, path, metadata, created_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
@@ -577,11 +581,11 @@ class TaskManager:
 
     async def _persist_dependencies(self, task: Task) -> None:
         async with aiosqlite.connect(self._db_path) as db:
-            await db.execute("DELETE FROM task_dependencies WHERE task_id = ?", (task.id,))
+            await db.execute(f"DELETE FROM {_TASK_DEPENDENCIES_TABLE} WHERE task_id = ?", (task.id,))
             for dep_id in task.depends_on:
                 await db.execute(
                     """
-                    INSERT OR IGNORE INTO task_dependencies (task_id, depends_on_task_id)
+                    INSERT OR IGNORE INTO cp_task_dependencies (task_id, depends_on_task_id)
                     VALUES (?, ?)
                     """,
                     (task.id, dep_id),
@@ -648,7 +652,7 @@ class TaskManager:
             db.row_factory = aiosqlite.Row
             async with db.execute(
                 """
-                SELECT * FROM bot_runs
+                SELECT * FROM cp_bot_runs
                 WHERE bot_id = ?
                 ORDER BY created_at DESC
                 LIMIT ?
@@ -682,7 +686,7 @@ class TaskManager:
             db.row_factory = aiosqlite.Row
             async with db.execute(
                 """
-                SELECT * FROM bot_run_artifacts
+                SELECT * FROM cp_bot_run_artifacts
                 WHERE bot_id = ?
                 ORDER BY created_at DESC
                 LIMIT ?

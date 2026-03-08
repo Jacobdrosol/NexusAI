@@ -319,3 +319,47 @@ async def test_task_manager_migrates_legacy_task_table_without_metadata(tmp_path
 
     updated = await tm.get_task(task.id)
     assert updated.status == "completed"
+
+
+@pytest.mark.anyio
+async def test_task_manager_ignores_legacy_dashboard_tasks_table_shape(tmp_path):
+    import asyncio
+    import sqlite3
+
+    from control_plane.task_manager.task_manager import TaskManager
+
+    db_path = tmp_path / "shared.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE tasks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bot_id INTEGER NOT NULL,
+            payload TEXT NOT NULL DEFAULT '{}',
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            status TEXT NOT NULL DEFAULT 'queued',
+            result TEXT,
+            error TEXT,
+            created_at TEXT,
+            updated_at TEXT
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {"output": "ok"}
+
+    tm = TaskManager(StubScheduler(), db_path=str(db_path))
+    task = await tm.create_task(bot_id="course-intake", payload={"instruction": "start"})
+
+    for _ in range(30):
+        updated = await tm.get_task(task.id)
+        if updated.status == "completed":
+            break
+        await asyncio.sleep(0.1)
+
+    updated = await tm.get_task(task.id)
+    assert updated.status == "completed"
