@@ -332,6 +332,14 @@ function renderMarkdown(text) {
     return !String(line || '').trim();
   }
 
+  function isTableStart(index) {
+    return (
+      index + 1 < lines.length &&
+      /^\|.+\|$/.test(lines[index]) &&
+      /^\|?(?:\s*:?-+:?\s*\|)+\s*:?-+:?\s*\|?$/.test(lines[index + 1])
+    );
+  }
+
   while (i < lines.length) {
     const line = lines[i];
 
@@ -354,7 +362,7 @@ function renderMarkdown(text) {
       continue;
     }
 
-    if (/^\|.+\|$/.test(line) && i + 1 < lines.length && /^\|?[\s:-|]+\|?$/.test(lines[i + 1])) {
+    if (isTableStart(i)) {
       const headerCells = line.split('|').slice(1, -1).map((cell) => renderInlineMarkdown(cell.trim()));
       i += 2;
       const rows = [];
@@ -424,13 +432,17 @@ function renderMarkdown(text) {
       i < lines.length &&
       !isBlank(lines[i]) &&
       !/^```/.test(lines[i]) &&
-      !/^\|.+\|$/.test(lines[i]) &&
+      !isTableStart(i) &&
       !/^(#{1,6})\s+/.test(lines[i]) &&
       !/^---+$/.test(lines[i].trim()) &&
       !/^>\s?/.test(lines[i]) &&
       !/^\d+\.\s+/.test(lines[i]) &&
       !/^[-*]\s+/.test(lines[i])
     ) {
+      paragraphLines.push(renderInlineMarkdown(lines[i]));
+      i += 1;
+    }
+    if (!paragraphLines.length) {
       paragraphLines.push(renderInlineMarkdown(lines[i]));
       i += 1;
     }
