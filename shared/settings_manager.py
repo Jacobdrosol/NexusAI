@@ -79,6 +79,9 @@ _DEFAULTS: List[tuple] = [
      "Default Embedding Model", "Model name used for text embeddings."),
     ("worker_heartbeat_interval", "30", "int", "llm",
      "Worker Heartbeat Interval (s)", "Seconds between worker heartbeat pings."),
+    ("cloud_backend_timeout_seconds", "900", "int", "llm",
+     "Cloud Backend Timeout (s)",
+     "Timeout in seconds for cloud model API calls used by orchestration and bot runs."),
     # Logging
     ("log_level", "INFO", "string", "logging", "Log Level",
      "Logging verbosity: DEBUG, INFO, WARNING, or ERROR."),

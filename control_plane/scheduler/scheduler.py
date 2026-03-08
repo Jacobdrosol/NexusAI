@@ -8,6 +8,7 @@ import httpx
 
 from shared.exceptions import BackendError, BotNotFoundError, NoViableBackendError
 from shared.models import BackendConfig, Task, Worker
+from shared.settings_manager import SettingsManager
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +36,15 @@ def _worker_timeout() -> httpx.Timeout:
 
 
 def _cloud_timeout() -> float:
-    return float(os.environ.get("NEXUSAI_CLOUD_API_TIMEOUT_SECONDS", "900"))
+    env_raw = os.environ.get("NEXUSAI_CLOUD_API_TIMEOUT_SECONDS", "").strip()
+    if env_raw:
+        return float(env_raw)
+    env_default = 900.0
+    try:
+        configured = SettingsManager.instance().get("cloud_backend_timeout_seconds", env_default)
+        return float(configured)
+    except Exception:
+        return env_default
 
 
 def _payload_to_messages(payload: Any) -> list[dict[str, str]]:

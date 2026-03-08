@@ -27,6 +27,24 @@ def test_cloud_timeout_reads_env(monkeypatch):
     assert _cloud_timeout() == 1800.0
 
 
+def test_cloud_timeout_prefers_settings_manager(monkeypatch):
+    from control_plane.scheduler import scheduler as scheduler_module
+
+    class _FakeSettings:
+        def get(self, key, default=None):
+            assert key == "cloud_backend_timeout_seconds"
+            return 2400
+
+    monkeypatch.delenv("NEXUSAI_CLOUD_API_TIMEOUT_SECONDS", raising=False)
+    monkeypatch.setattr(
+        scheduler_module.SettingsManager,
+        "instance",
+        staticmethod(lambda: _FakeSettings()),
+    )
+
+    assert scheduler_module._cloud_timeout() == 2400.0
+
+
 @pytest.mark.anyio
 async def test_scheduler_unpinned_backend_prefers_lower_weight_worker():
     from control_plane.scheduler.scheduler import Scheduler
