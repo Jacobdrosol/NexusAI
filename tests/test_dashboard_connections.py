@@ -71,6 +71,25 @@ paths:
     actions = actions_resp.get_json()["actions"]
     assert actions[0]["operation_id"] == "healthCheck"
 
+    update_resp = dashboard_client.put(
+        f"/api/connections/{conn['id']}",
+        json={
+            "name": "Example API Updated",
+            "description": "updated",
+            "config": {"base_url": "https://globeiq.org", "timeout_seconds": 60},
+            "auth": {"type": "api_key", "name": "X-GLOBEIQ-AGENT-KEY"},
+            "schema_text": schema,
+        },
+    )
+    assert update_resp.status_code == 200
+    updated = update_resp.get_json()
+    assert updated["name"] == "Example API Updated"
+    assert updated["description"] == "updated"
+    assert updated["config"]["base_url"] == "https://globeiq.org"
+    assert updated["config"]["timeout_seconds"] == 60
+    assert updated["auth"]["name"] == "X-GLOBEIQ-AGENT-KEY"
+    assert updated["auth"]["api_key"] == "[REDACTED]"
+
     del_resp = dashboard_client.delete(f"/api/connections/{conn['id']}")
     assert del_resp.status_code == 204
 

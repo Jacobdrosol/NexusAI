@@ -9,8 +9,12 @@
 <input type="hidden" id="csrf-token" value="{{ csrf_token() }}">
 
 <section class="panel" style="margin-bottom:1rem;">
-  <h2 class="panel-title">Create Connection</h2>
+  <div class="page-header" style="margin-bottom:0.75rem;">
+    <h2 class="panel-title" id="connection-form-title">Create Connection</h2>
+    <button class="btn" type="button" id="cancel-edit-btn" style="display:none;" onclick="resetConnectionForm()">Cancel Edit</button>
+  </div>
   <form id="conn-create-form" onsubmit="createConnection(event)">
+    <input type="hidden" name="connection_id" value="">
     <div class="split-grid" style="grid-template-columns:1fr 1fr;">
       <div class="form-group"><label>Name</label><input class="form-control" name="name" required></div>
       <div class="form-group">
@@ -61,7 +65,7 @@
       </div>
     </div>
 
-    <button class="btn btn-primary" type="submit">Create and Attach</button>
+    <button class="btn btn-primary" type="submit" id="connection-submit-btn">Create and Attach</button>
   </form>
 </section>
 
@@ -76,6 +80,7 @@
         <td>{{ c.kind }}</td>
         <td><pre style="white-space:pre-wrap;">{{ c.auth | tojson(indent=2) }}</pre></td>
         <td class="actions">
+          <button class="btn btn-sm" onclick="editConnection({{ c.id }})">Edit</button>
           <button class="btn btn-sm" onclick="openTest({{ c.id }})">Test</button>
           <button class="btn btn-sm" onclick="showActions({{ c.id }})">Actions</button>
           <button class="btn btn-sm btn-danger" onclick="deleteConnection({{ c.id }})">Delete</button>
@@ -111,6 +116,7 @@
 <script>
 const BOT_ID = {{ bot_id|tojson }};
 const CSRF = document.getElementById('csrf-token').value;
+const CONNECTIONS = {{ connections|tojson }};
 
 function toggleKindFields(kind) {
   document.getElementById('http-fields').style.display = kind === 'http' ? '' : 'none';
@@ -123,10 +129,62 @@ function toggleAuthFields(kind) {
   document.getElementById('auth-basic').style.display = kind === 'basic' ? '' : 'none';
 }
 
+function resetConnectionForm() {
+  const form = document.getElementById('conn-create-form');
+  form.reset();
+  form.connection_id.value = '';
+  form.kind.value = 'http';
+  form.auth_type.value = 'none';
+  form.auth_name.value = 'X-API-Key';
+  form.timeout_seconds.value = '15';
+  document.getElementById('connection-form-title').textContent = 'Create Connection';
+  document.getElementById('connection-submit-btn').textContent = 'Create and Attach';
+  document.getElementById('cancel-edit-btn').style.display = 'none';
+  toggleKindFields('http');
+  toggleAuthFields('none');
+}
+
+function editConnection(connectionId) {
+  const connection = (CONNECTIONS || []).find((item) => String(item.id) === String(connectionId));
+  if (!connection) {
+    alert('Connection not found.');
+    return;
+  }
+  const form = document.getElementById('conn-create-form');
+  form.connection_id.value = String(connection.id);
+  form.name.value = connection.name || '';
+  form.kind.value = connection.kind || 'http';
+  form.description.value = connection.description || '';
+
+  if ((connection.kind || 'http') === 'http') {
+    form.base_url.value = connection.config?.base_url || '';
+    form.timeout_seconds.value = String(connection.config?.timeout_seconds || 15);
+    form.schema_text.value = connection.schema_text || '';
+    form.auth_type.value = connection.auth?.type || 'none';
+    form.auth_name.value = connection.auth?.name || 'X-API-Key';
+    form.api_key.value = '';
+    form.bearer_token.value = '';
+    form.username.value = connection.auth?.username && connection.auth.username !== '[REDACTED]' ? connection.auth.username : '';
+    form.password.value = '';
+    toggleKindFields('http');
+    toggleAuthFields(form.auth_type.value);
+  } else {
+    form.dsn.value = connection.config?.dsn || '';
+    form.readonly.checked = !!connection.config?.readonly;
+    toggleKindFields('database');
+  }
+
+  document.getElementById('connection-form-title').textContent = 'Edit Connection';
+  document.getElementById('connection-submit-btn').textContent = 'Save Changes';
+  document.getElementById('cancel-edit-btn').style.display = '';
+  window.scrollTo({top: 0, behavior: 'smooth'});
+}
+
 function createConnection(evt) {
   evt.preventDefault();
   const fd = new FormData(evt.target);
   const kind = (fd.get('kind') || 'http').toString();
+  const connectionId = (fd.get('connection_id') || '').toString().trim();
   const payload = {
     name: (fd.get('name') || '').toString().trim(),
     kind: kind,
@@ -150,13 +208,18 @@ function createConnection(evt) {
     payload.config.readonly = evt.target.querySelector('input[name=readonly]').checked;
   }
 
-  fetch('/api/bots/' + encodeURIComponent(BOT_ID) + '/connections', {
-    method: 'POST',
+  const url = connectionId
+    ? '/api/connections/' + encodeURIComponent(connectionId)
+    : '/api/bots/' + encodeURIComponent(BOT_ID) + '/connections';
+  const method = connectionId ? 'PUT' : 'POST';
+
+  fetch(url, {
+    method: method,
     headers: {'Content-Type': 'application/json', 'X-CSRFToken': CSRF},
     body: JSON.stringify(payload),
   }).then(async (r) => {
     const data = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(data.error || 'Create failed');
+    if (!r.ok) throw new Error(data.error || (connectionId ? 'Update failed' : 'Create failed'));
     location.reload();
   }).catch((e) => alert(e.message));
 }
@@ -220,5 +283,7 @@ function runTest(evt) {
     document.getElementById('test-result').textContent = JSON.stringify(data, null, 2);
   }).catch((e) => alert(e.message));
 }
+
+resetConnectionForm();
 </script>
 {% endblock %}
