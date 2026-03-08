@@ -214,6 +214,47 @@ What schema ingest captures:
 
 That snapshot is stored as a vault document so project bots can retrieve it during task execution or chat.
 
+### 4.3 Workflow Templates
+
+Projects can install seeded multi-bot workflow templates from the project page.
+
+Current templates:
+
+- `Course Generation Pipeline`
+- `PR Review Pipeline`
+
+How it works:
+
+1. Open `Projects -> <project>`.
+2. In `Workflow Templates`, choose a source bot when you want the installed bots to inherit an existing backend chain.
+3. Click `Install` on the template you want.
+4. NexusAI creates or updates the template bots and adds them to that project.
+
+Course generation template coverage:
+
+- course shell
+- structure
+- units
+- lessons
+- image planning
+- question bank
+- badge design
+- final packaging
+- QC bots between major stages
+
+PR review template coverage:
+
+- PR triage
+- deep review
+- QC of findings
+- final operator-ready report
+
+Run reporting:
+
+- each bot run now records a `Run Report` artifact
+- project pages show the latest reports from project bots
+- reports summarize status, lineage, and the bot's result or error in a human-readable format
+
 ## 5. Vault
 
 ### 5.1 Ingestion

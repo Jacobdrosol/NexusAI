@@ -143,6 +143,8 @@ Vault and context:
 - File/URL/text ingestion, namespace management, search, preview, and bulk actions.
 - Filesystem-backed project data vault per project with individual-file upload, recursive folder upload, and in-UI ingest tracking.
 - Project-scoped database connections with schema snapshot ingestion into the vault.
+- Project-scoped workflow templates for seeded course-generation and PR-review bot pipelines.
+- Automatic run-report artifacts and project-level report visibility for long-running bot work.
 - Browser sends vault item IDs; control plane resolves content server-side for privacy.
 
 GitHub integration:

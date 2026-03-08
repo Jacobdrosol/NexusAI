@@ -235,6 +235,9 @@ class CPClient:
     def get_project(self, project_id: str) -> Optional[Dict[str, Any]]:
         return self._get(f"/v1/projects/{project_id}")
 
+    def update_project(self, project_id: str, project: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        return self._put(f"/v1/projects/{project_id}", project)
+
     def delete_project(self, project_id: str) -> bool:
         return self._delete(f"/v1/projects/{project_id}")
 

@@ -215,6 +215,74 @@ def test_project_data_ingest_status_and_start_apis(dashboard_client, tmp_path, m
         assert body["status"] in {"queued", "running", "completed", "completed_with_errors"}
 
 
+def test_project_workflow_template_install_api(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def __init__(self):
+            self.project = {
+                "id": "globeiq",
+                "name": "GlobeIQ",
+                "mode": "isolated",
+                "enabled": True,
+                "bridge_project_ids": [],
+                "bot_ids": [],
+                "settings_overrides": {},
+            }
+            self.bots = {
+                "seed-bot": {
+                    "id": "seed-bot",
+                    "name": "Seed Bot",
+                    "role": "assistant",
+                    "priority": 1,
+                    "enabled": True,
+                    "backends": [{"type": "cloud_api", "provider": "openai", "model": "gpt-4.1"}],
+                    "routing_rules": {},
+                    "workflow": {"triggers": []},
+                }
+            }
+
+        def get_project(self, project_id):
+            return dict(self.project) if project_id == self.project["id"] else None
+
+        def list_bots(self):
+            return [dict(bot) for bot in self.bots.values()]
+
+        def get_bot(self, bot_id):
+            bot = self.bots.get(bot_id)
+            return dict(bot) if bot else None
+
+        def create_bot(self, body):
+            self.bots[body["id"]] = dict(body)
+            return dict(body)
+
+        def update_bot(self, bot_id, body):
+            self.bots[bot_id] = dict(body)
+            return dict(body)
+
+        def update_project(self, project_id, body):
+            self.project = dict(body)
+            return dict(self.project)
+
+        def last_error(self):
+            return {}
+
+    fake_cp = FakeCP()
+    with patch("dashboard.routes.projects.get_cp_client", return_value=fake_cp):
+        resp = dashboard_client.post(
+            "/api/projects/globeiq/workflow-templates/install",
+            json={"template_id": "course_generation_pipeline", "source_bot_id": "seed-bot"},
+        )
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["template_id"] == "course_generation_pipeline"
+        assert body["entry_bot_id"] == "globeiq-course-shell-designer"
+        assert "globeiq-course-finisher" in body["bot_ids"]
+        assert "globeiq-course-shell-designer" in fake_cp.project["bot_ids"]
+        installed_bot = fake_cp.bots["globeiq-course-shell-designer"]
+        assert installed_bot["backends"][0]["provider"] == "openai"
+
+
 def test_chat_page_loads_when_logged_in(dashboard_client):
     _login_admin(dashboard_client)
     resp = dashboard_client.get("/chat")

@@ -75,6 +75,66 @@ CREATE TABLE IF NOT EXISTS bot_run_artifacts (
 """
 
 
+def _summarize_payload(payload: Any) -> str:
+    if isinstance(payload, dict):
+        keys = sorted(str(key) for key in payload.keys())
+        return f"Object with keys: {', '.join(keys[:12])}" if keys else "Empty object"
+    if isinstance(payload, list):
+        return f"List with {len(payload)} item(s)"
+    return str(type(payload).__name__)
+
+
+def _task_report_markdown(task: Task) -> str:
+    lines = [
+        f"# Run Report: {task.bot_id}",
+        "",
+        f"- Status: {task.status}",
+        f"- Task ID: {task.id}",
+        f"- Created: {task.created_at}",
+        f"- Updated: {task.updated_at}",
+    ]
+    if task.metadata:
+        if task.metadata.project_id:
+            lines.append(f"- Project: {task.metadata.project_id}")
+        if task.metadata.source:
+            lines.append(f"- Source: {task.metadata.source}")
+        if task.metadata.parent_task_id:
+            lines.append(f"- Triggered By Task: {task.metadata.parent_task_id}")
+        if task.metadata.trigger_rule_id:
+            lines.append(f"- Trigger Rule: {task.metadata.trigger_rule_id}")
+        if task.metadata.trigger_depth is not None:
+            lines.append(f"- Trigger Depth: {task.metadata.trigger_depth}")
+
+    lines.extend(["", "## Payload", _summarize_payload(task.payload)])
+
+    if task.error is not None:
+        lines.extend(
+            [
+                "",
+                "## Error",
+                f"- Message: {task.error.message}",
+                f"- Code: {task.error.code or '—'}",
+            ]
+        )
+    elif task.result is not None:
+        lines.append("")
+        lines.append("## Result")
+        if isinstance(task.result, dict):
+            report = task.result.get("report")
+            if isinstance(report, str) and report.strip():
+                lines.append(report.strip())
+            else:
+                result_keys = sorted(str(key) for key in task.result.keys())
+                lines.append(f"Result keys: {', '.join(result_keys[:20])}" if result_keys else "Empty result object")
+            explicit_artifacts = task.result.get("artifacts")
+            if isinstance(explicit_artifacts, list):
+                lines.append("")
+                lines.append(f"Artifacts reported by bot: {len(explicit_artifacts)}")
+        else:
+            lines.append(str(task.result))
+    return "\n".join(lines).strip() + "\n"
+
+
 class TaskManager:
     def __init__(self, scheduler: Any, db_path: Optional[str] = None, bot_registry: Optional[Any] = None) -> None:
         self._tasks: Dict[str, Task] = {}
@@ -271,7 +331,22 @@ class TaskManager:
                 content=json.dumps(task.payload, indent=2, sort_keys=True),
                 metadata={},
                 created_at=now,
-            )
+            ),
+            BotRunArtifact(
+                id=f"{task.id}:report",
+                run_id=task.id,
+                task_id=task.id,
+                bot_id=task.bot_id,
+                kind="note",
+                label="Run Report",
+                content=_task_report_markdown(task),
+                metadata={
+                    "status": task.status,
+                    "project_id": getattr(task.metadata, "project_id", None),
+                    "source": getattr(task.metadata, "source", None),
+                },
+                created_at=now,
+            ),
         ]
         if task.result is not None:
             artifacts.append(

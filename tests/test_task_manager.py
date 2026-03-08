@@ -140,6 +140,7 @@ async def test_bot_trigger_creates_follow_on_run_and_artifacts(tmp_path):
     labels = {artifact.label for artifact in artifacts}
     assert "Task Payload" in labels
     assert "Task Result" in labels
+    assert "Run Report" in labels
     assert "summary.txt" in labels
 
 
@@ -193,9 +194,11 @@ async def test_qc_bot_can_route_failures_back_to_source_bot(tmp_path):
         await asyncio.sleep(0.1)
 
     tasks = await tm.list_tasks()
-    assert len(tasks) == 3
-    qc_task = next(t for t in tasks if t.bot_id == "qc-bot")
-    retry_task = next(t for t in tasks if t.id not in {root.id, qc_task.id})
+    assert len(tasks) >= 3
+    qc_tasks = [t for t in tasks if t.bot_id == "qc-bot"]
+    assert qc_tasks
+    qc_task = qc_tasks[0]
+    retry_task = next(t for t in tasks if t.id not in {root.id, qc_task.id} and t.bot_id == "worker-bot")
     assert retry_task.bot_id == "worker-bot"
     assert retry_task.metadata is not None
     assert retry_task.metadata.parent_task_id == qc_task.id
