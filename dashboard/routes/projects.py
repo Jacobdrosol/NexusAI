@@ -671,12 +671,17 @@ def api_ingest_project_connection_schema(project_id: str, connection_id: int):
         content = render_database_schema_document(connection_name=row.name, snapshot=snapshot)
         item = cp.upsert_vault_item(
             {
-                "source_type": "project_database_schema",
+                "source_type": "custom",
                 "source_ref": f"project-db://{project_id}/{connection_id}/schema",
                 "title": f"{project_id} database schema: {row.name}",
                 "content": content,
                 "namespace": namespace,
                 "project_id": project_id,
+                "metadata": {
+                    "kind": "project_database_schema",
+                    "connection_id": connection_id,
+                    "connection_name": row.name,
+                },
             }
         )
         if item is None:

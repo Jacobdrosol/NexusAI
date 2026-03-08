@@ -151,6 +151,8 @@ def test_project_database_connection_create_test_and_schema_ingest(dashboard_cli
         body = schema_resp.get_json()
         assert body["ok"] is True
         assert body["vault_item"]["namespace"] == "project:proj-db:data"
+        assert body["vault_item"]["source_type"] == "custom"
+        assert body["vault_item"]["metadata"]["kind"] == "project_database_schema"
         assert body["connection"]["schema_totals"]["tables"] >= 0
 
 
