@@ -4,6 +4,7 @@ import bcrypt
 from unittest.mock import patch
 
 from dashboard.connections_service import normalize_database_dsn
+from dashboard.connections_service import test_http_connection as run_http_connection_test
 
 
 def _login_admin(client):
@@ -189,3 +190,39 @@ def test_normalize_database_dsn_supports_npgsql_style_string():
     )
     assert dsn.startswith("postgresql+psycopg2://globeiq:CHANGE_ME@localhost:5432/globeiq")
     assert "sslmode=require" in dsn
+
+
+def test_http_connection_can_skip_tls_verification(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        status = 200
+
+        def read(self, _size):
+            return b'{"ok":true}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def fake_urlopen(req, timeout=0, context=None):
+        captured["timeout"] = timeout
+        captured["context"] = context
+        captured["url"] = req.full_url
+        return FakeResponse()
+
+    monkeypatch.setattr("dashboard.connections_service.urllib.request.urlopen", fake_urlopen)
+
+    result = run_http_connection_test(
+        config={"base_url": "https://100.113.128.92:5001", "timeout_seconds": 15, "verify_ssl": False},
+        auth={"type": "api_key", "name": "X-GLOBEIQ-AGENT-KEY", "api_key": "secret"},
+        schema_text="",
+        payload={"method": "GET", "path": "/api/agent/courses"},
+    )
+
+    assert result["ok"] is True
+    assert result["verify_ssl"] is False
+    assert captured["url"] == "https://100.113.128.92:5001/api/agent/courses"
+    assert captured["context"] is not None

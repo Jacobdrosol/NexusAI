@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import shlex
+import ssl
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -160,6 +161,7 @@ def test_http_connection(
     """Execute a single HTTP action call and return response metadata."""
     base_url = str(config.get("base_url") or "").strip()
     timeout_seconds = int(config.get("timeout_seconds") or 15)
+    verify_ssl = bool(config.get("verify_ssl", True))
     op = _find_action(
         schema_text,
         operation_id=str(payload.get("operation_id") or "").strip() or None,
@@ -212,14 +214,19 @@ def test_http_connection(
         headers["Content-Type"] = "application/json"
 
     req = urllib.request.Request(url=url, method=method, headers=headers, data=body_bytes)
+    ssl_context = None
+    if not verify_ssl:
+        ssl_context = ssl._create_unverified_context()
+
     try:
-        with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
+        with urllib.request.urlopen(req, timeout=timeout_seconds, context=ssl_context) as resp:
             raw = resp.read(8000).decode("utf-8", errors="replace")
             return {
                 "ok": 200 <= int(resp.status) < 300,
                 "status": int(resp.status),
                 "url": url,
                 "method": method,
+                "verify_ssl": verify_ssl,
                 "body_preview": raw,
             }
     except urllib.error.HTTPError as exc:
@@ -229,6 +236,7 @@ def test_http_connection(
             "status": int(exc.code),
             "url": url,
             "method": method,
+            "verify_ssl": verify_ssl,
             "body_preview": raw,
         }
 

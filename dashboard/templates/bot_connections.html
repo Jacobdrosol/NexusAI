@@ -32,6 +32,10 @@
         <div class="form-group"><label>Base URL</label><input class="form-control" name="base_url" placeholder="https://api.example.com"></div>
         <div class="form-group"><label>Timeout Seconds</label><input class="form-control" type="number" name="timeout_seconds" value="15"></div>
       </div>
+      <div class="form-group">
+        <label><input type="checkbox" name="verify_ssl" checked> Verify TLS certificates</label>
+        <div class="mini-note">Turn this off only for trusted internal services that use self-signed certificates, such as private tailnet/origin endpoints.</div>
+      </div>
       <div class="split-grid" style="grid-template-columns:1fr 1fr;">
         <div class="form-group">
           <label>Auth Type</label>
@@ -135,9 +139,10 @@ function resetConnectionForm() {
   form.connection_id.value = '';
   form.kind.value = 'http';
   form.auth_type.value = 'none';
-  form.auth_name.value = 'X-API-Key';
-  form.timeout_seconds.value = '15';
-  document.getElementById('connection-form-title').textContent = 'Create Connection';
+    form.auth_name.value = 'X-API-Key';
+    form.timeout_seconds.value = '15';
+    form.verify_ssl.checked = true;
+    document.getElementById('connection-form-title').textContent = 'Create Connection';
   document.getElementById('connection-submit-btn').textContent = 'Create and Attach';
   document.getElementById('cancel-edit-btn').style.display = 'none';
   toggleKindFields('http');
@@ -159,6 +164,7 @@ function editConnection(connectionId) {
   if ((connection.kind || 'http') === 'http') {
     form.base_url.value = connection.config?.base_url || '';
     form.timeout_seconds.value = String(connection.config?.timeout_seconds || 15);
+    form.verify_ssl.checked = connection.config?.verify_ssl !== false;
     form.schema_text.value = connection.schema_text || '';
     form.auth_type.value = connection.auth?.type || 'none';
     form.auth_name.value = connection.auth?.name || 'X-API-Key';
@@ -196,6 +202,7 @@ function createConnection(evt) {
   if (kind === 'http') {
     payload.config.base_url = (fd.get('base_url') || '').toString().trim();
     payload.config.timeout_seconds = parseInt((fd.get('timeout_seconds') || '15').toString(), 10) || 15;
+    payload.config.verify_ssl = evt.target.querySelector('input[name=verify_ssl]').checked;
     payload.schema_text = (fd.get('schema_text') || '').toString();
     payload.auth.type = (fd.get('auth_type') || 'none').toString();
     payload.auth.name = (fd.get('auth_name') || 'X-API-Key').toString();
