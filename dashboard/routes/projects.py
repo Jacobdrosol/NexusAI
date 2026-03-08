@@ -267,6 +267,16 @@ def api_sync_project_github_context(project_id: str):
     return jsonify(result)
 
 
+@bp.get("/api/projects/<project_id>/github/context/sync")
+@login_required
+def api_get_project_github_context_sync_status(project_id: str):
+    cp = get_cp_client()
+    result = cp.get_project_github_context_sync_status(project_id)
+    if result is None:
+        return _cp_error_response(cp, "Repository context sync status failed")
+    return jsonify(result)
+
+
 @bp.post("/api/projects/<project_id>/github/pr-review/config")
 @login_required
 def api_configure_project_github_pr_review(project_id: str):

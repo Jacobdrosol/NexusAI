@@ -661,7 +661,14 @@ async def test_project_github_context_sync_ingests_vault_items(cp_client, monkey
         json={"sync_mode": "full"},
     )
     assert sync_resp.status_code == 200
-    body = sync_resp.json()
+    for _ in range(30):
+        status_resp = await cp_client.get("/v1/projects/gh-sync/github/context/sync")
+        assert status_resp.status_code == 200
+        body = status_resp.json()
+        if body.get("status") == "completed":
+            break
+        await asyncio.sleep(0.1)
+    assert body["status"] == "completed"
     assert body["ingested_count"] == 2
 
     items_resp = await cp_client.get("/v1/vault/items?project_id=gh-sync&limit=20")
@@ -749,7 +756,14 @@ async def test_project_github_context_sync_can_ingest_commits_prs_and_issues(cp_
         },
     )
     assert sync_resp.status_code == 200
-    body = sync_resp.json()
+    for _ in range(30):
+        status_resp = await cp_client.get("/v1/projects/gh-full-sync/github/context/sync")
+        assert status_resp.status_code == 200
+        body = status_resp.json()
+        if body.get("status") == "completed":
+            break
+        await asyncio.sleep(0.1)
+    assert body["status"] == "completed"
     assert body["ingested_count"] == 4
     assert body["counts"]["files"] == 1
     assert body["counts"]["commits"] == 1
@@ -814,13 +828,27 @@ async def test_project_github_context_update_ingests_only_newer_items(cp_client,
 
     first = await cp_client.post("/v1/projects/gh-update/github/context/sync", json={"sync_mode": "full"})
     assert first.status_code == 200
-    assert first.json()["ingested_count"] == 4
+    for _ in range(30):
+        first_status = await cp_client.get("/v1/projects/gh-update/github/context/sync")
+        assert first_status.status_code == 200
+        first_body = first_status.json()
+        if first_body.get("status") == "completed":
+            break
+        await asyncio.sleep(0.1)
+    assert first_body["ingested_count"] == 4
 
     state["index"] = 1
     second = await cp_client.post("/v1/projects/gh-update/github/context/sync", json={"sync_mode": "update"})
     assert second.status_code == 200
-    assert second.json()["ingested_count"] == 4
-    assert second.json()["sync_mode"] == "update"
+    for _ in range(30):
+        second_status = await cp_client.get("/v1/projects/gh-update/github/context/sync")
+        assert second_status.status_code == 200
+        second_body = second_status.json()
+        if second_body.get("status") == "completed" and second_body.get("sync_mode") == "update":
+            break
+        await asyncio.sleep(0.1)
+    assert second_body["ingested_count"] == 4
+    assert second_body["sync_mode"] == "update"
 
     items_resp = await cp_client.get("/v1/vault/items?project_id=gh-update&limit=20")
     assert items_resp.status_code == 200

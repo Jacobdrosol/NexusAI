@@ -153,6 +153,7 @@ GitHub integration:
   - `Full Ingest`: all repo files, commits, PRs, issues, and discussion threads
   - `Update Ingest`: only changed/newer repository data since the last successful sync
 - Optional PR review task workflow.
+- Long GitHub ingests now run as background jobs and report status back to the project page instead of holding the HTTP request open.
 
 Security and ops:
 

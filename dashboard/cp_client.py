@@ -298,6 +298,9 @@ class CPClient:
             timeout=_INGEST_TIMEOUT,
         )
 
+    def get_project_github_context_sync_status(self, project_id: str) -> Optional[Dict[str, Any]]:
+        return self._get(f"/v1/projects/{project_id}/github/context/sync")
+
     def configure_project_github_pr_review(
         self,
         project_id: str,

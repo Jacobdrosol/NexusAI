@@ -247,6 +247,7 @@ GitHub ingest behavior:
 - `Update Ingest` uses the last successful sync state stored on the project to decide what needs to be refreshed
 - file refresh is SHA-aware, so unchanged repo files are skipped on update
 - commits, pull requests, and issues are upserted by GitHub source reference instead of duplicated
+- long ingests run as background jobs; use the project page status panel to watch `queued`, `running`, `completed`, or `failed`
 
 Webhook security controls include:
 

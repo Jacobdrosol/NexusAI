@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 import base64
@@ -663,6 +664,30 @@ def _verify_github_signature(secret: str, raw_body: bytes, signature_header: str
     return hmac.compare_digest(digest, provided)
 
 
+def _ensure_github_sync_job_store(app) -> Dict[str, Dict[str, Any]]:
+    store = getattr(app.state, "github_context_sync_jobs", None)
+    if not isinstance(store, dict):
+        store = {}
+        app.state.github_context_sync_jobs = store
+    return store
+
+
+def _get_latest_github_sync_job(app, project_id: str) -> Optional[Dict[str, Any]]:
+    store = _ensure_github_sync_job_store(app)
+    jobs = [job for job in store.values() if str(job.get("project_id")) == str(project_id)]
+    if not jobs:
+        return None
+    jobs.sort(key=lambda job: str(job.get("updated_at") or job.get("created_at") or ""), reverse=True)
+    return dict(jobs[0])
+
+
+def _set_github_sync_job(app, job: Dict[str, Any]) -> Dict[str, Any]:
+    store = _ensure_github_sync_job_store(app)
+    job["updated_at"] = datetime.now(timezone.utc).isoformat()
+    store[str(job["job_id"])] = dict(job)
+    return dict(job)
+
+
 @router.post("", response_model=Project)
 async def create_project(request: Request, project: Project) -> Project:
     project_registry = request.app.state.project_registry
@@ -1098,19 +1123,15 @@ async def list_github_webhook_events(
     return {"events": rows}
 
 
-@router.post("/{project_id}/github/context/sync")
-async def sync_github_repo_context(
+async def _perform_github_context_sync(
+    app,
     project_id: str,
-    request: Request,
     body: SyncGitHubContextRequest,
 ) -> dict:
-    project_registry = request.app.state.project_registry
-    key_vault = request.app.state.key_vault
-    vault_manager = request.app.state.vault_manager
-    try:
-        project = await project_registry.get(project_id)
-    except ProjectNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    project_registry = app.state.project_registry
+    key_vault = app.state.key_vault
+    vault_manager = app.state.vault_manager
+    project = await project_registry.get(project_id)
 
     settings = project.settings_overrides if isinstance(project.settings_overrides, dict) else {}
     github_cfg = settings.get("github") if isinstance(settings.get("github"), dict) else {}
@@ -1134,13 +1155,7 @@ async def sync_github_repo_context(
     last_sync_at = last_update_sync_at or last_full_sync_at
 
     ingested = []
-    counts = {
-        "files": 0,
-        "commits": 0,
-        "pull_requests": 0,
-        "issues": 0,
-        "conversations": 0,
-    }
+    counts = {"files": 0, "commits": 0, "pull_requests": 0, "issues": 0, "conversations": 0}
     warnings: List[str] = []
 
     repo_full_name_str = str(repo_full_name)
@@ -1149,45 +1164,42 @@ async def sync_github_repo_context(
     latest_pr_updated_at: Optional[datetime] = _parse_iso8601(sync_state.get("latest_pr_updated_at"))
     latest_issue_updated_at: Optional[datetime] = _parse_iso8601(sync_state.get("latest_issue_updated_at"))
 
-    try:
-        repo_file_result = await _fetch_repo_context_files(
-            token=token,
-            repo_full_name=repo_full_name_str,
-            branch=branch_name,
+    repo_file_result = await _fetch_repo_context_files(
+        token=token,
+        repo_full_name=repo_full_name_str,
+        branch=branch_name,
+    )
+    branch_name = repo_file_result["branch"]
+    existing_file_items = await vault_manager.list_items(namespace=namespace, project_id=project_id, limit=100000)
+    file_sha_by_ref: Dict[str, str] = {}
+    for item in existing_file_items:
+        meta = item.metadata if isinstance(item.metadata, dict) else {}
+        if meta.get("ingest_kind") == "repo_file" and item.source_ref:
+            file_sha_by_ref[str(item.source_ref)] = str(meta.get("sha") or "")
+    for file in repo_file_result["files"]:
+        source_ref = f"github://{repo_file_result['repo_full_name']}/{file['path']}"
+        if sync_mode == "update" and file_sha_by_ref.get(source_ref) == str(file.get("sha") or ""):
+            continue
+        item = await _upsert_github_vault_item(
+            vault_manager,
+            title=f"{repo_file_result['repo_full_name']}:{file['path']}",
+            content=file["content"],
+            namespace=namespace,
+            project_id=project_id,
+            source_type="file",
+            source_ref=source_ref,
+            metadata={
+                "provider": "github",
+                "repo_full_name": repo_file_result["repo_full_name"],
+                "branch": repo_file_result["branch"],
+                "path": file["path"],
+                "sha": file.get("sha"),
+                "size": file.get("size"),
+                "ingest_kind": "repo_file",
+            },
         )
-        branch_name = repo_file_result["branch"]
-        existing_file_items = await vault_manager.list_items(namespace=namespace, project_id=project_id, limit=100000)
-        file_sha_by_ref: Dict[str, str] = {}
-        for item in existing_file_items:
-            meta = item.metadata if isinstance(item.metadata, dict) else {}
-            if meta.get("ingest_kind") == "repo_file" and item.source_ref:
-                file_sha_by_ref[str(item.source_ref)] = str(meta.get("sha") or "")
-        for file in repo_file_result["files"]:
-            source_ref = f"github://{repo_file_result['repo_full_name']}/{file['path']}"
-            if sync_mode == "update" and file_sha_by_ref.get(source_ref) == str(file.get("sha") or ""):
-                continue
-            item = await _upsert_github_vault_item(
-                vault_manager,
-                title=f"{repo_file_result['repo_full_name']}:{file['path']}",
-                content=file["content"],
-                namespace=namespace,
-                project_id=project_id,
-                source_type="file",
-                source_ref=source_ref,
-                metadata={
-                    "provider": "github",
-                    "repo_full_name": repo_file_result["repo_full_name"],
-                    "branch": repo_file_result["branch"],
-                    "path": file["path"],
-                    "sha": file.get("sha"),
-                    "size": file.get("size"),
-                    "ingest_kind": "repo_file",
-                },
-            )
-            ingested.append({"item_id": item.id, "type": "file", "path": file["path"]})
-            counts["files"] += 1
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"GitHub context sync failed for repo files: {e}")
+        ingested.append({"item_id": item.id, "type": "file", "path": file["path"]})
+        counts["files"] += 1
 
     try:
         commit_result = await _fetch_repo_commits(
@@ -1238,11 +1250,7 @@ async def sync_github_repo_context(
             item = await _upsert_github_vault_item(
                 vault_manager,
                 title=f"{repo_full_name_str}:pr:{pr.get('number')}",
-                content=_build_pull_request_text(
-                    repo_full_name_str,
-                    pr,
-                    include_conversations=True,
-                ),
+                content=_build_pull_request_text(repo_full_name_str, pr, include_conversations=True),
                 namespace=namespace,
                 project_id=project_id,
                 source_type="custom",
@@ -1279,11 +1287,7 @@ async def sync_github_repo_context(
             item = await _upsert_github_vault_item(
                 vault_manager,
                 title=f"{repo_full_name_str}:issue:{issue.get('number')}",
-                content=_build_issue_text(
-                    repo_full_name_str,
-                    issue,
-                    include_conversations=True,
-                ),
+                content=_build_issue_text(repo_full_name_str, issue, include_conversations=True),
                 namespace=namespace,
                 project_id=project_id,
                 source_type="custom",
@@ -1324,22 +1328,8 @@ async def sync_github_repo_context(
     )
     await project_registry.update(project_id, updated)
 
-    await record_audit_event(
-        request,
-        action="projects.github.context.sync",
-        resource=f"project:{project_id}",
-        details={
-            "repo_full_name": repo_full_name_str,
-            "branch": branch_name,
-            "ingested_count": len(ingested),
-            "namespace": namespace,
-            "sync_mode": sync_mode,
-            "counts": counts,
-            "warnings": warnings,
-        },
-    )
     return {
-        "status": "ok",
+        "status": "completed",
         "project_id": project_id,
         "repo_full_name": repo_full_name_str,
         "branch": branch_name,
@@ -1351,6 +1341,106 @@ async def sync_github_repo_context(
         "warnings": warnings,
         "context_sync": context_sync_state,
     }
+
+
+@router.post("/{project_id}/github/context/sync")
+async def sync_github_repo_context(
+    project_id: str,
+    request: Request,
+    body: SyncGitHubContextRequest,
+) -> dict:
+    try:
+        await request.app.state.project_registry.get(project_id)
+    except ProjectNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    existing = _get_latest_github_sync_job(request.app, project_id)
+    if existing and existing.get("status") in {"queued", "running"}:
+        return existing
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    job = _set_github_sync_job(
+        request.app,
+        {
+            "job_id": f"sync-{project_id}-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}",
+            "project_id": project_id,
+            "status": "queued",
+            "sync_mode": body.sync_mode,
+            "branch": body.branch,
+            "namespace": body.namespace,
+            "created_at": now_iso,
+            "started_at": None,
+            "finished_at": None,
+            "error": None,
+            "counts": {},
+            "warnings": [],
+            "ingested_count": 0,
+        },
+    )
+
+    async def _runner():
+        _set_github_sync_job(
+            request.app,
+            {
+                **job,
+                "status": "running",
+                "started_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        try:
+            result = await _perform_github_context_sync(request.app, project_id, body)
+            _set_github_sync_job(
+                request.app,
+                {
+                    **job,
+                    "status": "completed",
+                    "started_at": job.get("started_at") or datetime.now(timezone.utc).isoformat(),
+                    "finished_at": datetime.now(timezone.utc).isoformat(),
+                    "counts": result.get("counts") or {},
+                    "warnings": result.get("warnings") or [],
+                    "ingested_count": int(result.get("ingested_count") or 0),
+                    "result": result,
+                    "error": None,
+                },
+            )
+        except Exception as exc:
+            _set_github_sync_job(
+                request.app,
+                {
+                    **job,
+                    "status": "failed",
+                    "started_at": job.get("started_at") or datetime.now(timezone.utc).isoformat(),
+                    "finished_at": datetime.now(timezone.utc).isoformat(),
+                    "error": str(exc),
+                },
+            )
+
+    asyncio.create_task(_runner())
+    await record_audit_event(
+        request,
+        action="projects.github.context.sync.queue",
+        resource=f"project:{project_id}",
+        details={"sync_mode": body.sync_mode, "branch": body.branch, "namespace": body.namespace},
+    )
+    return job
+
+
+@router.get("/{project_id}/github/context/sync")
+async def get_github_context_sync_status(project_id: str, request: Request) -> dict:
+    try:
+        project = await request.app.state.project_registry.get(project_id)
+    except ProjectNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    job = _get_latest_github_sync_job(request.app, project_id) or {
+        "job_id": None,
+        "project_id": project_id,
+        "status": "idle",
+        "counts": {},
+        "warnings": [],
+        "ingested_count": 0,
+    }
+    sync_state = _extract_github_sync_state(project)
+    job["context_sync"] = sync_state
+    return job
 
 
 @router.post("/{project_id}/github/pr-review/config")

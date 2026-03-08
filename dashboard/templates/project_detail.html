@@ -379,6 +379,7 @@
 <script>
 const PROJECT_ID = {{ project.id|tojson if project else "''" }};
 let CLOUD_POLICY = {provider_policies: {}, bot_overrides: {}};
+let GITHUB_SYNC_POLL = null;
 
 function getCsrf() {
   const el = document.querySelector('input[name=csrf_token]');
@@ -631,19 +632,64 @@ async function syncGithubContext(syncMode) {
     return;
   }
   if (stateEl) {
-    stateEl.className = 'state-info';
-    const counts = data.counts || {};
-    const parts = [];
-    if (counts.files) parts.push(counts.files + ' file(s)');
-    if (counts.commits) parts.push(counts.commits + ' commit(s)');
-    if (counts.pull_requests) parts.push(counts.pull_requests + ' PR(s)');
-    if (counts.issues) parts.push(counts.issues + ' issue(s)');
-    if (counts.conversations) parts.push(counts.conversations + ' conversation item(s)');
-    const summary = parts.length ? parts.join(', ') : ((data.ingested_count || 0) + ' item(s)');
-    const warningText = Array.isArray(data.warnings) && data.warnings.length ? ' Warnings: ' + data.warnings.join(' | ') : '';
-    stateEl.textContent = (mode === 'update' ? 'Updated ' : 'Ingested ') + summary + ' into namespace ' + (data.namespace || '(default)') + '.' + warningText;
+    stateEl.className = 'state-loading';
+    stateEl.textContent = 'GitHub ingest job ' + (data.job_id || '') + ' is ' + (data.status || 'queued') + '.';
   }
-  await refreshGithubStatus(false);
+  startGithubSyncPolling();
+}
+
+async function refreshGithubSyncStatus() {
+  const stateEl = document.getElementById('github-sync-state');
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/github/context/sync');
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    if (stateEl) {
+      stateEl.className = 'state-error';
+      stateEl.textContent = data.error || 'Failed to load GitHub sync status.';
+    }
+    stopGithubSyncPolling();
+    return;
+  }
+  const status = String(data.status || 'idle');
+  if (stateEl) {
+    if (status === 'queued' || status === 'running') {
+      stateEl.className = 'state-loading';
+      stateEl.textContent = 'GitHub ingest ' + status + '...';
+    } else if (status === 'completed') {
+      stateEl.className = 'state-info';
+      const counts = data.counts || {};
+      const parts = [];
+      if (counts.files) parts.push(counts.files + ' file(s)');
+      if (counts.commits) parts.push(counts.commits + ' commit(s)');
+      if (counts.pull_requests) parts.push(counts.pull_requests + ' PR(s)');
+      if (counts.issues) parts.push(counts.issues + ' issue(s)');
+      if (counts.conversations) parts.push(counts.conversations + ' conversation item(s)');
+      const summary = parts.length ? parts.join(', ') : ((data.ingested_count || 0) + ' item(s)');
+      const warningText = Array.isArray(data.warnings) && data.warnings.length ? ' Warnings: ' + data.warnings.join(' | ') : '';
+      stateEl.textContent = 'Completed ingest: ' + summary + '.' + warningText;
+      stopGithubSyncPolling();
+      await refreshGithubStatus(false);
+    } else if (status === 'failed') {
+      stateEl.className = 'state-error';
+      stateEl.textContent = data.error || 'Repository context sync failed.';
+      stopGithubSyncPolling();
+    }
+  }
+}
+
+function startGithubSyncPolling() {
+  stopGithubSyncPolling();
+  GITHUB_SYNC_POLL = window.setInterval(() => {
+    refreshGithubSyncStatus().catch(() => {});
+  }, 3000);
+  refreshGithubSyncStatus().catch(() => {});
+}
+
+function stopGithubSyncPolling() {
+  if (GITHUB_SYNC_POLL) {
+    window.clearInterval(GITHUB_SYNC_POLL);
+    GITHUB_SYNC_POLL = null;
+  }
 }
 
 async function setWebhookSecret() {
@@ -819,6 +865,7 @@ async function removeCloudBotOverride() {
 document.getElementById('policy-bot-provider')?.addEventListener('change', _syncBotPolicyOptions);
 
 refreshGithubStatus(false);
+refreshGithubSyncStatus().catch(() => {});
 refreshWebhookEvents();
 refreshCloudContextPolicy();
 </script>
