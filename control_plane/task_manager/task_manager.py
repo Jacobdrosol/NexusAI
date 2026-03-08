@@ -802,7 +802,10 @@ class TaskManager:
             if not target_bot_id:
                 logger.warning("Skipping trigger %s for task %s because target bot could not be resolved", trigger.id, task.id)
                 continue
-            payload = self._build_trigger_payload(task, trigger)
+            payloads = self._build_trigger_payloads(task, trigger)
+            if not payloads:
+                logger.warning("Skipping trigger %s for task %s because no payloads were produced", trigger.id, task.id)
+                continue
             next_metadata = TaskMetadata(
                 user_id=metadata.user_id if trigger.inherit_metadata else None,
                 project_id=metadata.project_id if trigger.inherit_metadata else None,
@@ -814,11 +817,12 @@ class TaskManager:
                 trigger_rule_id=trigger.id,
                 trigger_depth=trigger_depth + 1,
             )
-            await self.create_task(
-                bot_id=target_bot_id,
-                payload=payload,
-                metadata=next_metadata,
-            )
+            for payload in payloads:
+                await self.create_task(
+                    bot_id=target_bot_id,
+                    payload=payload,
+                    metadata=next_metadata,
+                )
 
     def _build_trigger_payload(self, task: Task, trigger: Any) -> Any:
         payload_template = trigger.payload_template
@@ -838,6 +842,28 @@ class TaskManager:
         if payload_template is not None:
             return payload_template
         return base_payload
+
+    def _build_trigger_payloads(self, task: Task, trigger: Any) -> List[Any]:
+        payload = self._build_trigger_payload(task, trigger)
+        fan_out_field = str(getattr(trigger, "fan_out_field", "") or "").strip()
+        if not fan_out_field:
+            return [payload]
+        if not isinstance(payload, dict):
+            return [payload]
+        items = self._lookup_result_field(payload, fan_out_field)
+        if not isinstance(items, list):
+            return []
+        alias = str(getattr(trigger, "fan_out_alias", "") or "").strip() or "item"
+        index_alias = str(getattr(trigger, "fan_out_index_alias", "") or "").strip() or "item_index"
+        total = len(items)
+        payloads: List[Any] = []
+        for idx, item in enumerate(items):
+            next_payload = dict(payload)
+            next_payload[alias] = item
+            next_payload[index_alias] = idx
+            next_payload["fanout_count"] = total
+            payloads.append(next_payload)
+        return payloads
 
     def _resolve_trigger_target_bot_id(self, task: Task, target_bot_id: str) -> Optional[str]:
         raw = str(target_bot_id or "").strip()

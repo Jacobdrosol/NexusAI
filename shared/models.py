@@ -63,6 +63,9 @@ class BotWorkflowTrigger(BaseModel):
     result_field: Optional[str] = None
     result_equals: Optional[str] = None
     payload_template: Optional[Any] = None
+    fan_out_field: Optional[str] = None
+    fan_out_alias: Optional[str] = None
+    fan_out_index_alias: Optional[str] = None
     inherit_metadata: bool = True
     title: Optional[str] = None
 

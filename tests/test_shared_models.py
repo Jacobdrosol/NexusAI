@@ -100,3 +100,20 @@ def test_bot_workflow_trigger_supports_qc_match_fields():
     )
     assert trigger.result_field == "qc_status"
     assert trigger.result_equals == "pass"
+
+
+def test_bot_workflow_trigger_supports_fan_out_fields():
+    from shared.models import BotWorkflowTrigger
+
+    trigger = BotWorkflowTrigger(
+        id="fan-out",
+        event="task_completed",
+        target_bot_id="lesson-bot",
+        fan_out_field="source_result.units",
+        fan_out_alias="unit",
+        fan_out_index_alias="unit_index",
+    )
+
+    assert trigger.fan_out_field == "source_result.units"
+    assert trigger.fan_out_alias == "unit"
+    assert trigger.fan_out_index_alias == "unit_index"
