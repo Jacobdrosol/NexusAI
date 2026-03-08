@@ -126,6 +126,51 @@ def _extract_json_payload(text: str) -> Any:
     raise ValueError("no valid JSON object or array found")
 
 
+def _lookup_payload_path(payload: Any, path: str) -> Any:
+    current: Any = payload
+    for part in str(path or "").split("."):
+        key = part.strip()
+        if not key:
+            continue
+        if not isinstance(current, dict) or key not in current:
+            return None
+        current = current[key]
+    return current
+
+
+def _transform_template_value(template: Any, payload: Any, notes: list[str]) -> Any:
+    if isinstance(template, dict):
+        return {str(key): _transform_template_value(value, payload, notes) for key, value in template.items()}
+    if isinstance(template, list):
+        return [_transform_template_value(item, payload, notes) for item in template]
+    if not isinstance(template, str):
+        return template
+
+    raw = template.strip()
+    if raw.startswith("{{") and raw.endswith("}}"):
+        expr = raw[2:-2].strip()
+        mode = "value"
+        path = expr
+        if expr.startswith("json:"):
+            mode = "json"
+            path = expr[5:].strip()
+        if path.startswith("payload."):
+            path = path[8:].strip()
+        value = _lookup_payload_path(payload, path)
+        if mode == "json":
+            if value in (None, ""):
+                return [] if path.endswith("_json") else None
+            if isinstance(value, (dict, list)):
+                return value
+            try:
+                return json.loads(str(value))
+            except json.JSONDecodeError:
+                notes.append(f"Could not parse JSON field: {path}")
+                return None
+        return value
+    return template
+
+
 def _result_usage(task: Task) -> dict[str, Any]:
     if not isinstance(task.result, dict):
         return {}
@@ -810,23 +855,39 @@ class TaskManager:
             return result
 
         enabled = bool(contract.get("enabled", True))
+        mode = str(contract.get("mode") or "model_output").strip().lower()
         output_format = str(contract.get("format") or "any").strip().lower()
         required_fields = contract.get("required_fields") if isinstance(contract.get("required_fields"), list) else []
         if not enabled or (output_format == "any" and not required_fields):
             return result
 
-        normalized = result
-        raw_text = ""
-        if isinstance(result, dict):
-            for key in ("output", "content", "text", "result"):
-                value = result.get(key)
-                if isinstance(value, str) and value.strip():
-                    raw_text = value
-                    break
-        elif isinstance(result, str):
-            raw_text = result
+        if mode == "payload_transform":
+            template = contract.get("template")
+            if template is None:
+                raise ValueError("output contract payload transform requires a template")
+            notes: list[str] = []
+            transformed = _transform_template_value(template, task.payload, notes)
+            if isinstance(transformed, dict) and "normalization_notes" in transformed:
+                existing = transformed.get("normalization_notes")
+                if not isinstance(existing, list):
+                    existing = []
+                transformed["normalization_notes"] = existing + notes
+            normalized = transformed
+        else:
+            normalized = result
 
-        if output_format in {"json_object", "json_array"} or required_fields:
+        raw_text = ""
+        if mode != "payload_transform":
+            if isinstance(result, dict):
+                for key in ("output", "content", "text", "result"):
+                    value = result.get(key)
+                    if isinstance(value, str) and value.strip():
+                        raw_text = value
+                        break
+            elif isinstance(result, str):
+                raw_text = result
+
+        if mode != "payload_transform" and (output_format in {"json_object", "json_array"} or required_fields):
             parsed = None
             if isinstance(result, (dict, list)) and output_format == "json_array" and isinstance(result, list):
                 parsed = result

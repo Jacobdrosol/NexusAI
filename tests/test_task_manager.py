@@ -422,6 +422,70 @@ async def test_output_contract_fails_when_required_fields_are_missing(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_output_contract_can_transform_payload_deterministically(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {"ignored": True}
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "transform-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="transform-bot",
+            name="Transform",
+            role="assistant",
+            backends=[],
+            routing_rules={
+                "output_contract": {
+                    "enabled": True,
+                    "mode": "payload_transform",
+                    "format": "json_object",
+                    "required_fields": ["workflow_type", "course_brief", "generation_settings"],
+                    "template": {
+                        "workflow_type": "course_generation",
+                        "normalization_notes": [],
+                        "course_brief": {
+                            "topic": "{{payload.topic}}",
+                            "goals": "{{json:payload.goals_json}}"
+                        },
+                        "generation_settings": {
+                            "allowed_lesson_blocks": "{{json:payload.allowed_lesson_blocks_json}}"
+                        }
+                    },
+                }
+            },
+        )
+    )
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "transform.db"), bot_registry=bot_registry)
+    task = await tm.create_task(
+        bot_id="transform-bot",
+        payload={
+            "topic": "AP World History",
+            "goals_json": "[\"Goal 1\",\"Goal 2\"]",
+            "allowed_lesson_blocks_json": "[\"AdvancedParagraph\",\"image\"]",
+        },
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.1)
+
+    assert updated.status == "completed"
+    assert updated.result["workflow_type"] == "course_generation"
+    assert updated.result["course_brief"]["topic"] == "AP World History"
+    assert updated.result["course_brief"]["goals"] == ["Goal 1", "Goal 2"]
+    assert updated.result["generation_settings"]["allowed_lesson_blocks"] == ["AdvancedParagraph", "image"]
+
+
+@pytest.mark.anyio
 async def test_task_manager_migrates_legacy_task_table_without_metadata(tmp_path):
     import asyncio
     import sqlite3
