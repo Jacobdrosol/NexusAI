@@ -353,3 +353,16 @@ Primary endpoints:
 5. Keep cloud context policy at `block` during initial rollout.
 6. Enable `redact` only after validating output quality and data controls.
 7. Use audit logs, run history, and metrics as release gates.
+
+## 11. Future Enhancements
+
+The following ideas are intentionally documented as future enhancements, not current behavior:
+
+- A dedicated pipeline builder UI so operators can design multi-step workflows separately from individual bot configuration.
+- A pipeline run console that shows queued, running, completed, retried, and failed stages across the whole workflow.
+- Start-from-step pipeline execution, where an operator can feed input directly into a chosen stage instead of always starting at the first bot.
+- Fan-out branch rerun controls, for example rerunning one unit or one lesson branch after a partial failure.
+- Resume-from-checkpoint execution after correcting a prompt, contract, or payload issue mid-pipeline.
+- Pipeline-scoped reporting that separates operational reports from model-authored work and captures timing, token usage, retries, artifacts, and branch counts.
+- Better historical partitioning so recent operational task activity stays in the Tasks view while older deep history remains accessible at the bot level.
+- Pipeline-level throttling and concurrency controls for large fan-out stages so hundreds of downstream tasks drain safely through the queue.

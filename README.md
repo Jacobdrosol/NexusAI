@@ -715,3 +715,16 @@ capabilities:
 - [x] Extend automated security tests for webhook replay protections and secret-rotation workflows
 - [ ] Add complete in-app password reset/recovery workflows (no direct DB command dependency)
 - [ ] Stabilize deployment profile (compose + reverse proxy reference stack)
+
+## Future Enhancements
+
+Workflow and pipeline UX ideas currently planned, but not yet implemented:
+
+- A dedicated visual pipeline designer for building reusable multi-bot workflows without editing each bot page individually.
+- Pipeline-level execution views that show step state, fan-out branches, retries, and downstream dependencies in one place.
+- Start-from-step execution so operators can launch a pipeline from a chosen stage with explicit input.
+- Fan-out branch replay so operators can rerun one failed unit/lesson branch without rerunning the whole workflow.
+- Resume-from-checkpoint execution after a partial failure or operator correction.
+- Aggregated pipeline reports that summarize per-step inputs, outputs, token usage, timing, retries, and artifacts.
+- Queue and concurrency controls at the pipeline level so large fan-out stages can be drained safely without overwhelming providers or workers.
+- First-class pipeline templates that remain user-defined and modular rather than being seeded with project-specific assumptions.
