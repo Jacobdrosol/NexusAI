@@ -238,3 +238,84 @@ async def test_run_reports_capture_usage_metadata(tmp_path):
     assert '"prompt_tokens": 11' in str(usage_artifact.content)
     execution_artifact = next(a for a in artifacts if a.label == "Execution Report")
     assert execution_artifact.metadata["usage"]["total_tokens"] == 18
+
+
+@pytest.mark.anyio
+async def test_task_manager_migrates_legacy_task_table_without_metadata(tmp_path):
+    import asyncio
+    import sqlite3
+
+    from control_plane.task_manager.task_manager import TaskManager
+
+    db_path = tmp_path / "legacy.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE tasks (
+            id TEXT PRIMARY KEY,
+            bot_id TEXT,
+            payload TEXT,
+            status TEXT,
+            result TEXT,
+            error TEXT,
+            created_at TEXT,
+            updated_at TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE task_dependencies (
+            task_id TEXT NOT NULL,
+            depends_on_task_id TEXT NOT NULL,
+            PRIMARY KEY (task_id, depends_on_task_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE bot_runs (
+            id TEXT PRIMARY KEY,
+            task_id TEXT NOT NULL UNIQUE,
+            bot_id TEXT NOT NULL,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE bot_run_artifacts (
+            id TEXT PRIMARY KEY,
+            run_id TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            bot_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            label TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {"output": "ok"}
+
+    tm = TaskManager(StubScheduler(), db_path=str(db_path))
+    task = await tm.create_task(
+        bot_id="legacy-bot",
+        payload={"instruction": "start"},
+        metadata=None,
+    )
+
+    for _ in range(30):
+        updated = await tm.get_task(task.id)
+        if updated.status == "completed":
+            break
+        await asyncio.sleep(0.1)
+
+    updated = await tm.get_task(task.id)
+    assert updated.status == "completed"

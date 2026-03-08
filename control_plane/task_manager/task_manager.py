@@ -321,12 +321,45 @@ class TaskManager:
             self._db_ready = True
 
     async def _migrate_tasks_table(self, db: aiosqlite.Connection) -> None:
-        """Ensure new task columns exist for upgraded installations."""
-        async with db.execute("PRAGMA table_info(tasks)") as cursor:
-            columns = await cursor.fetchall()
-            column_names = {row[1] for row in columns}
-            if "depends_on" not in column_names:
-                await db.execute("ALTER TABLE tasks ADD COLUMN depends_on TEXT")
+        """Ensure new table columns exist for upgraded installations."""
+        table_columns = {
+            "tasks": {
+                "bot_id": "TEXT",
+                "payload": "TEXT",
+                "metadata": "TEXT",
+                "depends_on": "TEXT",
+                "status": "TEXT",
+                "result": "TEXT",
+                "error": "TEXT",
+                "created_at": "TEXT",
+                "updated_at": "TEXT",
+            },
+            "bot_runs": {
+                "payload": "TEXT",
+                "metadata": "TEXT",
+                "result": "TEXT",
+                "error": "TEXT",
+                "triggered_by_task_id": "TEXT",
+                "trigger_rule_id": "TEXT",
+                "started_at": "TEXT",
+                "completed_at": "TEXT",
+            },
+            "bot_run_artifacts": {
+                "content": "TEXT",
+                "path": "TEXT",
+                "metadata": "TEXT",
+            },
+        }
+        for table_name, columns in table_columns.items():
+            async with db.execute(f"PRAGMA table_info({table_name})") as cursor:
+                existing = await cursor.fetchall()
+            existing_names = {row[1] for row in existing}
+            for column_name, column_type in columns.items():
+                if column_name in existing_names:
+                    continue
+                await db.execute(
+                    f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}"
+                )
 
     async def _persist_task(self, task: Task) -> None:
         """Upsert *task* into the SQLite tasks table."""
