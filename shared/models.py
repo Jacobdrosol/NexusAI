@@ -66,6 +66,10 @@ class BotWorkflowTrigger(BaseModel):
     fan_out_field: Optional[str] = None
     fan_out_alias: Optional[str] = None
     fan_out_index_alias: Optional[str] = None
+    join_group_field: Optional[str] = None
+    join_expected_field: Optional[str] = None
+    join_items_alias: Optional[str] = None
+    join_sort_field: Optional[str] = None
     inherit_metadata: bool = True
     title: Optional[str] = None
 
@@ -104,6 +108,7 @@ class TaskMetadata(BaseModel):
     retry_attempt: Optional[int] = None
     original_task_id: Optional[str] = None
     retry_of_task_id: Optional[str] = None
+    workflow_root_task_id: Optional[str] = None
 
 
 class TaskError(BaseModel):

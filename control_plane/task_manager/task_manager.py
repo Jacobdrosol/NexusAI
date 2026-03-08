@@ -724,6 +724,10 @@ class TaskManager:
         task_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc).isoformat()
         initial_status = "blocked" if dependencies else "queued"
+        if metadata is not None and not metadata.workflow_root_task_id:
+            metadata = metadata.model_copy(update={"workflow_root_task_id": task_id})
+        elif metadata is None:
+            metadata = TaskMetadata(workflow_root_task_id=task_id)
         task = Task(
             id=task_id,
             bot_id=bot_id,
@@ -1161,7 +1165,11 @@ class TaskManager:
                 parent_task_id=task.id,
                 trigger_rule_id=trigger.id,
                 trigger_depth=trigger_depth + 1,
+                workflow_root_task_id=metadata.workflow_root_task_id or task.id,
             )
+            if self._trigger_uses_join(trigger):
+                await self._dispatch_join_trigger(task, trigger, target_bot_id, payloads, next_metadata)
+                continue
             for payload in payloads:
                 await self.create_task(
                     bot_id=target_bot_id,
@@ -1209,6 +1217,141 @@ class TaskManager:
             next_payload["fanout_count"] = total
             payloads.append(next_payload)
         return payloads
+
+    def _trigger_uses_join(self, trigger: Any) -> bool:
+        return bool(str(getattr(trigger, "join_expected_field", "") or "").strip())
+
+    async def _dispatch_join_trigger(
+        self,
+        task: Task,
+        trigger: Any,
+        target_bot_id: str,
+        payloads: List[Any],
+        next_metadata: TaskMetadata,
+    ) -> None:
+        for payload in payloads:
+            if not isinstance(payload, dict):
+                continue
+            aggregate_payload = await self._build_join_payload(task, trigger, target_bot_id, payload)
+            if aggregate_payload is None:
+                continue
+            join_step_id = self._join_step_id(task, trigger, payload)
+            if not join_step_id:
+                continue
+            existing = await self._find_task_by_step_id(join_step_id, target_bot_id)
+            if existing is not None:
+                continue
+            aggregate_metadata = next_metadata.model_copy(update={"step_id": join_step_id})
+            await self.create_task(
+                bot_id=target_bot_id,
+                payload=aggregate_payload,
+                metadata=aggregate_metadata,
+            )
+
+    async def _build_join_payload(
+        self,
+        task: Task,
+        trigger: Any,
+        target_bot_id: str,
+        payload: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        group_field = str(getattr(trigger, "join_group_field", "") or "").strip()
+        expected_field = str(getattr(trigger, "join_expected_field", "") or "").strip()
+        items_alias = str(getattr(trigger, "join_items_alias", "") or "").strip() or "items"
+        sort_field = str(getattr(trigger, "join_sort_field", "") or "").strip()
+
+        expected_raw = self._lookup_result_field(payload, expected_field)
+        try:
+            expected_count = max(1, int(expected_raw))
+        except (TypeError, ValueError):
+            logger.warning("Skipping join trigger %s for task %s because expected count is invalid: %r", trigger.id, task.id, expected_raw)
+            return None
+
+        group_value = self._lookup_result_field(payload, group_field) if group_field else None
+        sibling_payloads = self._collect_join_payloads(task, trigger, group_field, group_value)
+        if len(sibling_payloads) < expected_count:
+            return None
+
+        if sort_field:
+            sibling_payloads.sort(key=lambda item: self._sortable_join_value(self._lookup_result_field(item, sort_field)))
+
+        aggregate_payload = dict(payload)
+        aggregate_payload[items_alias] = sibling_payloads[:expected_count]
+        aggregate_payload["join_group"] = group_value
+        aggregate_payload["join_count"] = len(aggregate_payload[items_alias])
+        aggregate_payload["join_expected_count"] = expected_count
+        aggregate_payload["join_target_bot_id"] = target_bot_id
+        return aggregate_payload
+
+    def _collect_join_payloads(
+        self,
+        task: Task,
+        trigger: Any,
+        group_field: str,
+        group_value: Any,
+    ) -> List[Dict[str, Any]]:
+        metadata = task.metadata or TaskMetadata()
+        root_id = metadata.workflow_root_task_id or task.id
+        event = "task_completed" if task.status == "completed" else "task_failed"
+        matches: List[Dict[str, Any]] = []
+        for candidate in self._tasks.values():
+            candidate_meta = candidate.metadata or TaskMetadata()
+            if candidate.bot_id != task.bot_id:
+                continue
+            if candidate.status != task.status:
+                continue
+            if (candidate_meta.workflow_root_task_id or candidate.id) != root_id:
+                continue
+            if metadata.orchestration_id != candidate_meta.orchestration_id:
+                continue
+            if metadata.project_id != candidate_meta.project_id:
+                continue
+            if trigger.event != event:
+                continue
+            if trigger.condition == "has_result" and candidate.result is None:
+                continue
+            if trigger.condition == "has_error" and candidate.error is None:
+                continue
+            if not self._trigger_matches_result(candidate, trigger):
+                continue
+            candidate_payload = self._build_trigger_payload(candidate, trigger)
+            if not isinstance(candidate_payload, dict):
+                continue
+            candidate_group_value = self._lookup_result_field(candidate_payload, group_field) if group_field else None
+            if group_field and candidate_group_value != group_value:
+                continue
+            matches.append(candidate_payload)
+        return matches
+
+    def _join_step_id(self, task: Task, trigger: Any, payload: Dict[str, Any]) -> Optional[str]:
+        metadata = task.metadata or TaskMetadata()
+        root_id = metadata.workflow_root_task_id or task.id
+        group_field = str(getattr(trigger, "join_group_field", "") or "").strip()
+        group_value = self._lookup_result_field(payload, group_field) if group_field else "__all__"
+        try:
+            group_token = json.dumps(group_value, sort_keys=True)
+        except TypeError:
+            group_token = str(group_value)
+        normalized_group = re.sub(r"[^a-zA-Z0-9:_-]+", "-", group_token).strip("-") or "group"
+        return f"join:{task.bot_id}:{trigger.id}:{root_id}:{normalized_group}"
+
+    async def _find_task_by_step_id(self, step_id: str, bot_id: str) -> Optional[Task]:
+        await self._ensure_db()
+        async with self._lock:
+            for task in self._tasks.values():
+                if task.bot_id != bot_id:
+                    continue
+                metadata = task.metadata or TaskMetadata()
+                if metadata.step_id == step_id:
+                    return task
+        return None
+
+    def _sortable_join_value(self, value: Any) -> Any:
+        if isinstance(value, (int, float, str)):
+            return value
+        if value is None:
+            return ""
+        return json.dumps(value, sort_keys=True, default=str)
 
     def _resolve_trigger_target_bot_id(self, task: Task, target_bot_id: str) -> Optional[str]:
         raw = str(target_bot_id or "").strip()

@@ -117,3 +117,22 @@ def test_bot_workflow_trigger_supports_fan_out_fields():
     assert trigger.fan_out_field == "source_result.units"
     assert trigger.fan_out_alias == "unit"
     assert trigger.fan_out_index_alias == "unit_index"
+
+
+def test_bot_workflow_trigger_supports_join_fields():
+    from shared.models import BotWorkflowTrigger
+
+    trigger = BotWorkflowTrigger(
+        id="join-lessons",
+        event="task_completed",
+        target_bot_id="unit-packager",
+        join_group_field="unit_blueprint.unit_number",
+        join_expected_field="source_payload.fanout_count",
+        join_items_alias="lesson_bundles",
+        join_sort_field="lesson_output.lesson_number",
+    )
+
+    assert trigger.join_group_field == "unit_blueprint.unit_number"
+    assert trigger.join_expected_field == "source_payload.fanout_count"
+    assert trigger.join_items_alias == "lesson_bundles"
+    assert trigger.join_sort_field == "lesson_output.lesson_number"
