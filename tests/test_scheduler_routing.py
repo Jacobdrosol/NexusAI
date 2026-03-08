@@ -6,6 +6,27 @@ import pytest
 from shared.models import BackendConfig, Bot, Capability, Task, Worker, WorkerMetrics
 
 
+def test_backend_failure_message_includes_attempts():
+    from control_plane.scheduler.scheduler import _backend_failure_message
+
+    message = _backend_failure_message(
+        "task-err",
+        RuntimeError("timed out"),
+        ["ollama_cloud/qwen3.5:397b-cloud: timed out"],
+    )
+
+    assert "All backends failed for task task-err: timed out." in message
+    assert "Attempts: ollama_cloud/qwen3.5:397b-cloud: timed out." in message
+
+
+def test_cloud_timeout_reads_env(monkeypatch):
+    from control_plane.scheduler.scheduler import _cloud_timeout
+
+    monkeypatch.setenv("NEXUSAI_CLOUD_API_TIMEOUT_SECONDS", "1800")
+
+    assert _cloud_timeout() == 1800.0
+
+
 @pytest.mark.anyio
 async def test_scheduler_unpinned_backend_prefers_lower_weight_worker():
     from control_plane.scheduler.scheduler import Scheduler

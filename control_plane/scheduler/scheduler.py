@@ -12,11 +12,14 @@ from shared.models import BackendConfig, Task, Worker
 logger = logging.getLogger(__name__)
 
 
-def _backend_failure_message(task_id: str, last_error: Exception) -> str:
+def _backend_failure_message(task_id: str, last_error: Exception, attempts: list[str] | None = None) -> str:
     detail = str(last_error or "").strip()
+    if not detail:
+        detail = repr(last_error) if last_error is not None else ""
+    attempt_detail = f" Attempts: {'; '.join(attempts)}." if attempts else ""
     if detail:
-        return f"All backends failed for task {task_id}: {detail}"
-    return f"All backends failed for task {task_id}"
+        return f"All backends failed for task {task_id}: {detail}.{attempt_detail}".strip()
+    return f"All backends failed for task {task_id}.{attempt_detail}".strip()
 
 
 def _ollama_options(params: dict[str, Any]) -> dict[str, Any]:
@@ -29,6 +32,10 @@ def _ollama_options(params: dict[str, Any]) -> dict[str, Any]:
 
 def _worker_timeout() -> httpx.Timeout:
     return httpx.Timeout(connect=10.0, read=None, write=120.0, pool=30.0)
+
+
+def _cloud_timeout() -> float:
+    return float(os.environ.get("NEXUSAI_CLOUD_API_TIMEOUT_SECONDS", "900"))
 
 
 def _payload_to_messages(payload: Any) -> list[dict[str, str]]:
@@ -133,6 +140,7 @@ class Scheduler:
             raise NoViableBackendError(f"Bot {task.bot_id} is disabled")
 
         last_error: Exception = NoViableBackendError("No backends configured")
+        attempts: list[str] = []
         transformed_payload = self._apply_input_transform(bot, task.payload)
         prepared_payload = _inject_system_prompt(getattr(bot, "system_prompt", None), transformed_payload)
 
@@ -141,6 +149,7 @@ class Scheduler:
                 result = await self._dispatch_backend(backend, prepared_payload, task=task)
                 return result
             except Exception as e:
+                attempts.append(f"{backend.provider}/{backend.model}: {str(e or '').strip() or repr(e)}")
                 logger.warning(
                     "Backend %s/%s failed for task %s: %s",
                     backend.provider,
@@ -151,7 +160,7 @@ class Scheduler:
                 last_error = e
                 continue
 
-        raise NoViableBackendError(_backend_failure_message(task.id, last_error)) from last_error
+        raise NoViableBackendError(_backend_failure_message(task.id, last_error, attempts)) from last_error
 
     async def stream(self, task: Task) -> AsyncGenerator[dict[str, Any], None]:
         try:
@@ -163,6 +172,7 @@ class Scheduler:
             raise NoViableBackendError(f"Bot {task.bot_id} is disabled")
 
         last_error: Exception = NoViableBackendError("No backends configured")
+        attempts: list[str] = []
         transformed_payload = self._apply_input_transform(bot, task.payload)
         prepared_payload = _inject_system_prompt(getattr(bot, "system_prompt", None), transformed_payload)
 
@@ -178,6 +188,7 @@ class Scheduler:
                     yield event
                 return
             except Exception as e:
+                attempts.append(f"{backend.provider}/{backend.model}: {str(e or '').strip() or repr(e)}")
                 logger.warning(
                     "Backend %s/%s failed for stream task %s: %s",
                     backend.provider,
@@ -188,7 +199,7 @@ class Scheduler:
                 last_error = e
                 continue
 
-        raise NoViableBackendError(_backend_failure_message(task.id, last_error)) from last_error
+        raise NoViableBackendError(_backend_failure_message(task.id, last_error, attempts)) from last_error
 
     async def _dispatch_backend(self, backend: BackendConfig, payload: Any, task: Task | None = None) -> Any:
         await self._validate_model_if_catalog_present(backend)
@@ -484,7 +495,7 @@ class Scheduler:
             "messages": messages,
         }
         body.update(params_dict)
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=_cloud_timeout()) as client:
             response = await client.post(
                 "https://api.openai.com/v1/chat/completions",
                 headers={"Authorization": f"Bearer {api_key}"},
@@ -516,7 +527,7 @@ class Scheduler:
             "options": _ollama_options(params_dict),
         }
         base_url = os.environ.get("OLLAMA_CLOUD_BASE_URL", "https://ollama.com/api").rstrip("/")
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=_cloud_timeout()) as client:
             response = await client.post(
                 f"{base_url}/chat",
                 headers={"Authorization": f"Bearer {api_key}"},
@@ -570,7 +581,7 @@ class Scheduler:
             "messages": messages,
         }
         body.update(params_dict)
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=_cloud_timeout()) as client:
             response = await client.post(
                 "https://api.anthropic.com/v1/messages",
                 headers={
@@ -612,7 +623,7 @@ class Scheduler:
             f"https://generativelanguage.googleapis.com/v1beta/models/"
             f"{backend.model}:generateContent"
         )
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=_cloud_timeout()) as client:
             response = await client.post(
                 url,
                 headers={"x-goog-api-key": api_key},
