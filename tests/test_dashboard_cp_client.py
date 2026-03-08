@@ -2,7 +2,7 @@
 
 from unittest.mock import Mock, patch
 
-from dashboard.cp_client import CPClient, _CHAT_TIMEOUT
+from dashboard.cp_client import CPClient, _CHAT_TIMEOUT, _INGEST_TIMEOUT
 
 
 def test_unavailable_reason_for_unauthorized():
@@ -62,3 +62,17 @@ def test_post_message_uses_chat_timeout():
         cp.post_message("conv-1", {"content": "hello"})
 
     assert post_mock.call_args.kwargs["timeout"] == _CHAT_TIMEOUT
+
+
+def test_project_context_sync_uses_ingest_timeout():
+    cp = CPClient(base_url="http://example.invalid", timeout=0.1)
+
+    ok_resp = Mock()
+    ok_resp.raise_for_status.return_value = None
+    ok_resp.text = '{"status":"ok"}'
+    ok_resp.json.return_value = {"status": "ok"}
+
+    with patch("dashboard.cp_client.requests.post", return_value=ok_resp) as post_mock:
+        cp.sync_project_github_context(project_id="proj-1", sync_scope="full", max_files=500)
+
+    assert post_mock.call_args.kwargs["timeout"] == _INGEST_TIMEOUT

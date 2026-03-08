@@ -177,6 +177,7 @@ Copy `.env.example` to `.env` and set the following variables before starting th
 | `DATABASE_URL` | `sqlite:///data/nexusai.db` | SQLAlchemy connection URL (SQLite or PostgreSQL) |
 | `CONTROL_PLANE_URL` | — | URL the dashboard and worker use to reach the control plane, e.g. `http://localhost:8000` |
 | `CONTROL_PLANE_API_TOKEN` | — | Optional shared token for control-plane API auth; when set, dashboard/worker send `X-Nexus-API-Key` and CP enforces auth on API routes |
+| `CP_INGEST_TIMEOUT` | `1800` | Dashboard timeout in seconds for long-running project ingestion calls such as GitHub full-context sync |
 | `NEXUSAI_CLOUD_CONTEXT_POLICY` | `allow` | Cloud egress policy for context blocks (`allow`, `redact`, `block`) on control-plane scheduler cloud backends |
 | `NEXUS_WORKER_CLOUD_CONTEXT_POLICY` | `redact` | Standalone worker cloud egress policy for context blocks (`allow`, `redact`, `block`) |
 | `NEXUSAI_WORKER_LATENCY_EMA_ALPHA` | `0.30` | Scheduler EMA smoothing factor for worker latency scoring (0.01-1.0) |

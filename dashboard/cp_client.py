@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 _CP_BASE = os.environ.get("CONTROL_PLANE_URL", "http://control_plane:8000")
 _TIMEOUT = float(os.environ.get("CP_TIMEOUT", "2"))
 _CHAT_TIMEOUT = float(os.environ.get("CP_CHAT_TIMEOUT", "900"))
+_INGEST_TIMEOUT = float(os.environ.get("CP_INGEST_TIMEOUT", "1800"))
 _CP_API_TOKEN = os.environ.get("CONTROL_PLANE_API_TOKEN", "").strip()
 
 
@@ -311,7 +312,11 @@ class CPClient:
             body["branch"] = branch
         if namespace:
             body["namespace"] = namespace
-        return self._post(f"/v1/projects/{project_id}/github/context/sync", body)
+        return self._post(
+            f"/v1/projects/{project_id}/github/context/sync",
+            body,
+            timeout=_INGEST_TIMEOUT,
+        )
 
     def configure_project_github_pr_review(
         self,
