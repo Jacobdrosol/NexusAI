@@ -141,3 +141,62 @@ async def test_bot_trigger_creates_follow_on_run_and_artifacts(tmp_path):
     assert "Task Payload" in labels
     assert "Task Result" in labels
     assert "summary.txt" in labels
+
+
+@pytest.mark.anyio
+async def test_qc_bot_can_route_failures_back_to_source_bot(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot
+
+    class StubScheduler:
+        async def schedule(self, task):
+            if task.bot_id == "worker-bot":
+                return {"answer": "draft ready"}
+            if task.bot_id == "qc-bot":
+                return {"qc_status": "fail", "issues": ["missing citation"]}
+            return {"answer": f"redo:{task.bot_id}"}
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "bots-qc.db"))
+    await bot_registry.register(Bot(id="worker-bot", name="Worker", role="assistant", backends=[], workflow={
+        "triggers": [
+            {
+                "id": "send-to-qc",
+                "event": "task_completed",
+                "target_bot_id": "qc-bot",
+                "condition": "has_result",
+            }
+        ]
+    }))
+    await bot_registry.register(Bot(id="qc-bot", name="QC", role="quality", backends=[], workflow={
+        "triggers": [
+            {
+                "id": "return-for-fix",
+                "event": "task_completed",
+                "target_bot_id": "{{source_bot_id}}",
+                "condition": "has_result",
+                "result_field": "qc_status",
+                "result_equals": "fail",
+            }
+        ]
+    }))
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "tasks-qc.db"), bot_registry=bot_registry)
+    root = await tm.create_task(bot_id="worker-bot", payload={"instruction": "write draft"})
+
+    for _ in range(50):
+        tasks = await tm.list_tasks()
+        if len(tasks) >= 3 and all(t.status == "completed" for t in tasks):
+            break
+        await asyncio.sleep(0.1)
+
+    tasks = await tm.list_tasks()
+    assert len(tasks) == 3
+    qc_task = next(t for t in tasks if t.bot_id == "qc-bot")
+    retry_task = next(t for t in tasks if t.id not in {root.id, qc_task.id})
+    assert retry_task.bot_id == "worker-bot"
+    assert retry_task.metadata is not None
+    assert retry_task.metadata.parent_task_id == qc_task.id
+    assert retry_task.metadata.trigger_rule_id == "return-for-fix"

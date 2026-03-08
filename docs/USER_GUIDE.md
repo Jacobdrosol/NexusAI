@@ -106,6 +106,7 @@ Trigger guidance:
 - use `task_completed` when a downstream bot should process successful output
 - use `task_failed` for fallback, escalation, or recovery bots
 - use `has_result` or `has_error` conditions to avoid noisy follow-on runs
+- use `result_field` and `result_equals` when a QC or validator bot returns a structured decision such as `qc_status`
 - keep trigger chains linear at first; add branching only after you trust each handoff
 
 Safety behavior:
@@ -113,6 +114,25 @@ Safety behavior:
 - triggered runs inherit project and conversation metadata by default
 - trigger chains are capped to prevent accidental infinite loops
 - every run is recorded even when the scheduler fails
+
+QC bot pattern:
+
+1. Configure the worker bot to trigger the QC bot on `task_completed`.
+2. Make the QC bot return a structured result such as:
+   - `{"qc_status":"pass"}`
+   - `{"qc_status":"fail","issues":["missing tests","bad citation"]}`
+3. Add a pass trigger on the QC bot:
+   - `event=task_completed`
+   - `result_field=qc_status`
+   - `result_equals=pass`
+   - `target_bot_id=<next bot>`
+4. Add a fail trigger on the QC bot:
+   - `event=task_completed`
+   - `result_field=qc_status`
+   - `result_equals=fail`
+   - `target_bot_id={{source_bot_id}}`
+
+That gives you a practical loop of `worker -> qc -> publish` or `worker -> qc -> worker`.
 
 ## 4. Projects
 

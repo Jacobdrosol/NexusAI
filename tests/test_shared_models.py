@@ -87,3 +87,16 @@ def test_bot_model_supports_workflow_triggers():
     assert bot.workflow is not None
     assert len(bot.workflow.triggers) == 1
     assert bot.workflow.triggers[0].target_bot_id == "bot-reviewer"
+
+
+def test_bot_workflow_trigger_supports_qc_match_fields():
+    from shared.models import BotWorkflowTrigger
+    trigger = BotWorkflowTrigger(
+        id="qc-pass",
+        event="task_completed",
+        target_bot_id="bot-publisher",
+        result_field="qc_status",
+        result_equals="pass",
+    )
+    assert trigger.result_field == "qc_status"
+    assert trigger.result_equals == "pass"

@@ -241,9 +241,11 @@ Current capabilities:
 
 - Trigger another bot when a task completes or fails.
 - Gate triggers on `always`, `has_result`, or `has_error`.
+- Match trigger routing on a structured result field such as `qc_status=pass`.
 - Preserve project/conversation metadata across triggered runs.
 - Queue one-off bot test runs from the dashboard.
 - Inspect run history and generated artifacts per bot.
+- Route a trigger back to the source bot using `{{source_bot_id}}`.
 
 Loop safety:
 
@@ -253,6 +255,13 @@ API endpoints:
 
 - `GET /v1/bots/{bot_id}/runs`
 - `GET /v1/bots/{bot_id}/artifacts`
+
+QC pattern:
+
+- Worker bot trigger: `task_completed -> qc-bot`
+- QC bot result contract: return a structured result such as `{"qc_status":"pass"}` or `{"qc_status":"fail","issues":[...]}`
+- QC pass trigger: `result_field=qc_status`, `result_equals=pass`, `target_bot_id=bot-publisher`
+- QC fail trigger: `result_field=qc_status`, `result_equals=fail`, `target_bot_id={{source_bot_id}}`
 
 ---
 

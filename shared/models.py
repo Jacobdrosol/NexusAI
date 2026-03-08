@@ -60,6 +60,8 @@ class BotWorkflowTrigger(BaseModel):
     target_bot_id: str
     enabled: bool = True
     condition: Literal["always", "has_result", "has_error"] = "always"
+    result_field: Optional[str] = None
+    result_equals: Optional[str] = None
     payload_template: Optional[Any] = None
     inherit_metadata: bool = True
     title: Optional[str] = None

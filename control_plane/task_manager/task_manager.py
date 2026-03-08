@@ -542,6 +542,12 @@ class TaskManager:
                 continue
             if trigger.condition == "has_error" and task.error is None:
                 continue
+            if not self._trigger_matches_result(task, trigger):
+                continue
+            target_bot_id = self._resolve_trigger_target_bot_id(task, trigger.target_bot_id)
+            if not target_bot_id:
+                logger.warning("Skipping trigger %s for task %s because target bot could not be resolved", trigger.id, task.id)
+                continue
             payload = self._build_trigger_payload(task, trigger)
             next_metadata = TaskMetadata(
                 user_id=metadata.user_id if trigger.inherit_metadata else None,
@@ -555,7 +561,7 @@ class TaskManager:
                 trigger_depth=trigger_depth + 1,
             )
             await self.create_task(
-                bot_id=trigger.target_bot_id,
+                bot_id=target_bot_id,
                 payload=payload,
                 metadata=next_metadata,
             )
@@ -578,3 +584,36 @@ class TaskManager:
         if payload_template is not None:
             return payload_template
         return base_payload
+
+    def _resolve_trigger_target_bot_id(self, task: Task, target_bot_id: str) -> Optional[str]:
+        raw = str(target_bot_id or "").strip()
+        if not raw:
+            return None
+        if raw == "{{source_bot_id}}":
+            if isinstance(task.payload, dict):
+                source_bot_id = str(task.payload.get("source_bot_id") or "").strip()
+                if source_bot_id:
+                    return source_bot_id
+            return None
+        return raw
+
+    def _trigger_matches_result(self, task: Task, trigger: Any) -> bool:
+        field = str(getattr(trigger, "result_field", "") or "").strip()
+        if not field:
+            return True
+        if not isinstance(task.result, dict):
+            return False
+        actual = self._lookup_result_field(task.result, field)
+        expected = getattr(trigger, "result_equals", None)
+        if expected is None:
+            return actual is not None
+        return str(actual) == str(expected)
+
+    def _lookup_result_field(self, data: Dict[str, Any], field: str) -> Any:
+        current: Any = data
+        for part in str(field).split("."):
+            key = part.strip()
+            if not key or not isinstance(current, dict) or key not in current:
+                return None
+            current = current[key]
+        return current

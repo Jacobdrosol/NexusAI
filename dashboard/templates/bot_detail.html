@@ -90,7 +90,7 @@
   <table>
     <thead>
       <tr>
-        <th>Title</th><th>Event</th><th>Condition</th><th>Target Bot</th><th>Enabled</th><th>Actions</th>
+        <th>Title</th><th>Event</th><th>Condition</th><th>Match</th><th>Target Bot</th><th>Enabled</th><th>Actions</th>
       </tr>
     </thead>
     <tbody id="workflow-trigger-tbody">
@@ -99,6 +99,7 @@
         <td>{{ trigger.title or trigger.id }}</td>
         <td>{{ trigger.event }}</td>
         <td>{{ trigger.condition }}</td>
+        <td>{% if trigger.result_field %}{{ trigger.result_field }}{% if trigger.result_equals %} = {{ trigger.result_equals }}{% endif %}{% else %}—{% endif %}</td>
         <td>{{ trigger.target_bot_id }}</td>
         <td>{{ 'yes' if trigger.enabled else 'no' }}</td>
         <td class="actions">
@@ -107,7 +108,7 @@
         </td>
       </tr>
       {% else %}
-      <tr><td colspan="6" class="empty">No triggers configured</td></tr>
+      <tr><td colspan="7" class="empty">No triggers configured</td></tr>
       {% endfor %}
     </tbody>
   </table>
@@ -327,11 +328,22 @@
       </div>
       <div class="form-group">
         <label>Target Bot</label>
-        <input class="form-control" name="target_bot_id" placeholder="bot-reviewer">
+        <input class="form-control" name="target_bot_id" placeholder="bot-reviewer or {{source_bot_id}}">
+        <div class="mini-note">Use <code>{{source_bot_id}}</code> to send failed QC back to the bot that produced the source work.</div>
+      </div>
+      <div class="split-grid" style="grid-template-columns:1fr 1fr;">
+        <div class="form-group">
+          <label>Result Field (optional)</label>
+          <input class="form-control" name="result_field" placeholder="qc_status">
+        </div>
+        <div class="form-group">
+          <label>Result Equals (optional)</label>
+          <input class="form-control" name="result_equals" placeholder="pass">
+        </div>
       </div>
       <div class="form-group">
         <label>Payload Template (JSON object, optional)</label>
-        <textarea class="form-control" rows="6" name="payload_template" placeholder='{"instruction":"Summarize the source result"}'></textarea>
+        <textarea class="form-control" rows="6" name="payload_template" placeholder='{"instruction":"Run QC on the source result and return qc_status=pass or fail"}'></textarea>
       </div>
       <div class="form-group">
         <label><input type="checkbox" name="enabled" checked> Enabled</label>
@@ -687,6 +699,7 @@ function renderWorkflowTriggers() {
       <td>${escapeHtml(trigger.title || trigger.id || ('trigger-' + (idx + 1)))}</td>
       <td>${escapeHtml(trigger.event || '')}</td>
       <td>${escapeHtml(trigger.condition || 'always')}</td>
+      <td>${escapeHtml(trigger.result_field ? (trigger.result_field + (trigger.result_equals ? ' = ' + trigger.result_equals : '')) : '—')}</td>
       <td>${escapeHtml(trigger.target_bot_id || '')}</td>
       <td>${trigger.enabled ? 'yes' : 'no'}</td>
       <td class="actions">
@@ -723,6 +736,8 @@ function editTrigger(index) {
   form.event.value = trigger.event || 'task_completed';
   form.condition.value = trigger.condition || 'always';
   form.target_bot_id.value = trigger.target_bot_id || '';
+  form.result_field.value = trigger.result_field || '';
+  form.result_equals.value = trigger.result_equals || '';
   form.payload_template.value = trigger.payload_template ? JSON.stringify(trigger.payload_template, null, 2) : '';
   form.enabled.checked = trigger.enabled !== false;
   form.inherit_metadata.checked = trigger.inherit_metadata !== false;
@@ -759,6 +774,8 @@ function saveTriggerForm() {
     event: String(fd.get('event') || 'task_completed'),
     condition: String(fd.get('condition') || 'always'),
     target_bot_id: targetBotId,
+    result_field: String(fd.get('result_field') || '').trim() || null,
+    result_equals: String(fd.get('result_equals') || '').trim() || null,
     enabled: form.querySelector('input[name=enabled]').checked,
     inherit_metadata: form.querySelector('input[name=inherit_metadata]').checked,
     payload_template: payloadTemplate,
