@@ -174,6 +174,12 @@ You can move that root with:
 
 - `NEXUSAI_PROJECT_DATA_ROOT`
 
+Project Data Vault ingest:
+
+- use `Run Data Ingest` from the project page to push vault files into the searchable backend
+- the UI now shows a live status object with discovered, ingested, skipped, and failed counts
+- rerunning ingest is safe for the same file paths because project-data items are upserted by `project-data://...` source reference
+
 ## 5. Vault
 
 ### 5.1 Ingestion

@@ -175,7 +175,31 @@
       </div>
       <div id="project-data-state" class="state-empty" style="margin-top:0.6rem;">No filesystem action yet.</div>
       <hr style="margin:0.8rem 0;">
-      <div><strong>Ingest Command</strong></div>
+      <div><strong>Data Ingest</strong></div>
+      <div class="form-group" style="margin-top:0.35rem;">
+        <label>Namespace</label>
+        <input class="form-control" id="project-data-ingest-namespace" value="project:{{ project.id }}:data" placeholder="project:{{ project.id }}:data">
+      </div>
+      <div class="form-group">
+        <label>Max File Size (bytes)</label>
+        <input class="form-control" id="project-data-ingest-max-bytes" type="number" min="1024" max="5000000" value="200000">
+      </div>
+      <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+        <button class="btn btn-primary" type="button" onclick="startProjectDataIngest()">Run Data Ingest</button>
+        <button class="btn" type="button" onclick="refreshProjectDataIngestStatus()">Refresh Status</button>
+      </div>
+      <div id="project-data-ingest-state" class="state-empty" style="margin-top:0.6rem;">No project data ingest yet.</div>
+      <pre id="project-data-ingest-progress" style="white-space:pre-wrap; margin-top:0.5rem;">{
+  "status": "idle",
+  "counts": {
+    "discovered": 0,
+    "ingested": 0,
+    "skipped": 0,
+    "failed": 0
+  }
+}</pre>
+      <hr style="margin:0.8rem 0;">
+      <div><strong>CLI Fallback</strong></div>
       <pre style="white-space:pre-wrap; margin-top:0.35rem;">python scripts/ingest_project_data.py --project-id {{ project.id }} --namespace project:{{ project.id }}:data</pre>
       <div class="mini-note">
         Default folders are created automatically: <code>docs</code>, <code>inbox</code>, <code>exports</code>, <code>notes</code>.
@@ -380,6 +404,7 @@
 const PROJECT_ID = {{ project.id|tojson if project else "''" }};
 let CLOUD_POLICY = {provider_policies: {}, bot_overrides: {}};
 let GITHUB_SYNC_POLL = null;
+let PROJECT_DATA_INGEST_POLL = null;
 
 function getCsrf() {
   const el = document.querySelector('input[name=csrf_token]');
@@ -485,6 +510,95 @@ async function uploadProjectDataFiles() {
   }
   setProjectDataState('state-info', 'Uploaded ' + ((data.uploaded || []).length) + ' file(s).');
   location.reload();
+}
+
+async function startProjectDataIngest() {
+  const namespace = (document.getElementById('project-data-ingest-namespace')?.value || '').trim();
+  const maxBytesRaw = (document.getElementById('project-data-ingest-max-bytes')?.value || '200000').trim();
+  let maxBytes = parseInt(maxBytesRaw, 10);
+  if (!Number.isFinite(maxBytes) || maxBytes < 1024) maxBytes = 200000;
+  const stateEl = document.getElementById('project-data-ingest-state');
+  if (stateEl) {
+    stateEl.className = 'state-loading';
+    stateEl.textContent = 'Queuing project data ingest...';
+  }
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/data/ingest', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify({namespace: namespace || null, max_bytes: maxBytes}),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    if (stateEl) {
+      stateEl.className = 'state-error';
+      stateEl.textContent = data.error || 'Failed to start project data ingest.';
+    }
+    return;
+  }
+  if (stateEl) {
+    stateEl.className = 'state-loading';
+    stateEl.textContent = 'Project data ingest ' + (data.status || 'queued') + '.';
+  }
+  startProjectDataIngestPolling();
+}
+
+async function refreshProjectDataIngestStatus() {
+  const stateEl = document.getElementById('project-data-ingest-state');
+  const preEl = document.getElementById('project-data-ingest-progress');
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/data/ingest');
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    if (stateEl) {
+      stateEl.className = 'state-error';
+      stateEl.textContent = data.error || 'Failed to load project data ingest status.';
+    }
+    stopProjectDataIngestPolling();
+    return;
+  }
+  if (preEl) {
+    preEl.textContent = JSON.stringify(data, null, 2);
+  }
+  const status = String(data.status || 'idle');
+  if (stateEl) {
+    if (status === 'queued' || status === 'running') {
+      stateEl.className = 'state-loading';
+      const current = data.current_path ? ' Current file: ' + data.current_path : '';
+      stateEl.textContent = 'Project data ingest ' + status + '.' + current;
+    } else if (status === 'completed' || status === 'completed_with_errors') {
+      stateEl.className = status === 'completed' ? 'state-info' : 'state-error';
+      const counts = data.counts || {};
+      stateEl.textContent =
+        'Project data ingest finished. ' +
+        (counts.ingested || 0) + ' ingested, ' +
+        (counts.skipped || 0) + ' skipped, ' +
+        (counts.failed || 0) + ' failed.';
+      stopProjectDataIngestPolling();
+    } else if (status === 'failed') {
+      stateEl.className = 'state-error';
+      const errors = Array.isArray(data.errors) ? data.errors : [];
+      stateEl.textContent = errors[errors.length - 1] || 'Project data ingest failed.';
+      stopProjectDataIngestPolling();
+    } else {
+      stateEl.className = 'state-empty';
+      stateEl.textContent = 'No project data ingest yet.';
+      stopProjectDataIngestPolling();
+    }
+  }
+}
+
+function startProjectDataIngestPolling() {
+  stopProjectDataIngestPolling();
+  PROJECT_DATA_INGEST_POLL = window.setInterval(() => {
+    refreshProjectDataIngestStatus().catch(() => {});
+  }, 2000);
+  refreshProjectDataIngestStatus().catch(() => {});
+}
+
+function stopProjectDataIngestPolling() {
+  if (PROJECT_DATA_INGEST_POLL) {
+    window.clearInterval(PROJECT_DATA_INGEST_POLL);
+    PROJECT_DATA_INGEST_POLL = null;
+  }
 }
 
 function setWebhookState(cls, text) {
@@ -868,5 +982,6 @@ refreshGithubStatus(false);
 refreshGithubSyncStatus().catch(() => {});
 refreshWebhookEvents();
 refreshCloudContextPolicy();
+refreshProjectDataIngestStatus().catch(() => {});
 </script>
 {% endblock %}

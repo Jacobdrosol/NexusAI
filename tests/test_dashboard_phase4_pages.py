@@ -83,6 +83,7 @@ def test_project_detail_page_renders_with_partial_github_status(dashboard_client
     assert b"Project Data Vault" in resp.data
     assert b"GitHub Integration (PAT)" in resp.data
     assert b"Connection Flags" in resp.data
+    assert b"Run Data Ingest" in resp.data
 
 
 def test_project_data_folder_and_upload_apis_write_files(dashboard_client, tmp_path, monkeypatch):
@@ -116,6 +117,39 @@ def test_project_data_folder_and_upload_apis_write_files(dashboard_client, tmp_p
         entries = body["entries"]
         assert any(e["path"] == "docs/specs" and e["type"] == "directory" for e in entries)
         assert any(e["path"] == "docs/specs/overview.md" and e["type"] == "file" for e in entries)
+
+
+def test_project_data_ingest_status_and_start_apis(dashboard_client, tmp_path, monkeypatch):
+    _login_admin(dashboard_client)
+    monkeypatch.setenv("NEXUSAI_PROJECT_DATA_ROOT", str(tmp_path))
+
+    class FakeCP:
+        def get_project(self, project_id):
+            return {"id": project_id, "name": project_id}
+
+        def upsert_vault_item(self, body):
+            return {"id": "vault-1", **body}
+
+        def last_error(self):
+            return {}
+
+    project_root = tmp_path / "proj-ingest" / "docs"
+    project_root.mkdir(parents=True, exist_ok=True)
+    (project_root / "readme.md").write_text("hello world", encoding="utf-8")
+
+    with patch("dashboard.routes.projects.get_cp_client", return_value=FakeCP()), \
+         patch("dashboard.project_data_ingest.get_cp_client", return_value=FakeCP()):
+        start_resp = dashboard_client.post(
+            "/api/projects/proj-ingest/data/ingest",
+            json={"namespace": "project:proj-ingest:data"},
+        )
+        assert start_resp.status_code == 200
+
+        status_resp = dashboard_client.get("/api/projects/proj-ingest/data/ingest")
+        assert status_resp.status_code == 200
+        body = status_resp.get_json()
+        assert body["project_id"] == "proj-ingest"
+        assert body["status"] in {"queued", "running", "completed", "completed_with_errors"}
 
 
 def test_chat_page_loads_when_logged_in(dashboard_client):

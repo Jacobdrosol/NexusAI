@@ -391,6 +391,40 @@ async def test_vault_ingest_and_search(cp_client):
 
 
 @pytest.mark.anyio
+async def test_vault_upsert_reuses_existing_source_ref(cp_client):
+    first = await cp_client.post(
+        "/v1/vault/items/upsert",
+        json={
+            "title": "Doc",
+            "content": "v1",
+            "namespace": "project:test:data",
+            "project_id": "test",
+            "source_ref": "project-data://test/docs/readme.md",
+        },
+    )
+    assert first.status_code == 200
+
+    second = await cp_client.post(
+        "/v1/vault/items/upsert",
+        json={
+            "title": "Doc",
+            "content": "v2",
+            "namespace": "project:test:data",
+            "project_id": "test",
+            "source_ref": "project-data://test/docs/readme.md",
+        },
+    )
+    assert second.status_code == 200
+    assert second.json()["id"] == first.json()["id"]
+
+    items_resp = await cp_client.get("/v1/vault/items?project_id=test&limit=10")
+    assert items_resp.status_code == 200
+    items = items_resp.json()
+    assert len(items) == 1
+    assert items[0]["content"] == "v2"
+
+
+@pytest.mark.anyio
 async def test_vault_context_endpoint(cp_client):
     await cp_client.post(
         "/v1/vault/items",

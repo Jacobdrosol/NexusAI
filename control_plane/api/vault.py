@@ -55,6 +55,32 @@ async def ingest_item(request: Request, body: IngestVaultItemRequest) -> VaultIt
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.post("/items/upsert", response_model=VaultItem)
+async def upsert_item(request: Request, body: IngestVaultItemRequest) -> VaultItem:
+    await enforce_body_size(request, route_name="vault_ingest", default_max_bytes=2_000_000)
+    await enforce_rate_limit(
+        request,
+        route_name="vault_ingest",
+        default_limit=30,
+        default_window_seconds=60,
+    )
+    vault_manager = request.app.state.vault_manager
+    try:
+        return await vault_manager.upsert_text(
+            title=body.title,
+            content=body.content,
+            namespace=body.namespace,
+            project_id=body.project_id,
+            source_type=body.source_type,
+            source_ref=body.source_ref,
+            metadata=body.metadata,
+            chunk_size=body.chunk_size,
+            chunk_overlap=body.chunk_overlap,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.get("/items", response_model=List[VaultItem])
 async def list_items(
     request: Request,

@@ -14,6 +14,7 @@ from dashboard.project_data import (
     list_project_data_files,
     save_project_data_upload,
 )
+from dashboard.project_data_ingest import latest_job_for_project, start_project_data_ingest
 
 bp = Blueprint("projects", __name__)
 
@@ -389,3 +390,38 @@ def api_upload_project_data_file(project_id: str):
             }
         )
     return jsonify({"project_id": project_id, "uploaded": uploaded}), 201
+
+
+@bp.post("/api/projects/<project_id>/data/ingest")
+@login_required
+def api_start_project_data_ingest(project_id: str):
+    cp = get_cp_client()
+    if cp.get_project(project_id) is None:
+        return _cp_error_response(cp, "project not found")
+    data: dict[str, Any] = request.get_json(force=True) or {}
+    namespace = (data.get("namespace") or "").strip() or None
+    max_bytes_raw = data.get("max_bytes", 200_000)
+    try:
+        max_bytes = max(1_024, min(int(max_bytes_raw), 5_000_000))
+    except Exception:
+        max_bytes = 200_000
+    job = start_project_data_ingest(project_id=project_id, namespace=namespace, max_bytes=max_bytes)
+    return jsonify(job)
+
+
+@bp.get("/api/projects/<project_id>/data/ingest")
+@login_required
+def api_get_project_data_ingest_status(project_id: str):
+    cp = get_cp_client()
+    if cp.get_project(project_id) is None:
+        return _cp_error_response(cp, "project not found")
+    job = latest_job_for_project(project_id) or {
+        "job_id": None,
+        "project_id": project_id,
+        "namespace": f"project:{project_id}:data",
+        "status": "idle",
+        "counts": {"discovered": 0, "ingested": 0, "skipped": 0, "failed": 0},
+        "current_path": None,
+        "errors": [],
+    }
+    return jsonify(job)

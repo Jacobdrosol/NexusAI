@@ -397,6 +397,9 @@ class CPClient:
     def ingest_vault_item(self, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return self._post("/v1/vault/items", body)
 
+    def upsert_vault_item(self, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        return self._post("/v1/vault/items/upsert", body)
+
     def search_vault(self, body: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
         return self._post("/v1/vault/search", body)
 
