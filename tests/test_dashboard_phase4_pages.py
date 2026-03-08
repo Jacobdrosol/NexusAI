@@ -37,8 +37,9 @@ def test_projects_page_loads_when_logged_in(dashboard_client):
 def test_project_detail_page_handles_unavailable_cp(dashboard_client):
     _login_admin(dashboard_client)
     resp = dashboard_client.get("/projects/proj-x")
-    assert resp.status_code == 502
+    assert resp.status_code == 200
     assert b"Project Detail" in resp.data
+    assert b"Control plane unavailable or project not found." in resp.data
 
 
 def test_project_detail_page_renders_with_partial_github_status(dashboard_client):

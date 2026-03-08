@@ -79,10 +79,10 @@ def worker_detail_page(worker_id: str):
     db = get_db()
     try:
         if not str(worker_id).isdigit():
-            return render_template("worker_detail.html", worker=None, running_tasks=[], error="Worker not found"), 404
+            return render_template("worker_detail.html", worker=None, running_tasks=[], error="Worker not found")
         local = db.get(Worker, int(worker_id))
         if not local:
-            return render_template("worker_detail.html", worker=None, running_tasks=[], error="Worker not found"), 404
+            return render_template("worker_detail.html", worker=None, running_tasks=[], error="Worker not found")
         return render_template(
             "worker_detail.html",
             worker=_worker_to_dict(local),

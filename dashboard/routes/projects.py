@@ -84,7 +84,7 @@ def project_detail_page(project_id: str):
             project_data_root=None,
             project_data_tree=None,
             error="Control plane unavailable or project not found.",
-        ), 502
+        )
 
     all_projects = cp.list_projects() or []
     bots = cp.list_bots() or []

@@ -87,10 +87,10 @@ def bot_detail_page(bot_id: str):
     try:
         # Fallback local bot IDs are integer PKs.
         if not str(bot_id).isdigit():
-            return render_template("bot_detail.html", bot=None, tasks=[], error="Bot not found"), 404
+            return render_template("bot_detail.html", bot=None, tasks=[], error="Bot not found")
         bot = db.get(Bot, int(bot_id))
         if not bot:
-            return render_template("bot_detail.html", bot=None, tasks=[], error="Bot not found"), 404
+            return render_template("bot_detail.html", bot=None, tasks=[], error="Bot not found")
         local_tasks = db.query(Task).filter_by(bot_id=bot.id).all()
         tasks = []
         for t in local_tasks:
