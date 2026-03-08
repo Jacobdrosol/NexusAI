@@ -346,8 +346,42 @@ def test_tasks_page_shows_quick_launch_buttons(dashboard_client):
     _login_admin(dashboard_client)
 
     class FakeCP:
-        def list_tasks(self):
-            return []
+        def list_tasks(self, **kwargs):
+            return [
+                {
+                    "id": "task-running-1",
+                    "bot_id": "course-outline",
+                    "status": "running",
+                    "payload": {"instruction": "go"},
+                    "result": None,
+                    "error": None,
+                    "created_at": "2026-03-08T10:00:00+00:00",
+                    "updated_at": "2026-03-08T10:01:00+00:00",
+                    "metadata": {"project_id": "proj-1"},
+                },
+                {
+                    "id": "task-queued-1",
+                    "bot_id": "course-unit-builder",
+                    "status": "queued",
+                    "payload": {"instruction": "wait"},
+                    "result": None,
+                    "error": None,
+                    "created_at": "2026-03-08T10:02:00+00:00",
+                    "updated_at": "2026-03-08T10:02:00+00:00",
+                    "metadata": {},
+                },
+                {
+                    "id": "task-completed-1",
+                    "bot_id": "course-intake",
+                    "status": "completed",
+                    "payload": {"instruction": "done"},
+                    "result": {"ok": True},
+                    "error": None,
+                    "created_at": "2026-03-08T09:50:00+00:00",
+                    "updated_at": "2026-03-08T10:03:00+00:00",
+                    "metadata": {},
+                },
+            ]
 
         def list_bots(self):
             return [
@@ -366,12 +400,16 @@ def test_tasks_page_shows_quick_launch_buttons(dashboard_client):
                 }
             ]
 
-    with patch("dashboard.cp_client.get_cp_client", return_value=FakeCP()):
+    with patch("dashboard.routes.tasks.get_cp_client", return_value=FakeCP()):
         resp = dashboard_client.get("/tasks")
 
     assert resp.status_code == 200
     assert b"Quick Launch" in resp.data
     assert b"Run Course Pipeline" in resp.data
+    assert b"Running Now" in resp.data
+    assert b"Queued / Blocked" in resp.data
+    assert b"Recent Completed (24h)" in resp.data
+    assert b"Task Detail" in resp.data
 
 
 def test_chat_ingest_api_validates_required_fields(dashboard_client):

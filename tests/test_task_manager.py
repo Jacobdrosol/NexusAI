@@ -33,6 +33,41 @@ async def test_task_runs_and_completes():
 
 
 @pytest.mark.anyio
+async def test_task_manager_respects_max_concurrency(tmp_path, monkeypatch):
+    import asyncio
+
+    from control_plane.task_manager.task_manager import TaskManager
+
+    active = 0
+    peak = 0
+
+    class StubScheduler:
+        async def schedule(self, task):
+            nonlocal active, peak
+            active += 1
+            peak = max(peak, active)
+            await asyncio.sleep(0.05)
+            active -= 1
+            return {"task": task.id}
+
+    monkeypatch.setenv("NEXUSAI_TASK_MAX_CONCURRENCY", "2")
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "queue.db"))
+    for idx in range(5):
+        await tm.create_task(bot_id="bot1", payload={"i": idx})
+
+    for _ in range(80):
+        tasks = await tm.list_tasks()
+        if len(tasks) == 5 and all(task.status == "completed" for task in tasks):
+            break
+        await asyncio.sleep(0.05)
+
+    tasks = await tm.list_tasks()
+    assert len(tasks) == 5
+    assert all(task.status == "completed" for task in tasks)
+    assert peak <= 2
+
+
+@pytest.mark.anyio
 async def test_task_fails_on_scheduler_error():
     import asyncio
     from control_plane.task_manager.task_manager import TaskManager
@@ -253,7 +288,10 @@ async def test_trigger_can_fan_out_many_downstream_tasks(tmp_path):
         await asyncio.sleep(0.1)
 
     tasks = await tm.list_tasks()
-    unit_tasks = [t for t in tasks if t.bot_id == "unit-bot"]
+    unit_tasks = sorted(
+        [t for t in tasks if t.bot_id == "unit-bot"],
+        key=lambda task: int(task.payload["unit_index"]),
+    )
     assert len(unit_tasks) == 3
     assert unit_tasks[0].payload["unit"]["title"] == "Unit 1"
     assert unit_tasks[1].payload["unit_index"] == 1

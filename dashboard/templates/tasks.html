@@ -9,6 +9,7 @@
 <div class="alert alert-error">{{ error }}</div>
 {% endif %}
 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
 {% if launchable_bots %}
 <section class="panel" style="margin-bottom:1rem;">
   <div class="page-header" style="margin-bottom:0.75rem;">
@@ -26,51 +27,143 @@
   </div>
 </section>
 {% endif %}
-<table>
-  <thead>
-    <tr>
-      <th>ID</th><th>Bot</th><th>Status</th><th>Created</th><th>Updated</th>
-    </tr>
-  </thead>
-  <tbody id="tasks-tbody">
-    {% for t in tasks %}
-    <tr class="task-row" onclick="toggleDetail('{{ t.id }}')">
-      <td><code title="{{ t.id }}">{{ t.id }}</code></td>
-      <td>{{ t.bot_id }}</td>
-      <td><span class="badge badge-{{ t.status }}">{{ t.status }}</span></td>
-      <td>{{ (t.created_at[:19] if t.created_at else '') | replace("T"," ") }}</td>
-      <td>{{ (t.updated_at[:19] if t.updated_at else '') | replace("T"," ") }}</td>
-    </tr>
-    <tr id="detail-{{ t.id }}" class="task-detail">
-      <td colspan="5">
-        <strong>Payload:</strong>
-        <pre>{{ t.payload | tojson(indent=2) }}</pre>
-        {% if t.result %}
-        <strong>Result:</strong>
-        <pre>{{ t.result | tojson(indent=2) }}</pre>
-        {% endif %}
-        {% if t.error %}
-        <strong>Error:</strong>
-        <pre>{{ t.error | tojson(indent=2) }}</pre>
-        {% endif %}
-      </td>
-    </tr>
-    {% else %}
-    <tr><td colspan="5" style="text-align:center;color:#718096;">No tasks yet</td></tr>
-    {% endfor %}
-  </tbody>
-</table>
+
+<section class="panel" style="margin-bottom:1rem;">
+  <div class="split-grid" style="grid-template-columns:1.35fr 1fr;gap:1rem;">
+    <div style="display:flex;flex-direction:column;gap:1rem;">
+      <div>
+        <div class="page-header" style="margin-bottom:0.5rem;">
+          <h2 class="panel-title">Running Now</h2>
+          <div class="mini-note">{{ running_tasks|length }} active</div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Bot</th><th>Status</th><th>Created</th><th>Task</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for task in running_tasks %}
+              <tr class="task-row" data-task-id="{{ task.id }}">
+                <td>{{ task.bot_id }}</td>
+                <td><span class="badge badge-{{ task.status }}">{{ task.status }}</span></td>
+                <td>{{ (task.created_at[:19] if task.created_at else '') | replace('T', ' ') }}</td>
+                <td><code>{{ task.id[:8] }}…</code></td>
+              </tr>
+              {% else %}
+              <tr><td colspan="4" class="empty">No tasks currently running</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div>
+        <div class="page-header" style="margin-bottom:0.5rem;">
+          <h2 class="panel-title">Queued / Blocked</h2>
+          <div class="mini-note">{{ queued_tasks|length }} waiting</div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Bot</th><th>Status</th><th>Created</th><th>Task</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for task in queued_tasks %}
+              <tr class="task-row" data-task-id="{{ task.id }}">
+                <td>{{ task.bot_id }}</td>
+                <td><span class="badge badge-{{ task.status }}">{{ task.status }}</span></td>
+                <td>{{ (task.created_at[:19] if task.created_at else '') | replace('T', ' ') }}</td>
+                <td><code>{{ task.id[:8] }}…</code></td>
+              </tr>
+              {% else %}
+              <tr><td colspan="4" class="empty">No tasks waiting in queue</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div>
+        <div class="page-header" style="margin-bottom:0.5rem;">
+          <h2 class="panel-title">Recent Completed (24h)</h2>
+          <div class="mini-note">{{ recent_completed_tasks|length }} recent</div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Bot</th><th>Updated</th><th>Task</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for task in recent_completed_tasks %}
+              <tr class="task-row" data-task-id="{{ task.id }}">
+                <td>{{ task.bot_id }}</td>
+                <td>{{ (task.updated_at[:19] if task.updated_at else '') | replace('T', ' ') }}</td>
+                <td><code>{{ task.id[:8] }}…</code></td>
+              </tr>
+              {% else %}
+              <tr><td colspan="3" class="empty">No completed tasks in the last 24 hours</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div>
+        <div class="page-header" style="margin-bottom:0.5rem;">
+          <h2 class="panel-title">Recent Failed (24h)</h2>
+          <div class="mini-note">{{ recent_failed_tasks|length }} recent</div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Bot</th><th>Updated</th><th>Task</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for task in recent_failed_tasks %}
+              <tr class="task-row" data-task-id="{{ task.id }}">
+                <td>{{ task.bot_id }}</td>
+                <td>{{ (task.updated_at[:19] if task.updated_at else '') | replace('T', ' ') }}</td>
+                <td><code>{{ task.id[:8] }}…</code></td>
+              </tr>
+              {% else %}
+              <tr><td colspan="3" class="empty">No failed tasks in the last 24 hours</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="page-header" style="margin-bottom:0.5rem;">
+        <h2 class="panel-title">Task Detail</h2>
+        <div id="task-detail-status" class="mini-note">Select a task row</div>
+      </div>
+      <div class="panel" style="margin:0;">
+        <div id="task-detail-summary" class="mini-note">Running and queued work is surfaced here. Older bot-specific history stays on the bot page.</div>
+        <div id="task-detail-grid" style="display:grid;gap:0.75rem;margin-top:0.75rem;"></div>
+      </div>
+    </div>
+  </div>
+</section>
 {% endblock %}
+
 {% block scripts %}
 <script>
+const TASKS = {{ tasks|tojson }};
+let SELECTED_TASK_ID = '';
+
 function getCsrf() {
   const el = document.querySelector('input[name=csrf_token]');
   return el ? el.value : '';
-}
-
-function toggleDetail(id) {
-  const el = document.getElementById('detail-' + id);
-  if (el) el.classList.toggle('open');
 }
 
 function queueSavedLaunch(botId, label) {
@@ -86,6 +179,110 @@ function queueSavedLaunch(botId, label) {
     location.reload();
   })
   .catch((e) => alert(e.message || 'Launch failed'));
+}
+
+function taskById(taskId) {
+  return TASKS.find((task) => String(task.id) === String(taskId)) || null;
+}
+
+function renderTaskDetail(task) {
+  const statusEl = document.getElementById('task-detail-status');
+  const summaryEl = document.getElementById('task-detail-summary');
+  const gridEl = document.getElementById('task-detail-grid');
+  if (!statusEl || !summaryEl || !gridEl) return;
+  if (!task) {
+    statusEl.textContent = 'Select a task row';
+    summaryEl.textContent = 'Running and queued work is surfaced here. Older bot-specific history stays on the bot page.';
+    gridEl.innerHTML = '';
+    return;
+  }
+  statusEl.textContent = task.status + ' · ' + task.bot_id;
+  summaryEl.textContent = 'Task ' + task.id;
+  const sections = [
+    ['Task', JSON.stringify({
+      id: task.id,
+      bot_id: task.bot_id,
+      status: task.status,
+      created_at: task.created_at,
+      updated_at: task.updated_at,
+      metadata: task.metadata || null
+    }, null, 2)]
+  ];
+  if (task.payload !== undefined && task.payload !== null) {
+    sections.push(['Payload', JSON.stringify(task.payload, null, 2)]);
+  }
+  if (task.result !== undefined && task.result !== null) {
+    sections.push(['Result', JSON.stringify(task.result, null, 2)]);
+  }
+  if (task.error !== undefined && task.error !== null) {
+    sections.push(['Error', JSON.stringify(task.error, null, 2)]);
+  }
+  gridEl.innerHTML = sections.map(([label, body]) => `
+    <section class="panel" style="margin:0;">
+      <div class="page-header" style="margin-bottom:0.5rem;">
+        <h3 style="margin:0;">${label}</h3>
+        <button class="btn btn-sm" type="button" onclick="downloadTaskSection(${JSON.stringify(task.id)}, ${JSON.stringify(label.toLowerCase())})">Download</button>
+      </div>
+      <pre style="max-height:18rem;overflow:auto;white-space:pre-wrap;">${escapeHtml(body)}</pre>
+    </section>
+  `).join('');
+}
+
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function downloadTaskSection(taskId, section) {
+  const task = taskById(taskId);
+  if (!task) return;
+  let body = '';
+  if (section === 'payload') {
+    body = JSON.stringify(task.payload ?? null, null, 2);
+  } else if (section === 'result') {
+    body = JSON.stringify(task.result ?? null, null, 2);
+  } else if (section === 'error') {
+    body = JSON.stringify(task.error ?? null, null, 2);
+  } else {
+    body = JSON.stringify(task, null, 2);
+  }
+  const blob = new Blob([body], {type: 'application/json;charset=utf-8'});
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = taskId + '-' + section + '.json';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function selectTask(taskId) {
+  SELECTED_TASK_ID = String(taskId || '');
+  document.querySelectorAll('.task-row').forEach((row) => {
+    row.classList.toggle('selected', row.dataset.taskId === SELECTED_TASK_ID);
+  });
+  fetch('/api/tasks/' + encodeURIComponent(taskId))
+    .then(async (response) => {
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || 'Task load failed');
+      renderTaskDetail(data);
+    })
+    .catch((error) => {
+      renderTaskDetail(taskById(taskId));
+      const statusEl = document.getElementById('task-detail-status');
+      if (statusEl) statusEl.textContent = error.message || 'Task load failed';
+    });
+}
+
+document.querySelectorAll('.task-row').forEach((row) => {
+  row.addEventListener('click', () => selectTask(row.dataset.taskId));
+});
+
+if (TASKS.length > 0) {
+  selectTask(TASKS[0].id);
 }
 </script>
 {% endblock %}

@@ -37,9 +37,18 @@ async def create_task(request: Request, body: CreateTaskRequest) -> Task:
 async def list_tasks(
     request: Request,
     orchestration_id: Optional[str] = Query(default=None),
+    status: Optional[str] = Query(default=None),
+    bot_id: Optional[str] = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=1000),
 ) -> List[Task]:
     task_manager = request.app.state.task_manager
-    return await task_manager.list_tasks(orchestration_id=orchestration_id)
+    statuses = [part.strip() for part in str(status or "").split(",") if part.strip()]
+    return await task_manager.list_tasks(
+        orchestration_id=orchestration_id,
+        statuses=statuses or None,
+        bot_id=bot_id,
+        limit=limit,
+    )
 
 
 @router.get("/{task_id}", response_model=Task)

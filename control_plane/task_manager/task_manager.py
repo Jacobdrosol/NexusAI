@@ -260,6 +260,8 @@ class TaskManager:
         self._scheduler = scheduler
         self._bot_registry = bot_registry
         self._db_ready = False
+        self._running_task_ids: set[str] = set()
+        self._max_concurrency = max(1, int(os.environ.get("NEXUSAI_TASK_MAX_CONCURRENCY", "4")))
         if db_path is not None:
             self._db_path = db_path
         else:
@@ -624,7 +626,7 @@ class TaskManager:
         await self._persist_dependencies(task)
         await self._upsert_bot_run(task)
         if task.status == "queued":
-            asyncio.create_task(self._run_task(task_id))
+            await self._schedule_ready_tasks()
         return task
 
     async def get_task(self, task_id: str) -> Task:
@@ -634,17 +636,31 @@ class TaskManager:
                 raise TaskNotFoundError(f"Task not found: {task_id}")
             return self._tasks[task_id]
 
-    async def list_tasks(self, orchestration_id: Optional[str] = None) -> List[Task]:
+    async def list_tasks(
+        self,
+        orchestration_id: Optional[str] = None,
+        statuses: Optional[List[str]] = None,
+        bot_id: Optional[str] = None,
+        limit: Optional[int] = None,
+    ) -> List[Task]:
         await self._ensure_db()
         async with self._lock:
             tasks = list(self._tasks.values())
-        if not orchestration_id:
-            return tasks
-        return [
-            t
-            for t in tasks
-            if t.metadata and t.metadata.orchestration_id == orchestration_id
-        ]
+        if orchestration_id:
+            tasks = [
+                t
+                for t in tasks
+                if t.metadata and t.metadata.orchestration_id == orchestration_id
+            ]
+        if statuses:
+            wanted = {str(status).strip().lower() for status in statuses if str(status).strip()}
+            tasks = [t for t in tasks if t.status.lower() in wanted]
+        if bot_id:
+            tasks = [t for t in tasks if str(t.bot_id) == str(bot_id)]
+        tasks.sort(key=lambda task: (task.updated_at or "", task.created_at or ""), reverse=True)
+        if limit is not None:
+            tasks = tasks[: max(1, int(limit))]
+        return tasks
 
     async def list_bot_runs(self, bot_id: str, limit: int = 50) -> List[BotRun]:
         await self._ensure_db()
@@ -775,8 +791,8 @@ class TaskManager:
             await self._try_unblock_tasks()
 
     async def _run_task(self, task_id: str) -> None:
-        await self.update_status(task_id, "running")
         try:
+            await self.update_status(task_id, "running")
             task = await self.get_task(task_id)
             result = await self._scheduler.schedule(task)
             await self.update_status(task_id, "completed", result=result)
@@ -784,9 +800,13 @@ class TaskManager:
             logger.error("Task %s failed: %s", task_id, e)
             task_error = TaskError(message=str(e))
             await self.update_status(task_id, "failed", error=task_error)
+        finally:
+            async with self._lock:
+                self._running_task_ids.discard(task_id)
+            await self._schedule_ready_tasks()
 
     async def _try_unblock_tasks(self) -> None:
-        """Move ready blocked tasks into queued state and start them."""
+        """Move ready blocked tasks into queued state and schedule them."""
         async with self._lock:
             ready_ids: List[str] = []
             for task_id, task in self._tasks.items():
@@ -803,8 +823,28 @@ class TaskManager:
         for t in tasks_to_persist:
             await self._persist_task(t)
             await self._upsert_bot_run(t)
-        for task_id in ready_ids:
-            asyncio.create_task(self._run_task(task_id))
+        if ready_ids:
+            await self._schedule_ready_tasks()
+
+    async def _schedule_ready_tasks(self) -> None:
+        async with self._lock:
+            available_slots = max(0, self._max_concurrency - len(self._running_task_ids))
+            if available_slots <= 0:
+                return
+            queued = sorted(
+                (
+                    task
+                    for task in self._tasks.values()
+                    if task.status == "queued" and task.id not in self._running_task_ids
+                ),
+                key=lambda item: (item.created_at or "", item.updated_at or ""),
+            )
+            selected = queued[:available_slots]
+            for task in selected:
+                self._running_task_ids.add(task.id)
+
+        for task in selected:
+            asyncio.create_task(self._run_task(task.id))
 
     async def _dispatch_triggers(self, task: Task) -> None:
         if self._bot_registry is None:

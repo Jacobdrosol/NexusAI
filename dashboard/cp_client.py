@@ -212,10 +212,23 @@ class CPClient:
         return self._get(f"/v1/bots/{bot_id}/artifacts/{artifact_id}")
 
     # Tasks
-    def list_tasks(self, orchestration_id: Optional[str] = None) -> Optional[List[Dict[str, Any]]]:
+    def list_tasks(
+        self,
+        orchestration_id: Optional[str] = None,
+        statuses: Optional[List[str]] = None,
+        bot_id: Optional[str] = None,
+        limit: int = 200,
+    ) -> Optional[List[Dict[str, Any]]]:
+        params: List[str] = [f"limit={max(1, int(limit))}"]
         if orchestration_id:
-            return self._get(f"/v1/tasks?orchestration_id={orchestration_id}")
-        return self._get("/v1/tasks")
+            params.append(f"orchestration_id={orchestration_id}")
+        if statuses:
+            encoded = ",".join(str(status).strip() for status in statuses if str(status).strip())
+            if encoded:
+                params.append(f"status={encoded}")
+        if bot_id:
+            params.append(f"bot_id={bot_id}")
+        return self._get(f"/v1/tasks?{'&'.join(params)}")
 
     def get_task(self, task_id: str) -> Optional[Dict]:
         return self._get(f"/v1/tasks/{task_id}")
