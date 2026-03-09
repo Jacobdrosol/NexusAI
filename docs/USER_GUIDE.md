@@ -366,7 +366,18 @@ Current pipeline run behavior:
 - Operators can open or download bot artifacts generated during the run without leaving the pipeline view.
 - The workflow trigger depth limit is controlled by the `bot_trigger_max_depth` setting in `Settings`.
 
-## 12. Future Enhancements
+## 12. Bot Connections and Schema Context
+
+Bot-scoped connections are not limited to execution-only import steps. For model-backed bots, the attached connection schema text is injected into the run as authoring context so the model can follow platform-specific field names, JSON shapes, and OpenAPI structures.
+
+Current connection behavior:
+
+- HTTP/OpenAPI connection auth is used for runtime calls and tests, but auth secrets are not injected into model prompts.
+- Connection `schema_text` is treated as authoritative structure guidance for attached bots.
+- One connection definition can be attached to multiple bots from the bot connections page.
+- This is useful when several bots must write payloads that match the same platform schema, such as lesson blocks, unit packages, import payloads, or badge definitions.
+
+## 13. Future Enhancements
 
 The following ideas are intentionally documented as future enhancements, not current behavior:
 

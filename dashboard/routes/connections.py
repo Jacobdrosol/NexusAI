@@ -56,12 +56,43 @@ def _bot_connections(db, bot_ref: str) -> list[dict[str, Any]]:
     return [_connection_to_dict(r) for r in rows]
 
 
+def _available_connections(db, bot_ref: str) -> list[dict[str, Any]]:
+    attached_ids = {
+        int(link.connection_id)
+        for link in db.query(BotConnection).filter(BotConnection.bot_ref == bot_ref).all()
+    }
+    rows = (
+        db.query(Connection)
+        .filter(Connection.enabled.is_(True))
+        .order_by(Connection.name.asc())
+        .all()
+    )
+    payloads: list[dict[str, Any]] = []
+    for row in rows:
+        if int(row.id) in attached_ids:
+            continue
+        payloads.append(
+            {
+                "id": int(row.id),
+                "name": str(row.name),
+                "kind": str(row.kind or ""),
+                "description": str(row.description or ""),
+            }
+        )
+    return payloads
+
+
 @bp.get("/bots/<bot_id>/connections")
 @login_required
 def bot_connections_page(bot_id: str):
     db = get_db()
     try:
-        return render_template("bot_connections.html", bot_id=str(bot_id), connections=_bot_connections(db, str(bot_id)))
+        return render_template(
+            "bot_connections.html",
+            bot_id=str(bot_id),
+            connections=_bot_connections(db, str(bot_id)),
+            available_connections=_available_connections(db, str(bot_id)),
+        )
     finally:
         db.close()
 
@@ -248,4 +279,3 @@ def test_connection(connection_id: int):
         return jsonify({"ok": False, "error": str(exc)}), 500
     finally:
         db.close()
-

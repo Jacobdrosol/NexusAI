@@ -129,6 +129,7 @@ Dashboard and workflow:
 - Bot detail editor with backend chain management, workflow triggers, saved input contracts, saved launch profiles, test runs, run history, and task board.
 - Bot export from the bot detail page and bot import from the bots index page, including bot configuration and bot-scoped connections, with overwrite confirmation on ID conflicts.
 - Bot-scoped external Connections workspace for HTTP/OpenAPI and database integration setup.
+- Attached connection schemas are injected into model-backed bot runs as authoring context, so bots can follow shared API and JSON structure definitions without exposing auth secrets in prompts.
 - OpenAPI action discovery and in-dashboard connection test runner for bot connections.
 - Project detail pages with bridge management and scoped resources.
 - Pipeline run tracking page that groups all tasks in a saved-launch workflow, with per-pipeline status summaries, token usage, artifacts, and task-level retry/download actions.
@@ -295,6 +296,7 @@ Recommended contract settings for long multi-stage content pipelines:
 - Set `fallback_mode=disabled` for generation and QC stages where silent backfill would create false positives.
 - Reserve `fallback_mode=missing_only` or `fallback_mode=parse_failure` for intake/normalization bots where deterministic defaults are intentional.
 - For join aggregators, consume the collected branch payload array plus the helper fields `join_results` and `join_task_ids` instead of reconstructing the merge from deeply nested wrappers.
+- When multiple bots need the same platform schema or OpenAPI definition, attach the same connection to each bot instead of duplicating the connection definition.
 
 ---
 

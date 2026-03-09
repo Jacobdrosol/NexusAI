@@ -9,6 +9,9 @@
 <input type="hidden" id="csrf-token" value="{{ csrf_token() }}">
 
 <section class="panel" style="margin-bottom:1rem;">
+  <div class="mini-note" style="margin-bottom:0.75rem;">
+    Attached connection schemas are injected into model-backed bot runs as authoring context. Auth credentials are not injected into prompts.
+  </div>
   <div class="page-header" style="margin-bottom:0.75rem;">
     <h2 class="panel-title" id="connection-form-title">Create Connection</h2>
     <button class="btn" type="button" id="cancel-edit-btn" style="display:none;" onclick="resetConnectionForm()">Cancel Edit</button>
@@ -73,6 +76,31 @@
   </form>
 </section>
 
+<section class="panel" style="margin-bottom:1rem;">
+  <div class="page-header" style="margin-bottom:0.75rem;">
+    <h2 class="panel-title">Attach Existing Connection</h2>
+  </div>
+  <div class="mini-note" style="margin-bottom:0.75rem;">
+    Reuse one existing schema connection across multiple bots instead of recreating it.
+  </div>
+  <form onsubmit="attachExistingConnection(event)">
+    <div class="split-grid" style="grid-template-columns:1fr auto;align-items:end;">
+      <div class="form-group">
+        <label>Available Connections</label>
+        <select class="form-control" id="existing-connection-id">
+          <option value="">Select a connection</option>
+          {% for c in available_connections %}
+          <option value="{{ c.id }}">{{ c.name }} ({{ c.kind }}){% if c.description %} - {{ c.description }}{% endif %}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-group">
+        <button class="btn btn-primary" type="submit">Attach</button>
+      </div>
+    </div>
+  </form>
+</section>
+
 <section class="panel">
   <h2 class="panel-title">Attached Connections</h2>
   <table>
@@ -85,9 +113,10 @@
         <td><pre style="white-space:pre-wrap;">{{ c.auth | tojson(indent=2) }}</pre></td>
         <td class="actions">
           <button class="btn btn-sm" onclick="editConnection({{ c.id }})">Edit</button>
+          <button class="btn btn-sm" onclick="detachConnection({{ c.id }})">Detach</button>
           <button class="btn btn-sm" onclick="openTest({{ c.id }})">Test</button>
           <button class="btn btn-sm" onclick="showActions({{ c.id }})">Actions</button>
-          <button class="btn btn-sm btn-danger" onclick="deleteConnection({{ c.id }})">Delete</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteConnection({{ c.id }})">Delete Definition</button>
         </td>
       </tr>
       {% else %}
@@ -231,8 +260,37 @@ function createConnection(evt) {
   }).catch((e) => alert(e.message));
 }
 
+function attachExistingConnection(evt) {
+  evt.preventDefault();
+  const connectionId = String(document.getElementById('existing-connection-id').value || '').trim();
+  if (!connectionId) {
+    alert('Select a connection to attach.');
+    return;
+  }
+  fetch('/api/bots/' + encodeURIComponent(BOT_ID) + '/connections/' + encodeURIComponent(connectionId) + '/attach', {
+    method: 'POST',
+    headers: {'X-CSRFToken': CSRF},
+  }).then(async (r) => {
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || 'Attach failed');
+    location.reload();
+  }).catch((e) => alert(e.message));
+}
+
+function detachConnection(connectionId) {
+  if (!confirm('Detach this connection from the current bot?')) return;
+  fetch('/api/bots/' + encodeURIComponent(BOT_ID) + '/connections/' + encodeURIComponent(connectionId) + '/attach', {
+    method: 'DELETE',
+    headers: {'X-CSRFToken': CSRF},
+  }).then(async (r) => {
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok && r.status !== 204) throw new Error(data.error || 'Detach failed');
+    location.reload();
+  }).catch((e) => alert(e.message));
+}
+
 function deleteConnection(connectionId) {
-  if (!confirm('Delete this connection?')) return;
+  if (!confirm('Delete this connection definition everywhere it is attached?')) return;
   fetch('/api/connections/' + encodeURIComponent(connectionId), {
     method: 'DELETE',
     headers: {'X-CSRFToken': CSRF},

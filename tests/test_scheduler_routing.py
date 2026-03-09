@@ -1,4 +1,5 @@
 import json
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -150,6 +151,101 @@ async def test_scheduler_injects_bot_system_prompt_into_payload():
 
 
 @pytest.mark.anyio
+async def test_scheduler_injects_attached_connection_schema_into_model_prompt(monkeypatch):
+    from control_plane.scheduler.scheduler import Scheduler
+    from dashboard.models import BotConnection as DashboardBotConnection
+    from dashboard.models import Connection as DashboardConnection
+
+    class FakeQuery:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def filter(self, *args, **kwargs):
+            return self
+
+        def order_by(self, *args, **kwargs):
+            return self
+
+        def all(self):
+            return list(self._rows)
+
+    class FakeSession:
+        def query(self, model):
+            if model is DashboardBotConnection:
+                return FakeQuery([type("Link", (), {"connection_id": 7})()])
+            if model is DashboardConnection:
+                return FakeQuery(
+                    [
+                        type(
+                            "Conn",
+                            (),
+                            {
+                                "id": 7,
+                                "name": "platform-schema",
+                                "kind": "http",
+                                "description": "Lesson block schema",
+                                "config_json": json.dumps({"base_url": "https://example.test"}),
+                                "schema_text": json.dumps(
+                                    {
+                                        "lesson_blocks": [
+                                            {
+                                                "variant": "paragraph",
+                                                "html": "<p>Example paragraph</p>",
+                                                "options": {"textAlign": "left"},
+                                            },
+                                            {
+                                                "code": "console.log('Hello, World!');",
+                                                "language": "javascript",
+                                                "theme": "dark",
+                                                "showLineNumbers": True,
+                                            },
+                                        ]
+                                    }
+                                ),
+                                "enabled": True,
+                            },
+                        )()
+                    ]
+                )
+            raise AssertionError(f"Unexpected model queried: {model}")
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr("dashboard.db.get_db", lambda: FakeSession())
+
+    bot_registry = AsyncMock()
+    bot_registry.get.return_value = Bot(
+        id="course-lesson-writer",
+        name="Course Lesson Writer",
+        role="writer",
+        system_prompt="Write lesson blocks as strict JSON.",
+        backends=[BackendConfig(type="cloud_api", provider="openai", model="gpt-4o-mini")],
+    )
+    scheduler = Scheduler(bot_registry=bot_registry, worker_registry=AsyncMock())
+    task = Task(
+        id="task-ctx-1",
+        bot_id="course-lesson-writer",
+        payload={"instruction": "Write lesson 1"},
+        status="queued",
+        created_at="now",
+        updated_at="now",
+    )
+
+    async def fake_dispatch(backend, payload, task=None):
+        return {"payload": payload}
+
+    scheduler._dispatch_backend = fake_dispatch  # type: ignore[method-assign]
+    result = await scheduler.schedule(task)
+
+    system_message = result["payload"][0]["content"]
+    assert "Attached connection schemas:" in system_message
+    assert "platform-schema" in system_message
+    assert '"variant": "paragraph"' in system_message
+    assert '"showLineNumbers": true' in system_message
+
+
+@pytest.mark.anyio
 async def test_scheduler_does_not_duplicate_existing_system_prompt():
     from control_plane.scheduler.scheduler import Scheduler
 
@@ -184,6 +280,81 @@ async def test_scheduler_does_not_duplicate_existing_system_prompt():
         {"role": "system", "content": "Return only strict JSON."},
         {"role": "user", "content": "build outline"},
     ]
+
+
+@pytest.mark.anyio
+async def test_scheduler_keeps_custom_backend_payload_unwrapped_when_connection_context_exists(monkeypatch):
+    from control_plane.scheduler.scheduler import Scheduler
+    from dashboard.models import BotConnection as DashboardBotConnection
+    from dashboard.models import Connection as DashboardConnection
+
+    class FakeQuery:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def filter(self, *args, **kwargs):
+            return self
+
+        def order_by(self, *args, **kwargs):
+            return self
+
+        def all(self):
+            return list(self._rows)
+
+    class FakeSession:
+        def query(self, model):
+            if model is DashboardBotConnection:
+                return FakeQuery([type("Link", (), {"connection_id": 7})()])
+            if model is DashboardConnection:
+                return FakeQuery(
+                    [
+                        type(
+                            "Conn",
+                            (),
+                            {
+                                "id": 7,
+                                "name": "platform-api",
+                                "kind": "http",
+                                "description": "Importer connection",
+                                "config_json": json.dumps({"base_url": "https://example.test"}),
+                                "schema_text": "openapi: 3.1.0",
+                                "enabled": True,
+                            },
+                        )()
+                    ]
+                )
+            raise AssertionError(f"Unexpected model queried: {model}")
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr("dashboard.db.get_db", lambda: FakeSession())
+
+    bot_registry = AsyncMock()
+    bot_registry.get.return_value = Bot(
+        id="course-importer",
+        name="Course Importer",
+        role="importer",
+        system_prompt="Do not wrap payloads.",
+        backends=[BackendConfig(type="custom", provider="http_connection", model="attached-http")],
+    )
+    scheduler = Scheduler(bot_registry=bot_registry, worker_registry=AsyncMock())
+    task = Task(
+        id="task-custom-ctx",
+        bot_id="course-importer",
+        payload={"connection_actions": [{"operation_id": "createCourse"}]},
+        status="queued",
+        created_at="now",
+        updated_at="now",
+    )
+
+    async def fake_dispatch(backend, payload, task=None):
+        return {"payload": payload}
+
+    scheduler._dispatch_backend = fake_dispatch  # type: ignore[method-assign]
+    result = await scheduler.schedule(task)
+
+    assert result["payload"] == {"connection_actions": [{"operation_id": "createCourse"}]}
 
 
 @pytest.mark.anyio

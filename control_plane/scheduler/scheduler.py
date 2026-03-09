@@ -195,9 +195,125 @@ def _contract_prompt_suffix(bot: Any) -> str:
     return "\n\nOutput contract:\n" + "\n".join(parts)
 
 
-def _prepare_system_prompt(bot: Any) -> str | None:
+def _connection_context_prompt_suffix(bot_id: str, bot: Any) -> str:
+    routing_rules = getattr(bot, "routing_rules", None)
+    config = routing_rules.get("connection_context") if isinstance(routing_rules, dict) else None
+    if isinstance(config, dict) and not bool(config.get("enabled", True)):
+        return ""
+
+    include_schema = True if not isinstance(config, dict) else bool(config.get("include_schema", True))
+    include_actions = True if not isinstance(config, dict) else bool(config.get("include_actions", True))
+    max_schema_chars = 12000 if not isinstance(config, dict) else max(500, int(config.get("max_schema_chars") or 12000))
+    max_total_chars = 24000 if not isinstance(config, dict) else max(1000, int(config.get("max_total_chars") or 24000))
+    max_actions = 24 if not isinstance(config, dict) else max(1, int(config.get("max_actions") or 24))
+
+    try:
+        from dashboard.connections_service import parse_openapi_actions
+        from dashboard.db import get_db
+        from dashboard.models import BotConnection, Connection
+    except Exception:
+        return ""
+
+    db = get_db()
+    try:
+        links = db.query(BotConnection).filter(BotConnection.bot_ref == str(bot_id)).all()
+        connection_ids = [int(link.connection_id) for link in links]
+        if not connection_ids:
+            return ""
+        rows = (
+            db.query(Connection)
+            .filter(Connection.id.in_(connection_ids), Connection.enabled.is_(True))
+            .order_by(Connection.name.asc())
+            .all()
+        )
+    except Exception as exc:
+        logger.warning("Failed to load attached bot connections for %s: %s", bot_id, exc)
+        return ""
+    finally:
+        db.close()
+
+    if not rows:
+        return ""
+
+    parts: list[str] = [
+        "Attached connection schemas:",
+        "Use these attached connection definitions as authoritative for field names, nesting, and allowed JSON shapes.",
+        "Do not invent fields outside the attached schemas and examples.",
+    ]
+    remaining_chars = max_total_chars
+
+    for row in rows:
+        section: list[str] = [f"Connection: {str(row.name or '').strip() or row.id} ({str(row.kind or '').strip() or 'unknown'})"]
+        description = str(row.description or "").strip()
+        if description:
+            section.append(f"Description: {description}")
+
+        config_json = row.config_json or "{}"
+        try:
+            connection_config = json.loads(config_json)
+        except Exception:
+            connection_config = {}
+        if isinstance(connection_config, dict):
+            if str(row.kind or "").strip().lower() == "http":
+                base_url = str(connection_config.get("base_url") or "").strip()
+                if base_url:
+                    section.append(f"Base URL: {base_url}")
+            if str(row.kind or "").strip().lower() == "database":
+                readonly = bool(connection_config.get("readonly", False))
+                section.append(f"Readonly: {'true' if readonly else 'false'}")
+
+        schema_text = str(row.schema_text or "").strip()
+        if include_actions and str(row.kind or "").strip().lower() == "http" and schema_text:
+            try:
+                actions = parse_openapi_actions(schema_text)
+            except Exception:
+                actions = []
+            if actions:
+                formatted_actions = []
+                for action in actions[:max_actions]:
+                    op = str(action.get("operation_id") or "").strip()
+                    method = str(action.get("method") or "").strip().upper()
+                    path = str(action.get("path") or "").strip()
+                    formatted_actions.append(f"{op} [{method} {path}]".strip())
+                section.append("Available actions: " + ", ".join(item for item in formatted_actions if item).strip())
+
+        if include_schema and schema_text:
+            truncated = schema_text[:max_schema_chars]
+            if len(schema_text) > len(truncated):
+                truncated = truncated.rstrip() + "\n...[TRUNCATED]"
+            section.append("Schema and examples:")
+            section.append(truncated)
+
+        rendered = "\n".join(item for item in section if str(item).strip()).strip()
+        if not rendered:
+            continue
+        if len(rendered) > remaining_chars:
+            rendered = rendered[:remaining_chars].rstrip()
+            if rendered:
+                rendered += "\n...[TRUNCATED]"
+        if not rendered:
+            break
+        parts.append(rendered)
+        remaining_chars -= len(rendered)
+        if remaining_chars <= 0:
+            break
+
+    if len(parts) <= 3:
+        return ""
+    return "\n\n" + "\n\n".join(parts)
+
+
+def _prepare_system_prompt(bot: Any, *, bot_id: str | None = None) -> str | None:
     base = str(getattr(bot, "system_prompt", None) or "").strip()
-    suffix = _contract_prompt_suffix(bot).strip()
+    suffix_parts: list[str] = []
+    contract_suffix = _contract_prompt_suffix(bot).strip()
+    if contract_suffix:
+        suffix_parts.append(contract_suffix)
+    if bot_id:
+        connection_suffix = _connection_context_prompt_suffix(bot_id, bot).strip()
+        if connection_suffix:
+            suffix_parts.append(connection_suffix)
+    suffix = "\n".join(part for part in suffix_parts if part).strip()
     if not suffix:
         return base or None
     if not base:
@@ -205,6 +321,12 @@ def _prepare_system_prompt(bot: Any) -> str | None:
     if suffix in base:
         return base
     return f"{base}\n{suffix}"
+
+
+def _prepare_payload_for_backend(bot: Any, backend: BackendConfig, payload: Any, *, task: Task | None = None) -> Any:
+    if backend.type == "custom":
+        return payload
+    return _inject_system_prompt(_prepare_system_prompt(bot, bot_id=getattr(task, "bot_id", None)), payload)
 
 
 class Scheduler:
@@ -238,10 +360,9 @@ class Scheduler:
         last_error: Exception = NoViableBackendError("No backends configured")
         attempts: list[str] = []
         transformed_payload = self._apply_input_transform(bot, task.payload)
-        prepared_payload = _inject_system_prompt(_prepare_system_prompt(bot), transformed_payload)
-
         for backend in bot.backends:
             try:
+                prepared_payload = _prepare_payload_for_backend(bot, backend, transformed_payload, task=task)
                 result = await self._dispatch_backend(backend, prepared_payload, task=task)
                 return result
             except Exception as e:
@@ -270,10 +391,9 @@ class Scheduler:
         last_error: Exception = NoViableBackendError("No backends configured")
         attempts: list[str] = []
         transformed_payload = self._apply_input_transform(bot, task.payload)
-        prepared_payload = _inject_system_prompt(_prepare_system_prompt(bot), transformed_payload)
-
         for backend in bot.backends:
             try:
+                prepared_payload = _prepare_payload_for_backend(bot, backend, transformed_payload, task=task)
                 yield {
                     "event": "backend_selected",
                     "provider": backend.provider,

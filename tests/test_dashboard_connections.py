@@ -124,6 +124,49 @@ def test_database_connection_test_endpoint(dashboard_client):
     assert payload["row_count"] >= 1
 
 
+def test_existing_connection_can_be_attached_to_multiple_bots(dashboard_client):
+    _login_admin(dashboard_client)
+
+    first_bot = dashboard_client.post("/api/bots", json={"name": "Schema Bot One"})
+    second_bot = dashboard_client.post("/api/bots", json={"name": "Schema Bot Two"})
+    assert first_bot.status_code == 201
+    assert second_bot.status_code == 201
+    first_bot_id = str(first_bot.get_json()["id"])
+    second_bot_id = str(second_bot.get_json()["id"])
+
+    create_resp = dashboard_client.post(
+        f"/api/bots/{first_bot_id}/connections",
+        json={
+            "name": "Platform Schema",
+            "kind": "http",
+            "description": "Reusable site schema",
+            "config": {"base_url": "https://api.example.com"},
+            "schema_text": '{"lesson_blocks":[{"variant":"paragraph"}]}',
+        },
+    )
+    assert create_resp.status_code == 201
+    connection_id = create_resp.get_json()["id"]
+
+    attach_resp = dashboard_client.post(f"/api/bots/{second_bot_id}/connections/{connection_id}/attach")
+    assert attach_resp.status_code == 200
+
+    second_list_resp = dashboard_client.get(f"/api/bots/{second_bot_id}/connections")
+    assert second_list_resp.status_code == 200
+    second_rows = second_list_resp.get_json()
+    assert len(second_rows) == 1
+    assert second_rows[0]["id"] == connection_id
+    assert second_rows[0]["name"] == "Platform Schema"
+
+    detach_resp = dashboard_client.delete(f"/api/bots/{second_bot_id}/connections/{connection_id}/attach")
+    assert detach_resp.status_code == 204
+
+    first_list_resp = dashboard_client.get(f"/api/bots/{first_bot_id}/connections")
+    assert first_list_resp.status_code == 200
+    first_rows = first_list_resp.get_json()
+    assert len(first_rows) == 1
+    assert first_rows[0]["id"] == connection_id
+
+
 def test_bot_export_includes_full_bot_config_and_connections(dashboard_client):
     _login_admin(dashboard_client)
 
