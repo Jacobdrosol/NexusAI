@@ -1105,12 +1105,14 @@ class TaskManager:
         validate_before_transform = bool(contract.get("validate_before_transform", False))
         output_mode = await self._bot_output_contract_mode(bot_id)
         has_input_transform = await self._bot_has_enabled_input_transform(bot_id)
+        is_intake_role = await self._bot_is_intake_role(bot_id)
         has_launch_form_contract = bool(form_fields) or bool(default_payload)
         is_saved_launch_entry = await self._is_saved_launch_entry(bot_id, metadata)
         looks_like_flat_launch_payload = _looks_like_flat_launch_payload(payload, [str(field) for field in required_fields])
         if not validate_before_transform and (
             output_mode == "payload_transform"
             or has_input_transform
+            or is_intake_role
             or has_launch_form_contract
             or is_saved_launch_entry
             or looks_like_flat_launch_payload
@@ -1137,6 +1139,11 @@ class TaskManager:
             return False
         config = routing_rules.get("input_transform")
         return isinstance(config, dict) and bool(config.get("enabled", False)) and config.get("template") is not None
+
+    async def _bot_is_intake_role(self, bot_id: str) -> bool:
+        bot = await self._bot_registry.get(bot_id)
+        role = str(getattr(bot, "role", "") or "").strip().lower()
+        return role.endswith("intake") or role.endswith("-intake")
 
     async def _is_saved_launch_entry(self, bot_id: str, metadata: Optional[TaskMetadata]) -> bool:
         if metadata is None:

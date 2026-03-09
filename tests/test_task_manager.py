@@ -741,6 +741,55 @@ async def test_payload_transform_reuses_already_normalized_payload(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_intake_role_bots_skip_pre_run_input_validation(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {"ok": True}
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "intake-role-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="course-intake",
+            name="Course Intake",
+            role="course-intake",
+            backends=[],
+            routing_rules={
+                "input_contract": {
+                    "enabled": True,
+                    "format": "json_object",
+                    "required_fields": ["workflow_type", "course_brief", "generation_settings", "revision_context"],
+                },
+            },
+        )
+    )
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "intake-role-tasks.db"), bot_registry=bot_registry)
+    task = await tm.create_task(
+        bot_id="course-intake",
+        payload={
+            "workflow_type": "course_generation",
+            "course_brief": {"topic": "AP World History", "units": [{"title": "Unit 1"}]},
+            "generation_settings": {"allowed_lesson_blocks": ["AdvancedParagraph"]},
+        },
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status == "completed":
+            break
+        await asyncio.sleep(0.05)
+
+    updated = await tm.get_task(task.id)
+    assert updated.status == "completed"
+
+
+@pytest.mark.anyio
 async def test_bot_trigger_creates_follow_on_run_and_artifacts(tmp_path):
     import asyncio
 
