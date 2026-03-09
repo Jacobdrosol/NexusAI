@@ -244,6 +244,22 @@ def _empty_payload_fields(payload: Any, fields: list[str]) -> list[str]:
     return empty
 
 
+def _looks_like_flat_launch_payload(payload: Any, required_fields: list[str]) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    keys = {str(key).strip() for key in payload.keys() if str(key).strip()}
+    if len(keys) < 3:
+        return False
+    required = [str(field).strip() for field in required_fields if str(field).strip()]
+    if not required:
+        return False
+    if any(field in keys for field in required):
+        return False
+    has_serialized_fields = any(key.endswith("_json") for key in keys)
+    has_brief_like_fields = bool(keys.intersection({"topic", "subject", "scope", "audience", "language", "level"}))
+    return has_serialized_fields and has_brief_like_fields
+
+
 def _merge_with_contract_defaults(value: Any, defaults: Any) -> Any:
     if defaults is None:
         return value
@@ -1073,11 +1089,13 @@ class TaskManager:
         has_input_transform = await self._bot_has_enabled_input_transform(bot_id)
         has_launch_form_contract = bool(form_fields) or bool(default_payload)
         is_saved_launch_entry = await self._is_saved_launch_entry(bot_id, metadata)
+        looks_like_flat_launch_payload = _looks_like_flat_launch_payload(payload, [str(field) for field in required_fields])
         if not validate_before_transform and (
             output_mode == "payload_transform"
             or has_input_transform
             or has_launch_form_contract
             or is_saved_launch_entry
+            or looks_like_flat_launch_payload
         ):
             return
 
