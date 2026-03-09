@@ -1142,8 +1142,14 @@ class TaskManager:
 
     async def _bot_is_intake_role(self, bot_id: str) -> bool:
         bot = await self._bot_registry.get(bot_id)
+        bot_id_value = str(getattr(bot, "id", bot_id) or bot_id).strip().lower()
+        if bot_id_value.endswith("intake") or bot_id_value.endswith("-intake"):
+            return True
         role = str(getattr(bot, "role", "") or "").strip().lower()
-        return role.endswith("intake") or role.endswith("-intake")
+        if role.endswith("intake") or role.endswith("-intake"):
+            return True
+        name = str(getattr(bot, "name", "") or "").strip().lower()
+        return name.endswith("intake")
 
     async def _is_saved_launch_entry(self, bot_id: str, metadata: Optional[TaskMetadata]) -> bool:
         if metadata is None:
