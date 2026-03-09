@@ -905,6 +905,75 @@ async def test_output_contract_preserves_non_empty_model_values_over_defaults(tm
 
 
 @pytest.mark.anyio
+async def test_output_contract_can_fallback_to_defaults_when_model_output_is_not_json(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {"output": "Here is your detailed unit plan: 1. Start with context 2. Add examples"}
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "defaults-fallback-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="unit-bot",
+            name="Unit Builder",
+            role="assistant",
+            backends=[],
+            routing_rules={
+                "output_contract": {
+                    "enabled": True,
+                    "mode": "model_output",
+                    "format": "json_object",
+                    "required_fields": ["unit_blueprint"],
+                    "defaults_template": {
+                        "normalization_notes": [],
+                        "unit_blueprint": {
+                            "unit_number": "{{payload.unit.unit_number}}",
+                            "title": "{{payload.unit.title}}",
+                            "overview": "{{payload.unit.description}}",
+                            "outcomes": "{{payload.unit.goals}}",
+                            "prerequisites": [],
+                            "examples": [],
+                            "checks_for_understanding": [],
+                            "lesson_plans": "{{payload.unit.lessons}}",
+                        },
+                    },
+                }
+            },
+        )
+    )
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "defaults-fallback.db"), bot_registry=bot_registry)
+    task = await tm.create_task(
+        bot_id="unit-bot",
+        payload={
+            "unit": {
+                "unit_number": 2,
+                "title": "Networks of Exchange",
+                "description": "Trade networks and cultural exchange.",
+                "goals": ["Explain trade routes"],
+                "lessons": [{"lesson_number": 1, "title": "Lesson 1"}],
+            }
+        },
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.1)
+
+    assert updated.status == "completed"
+    assert updated.result["unit_blueprint"]["unit_number"] == 2
+    assert updated.result["unit_blueprint"]["lesson_plans"] == [{"lesson_number": 1, "title": "Lesson 1"}]
+    assert "fell back to defaults template" in " ".join(updated.result.get("normalization_notes", []))
+
+
+@pytest.mark.anyio
 async def test_payload_transform_supports_coalesce_paths_for_retry_loops(tmp_path):
     import asyncio
 

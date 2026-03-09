@@ -1019,7 +1019,19 @@ class TaskManager:
             if isinstance(result, (dict, list)) and output_format == "json_array" and isinstance(result, list):
                 parsed = result
             elif raw_text:
-                parsed = _extract_json_payload(raw_text)
+                try:
+                    parsed = _extract_json_payload(raw_text)
+                except ValueError:
+                    if defaults_template is not None:
+                        default_notes: list[str] = ["Model output was not parseable JSON; fell back to defaults template."]
+                        parsed = _transform_template_value(defaults_template, task.payload, default_notes)
+                        if isinstance(parsed, dict):
+                            existing_notes = parsed.get("normalization_notes")
+                            if not isinstance(existing_notes, list):
+                                existing_notes = []
+                            parsed["normalization_notes"] = existing_notes + default_notes
+                    else:
+                        raise
             elif isinstance(result, dict) and output_format in {"json_object", "any"} and required_fields:
                 parsed = result
             if parsed is None:
