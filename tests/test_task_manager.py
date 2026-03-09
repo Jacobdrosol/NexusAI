@@ -420,6 +420,60 @@ async def test_bot_trigger_creates_follow_on_run_and_artifacts(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_trigger_payload_template_can_reference_source_fields(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot
+
+    class StubScheduler:
+        async def schedule(self, task):
+            if task.bot_id == "outline-bot":
+                return {"course_structure": {"units": [{"unit_number": 1, "title": "Unit 1"}]}}
+            return {"ok": True}
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "templated-trigger-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="outline-bot",
+            name="Outline",
+            role="assistant",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "to-unit",
+                        "event": "task_completed",
+                        "target_bot_id": "unit-bot",
+                        "condition": "has_result",
+                        "payload_template": {
+                            "instruction": "Build one unit",
+                            "units": "{{source_result.course_structure.units}}",
+                        },
+                    }
+                ]
+            },
+        )
+    )
+    await bot_registry.register(Bot(id="unit-bot", name="Unit", role="assistant", backends=[]))
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "templated-trigger-tasks.db"), bot_registry=bot_registry)
+    root = await tm.create_task(bot_id="outline-bot", payload={"instruction": "outline"})
+
+    for _ in range(40):
+        tasks = await tm.list_tasks()
+        if len(tasks) >= 2 and all(task.status == "completed" for task in tasks):
+            break
+        await asyncio.sleep(0.1)
+
+    tasks = await tm.list_tasks()
+    triggered = next(task for task in tasks if task.id != root.id and task.bot_id == "unit-bot")
+    assert triggered.payload["instruction"] == "Build one unit"
+    assert triggered.payload["units"] == [{"unit_number": 1, "title": "Unit 1"}]
+
+
+@pytest.mark.anyio
 async def test_qc_bot_can_route_failures_back_to_source_bot(tmp_path):
     import asyncio
 
@@ -477,6 +531,49 @@ async def test_qc_bot_can_route_failures_back_to_source_bot(tmp_path):
     assert retry_task.metadata is not None
     assert retry_task.metadata.parent_task_id in {task.id for task in qc_tasks}
     assert retry_task.metadata.trigger_rule_id == "return-for-fix"
+
+
+@pytest.mark.anyio
+async def test_trigger_can_resolve_target_bot_from_result_field(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot
+
+    class StubScheduler:
+        async def schedule(self, task):
+            if task.bot_id == "qc-bot":
+                return {"qc_status": "fail", "retry_target_bot_id": "writer-bot"}
+            return {"ok": True}
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "dynamic-target-bots.db"))
+    await bot_registry.register(Bot(id="qc-bot", name="QC", role="quality", backends=[], workflow={
+        "triggers": [
+            {
+                "id": "dynamic-retry",
+                "event": "task_completed",
+                "target_bot_id": "{{result.retry_target_bot_id}}",
+                "condition": "has_result",
+                "result_field": "qc_status",
+                "result_equals": "fail",
+            }
+        ]
+    }))
+    await bot_registry.register(Bot(id="writer-bot", name="Writer", role="assistant", backends=[]))
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "dynamic-target-tasks.db"), bot_registry=bot_registry)
+    root = await tm.create_task(bot_id="qc-bot", payload={"instruction": "check"})
+
+    for _ in range(40):
+        tasks = await tm.list_tasks()
+        if len(tasks) >= 2 and all(task.status == "completed" for task in tasks):
+            break
+        await asyncio.sleep(0.1)
+
+    tasks = await tm.list_tasks()
+    retry_task = next(task for task in tasks if task.id != root.id)
+    assert retry_task.bot_id == "writer-bot"
 
 
 @pytest.mark.anyio
@@ -635,6 +732,8 @@ async def test_trigger_can_join_sibling_branch_outputs(tmp_path):
                         "join_group_field": "source_payload.source_result.unit_blueprint.unit_number",
                         "join_expected_field": "source_payload.fanout_count",
                         "join_items_alias": "lesson_bundles",
+                        "join_result_field": "source_result.approved_lesson",
+                        "join_result_items_alias": "approved_lessons",
                         "join_sort_field": "source_result.approved_lesson.lesson_number",
                     }
                 ]
@@ -661,6 +760,8 @@ async def test_trigger_can_join_sibling_branch_outputs(tmp_path):
     assert packager.payload["join_count"] == 2
     assert len(packager.payload["join_results"]) == 2
     assert len(packager.payload["join_task_ids"]) == 2
+    assert packager.payload["approved_lessons"][0]["lesson_number"] == 1
+    assert packager.payload["approved_lessons"][1]["lesson_number"] == 2
     assert len(packager.payload["lesson_bundles"]) == 2
     assert packager.payload["lesson_bundles"][0]["source_result"]["approved_lesson"]["lesson_number"] == 1
     assert packager.payload["lesson_bundles"][1]["source_result"]["approved_lesson"]["lesson_number"] == 2

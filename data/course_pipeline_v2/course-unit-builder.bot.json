@@ -1,0 +1,169 @@
+{
+  "bot": {
+    "backends": [
+      {
+        "api_key_ref": "Ollama_Cloud1",
+        "gpu_id": null,
+        "model": "qwen3.5:397b-cloud",
+        "params": {
+          "main_gpu": null,
+          "max_tokens": 6144,
+          "num_ctx": null,
+          "num_gpu": null,
+          "num_thread": null,
+          "repeat_penalty": null,
+          "temperature": null,
+          "top_p": null
+        },
+        "provider": "ollama_cloud",
+        "type": "cloud_api",
+        "worker_id": null
+      }
+    ],
+    "enabled": true,
+    "id": "course-unit-builder",
+    "name": "Unit Blueprint Builder",
+    "priority": 2,
+    "role": "course-unit-builder",
+    "routing_rules": {
+      "input_contract": {
+        "description": "Expand one approved outline unit into a strict unit blueprint.",
+        "enabled": true,
+        "format": "json_object",
+        "non_empty_fields": [
+          "course_shell.title",
+          "unit.title",
+          "unit.goals",
+          "unit.lessons",
+          "generation_settings.assessment_settings"
+        ],
+        "required_fields": [
+          "workflow_type",
+          "course_brief",
+          "generation_settings",
+          "course_shell",
+          "unit",
+          "revision_context"
+        ]
+      },
+      "input_transform": {
+        "description": "",
+        "enabled": false,
+        "template": null
+      },
+      "launch_profile": {
+        "description": "",
+        "enabled": false,
+        "label": "",
+        "payload": {},
+        "priority": 0,
+        "project_id": "",
+        "show_on_overview": false,
+        "show_on_tasks": false
+      },
+      "output_contract": {
+        "defaults_template": {},
+        "description": "Return one unit blueprint with lesson plans and assessment targets.",
+        "enabled": true,
+        "fallback_mode": "disabled",
+        "format": "json_object",
+        "mode": "model_output",
+        "non_empty_fields": [
+          "unit_blueprint.unit_number",
+          "unit_blueprint.title",
+          "unit_blueprint.overview",
+          "unit_blueprint.unit_goals",
+          "unit_blueprint.lesson_plans",
+          "unit_blueprint.assessment_plan.quiz",
+          "unit_blueprint.assessment_plan.test"
+        ],
+        "required_fields": [
+          "unit_blueprint",
+          "builder_notes"
+        ]
+      },
+      "workflow": {
+        "notes": "Fan out each unit blueprint into lesson writing tasks.",
+        "triggers": [
+          {
+            "condition": "has_result",
+            "enabled": true,
+            "event": "task_completed",
+            "fan_out_alias": "lesson_plan",
+            "fan_out_field": "source_result.unit_blueprint.lesson_plans",
+            "fan_out_index_alias": "lesson_index",
+            "id": "unit-to-lesson-writer",
+            "inherit_metadata": true,
+            "join_expected_field": null,
+            "join_group_field": null,
+            "join_items_alias": null,
+            "join_result_field": null,
+            "join_result_items_alias": null,
+            "join_sort_field": null,
+            "payload_template": {
+              "course_brief": "{{source_payload.course_brief}}",
+              "course_expected_unit_count": "{{source_payload.fanout_count}}",
+              "course_shell": "{{source_payload.course_shell}}",
+              "generation_settings": "{{source_payload.generation_settings}}",
+              "revision_context": {
+                "attempted_before": false,
+                "fix_instructions": [],
+                "issues": [],
+                "qc_summary": ""
+              },
+              "unit_blueprint": "{{source_result.unit_blueprint}}",
+              "workflow_type": "{{source_payload.workflow_type}}"
+            },
+            "result_equals": null,
+            "result_field": null,
+            "target_bot_id": "course-lesson-writer",
+            "title": "unit-to-lesson-writer"
+          }
+        ]
+      }
+    },
+    "system_prompt": "Design one unit blueprint at a time. Return JSON only. Do not write lesson bodies.",
+    "workflow": {
+      "notes": "Fan out each unit blueprint into lesson writing tasks.",
+      "triggers": [
+        {
+          "condition": "has_result",
+          "enabled": true,
+          "event": "task_completed",
+          "fan_out_alias": "lesson_plan",
+          "fan_out_field": "source_result.unit_blueprint.lesson_plans",
+          "fan_out_index_alias": "lesson_index",
+          "id": "unit-to-lesson-writer",
+          "inherit_metadata": true,
+          "join_expected_field": null,
+          "join_group_field": null,
+          "join_items_alias": null,
+          "join_result_field": null,
+          "join_result_items_alias": null,
+          "join_sort_field": null,
+          "payload_template": {
+            "course_brief": "{{source_payload.course_brief}}",
+            "course_expected_unit_count": "{{source_payload.fanout_count}}",
+            "course_shell": "{{source_payload.course_shell}}",
+            "generation_settings": "{{source_payload.generation_settings}}",
+            "revision_context": {
+              "attempted_before": false,
+              "fix_instructions": [],
+              "issues": [],
+              "qc_summary": ""
+            },
+            "unit_blueprint": "{{source_result.unit_blueprint}}",
+            "workflow_type": "{{source_payload.workflow_type}}"
+          },
+          "result_equals": null,
+          "result_field": null,
+          "target_bot_id": "course-lesson-writer",
+          "title": "unit-to-lesson-writer"
+        }
+      ]
+    }
+  },
+  "connections": [],
+  "exported_at": "2026-03-09T15:57:16.841484+00:00",
+  "schema_version": "nexusai.bot-export.v1"
+}

@@ -289,6 +289,171 @@ async def test_scheduler_input_transform_supports_coalesce_paths():
 
 
 @pytest.mark.anyio
+async def test_scheduler_input_transform_can_render_nested_templates():
+    from control_plane.scheduler.scheduler import Scheduler
+
+    bot_registry = AsyncMock()
+    bot_registry.get.return_value = Bot(
+        id="course-importer",
+        name="Course Importer",
+        role="importer",
+        system_prompt=None,
+        backends=[BackendConfig(type="cloud_api", provider="openai", model="gpt-4o-mini")],
+        routing_rules={
+            "input_transform": {
+                "enabled": True,
+                "template": {
+                    "connection_actions": "{{render:payload.generation_settings.platform_import_actions}}",
+                },
+            }
+        },
+    )
+    scheduler = Scheduler(bot_registry=bot_registry, worker_registry=AsyncMock())
+    task = Task(
+        id="task-render",
+        bot_id="course-importer",
+        payload={
+            "import_package": {
+                "course_package": {
+                    "course_shell": {
+                        "title": "World History Survey",
+                    }
+                }
+            },
+            "generation_settings": {
+                "platform_import_actions": [
+                    {
+                        "operation_id": "createCourse",
+                        "body_json": {
+                            "title": "{{payload.import_package.course_package.course_shell.title}}",
+                        },
+                    }
+                ]
+            },
+        },
+        status="queued",
+        created_at="now",
+        updated_at="now",
+    )
+
+    async def fake_dispatch(backend, payload, task=None):
+        return {"payload": payload}
+
+    scheduler._dispatch_backend = fake_dispatch  # type: ignore[method-assign]
+    result = await scheduler.schedule(task)
+
+    assert result["payload"] == {
+        "connection_actions": [
+            {
+                "operation_id": "createCourse",
+                "body_json": {"title": "World History Survey"},
+            }
+        ]
+    }
+
+
+@pytest.mark.anyio
+async def test_scheduler_custom_http_connection_backend_executes_actions(monkeypatch):
+    from control_plane.scheduler.scheduler import Scheduler
+    from dashboard.models import BotConnection as DashboardBotConnection
+    from dashboard.models import Connection as DashboardConnection
+
+    class FakeQuery:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def filter(self, *args, **kwargs):
+            return self
+
+        def all(self):
+            return list(self._rows)
+
+    class FakeSession:
+        def query(self, model):
+            if model is DashboardBotConnection:
+                return FakeQuery([type("Link", (), {"connection_id": 7})()])
+            if model is DashboardConnection:
+                return FakeQuery(
+                    [
+                        type(
+                            "Conn",
+                            (),
+                            {
+                                "id": 7,
+                                "name": "platform-api",
+                                "kind": "http",
+                                "config_json": json.dumps({"base_url": "https://api.example.test"}),
+                                "auth_json": json.dumps({"type": "api_key", "api_key": "enc:ignored"}),
+                                "schema_text": json.dumps(
+                                    {
+                                        "openapi": "3.1.0",
+                                        "paths": {
+                                            "/courses": {
+                                                "post": {
+                                                    "operationId": "createCourse",
+                                                }
+                                            }
+                                        },
+                                    }
+                                ),
+                            },
+                        )()
+                    ]
+                )
+            raise AssertionError(f"Unexpected model queried: {model}")
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr("dashboard.db.get_db", lambda: FakeSession())
+    monkeypatch.setattr("dashboard.connections_service.resolve_auth_payload", lambda payload: {"type": "api_key", "api_key": "live-key"})
+    monkeypatch.setattr(
+        "dashboard.connections_service.test_http_connection",
+        lambda **kwargs: {
+            "ok": True,
+            "status": 201,
+            "method": "POST",
+            "url": "https://api.example.test/courses",
+            "body_preview": "{\"id\": 42}",
+        },
+    )
+
+    bot_registry = AsyncMock()
+    bot_registry.get.return_value = Bot(
+        id="course-importer",
+        name="Course Importer",
+        role="importer",
+        system_prompt=None,
+        backends=[BackendConfig(type="custom", provider="http_connection", model="attached-http")],
+    )
+    scheduler = Scheduler(bot_registry=bot_registry, worker_registry=AsyncMock())
+    task = Task(
+        id="task-http",
+        bot_id="course-importer",
+        payload={
+            "connection": {"name": "platform-api"},
+            "connection_actions": [
+                {
+                    "operation_id": "createCourse",
+                    "body_json": {"title": "World History Survey"},
+                }
+            ],
+        },
+        status="queued",
+        created_at="now",
+        updated_at="now",
+    )
+
+    result = await scheduler.schedule(task)
+
+    assert result["import_status"] == "success"
+    assert result["connection_name"] == "platform-api"
+    assert result["completed_actions"] == ["createCourse"]
+    assert result["failed_actions"] == []
+    assert result["action_results"][0]["status"] == 201
+
+
+@pytest.mark.anyio
 async def test_scheduler_appends_output_contract_guidance_to_system_prompt():
     from control_plane.scheduler.scheduler import Scheduler
 

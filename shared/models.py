@@ -69,6 +69,8 @@ class BotWorkflowTrigger(BaseModel):
     join_group_field: Optional[str] = None
     join_expected_field: Optional[str] = None
     join_items_alias: Optional[str] = None
+    join_result_field: Optional[str] = None
+    join_result_items_alias: Optional[str] = None
     join_sort_field: Optional[str] = None
     inherit_metadata: bool = True
     title: Optional[str] = None

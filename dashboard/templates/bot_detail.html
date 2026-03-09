@@ -553,6 +553,16 @@
           <input class="form-control" name="join_sort_field" placeholder="lesson_output.lesson_number">
         </div>
       </div>
+      <div class="split-grid" style="grid-template-columns:1fr 1fr;">
+        <div class="form-group">
+          <label>Join Result Field (optional)</label>
+          <input class="form-control" name="join_result_field" placeholder="source_result.lesson_delivery_bundle">
+        </div>
+        <div class="form-group">
+          <label>Join Result Alias (optional)</label>
+          <input class="form-control" name="join_result_items_alias" placeholder="lesson_bundles">
+        </div>
+      </div>
       <div class="mini-note" style="margin-top:-0.25rem;margin-bottom:0.75rem;">Set the join fields when one downstream task should wait for sibling branches and receive their collected payloads as a single array.</div>
       <div class="form-group">
         <label><input type="checkbox" name="enabled" checked> Enabled</label>
@@ -1393,6 +1403,8 @@ function editTrigger(index) {
   form.join_group_field.value = trigger.join_group_field || '';
   form.join_expected_field.value = trigger.join_expected_field || '';
   form.join_items_alias.value = trigger.join_items_alias || '';
+  form.join_result_field.value = trigger.join_result_field || '';
+  form.join_result_items_alias.value = trigger.join_result_items_alias || '';
   form.join_sort_field.value = trigger.join_sort_field || '';
   form.enabled.checked = trigger.enabled !== false;
   form.inherit_metadata.checked = trigger.inherit_metadata !== false;
@@ -1437,6 +1449,8 @@ function saveTriggerForm() {
     join_group_field: String(fd.get('join_group_field') || '').trim() || null,
     join_expected_field: String(fd.get('join_expected_field') || '').trim() || null,
     join_items_alias: String(fd.get('join_items_alias') || '').trim() || null,
+    join_result_field: String(fd.get('join_result_field') || '').trim() || null,
+    join_result_items_alias: String(fd.get('join_result_items_alias') || '').trim() || null,
     join_sort_field: String(fd.get('join_sort_field') || '').trim() || null,
     enabled: form.querySelector('input[name=enabled]').checked,
     inherit_metadata: form.querySelector('input[name=inherit_metadata]').checked,

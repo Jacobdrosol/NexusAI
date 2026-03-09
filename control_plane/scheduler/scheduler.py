@@ -1,7 +1,8 @@
+import asyncio
+import json
 import logging
 import os
 import time
-import json
 from typing import Any, AsyncGenerator
 
 import httpx
@@ -129,6 +130,14 @@ def _transform_template_value(template: Any, payload: Any) -> Any:
         if expr.startswith("json:"):
             mode = "json"
             path = expr[5:].strip()
+        if path.startswith("render:"):
+            render_path = path[len("render:") :].strip()
+            if render_path.startswith("payload."):
+                render_path = render_path[8:].strip()
+            rendered = _transform_template_value(_lookup_payload_path(payload, render_path), payload)
+            if mode == "json":
+                return rendered
+            return rendered
         if path.startswith("coalesce:"):
             candidates = _split_transform_expr_list(path[len("coalesce:") :])
             for candidate in candidates:
@@ -317,8 +326,115 @@ class Scheduler:
             except Exception as e:
                 raise BackendError(f"Worker not found: {backend.worker_id}") from e
             return await self._dispatch_to_worker(worker, backend, safe_payload)
+        elif backend.type == "custom":
+            return await self._dispatch_custom_backend(backend, safe_payload, task=task)
         else:
             raise BackendError(f"Unsupported backend type: {backend.type}")
+
+    async def _dispatch_custom_backend(
+        self,
+        backend: BackendConfig,
+        payload: Any,
+        task: Task | None = None,
+    ) -> Any:
+        provider = str(backend.provider or "").strip().lower()
+        if provider == "http_connection":
+            return await self._dispatch_http_connection_backend(payload, task=task)
+        raise BackendError(f"Unsupported custom backend provider: {backend.provider}")
+
+    async def _dispatch_http_connection_backend(self, payload: Any, task: Task | None = None) -> Any:
+        if task is None:
+            raise BackendError("http_connection backend requires a task context")
+        if not isinstance(payload, dict):
+            raise BackendError("http_connection backend requires a JSON object payload")
+        return await asyncio.to_thread(self._run_http_connection_backend_sync, payload, task.bot_id)
+
+    def _run_http_connection_backend_sync(self, payload: dict[str, Any], bot_id: str) -> dict[str, Any]:
+        from dashboard.connections_service import resolve_auth_payload, test_http_connection
+        from dashboard.db import get_db
+        from dashboard.models import BotConnection, Connection
+
+        connection_ref = payload.get("connection") if isinstance(payload.get("connection"), dict) else {}
+        requested_name = str(connection_ref.get("name") or payload.get("connection_name") or "").strip()
+        requested_id = str(connection_ref.get("id") or payload.get("connection_id") or "").strip()
+        continue_on_error = bool(payload.get("continue_on_error", False))
+
+        raw_actions = payload.get("connection_actions")
+        if isinstance(raw_actions, dict):
+            actions = [raw_actions]
+        elif isinstance(raw_actions, list):
+            actions = [item for item in raw_actions if isinstance(item, dict)]
+        elif isinstance(payload.get("connection_action"), dict):
+            actions = [payload["connection_action"]]
+        else:
+            actions = []
+        if not actions:
+            raise BackendError("http_connection backend requires at least one connection action")
+
+        db = get_db()
+        try:
+            links = db.query(BotConnection).filter(BotConnection.bot_ref == str(bot_id)).all()
+            connection_ids = [int(link.connection_id) for link in links]
+            if not connection_ids:
+                raise BackendError(f"Bot {bot_id} has no attached connections")
+            rows = db.query(Connection).filter(Connection.id.in_(connection_ids)).all()
+            if requested_id:
+                connection = next((row for row in rows if str(row.id) == requested_id), None)
+            elif requested_name:
+                connection = next((row for row in rows if str(row.name) == requested_name), None)
+            elif len(rows) == 1:
+                connection = rows[0]
+            else:
+                raise BackendError("Multiple bot connections are attached; specify connection.name or connection.id")
+            if connection is None:
+                raise BackendError("Requested bot connection was not found")
+            if str(connection.kind or "").strip().lower() != "http":
+                raise BackendError("http_connection backend only supports HTTP connections")
+
+            config = json.loads(connection.config_json or "{}")
+            auth = resolve_auth_payload(json.loads(connection.auth_json or "{}"))
+            schema_text = str(connection.schema_text or "")
+        finally:
+            db.close()
+
+        action_results: list[dict[str, Any]] = []
+        warnings: list[str] = []
+        errors: list[str] = []
+        completed_actions: list[str] = []
+        failed_actions: list[str] = []
+
+        for index, action in enumerate(actions):
+            op_id = str(action.get("operation_id") or action.get("path") or f"action_{index + 1}").strip()
+            result = test_http_connection(
+                config=config if isinstance(config, dict) else {},
+                auth=auth if isinstance(auth, dict) else {},
+                schema_text=schema_text,
+                payload=action,
+            )
+            action_result = {"operation_id": op_id, **result}
+            action_results.append(action_result)
+            if bool(result.get("ok")):
+                completed_actions.append(op_id)
+            else:
+                failed_actions.append(op_id)
+                detail = str(result.get("body_preview") or result.get("error") or "").strip()
+                errors.append(f"{op_id} failed with status {result.get('status')}: {detail}".strip())
+                if not continue_on_error:
+                    break
+
+        if failed_actions and continue_on_error:
+            warnings.append("One or more connection actions failed while continue_on_error was enabled.")
+
+        return {
+            "import_status": "success" if not failed_actions else "failed",
+            "connection_name": str(connection.name),
+            "connection_id": int(connection.id),
+            "completed_actions": completed_actions,
+            "failed_actions": failed_actions,
+            "action_results": action_results,
+            "warnings": warnings,
+            "errors": errors,
+        }
 
     def _apply_input_transform(self, bot: Any, payload: Any) -> Any:
         routing_rules = getattr(bot, "routing_rules", None)

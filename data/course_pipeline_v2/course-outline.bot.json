@@ -1,0 +1,167 @@
+{
+  "bot": {
+    "backends": [
+      {
+        "api_key_ref": "Ollama_Cloud1",
+        "gpu_id": null,
+        "model": "gpt-oss:120b-cloud",
+        "params": {
+          "main_gpu": null,
+          "max_tokens": 8192,
+          "num_ctx": null,
+          "num_gpu": null,
+          "num_thread": null,
+          "repeat_penalty": null,
+          "temperature": null,
+          "top_p": null
+        },
+        "provider": "ollama_cloud",
+        "type": "cloud_api",
+        "worker_id": null
+      }
+    ],
+    "enabled": true,
+    "id": "course-outline",
+    "name": "Course Outline",
+    "priority": 2,
+    "role": "course-outline",
+    "routing_rules": {
+      "input_contract": {
+        "description": "Build the course shell and the full unit outline from a normalized course brief.",
+        "enabled": true,
+        "format": "json_object",
+        "non_empty_fields": [
+          "workflow_type",
+          "course_brief.topic",
+          "course_brief.subject",
+          "course_brief.scope",
+          "course_brief.goals",
+          "generation_settings.allowed_lesson_blocks"
+        ],
+        "required_fields": [
+          "workflow_type",
+          "course_brief",
+          "generation_settings",
+          "revision_context"
+        ]
+      },
+      "input_transform": {
+        "description": "",
+        "enabled": false,
+        "template": null
+      },
+      "launch_profile": {
+        "description": "",
+        "enabled": false,
+        "label": "",
+        "payload": {},
+        "priority": 0,
+        "project_id": "",
+        "show_on_overview": false,
+        "show_on_tasks": false
+      },
+      "output_contract": {
+        "defaults_template": {},
+        "description": "Return the complete course shell and outline as strict JSON.",
+        "enabled": true,
+        "fallback_mode": "disabled",
+        "format": "json_object",
+        "mode": "model_output",
+        "non_empty_fields": [
+          "course_shell.title",
+          "course_shell.summary",
+          "course_shell.goals",
+          "course_structure.unit_count",
+          "course_structure.units"
+        ],
+        "required_fields": [
+          "course_shell",
+          "course_structure",
+          "design_rationale"
+        ]
+      },
+      "workflow": {
+        "notes": "Generate the course outline, then route it to outline QC.",
+        "triggers": [
+          {
+            "condition": "has_result",
+            "enabled": true,
+            "event": "task_completed",
+            "fan_out_alias": null,
+            "fan_out_field": null,
+            "fan_out_index_alias": null,
+            "id": "to-course-outline-qc",
+            "inherit_metadata": true,
+            "join_expected_field": null,
+            "join_group_field": null,
+            "join_items_alias": null,
+            "join_result_field": null,
+            "join_result_items_alias": null,
+            "join_sort_field": null,
+            "payload_template": {
+              "course_brief": "{{source_payload.course_brief}}",
+              "course_shell": "{{source_result.course_shell}}",
+              "course_structure": "{{source_result.course_structure}}",
+              "design_rationale": "{{source_result.design_rationale}}",
+              "generation_settings": "{{source_payload.generation_settings}}",
+              "retry_payload": {
+                "course_brief": "{{source_payload.course_brief}}",
+                "generation_settings": "{{source_payload.generation_settings}}",
+                "revision_context": "{{source_payload.revision_context}}",
+                "workflow_type": "{{source_payload.workflow_type}}"
+              },
+              "workflow_type": "{{source_payload.workflow_type}}"
+            },
+            "result_equals": null,
+            "result_field": null,
+            "target_bot_id": "course-outline-qc",
+            "title": "to-course-outline-qc"
+          }
+        ]
+      }
+    },
+    "system_prompt": "Design the complete course shell and course outline. Return JSON only. Preserve provided unit intent and do not reduce scope.",
+    "workflow": {
+      "notes": "Generate the course outline, then route it to outline QC.",
+      "triggers": [
+        {
+          "condition": "has_result",
+          "enabled": true,
+          "event": "task_completed",
+          "fan_out_alias": null,
+          "fan_out_field": null,
+          "fan_out_index_alias": null,
+          "id": "to-course-outline-qc",
+          "inherit_metadata": true,
+          "join_expected_field": null,
+          "join_group_field": null,
+          "join_items_alias": null,
+          "join_result_field": null,
+          "join_result_items_alias": null,
+          "join_sort_field": null,
+          "payload_template": {
+            "course_brief": "{{source_payload.course_brief}}",
+            "course_shell": "{{source_result.course_shell}}",
+            "course_structure": "{{source_result.course_structure}}",
+            "design_rationale": "{{source_result.design_rationale}}",
+            "generation_settings": "{{source_payload.generation_settings}}",
+            "retry_payload": {
+              "course_brief": "{{source_payload.course_brief}}",
+              "generation_settings": "{{source_payload.generation_settings}}",
+              "revision_context": "{{source_payload.revision_context}}",
+              "workflow_type": "{{source_payload.workflow_type}}"
+            },
+            "workflow_type": "{{source_payload.workflow_type}}"
+          },
+          "result_equals": null,
+          "result_field": null,
+          "target_bot_id": "course-outline-qc",
+          "title": "to-course-outline-qc"
+        }
+      ]
+    }
+  },
+  "connections": [],
+  "exported_at": "2026-03-09T15:57:16.841484+00:00",
+  "schema_version": "nexusai.bot-export.v1"
+}

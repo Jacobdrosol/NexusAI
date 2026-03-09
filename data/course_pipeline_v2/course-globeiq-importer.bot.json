@@ -1,0 +1,94 @@
+{
+  "bot": {
+    "backends": [
+      {
+        "api_key_ref": null,
+        "gpu_id": null,
+        "model": "deterministic-runtime",
+        "params": null,
+        "provider": "http_connection",
+        "type": "custom",
+        "worker_id": null
+      }
+    ],
+    "enabled": true,
+    "id": "course-globeiq-importer",
+    "name": "Course Importer",
+    "priority": 2,
+    "role": "course-importer",
+    "routing_rules": {
+      "input_contract": {
+        "description": "Execute the configured platform import actions against one attached HTTP connection.",
+        "enabled": true,
+        "format": "json_object",
+        "non_empty_fields": [
+          "workflow_type",
+          "delivery_package.course_package.course_shell.title",
+          "import_connection_name",
+          "generation_settings.platform_import_actions"
+        ],
+        "required_fields": [
+          "workflow_type",
+          "generation_settings",
+          "delivery_package",
+          "import_connection_name"
+        ]
+      },
+      "input_transform": {
+        "description": "Render the configured platform import action templates into concrete HTTP actions.",
+        "enabled": true,
+        "template": {
+          "connection": {
+            "name": "{{payload.import_connection_name}}"
+          },
+          "connection_actions": "{{render:payload.generation_settings.platform_import_actions}}",
+          "continue_on_error": false
+        }
+      },
+      "launch_profile": {
+        "description": "",
+        "enabled": false,
+        "label": "",
+        "payload": {},
+        "priority": 0,
+        "project_id": "",
+        "show_on_overview": false,
+        "show_on_tasks": false
+      },
+      "output_contract": {
+        "defaults_template": {},
+        "description": "Return the actual import execution result from the configured HTTP connection actions.",
+        "enabled": true,
+        "fallback_mode": "disabled",
+        "format": "json_object",
+        "mode": "model_output",
+        "non_empty_fields": [
+          "import_status",
+          "connection_name",
+          "action_results"
+        ],
+        "required_fields": [
+          "import_status",
+          "connection_name",
+          "completed_actions",
+          "failed_actions",
+          "action_results",
+          "warnings",
+          "errors"
+        ]
+      },
+      "workflow": {
+        "notes": "Import execution is terminal.",
+        "triggers": []
+      }
+    },
+    "system_prompt": "Execute the configured platform import actions deterministically.",
+    "workflow": {
+      "notes": "Import execution is terminal.",
+      "triggers": []
+    }
+  },
+  "connections": [],
+  "exported_at": "2026-03-09T15:57:16.842485+00:00",
+  "schema_version": "nexusai.bot-export.v1"
+}

@@ -1,0 +1,166 @@
+{
+  "bot": {
+    "backends": [
+      {
+        "api_key_ref": "Ollama_Cloud1",
+        "gpu_id": null,
+        "model": "glm-5:cloud",
+        "params": {
+          "main_gpu": null,
+          "max_tokens": 4096,
+          "num_ctx": null,
+          "num_gpu": null,
+          "num_thread": null,
+          "repeat_penalty": null,
+          "temperature": null,
+          "top_p": null
+        },
+        "provider": "ollama_cloud",
+        "type": "cloud_api",
+        "worker_id": null
+      }
+    ],
+    "enabled": true,
+    "id": "course-badge-designer",
+    "name": "Course Badge Designer",
+    "priority": 2,
+    "role": "course-badge-designer",
+    "routing_rules": {
+      "input_contract": {
+        "description": "Design one badge specification for the finished course package.",
+        "enabled": true,
+        "format": "json_object",
+        "non_empty_fields": [
+          "course_package.course_shell.title",
+          "generation_settings.badge_settings"
+        ],
+        "required_fields": [
+          "workflow_type",
+          "course_brief",
+          "generation_settings",
+          "course_package",
+          "revision_context"
+        ]
+      },
+      "input_transform": {
+        "description": "",
+        "enabled": false,
+        "template": null
+      },
+      "launch_profile": {
+        "description": "",
+        "enabled": false,
+        "label": "",
+        "payload": {},
+        "priority": 0,
+        "project_id": "",
+        "show_on_overview": false,
+        "show_on_tasks": false
+      },
+      "output_contract": {
+        "defaults_template": {},
+        "description": "Return one badge specification or an explicit skipped status.",
+        "enabled": true,
+        "fallback_mode": "disabled",
+        "format": "json_object",
+        "mode": "model_output",
+        "non_empty_fields": [
+          "badge_status",
+          "badge_spec.name",
+          "badge_spec.image_prompt"
+        ],
+        "required_fields": [
+          "badge_status",
+          "badge_spec",
+          "warnings"
+        ]
+      },
+      "workflow": {
+        "notes": "Forward the badge specification into deterministic final packaging.",
+        "triggers": [
+          {
+            "condition": "has_result",
+            "enabled": true,
+            "event": "task_completed",
+            "fan_out_alias": null,
+            "fan_out_field": null,
+            "fan_out_index_alias": null,
+            "id": "badge-to-course-packager",
+            "inherit_metadata": true,
+            "join_expected_field": null,
+            "join_group_field": null,
+            "join_items_alias": null,
+            "join_result_field": null,
+            "join_result_items_alias": null,
+            "join_sort_field": null,
+            "payload_template": {
+              "badge_spec": "{{source_result.badge_spec}}",
+              "badge_status": "{{source_result.badge_status}}",
+              "badge_warnings": "{{source_result.warnings}}",
+              "course_brief": "{{source_payload.course_brief}}",
+              "course_package": "{{source_payload.course_package}}",
+              "generation_settings": "{{source_payload.generation_settings}}",
+              "retry_payload": {
+                "course_brief": "{{source_payload.course_brief}}",
+                "course_package": "{{source_payload.course_package}}",
+                "generation_settings": "{{source_payload.generation_settings}}",
+                "revision_context": "{{source_payload.revision_context}}",
+                "workflow_type": "{{source_payload.workflow_type}}"
+              },
+              "workflow_type": "{{source_payload.workflow_type}}"
+            },
+            "result_equals": null,
+            "result_field": null,
+            "target_bot_id": "course-packager",
+            "title": "badge-to-course-packager"
+          }
+        ]
+      }
+    },
+    "system_prompt": "Design one course badge specification. Return JSON only. If badges are disabled, return an explicit skipped status.",
+    "workflow": {
+      "notes": "Forward the badge specification into deterministic final packaging.",
+      "triggers": [
+        {
+          "condition": "has_result",
+          "enabled": true,
+          "event": "task_completed",
+          "fan_out_alias": null,
+          "fan_out_field": null,
+          "fan_out_index_alias": null,
+          "id": "badge-to-course-packager",
+          "inherit_metadata": true,
+          "join_expected_field": null,
+          "join_group_field": null,
+          "join_items_alias": null,
+          "join_result_field": null,
+          "join_result_items_alias": null,
+          "join_sort_field": null,
+          "payload_template": {
+            "badge_spec": "{{source_result.badge_spec}}",
+            "badge_status": "{{source_result.badge_status}}",
+            "badge_warnings": "{{source_result.warnings}}",
+            "course_brief": "{{source_payload.course_brief}}",
+            "course_package": "{{source_payload.course_package}}",
+            "generation_settings": "{{source_payload.generation_settings}}",
+            "retry_payload": {
+              "course_brief": "{{source_payload.course_brief}}",
+              "course_package": "{{source_payload.course_package}}",
+              "generation_settings": "{{source_payload.generation_settings}}",
+              "revision_context": "{{source_payload.revision_context}}",
+              "workflow_type": "{{source_payload.workflow_type}}"
+            },
+            "workflow_type": "{{source_payload.workflow_type}}"
+          },
+          "result_equals": null,
+          "result_field": null,
+          "target_bot_id": "course-packager",
+          "title": "badge-to-course-packager"
+        }
+      ]
+    }
+  },
+  "connections": [],
+  "exported_at": "2026-03-09T15:57:16.842485+00:00",
+  "schema_version": "nexusai.bot-export.v1"
+}

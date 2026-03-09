@@ -127,7 +127,8 @@ Dashboard and workflow:
 - Improved dashboard link contrast for worker and bot names on dark tables/cards.
 - Worker detail pages with live load, queue, and GPU graphs.
 - Bot detail editor with backend chain management, workflow triggers, saved input contracts, test runs, run history, and task board.
-- Bot import/export from the detail page, including bot configuration and bot-scoped connections, with overwrite confirmation on ID conflicts.
+- Bot export from the bot detail page and bot import from the bots index page, including bot configuration and bot-scoped connections, with overwrite confirmation on ID conflicts.
+- Generated reference bundles for the hardened course pipeline in [`data/course_pipeline_v2`](/Users/jacob/Documents/GitHub/NexusAI/data/course_pipeline_v2), documented in [`docs/COURSE_PIPELINE_V2.md`](/Users/jacob/Documents/GitHub/NexusAI/docs/COURSE_PIPELINE_V2.md).
 - Bot-scoped external Connections workspace for HTTP/OpenAPI and database integration setup.
 - OpenAPI action discovery and in-dashboard connection test runner for bot connections.
 - Project detail pages with bridge management and scoped resources.

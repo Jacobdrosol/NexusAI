@@ -167,6 +167,14 @@ def _resolve_transform_value(expr: str, payload: Any, notes: list[str]) -> Any:
     if raw_expr.startswith("json:"):
         mode = "json"
         raw_expr = raw_expr[5:].strip()
+    if raw_expr.startswith("render:"):
+        render_path = raw_expr[len("render:") :].strip()
+        if render_path.startswith("payload."):
+            render_path = render_path[8:].strip()
+        rendered = _transform_template_value(_lookup_payload_path(payload, render_path), payload, notes)
+        if mode == "json":
+            return rendered
+        return rendered
     if raw_expr.startswith("coalesce:"):
         candidates = _split_transform_expr_list(raw_expr[len("coalesce:") :])
         for candidate in candidates:
@@ -1406,11 +1414,22 @@ class TaskManager:
             "instruction": f"Triggered by bot {task.bot_id} task {task.id}",
         }
         if isinstance(payload_template, dict):
+            notes: list[str] = []
+            transformed = _transform_template_value(payload_template, base_payload, notes)
             merged = dict(base_payload)
-            merged.update(payload_template)
+            if isinstance(transformed, dict):
+                merged.update(transformed)
+            else:
+                merged["payload_template_error"] = "Trigger payload template did not resolve to a JSON object."
+            if notes:
+                merged["trigger_template_notes"] = notes
             return merged
         if payload_template is not None:
-            return payload_template
+            notes: list[str] = []
+            transformed = _transform_template_value(payload_template, base_payload, notes)
+            if notes and isinstance(transformed, dict):
+                transformed["trigger_template_notes"] = notes
+            return transformed
         return base_payload
 
     def _build_trigger_payloads(self, task: Task, trigger: Any) -> List[Any]:
@@ -1475,6 +1494,8 @@ class TaskManager:
         group_field = str(getattr(trigger, "join_group_field", "") or "").strip()
         expected_field = str(getattr(trigger, "join_expected_field", "") or "").strip()
         items_alias = str(getattr(trigger, "join_items_alias", "") or "").strip() or "items"
+        result_field = str(getattr(trigger, "join_result_field", "") or "").strip()
+        result_items_alias = str(getattr(trigger, "join_result_items_alias", "") or "").strip() or "join_result_items"
         sort_field = str(getattr(trigger, "join_sort_field", "") or "").strip()
 
         expected_raw = self._lookup_result_field(payload, expected_field)
@@ -1499,6 +1520,12 @@ class TaskManager:
             for item in aggregate_payload[items_alias]
             if isinstance(item, dict) and item.get("source_result") is not None
         ]
+        if result_field:
+            aggregate_payload[result_items_alias] = [
+                self._lookup_result_field(item, result_field)
+                for item in aggregate_payload[items_alias]
+                if isinstance(item, dict) and self._lookup_result_field(item, result_field) is not None
+            ]
         aggregate_payload["join_task_ids"] = [
             str(item.get("source_task_id"))
             for item in aggregate_payload[items_alias]
@@ -1590,6 +1617,14 @@ class TaskManager:
                 if source_bot_id:
                     return source_bot_id
             return None
+        if raw.startswith("{{") and raw.endswith("}}"):
+            expr = raw[2:-2].strip()
+            if expr.startswith("result.") and isinstance(task.result, dict):
+                resolved = self._lookup_result_field(task.result, expr[7:].strip())
+                return str(resolved).strip() or None if resolved is not None else None
+            if expr.startswith("payload.") and isinstance(task.payload, dict):
+                resolved = self._lookup_result_field(task.payload, expr[8:].strip())
+                return str(resolved).strip() or None if resolved is not None else None
         return raw
 
     def _trigger_matches_result(self, task: Task, trigger: Any) -> bool:

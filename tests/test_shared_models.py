@@ -129,10 +129,14 @@ def test_bot_workflow_trigger_supports_join_fields():
         join_group_field="unit_blueprint.unit_number",
         join_expected_field="source_payload.fanout_count",
         join_items_alias="lesson_bundles",
+        join_result_field="source_result.approved_lesson",
+        join_result_items_alias="approved_lessons",
         join_sort_field="lesson_output.lesson_number",
     )
 
     assert trigger.join_group_field == "unit_blueprint.unit_number"
     assert trigger.join_expected_field == "source_payload.fanout_count"
     assert trigger.join_items_alias == "lesson_bundles"
+    assert trigger.join_result_field == "source_result.approved_lesson"
+    assert trigger.join_result_items_alias == "approved_lessons"
     assert trigger.join_sort_field == "lesson_output.lesson_number"
