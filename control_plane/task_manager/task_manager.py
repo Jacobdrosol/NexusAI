@@ -210,6 +210,32 @@ def _is_empty_contract_value(value: Any) -> bool:
     return value in (None, "", [], {})
 
 
+def _missing_payload_fields(payload: Any, fields: list[str]) -> list[str]:
+    if not isinstance(payload, dict):
+        return [str(field) for field in fields]
+    missing: list[str] = []
+    for field in fields:
+        path = str(field).strip()
+        if not path:
+            continue
+        if _lookup_payload_path(payload, path) is None:
+            missing.append(path)
+    return missing
+
+
+def _empty_payload_fields(payload: Any, fields: list[str]) -> list[str]:
+    if not isinstance(payload, dict):
+        return [str(field) for field in fields]
+    empty: list[str] = []
+    for field in fields:
+        path = str(field).strip()
+        if not path:
+            continue
+        if _is_empty_contract_value(_lookup_payload_path(payload, path)):
+            empty.append(path)
+    return empty
+
+
 def _merge_with_contract_defaults(value: Any, defaults: Any) -> Any:
     if defaults is None:
         return value
@@ -779,6 +805,7 @@ class TaskManager:
         depends_on: Optional[List[str]] = None,
     ) -> Task:
         await self._ensure_db()
+        await self._validate_task_payload(bot_id, payload)
         dependencies = depends_on or []
         async with self._lock:
             for dep_id in dependencies:
@@ -994,6 +1021,46 @@ class TaskManager:
             if isinstance(contract, dict):
                 return contract
         return {}
+
+    async def _bot_input_contract(self, bot_id: str) -> dict[str, Any]:
+        if self._bot_registry is None:
+            return {}
+        try:
+            bot = await self._bot_registry.get(bot_id)
+        except Exception:
+            return {}
+        routing_rules = getattr(bot, "routing_rules", None)
+        if isinstance(routing_rules, dict):
+            contract = routing_rules.get("input_contract")
+            if isinstance(contract, dict):
+                return contract
+        return {}
+
+    async def _validate_task_payload(self, bot_id: str, payload: Any) -> None:
+        contract = await self._bot_input_contract(bot_id)
+        if not contract:
+            return
+        enabled = bool(contract.get("enabled", True))
+        if not enabled:
+            return
+
+        payload_format = str(contract.get("format") or "any").strip().lower()
+        required_fields = contract.get("required_fields") if isinstance(contract.get("required_fields"), list) else []
+        non_empty_fields = contract.get("non_empty_fields") if isinstance(contract.get("non_empty_fields"), list) else []
+
+        if payload_format == "json_object" and not isinstance(payload, dict):
+            raise ValueError("input contract requires a JSON object payload")
+        if payload_format == "json_array" and not isinstance(payload, list):
+            raise ValueError("input contract requires a JSON array payload")
+
+        if required_fields:
+            missing = _missing_payload_fields(payload, [str(field) for field in required_fields])
+            if missing:
+                raise ValueError(f"input contract missing required fields: {', '.join(missing)}")
+        if non_empty_fields:
+            empty = _empty_payload_fields(payload, [str(field) for field in non_empty_fields])
+            if empty:
+                raise ValueError(f"input contract requires non-empty fields: {', '.join(empty)}")
 
     async def _bot_output_contract_mode(self, bot_id: str) -> str:
         contract = await self._bot_output_contract(bot_id)
@@ -1427,6 +1494,16 @@ class TaskManager:
 
         aggregate_payload = dict(payload)
         aggregate_payload[items_alias] = sibling_payloads[:expected_count]
+        aggregate_payload["join_results"] = [
+            item.get("source_result")
+            for item in aggregate_payload[items_alias]
+            if isinstance(item, dict) and item.get("source_result") is not None
+        ]
+        aggregate_payload["join_task_ids"] = [
+            str(item.get("source_task_id"))
+            for item in aggregate_payload[items_alias]
+            if isinstance(item, dict) and item.get("source_task_id")
+        ]
         aggregate_payload["join_group"] = group_value
         aggregate_payload["join_count"] = len(aggregate_payload[items_alias])
         aggregate_payload["join_expected_count"] = expected_count

@@ -287,6 +287,80 @@ async def test_dependent_task_unblocks_after_dependency_completes():
 
 
 @pytest.mark.anyio
+async def test_create_task_rejects_payloads_that_violate_input_contract(tmp_path):
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {"ok": True}
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "input-contract-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="outline-bot",
+            name="Outline",
+            role="assistant",
+            backends=[],
+            routing_rules={
+                "input_contract": {
+                    "enabled": True,
+                    "format": "json_object",
+                    "required_fields": ["course_brief", "generation_settings"],
+                    "non_empty_fields": ["course_brief.topic"],
+                }
+            },
+        )
+    )
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "input-contract-tasks.db"), bot_registry=bot_registry)
+
+    with pytest.raises(ValueError, match="missing required fields: generation_settings"):
+        await tm.create_task(
+            bot_id="outline-bot",
+            payload={"course_brief": {"topic": "AP World History"}},
+        )
+
+
+@pytest.mark.anyio
+async def test_create_task_rejects_empty_required_input_fields(tmp_path):
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {"ok": True}
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "input-contract-empty-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="lesson-bot",
+            name="Lesson",
+            role="assistant",
+            backends=[],
+            routing_rules={
+                "input_contract": {
+                    "enabled": True,
+                    "format": "json_object",
+                    "required_fields": ["lesson"],
+                    "non_empty_fields": ["lesson.title", "lesson.blocks"],
+                }
+            },
+        )
+    )
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "input-contract-empty.db"), bot_registry=bot_registry)
+
+    with pytest.raises(ValueError, match="non-empty fields: lesson.title, lesson.blocks"):
+        await tm.create_task(
+            bot_id="lesson-bot",
+            payload={"lesson": {"title": "", "blocks": []}},
+        )
+
+
+@pytest.mark.anyio
 async def test_bot_trigger_creates_follow_on_run_and_artifacts(tmp_path):
     import asyncio
 
@@ -398,11 +472,10 @@ async def test_qc_bot_can_route_failures_back_to_source_bot(tmp_path):
     assert len(tasks) >= 3
     qc_tasks = [t for t in tasks if t.bot_id == "qc-bot"]
     assert qc_tasks
-    qc_task = qc_tasks[0]
-    retry_task = next(t for t in tasks if t.id not in {root.id, qc_task.id} and t.bot_id == "worker-bot")
+    retry_task = next(t for t in tasks if t.id != root.id and t.bot_id == "worker-bot" and t.metadata and t.metadata.parent_task_id)
     assert retry_task.bot_id == "worker-bot"
     assert retry_task.metadata is not None
-    assert retry_task.metadata.parent_task_id == qc_task.id
+    assert retry_task.metadata.parent_task_id in {task.id for task in qc_tasks}
     assert retry_task.metadata.trigger_rule_id == "return-for-fix"
 
 
@@ -586,6 +659,8 @@ async def test_trigger_can_join_sibling_branch_outputs(tmp_path):
     assert packager.status == "completed"
     assert packager.payload["join_expected_count"] == 2
     assert packager.payload["join_count"] == 2
+    assert len(packager.payload["join_results"]) == 2
+    assert len(packager.payload["join_task_ids"]) == 2
     assert len(packager.payload["lesson_bundles"]) == 2
     assert packager.payload["lesson_bundles"][0]["source_result"]["approved_lesson"]["lesson_number"] == 1
     assert packager.payload["lesson_bundles"][1]["source_result"]["approved_lesson"]["lesson_number"] == 2

@@ -255,6 +255,7 @@ Current capabilities:
 - Trigger another bot when a task completes or fails.
 - Gate triggers on `always`, `has_result`, or `has_error`.
 - Match trigger routing on a structured result field such as `qc_status=pass`.
+- Enforce input contracts before a task is queued so malformed upstream payloads fail fast.
 - Enforce output contracts with required top-level fields, required non-empty nested fields, and configurable fallback policy.
 - Preserve project/conversation metadata across triggered runs.
 - Queue one-off bot test runs from the dashboard.
@@ -279,10 +280,12 @@ QC pattern:
 
 Recommended contract settings for long multi-stage content pipelines:
 
+- Use `input_contract.required_fields` and `input_contract.non_empty_fields` so every stage rejects malformed or partial upstream payloads before inference starts.
 - Use `required_fields` for the structural envelope a stage must return.
 - Use `non_empty_fields` for the fields that prove the stage actually did the work, such as `course_structure.units`, `unit_blueprint.lesson_plans`, or `lesson_output.blocks`.
 - Set `fallback_mode=disabled` for generation and QC stages where silent backfill would create false positives.
 - Reserve `fallback_mode=missing_only` or `fallback_mode=parse_failure` for intake/normalization bots where deterministic defaults are intentional.
+- For join aggregators, consume the collected branch payload array plus the helper fields `join_results` and `join_task_ids` instead of reconstructing the merge from deeply nested wrappers.
 
 ---
 

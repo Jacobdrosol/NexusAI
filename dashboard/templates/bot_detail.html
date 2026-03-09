@@ -124,6 +124,27 @@
     </div>
   </div>
   <p class="mini-note" style="margin-bottom:0.75rem;">Define operator-facing fields for this bot's task input. The same contract is used in the test-run modal, and advanced users can still send raw JSON overrides.</p>
+  <div class="split-grid" style="grid-template-columns:1fr 1fr 1fr;">
+    <div class="form-group">
+      <label><input type="checkbox" id="input-contract-enabled" checked> Enforce input contract</label>
+    </div>
+    <div class="form-group">
+      <label>Payload Format</label>
+      <select class="form-control" id="input-contract-format">
+        <option value="any">Any</option>
+        <option value="json_object">JSON Object</option>
+        <option value="json_array">JSON Array</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Required Fields (JSON array)</label>
+      <input class="form-control" id="input-contract-required-fields" placeholder='["course_brief","generation_settings"]'>
+    </div>
+  </div>
+  <div class="form-group">
+    <label>Required Non-Empty Fields (JSON array, optional)</label>
+    <input class="form-control" id="input-contract-non-empty-fields" placeholder='["course_brief.topic","generation_settings.allowed_lesson_blocks"]'>
+  </div>
   <div class="form-group">
     <label>Operator Notes</label>
     <textarea class="form-control" id="input-contract-description" rows="3" placeholder="Describe what this bot expects and how operators should fill it out."></textarea>
@@ -685,6 +706,10 @@ function openTestRun() {
 function normalizedInputContract() {
   const contract = BOT.input_contract && typeof BOT.input_contract === 'object' ? BOT.input_contract : {};
   return {
+    enabled: contract.enabled !== false,
+    format: ['any', 'json_object', 'json_array'].includes(String(contract.format || '').trim()) ? String(contract.format || '').trim() : 'any',
+    required_fields: Array.isArray(contract.required_fields) ? contract.required_fields : [],
+    non_empty_fields: Array.isArray(contract.non_empty_fields) ? contract.non_empty_fields : [],
     description: String(contract.description || '').trim(),
     form_fields: Array.isArray(contract.form_fields) ? contract.form_fields : [],
     default_payload: contract.default_payload && typeof contract.default_payload === 'object' && !Array.isArray(contract.default_payload)
@@ -710,9 +735,17 @@ function botPayloadForSave() {
 
 function loadInputContractEditor() {
   const contract = normalizedInputContract();
+  const enabled = document.getElementById('input-contract-enabled');
+  const format = document.getElementById('input-contract-format');
+  const required = document.getElementById('input-contract-required-fields');
+  const nonEmpty = document.getElementById('input-contract-non-empty-fields');
   const description = document.getElementById('input-contract-description');
   const fields = document.getElementById('input-contract-fields');
   const defaults = document.getElementById('input-contract-default-payload');
+  if (enabled) enabled.checked = contract.enabled !== false;
+  if (format) format.value = contract.format || 'any';
+  if (required) required.value = JSON.stringify(contract.required_fields || []);
+  if (nonEmpty) nonEmpty.value = JSON.stringify(contract.non_empty_fields || []);
   if (description) description.value = contract.description;
   if (fields) fields.value = JSON.stringify(contract.form_fields, null, 2);
   if (defaults) defaults.value = JSON.stringify(contract.default_payload, null, 2);
@@ -722,8 +755,36 @@ function saveInputContract() {
   const description = String(document.getElementById('input-contract-description')?.value || '').trim();
   const rawFields = String(document.getElementById('input-contract-fields')?.value || '').trim();
   const rawDefaults = String(document.getElementById('input-contract-default-payload')?.value || '').trim();
+  const rawRequiredFields = String(document.getElementById('input-contract-required-fields')?.value || '').trim();
+  const rawNonEmptyFields = String(document.getElementById('input-contract-non-empty-fields')?.value || '').trim();
   let formFields = [];
   let defaultPayload = {};
+  let requiredFields = [];
+  let nonEmptyFields = [];
+  if (rawRequiredFields) {
+    try {
+      requiredFields = JSON.parse(rawRequiredFields);
+    } catch (err) {
+      alert('Input contract required fields must be valid JSON.');
+      return;
+    }
+  }
+  if (!Array.isArray(requiredFields)) {
+    alert('Input contract required fields must be a JSON array.');
+    return;
+  }
+  if (rawNonEmptyFields) {
+    try {
+      nonEmptyFields = JSON.parse(rawNonEmptyFields);
+    } catch (err) {
+      alert('Input contract required non-empty fields must be valid JSON.');
+      return;
+    }
+  }
+  if (!Array.isArray(nonEmptyFields)) {
+    alert('Input contract required non-empty fields must be a JSON array.');
+    return;
+  }
   if (rawFields) {
     try {
       formFields = JSON.parse(rawFields);
@@ -749,6 +810,10 @@ function saveInputContract() {
     return;
   }
   BOT.input_contract = {
+    enabled: document.getElementById('input-contract-enabled').checked,
+    format: String(document.getElementById('input-contract-format')?.value || 'any'),
+    required_fields: requiredFields,
+    non_empty_fields: nonEmptyFields,
     description,
     form_fields: formFields,
     default_payload: defaultPayload,
