@@ -4,8 +4,13 @@
 {% block content %}
 <div class="page-header">
   <h1>Bots</h1>
-  <button class="btn btn-primary" onclick="showAddBot()">+ Add Bot</button>
+  <div style="display:flex;gap:0.5rem;">
+    <button class="btn" type="button" onclick="triggerBotImport()">Import Bot</button>
+    <button class="btn btn-primary" onclick="showAddBot()">+ Add Bot</button>
+  </div>
 </div>
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<input type="file" id="bot-import-file" accept=".json" style="display:none;" onchange="handleBotImportFile(event)">
 {% if error %}
 <div class="alert alert-error">{{ error }}</div>
 {% endif %}
@@ -72,6 +77,57 @@ document.getElementById('form-add-bot').addEventListener('submit', async functio
 function getCsrf() {
   const el = document.querySelector('input[name=csrf_token]');
   return el ? el.value : '';
+}
+
+function triggerBotImport() {
+  const input = document.getElementById('bot-import-file');
+  if (!input) return;
+  input.value = '';
+  input.click();
+}
+
+function handleBotImportFile(event) {
+  const file = event?.target?.files?.[0];
+  if (!file) return;
+  file.text()
+    .then((text) => {
+      let bundle = null;
+      try {
+        bundle = JSON.parse(text);
+      } catch (err) {
+        throw new Error('Imported bot file must be valid JSON.');
+      }
+      return submitBotImport(bundle, false);
+    })
+    .catch((e) => alert(e.message));
+}
+
+function submitBotImport(bundle, overwrite) {
+  return fetch('/api/bots/import', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify({bundle, overwrite})
+  })
+  .then(async (r) => {
+    const data = await r.json().catch(() => ({}));
+    if (r.status === 409) {
+      const confirmOverwrite = window.confirm('A bot with this id already exists. Overwrite it?');
+      if (!confirmOverwrite) return null;
+      return submitBotImport(bundle, true);
+    }
+    if (!r.ok) throw new Error(data.error || 'Import failed');
+    return data;
+  })
+  .then((data) => {
+    if (!data) return;
+    const importedBotId = String((data.bot && data.bot.id) || '');
+    alert('Bot import completed.');
+    if (importedBotId) {
+      window.location.href = '/bots/' + encodeURIComponent(importedBotId);
+      return;
+    }
+    location.reload();
+  });
 }
 
 async function deleteBot(id) {
