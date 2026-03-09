@@ -468,6 +468,63 @@ async def test_payload_transform_bots_can_still_enforce_pre_transform_input_vali
 
 
 @pytest.mark.anyio
+async def test_input_transform_bots_defer_required_input_validation_until_after_transform(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {"course_brief": {"topic": "AP World History"}}
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "input-transform-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="legacy-intake",
+            name="Legacy Intake",
+            role="assistant",
+            backends=[],
+            routing_rules={
+                "input_contract": {
+                    "enabled": True,
+                    "format": "json_object",
+                    "required_fields": ["workflow_type", "course_brief", "generation_settings", "revision_context"],
+                },
+                "input_transform": {
+                    "enabled": True,
+                    "template": {
+                        "workflow_type": "course_generation",
+                        "course_brief": {
+                            "topic": "{{payload.topic}}",
+                        },
+                        "generation_settings": {
+                            "allowed_lesson_blocks": "{{json:payload.allowed_lesson_blocks_json}}",
+                        },
+                    },
+                },
+            },
+        )
+    )
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "input-transform-tasks.db"), bot_registry=bot_registry)
+    task = await tm.create_task(
+        bot_id="legacy-intake",
+        payload={"topic": "AP World History", "allowed_lesson_blocks_json": '["AdvancedParagraph"]'},
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status == "completed":
+            break
+        await asyncio.sleep(0.05)
+
+    updated = await tm.get_task(task.id)
+    assert updated.status == "completed"
+
+
+@pytest.mark.anyio
 async def test_bot_trigger_creates_follow_on_run_and_artifacts(tmp_path):
     import asyncio
 

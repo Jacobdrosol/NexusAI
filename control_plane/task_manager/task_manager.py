@@ -1061,9 +1061,10 @@ class TaskManager:
         if payload_format == "json_array" and not isinstance(payload, list):
             raise ValueError("input contract requires a JSON array payload")
 
-        output_mode = await self._bot_output_contract_mode(bot_id)
         validate_before_transform = bool(contract.get("validate_before_transform", False))
-        if output_mode == "payload_transform" and not validate_before_transform:
+        output_mode = await self._bot_output_contract_mode(bot_id)
+        has_input_transform = await self._bot_has_enabled_input_transform(bot_id)
+        if not validate_before_transform and (output_mode == "payload_transform" or has_input_transform):
             return
 
         if required_fields:
@@ -1078,6 +1079,14 @@ class TaskManager:
     async def _bot_output_contract_mode(self, bot_id: str) -> str:
         contract = await self._bot_output_contract(bot_id)
         return str(contract.get("mode") or "model_output").strip().lower()
+
+    async def _bot_has_enabled_input_transform(self, bot_id: str) -> bool:
+        bot = await self._bot_registry.get(bot_id)
+        routing_rules = getattr(bot, "routing_rules", None)
+        if not isinstance(routing_rules, dict):
+            return False
+        config = routing_rules.get("input_transform")
+        return isinstance(config, dict) and bool(config.get("enabled", False)) and config.get("template") is not None
 
     async def _normalize_task_result(self, task: Task, result: Any) -> Any:
         contract = await self._bot_output_contract(task.bot_id)
