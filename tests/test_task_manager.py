@@ -849,6 +849,74 @@ async def test_bot_trigger_creates_follow_on_run_and_artifacts(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_trigger_dispatch_failure_does_not_fail_parent_task(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {"answer": f"done:{task.bot_id}"}
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "trigger-failure-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="bot-a",
+            name="Bot A",
+            role="assistant",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "handoff",
+                        "event": "task_completed",
+                        "target_bot_id": "bot-b",
+                        "condition": "has_result",
+                    }
+                ]
+            },
+        )
+    )
+    await bot_registry.register(
+        Bot(
+            id="bot-b",
+            name="Bot B",
+            role="assistant",
+            backends=[],
+            routing_rules={
+                "input_contract": {
+                    "enabled": True,
+                    "format": "json_object",
+                    "required_fields": ["workflow_type", "course_brief", "generation_settings", "revision_context"],
+                }
+            },
+        )
+    )
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "trigger-failure-tasks.db"), bot_registry=bot_registry)
+    root = await tm.create_task(bot_id="bot-a", payload={"instruction": "start"})
+
+    for _ in range(40):
+        updated = await tm.get_task(root.id)
+        if updated.status == "completed":
+            break
+        await asyncio.sleep(0.1)
+
+    updated = await tm.get_task(root.id)
+    assert updated.status == "completed"
+
+    tasks = await tm.list_tasks()
+    assert len(tasks) == 1
+
+    artifacts = await tm.list_bot_run_artifacts("bot-a", task_id=root.id)
+    trigger_errors = [artifact for artifact in artifacts if artifact.label == "Trigger Dispatch Error"]
+    assert len(trigger_errors) == 1
+    assert "revision_context" in (trigger_errors[0].content or "")
+
+
+@pytest.mark.anyio
 async def test_trigger_payload_template_can_reference_source_fields(tmp_path):
     import asyncio
 

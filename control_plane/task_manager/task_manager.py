@@ -1454,45 +1454,93 @@ class TaskManager:
 
         event = "task_completed" if task.status == "completed" else "task_failed"
         for trigger in workflow.triggers:
-            if not trigger.enabled or trigger.event != event:
-                continue
-            if trigger.condition == "has_result" and task.result is None:
-                continue
-            if trigger.condition == "has_error" and task.error is None:
-                continue
-            if not self._trigger_matches_result(task, trigger):
-                continue
-            target_bot_id = self._resolve_trigger_target_bot_id(task, trigger.target_bot_id)
-            if not target_bot_id:
-                logger.warning("Skipping trigger %s for task %s because target bot could not be resolved", trigger.id, task.id)
-                continue
-            payloads = self._build_trigger_payloads(task, trigger)
-            if not payloads:
-                logger.warning("Skipping trigger %s for task %s because no payloads were produced", trigger.id, task.id)
-                continue
-            next_metadata = TaskMetadata(
-                user_id=metadata.user_id if trigger.inherit_metadata else None,
-                project_id=metadata.project_id if trigger.inherit_metadata else None,
-                source="bot_trigger",
-                priority=metadata.priority if trigger.inherit_metadata else None,
-                conversation_id=metadata.conversation_id if trigger.inherit_metadata else None,
-                orchestration_id=metadata.orchestration_id if trigger.inherit_metadata else None,
-                pipeline_name=metadata.pipeline_name if trigger.inherit_metadata else None,
-                pipeline_entry_bot_id=metadata.pipeline_entry_bot_id if trigger.inherit_metadata else None,
-                parent_task_id=task.id,
-                trigger_rule_id=trigger.id,
-                trigger_depth=trigger_depth + 1,
-                workflow_root_task_id=metadata.workflow_root_task_id or task.id,
-            )
-            if self._trigger_uses_join(trigger):
-                await self._dispatch_join_trigger(task, trigger, target_bot_id, payloads, next_metadata)
-                continue
-            for payload in payloads:
-                await self.create_task(
-                    bot_id=target_bot_id,
-                    payload=payload,
-                    metadata=next_metadata,
+            try:
+                if not trigger.enabled or trigger.event != event:
+                    continue
+                if trigger.condition == "has_result" and task.result is None:
+                    continue
+                if trigger.condition == "has_error" and task.error is None:
+                    continue
+                if not self._trigger_matches_result(task, trigger):
+                    continue
+                target_bot_id = self._resolve_trigger_target_bot_id(task, trigger.target_bot_id)
+                if not target_bot_id:
+                    logger.warning("Skipping trigger %s for task %s because target bot could not be resolved", trigger.id, task.id)
+                    continue
+                payloads = self._build_trigger_payloads(task, trigger)
+                if not payloads:
+                    logger.warning("Skipping trigger %s for task %s because no payloads were produced", trigger.id, task.id)
+                    continue
+                next_metadata = TaskMetadata(
+                    user_id=metadata.user_id if trigger.inherit_metadata else None,
+                    project_id=metadata.project_id if trigger.inherit_metadata else None,
+                    source="bot_trigger",
+                    priority=metadata.priority if trigger.inherit_metadata else None,
+                    conversation_id=metadata.conversation_id if trigger.inherit_metadata else None,
+                    orchestration_id=metadata.orchestration_id if trigger.inherit_metadata else None,
+                    pipeline_name=metadata.pipeline_name if trigger.inherit_metadata else None,
+                    pipeline_entry_bot_id=metadata.pipeline_entry_bot_id if trigger.inherit_metadata else None,
+                    parent_task_id=task.id,
+                    trigger_rule_id=trigger.id,
+                    trigger_depth=trigger_depth + 1,
+                    workflow_root_task_id=metadata.workflow_root_task_id or task.id,
                 )
+                if self._trigger_uses_join(trigger):
+                    await self._dispatch_join_trigger(task, trigger, target_bot_id, payloads, next_metadata)
+                    continue
+                for payload in payloads:
+                    await self.create_task(
+                        bot_id=target_bot_id,
+                        payload=payload,
+                        metadata=next_metadata,
+                    )
+            except Exception as exc:
+                logger.exception(
+                    "Trigger %s failed while dispatching task %s to %s",
+                    getattr(trigger, "id", ""),
+                    task.id,
+                    getattr(trigger, "target_bot_id", ""),
+                )
+                await self._record_trigger_dispatch_error(
+                    source_task=task,
+                    trigger_id=str(getattr(trigger, "id", "") or ""),
+                    target_bot_id=str(getattr(trigger, "target_bot_id", "") or ""),
+                    message=str(exc),
+                )
+
+    async def _record_trigger_dispatch_error(
+        self,
+        source_task: Task,
+        trigger_id: str,
+        target_bot_id: str,
+        message: str,
+    ) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        await self._upsert_artifact(
+            BotRunArtifact(
+                id=f"{source_task.id}:trigger-error:{trigger_id or 'unknown'}",
+                run_id=source_task.id,
+                task_id=source_task.id,
+                bot_id=source_task.bot_id,
+                kind="error",
+                label="Trigger Dispatch Error",
+                content=json.dumps(
+                    {
+                        "trigger_id": trigger_id,
+                        "target_bot_id": target_bot_id,
+                        "message": message,
+                    },
+                    indent=2,
+                    sort_keys=True,
+                ),
+                metadata={
+                    "trigger_id": trigger_id,
+                    "target_bot_id": target_bot_id,
+                    "message": message,
+                },
+                created_at=now,
+            )
+        )
 
     def _build_trigger_payload(self, task: Task, trigger: Any) -> Any:
         payload_template = trigger.payload_template
