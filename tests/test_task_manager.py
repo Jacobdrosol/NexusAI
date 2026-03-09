@@ -679,6 +679,67 @@ async def test_output_contract_can_transform_payload_deterministically(tmp_path)
 
 
 @pytest.mark.anyio
+async def test_payload_transform_supports_coalesce_paths_for_retry_loops(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {"ignored": True}
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "coalesce-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="outline-bot",
+            name="Outline",
+            role="assistant",
+            backends=[],
+            routing_rules={
+                "output_contract": {
+                    "enabled": True,
+                    "mode": "payload_transform",
+                    "format": "json_object",
+                    "required_fields": ["course_brief", "generation_settings"],
+                    "template": {
+                        "course_brief": "{{coalesce:payload.source_result.course_brief,payload.source_payload.source_result.course_brief,payload.source_payload.source_payload.source_result.course_brief}}",
+                        "generation_settings": "{{coalesce:payload.source_result.generation_settings,payload.source_payload.source_result.generation_settings,payload.source_payload.source_payload.source_result.generation_settings}}",
+                    },
+                }
+            },
+        )
+    )
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "coalesce.db"), bot_registry=bot_registry)
+    task = await tm.create_task(
+        bot_id="outline-bot",
+        payload={
+            "source_result": {
+                "qc_status": "fail",
+            },
+            "source_payload": {
+                "source_result": {
+                    "course_brief": {"topic": "AP World History"},
+                    "generation_settings": {"generate_documentation": True},
+                }
+            },
+        },
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.1)
+
+    assert updated.status == "completed"
+    assert updated.result["course_brief"]["topic"] == "AP World History"
+    assert updated.result["generation_settings"]["generate_documentation"] is True
+
+
+@pytest.mark.anyio
 async def test_task_manager_migrates_legacy_task_table_without_metadata(tmp_path):
     import asyncio
     import sqlite3

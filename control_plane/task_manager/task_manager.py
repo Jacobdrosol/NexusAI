@@ -139,6 +139,58 @@ def _lookup_payload_path(payload: Any, path: str) -> Any:
     return current
 
 
+def _split_transform_expr_list(expr: str) -> List[str]:
+    parts: List[str] = []
+    current: List[str] = []
+    depth = 0
+    for char in str(expr or ""):
+        if char == "," and depth == 0:
+            item = "".join(current).strip()
+            if item:
+                parts.append(item)
+            current = []
+            continue
+        if char in "{[":
+            depth += 1
+        elif char in "}]":
+            depth = max(0, depth - 1)
+        current.append(char)
+    tail = "".join(current).strip()
+    if tail:
+        parts.append(tail)
+    return parts
+
+
+def _resolve_transform_value(expr: str, payload: Any, notes: list[str]) -> Any:
+    mode = "value"
+    raw_expr = str(expr or "").strip()
+    if raw_expr.startswith("json:"):
+        mode = "json"
+        raw_expr = raw_expr[5:].strip()
+    if raw_expr.startswith("coalesce:"):
+        candidates = _split_transform_expr_list(raw_expr[len("coalesce:") :])
+        for candidate in candidates:
+            value = _resolve_transform_value(("json:" + candidate) if mode == "json" else candidate, payload, notes)
+            if value not in (None, "", [], {}):
+                return value
+        return None
+    path = raw_expr
+    if path.startswith("payload."):
+        path = path[8:].strip()
+    value = _lookup_payload_path(payload, path)
+    if mode == "json":
+        if value in (None, ""):
+            return [] if path.endswith("_json") else None
+        if isinstance(value, (dict, list)):
+            return value
+        try:
+            return json.loads(str(value))
+        except json.JSONDecodeError:
+            notes.append(f"Could not parse JSON field: {path}")
+            return None
+    return value
+
+
 def _transform_template_value(template: Any, payload: Any, notes: list[str]) -> Any:
     if isinstance(template, dict):
         return {str(key): _transform_template_value(value, payload, notes) for key, value in template.items()}
@@ -150,25 +202,7 @@ def _transform_template_value(template: Any, payload: Any, notes: list[str]) -> 
     raw = template.strip()
     if raw.startswith("{{") and raw.endswith("}}"):
         expr = raw[2:-2].strip()
-        mode = "value"
-        path = expr
-        if expr.startswith("json:"):
-            mode = "json"
-            path = expr[5:].strip()
-        if path.startswith("payload."):
-            path = path[8:].strip()
-        value = _lookup_payload_path(payload, path)
-        if mode == "json":
-            if value in (None, ""):
-                return [] if path.endswith("_json") else None
-            if isinstance(value, (dict, list)):
-                return value
-            try:
-                return json.loads(str(value))
-            except json.JSONDecodeError:
-                notes.append(f"Could not parse JSON field: {path}")
-                return None
-        return value
+        return _resolve_transform_value(expr, payload, notes)
     return template
 
 
