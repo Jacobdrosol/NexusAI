@@ -675,6 +675,72 @@ async def test_flat_launch_payloads_defer_normalized_input_validation(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_payload_transform_reuses_already_normalized_payload(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {"ignored": True}
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "normalized-payload-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="course-intake",
+            name="Course Intake",
+            role="assistant",
+            backends=[],
+            routing_rules={
+                "output_contract": {
+                    "enabled": True,
+                    "mode": "payload_transform",
+                    "format": "json_object",
+                    "required_fields": ["workflow_type", "course_brief", "generation_settings"],
+                    "non_empty_fields": [
+                        "course_brief.topic",
+                        "course_brief.units",
+                        "generation_settings.allowed_lesson_blocks",
+                    ],
+                    "template": {
+                        "workflow_type": "course_generation",
+                        "course_brief": {
+                            "topic": "{{payload.topic}}",
+                            "units": "{{json:payload.units_json}}",
+                        },
+                        "generation_settings": {
+                            "allowed_lesson_blocks": "{{json:payload.allowed_lesson_blocks_json}}",
+                        },
+                    },
+                },
+            },
+        )
+    )
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "normalized-payload-tasks.db"), bot_registry=bot_registry)
+    task = await tm.create_task(
+        bot_id="course-intake",
+        payload={
+            "workflow_type": "course_generation",
+            "course_brief": {"topic": "AP World History", "units": [{"title": "Unit 1"}]},
+            "generation_settings": {"allowed_lesson_blocks": ["AdvancedParagraph"]},
+        },
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status == "completed":
+            break
+        await asyncio.sleep(0.05)
+
+    updated = await tm.get_task(task.id)
+    assert updated.status == "completed"
+    assert updated.result["course_brief"]["topic"] == "AP World History"
+
+
+@pytest.mark.anyio
 async def test_bot_trigger_creates_follow_on_run_and_artifacts(tmp_path):
     import asyncio
 

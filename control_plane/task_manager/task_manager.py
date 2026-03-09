@@ -260,6 +260,24 @@ def _looks_like_flat_launch_payload(payload: Any, required_fields: list[str]) ->
     return has_serialized_fields and has_brief_like_fields
 
 
+def _payload_satisfies_output_contract(payload: Any, required_fields: list[str], non_empty_fields: list[str]) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    if required_fields:
+        missing = [field for field in required_fields if str(field) not in payload]
+        if missing:
+            return False
+    if non_empty_fields:
+        empty_fields = [
+            str(field)
+            for field in non_empty_fields
+            if _is_empty_contract_value(_lookup_payload_path(payload, str(field)))
+        ]
+        if empty_fields:
+            return False
+    return bool(required_fields or non_empty_fields)
+
+
 def _merge_with_contract_defaults(value: Any, defaults: Any) -> Any:
     if defaults is None:
         return value
@@ -1159,17 +1177,20 @@ class TaskManager:
             return result
 
         if mode == "payload_transform":
-            template = contract.get("template")
-            if template is None:
-                raise ValueError("output contract payload transform requires a template")
-            notes: list[str] = []
-            transformed = _transform_template_value(template, task.payload, notes)
-            if isinstance(transformed, dict) and "normalization_notes" in transformed:
-                existing = transformed.get("normalization_notes")
-                if not isinstance(existing, list):
-                    existing = []
-                transformed["normalization_notes"] = existing + notes
-            normalized = transformed
+            if _payload_satisfies_output_contract(task.payload, [str(field) for field in required_fields], [str(field) for field in non_empty_fields]):
+                normalized = task.payload
+            else:
+                template = contract.get("template")
+                if template is None:
+                    raise ValueError("output contract payload transform requires a template")
+                notes: list[str] = []
+                transformed = _transform_template_value(template, task.payload, notes)
+                if isinstance(transformed, dict) and "normalization_notes" in transformed:
+                    existing = transformed.get("normalization_notes")
+                    if not isinstance(existing, list):
+                        existing = []
+                    transformed["normalization_notes"] = existing + notes
+                normalized = transformed
         else:
             normalized = result
 
