@@ -406,7 +406,17 @@ def api_import_bot():
         "workflow": bot_payload.get("workflow"),
     }
 
-    saved = cp.update_bot(bot_id, import_payload) if existing is not None else cp.create_bot(import_payload)
+    if existing is not None:
+        deleted = cp.delete_bot(bot_id)
+        if not deleted:
+            err = cp.last_error()
+            status = int((err or {}).get("status_code") or 502)
+            if status < 400 or status > 599:
+                status = 502
+            return jsonify({"error": str((err or {}).get("detail") or "failed to replace existing bot")}), status
+        saved = cp.create_bot(import_payload)
+    else:
+        saved = cp.create_bot(import_payload)
     if saved is None:
         err = cp.last_error()
         status = int((err or {}).get("status_code") or 502)

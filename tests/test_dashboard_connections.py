@@ -173,6 +173,8 @@ def test_bot_export_includes_full_bot_config_and_connections(dashboard_client):
     class FakeCP:
         def __init__(self):
             self._last_error = {}
+            self.deleted_bot_ids = []
+            self.updated_bot_ids = []
             self.bots = {
                 "course-bot": {
                     "id": "course-bot",
@@ -237,6 +239,8 @@ def test_bot_import_can_overwrite_existing_bot_config_and_connections(dashboard_
     class FakeCP:
         def __init__(self):
             self._last_error = {}
+            self.deleted_bot_ids = []
+            self.updated_bot_ids = []
             self.bots = {
                 "course-bot": {
                     "id": "course-bot",
@@ -256,12 +260,18 @@ def test_bot_import_can_overwrite_existing_bot_config_and_connections(dashboard_
             return bot
 
         def update_bot(self, bot_id, body):
+            self.updated_bot_ids.append(bot_id)
             self.bots[bot_id] = dict(body)
             return self.bots[bot_id]
 
         def create_bot(self, body):
             self.bots[body["id"]] = dict(body)
             return self.bots[body["id"]]
+
+        def delete_bot(self, bot_id):
+            self.deleted_bot_ids.append(bot_id)
+            self.bots.pop(bot_id, None)
+            return True
 
         def last_error(self):
             return self._last_error
@@ -315,6 +325,8 @@ def test_bot_import_can_overwrite_existing_bot_config_and_connections(dashboard_
         body = import_resp.get_json()
         assert body["overwritten"] is True
         assert body["bot"]["name"] == "Imported Bot"
+        assert fake_cp.deleted_bot_ids == ["course-bot"]
+        assert fake_cp.updated_bot_ids == []
 
         list_resp = dashboard_client.get("/api/bots/course-bot/connections")
         assert list_resp.status_code == 200
