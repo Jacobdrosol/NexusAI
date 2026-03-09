@@ -426,3 +426,41 @@ def test_http_connection_can_skip_tls_verification(monkeypatch):
     assert result["verify_ssl"] is False
     assert captured["url"] == "https://100.113.128.92:5001/api/agent/courses"
     assert captured["context"] is not None
+
+
+def test_http_connection_merges_action_headers(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        status = 200
+
+        def read(self, _size):
+            return b'{"ok":true}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def fake_urlopen(req, timeout=0, context=None):
+        captured["headers"] = dict(req.header_items())
+        return FakeResponse()
+
+    monkeypatch.setattr("dashboard.connections_service.urllib.request.urlopen", fake_urlopen)
+
+    result = run_http_connection_test(
+        config={"base_url": "https://api.example.com"},
+        auth={"type": "api_key", "name": "X-API-Key", "api_key": "secret-token"},
+        schema_text="",
+        payload={
+            "method": "POST",
+            "path": "/courses",
+            "headers": {"X-GLOBEIQ-AGENT-APPROVAL": "approval-token"},
+            "body_json": {"title": "World History Survey"},
+        },
+    )
+
+    assert result["ok"] is True
+    assert captured["headers"]["X-api-key"] == "secret-token"
+    assert captured["headers"]["X-globeiq-agent-approval"] == "approval-token"

@@ -199,6 +199,10 @@ def test_http_connection(
         token = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("utf-8")
         headers["Authorization"] = f"Basic {token}"
 
+    action_headers = payload.get("headers")
+    if isinstance(action_headers, dict):
+        headers.update({str(k): str(v) for k, v in action_headers.items() if v is not None})
+
     query_params = payload.get("query_params")
     if isinstance(query_params, dict):
         parsed = urllib.parse.urlparse(url)
