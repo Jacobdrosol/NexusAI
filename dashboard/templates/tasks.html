@@ -15,12 +15,13 @@
   <div class="page-header" style="margin-bottom:0.75rem;">
     <h2 class="panel-title">Quick Launch</h2>
   </div>
+  <div id="quick-launch-status" class="mini-note" style="margin-bottom:0.75rem;">Select a saved launch profile to queue a workflow run.</div>
   <div class="quick-links">
     {% for bot in launchable_bots %}
     <button
       class="quick-link"
       type="button"
-      onclick="queueSavedLaunch({{ bot.id|tojson }}, {{ bot.launch_profile.label|tojson }})"
+      onclick="queueSavedLaunch(this, {{ bot.id|tojson }}, {{ bot.launch_profile.label|tojson }})"
       title="{{ bot.launch_profile.description or bot.role }}"
     >{{ bot.launch_profile.label }}</button>
     {% endfor %}
@@ -194,23 +195,57 @@ function getCsrf() {
   return el ? el.value : '';
 }
 
-function queueSavedLaunch(botId, label) {
+function setQuickLaunchStatus(message, isError) {
+  const el = document.getElementById('quick-launch-status');
+  if (!el) return;
+  el.textContent = message;
+  el.style.color = isError ? '#fca5a5' : '#a0aec0';
+}
+
+function queueSavedLaunch(buttonEl, botId, label) {
+  const originalLabel = buttonEl ? buttonEl.textContent : (label || 'Launch');
+  if (buttonEl) {
+    buttonEl.disabled = true;
+    buttonEl.textContent = 'Launching...';
+  }
+  setQuickLaunchStatus('Queueing ' + (label || 'launch') + '...', false);
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 20000);
+
   fetch('/api/bots/' + encodeURIComponent(botId) + '/launch', {
     method: 'POST',
     headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
-    body: JSON.stringify({})
+    body: JSON.stringify({}),
+    signal: controller.signal
   })
   .then(async (r) => {
+    clearTimeout(timeoutId);
     const data = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(data.error || 'Launch failed');
     if (data.pipeline_id) {
+      setQuickLaunchStatus((label || 'Launch') + ' queued. Opening pipeline view...', false);
       window.location.href = '/pipelines/' + encodeURIComponent(data.pipeline_id);
       return;
     }
+    setQuickLaunchStatus((label || 'Launch') + ' queued: ' + data.id, false);
     alert((label || 'Launch') + ' queued: ' + data.id);
     location.reload();
   })
-  .catch((e) => alert(e.message || 'Launch failed'));
+  .catch((e) => {
+    clearTimeout(timeoutId);
+    const message = e.name === 'AbortError'
+      ? 'Launch request timed out after 20 seconds.'
+      : (e.message || 'Launch failed');
+    setQuickLaunchStatus(message, true);
+    alert(message);
+  })
+  .finally(() => {
+    if (buttonEl) {
+      buttonEl.disabled = false;
+      buttonEl.textContent = originalLabel;
+    }
+  });
 }
 
 function taskById(taskId) {
