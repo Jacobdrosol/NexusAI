@@ -235,3 +235,102 @@ async def test_scheduler_applies_bot_input_transform_before_system_prompt():
         "instruction": "Build outline",
         "course_brief": {"topic": "AP World History", "subject": "History"},
     }
+
+
+@pytest.mark.anyio
+async def test_scheduler_input_transform_supports_coalesce_paths():
+    from control_plane.scheduler.scheduler import Scheduler
+
+    bot_registry = AsyncMock()
+    bot_registry.get.return_value = Bot(
+        id="course-outline",
+        name="Course Outline",
+        role="planner",
+        system_prompt="Return only strict JSON.",
+        backends=[BackendConfig(type="cloud_api", provider="openai", model="gpt-4o-mini")],
+        routing_rules={
+            "input_transform": {
+                "enabled": True,
+                "template": {
+                    "course_brief": "{{coalesce:payload.source_result.course_brief,payload.source_payload.source_result.course_brief}}",
+                    "generation_settings": "{{coalesce:payload.source_result.generation_settings,payload.source_payload.source_result.generation_settings}}",
+                },
+            }
+        },
+    )
+    scheduler = Scheduler(bot_registry=bot_registry, worker_registry=AsyncMock())
+    task = Task(
+        id="task-4",
+        bot_id="course-outline",
+        payload={
+            "source_payload": {
+                "source_result": {
+                    "course_brief": {"topic": "AP World History"},
+                    "generation_settings": {"generate_documentation": True},
+                }
+            }
+        },
+        status="queued",
+        created_at="now",
+        updated_at="now",
+    )
+
+    async def fake_dispatch(backend, payload, task=None):
+        return {"payload": payload}
+
+    scheduler._dispatch_backend = fake_dispatch  # type: ignore[method-assign]
+    result = await scheduler.schedule(task)
+
+    transformed = json.loads(result["payload"][1]["content"])
+    assert transformed == {
+        "course_brief": {"topic": "AP World History"},
+        "generation_settings": {"generate_documentation": True},
+    }
+
+
+@pytest.mark.anyio
+async def test_scheduler_appends_output_contract_guidance_to_system_prompt():
+    from control_plane.scheduler.scheduler import Scheduler
+
+    bot_registry = AsyncMock()
+    bot_registry.get.return_value = Bot(
+        id="course-outline",
+        name="Course Outline",
+        role="planner",
+        system_prompt="Build the course outline.",
+        backends=[BackendConfig(type="cloud_api", provider="openai", model="gpt-4o-mini")],
+        routing_rules={
+            "output_contract": {
+                "enabled": True,
+                "mode": "model_output",
+                "format": "json_object",
+                "required_fields": ["course_shell", "course_structure"],
+                "description": "Return a structured outline only.",
+                "example_output": {
+                    "course_shell": {"title": "Example"},
+                    "course_structure": {"units": []},
+                },
+            }
+        },
+    )
+    scheduler = Scheduler(bot_registry=bot_registry, worker_registry=AsyncMock())
+    task = Task(
+        id="task-5",
+        bot_id="course-outline",
+        payload={"instruction": "Build outline"},
+        status="queued",
+        created_at="now",
+        updated_at="now",
+    )
+
+    async def fake_dispatch(backend, payload, task=None):
+        return {"payload": payload}
+
+    scheduler._dispatch_backend = fake_dispatch  # type: ignore[method-assign]
+    result = await scheduler.schedule(task)
+
+    system_message = result["payload"][0]["content"]
+    assert "Build the course outline." in system_message
+    assert "Output contract:" in system_message
+    assert "Required top-level fields: course_shell, course_structure." in system_message
+    assert "\"course_shell\"" in system_message

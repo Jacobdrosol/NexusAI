@@ -91,6 +91,28 @@ def _lookup_payload_path(payload: Any, path: str) -> Any:
     return current
 
 
+def _split_transform_expr_list(expr: str) -> list[str]:
+    parts: list[str] = []
+    current: list[str] = []
+    depth = 0
+    for char in str(expr or ""):
+        if char == "," and depth == 0:
+            item = "".join(current).strip()
+            if item:
+                parts.append(item)
+            current = []
+            continue
+        if char in "{[":
+            depth += 1
+        elif char in "}]":
+            depth = max(0, depth - 1)
+        current.append(char)
+    tail = "".join(current).strip()
+    if tail:
+        parts.append(tail)
+    return parts
+
+
 def _transform_template_value(template: Any, payload: Any) -> Any:
     if isinstance(template, dict):
         return {str(key): _transform_template_value(value, payload) for key, value in template.items()}
@@ -107,6 +129,13 @@ def _transform_template_value(template: Any, payload: Any) -> Any:
         if expr.startswith("json:"):
             mode = "json"
             path = expr[5:].strip()
+        if path.startswith("coalesce:"):
+            candidates = _split_transform_expr_list(path[len("coalesce:") :])
+            for candidate in candidates:
+                value = _transform_template_value("{{" + (("json:" + candidate) if mode == "json" else candidate) + "}}", payload)
+                if value not in (None, "", [], {}):
+                    return value
+            return None
         if path.startswith("payload."):
             path = path[8:].strip()
         value = _lookup_payload_path(payload, path)
@@ -118,6 +147,49 @@ def _transform_template_value(template: Any, payload: Any) -> Any:
             return json.loads(str(value))
         return value
     return template
+
+
+def _contract_prompt_suffix(bot: Any) -> str:
+    routing_rules = getattr(bot, "routing_rules", None)
+    if not isinstance(routing_rules, dict):
+        return ""
+    contract = routing_rules.get("output_contract")
+    if not isinstance(contract, dict) or not bool(contract.get("enabled", False)):
+        return ""
+    if str(contract.get("mode") or "model_output").strip().lower() != "model_output":
+        return ""
+    parts: list[str] = []
+    output_format = str(contract.get("format") or "any").strip().lower()
+    required_fields = contract.get("required_fields")
+    description = str(contract.get("description") or "").strip()
+    example_output = contract.get("example_output")
+
+    if description:
+        parts.append(description)
+    if output_format == "json_object":
+        parts.append("Return exactly one JSON object.")
+    elif output_format == "json_array":
+        parts.append("Return exactly one JSON array.")
+    if isinstance(required_fields, list) and required_fields:
+        parts.append(f"Required top-level fields: {', '.join(str(field) for field in required_fields)}.")
+    if isinstance(example_output, dict) and example_output:
+        parts.append("Example output JSON:")
+        parts.append(json.dumps(example_output, ensure_ascii=False, indent=2))
+    if not parts:
+        return ""
+    return "\n\nOutput contract:\n" + "\n".join(parts)
+
+
+def _prepare_system_prompt(bot: Any) -> str | None:
+    base = str(getattr(bot, "system_prompt", None) or "").strip()
+    suffix = _contract_prompt_suffix(bot).strip()
+    if not suffix:
+        return base or None
+    if not base:
+        return suffix
+    if suffix in base:
+        return base
+    return f"{base}\n{suffix}"
 
 
 class Scheduler:
@@ -151,7 +223,7 @@ class Scheduler:
         last_error: Exception = NoViableBackendError("No backends configured")
         attempts: list[str] = []
         transformed_payload = self._apply_input_transform(bot, task.payload)
-        prepared_payload = _inject_system_prompt(getattr(bot, "system_prompt", None), transformed_payload)
+        prepared_payload = _inject_system_prompt(_prepare_system_prompt(bot), transformed_payload)
 
         for backend in bot.backends:
             try:
@@ -183,7 +255,7 @@ class Scheduler:
         last_error: Exception = NoViableBackendError("No backends configured")
         attempts: list[str] = []
         transformed_payload = self._apply_input_transform(bot, task.payload)
-        prepared_payload = _inject_system_prompt(getattr(bot, "system_prompt", None), transformed_payload)
+        prepared_payload = _inject_system_prompt(_prepare_system_prompt(bot), transformed_payload)
 
         for backend in bot.backends:
             try:
