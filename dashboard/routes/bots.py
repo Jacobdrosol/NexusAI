@@ -5,13 +5,15 @@ import io
 import json
 import logging
 import re
+from datetime import datetime, timezone
 from typing import Any
 
 from flask import Blueprint, flash, jsonify, render_template, request, send_file
 from flask_login import login_required
 
+from dashboard.connections_service import normalize_auth_payload, resolve_auth_payload
 from dashboard.db import get_db
-from dashboard.models import Bot, Task
+from dashboard.models import Bot, BotConnection, Connection, ProjectConnection, Task
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +66,84 @@ def _bot_to_dict(b: Bot) -> dict[str, Any]:
         "input_transform": routing_rules.get("input_transform") if isinstance(routing_rules, dict) else None,
         "output_contract": routing_rules.get("output_contract") if isinstance(routing_rules, dict) else None,
         "launch_profile": routing_rules.get("launch_profile") if isinstance(routing_rules, dict) else None,
+    }
+
+
+def _parse_json(raw: str, default: Any) -> Any:
+    try:
+        return json.loads(raw)
+    except Exception:
+        return default
+
+
+def _bot_connections_payload(db, bot_ref: str) -> list[dict[str, Any]]:
+    links = db.query(BotConnection).filter(BotConnection.bot_ref == str(bot_ref)).all()
+    ids = [link.connection_id for link in links]
+    if not ids:
+        return []
+    rows = db.query(Connection).filter(Connection.id.in_(ids)).order_by(Connection.name.asc()).all()
+    payloads: list[dict[str, Any]] = []
+    for row in rows:
+        payloads.append(
+            {
+                "name": row.name,
+                "kind": row.kind,
+                "description": row.description or "",
+                "config": _parse_json(row.config_json or "{}", {}),
+                "auth": resolve_auth_payload(_parse_json(row.auth_json or "{}", {})),
+                "schema_text": row.schema_text or "",
+                "enabled": bool(row.enabled),
+            }
+        )
+    return payloads
+
+
+def _cleanup_orphaned_connection(db, connection_id: int) -> None:
+    has_bot_refs = db.query(BotConnection).filter(BotConnection.connection_id == connection_id).first()
+    has_project_refs = db.query(ProjectConnection).filter(ProjectConnection.connection_id == connection_id).first()
+    if has_bot_refs or has_project_refs:
+        return
+    row = db.get(Connection, connection_id)
+    if row is not None:
+        db.delete(row)
+
+
+def _replace_bot_connections(db, bot_ref: str, connection_payloads: list[dict[str, Any]]) -> None:
+    existing_links = db.query(BotConnection).filter(BotConnection.bot_ref == str(bot_ref)).all()
+    existing_ids = [link.connection_id for link in existing_links]
+    db.query(BotConnection).filter(BotConnection.bot_ref == str(bot_ref)).delete()
+    db.flush()
+    for connection_id in existing_ids:
+        _cleanup_orphaned_connection(db, connection_id)
+
+    now = datetime.now(timezone.utc)
+    for payload in connection_payloads:
+        if not isinstance(payload, dict):
+            continue
+        row = Connection(
+            name=str(payload.get("name") or "").strip() or "Imported Connection",
+            kind=str(payload.get("kind") or "http").strip().lower() or "http",
+            description=str(payload.get("description") or ""),
+            config_json=json.dumps(payload.get("config") if isinstance(payload.get("config"), dict) else {}),
+            auth_json=json.dumps(
+                normalize_auth_payload(payload.get("auth") if isinstance(payload.get("auth"), dict) else {})
+            ),
+            schema_text=str(payload.get("schema_text") or ""),
+            enabled=bool(payload.get("enabled", True)),
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(row)
+        db.flush()
+        db.add(BotConnection(bot_ref=str(bot_ref), connection_id=row.id, created_at=now))
+
+
+def _export_bundle(bot_payload: dict[str, Any], connections: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "schema_version": "nexusai.bot-export.v1",
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "bot": bot_payload,
+        "connections": connections,
     }
 
 
@@ -249,6 +329,103 @@ def api_get_bot(bot_id: str):
         return jsonify(_bot_to_dict(bot))
     finally:
         db.close()
+
+
+@bp.get("/api/bots/<bot_id>/export")
+@login_required
+def api_export_bot(bot_id: str):
+    from dashboard.cp_client import get_cp_client
+
+    cp = get_cp_client()
+    bot_payload = cp.get_bot(bot_id)
+    if bot_payload is None:
+        err = cp.last_error()
+        status = int((err or {}).get("status_code") or 502)
+        if status < 400 or status > 599:
+            status = 502
+        return jsonify({"error": str((err or {}).get("detail") or "bot export requires control plane access")}), status
+
+    db = get_db()
+    try:
+        bundle = _export_bundle(bot_payload, _bot_connections_payload(db, str(bot_id)))
+    finally:
+        db.close()
+
+    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", str(bot_payload.get("id") or bot_id)).strip("._") or "bot"
+    return send_file(
+        io.BytesIO(json.dumps(bundle, indent=2, sort_keys=True).encode("utf-8")),
+        mimetype="application/json",
+        as_attachment=True,
+        download_name=f"{safe_name}.bot.json",
+    )
+
+
+@bp.post("/api/bots/import")
+@login_required
+def api_import_bot():
+    from dashboard.cp_client import get_cp_client
+
+    body: dict[str, Any] = request.get_json(force=True) or {}
+    bundle = body.get("bundle") if isinstance(body.get("bundle"), dict) else body
+    bot_payload = bundle.get("bot") if isinstance(bundle, dict) and isinstance(bundle.get("bot"), dict) else None
+    if bot_payload is None:
+        return jsonify({"error": "import bundle must include a bot object"}), 400
+
+    bot_id = str(bot_payload.get("id") or "").strip()
+    bot_name = str(bot_payload.get("name") or "").strip()
+    if not bot_id or not bot_name:
+        return jsonify({"error": "imported bot must include id and name"}), 400
+
+    overwrite = bool(body.get("overwrite", False))
+    cp = get_cp_client()
+    existing = cp.get_bot(bot_id)
+    if existing is None:
+        err = cp.last_error()
+        status = int((err or {}).get("status_code") or 502)
+        if status not in {404} and (status < 400 or status > 599):
+            status = 502
+        if status not in {404}:
+            return jsonify({"error": str((err or {}).get("detail") or "bot import requires control plane access")}), status
+
+    if existing is not None and not overwrite:
+        return jsonify({"error": "bot id already exists", "bot_id": bot_id}), 409
+
+    import_payload = {
+        "id": bot_id,
+        "name": bot_name,
+        "role": bot_payload.get("role", "") or "assistant",
+        "priority": int(bot_payload.get("priority", 0) or 0),
+        "enabled": bool(bot_payload.get("enabled", True)),
+        "system_prompt": bot_payload.get("system_prompt"),
+        "backends": bot_payload.get("backends", []),
+        "routing_rules": _merge_routing_rules(bot_payload, existing=bot_payload.get("routing_rules")),
+        "workflow": bot_payload.get("workflow"),
+    }
+
+    saved = cp.update_bot(bot_id, import_payload) if existing is not None else cp.create_bot(import_payload)
+    if saved is None:
+        err = cp.last_error()
+        status = int((err or {}).get("status_code") or 502)
+        if status < 400 or status > 599:
+            status = 502
+        return jsonify({"error": str((err or {}).get("detail") or "import failed")}), status
+
+    db = get_db()
+    try:
+        connections = bundle.get("connections") if isinstance(bundle.get("connections"), list) else []
+        _replace_bot_connections(db, str(bot_id), connections)
+        db.commit()
+    finally:
+        db.close()
+
+    return jsonify(
+        {
+            "ok": True,
+            "bot": saved,
+            "overwritten": existing is not None,
+            "connection_count": len(bundle.get("connections") if isinstance(bundle.get("connections"), list) else []),
+        }
+    )
 
 
 @bp.put("/api/bots/<bot_id>")

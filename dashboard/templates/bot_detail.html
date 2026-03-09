@@ -5,11 +5,14 @@
 <div class="page-header">
   <h1>Bot Detail</h1>
   <div style="display:flex;gap:0.5rem;">
+    <button class="btn" type="button" onclick="exportBotConfig()">Export Bot</button>
+    <button class="btn" type="button" onclick="triggerBotImport()">Import Bot</button>
     <a class="btn" href="{{ url_for('connections.bot_connections_page', bot_id=bot.id) }}">Connections</a>
     <a class="btn" href="{{ url_for('bots.bots_page') }}">Back to Bots</a>
   </div>
 </div>
 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<input type="file" id="bot-import-file" accept=".json" style="display:none;" onchange="handleBotImportFile(event)">
 
 {% if error %}
 <div class="alert alert-error">{{ error }}</div>
@@ -701,6 +704,80 @@ function openBotEdit() {
 function openTestRun() {
   renderTestRunForm();
   document.getElementById('modal-test-run').style.display = 'flex';
+}
+
+function exportBotConfig() {
+  fetch('/api/bots/' + encodeURIComponent(BOT_ID) + '/export', {
+    method: 'GET',
+    headers: {'X-CSRFToken': getCsrf()}
+  })
+  .then(async (r) => {
+    if (!r.ok) {
+      const text = await r.text().catch(() => '');
+      let data = {};
+      try { data = JSON.parse(text || '{}'); } catch (err) {}
+      throw new Error(data.error || 'Export failed');
+    }
+    return r.blob();
+  })
+  .then((blob) => {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = String(BOT_ID || 'bot') + '.bot.json';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  })
+  .catch((e) => alert(e.message));
+}
+
+function triggerBotImport() {
+  const input = document.getElementById('bot-import-file');
+  if (!input) return;
+  input.value = '';
+  input.click();
+}
+
+function handleBotImportFile(event) {
+  const file = event?.target?.files?.[0];
+  if (!file) return;
+  file.text()
+    .then((text) => {
+      let bundle = null;
+      try {
+        bundle = JSON.parse(text);
+      } catch (err) {
+        throw new Error('Imported bot file must be valid JSON.');
+      }
+      return submitBotImport(bundle, false);
+    })
+    .catch((e) => alert(e.message));
+}
+
+function submitBotImport(bundle, overwrite) {
+  return fetch('/api/bots/import', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify({bundle, overwrite})
+  })
+  .then(async (r) => {
+    const data = await r.json().catch(() => ({}));
+    if (r.status === 409) {
+      const confirmOverwrite = window.confirm('A bot with this id already exists. Overwrite it?');
+      if (!confirmOverwrite) return null;
+      return submitBotImport(bundle, true);
+    }
+    if (!r.ok) throw new Error(data.error || 'Import failed');
+    return data;
+  })
+  .then((data) => {
+    if (!data) return;
+    const importedBotId = String((data.bot && data.bot.id) || BOT_ID);
+    alert('Bot import completed.');
+    window.location.href = '/bots/' + encodeURIComponent(importedBotId);
+  });
 }
 
 function normalizedInputContract() {

@@ -127,6 +127,7 @@ Dashboard and workflow:
 - Improved dashboard link contrast for worker and bot names on dark tables/cards.
 - Worker detail pages with live load, queue, and GPU graphs.
 - Bot detail editor with backend chain management, workflow triggers, saved input contracts, test runs, run history, and task board.
+- Bot import/export from the detail page, including bot configuration and bot-scoped connections, with overwrite confirmation on ID conflicts.
 - Bot-scoped external Connections workspace for HTTP/OpenAPI and database integration setup.
 - OpenAPI action discovery and in-dashboard connection test runner for bot connections.
 - Project detail pages with bridge management and scoped resources.

@@ -1,5 +1,6 @@
 """Tests for bot connections APIs in dashboard."""
 
+import json
 import bcrypt
 from unittest.mock import patch
 
@@ -121,6 +122,162 @@ def test_database_connection_test_endpoint(dashboard_client):
     payload = test_resp.get_json()
     assert payload["ok"] is True
     assert payload["row_count"] >= 1
+
+
+def test_bot_export_includes_full_bot_config_and_connections(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def __init__(self):
+            self._last_error = {}
+            self.bots = {
+                "course-bot": {
+                    "id": "course-bot",
+                    "name": "Course Bot",
+                    "role": "assistant",
+                    "priority": 3,
+                    "enabled": True,
+                    "system_prompt": "Return strict JSON.",
+                    "backends": [{"type": "cloud_api", "provider": "openai", "model": "gpt-4o-mini"}],
+                    "routing_rules": {
+                        "workflow": {"triggers": []},
+                        "input_contract": {"required_fields": ["course_brief"]},
+                        "input_transform": {"enabled": True, "template": {"course_brief": "{{payload.course_brief}}"}},
+                        "output_contract": {"required_fields": ["course_shell"]},
+                        "launch_profile": {"enabled": True, "label": "Run Bot", "payload": {"instruction": "start"}},
+                    },
+                    "workflow": {"triggers": []},
+                    "input_contract": {"required_fields": ["course_brief"]},
+                    "input_transform": {"enabled": True, "template": {"course_brief": "{{payload.course_brief}}"}},
+                    "output_contract": {"required_fields": ["course_shell"]},
+                    "launch_profile": {"enabled": True, "label": "Run Bot", "payload": {"instruction": "start"}},
+                }
+            }
+
+        def get_bot(self, bot_id):
+            bot = self.bots.get(bot_id)
+            self._last_error = {} if bot else {"status_code": 404, "detail": "not found"}
+            return bot
+
+        def last_error(self):
+            return self._last_error
+
+    fake_cp = FakeCP()
+    with patch("dashboard.cp_client.get_cp_client", return_value=fake_cp):
+        create_resp = dashboard_client.post(
+            "/api/bots/course-bot/connections",
+            json={
+                "name": "Example API",
+                "kind": "http",
+                "config": {"base_url": "https://api.example.com"},
+                "auth": {"type": "api_key", "name": "X-API-Key", "api_key": "secret-token"},
+                "schema_text": "openapi: 3.1.0",
+            },
+        )
+        assert create_resp.status_code == 201
+
+        export_resp = dashboard_client.get("/api/bots/course-bot/export")
+        assert export_resp.status_code == 200
+        bundle = json.loads(export_resp.data)
+        assert bundle["schema_version"] == "nexusai.bot-export.v1"
+        assert bundle["bot"]["id"] == "course-bot"
+        assert bundle["bot"]["system_prompt"] == "Return strict JSON."
+        assert bundle["bot"]["launch_profile"]["label"] == "Run Bot"
+        assert len(bundle["connections"]) == 1
+        assert bundle["connections"][0]["config"]["base_url"] == "https://api.example.com"
+        assert bundle["connections"][0]["auth"]["api_key"] == "secret-token"
+
+
+def test_bot_import_can_overwrite_existing_bot_config_and_connections(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def __init__(self):
+            self._last_error = {}
+            self.bots = {
+                "course-bot": {
+                    "id": "course-bot",
+                    "name": "Old Bot",
+                    "role": "assistant",
+                    "priority": 1,
+                    "enabled": True,
+                    "backends": [],
+                    "routing_rules": {},
+                    "workflow": None,
+                }
+            }
+
+        def get_bot(self, bot_id):
+            bot = self.bots.get(bot_id)
+            self._last_error = {} if bot else {"status_code": 404, "detail": "not found"}
+            return bot
+
+        def update_bot(self, bot_id, body):
+            self.bots[bot_id] = dict(body)
+            return self.bots[bot_id]
+
+        def create_bot(self, body):
+            self.bots[body["id"]] = dict(body)
+            return self.bots[body["id"]]
+
+        def last_error(self):
+            return self._last_error
+
+    fake_cp = FakeCP()
+    with patch("dashboard.cp_client.get_cp_client", return_value=fake_cp):
+        old_conn = dashboard_client.post(
+            "/api/bots/course-bot/connections",
+            json={
+                "name": "Old API",
+                "kind": "http",
+                "config": {"base_url": "https://old.example.com"},
+            },
+        )
+        assert old_conn.status_code == 201
+
+        bundle = {
+            "schema_version": "nexusai.bot-export.v1",
+            "bot": {
+                "id": "course-bot",
+                "name": "Imported Bot",
+                "role": "planner",
+                "priority": 7,
+                "enabled": True,
+                "system_prompt": "Imported prompt",
+                "backends": [{"type": "cloud_api", "provider": "openai", "model": "gpt-4.1-mini"}],
+                "routing_rules": {
+                    "launch_profile": {"enabled": True, "label": "Imported Launch", "payload": {"instruction": "go"}}
+                },
+                "workflow": {"triggers": []},
+                "launch_profile": {"enabled": True, "label": "Imported Launch", "payload": {"instruction": "go"}},
+            },
+            "connections": [
+                {
+                    "name": "Imported API",
+                    "kind": "http",
+                    "description": "imported",
+                    "config": {"base_url": "https://api.example.com"},
+                    "auth": {"type": "api_key", "name": "X-API-Key", "api_key": "new-secret"},
+                    "schema_text": "openapi: 3.1.0",
+                    "enabled": True,
+                }
+            ],
+        }
+
+        conflict_resp = dashboard_client.post("/api/bots/import", json={"bundle": bundle})
+        assert conflict_resp.status_code == 409
+
+        import_resp = dashboard_client.post("/api/bots/import", json={"bundle": bundle, "overwrite": True})
+        assert import_resp.status_code == 200
+        body = import_resp.get_json()
+        assert body["overwritten"] is True
+        assert body["bot"]["name"] == "Imported Bot"
+
+        list_resp = dashboard_client.get("/api/bots/course-bot/connections")
+        assert list_resp.status_code == 200
+        rows = list_resp.get_json()
+        assert len(rows) == 1
+        assert rows[0]["name"] == "Imported API"
 
 
 def test_project_database_connection_create_test_and_schema_ingest(dashboard_client):
