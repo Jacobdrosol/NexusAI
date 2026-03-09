@@ -1110,12 +1110,7 @@ class TaskManager:
             return False
         if metadata.parent_task_id or metadata.trigger_rule_id:
             return False
-        bot = await self._bot_registry.get(bot_id)
-        routing_rules = getattr(bot, "routing_rules", None)
-        if not isinstance(routing_rules, dict):
-            return False
-        launch_profile = routing_rules.get("launch_profile")
-        return isinstance(launch_profile, dict) and bool(launch_profile.get("enabled", False))
+        return True
 
     async def _normalize_task_result(self, task: Task, result: Any) -> Any:
         contract = await self._bot_output_contract(task.bot_id)
