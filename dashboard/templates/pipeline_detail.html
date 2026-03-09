@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% set active_page = "pipelines" %}
+{% block title %}Pipeline Detail{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Pipeline Detail</h1>
+  <div style="display:flex;gap:0.5rem;">
+    <a class="btn" href="{{ url_for('pipelines.pipelines_page') }}">Back to Pipelines</a>
+  </div>
+</div>
+{% if error %}
+<div class="alert alert-error">{{ error }}</div>
+{% elif pipeline %}
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<section class="panel" style="margin-bottom:1rem;">
+  <h2 class="panel-title">{{ pipeline.name }}</h2>
+  <div class="split-grid" style="grid-template-columns:1fr 1fr 1fr;gap:1rem;">
+    <div><strong>Status:</strong> <span class="badge badge-{{ pipeline.status }}">{{ pipeline.status }}</span></div>
+    <div><strong>Entry Bot:</strong> {{ pipeline.entry_bot_id or "—" }}</div>
+    <div><strong>Root Task:</strong> <code>{{ pipeline.root_task_id }}</code></div>
+    <div><strong>Queued:</strong> {{ pipeline.status_summary.queued + pipeline.status_summary.blocked }}</div>
+    <div><strong>Completed:</strong> {{ pipeline.status_summary.completed }}</div>
+    <div><strong>Failed:</strong> {{ pipeline.status_summary.failed }}</div>
+    <div><strong>Prompt Tokens:</strong> {{ pipeline.usage.prompt_tokens }}</div>
+    <div><strong>Completion Tokens:</strong> {{ pipeline.usage.completion_tokens }}</div>
+    <div><strong>Total Tokens:</strong> {{ pipeline.usage.total_tokens }}</div>
+  </div>
+</section>
+
+<section class="panel" style="margin-bottom:1rem;">
+  <div class="page-header" style="margin-bottom:0.75rem;">
+    <h2 class="panel-title">Tasks</h2>
+    <div class="mini-note">{{ pipeline.tasks|length }} total</div>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>Bot</th><th>Status</th><th>Created</th><th>Task</th><th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for task in pipeline.tasks %}
+      <tr>
+        <td>{{ task.bot_id }}</td>
+        <td><span class="badge badge-{{ task.status }}">{{ task.status }}</span></td>
+        <td>{{ (task.created_at[:19] if task.created_at else "") | replace('T', ' ') }}</td>
+        <td><code>{{ task.id }}</code></td>
+        <td class="actions">
+          <button class="btn btn-sm" type="button" onclick="retryTask('{{ task.id }}')">Retry</button>
+          <a class="btn btn-sm" href="/api/tasks/{{ task.id }}/download?section=payload">Payload</a>
+          <a class="btn btn-sm" href="/api/tasks/{{ task.id }}/download?section=result">Result</a>
+          <a class="btn btn-sm" href="/api/tasks/{{ task.id }}/download?section=error">Error</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="panel">
+  <div class="page-header" style="margin-bottom:0.75rem;">
+    <h2 class="panel-title">Artifacts and Reports</h2>
+    <div class="mini-note">{{ pipeline.artifacts|length }} total</div>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>Bot</th><th>Task</th><th>Label</th><th>Kind</th><th>Created</th><th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for artifact in pipeline.artifacts %}
+      <tr>
+        <td>{{ artifact.bot_id }}</td>
+        <td><code>{{ artifact.task_id }}</code></td>
+        <td>{{ artifact.label }}</td>
+        <td>{{ artifact.kind }}</td>
+        <td>{{ (artifact.created_at[:19] if artifact.created_at else "") | replace('T', ' ') }}</td>
+        <td class="actions">
+          <a class="btn btn-sm" href="/api/bots/{{ artifact.bot_id }}/artifacts/{{ artifact.id }}" target="_blank" rel="noopener">View</a>
+          <a class="btn btn-sm" href="/api/bots/{{ artifact.bot_id }}/artifacts/{{ artifact.id }}/download">Download</a>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="empty">No artifacts recorded for this pipeline yet</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+function getCsrf() {
+  const el = document.querySelector('input[name=csrf_token]');
+  return el ? el.value : '';
+}
+
+function retryTask(taskId) {
+  fetch('/api/tasks/' + encodeURIComponent(taskId) + '/retry', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify({})
+  })
+  .then(async (r) => {
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || 'Retry failed');
+    location.reload();
+  })
+  .catch((e) => alert(e.message || 'Retry failed'));
+}
+</script>
+{% endblock %}

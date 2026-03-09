@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% set active_page = "pipelines" %}
+{% block title %}Pipelines{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Pipelines</h1>
+</div>
+{% if error %}
+<div class="alert alert-error">{{ error }}</div>
+{% endif %}
+
+<section class="panel">
+  <div class="page-header" style="margin-bottom:0.75rem;">
+    <h2 class="panel-title">Pipeline Runs</h2>
+    <div class="mini-note">{{ pipelines|length }} tracked</div>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th><th>Status</th><th>Entry Bot</th><th>Tasks</th><th>Bots</th><th>Updated</th><th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for pipeline in pipelines %}
+      <tr>
+        <td>
+          <strong>{{ pipeline.name }}</strong><br>
+          <span class="mini-note"><code>{{ pipeline.id }}</code></span>
+        </td>
+        <td><span class="badge badge-{{ pipeline.status }}">{{ pipeline.status }}</span></td>
+        <td>{{ pipeline.entry_bot_id or "—" }}</td>
+        <td>{{ pipeline.task_count }}</td>
+        <td>{{ pipeline.bot_count }}</td>
+        <td>{{ (pipeline.updated_at[:19] if pipeline.updated_at else "") | replace('T', ' ') }}</td>
+        <td><a class="btn btn-sm" href="{{ url_for('pipelines.pipeline_detail_page', orchestration_id=pipeline.id) }}">Open</a></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="empty">No pipeline runs recorded yet</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

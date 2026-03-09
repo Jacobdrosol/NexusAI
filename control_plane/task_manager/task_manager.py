@@ -1357,7 +1357,7 @@ class TaskManager:
 
         metadata = task.metadata or TaskMetadata()
         trigger_depth = int(metadata.trigger_depth or 0)
-        max_depth = int(os.environ.get("NEXUSAI_BOT_TRIGGER_MAX_DEPTH", "6"))
+        max_depth = max(1, _settings_int("bot_trigger_max_depth", 20))
         if trigger_depth >= max_depth:
             logger.warning("Skipping bot triggers for task %s due to depth cap %s", task.id, max_depth)
             return
@@ -1387,6 +1387,8 @@ class TaskManager:
                 priority=metadata.priority if trigger.inherit_metadata else None,
                 conversation_id=metadata.conversation_id if trigger.inherit_metadata else None,
                 orchestration_id=metadata.orchestration_id if trigger.inherit_metadata else None,
+                pipeline_name=metadata.pipeline_name if trigger.inherit_metadata else None,
+                pipeline_entry_bot_id=metadata.pipeline_entry_bot_id if trigger.inherit_metadata else None,
                 parent_task_id=task.id,
                 trigger_rule_id=trigger.id,
                 trigger_depth=trigger_depth + 1,

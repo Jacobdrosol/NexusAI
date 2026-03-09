@@ -65,6 +65,7 @@ def create_app() -> Flask:
     from dashboard.routes.chat import bp as chat_bp
     from dashboard.routes.connections import bp as connections_bp
     from dashboard.routes.events import bp as events_bp
+    from dashboard.routes.pipelines import bp as pipelines_bp
     from dashboard.routes.projects import bp as projects_bp
     from dashboard.routes.tasks import bp as tasks_bp
     from dashboard.routes.users import bp as users_bp
@@ -78,6 +79,7 @@ def create_app() -> Flask:
     app.register_blueprint(bots_bp)
     app.register_blueprint(tasks_bp)
     app.register_blueprint(projects_bp)
+    app.register_blueprint(pipelines_bp)
     app.register_blueprint(chat_bp)
     app.register_blueprint(connections_bp)
     app.register_blueprint(vault_bp)

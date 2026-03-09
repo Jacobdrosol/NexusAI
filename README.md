@@ -123,14 +123,15 @@ Then open http://localhost:5000 in your browser.
 
 Dashboard and workflow:
 
-- Navigation pages: `Overview`, `Projects`, `Chat`, `Bots`, `Workers`, `Vault`, `Settings`.
+- Navigation pages: `Overview`, `Projects`, `Chat`, `Bots`, `Pipelines`, `Workers`, `Vault`, `Settings`.
 - Improved dashboard link contrast for worker and bot names on dark tables/cards.
 - Worker detail pages with live load, queue, and GPU graphs.
-- Bot detail editor with backend chain management, workflow triggers, saved input contracts, test runs, run history, and task board.
+- Bot detail editor with backend chain management, workflow triggers, saved input contracts, saved launch profiles, test runs, run history, and task board.
 - Bot export from the bot detail page and bot import from the bots index page, including bot configuration and bot-scoped connections, with overwrite confirmation on ID conflicts.
 - Bot-scoped external Connections workspace for HTTP/OpenAPI and database integration setup.
 - OpenAPI action discovery and in-dashboard connection test runner for bot connections.
 - Project detail pages with bridge management and scoped resources.
+- Pipeline run tracking page that groups all tasks in a saved-launch workflow, with per-pipeline status summaries, token usage, artifacts, and task-level retry/download actions.
 
 Chat and orchestration:
 
@@ -265,7 +266,14 @@ Current capabilities:
 
 Loop safety:
 
-- Trigger chains are capped by `NEXUSAI_BOT_TRIGGER_MAX_DEPTH` (default `6`) to prevent accidental infinite handoff loops.
+- Trigger chains are capped by the `bot_trigger_max_depth` runtime setting (default `20`) to prevent accidental infinite handoff loops.
+- Operators can change this in `Settings` without restarting the stack.
+
+Saved launch profiles:
+
+- A saved launch profile can be marked as a pipeline entry point from the bot detail page.
+- Launching a saved pipeline run assigns a shared orchestration ID to the root task and all downstream triggered tasks.
+- The `Pipelines` page then shows the grouped run with status, usage, reports, and rerun/download controls.
 
 API endpoints:
 
@@ -733,10 +741,8 @@ capabilities:
 Workflow and pipeline UX ideas currently planned, but not yet implemented:
 
 - A dedicated visual pipeline designer for building reusable multi-bot workflows without editing each bot page individually.
-- Pipeline-level execution views that show step state, fan-out branches, retries, and downstream dependencies in one place.
 - Start-from-step execution so operators can launch a pipeline from a chosen stage with explicit input.
 - Fan-out branch replay so operators can rerun one failed unit/lesson branch without rerunning the whole workflow.
 - Resume-from-checkpoint execution after a partial failure or operator correction.
-- Aggregated pipeline reports that summarize per-step inputs, outputs, token usage, timing, retries, and artifacts.
 - Queue and concurrency controls at the pipeline level so large fan-out stages can be drained safely without overwhelming providers or workers.
 - First-class pipeline templates that remain user-defined and modular rather than being seeded with project-specific assumptions.

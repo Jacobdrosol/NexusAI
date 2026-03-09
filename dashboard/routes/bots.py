@@ -5,6 +5,7 @@ import io
 import json
 import logging
 import re
+import uuid
 from datetime import datetime, timezone
 from typing import Any
 
@@ -553,10 +554,16 @@ def api_launch_bot(bot_id: str):
         return jsonify({"error": "launch payload must be a JSON object"}), 400
 
     metadata = {
-        "source": "saved_launch",
+        "source": "saved_launch_pipeline" if launch_profile.get("is_pipeline") else "saved_launch",
         "project_id": data.get("project_id", launch_profile.get("project_id")),
         "priority": data.get("priority", launch_profile.get("priority")),
     }
+    orchestration_id = None
+    if launch_profile.get("is_pipeline"):
+        orchestration_id = str(uuid.uuid4())
+        metadata["orchestration_id"] = orchestration_id
+        metadata["pipeline_name"] = str(launch_profile.get("pipeline_name") or launch_profile.get("label") or bot.get("name") or bot_id).strip()
+        metadata["pipeline_entry_bot_id"] = str(bot_id)
     task = cp.create_task_full(
         bot_id=bot_id,
         payload=payload,
@@ -568,7 +575,11 @@ def api_launch_bot(bot_id: str):
         if status < 400 or status > 599:
             status = 502
         return jsonify({"error": str((err or {}).get("detail") or "launch failed")}), status
-    return jsonify(task), 201
+    response_body = dict(task)
+    if orchestration_id:
+        response_body["pipeline_id"] = orchestration_id
+        response_body["pipeline_name"] = metadata.get("pipeline_name")
+    return jsonify(response_body), 201
 
 
 @bp.get("/api/bots/<bot_id>/artifacts/<artifact_id>")

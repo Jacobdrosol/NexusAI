@@ -262,6 +262,10 @@ function queueSavedLaunch(botId, label) {
   .then(async (r) => {
     const data = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(data.error || 'Launch failed');
+    if (data.pipeline_id) {
+      window.location.href = '/pipelines/' + encodeURIComponent(data.pipeline_id);
+      return;
+    }
     alert((label || 'Launch') + ' queued: ' + data.id);
     location.reload();
   })

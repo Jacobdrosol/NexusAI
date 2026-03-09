@@ -41,6 +41,8 @@ def normalize_launch_profile(bot: dict[str, Any]) -> dict[str, Any] | None:
         "priority": priority,
         "show_on_overview": bool(profile.get("show_on_overview", True)),
         "show_on_tasks": bool(profile.get("show_on_tasks", True)),
+        "is_pipeline": bool(profile.get("is_pipeline", False)),
+        "pipeline_name": str(profile.get("pipeline_name") or label).strip() or label,
     }
 
 

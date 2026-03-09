@@ -37,9 +37,11 @@ def test_bot_model_with_backend():
 
 def test_task_metadata():
     from shared.models import TaskMetadata
-    meta = TaskMetadata(source="test", priority=1)
+    meta = TaskMetadata(source="test", priority=1, pipeline_name="Course Pipeline", pipeline_entry_bot_id="course-intake")
     assert meta.source == "test"
     assert meta.priority == 1
+    assert meta.pipeline_name == "Course Pipeline"
+    assert meta.pipeline_entry_bot_id == "course-intake"
 
 
 def test_worker_model_has_enabled_field():

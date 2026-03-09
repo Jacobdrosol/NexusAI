@@ -16,6 +16,7 @@
     <a href="{{ url_for('vault.vault_page') }}" {% if active_page == 'vault' %}class="active"{% endif %}>Vault</a>
     <a href="{{ url_for('workers.workers_page') }}" {% if active_page == 'workers' %}class="active"{% endif %}>Workers</a>
     <a href="{{ url_for('bots.bots_page') }}" {% if active_page == 'bots' %}class="active"{% endif %}>Bots</a>
+    <a href="{{ url_for('pipelines.pipelines_page') }}" {% if active_page == 'pipelines' %}class="active"{% endif %}>Pipelines</a>
     <a href="{{ url_for('tasks.tasks_page') }}" {% if active_page == 'tasks' %}class="active"{% endif %}>Tasks</a>
     {% if current_user.role == 'admin' %}
     <a href="{{ url_for('users.users_page') }}" {% if active_page == 'users' %}class="active"{% endif %}>Users</a>

@@ -318,6 +318,40 @@ def test_bot_launch_api_uses_saved_launch_profile(dashboard_client):
     assert body["metadata"]["project_id"] == "globeiq"
 
 
+def test_bot_launch_api_marks_pipeline_runs(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def get_bot(self, bot_id):
+            return {
+                "id": bot_id,
+                "name": "Course Intake",
+                "role": "assistant",
+                "routing_rules": {
+                    "launch_profile": {
+                        "enabled": True,
+                        "label": "Run Course Pipeline",
+                        "payload": {"topic": "AP World History"},
+                        "is_pipeline": True,
+                        "pipeline_name": "Course Generation Pipeline",
+                    }
+                },
+            }
+
+        def create_task_full(self, bot_id, payload, metadata=None, depends_on=None):
+            return {"id": "task-launch-2", "bot_id": bot_id, "payload": payload, "metadata": metadata}
+
+    with patch("dashboard.cp_client.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post("/api/bots/course-intake/launch", json={})
+
+    assert resp.status_code == 201
+    body = resp.get_json()
+    assert body["metadata"]["source"] == "saved_launch_pipeline"
+    assert body["metadata"]["pipeline_name"] == "Course Generation Pipeline"
+    assert body["metadata"]["pipeline_entry_bot_id"] == "course-intake"
+    assert body["pipeline_id"]
+
+
 def test_bot_artifact_api_and_download_proxy_control_plane(dashboard_client):
     _login_admin(dashboard_client)
 
@@ -816,6 +850,7 @@ def test_settings_page_loads_for_admin(dashboard_client):
     assert b"Export/Import" in resp.data
     assert b"Audit Log" in resp.data
     assert b"Deploy" in resp.data
+    assert b"Bot Trigger Max Depth" in resp.data
     assert b'data-target="section-export-import"' in resp.data
     assert b'data-target="section-audit-log"' in resp.data
     assert b'data-target="section-deploy"' in resp.data
@@ -974,3 +1009,67 @@ def test_overview_page_shows_saved_launch_profiles(dashboard_client):
 
     assert resp.status_code == 200
     assert b"Run Course Pipeline" in resp.data
+
+
+def test_pipelines_pages_render_grouped_pipeline_runs(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_tasks(self, orchestration_id=None, statuses=None, bot_id=None, limit=200):
+            rows = [
+                {
+                    "id": "task-root",
+                    "bot_id": "course-intake",
+                    "status": "completed",
+                    "payload": {"topic": "AP World History"},
+                    "result": {"usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30}},
+                    "error": None,
+                    "created_at": "2026-03-09T10:00:00+00:00",
+                    "updated_at": "2026-03-09T10:01:00+00:00",
+                    "metadata": {
+                        "source": "saved_launch_pipeline",
+                        "orchestration_id": "orch-1",
+                        "workflow_root_task_id": "task-root",
+                        "pipeline_name": "Course Generation Pipeline",
+                        "pipeline_entry_bot_id": "course-intake",
+                    },
+                },
+                {
+                    "id": "task-child",
+                    "bot_id": "course-outline",
+                    "status": "running",
+                    "payload": {},
+                    "result": {"usage": {"prompt_tokens": 5, "completion_tokens": 7, "total_tokens": 12}},
+                    "error": None,
+                    "created_at": "2026-03-09T10:02:00+00:00",
+                    "updated_at": "2026-03-09T10:03:00+00:00",
+                    "metadata": {
+                        "source": "bot_trigger",
+                        "orchestration_id": "orch-1",
+                        "workflow_root_task_id": "task-root",
+                        "pipeline_name": "Course Generation Pipeline",
+                        "pipeline_entry_bot_id": "course-intake",
+                    },
+                },
+            ]
+            if orchestration_id:
+                return [row for row in rows if (row.get("metadata") or {}).get("orchestration_id") == orchestration_id]
+            return rows
+
+        def list_bot_artifacts(self, bot_id, limit=100, task_id=None, include_content=False):
+            rows = [
+                {"id": "art-1", "task_id": "task-root", "bot_id": "course-intake", "kind": "note", "label": "Run Report", "content": None, "path": None, "metadata": {}, "created_at": "2026-03-09T10:01:00+00:00"},
+                {"id": "art-2", "task_id": "task-child", "bot_id": "course-outline", "kind": "note", "label": "Execution Report", "content": None, "path": None, "metadata": {}, "created_at": "2026-03-09T10:03:00+00:00"},
+            ]
+            return [row for row in rows if row["bot_id"] == bot_id]
+
+    with patch("dashboard.routes.pipelines.get_cp_client", return_value=FakeCP()):
+        list_resp = dashboard_client.get("/pipelines")
+        detail_resp = dashboard_client.get("/pipelines/orch-1")
+
+    assert list_resp.status_code == 200
+    assert b"Pipelines" in list_resp.data
+    assert b"Course Generation Pipeline" in list_resp.data
+    assert detail_resp.status_code == 200
+    assert b"Artifacts and Reports" in detail_resp.data
+    assert b"Execution Report" in detail_resp.data

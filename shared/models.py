@@ -111,6 +111,8 @@ class TaskMetadata(BaseModel):
     original_task_id: Optional[str] = None
     retry_of_task_id: Optional[str] = None
     workflow_root_task_id: Optional[str] = None
+    pipeline_name: Optional[str] = None
+    pipeline_entry_bot_id: Optional[str] = None
 
 
 class TaskError(BaseModel):
