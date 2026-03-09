@@ -813,7 +813,7 @@ class TaskManager:
         depends_on: Optional[List[str]] = None,
     ) -> Task:
         await self._ensure_db()
-        await self._validate_task_payload(bot_id, payload)
+        await self._validate_task_payload(bot_id, payload, metadata=metadata)
         dependencies = depends_on or []
         async with self._lock:
             for dep_id in dependencies:
@@ -1044,7 +1044,12 @@ class TaskManager:
                 return contract
         return {}
 
-    async def _validate_task_payload(self, bot_id: str, payload: Any) -> None:
+    async def _validate_task_payload(
+        self,
+        bot_id: str,
+        payload: Any,
+        metadata: Optional[TaskMetadata] = None,
+    ) -> None:
         contract = await self._bot_input_contract(bot_id)
         if not contract:
             return
@@ -1067,10 +1072,12 @@ class TaskManager:
         output_mode = await self._bot_output_contract_mode(bot_id)
         has_input_transform = await self._bot_has_enabled_input_transform(bot_id)
         has_launch_form_contract = bool(form_fields) or bool(default_payload)
+        is_saved_launch_entry = await self._is_saved_launch_entry(bot_id, metadata)
         if not validate_before_transform and (
             output_mode == "payload_transform"
             or has_input_transform
             or has_launch_form_contract
+            or is_saved_launch_entry
         ):
             return
 
@@ -1094,6 +1101,21 @@ class TaskManager:
             return False
         config = routing_rules.get("input_transform")
         return isinstance(config, dict) and bool(config.get("enabled", False)) and config.get("template") is not None
+
+    async def _is_saved_launch_entry(self, bot_id: str, metadata: Optional[TaskMetadata]) -> bool:
+        if metadata is None:
+            return False
+        source = str(metadata.source or "").strip().lower()
+        if source not in {"saved_launch", "saved_launch_pipeline", "manual_retry"}:
+            return False
+        if metadata.parent_task_id or metadata.trigger_rule_id:
+            return False
+        bot = await self._bot_registry.get(bot_id)
+        routing_rules = getattr(bot, "routing_rules", None)
+        if not isinstance(routing_rules, dict):
+            return False
+        launch_profile = routing_rules.get("launch_profile")
+        return isinstance(launch_profile, dict) and bool(launch_profile.get("enabled", False))
 
     async def _normalize_task_result(self, task: Task, result: Any) -> Any:
         contract = await self._bot_output_contract(task.bot_id)
