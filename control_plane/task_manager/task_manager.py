@@ -1055,6 +1055,8 @@ class TaskManager:
         payload_format = str(contract.get("format") or "any").strip().lower()
         required_fields = contract.get("required_fields") if isinstance(contract.get("required_fields"), list) else []
         non_empty_fields = contract.get("non_empty_fields") if isinstance(contract.get("non_empty_fields"), list) else []
+        form_fields = contract.get("form_fields") if isinstance(contract.get("form_fields"), list) else []
+        default_payload = contract.get("default_payload") if isinstance(contract.get("default_payload"), dict) else {}
 
         if payload_format == "json_object" and not isinstance(payload, dict):
             raise ValueError("input contract requires a JSON object payload")
@@ -1064,7 +1066,12 @@ class TaskManager:
         validate_before_transform = bool(contract.get("validate_before_transform", False))
         output_mode = await self._bot_output_contract_mode(bot_id)
         has_input_transform = await self._bot_has_enabled_input_transform(bot_id)
-        if not validate_before_transform and (output_mode == "payload_transform" or has_input_transform):
+        has_launch_form_contract = bool(form_fields) or bool(default_payload)
+        if not validate_before_transform and (
+            output_mode == "payload_transform"
+            or has_input_transform
+            or has_launch_form_contract
+        ):
             return
 
         if required_fields:

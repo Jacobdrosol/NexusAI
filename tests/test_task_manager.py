@@ -525,6 +525,55 @@ async def test_input_transform_bots_defer_required_input_validation_until_after_
 
 
 @pytest.mark.anyio
+async def test_launch_form_contracts_defer_stale_required_input_validation(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {"ok": True}
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "launch-form-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="launch-form-intake",
+            name="Launch Form Intake",
+            role="assistant",
+            backends=[],
+            routing_rules={
+                "input_contract": {
+                    "enabled": True,
+                    "format": "json_object",
+                    "required_fields": ["workflow_type", "course_brief", "generation_settings", "revision_context"],
+                    "default_payload": {"workflow_type": "course_generation"},
+                    "form_fields": [
+                        {"key": "topic", "label": "Topic", "required": True, "type": "text"},
+                    ],
+                },
+            },
+        )
+    )
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "launch-form-tasks.db"), bot_registry=bot_registry)
+    task = await tm.create_task(
+        bot_id="launch-form-intake",
+        payload={"topic": "AP World History"},
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status == "completed":
+            break
+        await asyncio.sleep(0.05)
+
+    updated = await tm.get_task(task.id)
+    assert updated.status == "completed"
+
+
+@pytest.mark.anyio
 async def test_bot_trigger_creates_follow_on_run_and_artifacts(tmp_path):
     import asyncio
 
