@@ -254,6 +254,60 @@
 
 <section class="panel" style="margin-bottom:1rem;">
   <div class="page-header" style="margin-bottom:0.75rem;">
+    <h2 class="panel-title">Connection Context</h2>
+    <div>
+      <button class="btn btn-primary" onclick="saveConnectionContext()">Save Connection Context</button>
+    </div>
+  </div>
+  <p class="mini-note" style="margin-bottom:0.75rem;">Inject attached connection schemas into model prompts and optionally fetch dynamic context from an attached HTTP connection before inference. Use this when a bot must follow platform-owned JSON structures such as lesson blocks, question payloads, or import contracts.</p>
+  <div class="form-group">
+    <label><input type="checkbox" id="connection-context-enabled"> Enable connection context injection</label>
+  </div>
+  <div class="split-grid" style="grid-template-columns:1fr 1fr 1fr;">
+    <div class="form-group">
+      <label>Static Context Connection Name (optional)</label>
+      <input class="form-control" id="connection-context-name" placeholder="platform-schema">
+    </div>
+    <div class="form-group">
+      <label>Fetch Connection Name (optional)</label>
+      <input class="form-control" id="connection-fetch-name" placeholder="platform-blocks-api">
+    </div>
+    <div class="form-group">
+      <label>For-Each Payload Field (optional)</label>
+      <input class="form-control" id="connection-fetch-field" placeholder="generation_settings.allowed_lesson_blocks">
+    </div>
+  </div>
+  <div class="split-grid" style="grid-template-columns:1fr 1fr 1fr;">
+    <div class="form-group">
+      <label>Max Items</label>
+      <input class="form-control" id="connection-fetch-max-items" type="number" placeholder="40">
+    </div>
+    <div class="form-group">
+      <label>Max Static Schema Chars</label>
+      <input class="form-control" id="connection-context-max-schema-chars" type="number" placeholder="12000">
+    </div>
+    <div class="form-group">
+      <label>Max Total Context Chars</label>
+      <input class="form-control" id="connection-context-max-total-chars" type="number" placeholder="24000">
+    </div>
+  </div>
+  <div class="split-grid" style="grid-template-columns:1fr 1fr;">
+    <div class="form-group">
+      <label><input type="checkbox" id="connection-context-include-schema" checked> Include attached schema_text in prompt</label>
+    </div>
+    <div class="form-group">
+      <label><input type="checkbox" id="connection-context-include-actions" checked> Include discovered HTTP actions in prompt</label>
+    </div>
+  </div>
+  <div class="form-group">
+    <label>Fetch Actions JSON (optional)</label>
+    <textarea class="form-control" id="connection-fetch-actions" rows="8" placeholder='[{"method":"GET","path":"/api/blocks/&#123;&#123;item&#125;&#125;","query_params":{"includeExample":"true"}}]'></textarea>
+    <div class="mini-note">Use <code>&#123;&#123;item&#125;&#125;</code>, <code>&#123;&#123;item_index&#125;&#125;</code>, and <code>&#123;&#123;item_json&#125;&#125;</code> inside fetch actions. When <code>For-Each Payload Field</code> is set, the platform runs these actions once per item in that payload array and injects the responses into the prompt.</div>
+  </div>
+</section>
+
+<section class="panel" style="margin-bottom:1rem;">
+  <div class="page-header" style="margin-bottom:0.75rem;">
     <h2 class="panel-title">Saved Launch Profile</h2>
     <div>
       <button class="btn" onclick="queueSavedLaunch()">Queue Saved Launch</button>
@@ -690,6 +744,11 @@ BOT.input_transform = BOT.input_transform && typeof BOT.input_transform === 'obj
   : ((BOT.routing_rules && typeof BOT.routing_rules === 'object' && BOT.routing_rules.input_transform && typeof BOT.routing_rules.input_transform === 'object')
     ? BOT.routing_rules.input_transform
     : {enabled: false, description: '', template: null});
+BOT.connection_context = BOT.connection_context && typeof BOT.connection_context === 'object'
+  ? BOT.connection_context
+  : ((BOT.routing_rules && typeof BOT.routing_rules === 'object' && BOT.routing_rules.connection_context && typeof BOT.routing_rules.connection_context === 'object')
+    ? BOT.routing_rules.connection_context
+    : {enabled: false, fetch_actions: []});
 BOT.launch_profile = BOT.launch_profile && typeof BOT.launch_profile === 'object'
   ? BOT.launch_profile
   : ((BOT.routing_rules && typeof BOT.routing_rules === 'object' && BOT.routing_rules.launch_profile && typeof BOT.routing_rules.launch_profile === 'object')
@@ -774,6 +833,7 @@ function botPayloadForSave() {
   routingRules.input_contract = normalizedInputContract();
   routingRules.input_transform = normalizedInputTransform();
   routingRules.output_contract = normalizedOutputContract();
+  routingRules.connection_context = normalizedConnectionContext();
   routingRules.launch_profile = normalizedLaunchProfile();
   payload.routing_rules = routingRules;
   payload.workflow = BOT.workflow;
@@ -908,6 +968,31 @@ function normalizedInputTransform() {
   };
 }
 
+function normalizedConnectionContext() {
+  const config = BOT.connection_context && typeof BOT.connection_context === 'object' ? BOT.connection_context : {};
+  const fetchActions = Array.isArray(config.fetch_actions)
+    ? config.fetch_actions
+    : (config.fetch_actions && typeof config.fetch_actions === 'object' ? [config.fetch_actions] : []);
+  return {
+    enabled: config.enabled === true,
+    connection_name: String(config.connection_name || '').trim() || null,
+    fetch_connection_name: String(config.fetch_connection_name || '').trim() || null,
+    for_each_field: String(config.for_each_field || '').trim() || null,
+    max_items: config.max_items === null || config.max_items === undefined || config.max_items === ''
+      ? 40
+      : parseInt(config.max_items, 10),
+    include_schema: config.include_schema !== false,
+    include_actions: config.include_actions !== false,
+    max_schema_chars: config.max_schema_chars === null || config.max_schema_chars === undefined || config.max_schema_chars === ''
+      ? 12000
+      : parseInt(config.max_schema_chars, 10),
+    max_total_chars: config.max_total_chars === null || config.max_total_chars === undefined || config.max_total_chars === ''
+      ? 24000
+      : parseInt(config.max_total_chars, 10),
+    fetch_actions: fetchActions,
+  };
+}
+
 function loadInputTransformEditor() {
   const transform = normalizedInputTransform();
   document.getElementById('input-transform-enabled').checked = transform.enabled === true;
@@ -936,6 +1021,50 @@ function saveInputTransform() {
     template: template,
   };
   persistBot('Input transform saved.');
+}
+
+function loadConnectionContextEditor() {
+  const config = normalizedConnectionContext();
+  document.getElementById('connection-context-enabled').checked = config.enabled === true;
+  document.getElementById('connection-context-name').value = config.connection_name || '';
+  document.getElementById('connection-fetch-name').value = config.fetch_connection_name || '';
+  document.getElementById('connection-fetch-field').value = config.for_each_field || '';
+  document.getElementById('connection-fetch-max-items').value = config.max_items ?? 40;
+  document.getElementById('connection-context-max-schema-chars').value = config.max_schema_chars ?? 12000;
+  document.getElementById('connection-context-max-total-chars').value = config.max_total_chars ?? 24000;
+  document.getElementById('connection-context-include-schema').checked = config.include_schema !== false;
+  document.getElementById('connection-context-include-actions').checked = config.include_actions !== false;
+  document.getElementById('connection-fetch-actions').value = JSON.stringify(config.fetch_actions || [], null, 2);
+}
+
+function saveConnectionContext() {
+  const rawFetchActions = String(document.getElementById('connection-fetch-actions')?.value || '').trim();
+  let fetchActions = [];
+  if (rawFetchActions) {
+    try {
+      fetchActions = JSON.parse(rawFetchActions);
+    } catch (err) {
+      alert('Fetch actions must be valid JSON.');
+      return;
+    }
+  }
+  if (!Array.isArray(fetchActions)) {
+    alert('Fetch actions must be a JSON array.');
+    return;
+  }
+  BOT.connection_context = {
+    enabled: document.getElementById('connection-context-enabled').checked,
+    connection_name: String(document.getElementById('connection-context-name')?.value || '').trim() || null,
+    fetch_connection_name: String(document.getElementById('connection-fetch-name')?.value || '').trim() || null,
+    for_each_field: String(document.getElementById('connection-fetch-field')?.value || '').trim() || null,
+    max_items: parseInt(String(document.getElementById('connection-fetch-max-items')?.value || '40').trim(), 10) || 40,
+    include_schema: document.getElementById('connection-context-include-schema').checked,
+    include_actions: document.getElementById('connection-context-include-actions').checked,
+    max_schema_chars: parseInt(String(document.getElementById('connection-context-max-schema-chars')?.value || '12000').trim(), 10) || 12000,
+    max_total_chars: parseInt(String(document.getElementById('connection-context-max-total-chars')?.value || '24000').trim(), 10) || 24000,
+    fetch_actions: fetchActions,
+  };
+  persistBot('Connection context saved.');
 }
 
 function loadOutputContractEditor() {
@@ -1790,6 +1919,7 @@ renderBackendChain();
 renderWorkflowTriggers();
 loadInputContractEditor();
 loadInputTransformEditor();
+loadConnectionContextEditor();
 loadOutputContractEditor();
 loadLaunchProfileEditor();
 if (RUNS.length) {

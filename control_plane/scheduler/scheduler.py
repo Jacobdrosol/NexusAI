@@ -195,32 +195,26 @@ def _contract_prompt_suffix(bot: Any) -> str:
     return "\n\nOutput contract:\n" + "\n".join(parts)
 
 
-def _connection_context_prompt_suffix(bot_id: str, bot: Any) -> str:
+def _connection_context_config(bot: Any) -> dict[str, Any]:
     routing_rules = getattr(bot, "routing_rules", None)
     config = routing_rules.get("connection_context") if isinstance(routing_rules, dict) else None
-    if isinstance(config, dict) and not bool(config.get("enabled", True)):
-        return ""
+    return config if isinstance(config, dict) else {}
 
-    include_schema = True if not isinstance(config, dict) else bool(config.get("include_schema", True))
-    include_actions = True if not isinstance(config, dict) else bool(config.get("include_actions", True))
-    max_schema_chars = 12000 if not isinstance(config, dict) else max(500, int(config.get("max_schema_chars") or 12000))
-    max_total_chars = 24000 if not isinstance(config, dict) else max(1000, int(config.get("max_total_chars") or 24000))
-    max_actions = 24 if not isinstance(config, dict) else max(1, int(config.get("max_actions") or 24))
 
+def _load_attached_connection_rows(bot_id: str) -> list[Any]:
     try:
-        from dashboard.connections_service import parse_openapi_actions
         from dashboard.db import get_db
         from dashboard.models import BotConnection, Connection
     except Exception:
-        return ""
+        return []
 
     db = get_db()
     try:
         links = db.query(BotConnection).filter(BotConnection.bot_ref == str(bot_id)).all()
         connection_ids = [int(link.connection_id) for link in links]
         if not connection_ids:
-            return ""
-        rows = (
+            return []
+        return (
             db.query(Connection)
             .filter(Connection.id.in_(connection_ids), Connection.enabled.is_(True))
             .order_by(Connection.name.asc())
@@ -228,12 +222,93 @@ def _connection_context_prompt_suffix(bot_id: str, bot: Any) -> str:
         )
     except Exception as exc:
         logger.warning("Failed to load attached bot connections for %s: %s", bot_id, exc)
-        return ""
+        return []
     finally:
         db.close()
 
+
+def _resolve_attached_connection(
+    rows: list[Any],
+    *,
+    requested_name: str | None = None,
+    requested_id: str | None = None,
+) -> Any | None:
+    if requested_id:
+        match = next((row for row in rows if str(getattr(row, "id", "")) == str(requested_id)), None)
+        if match is not None:
+            return match
+    if requested_name:
+        match = next(
+            (row for row in rows if str(getattr(row, "name", "")).strip().lower() == str(requested_name).strip().lower()),
+            None,
+        )
+        if match is not None:
+            return match
+    if len(rows) == 1:
+        return rows[0]
+    return None
+
+
+def _normalize_payload_path(path: str) -> str:
+    cleaned = str(path or "").strip()
+    if cleaned.startswith("payload."):
+        cleaned = cleaned[8:].strip()
+    return cleaned
+
+
+def _render_loop_template(template: Any, *, item: Any, item_index: int) -> Any:
+    if isinstance(template, dict):
+        return {str(key): _render_loop_template(value, item=item, item_index=item_index) for key, value in template.items()}
+    if isinstance(template, list):
+        return [_render_loop_template(value, item=item, item_index=item_index) for value in template]
+    if not isinstance(template, str):
+        return template
+
+    raw = template.strip()
+    if raw == "{{item_json}}":
+        return item
+    if raw == "{{item_index}}":
+        return item_index
+    if raw == "{{item}}":
+        return item if isinstance(item, (dict, list, int, float, bool)) else str(item)
+
+    rendered = template.replace("{{item_index}}", str(item_index))
+    if "{{item_json}}" in rendered:
+        rendered = rendered.replace("{{item_json}}", json.dumps(item, ensure_ascii=False))
+    if "{{item}}" in rendered:
+        rendered = rendered.replace("{{item}}", str(item))
+    return rendered
+
+
+def _truncate_text(value: str, limit: int) -> str:
+    text = str(value or "").strip()
+    if limit <= 0 or len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "\n...[TRUNCATED]"
+
+
+def _static_connection_context_prompt(rows: list[Any], config: dict[str, Any]) -> str:
     if not rows:
         return ""
+
+    include_schema = bool(config.get("include_schema", True))
+    include_actions = bool(config.get("include_actions", True))
+    max_schema_chars = max(500, int(config.get("max_schema_chars") or 12000))
+    max_total_chars = max(1000, int(config.get("max_total_chars") or 24000))
+    max_actions = max(1, int(config.get("max_actions") or 24))
+    requested_name = str(config.get("connection_name") or "").strip()
+
+    target_rows = rows
+    if requested_name:
+        selected = _resolve_attached_connection(rows, requested_name=requested_name)
+        target_rows = [selected] if selected is not None else []
+    if not target_rows:
+        return ""
+
+    try:
+        from dashboard.connections_service import parse_openapi_actions
+    except Exception:
+        parse_openapi_actions = None  # type: ignore[assignment]
 
     parts: list[str] = [
         "Attached connection schemas:",
@@ -242,28 +317,27 @@ def _connection_context_prompt_suffix(bot_id: str, bot: Any) -> str:
     ]
     remaining_chars = max_total_chars
 
-    for row in rows:
-        section: list[str] = [f"Connection: {str(row.name or '').strip() or row.id} ({str(row.kind or '').strip() or 'unknown'})"]
-        description = str(row.description or "").strip()
+    for row in target_rows:
+        section: list[str] = [f"Connection: {str(getattr(row, 'name', '') or '').strip() or getattr(row, 'id', '')} ({str(getattr(row, 'kind', '') or '').strip() or 'unknown'})"]
+        description = str(getattr(row, "description", "") or "").strip()
         if description:
             section.append(f"Description: {description}")
 
-        config_json = row.config_json or "{}"
         try:
-            connection_config = json.loads(config_json)
+            connection_config = json.loads(getattr(row, "config_json", "{}") or "{}")
         except Exception:
             connection_config = {}
         if isinstance(connection_config, dict):
-            if str(row.kind or "").strip().lower() == "http":
+            if str(getattr(row, "kind", "") or "").strip().lower() == "http":
                 base_url = str(connection_config.get("base_url") or "").strip()
                 if base_url:
                     section.append(f"Base URL: {base_url}")
-            if str(row.kind or "").strip().lower() == "database":
+            if str(getattr(row, "kind", "") or "").strip().lower() == "database":
                 readonly = bool(connection_config.get("readonly", False))
                 section.append(f"Readonly: {'true' if readonly else 'false'}")
 
-        schema_text = str(row.schema_text or "").strip()
-        if include_actions and str(row.kind or "").strip().lower() == "http" and schema_text:
+        schema_text = str(getattr(row, "schema_text", "") or "").strip()
+        if include_actions and parse_openapi_actions and str(getattr(row, "kind", "") or "").strip().lower() == "http" and schema_text:
             try:
                 actions = parse_openapi_actions(schema_text)
             except Exception:
@@ -278,19 +352,14 @@ def _connection_context_prompt_suffix(bot_id: str, bot: Any) -> str:
                 section.append("Available actions: " + ", ".join(item for item in formatted_actions if item).strip())
 
         if include_schema and schema_text:
-            truncated = schema_text[:max_schema_chars]
-            if len(schema_text) > len(truncated):
-                truncated = truncated.rstrip() + "\n...[TRUNCATED]"
             section.append("Schema and examples:")
-            section.append(truncated)
+            section.append(_truncate_text(schema_text, max_schema_chars))
 
         rendered = "\n".join(item for item in section if str(item).strip()).strip()
         if not rendered:
             continue
         if len(rendered) > remaining_chars:
-            rendered = rendered[:remaining_chars].rstrip()
-            if rendered:
-                rendered += "\n...[TRUNCATED]"
+            rendered = _truncate_text(rendered, remaining_chars)
         if not rendered:
             break
         parts.append(rendered)
@@ -303,14 +372,129 @@ def _connection_context_prompt_suffix(bot_id: str, bot: Any) -> str:
     return "\n\n" + "\n\n".join(parts)
 
 
-def _prepare_system_prompt(bot: Any, *, bot_id: str | None = None) -> str | None:
+def _dynamic_connection_fetch_prompt(rows: list[Any], config: dict[str, Any], payload: Any) -> str:
+    fetch_templates = config.get("fetch_actions")
+    if isinstance(fetch_templates, dict):
+        fetch_templates = [fetch_templates]
+    if not isinstance(fetch_templates, list) or not fetch_templates:
+        return ""
+
+    connection = _resolve_attached_connection(
+        rows,
+        requested_name=str(config.get("fetch_connection_name") or config.get("connection_name") or "").strip() or None,
+        requested_id=str(config.get("fetch_connection_id") or "").strip() or None,
+    )
+    if connection is None:
+        return ""
+
+    try:
+        from dashboard.connections_service import resolve_auth_payload, test_http_connection
+    except Exception:
+        return ""
+
+    try:
+        connection_config = json.loads(getattr(connection, "config_json", "{}") or "{}")
+    except Exception:
+        connection_config = {}
+    try:
+        auth_payload = resolve_auth_payload(json.loads(getattr(connection, "auth_json", "{}") or "{}"))
+    except Exception:
+        auth_payload = {}
+    schema_text = str(getattr(connection, "schema_text", "") or "")
+
+    allow_mutating_fetch = bool(config.get("allow_mutating_fetch", False))
+    response_chars = max(500, int(config.get("fetch_response_chars") or 5000))
+    max_items = max(1, int(config.get("max_items") or 40))
+    for_each_field = _normalize_payload_path(str(config.get("for_each_field") or ""))
+    items: list[Any]
+    if for_each_field:
+        resolved = _lookup_payload_path(payload, for_each_field)
+        if not isinstance(resolved, list) or not resolved:
+            return ""
+        items = list(resolved[:max_items])
+    else:
+        items = [None]
+
+    actions: list[tuple[str, dict[str, Any]]] = []
+    for item_index, item in enumerate(items):
+        for template in fetch_templates:
+            if not isinstance(template, dict):
+                continue
+            expanded = _render_loop_template(template, item=item, item_index=item_index) if item is not None else template
+            action = _transform_template_value(expanded, payload)
+            if not isinstance(action, dict):
+                continue
+            method = str(action.get("method") or "GET").strip().upper()
+            if method not in {"GET", "HEAD", "OPTIONS"} and not allow_mutating_fetch:
+                logger.warning("Skipping mutating connection-context fetch for bot payload because method %s is not allowed", method)
+                continue
+            label = str(action.get("operation_id") or action.get("path") or f"fetch_{len(actions) + 1}").strip()
+            if item is not None:
+                label = f"{label} [{item}]"
+            actions.append((label, action))
+
+    if not actions:
+        return ""
+
+    sections: list[str] = []
+    for label, action in actions:
+        result = test_http_connection(
+            config=connection_config if isinstance(connection_config, dict) else {},
+            auth=auth_payload if isinstance(auth_payload, dict) else {},
+            schema_text=schema_text,
+            payload=action,
+        )
+        preview = str(result.get("body_preview") or "").strip()
+        if preview:
+            try:
+                preview = json.dumps(json.loads(preview), ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+        rendered = "\n".join(
+            part
+            for part in [
+                f"Fetch: {label}",
+                f"Status: {result.get('status')}",
+                f"URL: {result.get('url')}",
+                "Response:",
+                _truncate_text(preview or "{}", response_chars),
+            ]
+            if str(part).strip()
+        ).strip()
+        sections.append(rendered)
+
+    if not sections:
+        return ""
+    return "\n\nDynamic connection fetch results:\n" + "\n\n".join(sections)
+
+
+def _connection_context_prompt_suffix(bot_id: str, bot: Any, payload: Any) -> str:
+    config = _connection_context_config(bot)
+    if config and not bool(config.get("enabled", True)):
+        return ""
+
+    rows = _load_attached_connection_rows(bot_id)
+    if not rows:
+        return ""
+
+    parts = [
+        _static_connection_context_prompt(rows, config),
+        _dynamic_connection_fetch_prompt(rows, config, payload),
+    ]
+    rendered = "\n".join(part for part in parts if str(part).strip()).strip()
+    if not rendered:
+        return ""
+    return "\n\n" + rendered
+
+
+def _prepare_system_prompt(bot: Any, *, bot_id: str | None = None, payload: Any = None) -> str | None:
     base = str(getattr(bot, "system_prompt", None) or "").strip()
     suffix_parts: list[str] = []
     contract_suffix = _contract_prompt_suffix(bot).strip()
     if contract_suffix:
         suffix_parts.append(contract_suffix)
     if bot_id:
-        connection_suffix = _connection_context_prompt_suffix(bot_id, bot).strip()
+        connection_suffix = _connection_context_prompt_suffix(bot_id, bot, payload).strip()
         if connection_suffix:
             suffix_parts.append(connection_suffix)
     suffix = "\n".join(part for part in suffix_parts if part).strip()
@@ -326,7 +510,7 @@ def _prepare_system_prompt(bot: Any, *, bot_id: str | None = None) -> str | None
 def _prepare_payload_for_backend(bot: Any, backend: BackendConfig, payload: Any, *, task: Task | None = None) -> Any:
     if backend.type == "custom":
         return payload
-    return _inject_system_prompt(_prepare_system_prompt(bot, bot_id=getattr(task, "bot_id", None)), payload)
+    return _inject_system_prompt(_prepare_system_prompt(bot, bot_id=getattr(task, "bot_id", None), payload=payload), payload)
 
 
 class Scheduler:

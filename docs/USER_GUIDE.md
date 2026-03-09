@@ -374,6 +374,7 @@ Current connection behavior:
 
 - HTTP/OpenAPI connection auth is used for runtime calls and tests, but auth secrets are not injected into model prompts.
 - Connection `schema_text` is treated as authoritative structure guidance for attached bots.
+- Connection context can also fetch live JSON from an attached HTTP connection before inference, including one fetch per item from a payload array.
 - One connection definition can be attached to multiple bots from the bot connections page.
 - This is useful when several bots must write payloads that match the same platform schema, such as lesson blocks, unit packages, import payloads, or badge definitions.
 

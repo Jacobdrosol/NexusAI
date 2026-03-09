@@ -260,6 +260,7 @@ def test_bot_detail_page_loads_when_logged_in(dashboard_client):
     assert b"Input Transform" in resp.data
     assert b"Output Contract" in resp.data
     assert b"Payload Transform" in resp.data
+    assert b"Connection Context" in resp.data
     assert b"Saved Launch Profile" in resp.data
     assert b"Backlog" in resp.data
     assert b"ollama_cloud" in resp.data

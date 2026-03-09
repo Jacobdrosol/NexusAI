@@ -246,6 +246,119 @@ async def test_scheduler_injects_attached_connection_schema_into_model_prompt(mo
 
 
 @pytest.mark.anyio
+async def test_scheduler_fetches_dynamic_connection_context_from_payload_items(monkeypatch):
+    from control_plane.scheduler.scheduler import Scheduler
+    from dashboard.models import BotConnection as DashboardBotConnection
+    from dashboard.models import Connection as DashboardConnection
+
+    class FakeQuery:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def filter(self, *args, **kwargs):
+            return self
+
+        def order_by(self, *args, **kwargs):
+            return self
+
+        def all(self):
+            return list(self._rows)
+
+    class FakeSession:
+        def query(self, model):
+            if model is DashboardBotConnection:
+                return FakeQuery([type("Link", (), {"connection_id": 7})()])
+            if model is DashboardConnection:
+                return FakeQuery(
+                    [
+                        type(
+                            "Conn",
+                            (),
+                            {
+                                "id": 7,
+                                "name": "platform-blocks-api",
+                                "kind": "http",
+                                "description": "Remote block schema API",
+                                "config_json": json.dumps({"base_url": "https://example.test"}),
+                                "auth_json": json.dumps({"type": "api_key", "name": "X-GLOBEIQ-BLOCKS-KEY", "api_key": "enc:ignored"}),
+                                "schema_text": "openapi: 3.1.0",
+                                "enabled": True,
+                            },
+                        )()
+                    ]
+                )
+            raise AssertionError(f"Unexpected model queried: {model}")
+
+        def close(self):
+            return None
+
+    def fake_http_connection_test(*, config, auth, schema_text, payload):
+        assert auth["name"] == "X-GLOBEIQ-BLOCKS-KEY"
+        block_type = str(payload.get("path") or "").split("/")[-1]
+        return {
+            "ok": True,
+            "status": 200,
+            "method": "GET",
+            "url": f"https://example.test{payload.get('path')}",
+            "body_preview": json.dumps(
+                {
+                    "blockType": block_type,
+                    "schema": {"required": ["html"], "properties": {"html": {"type": "string"}}},
+                    "example": {"variant": block_type, "html": "<p>Example</p>"},
+                }
+            ),
+        }
+
+    monkeypatch.setattr("dashboard.db.get_db", lambda: FakeSession())
+    monkeypatch.setattr("dashboard.connections_service.resolve_auth_payload", lambda payload: {"type": "api_key", "name": "X-GLOBEIQ-BLOCKS-KEY", "api_key": "live-key"})
+    monkeypatch.setattr("dashboard.connections_service.test_http_connection", fake_http_connection_test)
+
+    bot_registry = AsyncMock()
+    bot_registry.get.return_value = Bot(
+        id="course-lesson-writer",
+        name="Course Lesson Writer",
+        role="writer",
+        system_prompt="Write lesson blocks as strict JSON.",
+        backends=[BackendConfig(type="cloud_api", provider="openai", model="gpt-4o-mini")],
+        routing_rules={
+            "connection_context": {
+                "enabled": True,
+                "fetch_connection_name": "platform-blocks-api",
+                "for_each_field": "generation_settings.allowed_lesson_blocks",
+                "fetch_actions": [
+                    {
+                        "method": "GET",
+                        "path": "/api/blocks/{{item}}",
+                        "query_params": {"includeExample": "true"},
+                    }
+                ],
+            }
+        },
+    )
+    scheduler = Scheduler(bot_registry=bot_registry, worker_registry=AsyncMock())
+    task = Task(
+        id="task-fetch-ctx-1",
+        bot_id="course-lesson-writer",
+        payload={"generation_settings": {"allowed_lesson_blocks": ["paragraph", "code"]}},
+        status="queued",
+        created_at="now",
+        updated_at="now",
+    )
+
+    async def fake_dispatch(backend, payload, task=None):
+        return {"payload": payload}
+
+    scheduler._dispatch_backend = fake_dispatch  # type: ignore[method-assign]
+    result = await scheduler.schedule(task)
+
+    system_message = result["payload"][0]["content"]
+    assert "Dynamic connection fetch results:" in system_message
+    assert "Fetch: /api/blocks/paragraph [paragraph]" in system_message
+    assert '"blockType": "paragraph"' in system_message
+    assert '"blockType": "code"' in system_message
+
+
+@pytest.mark.anyio
 async def test_scheduler_does_not_duplicate_existing_system_prompt():
     from control_plane.scheduler.scheduler import Scheduler
 
