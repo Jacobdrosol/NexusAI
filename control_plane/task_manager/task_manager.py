@@ -1061,6 +1061,11 @@ class TaskManager:
         if payload_format == "json_array" and not isinstance(payload, list):
             raise ValueError("input contract requires a JSON array payload")
 
+        output_mode = await self._bot_output_contract_mode(bot_id)
+        validate_before_transform = bool(contract.get("validate_before_transform", False))
+        if output_mode == "payload_transform" and not validate_before_transform:
+            return
+
         if required_fields:
             missing = _missing_payload_fields(payload, [str(field) for field in required_fields])
             if missing:

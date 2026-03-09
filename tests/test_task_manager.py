@@ -361,6 +361,113 @@ async def test_create_task_rejects_empty_required_input_fields(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_payload_transform_bots_defer_required_input_validation_until_after_transform(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {"ignored": True}
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "payload-transform-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="course-intake",
+            name="Course Intake",
+            role="assistant",
+            backends=[],
+            routing_rules={
+                "input_contract": {
+                    "enabled": True,
+                    "format": "json_object",
+                    "required_fields": ["workflow_type", "course_brief", "generation_settings", "revision_context"],
+                },
+                "output_contract": {
+                    "enabled": True,
+                    "mode": "payload_transform",
+                    "format": "json_object",
+                    "required_fields": ["workflow_type", "course_brief", "generation_settings"],
+                    "template": {
+                        "workflow_type": "course_generation",
+                        "course_brief": {
+                            "topic": "{{payload.topic}}",
+                        },
+                        "generation_settings": {
+                            "allowed_lesson_blocks": "{{json:payload.allowed_lesson_blocks_json}}",
+                        },
+                    },
+                },
+            },
+        )
+    )
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "payload-transform-tasks.db"), bot_registry=bot_registry)
+    task = await tm.create_task(
+        bot_id="course-intake",
+        payload={"topic": "AP World History", "allowed_lesson_blocks_json": '["AdvancedParagraph"]'},
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status == "completed":
+            break
+        await asyncio.sleep(0.05)
+
+    updated = await tm.get_task(task.id)
+    assert updated.status == "completed"
+    assert updated.result["workflow_type"] == "course_generation"
+    assert updated.result["course_brief"]["topic"] == "AP World History"
+
+
+@pytest.mark.anyio
+async def test_payload_transform_bots_can_still_enforce_pre_transform_input_validation(tmp_path):
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {"ignored": True}
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "payload-transform-strict-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="strict-intake",
+            name="Strict Intake",
+            role="assistant",
+            backends=[],
+            routing_rules={
+                "input_contract": {
+                    "enabled": True,
+                    "format": "json_object",
+                    "required_fields": ["topic"],
+                    "validate_before_transform": True,
+                },
+                "output_contract": {
+                    "enabled": True,
+                    "mode": "payload_transform",
+                    "format": "json_object",
+                    "required_fields": ["course_brief"],
+                    "template": {
+                        "course_brief": {
+                            "topic": "{{payload.topic}}",
+                        },
+                    },
+                },
+            },
+        )
+    )
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "payload-transform-strict-tasks.db"), bot_registry=bot_registry)
+
+    with pytest.raises(ValueError, match="missing required fields: topic"):
+        await tm.create_task(bot_id="strict-intake", payload={})
+
+
+@pytest.mark.anyio
 async def test_bot_trigger_creates_follow_on_run_and_artifacts(tmp_path):
     import asyncio
 
