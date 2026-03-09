@@ -173,6 +173,21 @@
       <input class="form-control" id="output-contract-required-fields" placeholder='["status","items"]'>
     </div>
     <div class="form-group">
+      <label>Required Non-Empty Fields (JSON array, optional)</label>
+      <input class="form-control" id="output-contract-non-empty-fields" placeholder='["course_structure.units","unit_blueprint.lesson_plans"]'>
+    </div>
+  </div>
+  <div class="split-grid" style="grid-template-columns:1fr 1fr;">
+    <div class="form-group">
+      <label>Fallback Policy</label>
+      <select class="form-control" id="output-contract-fallback-mode">
+        <option value="disabled">Disabled</option>
+        <option value="missing_only">Backfill Missing Fields Only</option>
+        <option value="parse_failure">Fallback On Parse Failure Only</option>
+        <option value="parse_failure_or_missing">Parse Failure Or Missing Fields</option>
+      </select>
+    </div>
+    <div class="form-group">
       <label>Transform Template JSON (optional)</label>
       <textarea class="form-control" id="output-contract-template" rows="4" placeholder='{"status":"&#123;&#123;payload.status&#125;&#125;","items":"&#123;&#123;json:payload.items_json&#125;&#125;"}'></textarea>
       <div class="mini-note">Use this only for deterministic payload transforms. Tokens: <code>&#123;&#123;payload.field&#125;&#125;</code> and <code>&#123;&#123;json:payload.field&#125;&#125;</code>.</div>
@@ -181,7 +196,7 @@
   <div class="form-group">
     <label>Defaults / Fallback Template JSON (optional)</label>
     <textarea class="form-control" id="output-contract-defaults-template" rows="6" placeholder='{"status":"ready","items":"&#123;&#123;coalesce:payload.items,payload.source_result.items&#125;&#125;"}'></textarea>
-    <div class="mini-note">Optional generic fallback values for model output. Empty or missing fields are backfilled after JSON extraction. Supports <code>&#123;&#123;payload.field&#125;&#125;</code>, <code>&#123;&#123;json:payload.field&#125;&#125;</code>, and <code>&#123;&#123;coalesce:...&#125;&#125;</code>.</div>
+    <div class="mini-note">Optional generic fallback values for model output. Pair this with a fallback policy so the platform only backfills when you explicitly want it to. Supports <code>&#123;&#123;payload.field&#125;&#125;</code>, <code>&#123;&#123;json:payload.field&#125;&#125;</code>, and <code>&#123;&#123;coalesce:...&#125;&#125;</code>.</div>
   </div>
   <div class="form-group">
     <label>Operator Notes</label>
@@ -752,15 +767,20 @@ function normalizedOutputContract() {
   const defaultsTemplate = contract.defaults_template && typeof contract.defaults_template === 'object' && !Array.isArray(contract.defaults_template)
     ? contract.defaults_template
     : null;
+  const fallbackMode = ['disabled', 'missing_only', 'parse_failure', 'parse_failure_or_missing'].includes(String(contract.fallback_mode || '').trim())
+    ? String(contract.fallback_mode || '').trim()
+    : (defaultsTemplate ? 'parse_failure_or_missing' : 'disabled');
   return {
     enabled: contract.enabled === true,
     mode: ['model_output', 'payload_transform'].includes(String(contract.mode || '').trim()) ? String(contract.mode || '').trim() : 'model_output',
     format: ['any', 'json_object', 'json_array'].includes(String(contract.format || '').trim()) ? String(contract.format || '').trim() : 'any',
     required_fields: Array.isArray(contract.required_fields) ? contract.required_fields : [],
+    non_empty_fields: Array.isArray(contract.non_empty_fields) ? contract.non_empty_fields : [],
     description: String(contract.description || '').trim(),
     example_output: exampleOutput,
     template: template,
     defaults_template: defaultsTemplate,
+    fallback_mode: fallbackMode,
   };
 }
 
@@ -812,6 +832,8 @@ function loadOutputContractEditor() {
   document.getElementById('output-contract-mode').value = contract.mode || 'model_output';
   document.getElementById('output-contract-format').value = contract.format || 'any';
   document.getElementById('output-contract-required-fields').value = JSON.stringify(contract.required_fields || []);
+  document.getElementById('output-contract-non-empty-fields').value = JSON.stringify(contract.non_empty_fields || []);
+  document.getElementById('output-contract-fallback-mode').value = contract.fallback_mode || 'disabled';
   document.getElementById('output-contract-description').value = contract.description || '';
   document.getElementById('output-contract-example').value = JSON.stringify(contract.example_output || {}, null, 2);
   document.getElementById('output-contract-template').value = JSON.stringify(contract.template || {}, null, 2);
@@ -820,10 +842,12 @@ function loadOutputContractEditor() {
 
 function saveOutputContract() {
   const rawRequiredFields = String(document.getElementById('output-contract-required-fields')?.value || '').trim();
+  const rawNonEmptyFields = String(document.getElementById('output-contract-non-empty-fields')?.value || '').trim();
   const rawExample = String(document.getElementById('output-contract-example')?.value || '').trim();
   const rawTemplate = String(document.getElementById('output-contract-template')?.value || '').trim();
   const rawDefaultsTemplate = String(document.getElementById('output-contract-defaults-template')?.value || '').trim();
   let requiredFields = [];
+  let nonEmptyFields = [];
   let exampleOutput = {};
   let template = null;
   let defaultsTemplate = null;
@@ -837,6 +861,18 @@ function saveOutputContract() {
   }
   if (!Array.isArray(requiredFields)) {
     alert('Required fields must be a JSON array.');
+    return;
+  }
+  if (rawNonEmptyFields) {
+    try {
+      nonEmptyFields = JSON.parse(rawNonEmptyFields);
+    } catch (err) {
+      alert('Required non-empty fields must be valid JSON.');
+      return;
+    }
+  }
+  if (!Array.isArray(nonEmptyFields)) {
+    alert('Required non-empty fields must be a JSON array.');
     return;
   }
   if (rawExample) {
@@ -880,6 +916,8 @@ function saveOutputContract() {
     mode: String(document.getElementById('output-contract-mode')?.value || 'model_output'),
     format: String(document.getElementById('output-contract-format')?.value || 'any'),
     required_fields: requiredFields,
+    non_empty_fields: nonEmptyFields,
+    fallback_mode: String(document.getElementById('output-contract-fallback-mode')?.value || 'disabled'),
     description: String(document.getElementById('output-contract-description')?.value || '').trim(),
     example_output: exampleOutput,
     template: template,

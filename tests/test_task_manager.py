@@ -672,9 +672,10 @@ async def test_output_contract_extracts_json_from_text_result(tmp_path):
 
 
 @pytest.mark.anyio
-async def test_output_contract_fails_when_required_fields_are_missing(tmp_path):
+async def test_output_contract_fails_when_required_fields_are_missing(tmp_path, monkeypatch):
     import asyncio
 
+    from control_plane.task_manager import task_manager as task_manager_module
     from control_plane.registry.bot_registry import BotRegistry
     from control_plane.task_manager.task_manager import TaskManager
     from shared.models import Bot
@@ -700,6 +701,7 @@ async def test_output_contract_fails_when_required_fields_are_missing(tmp_path):
         )
     )
 
+    monkeypatch.setattr(task_manager_module, "_settings_int", lambda name, default: 0 if name == "max_task_retries" else default)
     tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "missing.db"), bot_registry=bot_registry)
     task = await tm.create_task(bot_id="strict-bot", payload={"instruction": "go"})
 
@@ -875,6 +877,7 @@ async def test_output_contract_can_backfill_empty_model_output_from_defaults(tmp
                     "mode": "model_output",
                     "format": "json_object",
                     "required_fields": ["course_shell", "course_structure"],
+                    "fallback_mode": "missing_only",
                     "defaults_template": {
                         "course_shell": {
                             "title": "{{payload.course_brief.topic}}",
@@ -965,6 +968,7 @@ async def test_output_contract_preserves_non_empty_model_values_over_defaults(tm
                     "mode": "model_output",
                     "format": "json_object",
                     "required_fields": ["course_shell", "course_structure"],
+                    "fallback_mode": "missing_only",
                     "defaults_template": {
                         "course_shell": {
                             "title": "{{payload.course_brief.topic}}",
@@ -1028,6 +1032,7 @@ async def test_output_contract_can_fallback_to_defaults_when_model_output_is_not
                     "mode": "model_output",
                     "format": "json_object",
                     "required_fields": ["unit_blueprint"],
+                    "fallback_mode": "parse_failure",
                     "defaults_template": {
                         "normalization_notes": [],
                         "unit_blueprint": {
@@ -1070,6 +1075,119 @@ async def test_output_contract_can_fallback_to_defaults_when_model_output_is_not
     assert updated.result["unit_blueprint"]["unit_number"] == 2
     assert updated.result["unit_blueprint"]["lesson_plans"] == [{"lesson_number": 1, "title": "Lesson 1"}]
     assert "fell back to defaults template" in " ".join(updated.result.get("normalization_notes", []))
+
+
+@pytest.mark.anyio
+async def test_output_contract_non_empty_fields_fail_incomplete_output(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {
+                "output": json.dumps(
+                    {
+                        "course_shell": {"title": "Generated Title"},
+                        "course_structure": {"units": []},
+                    }
+                )
+            }
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "non-empty-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="outline-bot",
+            name="Outline",
+            role="assistant",
+            backends=[],
+            routing_rules={
+                "output_contract": {
+                    "enabled": True,
+                    "mode": "model_output",
+                    "format": "json_object",
+                    "required_fields": ["course_shell", "course_structure"],
+                    "non_empty_fields": ["course_structure.units"],
+                    "fallback_mode": "disabled",
+                }
+            },
+        )
+    )
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "non-empty.db"), bot_registry=bot_registry)
+    task = await tm.create_task(
+        bot_id="outline-bot",
+        payload={"instruction": "build outline"},
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.1)
+
+    assert updated.status == "failed"
+    assert updated.error is not None
+    assert "non-empty fields" in updated.error.message
+    assert "course_structure.units" in updated.error.message
+
+
+@pytest.mark.anyio
+async def test_output_contract_disabled_fallback_mode_does_not_mask_parse_failures(tmp_path, monkeypatch):
+    import asyncio
+
+    from control_plane.task_manager import task_manager as task_manager_module
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {"output": "not valid json"}
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "strict-fallback-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="unit-bot",
+            name="Unit Builder",
+            role="assistant",
+            backends=[],
+            routing_rules={
+                "output_contract": {
+                    "enabled": True,
+                    "mode": "model_output",
+                    "format": "json_object",
+                    "required_fields": ["unit_blueprint"],
+                    "fallback_mode": "disabled",
+                    "defaults_template": {
+                        "unit_blueprint": {
+                            "unit_number": "{{payload.unit.unit_number}}",
+                            "title": "{{payload.unit.title}}",
+                        },
+                    },
+                }
+            },
+        )
+    )
+
+    monkeypatch.setattr(task_manager_module, "_settings_int", lambda name, default: 0 if name == "max_task_retries" else default)
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "strict-fallback.db"), bot_registry=bot_registry)
+    task = await tm.create_task(
+        bot_id="unit-bot",
+        payload={"unit": {"unit_number": 2, "title": "Networks of Exchange"}},
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.1)
+
+    assert updated.status == "failed"
+    assert updated.error is not None
+    assert "valid JSON object or array" in updated.error.message
 
 
 @pytest.mark.anyio

@@ -305,6 +305,8 @@ async def test_scheduler_appends_output_contract_guidance_to_system_prompt():
                 "mode": "model_output",
                 "format": "json_object",
                 "required_fields": ["course_shell", "course_structure"],
+                "non_empty_fields": ["course_structure.units"],
+                "fallback_mode": "disabled",
                 "description": "Return a structured outline only.",
                 "example_output": {
                     "course_shell": {"title": "Example"},
@@ -333,4 +335,6 @@ async def test_scheduler_appends_output_contract_guidance_to_system_prompt():
     assert "Build the course outline." in system_message
     assert "Output contract:" in system_message
     assert "Required top-level fields: course_shell, course_structure." in system_message
+    assert "Fields that must be populated: course_structure.units." in system_message
+    assert "Missing or empty required fields will fail the run." in system_message
     assert "\"course_shell\"" in system_message

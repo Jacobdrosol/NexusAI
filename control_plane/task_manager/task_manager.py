@@ -1008,8 +1008,23 @@ class TaskManager:
         mode = str(contract.get("mode") or "model_output").strip().lower()
         output_format = str(contract.get("format") or "any").strip().lower()
         required_fields = contract.get("required_fields") if isinstance(contract.get("required_fields"), list) else []
+        non_empty_fields = contract.get("non_empty_fields") if isinstance(contract.get("non_empty_fields"), list) else []
         defaults_template = contract.get("defaults_template") if isinstance(contract.get("defaults_template"), dict) else None
-        if not enabled or (output_format == "any" and not required_fields and defaults_template is None and mode != "payload_transform"):
+        fallback_mode = str(contract.get("fallback_mode") or "").strip().lower()
+        if fallback_mode not in {"disabled", "missing_only", "parse_failure", "parse_failure_or_missing"}:
+            fallback_mode = "parse_failure_or_missing" if defaults_template is not None else "disabled"
+        allow_parse_failure_fallback = defaults_template is not None and fallback_mode in {"parse_failure", "parse_failure_or_missing"}
+        allow_missing_backfill = defaults_template is not None and fallback_mode in {"missing_only", "parse_failure_or_missing"}
+        if (
+            not enabled
+            or (
+                output_format == "any"
+                and not required_fields
+                and not non_empty_fields
+                and defaults_template is None
+                and mode != "payload_transform"
+            )
+        ):
             return result
 
         if mode == "payload_transform":
@@ -1046,7 +1061,7 @@ class TaskManager:
                 try:
                     parsed = _extract_json_payload(raw_text)
                 except ValueError:
-                    if defaults_template is not None:
+                    if allow_parse_failure_fallback:
                         default_notes: list[str] = ["Model output was not parseable JSON; fell back to defaults template."]
                         parsed = _transform_template_value(defaults_template, task.payload, default_notes)
                         if isinstance(parsed, dict):
@@ -1062,7 +1077,7 @@ class TaskManager:
                 raise ValueError("output contract requires structured JSON output")
             normalized = parsed
 
-        if defaults_template is not None:
+        if allow_missing_backfill:
             default_notes: list[str] = []
             normalized_defaults = _transform_template_value(defaults_template, task.payload, default_notes)
             if isinstance(normalized_defaults, dict):
@@ -1084,6 +1099,19 @@ class TaskManager:
             missing = [field for field in required_fields if str(field) not in normalized]
             if missing:
                 raise ValueError(f"output contract missing required fields: {', '.join(str(field) for field in missing)}")
+        if non_empty_fields:
+            if not isinstance(normalized, dict):
+                raise ValueError("non-empty fields can only be validated on JSON objects")
+            empty_fields = [
+                str(field)
+                for field in non_empty_fields
+                if _is_empty_contract_value(_lookup_payload_path(normalized, str(field)))
+            ]
+            if empty_fields:
+                raise ValueError(
+                    "output contract requires non-empty fields: "
+                    + ", ".join(empty_fields)
+                )
 
         if isinstance(result, dict) and isinstance(normalized, dict):
             if "usage" in result and "usage" not in normalized:

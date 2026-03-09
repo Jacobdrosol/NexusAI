@@ -255,6 +255,7 @@ Current capabilities:
 - Trigger another bot when a task completes or fails.
 - Gate triggers on `always`, `has_result`, or `has_error`.
 - Match trigger routing on a structured result field such as `qc_status=pass`.
+- Enforce output contracts with required top-level fields, required non-empty nested fields, and configurable fallback policy.
 - Preserve project/conversation metadata across triggered runs.
 - Queue one-off bot test runs from the dashboard.
 - Inspect run history and generated artifacts per bot.
@@ -275,6 +276,13 @@ QC pattern:
 - QC bot result contract: return a structured result such as `{"qc_status":"pass"}` or `{"qc_status":"fail","issues":[...]}`
 - QC pass trigger: `result_field=qc_status`, `result_equals=pass`, `target_bot_id=bot-publisher`
 - QC fail trigger: `result_field=qc_status`, `result_equals=fail`, `target_bot_id={{source_bot_id}}`
+
+Recommended contract settings for long multi-stage content pipelines:
+
+- Use `required_fields` for the structural envelope a stage must return.
+- Use `non_empty_fields` for the fields that prove the stage actually did the work, such as `course_structure.units`, `unit_blueprint.lesson_plans`, or `lesson_output.blocks`.
+- Set `fallback_mode=disabled` for generation and QC stages where silent backfill would create false positives.
+- Reserve `fallback_mode=missing_only` or `fallback_mode=parse_failure` for intake/normalization bots where deterministic defaults are intentional.
 
 ---
 

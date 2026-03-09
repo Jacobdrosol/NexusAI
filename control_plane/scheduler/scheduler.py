@@ -161,8 +161,10 @@ def _contract_prompt_suffix(bot: Any) -> str:
     parts: list[str] = []
     output_format = str(contract.get("format") or "any").strip().lower()
     required_fields = contract.get("required_fields")
+    non_empty_fields = contract.get("non_empty_fields")
     description = str(contract.get("description") or "").strip()
     example_output = contract.get("example_output")
+    fallback_mode = str(contract.get("fallback_mode") or "").strip().lower()
 
     if description:
         parts.append(description)
@@ -172,6 +174,10 @@ def _contract_prompt_suffix(bot: Any) -> str:
         parts.append("Return exactly one JSON array.")
     if isinstance(required_fields, list) and required_fields:
         parts.append(f"Required top-level fields: {', '.join(str(field) for field in required_fields)}.")
+    if isinstance(non_empty_fields, list) and non_empty_fields:
+        parts.append(f"Fields that must be populated: {', '.join(str(field) for field in non_empty_fields)}.")
+    if fallback_mode == "disabled":
+        parts.append("Do not omit required content. Missing or empty required fields will fail the run.")
     if isinstance(example_output, dict) and example_output:
         parts.append("Example output JSON:")
         parts.append(json.dumps(example_output, ensure_ascii=False, indent=2))
