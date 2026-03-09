@@ -1,6 +1,78 @@
 from __future__ import annotations
 
+import json
 from typing import Any
+
+
+def _lookup_payload_path(payload: Any, path: str) -> Any:
+    current = payload
+    for part in [segment for segment in str(path or "").split(".") if segment]:
+        if isinstance(current, dict) and part in current:
+            current = current[part]
+            continue
+        return None
+    return current
+
+
+def _resolve_transform_value(expr: str, payload: Any) -> Any:
+    raw_expr = str(expr or "").strip()
+    mode = "value"
+    if raw_expr.startswith("json:"):
+        mode = "json"
+        raw_expr = raw_expr[5:].strip()
+    path = raw_expr
+    if path.startswith("payload."):
+        path = path[8:].strip()
+    value = _lookup_payload_path(payload, path)
+    if mode == "json":
+        if value in (None, ""):
+            return [] if path.endswith("_json") else None
+        if isinstance(value, (dict, list)):
+            return value
+        try:
+            return json.loads(str(value))
+        except json.JSONDecodeError:
+            return None
+    return value
+
+
+def _transform_template_value(template: Any, payload: Any) -> Any:
+    if isinstance(template, dict):
+        return {str(key): _transform_template_value(value, payload) for key, value in template.items()}
+    if isinstance(template, list):
+        return [_transform_template_value(item, payload) for item in template]
+    if not isinstance(template, str):
+        return template
+
+    raw = template.strip()
+    if raw.startswith("{{") and raw.endswith("}}"):
+        expr = raw[2:-2].strip()
+        return _resolve_transform_value(expr, payload)
+    return template
+
+
+def normalize_launch_payload(bot: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    routing_rules = bot.get("routing_rules") if isinstance(bot, dict) else None
+    if not isinstance(routing_rules, dict):
+        return payload
+
+    input_transform = routing_rules.get("input_transform")
+    if isinstance(input_transform, dict) and bool(input_transform.get("enabled", False)):
+        template = input_transform.get("template")
+        if template is not None:
+            transformed = _transform_template_value(template, payload)
+            if isinstance(transformed, dict):
+                return transformed
+
+    output_contract = routing_rules.get("output_contract")
+    if isinstance(output_contract, dict) and str(output_contract.get("mode") or "").strip().lower() == "payload_transform":
+        template = output_contract.get("template")
+        if template is not None:
+            transformed = _transform_template_value(template, payload)
+            if isinstance(transformed, dict):
+                return transformed
+
+    return payload
 
 
 def normalize_launch_profile(bot: dict[str, Any]) -> dict[str, Any] | None:

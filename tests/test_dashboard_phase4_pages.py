@@ -353,6 +353,50 @@ def test_bot_launch_api_marks_pipeline_runs(dashboard_client):
     assert body["pipeline_id"]
 
 
+def test_bot_launch_api_applies_deterministic_launch_transform(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def get_bot(self, bot_id):
+            return {
+                "id": bot_id,
+                "name": "Course Intake",
+                "role": "assistant",
+                "routing_rules": {
+                    "launch_profile": {
+                        "enabled": True,
+                        "label": "Run Course Pipeline",
+                        "payload": {"topic": "AP World History", "allowed_lesson_blocks_json": "[\"AdvancedParagraph\"]"},
+                    },
+                    "output_contract": {
+                        "enabled": True,
+                        "mode": "payload_transform",
+                        "template": {
+                            "workflow_type": "course_generation",
+                            "course_brief": {
+                                "topic": "{{payload.topic}}",
+                            },
+                            "generation_settings": {
+                                "allowed_lesson_blocks": "{{json:payload.allowed_lesson_blocks_json}}",
+                            },
+                        },
+                    },
+                },
+            }
+
+        def create_task_full(self, bot_id, payload, metadata=None, depends_on=None):
+            return {"id": "task-launch-3", "bot_id": bot_id, "payload": payload, "metadata": metadata}
+
+    with patch("dashboard.cp_client.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post("/api/bots/course-intake/launch", json={})
+
+    assert resp.status_code == 201
+    body = resp.get_json()
+    assert body["payload"]["workflow_type"] == "course_generation"
+    assert body["payload"]["course_brief"]["topic"] == "AP World History"
+    assert body["payload"]["generation_settings"]["allowed_lesson_blocks"] == ["AdvancedParagraph"]
+
+
 def test_bot_artifact_api_and_download_proxy_control_plane(dashboard_client):
     _login_admin(dashboard_client)
 

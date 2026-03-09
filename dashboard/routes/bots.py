@@ -543,7 +543,7 @@ def api_test_run_bot(bot_id: str):
 @bp.post("/api/bots/<bot_id>/launch")
 @login_required
 def api_launch_bot(bot_id: str):
-    from dashboard.bot_launch import normalize_launch_profile
+    from dashboard.bot_launch import normalize_launch_payload, normalize_launch_profile
     from dashboard.cp_client import get_cp_client
 
     cp = get_cp_client()
@@ -565,6 +565,7 @@ def api_launch_bot(bot_id: str):
         payload = launch_profile["payload"]
     if not isinstance(payload, dict):
         return jsonify({"error": "launch payload must be a JSON object"}), 400
+    payload = normalize_launch_payload(bot, payload)
 
     metadata = {
         "source": "saved_launch_pipeline" if launch_profile.get("is_pipeline") else "saved_launch",
