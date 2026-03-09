@@ -971,6 +971,10 @@ class TaskManager:
                 return contract
         return {}
 
+    async def _bot_output_contract_mode(self, bot_id: str) -> str:
+        contract = await self._bot_output_contract(bot_id)
+        return str(contract.get("mode") or "model_output").strip().lower()
+
     async def _normalize_task_result(self, task: Task, result: Any) -> Any:
         contract = await self._bot_output_contract(task.bot_id)
         if not contract:
@@ -1084,7 +1088,11 @@ class TaskManager:
         try:
             await self.update_status(task_id, "running")
             task = await self.get_task(task_id)
-            raw_result = await self._scheduler.schedule(task)
+            mode = await self._bot_output_contract_mode(task.bot_id)
+            if mode == "payload_transform":
+                raw_result = {"deterministic_transform": True}
+            else:
+                raw_result = await self._scheduler.schedule(task)
             result = await self._normalize_task_result(task, raw_result)
             await self.update_status(task_id, "completed", result=result)
         except Exception as e:

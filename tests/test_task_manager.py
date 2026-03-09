@@ -680,6 +680,58 @@ async def test_output_contract_can_transform_payload_deterministically(tmp_path)
 
 
 @pytest.mark.anyio
+async def test_payload_transform_mode_skips_scheduler_execution(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot
+
+    class StubScheduler:
+        def __init__(self):
+            self.called = False
+
+        async def schedule(self, task):
+            self.called = True
+            return {"should_not": "run"}
+
+    scheduler = StubScheduler()
+    bot_registry = BotRegistry(db_path=str(tmp_path / "skip-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="transform-bot",
+            name="Transform",
+            role="assistant",
+            backends=[],
+            routing_rules={
+                "output_contract": {
+                    "enabled": True,
+                    "mode": "payload_transform",
+                    "format": "json_object",
+                    "required_fields": ["workflow_type"],
+                    "template": {
+                        "workflow_type": "course_generation",
+                    },
+                }
+            },
+        )
+    )
+
+    tm = TaskManager(scheduler, db_path=str(tmp_path / "skip.db"), bot_registry=bot_registry)
+    task = await tm.create_task(bot_id="transform-bot", payload={"instruction": "go"})
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.1)
+
+    assert updated.status == "completed"
+    assert updated.result["workflow_type"] == "course_generation"
+    assert scheduler.called is False
+
+
+@pytest.mark.anyio
 async def test_output_contract_can_backfill_empty_model_output_from_defaults(tmp_path):
     import asyncio
 
