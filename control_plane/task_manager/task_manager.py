@@ -340,6 +340,11 @@ def _is_retryable_error_message(message: str) -> bool:
         "timed out",
         "readtimeout",
         "connecttimeout",
+        "no valid json object or array found",
+        "output contract requires structured json output",
+        "output contract missing required fields",
+        "output contract requires a json object",
+        "output contract requires a json array",
         "internal server error",
         "server error",
         "bad gateway",
@@ -432,6 +437,7 @@ class TaskManager:
         self._bot_registry = bot_registry
         self._db_ready = False
         self._running_task_ids: set[str] = set()
+        self._runner_tasks: Dict[str, asyncio.Task[Any]] = {}
         self._max_concurrency = max(1, int(os.environ.get("NEXUSAI_TASK_MAX_CONCURRENCY", "4")))
         if db_path is not None:
             self._db_path = db_path
@@ -572,7 +578,7 @@ class TaskManager:
     async def _upsert_bot_run(self, task: Task) -> None:
         metadata = task.metadata.model_dump() if task.metadata else None
         started_at = task.updated_at if task.status == "running" else None
-        completed_at = task.updated_at if task.status in {"completed", "failed"} else None
+        completed_at = task.updated_at if task.status in {"completed", "failed", "cancelled"} else None
         async with aiosqlite.connect(self._db_path) as db:
             await db.execute(
                 """
@@ -830,6 +836,24 @@ class TaskManager:
             metadata=next_metadata,
             depends_on=[],
         )
+
+    async def cancel_task(self, task_id: str) -> Task:
+        await self._ensure_db()
+        task = await self.get_task(task_id)
+        if task.status in {"completed", "failed", "cancelled"}:
+            return task
+
+        runner: Optional[asyncio.Task[Any]] = None
+        async with self._lock:
+            runner = self._runner_tasks.get(task_id)
+
+        if task.status in {"queued", "blocked"} or runner is None:
+            cancelled_error = TaskError(message="Task cancelled by operator", code="cancelled")
+            await self.update_status(task_id, "cancelled", error=cancelled_error)
+            return await self.get_task(task_id)
+
+        runner.cancel()
+        return await self.get_task(task_id)
 
     async def list_tasks(
         self,
@@ -1091,9 +1115,10 @@ class TaskManager:
             updated_task = self._tasks[task_id]
         await self._persist_task(updated_task)
         await self._upsert_bot_run(updated_task)
-        if status in {"completed", "failed"}:
+        if status in {"completed", "failed", "cancelled"}:
             await self._record_artifacts_for_task(updated_task)
-            await self._dispatch_triggers(updated_task)
+            if status != "cancelled":
+                await self._dispatch_triggers(updated_task)
             await self._try_unblock_tasks()
 
     async def _run_task(self, task_id: str) -> None:
@@ -1107,6 +1132,11 @@ class TaskManager:
                 raw_result = await self._scheduler.schedule(task)
             result = await self._normalize_task_result(task, raw_result)
             await self.update_status(task_id, "completed", result=result)
+        except asyncio.CancelledError:
+            logger.info("Task %s cancelled", task_id)
+            task_error = TaskError(message="Task cancelled by operator", code="cancelled")
+            await self.update_status(task_id, "cancelled", error=task_error)
+            raise
         except Exception as e:
             logger.error("Task %s failed: %s", task_id, e)
             task = await self.get_task(task_id)
@@ -1118,6 +1148,7 @@ class TaskManager:
         finally:
             async with self._lock:
                 self._running_task_ids.discard(task_id)
+                self._runner_tasks.pop(task_id, None)
             await self._schedule_ready_tasks()
 
     async def _requeue_for_retry(self, task: Task, task_error: TaskError) -> bool:
@@ -1206,7 +1237,9 @@ class TaskManager:
                 self._running_task_ids.add(task.id)
 
         for task in selected:
-            asyncio.create_task(self._run_task(task.id))
+            runner = asyncio.create_task(self._run_task(task.id))
+            async with self._lock:
+                self._runner_tasks[task.id] = runner
 
     async def _dispatch_triggers(self, task: Task) -> None:
         if self._bot_registry is None:

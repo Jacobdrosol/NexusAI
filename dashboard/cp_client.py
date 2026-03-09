@@ -239,6 +239,9 @@ class CPClient:
             body["payload"] = payload
         return self._post(f"/v1/tasks/{task_id}/retry", body)
 
+    def cancel_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        return self._post(f"/v1/tasks/{task_id}/cancel", {})
+
     def create_task(self, bot_id: str, payload: Any) -> Optional[Dict]:
         return self._post("/v1/tasks", {"bot_id": bot_id, "payload": payload})
 

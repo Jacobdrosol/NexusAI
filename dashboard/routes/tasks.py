@@ -251,3 +251,16 @@ def api_retry_task(task_id: str):
         detail = error.get("detail") or "Task retry failed"
         return jsonify({"error": detail}), status
     return jsonify(retried), 201
+
+
+@bp.post("/api/tasks/<task_id>/cancel")
+@login_required
+def api_cancel_task(task_id: str):
+    cp = get_cp_client()
+    cancelled = cp.cancel_task(task_id)
+    if cancelled is None:
+        error = cp.last_error()
+        status = int(error.get("status_code") or 502)
+        detail = error.get("detail") or "Task cancel failed"
+        return jsonify({"error": detail}), status
+    return jsonify(cancelled), 200

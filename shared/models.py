@@ -125,7 +125,7 @@ class Task(BaseModel):
     payload: Any
     metadata: Optional[TaskMetadata] = None
     depends_on: List[str] = Field(default_factory=list)
-    status: Literal["queued", "blocked", "running", "completed", "failed"] = "queued"
+    status: Literal["queued", "blocked", "running", "completed", "failed", "cancelled"] = "queued"
     result: Optional[Any] = None
     error: Optional[TaskError] = None
     created_at: str
@@ -137,7 +137,7 @@ class BotRun(BaseModel):
     id: str
     task_id: str
     bot_id: str
-    status: Literal["queued", "blocked", "running", "completed", "failed"] = "queued"
+    status: Literal["queued", "blocked", "running", "completed", "failed", "cancelled"] = "queued"
     payload: Any
     metadata: Optional[TaskMetadata] = None
     result: Optional[Any] = None

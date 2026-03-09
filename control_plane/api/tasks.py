@@ -73,3 +73,14 @@ async def retry_task(task_id: str, request: Request, body: RetryTaskRequest) -> 
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/{task_id}/cancel", response_model=Task)
+async def cancel_task(task_id: str, request: Request) -> Task:
+    task_manager = request.app.state.task_manager
+    try:
+        return await task_manager.cancel_task(task_id)
+    except TaskNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

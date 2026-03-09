@@ -153,6 +153,7 @@
           <button class="btn btn-sm" id="task-retry-btn" type="button">Retry Failed Branch</button>
           <button class="btn btn-sm" id="task-rerun-btn" type="button">Rerun as New</button>
           <button class="btn btn-sm" id="task-edit-rerun-btn" type="button">Edit Payload &amp; Rerun</button>
+          <button class="btn btn-sm btn-danger" id="task-cancel-btn" type="button">Stop Task</button>
         </div>
         <div id="task-detail-grid" style="display:grid;gap:0.75rem;margin-top:0.75rem;"></div>
       </div>
@@ -230,6 +231,7 @@ function renderTaskDetail(task) {
   const retryBtn = document.getElementById('task-retry-btn');
   const rerunBtn = document.getElementById('task-rerun-btn');
   const editRerunBtn = document.getElementById('task-edit-rerun-btn');
+  const cancelBtn = document.getElementById('task-cancel-btn');
   if (!statusEl || !summaryEl || !gridEl) return;
   if (!task) {
     statusEl.textContent = 'Select a task row';
@@ -252,6 +254,10 @@ function renderTaskDetail(task) {
   if (editRerunBtn) {
     editRerunBtn.style.display = ['completed', 'failed'].includes(task.status) ? 'inline-flex' : 'none';
     editRerunBtn.onclick = () => openTaskRerunModal(task);
+  }
+  if (cancelBtn) {
+    cancelBtn.style.display = ['queued', 'blocked', 'running'].includes(task.status) ? 'inline-flex' : 'none';
+    cancelBtn.onclick = () => cancelTask(task.id);
   }
   const sections = [
     ['Task', 'Task identity, status, timestamps, and metadata.']
@@ -309,6 +315,21 @@ function retryTask(taskId, payload, label) {
     location.reload();
   })
   .catch((error) => alert(error.message || 'Task retry failed'));
+}
+
+function cancelTask(taskId) {
+  fetch('/api/tasks/' + encodeURIComponent(taskId) + '/cancel', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify({})
+  })
+  .then(async (response) => {
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Task cancel failed');
+    alert('Task stopped: ' + data.id);
+    location.reload();
+  })
+  .catch((error) => alert(error.message || 'Task cancel failed'));
 }
 
 function openTaskRerunModal(task) {

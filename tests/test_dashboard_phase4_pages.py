@@ -494,6 +494,52 @@ def test_tasks_page_shows_retry_actions(dashboard_client):
     assert b"Edit Payload &amp; Rerun" in resp.data
 
 
+def test_tasks_api_cancel_proxies_control_plane(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def cancel_task(self, task_id):
+            return {"id": task_id, "status": "cancelled"}
+
+        def last_error(self):
+            return {}
+
+    with patch("dashboard.routes.tasks.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post("/api/tasks/task-1/cancel")
+
+    assert resp.status_code == 200
+    assert resp.get_json()["status"] == "cancelled"
+
+
+def test_tasks_page_shows_stop_action_for_running_tasks(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_tasks(self, **kwargs):
+            return [
+                {
+                    "id": "task-running-1",
+                    "bot_id": "course-lesson-writer",
+                    "status": "running",
+                    "payload": {"instruction": "go"},
+                    "result": None,
+                    "error": None,
+                    "created_at": "2026-03-08T10:00:00+00:00",
+                    "updated_at": "2026-03-08T10:01:00+00:00",
+                    "metadata": {"project_id": "proj-1"},
+                }
+            ]
+
+        def list_bots(self):
+            return []
+
+    with patch("dashboard.routes.tasks.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/tasks")
+
+    assert resp.status_code == 200
+    assert b"Stop Task" in resp.data
+
+
 def test_chat_ingest_api_validates_required_fields(dashboard_client):
     _login_admin(dashboard_client)
     resp = dashboard_client.post("/api/chat/ingest", json={})
