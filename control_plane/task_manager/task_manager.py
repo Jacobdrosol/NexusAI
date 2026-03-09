@@ -206,6 +206,29 @@ def _transform_template_value(template: Any, payload: Any, notes: list[str]) -> 
     return template
 
 
+def _is_empty_contract_value(value: Any) -> bool:
+    return value in (None, "", [], {})
+
+
+def _merge_with_contract_defaults(value: Any, defaults: Any) -> Any:
+    if defaults is None:
+        return value
+    if _is_empty_contract_value(value):
+        return defaults
+    if isinstance(value, dict) and isinstance(defaults, dict):
+        merged: dict[str, Any] = dict(value)
+        for key, default_value in defaults.items():
+            current_value = merged.get(key)
+            if key not in merged:
+                merged[key] = default_value
+            else:
+                merged[key] = _merge_with_contract_defaults(current_value, default_value)
+        return merged
+    if isinstance(value, list) and isinstance(defaults, list):
+        return value if len(value) > 0 else defaults
+    return value
+
+
 def _result_usage(task: Task) -> dict[str, Any]:
     if not isinstance(task.result, dict):
         return {}
@@ -957,7 +980,8 @@ class TaskManager:
         mode = str(contract.get("mode") or "model_output").strip().lower()
         output_format = str(contract.get("format") or "any").strip().lower()
         required_fields = contract.get("required_fields") if isinstance(contract.get("required_fields"), list) else []
-        if not enabled or (output_format == "any" and not required_fields):
+        defaults_template = contract.get("defaults_template") if isinstance(contract.get("defaults_template"), dict) else None
+        if not enabled or (output_format == "any" and not required_fields and defaults_template is None and mode != "payload_transform"):
             return result
 
         if mode == "payload_transform":
@@ -997,6 +1021,17 @@ class TaskManager:
             if parsed is None:
                 raise ValueError("output contract requires structured JSON output")
             normalized = parsed
+
+        if defaults_template is not None:
+            default_notes: list[str] = []
+            normalized_defaults = _transform_template_value(defaults_template, task.payload, default_notes)
+            if isinstance(normalized_defaults, dict):
+                normalized = _merge_with_contract_defaults(normalized, normalized_defaults)
+                if default_notes and isinstance(normalized, dict):
+                    existing_notes = normalized.get("normalization_notes")
+                    if not isinstance(existing_notes, list):
+                        existing_notes = []
+                    normalized["normalization_notes"] = existing_notes + default_notes
 
         if output_format == "json_object" and not isinstance(normalized, dict):
             raise ValueError("output contract requires a JSON object")

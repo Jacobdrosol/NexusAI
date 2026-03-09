@@ -1,4 +1,5 @@
 """Unit tests for TaskManager."""
+import json
 import pytest
 from unittest.mock import AsyncMock
 
@@ -676,6 +677,179 @@ async def test_output_contract_can_transform_payload_deterministically(tmp_path)
     assert updated.result["course_brief"]["topic"] == "AP World History"
     assert updated.result["course_brief"]["goals"] == ["Goal 1", "Goal 2"]
     assert updated.result["generation_settings"]["allowed_lesson_blocks"] == ["AdvancedParagraph", "image"]
+
+
+@pytest.mark.anyio
+async def test_output_contract_can_backfill_empty_model_output_from_defaults(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {
+                "output": json.dumps(
+                    {
+                        "course_shell": {
+                            "title": "",
+                            "subject": "",
+                            "audience": "",
+                            "level": "",
+                            "estimated_hours": 0,
+                            "summary": "",
+                            "voice": "",
+                            "tone": "",
+                            "tags": [],
+                            "goals": [],
+                        },
+                        "course_structure": {
+                            "units": [],
+                        },
+                    }
+                )
+            }
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "defaults-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="outline-bot",
+            name="Outline",
+            role="assistant",
+            backends=[],
+            routing_rules={
+                "output_contract": {
+                    "enabled": True,
+                    "mode": "model_output",
+                    "format": "json_object",
+                    "required_fields": ["course_shell", "course_structure"],
+                    "defaults_template": {
+                        "course_shell": {
+                            "title": "{{payload.course_brief.topic}}",
+                            "subject": "{{payload.course_brief.subject}}",
+                            "audience": "{{payload.course_brief.audience}}",
+                            "level": "{{payload.course_brief.level}}",
+                            "estimated_hours": "{{payload.course_brief.estimated_hours}}",
+                            "summary": "{{payload.course_brief.scope}}",
+                            "voice": "{{payload.course_brief.preferred_voice}}",
+                            "tone": "{{payload.course_brief.tone}}",
+                            "tags": "{{payload.course_brief.tags}}",
+                            "goals": "{{payload.course_brief.goals}}",
+                        },
+                        "course_structure": {
+                            "units": "{{payload.course_brief.units}}",
+                        },
+                    },
+                }
+            },
+        )
+    )
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "defaults.db"), bot_registry=bot_registry)
+    task = await tm.create_task(
+        bot_id="outline-bot",
+        payload={
+            "course_brief": {
+                "topic": "AP World History",
+                "subject": "History",
+                "audience": "High School",
+                "level": "Advanced",
+                "estimated_hours": 100,
+                "scope": "Modern world history survey",
+                "preferred_voice": "Formal",
+                "tone": "Structured",
+                "tags": ["History"],
+                "goals": ["Goal 1"],
+                "units": [{"unit_number": 1, "title": "Unit 1"}],
+            }
+        },
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.1)
+
+    assert updated.status == "completed"
+    assert updated.result["course_shell"]["title"] == "AP World History"
+    assert updated.result["course_structure"]["units"] == [{"unit_number": 1, "title": "Unit 1"}]
+
+
+@pytest.mark.anyio
+async def test_output_contract_preserves_non_empty_model_values_over_defaults(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {
+                "output": json.dumps(
+                    {
+                        "course_shell": {
+                            "title": "Generated Title",
+                            "subject": "Generated Subject",
+                        },
+                        "course_structure": {
+                            "units": [{"unit_number": 1, "title": "Generated Unit"}],
+                        },
+                    }
+                )
+            }
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "defaults-preserve-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="outline-bot",
+            name="Outline",
+            role="assistant",
+            backends=[],
+            routing_rules={
+                "output_contract": {
+                    "enabled": True,
+                    "mode": "model_output",
+                    "format": "json_object",
+                    "required_fields": ["course_shell", "course_structure"],
+                    "defaults_template": {
+                        "course_shell": {
+                            "title": "{{payload.course_brief.topic}}",
+                            "subject": "{{payload.course_brief.subject}}",
+                        },
+                        "course_structure": {
+                            "units": "{{payload.course_brief.units}}",
+                        },
+                    },
+                }
+            },
+        )
+    )
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "defaults-preserve.db"), bot_registry=bot_registry)
+    task = await tm.create_task(
+        bot_id="outline-bot",
+        payload={
+            "course_brief": {
+                "topic": "Fallback Title",
+                "subject": "Fallback Subject",
+                "units": [{"unit_number": 99, "title": "Fallback Unit"}],
+            }
+        },
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.1)
+
+    assert updated.status == "completed"
+    assert updated.result["course_shell"]["title"] == "Generated Title"
+    assert updated.result["course_shell"]["subject"] == "Generated Subject"
+    assert updated.result["course_structure"]["units"] == [{"unit_number": 1, "title": "Generated Unit"}]
 
 
 @pytest.mark.anyio

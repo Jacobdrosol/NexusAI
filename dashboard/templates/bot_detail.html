@@ -179,6 +179,11 @@
     </div>
   </div>
   <div class="form-group">
+    <label>Defaults / Fallback Template JSON (optional)</label>
+    <textarea class="form-control" id="output-contract-defaults-template" rows="6" placeholder='{"status":"ready","items":"&#123;&#123;coalesce:payload.items,payload.source_result.items&#125;&#125;"}'></textarea>
+    <div class="mini-note">Optional generic fallback values for model output. Empty or missing fields are backfilled after JSON extraction. Supports <code>&#123;&#123;payload.field&#125;&#125;</code>, <code>&#123;&#123;json:payload.field&#125;&#125;</code>, and <code>&#123;&#123;coalesce:...&#125;&#125;</code>.</div>
+  </div>
+  <div class="form-group">
     <label>Operator Notes</label>
     <textarea class="form-control" id="output-contract-description" rows="3" placeholder="Describe what this bot must return so downstream steps can consume it safely."></textarea>
   </div>
@@ -744,6 +749,9 @@ function normalizedOutputContract() {
   const template = contract.template && typeof contract.template === 'object' && !Array.isArray(contract.template)
     ? contract.template
     : null;
+  const defaultsTemplate = contract.defaults_template && typeof contract.defaults_template === 'object' && !Array.isArray(contract.defaults_template)
+    ? contract.defaults_template
+    : null;
   return {
     enabled: contract.enabled === true,
     mode: ['model_output', 'payload_transform'].includes(String(contract.mode || '').trim()) ? String(contract.mode || '').trim() : 'model_output',
@@ -752,6 +760,7 @@ function normalizedOutputContract() {
     description: String(contract.description || '').trim(),
     example_output: exampleOutput,
     template: template,
+    defaults_template: defaultsTemplate,
   };
 }
 
@@ -806,15 +815,18 @@ function loadOutputContractEditor() {
   document.getElementById('output-contract-description').value = contract.description || '';
   document.getElementById('output-contract-example').value = JSON.stringify(contract.example_output || {}, null, 2);
   document.getElementById('output-contract-template').value = JSON.stringify(contract.template || {}, null, 2);
+  document.getElementById('output-contract-defaults-template').value = JSON.stringify(contract.defaults_template || {}, null, 2);
 }
 
 function saveOutputContract() {
   const rawRequiredFields = String(document.getElementById('output-contract-required-fields')?.value || '').trim();
   const rawExample = String(document.getElementById('output-contract-example')?.value || '').trim();
   const rawTemplate = String(document.getElementById('output-contract-template')?.value || '').trim();
+  const rawDefaultsTemplate = String(document.getElementById('output-contract-defaults-template')?.value || '').trim();
   let requiredFields = [];
   let exampleOutput = {};
   let template = null;
+  let defaultsTemplate = null;
   if (rawRequiredFields) {
     try {
       requiredFields = JSON.parse(rawRequiredFields);
@@ -851,6 +863,18 @@ function saveOutputContract() {
       return;
     }
   }
+  if (rawDefaultsTemplate) {
+    try {
+      defaultsTemplate = JSON.parse(rawDefaultsTemplate);
+    } catch (err) {
+      alert('Defaults template must be valid JSON.');
+      return;
+    }
+    if (defaultsTemplate === null || Array.isArray(defaultsTemplate) || typeof defaultsTemplate !== 'object') {
+      alert('Defaults template must be a JSON object.');
+      return;
+    }
+  }
   BOT.output_contract = {
     enabled: document.getElementById('output-contract-enabled').checked,
     mode: String(document.getElementById('output-contract-mode')?.value || 'model_output'),
@@ -859,6 +883,7 @@ function saveOutputContract() {
     description: String(document.getElementById('output-contract-description')?.value || '').trim(),
     example_output: exampleOutput,
     template: template,
+    defaults_template: defaultsTemplate,
   };
   persistBot('Output contract saved.');
 }
