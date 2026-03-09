@@ -1441,7 +1441,7 @@ class TaskManager:
             bot = await self._bot_registry.get(task.bot_id)
         except Exception:
             return
-        workflow = getattr(bot, "workflow", None)
+        workflow = self._bot_workflow(bot)
         if workflow is None or not workflow.triggers:
             return
 
@@ -1507,6 +1507,24 @@ class TaskManager:
                     target_bot_id=str(getattr(trigger, "target_bot_id", "") or ""),
                     message=str(exc),
                 )
+
+    def _bot_workflow(self, bot: Any) -> Any:
+        workflow = getattr(bot, "workflow", None)
+        if workflow is not None and getattr(workflow, "triggers", None):
+            return workflow
+        routing_rules = getattr(bot, "routing_rules", None)
+        if not isinstance(routing_rules, dict):
+            return workflow
+        candidate = routing_rules.get("workflow")
+        if candidate is None:
+            return workflow
+        try:
+            from shared.models import BotWorkflow
+
+            parsed = BotWorkflow.model_validate(candidate)
+            return parsed if parsed.triggers else workflow
+        except Exception:
+            return workflow
 
     async def _record_trigger_dispatch_error(
         self,

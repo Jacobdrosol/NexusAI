@@ -917,6 +917,57 @@ async def test_trigger_dispatch_failure_does_not_fail_parent_task(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_dispatch_triggers_falls_back_to_routing_rules_workflow(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {"ok": True}
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "routing-workflow-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="bot-a",
+            name="Bot A",
+            role="assistant",
+            backends=[],
+            workflow=None,
+            routing_rules={
+                "workflow": {
+                    "triggers": [
+                        {
+                            "id": "handoff",
+                            "event": "task_completed",
+                            "target_bot_id": "bot-b",
+                            "condition": "has_result",
+                        }
+                    ]
+                }
+            },
+        )
+    )
+    await bot_registry.register(Bot(id="bot-b", name="Bot B", role="assistant", backends=[]))
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "routing-workflow-tasks.db"), bot_registry=bot_registry)
+    root = await tm.create_task(bot_id="bot-a", payload={"instruction": "start"})
+
+    for _ in range(40):
+        tasks = await tm.list_tasks()
+        if len(tasks) >= 2 and all(t.status == "completed" for t in tasks):
+            break
+        await asyncio.sleep(0.1)
+
+    tasks = await tm.list_tasks()
+    assert len(tasks) == 2
+    triggered = next(t for t in tasks if t.id != root.id)
+    assert triggered.bot_id == "bot-b"
+
+
+@pytest.mark.anyio
 async def test_trigger_payload_template_can_reference_source_fields(tmp_path):
     import asyncio
 
