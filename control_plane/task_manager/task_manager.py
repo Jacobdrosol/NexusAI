@@ -6,7 +6,7 @@ import re
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import aiosqlite
 
@@ -1500,10 +1500,18 @@ class TaskManager:
                     await self._dispatch_join_trigger(task, trigger, target_bot_id, payloads, next_metadata)
                     continue
                 for payload in payloads:
+                    branch_metadata = next_metadata
+                    if isinstance(payload, dict):
+                        branch_step_id = self._fanout_step_id(task, trigger, payload)
+                        if branch_step_id:
+                            existing = await self._find_task_by_step_id(branch_step_id, target_bot_id)
+                            if existing is not None and existing.status in {"queued", "running", "blocked", "completed"}:
+                                continue
+                            branch_metadata = next_metadata.model_copy(update={"step_id": branch_step_id})
                     await self.create_task(
                         bot_id=target_bot_id,
                         payload=payload,
-                        metadata=next_metadata,
+                        metadata=branch_metadata,
                     )
             except Exception as exc:
                 logger.exception(
@@ -1720,7 +1728,7 @@ class TaskManager:
         metadata = task.metadata or TaskMetadata()
         root_id = metadata.workflow_root_task_id or task.id
         event = "task_completed" if task.status == "completed" else "task_failed"
-        matches: List[Dict[str, Any]] = []
+        matches: Dict[str, Tuple[Task, Dict[str, Any]]] = {}
         for candidate in self._tasks.values():
             candidate_meta = candidate.metadata or TaskMetadata()
             if candidate.bot_id != task.bot_id:
@@ -1747,8 +1755,31 @@ class TaskManager:
             candidate_group_value = self._lookup_result_field(candidate_payload, group_field) if group_field else None
             if group_field and candidate_group_value != group_value:
                 continue
-            matches.append(candidate_payload)
-        return matches
+            match_key = str(candidate_meta.step_id or candidate_meta.original_task_id or candidate.id)
+            existing = matches.get(match_key)
+            if existing is None or self._task_order_token(candidate) >= self._task_order_token(existing[0]):
+                matches[match_key] = (candidate, candidate_payload)
+        return [payload for _, payload in matches.values()]
+
+    def _fanout_step_id(self, task: Task, trigger: Any, payload: Dict[str, Any]) -> Optional[str]:
+        fan_out_field = str(getattr(trigger, "fan_out_field", "") or "").strip()
+        if not fan_out_field:
+            return None
+        metadata = task.metadata or TaskMetadata()
+        root_id = metadata.workflow_root_task_id or task.id
+        index_alias = str(getattr(trigger, "fan_out_index_alias", "") or "").strip() or "item_index"
+        alias = str(getattr(trigger, "fan_out_alias", "") or "").strip() or "item"
+        branch_value = payload.get(index_alias)
+        if branch_value is None:
+            branch_value = payload.get(alias)
+        if branch_value is None:
+            return None
+        try:
+            branch_token = json.dumps(branch_value, sort_keys=True, default=str)
+        except TypeError:
+            branch_token = str(branch_value)
+        normalized_branch = re.sub(r"[^a-zA-Z0-9:_-]+", "-", branch_token).strip("-") or "branch"
+        return f"fanout:{task.bot_id}:{trigger.id}:{root_id}:{normalized_branch}"
 
     def _join_step_id(self, task: Task, trigger: Any, payload: Dict[str, Any]) -> Optional[str]:
         metadata = task.metadata or TaskMetadata()
@@ -1779,6 +1810,9 @@ class TaskManager:
         if value is None:
             return ""
         return json.dumps(value, sort_keys=True, default=str)
+
+    def _task_order_token(self, task: Task) -> Tuple[str, str]:
+        return (str(task.updated_at or task.created_at or ""), str(task.id))
 
     def _resolve_trigger_target_bot_id(self, task: Task, target_bot_id: str) -> Optional[str]:
         raw = str(target_bot_id or "").strip()

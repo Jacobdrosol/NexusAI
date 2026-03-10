@@ -1425,6 +1425,109 @@ async def test_trigger_can_fan_out_from_bare_result_field(tmp_path):
     assert len(unit_tasks) == 2
     assert unit_tasks[0].payload["unit"]["title"] == "Unit 1"
     assert unit_tasks[1].payload["unit"]["title"] == "Unit 2"
+    assert unit_tasks[0].metadata.step_id
+    assert unit_tasks[1].metadata.step_id
+    assert unit_tasks[0].metadata.step_id != unit_tasks[1].metadata.step_id
+
+
+@pytest.mark.anyio
+async def test_join_waits_for_latest_successful_branch_results(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot
+
+    class StubScheduler:
+        async def schedule(self, task):
+            if task.bot_id == "outline-bot":
+                return {
+                    "approved_units": [
+                        {"unit_number": 1, "title": "Unit 1"},
+                        {"unit_number": 2, "title": "Unit 2"},
+                        {"unit_number": 3, "title": "Unit 3"},
+                    ]
+                }
+            if task.bot_id == "unit-bot":
+                if task.payload["unit"]["unit_number"] == 3:
+                    await asyncio.sleep(1.0)
+                return {"approved_unit": {"unit_number": task.payload["unit"]["unit_number"]}}
+            return {"ok": True}
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "join-retry-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="outline-bot",
+            name="Outline",
+            role="assistant",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "fan-out-units",
+                        "event": "task_completed",
+                        "target_bot_id": "unit-bot",
+                        "condition": "has_result",
+                        "fan_out_field": "approved_units",
+                        "fan_out_alias": "unit",
+                        "fan_out_index_alias": "unit_index",
+                    }
+                ]
+            },
+        )
+    )
+    await bot_registry.register(
+        Bot(
+            id="unit-bot",
+            name="Unit",
+            role="assistant",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "join-units",
+                        "event": "task_completed",
+                        "target_bot_id": "packager-bot",
+                        "condition": "has_result",
+                        "join_expected_field": "source_payload.fanout_count",
+                        "join_items_alias": "approved_units",
+                        "join_sort_field": "source_result.approved_unit.unit_number",
+                    }
+                ]
+            },
+        )
+    )
+    await bot_registry.register(Bot(id="packager-bot", name="Packager", role="assistant", backends=[]))
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "join-retry-tasks.db"), bot_registry=bot_registry)
+    await tm.create_task(bot_id="outline-bot", payload={"instruction": "build outline"})
+
+    first_two: List[Any] = []
+    for _ in range(60):
+        tasks = await tm.list_tasks()
+        first_two = [task for task in tasks if task.bot_id == "unit-bot" and task.status == "completed"]
+        if len(first_two) >= 2:
+            break
+        await asyncio.sleep(0.1)
+
+    assert len(first_two) >= 2
+    await tm.retry_task(first_two[0].id)
+    await asyncio.sleep(0.3)
+
+    tasks = await tm.list_tasks()
+    assert not any(task.bot_id == "packager-bot" for task in tasks)
+
+    for _ in range(80):
+        tasks = await tm.list_tasks()
+        if any(task.bot_id == "packager-bot" and task.status == "completed" for task in tasks):
+            break
+        await asyncio.sleep(0.1)
+
+    tasks = await tm.list_tasks()
+    packagers = [task for task in tasks if task.bot_id == "packager-bot"]
+    assert len(packagers) == 1
+    assert packagers[0].payload["join_expected_count"] == 3
+    assert packagers[0].payload["join_count"] == 3
 
 
 @pytest.mark.anyio
