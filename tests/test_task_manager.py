@@ -1249,6 +1249,8 @@ async def test_trigger_can_fan_out_many_downstream_tasks(tmp_path):
     assert unit_tasks[0].payload["unit"]["title"] == "Unit 1"
     assert unit_tasks[1].payload["unit_index"] == 1
     assert unit_tasks[2].payload["fanout_count"] == 3
+    assert unit_tasks[0].payload["fanout_branch_key"] == "0"
+    assert unit_tasks[2].payload["fanout_expected_branch_keys"] == ["0", "1", "2"]
 
 
 @pytest.mark.anyio
@@ -1579,6 +1581,104 @@ async def test_join_waits_for_latest_successful_branch_results(tmp_path):
     assert len(packagers) == 1
     assert packagers[0].payload["join_expected_count"] == 3
     assert packagers[0].payload["join_count"] == 3
+
+
+@pytest.mark.anyio
+async def test_join_can_use_fanout_branch_metadata_when_expected_field_is_missing(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot
+
+    class StubScheduler:
+        async def schedule(self, task):
+            if task.bot_id == "outline-bot":
+                return {
+                    "approved_units": [
+                        {"unit_number": 1, "title": "Unit 1"},
+                        {"unit_number": 2, "title": "Unit 2"},
+                    ]
+                }
+            if task.bot_id == "unit-bot":
+                return {
+                    "approved_unit": {
+                        "unit_number": task.payload["unit"]["unit_number"],
+                        "title": task.payload["unit"]["title"],
+                    }
+                }
+            return {"ok": True}
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "join-fanout-meta-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="outline-bot",
+            name="Outline",
+            role="assistant",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "fan-out-units",
+                        "event": "task_completed",
+                        "target_bot_id": "unit-bot",
+                        "condition": "has_result",
+                        "fan_out_field": "approved_units",
+                        "fan_out_alias": "unit",
+                        "fan_out_index_alias": "unit_index",
+                    }
+                ]
+            },
+        )
+    )
+    await bot_registry.register(
+        Bot(
+            id="unit-bot",
+            name="Unit",
+            role="assistant",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "join-units",
+                        "event": "task_completed",
+                        "target_bot_id": "packager-bot",
+                        "condition": "has_result",
+                        "join_expected_field": "source_payload.missing_count",
+                        "join_items_alias": "approved_units",
+                        "join_result_field": "source_result.approved_unit",
+                        "join_result_items_alias": "approved_unit_results",
+                        "join_sort_field": "source_result.approved_unit.unit_number",
+                    }
+                ]
+            },
+        )
+    )
+    await bot_registry.register(Bot(id="packager-bot", name="Packager", role="assistant", backends=[]))
+
+    tm = TaskManager(
+        StubScheduler(),
+        db_path=str(tmp_path / "join-fanout-meta-tasks.db"),
+        bot_registry=bot_registry,
+    )
+    await tm.create_task(bot_id="outline-bot", payload={"instruction": "build outline"})
+
+    for _ in range(80):
+        tasks = await tm.list_tasks()
+        if any(task.bot_id == "packager-bot" and task.status == "completed" for task in tasks):
+            break
+        await asyncio.sleep(0.1)
+
+    tasks = await tm.list_tasks()
+    packagers = [task for task in tasks if task.bot_id == "packager-bot"]
+    assert len(packagers) == 1
+    payload = packagers[0].payload
+    assert payload["join_expected_count"] == 2
+    assert payload["join_count"] == 2
+    assert payload["join_expected_branch_keys"] == ["0", "1"]
+    assert payload["join_branch_keys"] == ["0", "1"]
+    assert payload["join_missing_branch_keys"] == []
+    assert len(payload["approved_unit_results"]) == 2
 
 
 @pytest.mark.anyio
