@@ -2074,10 +2074,12 @@ class TaskManager:
     def _join_step_id(self, task: Task, trigger: Any, payload: Dict[str, Any]) -> Optional[str]:
         metadata = task.metadata or TaskMetadata()
         root_id = metadata.workflow_root_task_id or task.id
+        fanout_id = self._resolve_fanout_id(payload)
+        normalized_fanout = self._normalize_branch_token(fanout_id, fallback="fanout") if fanout_id else "nofanout"
         group_field = str(getattr(trigger, "join_group_field", "") or "").strip()
         group_value = self._lookup_result_field(payload, group_field) if group_field else "__all__"
         normalized_group = self._normalize_branch_token(group_value, fallback="group")
-        return f"join:{task.bot_id}:{trigger.id}:{root_id}:{normalized_group}"
+        return f"join:{task.bot_id}:{trigger.id}:{root_id}:{normalized_fanout}:{normalized_group}"
 
     def _fanout_id(self, task: Task, trigger: Any) -> Optional[str]:
         fan_out_field = str(getattr(trigger, "fan_out_field", "") or "").strip()
@@ -2085,7 +2087,20 @@ class TaskManager:
             return None
         metadata = task.metadata or TaskMetadata()
         root_id = metadata.workflow_root_task_id or task.id
-        return f"fanout:{task.bot_id}:{trigger.id}:{root_id}"
+        # Include stable parent-branch identity so nested fan-outs from sibling
+        # parents do not collide on branch indexes (for example, lesson_index 0
+        # for every unit builder branch).
+        origin_token = self._fanout_origin_token(task)
+        return f"fanout:{task.bot_id}:{trigger.id}:{root_id}:{origin_token}"
+
+    def _fanout_origin_token(self, task: Task) -> str:
+        metadata = task.metadata or TaskMetadata()
+        raw_origin = (
+            metadata.step_id
+            or metadata.original_task_id
+            or task.id
+        )
+        return self._normalize_branch_token(raw_origin, fallback="origin")
 
     def _fanout_branch_key(self, trigger: Any, payload: Dict[str, Any]) -> Optional[str]:
         index_alias = str(getattr(trigger, "fan_out_index_alias", "") or "").strip() or "item_index"
