@@ -164,6 +164,29 @@ def _parse_transform_literal(expr: str) -> tuple[bool, Any]:
     return False, None
 
 
+def _camelize_key(key: str) -> str:
+    text = str(key or "")
+    if "_" not in text:
+        return text
+    parts = [part for part in text.split("_") if part]
+    if not parts:
+        return text
+    first = parts[0]
+    rest = "".join(part[:1].upper() + part[1:] for part in parts[1:])
+    return first + rest
+
+
+def _camelize_json_keys(value: Any) -> Any:
+    if isinstance(value, dict):
+        converted: dict[str, Any] = {}
+        for key, item in value.items():
+            converted[_camelize_key(str(key))] = _camelize_json_keys(item)
+        return converted
+    if isinstance(value, list):
+        return [_camelize_json_keys(item) for item in value]
+    return value
+
+
 def _transform_template_value(template: Any, payload: Any) -> Any:
     if isinstance(template, dict):
         return {str(key): _transform_template_value(value, payload) for key, value in template.items()}
@@ -180,11 +203,17 @@ def _transform_template_value(template: Any, payload: Any) -> Any:
         if expr.startswith("json:"):
             mode = "json"
             path = expr[5:].strip()
+        camelize = False
+        while path.startswith("camelize:"):
+            camelize = True
+            path = path[len("camelize:") :].strip()
         if path.startswith("render:"):
             render_path = path[len("render:") :].strip()
             if render_path.startswith("payload."):
                 render_path = render_path[8:].strip()
             rendered = _transform_template_value(_lookup_payload_path(payload, render_path), payload)
+            if camelize:
+                rendered = _camelize_json_keys(rendered)
             if mode == "json":
                 return rendered
             return rendered
@@ -194,14 +223,23 @@ def _transform_template_value(template: Any, payload: Any) -> Any:
                 literal_ok, literal_value = _parse_transform_literal(candidate)
                 if literal_ok:
                     if literal_value is not None:
+                        if camelize:
+                            literal_value = _camelize_json_keys(literal_value)
                         return literal_value
                     continue
-                value = _transform_template_value("{{" + (("json:" + candidate) if mode == "json" else candidate) + "}}", payload)
+                nested_expr = candidate
+                if camelize:
+                    nested_expr = "camelize:" + nested_expr
+                if mode == "json":
+                    nested_expr = "json:" + nested_expr
+                value = _transform_template_value("{{" + nested_expr + "}}", payload)
                 if value not in (None, "", [], {}):
                     return value
             return None
         literal_ok, literal_value = _parse_transform_literal(path)
         if literal_ok:
+            if camelize:
+                literal_value = _camelize_json_keys(literal_value)
             return literal_value
         if path.startswith("payload."):
             path = path[8:].strip()
@@ -210,8 +248,15 @@ def _transform_template_value(template: Any, payload: Any) -> Any:
             if value in (None, ""):
                 return None
             if isinstance(value, (dict, list)):
+                if camelize:
+                    return _camelize_json_keys(value)
                 return value
-            return json.loads(str(value))
+            parsed_json = json.loads(str(value))
+            if camelize:
+                return _camelize_json_keys(parsed_json)
+            return parsed_json
+        if camelize:
+            return _camelize_json_keys(value)
         return value
     return template
 

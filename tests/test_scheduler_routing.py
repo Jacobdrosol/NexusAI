@@ -696,6 +696,66 @@ async def test_scheduler_input_transform_supports_literal_fallbacks_and_list_ind
 
 
 @pytest.mark.anyio
+async def test_scheduler_input_transform_supports_camelize_for_nested_payloads():
+    from control_plane.scheduler.scheduler import Scheduler
+
+    bot_registry = AsyncMock()
+    bot_registry.get.return_value = Bot(
+        id="course-importer",
+        name="Course Importer",
+        role="importer",
+        system_prompt=None,
+        backends=[BackendConfig(type="custom", provider="http_connection", model="attached-http")],
+        routing_rules={
+            "input_transform": {
+                "enabled": True,
+                "template": {
+                    "coursePackage": "{{json:camelize:payload.source_result.approved_package.course_package}}",
+                    "badgeSpec": "{{json:camelize:payload.source_result.approved_package.badge_spec}}",
+                },
+            }
+        },
+    )
+    scheduler = Scheduler(bot_registry=bot_registry, worker_registry=AsyncMock())
+    task = Task(
+        id="task-camelize",
+        bot_id="course-importer",
+        payload={
+            "source_result": {
+                "approved_package": {
+                    "course_package": {
+                        "course_shell": {"title": "World History Survey"},
+                        "units": [
+                            {
+                                "unit_number": 1,
+                                "unit_question_bank": {"question_count": 20},
+                                "lessons": [{"lesson_number": 1, "title": "Lesson 1"}],
+                            }
+                        ],
+                    },
+                    "badge_spec": {"image_prompt": "Create a crest"},
+                }
+            }
+        },
+        status="queued",
+        created_at="now",
+        updated_at="now",
+    )
+
+    async def fake_dispatch(backend, payload, task=None):
+        return {"payload": payload}
+
+    scheduler._dispatch_backend = fake_dispatch  # type: ignore[method-assign]
+    result = await scheduler.schedule(task)
+
+    assert result["payload"]["coursePackage"]["courseShell"]["title"] == "World History Survey"
+    assert result["payload"]["coursePackage"]["units"][0]["unitNumber"] == 1
+    assert result["payload"]["coursePackage"]["units"][0]["unitQuestionBank"]["questionCount"] == 20
+    assert result["payload"]["coursePackage"]["units"][0]["lessons"][0]["lessonNumber"] == 1
+    assert result["payload"]["badgeSpec"]["imagePrompt"] == "Create a crest"
+
+
+@pytest.mark.anyio
 async def test_scheduler_custom_http_connection_backend_executes_actions(monkeypatch):
     from control_plane.scheduler.scheduler import Scheduler
     from dashboard.models import BotConnection as DashboardBotConnection
