@@ -127,16 +127,31 @@ def _extract_json_payload(text: str) -> Any:
     raise ValueError("no valid JSON object or array found")
 
 
-def _lookup_payload_path(payload: Any, path: str) -> Any:
+def _lookup_nested_path(payload: Any, path: str) -> Any:
     current: Any = payload
     for part in str(path or "").split("."):
         key = part.strip()
         if not key:
             continue
-        if not isinstance(current, dict) or key not in current:
-            return None
-        current = current[key]
+        if isinstance(current, dict):
+            if key not in current:
+                return None
+            current = current[key]
+            continue
+        if isinstance(current, list):
+            if not key.isdigit():
+                return None
+            index = int(key)
+            if index < 0 or index >= len(current):
+                return None
+            current = current[index]
+            continue
+        return None
     return current
+
+
+def _lookup_payload_path(payload: Any, path: str) -> Any:
+    return _lookup_nested_path(payload, path)
 
 
 def _split_transform_expr_list(expr: str) -> List[str]:
@@ -1847,10 +1862,4 @@ class TaskManager:
         return str(actual) == str(expected)
 
     def _lookup_result_field(self, data: Dict[str, Any], field: str) -> Any:
-        current: Any = data
-        for part in str(field).split("."):
-            key = part.strip()
-            if not key or not isinstance(current, dict) or key not in current:
-                return None
-            current = current[key]
-        return current
+        return _lookup_nested_path(data, field)

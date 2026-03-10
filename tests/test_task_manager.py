@@ -4,6 +4,27 @@ import pytest
 from unittest.mock import AsyncMock
 
 
+def test_lookup_payload_path_supports_list_indexes():
+    from control_plane.task_manager.task_manager import _lookup_payload_path
+
+    payload = {
+        "approved_units": [
+            {
+                "source_payload": {
+                    "unit_blueprint": {
+                        "unit_number": 1,
+                        "title": "Unit 1",
+                    }
+                }
+            }
+        ]
+    }
+
+    assert _lookup_payload_path(payload, "approved_units.0.source_payload.unit_blueprint.unit_number") == 1
+    assert _lookup_payload_path(payload, "approved_units.0.source_payload.unit_blueprint.title") == "Unit 1"
+    assert _lookup_payload_path(payload, "approved_units.1.source_payload.unit_blueprint.title") is None
+
+
 @pytest.mark.anyio
 async def test_create_and_get_task():
     from control_plane.task_manager.task_manager import TaskManager
@@ -1428,6 +1449,36 @@ async def test_trigger_can_fan_out_from_bare_result_field(tmp_path):
     assert unit_tasks[0].metadata.step_id
     assert unit_tasks[1].metadata.step_id
     assert unit_tasks[0].metadata.step_id != unit_tasks[1].metadata.step_id
+
+
+def test_transform_template_can_read_list_index_paths():
+    from control_plane.task_manager.task_manager import _transform_template_value
+
+    payload = {
+        "approved_lesson_bundles": [
+            {
+                "source_payload": {
+                    "unit_blueprint": {
+                        "unit_number": 3,
+                        "title": "Land-Based Empires",
+                    }
+                }
+            }
+        ]
+    }
+    notes = []
+
+    transformed = _transform_template_value(
+        {
+            "approved_lesson_bundles": "{{payload.approved_lesson_bundles}}",
+            "unit_blueprint": "{{payload.approved_lesson_bundles.0.source_payload.unit_blueprint}}",
+        },
+        payload,
+        notes,
+    )
+
+    assert transformed["unit_blueprint"]["unit_number"] == 3
+    assert transformed["unit_blueprint"]["title"] == "Land-Based Empires"
 
 
 @pytest.mark.anyio
