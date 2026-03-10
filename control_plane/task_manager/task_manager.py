@@ -1657,6 +1657,8 @@ class TaskManager:
                 branch_keys.append(branch_key)
             payloads.append(next_payload)
         if branch_keys:
+            # Persist the expected branch set on every child payload so downstream joins
+            # can wait for the exact branch keys instead of relying only on counts.
             unique_branch_keys: List[str] = []
             seen: Set[str] = set()
             for key in branch_keys:
@@ -1725,6 +1727,8 @@ class TaskManager:
         sibling_payloads = self._collect_join_payloads(task, trigger, group_field, group_value)
         fanout_id = self._resolve_fanout_id(payload)
         if fanout_id:
+            # Restrict sibling collection to the originating fan-out set so unrelated
+            # branches from the same bot/workflow root cannot satisfy this join.
             sibling_payloads = [
                 item for item in sibling_payloads if self._resolve_fanout_id(item) == fanout_id
             ]
@@ -1944,6 +1948,8 @@ class TaskManager:
         return normalized or fallback
 
     def _payload_source_chain(self, payload: Any) -> List[Dict[str, Any]]:
+        # Traverse nested source_payload wrappers (up to a bounded depth) to locate
+        # fan-out metadata regardless of how many trigger hops a branch has passed through.
         chain: List[Dict[str, Any]] = []
         current: Any = payload
         seen: Set[int] = set()
