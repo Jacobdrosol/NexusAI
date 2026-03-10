@@ -1750,6 +1750,348 @@ async def test_join_without_group_field_dedupes_per_fanout_set(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_course_pipeline_cardinality_matches_expected_branch_counts(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot
+
+    units = [
+        {
+            "unit_number": unit_number,
+            "title": f"Unit {unit_number}",
+            "lessons": [
+                {
+                    "lesson_number": lesson_number,
+                    "title": f"U{unit_number}-L{lesson_number}",
+                }
+                for lesson_number in range(1, 5)
+            ],
+        }
+        for unit_number in range(1, 4)
+    ]
+
+    class StubScheduler:
+        async def schedule(self, task):
+            if task.bot_id == "intake-bot":
+                return {"ok": True}
+            if task.bot_id == "outline-bot":
+                return {"units": units}
+            if task.bot_id == "outline-qc-bot":
+                return {"qc_status": "pass", "approved_units": task.payload["source_result"]["units"]}
+            if task.bot_id == "unit-builder-bot":
+                unit = task.payload["unit"]
+                return {
+                    "unit_blueprint": {
+                        "unit_number": unit["unit_number"],
+                        "title": unit["title"],
+                        "lesson_plans": unit["lessons"],
+                    }
+                }
+            if task.bot_id == "lesson-writer-bot":
+                unit_number = task.payload["source_result"]["unit_blueprint"]["unit_number"]
+                lesson = task.payload["lesson"]
+                return {
+                    "lesson_output": {
+                        "unit_number": unit_number,
+                        "lesson_number": lesson["lesson_number"],
+                        "title": lesson["title"],
+                    }
+                }
+            if task.bot_id == "lesson-qc-bot":
+                return {
+                    "qc_status": "pass",
+                    "approved_lesson": task.payload["source_result"]["lesson_output"],
+                }
+            if task.bot_id == "unit-aggregator-bot":
+                return {"approved_unit": {"unit_number": task.payload["join_group"]}}
+            if task.bot_id == "image-planner-bot":
+                return {"unit_image_plan": {"unit_number": task.payload["source_result"]["approved_unit"]["unit_number"]}}
+            if task.bot_id == "unit-question-bank-bot":
+                return {
+                    "unit_question_bank": {
+                        "unit_number": task.payload["source_result"]["approved_unit"]["unit_number"],
+                    }
+                }
+            if task.bot_id == "unit-question-bank-qc-bot":
+                return {
+                    "qc_status": "pass",
+                    "approved_unit_package": {
+                        "unit_number": task.payload["source_result"]["unit_question_bank"]["unit_number"],
+                    },
+                }
+            if task.bot_id == "course-aggregator-bot":
+                return {"course_package": {"units": task.payload["approved_units"]}}
+            return {"ok": True}
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "pipeline-counts-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="intake-bot",
+            name="Intake",
+            role="intake",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "to-outline",
+                        "event": "task_completed",
+                        "target_bot_id": "outline-bot",
+                        "condition": "has_result",
+                    }
+                ]
+            },
+        )
+    )
+    await bot_registry.register(
+        Bot(
+            id="outline-bot",
+            name="Outline",
+            role="assistant",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "to-outline-qc",
+                        "event": "task_completed",
+                        "target_bot_id": "outline-qc-bot",
+                        "condition": "has_result",
+                    }
+                ]
+            },
+        )
+    )
+    await bot_registry.register(
+        Bot(
+            id="outline-qc-bot",
+            name="Outline QC",
+            role="quality",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "fan-out-units",
+                        "event": "task_completed",
+                        "target_bot_id": "unit-builder-bot",
+                        "condition": "has_result",
+                        "result_field": "qc_status",
+                        "result_equals": "pass",
+                        "fan_out_field": "approved_units",
+                        "fan_out_alias": "unit",
+                        "fan_out_index_alias": "unit_index",
+                    }
+                ]
+            },
+        )
+    )
+    await bot_registry.register(
+        Bot(
+            id="unit-builder-bot",
+            name="Unit Builder",
+            role="assistant",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "fan-out-lessons",
+                        "event": "task_completed",
+                        "target_bot_id": "lesson-writer-bot",
+                        "condition": "has_result",
+                        "fan_out_field": "source_result.unit_blueprint.lesson_plans",
+                        "fan_out_alias": "lesson",
+                        "fan_out_index_alias": "lesson_index",
+                        "payload_template": {
+                            "course_unit_count": "{{source_payload.fanout_count}}",
+                            "unit_blueprint": "{{source_result.unit_blueprint}}",
+                        },
+                    }
+                ]
+            },
+        )
+    )
+    await bot_registry.register(
+        Bot(
+            id="lesson-writer-bot",
+            name="Lesson Writer",
+            role="assistant",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "to-lesson-qc",
+                        "event": "task_completed",
+                        "target_bot_id": "lesson-qc-bot",
+                        "condition": "has_result",
+                        "payload_template": {
+                            "course_unit_count": "{{source_payload.course_unit_count}}",
+                            "unit_blueprint": "{{source_payload.unit_blueprint}}",
+                            "lesson_output": "{{source_result.lesson_output}}",
+                        },
+                    }
+                ]
+            },
+        )
+    )
+    await bot_registry.register(
+        Bot(
+            id="lesson-qc-bot",
+            name="Lesson QC",
+            role="quality",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "join-lessons",
+                        "event": "task_completed",
+                        "target_bot_id": "unit-aggregator-bot",
+                        "condition": "has_result",
+                        "result_field": "qc_status",
+                        "result_equals": "pass",
+                        "join_group_field": "source_payload.unit_blueprint.unit_number",
+                        "join_expected_field": "source_payload.fanout_count",
+                        "join_items_alias": "lesson_bundles",
+                        "join_result_field": "source_result.approved_lesson",
+                        "join_result_items_alias": "approved_lessons",
+                        "join_sort_field": "source_result.approved_lesson.lesson_number",
+                        "payload_template": {
+                            "course_unit_count": "{{source_payload.course_unit_count}}",
+                            "unit_blueprint": "{{source_payload.unit_blueprint}}",
+                        },
+                    }
+                ]
+            },
+        )
+    )
+    await bot_registry.register(
+        Bot(
+            id="unit-aggregator-bot",
+            name="Unit Aggregator",
+            role="assistant",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "to-image-planner",
+                        "event": "task_completed",
+                        "target_bot_id": "image-planner-bot",
+                        "condition": "has_result",
+                        "payload_template": {
+                            "course_unit_count": "{{source_payload.course_unit_count}}",
+                            "approved_unit": "{{source_result.approved_unit}}",
+                        },
+                    },
+                    {
+                        "id": "to-unit-question-bank",
+                        "event": "task_completed",
+                        "target_bot_id": "unit-question-bank-bot",
+                        "condition": "has_result",
+                        "payload_template": {
+                            "course_unit_count": "{{source_payload.course_unit_count}}",
+                            "approved_unit": "{{source_result.approved_unit}}",
+                        },
+                    },
+                ]
+            },
+        )
+    )
+    await bot_registry.register(Bot(id="image-planner-bot", name="Image Planner", role="assistant", backends=[]))
+    await bot_registry.register(
+        Bot(
+            id="unit-question-bank-bot",
+            name="Unit Question Bank",
+            role="assistant",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "to-unit-question-bank-qc",
+                        "event": "task_completed",
+                        "target_bot_id": "unit-question-bank-qc-bot",
+                        "condition": "has_result",
+                        "payload_template": {
+                            "course_unit_count": "{{source_payload.course_unit_count}}",
+                            "unit_question_bank": "{{source_result.unit_question_bank}}",
+                        },
+                    }
+                ]
+            },
+        )
+    )
+    await bot_registry.register(
+        Bot(
+            id="unit-question-bank-qc-bot",
+            name="Unit Question Bank QC",
+            role="quality",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "join-approved-units",
+                        "event": "task_completed",
+                        "target_bot_id": "course-aggregator-bot",
+                        "condition": "has_result",
+                        "result_field": "qc_status",
+                        "result_equals": "pass",
+                        "join_expected_field": "source_payload.course_unit_count",
+                        "join_items_alias": "approved_units",
+                        "join_result_field": "source_result.approved_unit_package",
+                        "join_result_items_alias": "approved_unit_packages",
+                        "join_sort_field": "source_result.approved_unit_package.unit_number",
+                    }
+                ]
+            },
+        )
+    )
+    await bot_registry.register(Bot(id="course-aggregator-bot", name="Course Aggregator", role="assistant", backends=[]))
+
+    tm = TaskManager(
+        StubScheduler(),
+        db_path=str(tmp_path / "pipeline-counts-tasks.db"),
+        bot_registry=bot_registry,
+    )
+    await tm.create_task(bot_id="intake-bot", payload={"instruction": "start"})
+
+    for _ in range(240):
+        tasks = await tm.list_tasks()
+        if any(task.bot_id == "course-aggregator-bot" and task.status == "completed" for task in tasks):
+            break
+        await asyncio.sleep(0.1)
+
+    expected_total = 43
+    for _ in range(240):
+        tasks = await tm.list_tasks()
+        if len(tasks) == expected_total and all(task.status == "completed" for task in tasks):
+            break
+        await asyncio.sleep(0.1)
+
+    tasks = await tm.list_tasks()
+    assert len(tasks) == expected_total
+    assert all(task.status == "completed" for task in tasks)
+
+    counts = {}
+    for task in tasks:
+        counts[task.bot_id] = counts.get(task.bot_id, 0) + 1
+
+    assert counts.get("intake-bot", 0) == 1
+    assert counts.get("outline-bot", 0) == 1
+    assert counts.get("outline-qc-bot", 0) == 1
+    assert counts.get("unit-builder-bot", 0) == 3
+    assert counts.get("lesson-writer-bot", 0) == 12
+    assert counts.get("lesson-qc-bot", 0) == 12
+    assert counts.get("unit-aggregator-bot", 0) == 3
+    assert counts.get("image-planner-bot", 0) == 3
+    assert counts.get("unit-question-bank-bot", 0) == 3
+    assert counts.get("unit-question-bank-qc-bot", 0) == 3
+    assert counts.get("course-aggregator-bot", 0) == 1
+
+    unit_aggregators = [task for task in tasks if task.bot_id == "unit-aggregator-bot"]
+    assert len(unit_aggregators) == 3
+    for task in unit_aggregators:
+        assert task.payload["join_expected_count"] == 4
+        assert task.payload["join_count"] == 4
+
+@pytest.mark.anyio
 async def test_trigger_can_fan_out_from_bare_result_field(tmp_path):
     import asyncio
 

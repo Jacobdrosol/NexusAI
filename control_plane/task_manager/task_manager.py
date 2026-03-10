@@ -1957,6 +1957,12 @@ class TaskManager:
         aggregate_payload["join_expected_branch_keys"] = expected_branch_keys
         aggregate_payload["join_missing_branch_keys"] = missing_branch_keys
         aggregate_payload["join_target_bot_id"] = target_bot_id
+        # Reset fan-out scope at join boundaries. Downstream stages can opt in
+        # by explicitly setting new fanout_* fields in their payload templates.
+        aggregate_payload["fanout_id"] = ""
+        aggregate_payload["fanout_count"] = None
+        aggregate_payload["fanout_branch_key"] = ""
+        aggregate_payload["fanout_expected_branch_keys"] = []
         return aggregate_payload
 
     def _resolve_join_expected_count(
@@ -2139,23 +2145,26 @@ class TaskManager:
 
     def _resolve_fanout_id(self, payload: Dict[str, Any]) -> Optional[str]:
         for node in self._payload_source_chain(payload):
+            if "fanout_id" not in node:
+                continue
             raw = str(node.get("fanout_id") or "").strip()
-            if raw:
-                return raw
+            return raw or None
         return None
 
     def _resolve_fanout_count(self, payload: Dict[str, Any]) -> Optional[int]:
         for node in self._payload_source_chain(payload):
-            parsed = self._coerce_positive_int(node.get("fanout_count"))
-            if parsed is not None:
-                return parsed
+            if "fanout_count" not in node:
+                continue
+            return self._coerce_positive_int(node.get("fanout_count"))
         return None
 
     def _resolve_fanout_expected_branch_keys(self, payload: Dict[str, Any]) -> List[str]:
         for node in self._payload_source_chain(payload):
+            if "fanout_expected_branch_keys" not in node:
+                continue
             raw = node.get("fanout_expected_branch_keys")
             if not isinstance(raw, list):
-                continue
+                return []
             normalized: List[str] = []
             seen: Set[str] = set()
             for item in raw:
@@ -2164,15 +2173,14 @@ class TaskManager:
                     continue
                 seen.add(key)
                 normalized.append(key)
-            if normalized:
-                return normalized
+            return normalized
         return []
 
     def _resolve_join_branch_key(self, payload: Dict[str, Any]) -> Optional[str]:
         for node in self._payload_source_chain(payload):
-            key = self._coerce_branch_key(node.get("fanout_branch_key"))
-            if key:
-                return key
+            if "fanout_branch_key" not in node:
+                continue
+            return self._coerce_branch_key(node.get("fanout_branch_key"))
         source_task_id = str(payload.get("source_task_id") or "").strip()
         if source_task_id:
             return self._normalize_branch_token(source_task_id, fallback="task")
