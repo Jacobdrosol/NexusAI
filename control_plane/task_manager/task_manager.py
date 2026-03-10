@@ -260,6 +260,15 @@ def _looks_like_flat_launch_payload(payload: Any, required_fields: list[str]) ->
     return has_serialized_fields and has_brief_like_fields
 
 
+def _looks_like_trigger_wrapper_payload(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    keys = {str(key).strip() for key in payload.keys() if str(key).strip()}
+    if not keys:
+        return False
+    return bool(keys.intersection({"source_payload", "source_result", "source_task_id", "source_bot_id"}))
+
+
 def _payload_satisfies_output_contract(payload: Any, required_fields: list[str], non_empty_fields: list[str]) -> bool:
     if not isinstance(payload, dict):
         return False
@@ -1109,6 +1118,7 @@ class TaskManager:
         has_launch_form_contract = bool(form_fields) or bool(default_payload)
         is_saved_launch_entry = await self._is_saved_launch_entry(bot_id, metadata)
         looks_like_flat_launch_payload = _looks_like_flat_launch_payload(payload, [str(field) for field in required_fields])
+        looks_like_trigger_wrapper_payload = _looks_like_trigger_wrapper_payload(payload)
         if not validate_before_transform and (
             output_mode == "payload_transform"
             or has_input_transform
@@ -1116,6 +1126,7 @@ class TaskManager:
             or has_launch_form_contract
             or is_saved_launch_entry
             or looks_like_flat_launch_payload
+            or looks_like_trigger_wrapper_payload
         ):
             return
 

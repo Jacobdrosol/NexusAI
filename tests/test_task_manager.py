@@ -889,6 +889,7 @@ async def test_trigger_dispatch_failure_does_not_fail_parent_task(tmp_path):
                 "input_contract": {
                     "enabled": True,
                     "format": "json_object",
+                    "validate_before_transform": True,
                     "required_fields": ["workflow_type", "course_brief", "generation_settings", "revision_context"],
                 }
             },
@@ -965,6 +966,55 @@ async def test_dispatch_triggers_falls_back_to_routing_rules_workflow(tmp_path):
     assert len(tasks) == 2
     triggered = next(t for t in tasks if t.id != root.id)
     assert triggered.bot_id == "bot-b"
+
+
+@pytest.mark.anyio
+async def test_trigger_wrapper_payloads_skip_pre_run_input_validation(tmp_path):
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot, TaskMetadata
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {"ok": True}
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "trigger-wrapper-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="course-outline",
+            name="Course Outline",
+            role="course-outline",
+            backends=[],
+            routing_rules={
+                "input_contract": {
+                    "enabled": True,
+                    "format": "json_object",
+                    "required_fields": ["workflow_type", "course_brief", "generation_settings", "revision_context"],
+                }
+            },
+        )
+    )
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "trigger-wrapper-tasks.db"), bot_registry=bot_registry)
+    await tm._validate_task_payload(
+        "course-outline",
+        {
+            "source_bot_id": "course-intake",
+            "source_task_id": "root-task",
+            "source_payload": {
+                "course_brief": {"topic": "AP World History"},
+                "generation_settings": {"allowed_lesson_blocks": ["AdvancedParagraph"]},
+                "workflow_type": "course_generation",
+            },
+            "source_result": {
+                "course_brief": {"topic": "AP World History"},
+                "generation_settings": {"allowed_lesson_blocks": ["AdvancedParagraph"]},
+                "workflow_type": "course_generation",
+            },
+            "instruction": "Build outline",
+        },
+        metadata=TaskMetadata(source="bot_trigger", parent_task_id="root-task", trigger_rule_id="to-outline"),
+    )
 
 
 @pytest.mark.anyio
