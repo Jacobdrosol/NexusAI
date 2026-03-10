@@ -171,6 +171,7 @@ tr:hover td {
 .badge-running { background: #1a2e4a; color: #60a5fa; }
 .badge-completed { background: #064e3b; color: #6ee7b7; }
 .badge-failed { background: #450a0a; color: #fca5a5; }
+.badge-retried { background: #3f2a0d; color: #fcd34d; }
 .badge-enabled { background: #064e3b; color: #6ee7b7; }
 .badge-disabled { background: #1f2937; color: #9ca3af; }
 

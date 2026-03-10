@@ -114,7 +114,7 @@ def tasks_page() -> str:
         recent_failed = [
             task
             for task in sorted_tasks
-            if task.get("status") == "failed" and (_parse_iso(task.get("updated_at")) or now) >= recent_cutoff
+            if task.get("status") in {"failed", "retried"} and (_parse_iso(task.get("updated_at")) or now) >= recent_cutoff
         ]
         return render_template(
             "tasks.html",
@@ -138,7 +138,7 @@ def tasks_page() -> str:
             running_tasks=[task for task in task_rows if task.get("status") == "running"],
             queued_tasks=[task for task in task_rows if task.get("status") in {"queued", "blocked"}],
             recent_completed_tasks=[task for task in task_rows if task.get("status") == "completed"],
-            recent_failed_tasks=[task for task in task_rows if task.get("status") == "failed"],
+            recent_failed_tasks=[task for task in task_rows if task.get("status") in {"failed", "retried"}],
             launchable_bots=[],
             error=None,
         )

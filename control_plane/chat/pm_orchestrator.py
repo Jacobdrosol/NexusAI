@@ -110,7 +110,7 @@ class PMOrchestrator:
             for task_id in task_ids:
                 task = await self._task_manager.get_task(task_id)
                 snapshots[task_id] = task
-                if task.status not in {"completed", "failed"}:
+                if task.status not in {"completed", "failed", "retried"}:
                     all_terminal = False
             if all_terminal:
                 break
@@ -126,7 +126,7 @@ class PMOrchestrator:
             task = snapshots.get(task_id) or await self._task_manager.get_task(task_id)
             if task.status == "completed":
                 completed += 1
-            if task.status == "failed":
+            if task.status in {"failed", "retried"}:
                 failed += 1
             title = ""
             if isinstance(task.payload, dict):

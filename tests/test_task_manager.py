@@ -207,6 +207,15 @@ async def test_manual_retry_creates_new_task_with_override(tmp_path):
     assert retried.metadata.original_task_id == original.id
     assert retried.metadata.retry_of_task_id == original.id
 
+    original_after_retry = await tm.get_task(original.id)
+    assert original_after_retry.status == "retried"
+    assert original_after_retry.metadata is not None
+    assert original_after_retry.metadata.retried_by_task_id == retried.id
+    assert original_after_retry.error is not None
+    assert original_after_retry.error.code == "retried"
+    assert isinstance(original_after_retry.error.details, dict)
+    assert original_after_retry.error.details.get("retried_by_task_id") == retried.id
+
 
 @pytest.mark.anyio
 async def test_cancel_running_task_marks_cancelled(tmp_path, monkeypatch):
@@ -936,6 +945,61 @@ async def test_trigger_dispatch_failure_does_not_fail_parent_task(tmp_path):
     trigger_errors = [artifact for artifact in artifacts if artifact.label == "Trigger Dispatch Error"]
     assert len(trigger_errors) == 1
     assert "revision_context" in (trigger_errors[0].content or "")
+
+
+@pytest.mark.anyio
+async def test_trigger_skip_records_diagnostics_when_fan_out_produces_no_payloads(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {"unit_blueprint": {"unit_number": 1, "title": "Unit 1"}}
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "trigger-skip-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="unit-builder-bot",
+            name="Unit Builder",
+            role="assistant",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "fanout-lessons",
+                        "event": "task_completed",
+                        "target_bot_id": "lesson-writer-bot",
+                        "condition": "has_result",
+                        "fan_out_field": "source_result.unit_blueprint.lesson_plans",
+                        "fan_out_alias": "lesson",
+                        "fan_out_index_alias": "lesson_index",
+                    }
+                ]
+            },
+        )
+    )
+    await bot_registry.register(Bot(id="lesson-writer-bot", name="Lesson Writer", role="assistant", backends=[]))
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "trigger-skip-tasks.db"), bot_registry=bot_registry)
+    root = await tm.create_task(bot_id="unit-builder-bot", payload={"instruction": "build unit"})
+
+    for _ in range(40):
+        updated = await tm.get_task(root.id)
+        if updated.status == "completed":
+            break
+        await asyncio.sleep(0.1)
+
+    tasks = await tm.list_tasks()
+    assert len([task for task in tasks if task.bot_id == "lesson-writer-bot"]) == 0
+
+    artifacts = await tm.list_bot_run_artifacts("unit-builder-bot", task_id=root.id)
+    skipped = [artifact for artifact in artifacts if artifact.label == "Trigger Dispatch Skipped"]
+    assert len(skipped) == 1
+    assert '"reason": "fan_out_field_not_list"' in (skipped[0].content or "")
+    assert '"fan_out_field": "source_result.unit_blueprint.lesson_plans"' in (skipped[0].content or "")
 
 
 @pytest.mark.anyio

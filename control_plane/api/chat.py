@@ -313,7 +313,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                             }
                             yield f"event: task_status\ndata: {json.dumps(payload)}\n\n"
                             last_status[task_id] = task.status
-                        if task.status not in {"completed", "failed"}:
+                        if task.status not in {"completed", "failed", "retried"}:
                             all_terminal = False
                     if all_terminal:
                         break

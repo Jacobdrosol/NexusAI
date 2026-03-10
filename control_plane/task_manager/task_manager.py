@@ -670,7 +670,7 @@ class TaskManager:
     async def _upsert_bot_run(self, task: Task) -> None:
         metadata = task.metadata.model_dump() if task.metadata else None
         started_at = task.updated_at if task.status == "running" else None
-        completed_at = task.updated_at if task.status in {"completed", "failed", "cancelled"} else None
+        completed_at = task.updated_at if task.status in {"completed", "failed", "cancelled", "retried"} else None
         async with aiosqlite.connect(self._db_path) as db:
             await db.execute(
                 """
@@ -923,17 +923,50 @@ class TaskManager:
                 "source": "manual_retry",
             }
         )
-        return await self.create_task(
+        retried_task = await self.create_task(
             bot_id=original.bot_id,
             payload=original.payload if payload_override is None else payload_override,
             metadata=next_metadata,
             depends_on=[],
         )
+        if original.status != "failed":
+            return retried_task
+
+        now = datetime.now(timezone.utc).isoformat()
+        async with self._lock:
+            existing = self._tasks.get(task_id)
+            if existing is None:
+                return retried_task
+            existing_metadata = existing.metadata or TaskMetadata()
+            updated_metadata = existing_metadata.model_copy(
+                update={"retried_by_task_id": retried_task.id}
+            )
+            existing_error = existing.error or TaskError(
+                message="Task retried by operator",
+                code="retried",
+                details={},
+            )
+            details = dict(existing_error.details) if isinstance(existing_error.details, dict) else {}
+            details["retried_by_task_id"] = retried_task.id
+            updated_error = existing_error.model_copy(update={"code": "retried", "details": details})
+            self._tasks[task_id] = existing.model_copy(
+                update={
+                    "status": "retried",
+                    "metadata": updated_metadata,
+                    "error": updated_error,
+                    "updated_at": now,
+                }
+            )
+            updated_original = self._tasks[task_id]
+        await self._persist_task(updated_original)
+        await self._upsert_bot_run(updated_original)
+        await self._record_artifacts_for_task(updated_original)
+        return retried_task
 
     async def cancel_task(self, task_id: str) -> Task:
         await self._ensure_db()
         task = await self.get_task(task_id)
-        if task.status in {"completed", "failed", "cancelled"}:
+        if task.status in {"completed", "failed", "cancelled", "retried"}:
             return task
 
         runner: Optional[asyncio.Task[Any]] = None
@@ -1334,9 +1367,9 @@ class TaskManager:
             updated_task = self._tasks[task_id]
         await self._persist_task(updated_task)
         await self._upsert_bot_run(updated_task)
-        if status in {"completed", "failed", "cancelled"}:
+        if status in {"completed", "failed", "cancelled", "retried"}:
             await self._record_artifacts_for_task(updated_task)
-            if status != "cancelled":
+            if status in {"completed", "failed"}:
                 await self._dispatch_triggers(updated_task)
             await self._try_unblock_tasks()
 
@@ -1496,6 +1529,12 @@ class TaskManager:
                 payloads = self._build_trigger_payloads(task, trigger)
                 if not payloads:
                     logger.warning("Skipping trigger %s for task %s because no payloads were produced", trigger.id, task.id)
+                    await self._record_trigger_dispatch_skip(
+                        source_task=task,
+                        trigger_id=str(getattr(trigger, "id", "") or ""),
+                        target_bot_id=str(target_bot_id or ""),
+                        details=self._describe_trigger_payload_skip(task, trigger),
+                    )
                     continue
                 next_metadata = TaskMetadata(
                     user_id=metadata.user_id if trigger.inherit_metadata else None,
@@ -1594,6 +1633,40 @@ class TaskManager:
             )
         )
 
+    async def _record_trigger_dispatch_skip(
+        self,
+        source_task: Task,
+        trigger_id: str,
+        target_bot_id: str,
+        details: Dict[str, Any],
+    ) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        await self._upsert_artifact(
+            BotRunArtifact(
+                id=f"{source_task.id}:trigger-skip:{trigger_id or 'unknown'}",
+                run_id=source_task.id,
+                task_id=source_task.id,
+                bot_id=source_task.bot_id,
+                kind="note",
+                label="Trigger Dispatch Skipped",
+                content=json.dumps(
+                    {
+                        "trigger_id": trigger_id,
+                        "target_bot_id": target_bot_id,
+                        "details": details,
+                    },
+                    indent=2,
+                    sort_keys=True,
+                ),
+                metadata={
+                    "trigger_id": trigger_id,
+                    "target_bot_id": target_bot_id,
+                    "details": details,
+                },
+                created_at=now,
+            )
+        )
+
     def _build_trigger_payload(self, task: Task, trigger: Any) -> Any:
         payload_template = trigger.payload_template
         base_payload: Dict[str, Any] = {
@@ -1631,11 +1704,7 @@ class TaskManager:
             return [payload]
         if not isinstance(payload, dict):
             return [payload]
-        items = self._lookup_result_field(payload, fan_out_field)
-        if not isinstance(items, list) and isinstance(task.result, dict):
-            # Allow fan-out fields to be expressed relative to the completed task result
-            # as well as the wrapped trigger payload.
-            items = self._lookup_result_field(task.result, fan_out_field)
+        items = self._resolve_fan_out_items(payload, task, fan_out_field)
         if not isinstance(items, list):
             return []
         alias = str(getattr(trigger, "fan_out_alias", "") or "").strip() or "item"
@@ -1670,6 +1739,95 @@ class TaskManager:
                 if isinstance(next_payload, dict):
                     next_payload["fanout_expected_branch_keys"] = list(unique_branch_keys)
         return payloads
+
+    def _resolve_fan_out_items(
+        self,
+        payload: Dict[str, Any],
+        task: Task,
+        fan_out_field: str,
+    ) -> Optional[List[Any]]:
+        for lookup_path in self._fan_out_lookup_paths(fan_out_field):
+            items = self._lookup_result_field(payload, lookup_path)
+            if isinstance(items, list):
+                return items
+        if isinstance(task.result, dict):
+            for lookup_path in self._fan_out_lookup_paths(fan_out_field):
+                # Allow fan-out fields to be expressed relative to both wrapped payload
+                # context and the raw task result.
+                items = self._lookup_result_field(task.result, lookup_path)
+                if isinstance(items, list):
+                    return items
+        return None
+
+    def _fan_out_lookup_paths(self, fan_out_field: str) -> List[str]:
+        raw = str(fan_out_field or "").strip()
+        if not raw:
+            return []
+        paths: List[str] = [raw]
+        if raw.startswith("source_result."):
+            paths.append(raw[len("source_result.") :].strip())
+        if raw.startswith("payload."):
+            paths.append(raw[len("payload.") :].strip())
+        unique: List[str] = []
+        seen: Set[str] = set()
+        for path in paths:
+            normalized = str(path or "").strip()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            unique.append(normalized)
+        return unique
+
+    def _describe_trigger_payload_skip(self, task: Task, trigger: Any) -> Dict[str, Any]:
+        fan_out_field = str(getattr(trigger, "fan_out_field", "") or "").strip()
+        payload = self._build_trigger_payload(task, trigger)
+        details: Dict[str, Any] = {
+            "reason": "no_payloads_produced",
+            "fan_out_field": fan_out_field or None,
+            "trigger_payload_type": type(payload).__name__,
+        }
+        if not fan_out_field:
+            return details
+        if not isinstance(payload, dict):
+            details["reason"] = "fan_out_requires_object_payload"
+            details["trigger_payload_summary"] = _summarize_payload(payload)
+            return details
+
+        lookup_paths = self._fan_out_lookup_paths(fan_out_field)
+        details["lookup_paths"] = lookup_paths
+
+        payload_value = None
+        payload_path = None
+        for path in lookup_paths:
+            value = self._lookup_result_field(payload, path)
+            if isinstance(value, list):
+                payload_value = value
+                payload_path = path
+                break
+        details["payload_resolved_path"] = payload_path
+        details["payload_resolved_type"] = type(payload_value).__name__ if payload_value is not None else None
+        details["payload_resolved_count"] = len(payload_value) if isinstance(payload_value, list) else None
+
+        result_value = None
+        result_path = None
+        if isinstance(task.result, dict):
+            for path in lookup_paths:
+                value = self._lookup_result_field(task.result, path)
+                if isinstance(value, list):
+                    result_value = value
+                    result_path = path
+                    break
+        details["result_resolved_path"] = result_path
+        details["result_resolved_type"] = type(result_value).__name__ if result_value is not None else None
+        details["result_resolved_count"] = len(result_value) if isinstance(result_value, list) else None
+
+        if payload_value is None and result_value is None:
+            details["reason"] = "fan_out_field_not_list"
+        elif isinstance(payload_value, list) and len(payload_value) == 0:
+            details["reason"] = "fan_out_field_resolved_empty_list"
+        elif isinstance(result_value, list) and len(result_value) == 0:
+            details["reason"] = "fan_out_result_field_resolved_empty_list"
+        return details
 
     def _trigger_uses_join(self, trigger: Any) -> bool:
         join_fields = (
