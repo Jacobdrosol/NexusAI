@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from typing import Any, AsyncGenerator
 
@@ -86,9 +87,20 @@ def _lookup_payload_path(payload: Any, path: str) -> Any:
         key = part.strip()
         if not key:
             continue
-        if not isinstance(current, dict) or key not in current:
-            return None
-        current = current[key]
+        if isinstance(current, dict):
+            if key not in current:
+                return None
+            current = current[key]
+            continue
+        if isinstance(current, list):
+            if not key.isdigit():
+                return None
+            index = int(key)
+            if index < 0 or index >= len(current):
+                return None
+            current = current[index]
+            continue
+        return None
     return current
 
 
@@ -112,6 +124,44 @@ def _split_transform_expr_list(expr: str) -> list[str]:
     if tail:
         parts.append(tail)
     return parts
+
+
+def _parse_transform_literal(expr: str) -> tuple[bool, Any]:
+    value = str(expr or "").strip()
+    if value == "":
+        return False, None
+    lowered = value.lower()
+    if lowered == "null":
+        return True, None
+    if lowered == "true":
+        return True, True
+    if lowered == "false":
+        return True, False
+    if value.startswith("'") and value.endswith("'") and len(value) >= 2:
+        inner = value[1:-1]
+        inner = inner.replace("\\'", "'").replace("\\\\", "\\")
+        return True, inner
+    if value.startswith('"') and value.endswith('"') and len(value) >= 2:
+        try:
+            return True, json.loads(value)
+        except json.JSONDecodeError:
+            return True, value[1:-1]
+    if re.fullmatch(r"-?\d+", value):
+        try:
+            return True, int(value)
+        except ValueError:
+            return False, None
+    if re.fullmatch(r"-?(?:\d+\.\d*|\d*\.\d+)", value):
+        try:
+            return True, float(value)
+        except ValueError:
+            return False, None
+    if (value.startswith("[") and value.endswith("]")) or (value.startswith("{") and value.endswith("}")):
+        try:
+            return True, json.loads(value)
+        except json.JSONDecodeError:
+            return False, None
+    return False, None
 
 
 def _transform_template_value(template: Any, payload: Any) -> Any:
@@ -141,10 +191,18 @@ def _transform_template_value(template: Any, payload: Any) -> Any:
         if path.startswith("coalesce:"):
             candidates = _split_transform_expr_list(path[len("coalesce:") :])
             for candidate in candidates:
+                literal_ok, literal_value = _parse_transform_literal(candidate)
+                if literal_ok:
+                    if literal_value is not None:
+                        return literal_value
+                    continue
                 value = _transform_template_value("{{" + (("json:" + candidate) if mode == "json" else candidate) + "}}", payload)
                 if value not in (None, "", [], {}):
                     return value
             return None
+        literal_ok, literal_value = _parse_transform_literal(path)
+        if literal_ok:
+            return literal_value
         if path.startswith("payload."):
             path = path[8:].strip()
         value = _lookup_payload_path(payload, path)

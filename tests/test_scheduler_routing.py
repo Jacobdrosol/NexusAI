@@ -637,6 +637,65 @@ async def test_scheduler_input_transform_can_render_nested_templates():
 
 
 @pytest.mark.anyio
+async def test_scheduler_input_transform_supports_literal_fallbacks_and_list_index_paths():
+    from control_plane.scheduler.scheduler import Scheduler
+
+    bot_registry = AsyncMock()
+    bot_registry.get.return_value = Bot(
+        id="course-importer",
+        name="Course Importer",
+        role="importer",
+        system_prompt=None,
+        backends=[BackendConfig(type="custom", provider="http_connection", model="attached-http")],
+        routing_rules={
+            "input_transform": {
+                "enabled": True,
+                "template": {
+                    "create_badge": "{{coalesce:payload.source_payload.generation_settings.badge_settings.enabled,true}}",
+                    "course_title": "{{coalesce:payload.source_result.course_package.course_shell.title,payload.source_result.course_package.units.0.approved_unit_package.unit_package.title,'Generated Course'}}",
+                    "first_unit_title": "{{payload.source_result.course_package.units.0.approved_unit_package.unit_package.title}}",
+                },
+            }
+        },
+    )
+    scheduler = Scheduler(bot_registry=bot_registry, worker_registry=AsyncMock())
+    task = Task(
+        id="task-literals",
+        bot_id="course-importer",
+        payload={
+            "source_payload": {"generation_settings": None},
+            "source_result": {
+                "course_package": {
+                    "course_shell": {"title": None},
+                    "units": [
+                        {
+                            "approved_unit_package": {
+                                "unit_package": {
+                                    "title": "The Global Tapestry (c. 1200-1450)",
+                                }
+                            }
+                        }
+                    ],
+                }
+            },
+        },
+        status="queued",
+        created_at="now",
+        updated_at="now",
+    )
+
+    async def fake_dispatch(backend, payload, task=None):
+        return {"payload": payload}
+
+    scheduler._dispatch_backend = fake_dispatch  # type: ignore[method-assign]
+    result = await scheduler.schedule(task)
+
+    assert result["payload"]["create_badge"] is True
+    assert result["payload"]["course_title"] == "The Global Tapestry (c. 1200-1450)"
+    assert result["payload"]["first_unit_title"] == "The Global Tapestry (c. 1200-1450)"
+
+
+@pytest.mark.anyio
 async def test_scheduler_custom_http_connection_backend_executes_actions(monkeypatch):
     from control_plane.scheduler.scheduler import Scheduler
     from dashboard.models import BotConnection as DashboardBotConnection
