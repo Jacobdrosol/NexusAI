@@ -1609,6 +1609,10 @@ class TaskManager:
         if not isinstance(payload, dict):
             return [payload]
         items = self._lookup_result_field(payload, fan_out_field)
+        if not isinstance(items, list) and isinstance(task.result, dict):
+            # Allow fan-out fields to be expressed relative to the completed task result
+            # as well as the wrapped trigger payload.
+            items = self._lookup_result_field(task.result, fan_out_field)
         if not isinstance(items, list):
             return []
         alias = str(getattr(trigger, "fan_out_alias", "") or "").strip() or "item"

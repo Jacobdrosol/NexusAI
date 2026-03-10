@@ -1366,6 +1366,68 @@ async def test_trigger_can_join_sibling_branch_outputs(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_trigger_can_fan_out_from_bare_result_field(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot
+
+    class StubScheduler:
+        async def schedule(self, task):
+            if task.bot_id == "outline-bot":
+                return {
+                    "approved_units": [
+                        {"unit_number": 1, "title": "Unit 1"},
+                        {"unit_number": 2, "title": "Unit 2"},
+                    ]
+                }
+            return {"ok": True}
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "bare-result-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="outline-bot",
+            name="Outline",
+            role="assistant",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "fan-out-approved-units",
+                        "event": "task_completed",
+                        "target_bot_id": "unit-bot",
+                        "condition": "has_result",
+                        "fan_out_field": "approved_units",
+                        "fan_out_alias": "unit",
+                        "fan_out_index_alias": "unit_index",
+                    }
+                ]
+            },
+        )
+    )
+    await bot_registry.register(Bot(id="unit-bot", name="Unit", role="assistant", backends=[]))
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "bare-result-tasks.db"), bot_registry=bot_registry)
+    await tm.create_task(bot_id="outline-bot", payload={"instruction": "build outline"})
+
+    for _ in range(50):
+        tasks = await tm.list_tasks()
+        if len([task for task in tasks if task.bot_id == "unit-bot"]) == 2:
+            break
+        await asyncio.sleep(0.1)
+
+    tasks = await tm.list_tasks()
+    unit_tasks = sorted(
+        [task for task in tasks if task.bot_id == "unit-bot"],
+        key=lambda task: int(task.payload["unit_index"]),
+    )
+    assert len(unit_tasks) == 2
+    assert unit_tasks[0].payload["unit"]["title"] == "Unit 1"
+    assert unit_tasks[1].payload["unit"]["title"] == "Unit 2"
+
+
+@pytest.mark.anyio
 async def test_run_reports_capture_usage_metadata(tmp_path):
     import asyncio
 
