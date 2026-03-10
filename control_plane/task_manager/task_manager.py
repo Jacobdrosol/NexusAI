@@ -176,6 +176,44 @@ def _split_transform_expr_list(expr: str) -> List[str]:
     return parts
 
 
+def _parse_transform_literal(expr: str) -> tuple[bool, Any]:
+    value = str(expr or "").strip()
+    if value == "":
+        return False, None
+    lowered = value.lower()
+    if lowered == "null":
+        return True, None
+    if lowered == "true":
+        return True, True
+    if lowered == "false":
+        return True, False
+    if value.startswith("'") and value.endswith("'") and len(value) >= 2:
+        inner = value[1:-1]
+        inner = inner.replace("\\'", "'").replace("\\\\", "\\")
+        return True, inner
+    if value.startswith('"') and value.endswith('"') and len(value) >= 2:
+        try:
+            return True, json.loads(value)
+        except json.JSONDecodeError:
+            return True, value[1:-1]
+    if re.fullmatch(r"-?\d+", value):
+        try:
+            return True, int(value)
+        except ValueError:
+            return False, None
+    if re.fullmatch(r"-?(?:\d+\.\d*|\d*\.\d+)", value):
+        try:
+            return True, float(value)
+        except ValueError:
+            return False, None
+    if (value.startswith("[") and value.endswith("]")) or (value.startswith("{") and value.endswith("}")):
+        try:
+            return True, json.loads(value)
+        except json.JSONDecodeError:
+            return False, None
+    return False, None
+
+
 def _resolve_transform_value(expr: str, payload: Any, notes: list[str]) -> Any:
     mode = "value"
     raw_expr = str(expr or "").strip()
@@ -193,10 +231,18 @@ def _resolve_transform_value(expr: str, payload: Any, notes: list[str]) -> Any:
     if raw_expr.startswith("coalesce:"):
         candidates = _split_transform_expr_list(raw_expr[len("coalesce:") :])
         for candidate in candidates:
+            literal_ok, literal_value = _parse_transform_literal(candidate)
+            if literal_ok:
+                if literal_value is not None:
+                    return literal_value
+                continue
             value = _resolve_transform_value(("json:" + candidate) if mode == "json" else candidate, payload, notes)
             if value not in (None, "", [], {}):
                 return value
         return None
+    literal_ok, literal_value = _parse_transform_literal(raw_expr)
+    if literal_ok:
+        return literal_value
     path = raw_expr
     if path.startswith("payload."):
         path = path[8:].strip()

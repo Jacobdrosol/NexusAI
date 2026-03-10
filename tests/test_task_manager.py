@@ -2186,6 +2186,36 @@ def test_transform_template_can_read_list_index_paths():
     assert transformed["unit_blueprint"]["title"] == "Land-Based Empires"
 
 
+def test_transform_template_coalesce_supports_literal_fallbacks():
+    from control_plane.task_manager.task_manager import _transform_template_value
+
+    payload = {
+        "items": [],
+        "backup_items": ["fallback-item"],
+    }
+    notes = []
+
+    transformed = _transform_template_value(
+        {
+            "title": "{{coalesce:payload.title,'Generated Course'}}",
+            "subject": "{{coalesce:payload.subject,''}}",
+            "estimated_hours": "{{coalesce:payload.estimated_hours,0}}",
+            "badge_enabled": "{{coalesce:payload.badge_enabled,true}}",
+            "preferred_items": "{{coalesce:payload.items,payload.backup_items,[]}}",
+            "empty_items_default": "{{coalesce:payload.missing_items,[]}}",
+        },
+        payload,
+        notes,
+    )
+
+    assert transformed["title"] == "Generated Course"
+    assert transformed["subject"] == ""
+    assert transformed["estimated_hours"] == 0
+    assert transformed["badge_enabled"] is True
+    assert transformed["preferred_items"] == ["fallback-item"]
+    assert transformed["empty_items_default"] == []
+
+
 @pytest.mark.anyio
 async def test_join_waits_for_latest_successful_branch_results(tmp_path):
     import asyncio
