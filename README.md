@@ -277,10 +277,27 @@ Saved launch profiles:
 - Launching a saved pipeline run assigns a shared orchestration ID to the root task and all downstream triggered tasks.
 - The `Pipelines` page then shows the grouped run with status, usage, reports, and rerun/download controls.
 
+External bot triggers:
+
+- Each bot can expose a dedicated external trigger intake endpoint from the bot detail page.
+- External trigger calls create normal queued tasks, so existing workflow triggers/fan-out/join behavior runs unchanged.
+- Per-bot external trigger auth is configurable (`require_auth`, header name, token), so integrations are not tied to a single global workflow.
+- Optional `payload_field` lets you map nested webhook envelopes (for example `event.data`) to the queued task payload.
+- Optional `allow_metadata` permits limited caller metadata overrides (`project_id`, `priority`, `conversation_id`, `orchestration_id`).
+
 API endpoints:
 
 - `GET /v1/bots/{bot_id}/runs`
 - `GET /v1/bots/{bot_id}/artifacts`
+- `POST /v1/bots/{bot_id}/trigger`
+
+Runtime settings for external trigger intake:
+
+- `external_trigger_default_auth_header`
+- `external_trigger_default_source`
+- `external_trigger_max_body_bytes`
+- `external_trigger_rate_limit_count`
+- `external_trigger_rate_limit_window_seconds`
 
 QC pattern:
 
