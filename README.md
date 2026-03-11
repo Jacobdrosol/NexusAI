@@ -140,6 +140,9 @@ Chat and orchestration:
 - Persistent chat conversations with SSE streaming.
 - Context picker and one-click chat-to-vault ingestion.
 - Project-scoped and bridged chats can optionally attach semantic repo context from synced vault namespaces (`project:<id>:repo`) per message with `include_project_context=true`.
+- Optional workspace tooling in chat supports Codex-style repo help with strict three-level access control: bot policy, project policy, and chat policy must all be enabled or workspace tool access is denied.
+- Workspace tooling supports two independently controlled capabilities: repository search snippets and filesystem file snippet reads rooted to the project's configured workspace root.
+- Message-level workspace tool usage can be toggled on/off (`use_workspace_tools`) so operators can keep a chat configured for tools but disable tool use for specific prompts.
 - Inline `@assign` orchestration with PM task decomposition.
 - PM orchestration task payloads now include step-level acceptance criteria, deliverables, and quality gates for stronger implementation/test/review handoffs.
 - Task status streaming and DAG viewer actions in chat.
