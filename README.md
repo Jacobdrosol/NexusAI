@@ -169,6 +169,8 @@ GitHub integration:
   - configuring a local repo root path and clone defaults
   - repository clone/status/pull/commit/push operations from the dashboard
   - optional guarded command execution for test/build commands (`run`) with an allowlist policy
+- Repository workspace run history with per-run resource metrics (duration, CPU, peak memory, IO) and aggregate summaries for internal tracking and future usage billing models.
+- Optional isolated temporary workspace runs for checks (`use_temp_workspace`) with dependency bootstrap helpers for Python, Node, .NET, and C++ projects.
 
 Security and ops:
 
