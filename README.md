@@ -176,6 +176,7 @@ For detailed walkthroughs, use:
 - `docs/GETTING_STARTED.md`
 - `docs/USER_GUIDE.md`
 - `docs/OPERATIONS.md`
+- `docs/PM_BOT_PACK_OLLAMA_CLOUD.md`
 
 ---
 
