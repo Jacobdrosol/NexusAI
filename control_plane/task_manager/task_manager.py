@@ -576,6 +576,8 @@ class TaskManager:
         self._db_ready = False
         self._running_task_ids: set[str] = set()
         self._runner_tasks: Dict[str, asyncio.Task[Any]] = {}
+        self._retry_tasks: Set[asyncio.Task[Any]] = set()
+        self._is_closing = False
         self._max_concurrency = max(1, int(os.environ.get("NEXUSAI_TASK_MAX_CONCURRENCY", "4")))
         if db_path is not None:
             self._db_path = db_path
@@ -585,6 +587,33 @@ class TaskManager:
                 self._db_path = db_url[len("sqlite:///"):]
             else:
                 self._db_path = _DEFAULT_DB_PATH
+
+    async def close(self) -> None:
+        self._is_closing = True
+        async with self._lock:
+            runner_tasks = [task for task in self._runner_tasks.values() if not task.done()]
+            retry_tasks = [task for task in self._retry_tasks if not task.done()]
+        pending = runner_tasks + retry_tasks
+        for pending_task in pending:
+            pending_task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        async with self._lock:
+            self._runner_tasks.clear()
+            self._retry_tasks.clear()
+            self._running_task_ids.clear()
+
+    def __del__(self) -> None:
+        # Best-effort cancellation for unmanaged instances (e.g. tests without explicit teardown).
+        try:
+            for task in list(self._runner_tasks.values()):
+                if not task.done():
+                    task.cancel()
+            for task in list(self._retry_tasks):
+                if not task.done():
+                    task.cancel()
+        except Exception:
+            pass
 
     async def _ensure_db(self) -> None:
         """Lazily initialise the SQLite tasks table and load existing rows."""
@@ -1024,6 +1053,8 @@ class TaskManager:
             await self.update_status(task_id, "cancelled", error=cancelled_error)
             return await self.get_task(task_id)
 
+        cancelled_error = TaskError(message="Task cancelled by operator", code="cancelled")
+        await self.update_status(task_id, "cancelled", error=cancelled_error)
         runner.cancel()
         return await self.get_task(task_id)
 
@@ -1421,6 +1452,8 @@ class TaskManager:
 
     async def _run_task(self, task_id: str) -> None:
         try:
+            if self._is_closing:
+                return
             await self.update_status(task_id, "running")
             task = await self.get_task(task_id)
             mode = await self._bot_output_contract_mode(task.bot_id)
@@ -1432,8 +1465,6 @@ class TaskManager:
             await self.update_status(task_id, "completed", result=result)
         except asyncio.CancelledError:
             logger.info("Task %s cancelled", task_id)
-            task_error = TaskError(message="Task cancelled by operator", code="cancelled")
-            await self.update_status(task_id, "cancelled", error=task_error)
             raise
         except Exception as e:
             logger.error("Task %s failed: %s", task_id, e)
@@ -1447,7 +1478,8 @@ class TaskManager:
             async with self._lock:
                 self._running_task_ids.discard(task_id)
                 self._runner_tasks.pop(task_id, None)
-            await self._schedule_ready_tasks()
+            if not self._is_closing:
+                await self._schedule_ready_tasks()
 
     async def _requeue_for_retry(self, task: Task, task_error: TaskError) -> bool:
         max_retries = max(0, _settings_int("max_task_retries", 3))
@@ -1493,7 +1525,19 @@ class TaskManager:
             await self._upsert_bot_run(updated)
             await self._schedule_ready_tasks()
 
-        asyncio.create_task(_delayed_requeue())
+        retry_task = asyncio.create_task(_delayed_requeue())
+        async with self._lock:
+            self._retry_tasks.add(retry_task)
+
+        def _cleanup_retry_task(done_task: asyncio.Task[Any]) -> None:
+            self._retry_tasks.discard(done_task)
+            if done_task.cancelled():
+                return
+            exception = done_task.exception()
+            if exception is not None:
+                logger.warning("Delayed retry task for %s ended with error: %s", task.id, exception)
+
+        retry_task.add_done_callback(_cleanup_retry_task)
         return True
 
     async def _try_unblock_tasks(self) -> None:
@@ -1518,6 +1562,8 @@ class TaskManager:
             await self._schedule_ready_tasks()
 
     async def _schedule_ready_tasks(self) -> None:
+        if self._is_closing:
+            return
         async with self._lock:
             available_slots = max(0, self._max_concurrency - len(self._running_task_ids))
             if available_slots <= 0:

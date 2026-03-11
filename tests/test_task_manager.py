@@ -6,6 +6,23 @@ import pytest
 from unittest.mock import AsyncMock
 
 
+@pytest.fixture(autouse=True)
+async def _close_task_managers_after_each_test(monkeypatch):
+    from control_plane.task_manager.task_manager import TaskManager
+
+    created: List[TaskManager] = []
+    original_init = TaskManager.__init__
+
+    def _tracked_init(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        created.append(self)
+
+    monkeypatch.setattr(TaskManager, "__init__", _tracked_init)
+    yield
+    for manager in reversed(created):
+        await manager.close()
+
+
 def test_lookup_payload_path_supports_list_indexes():
     from control_plane.task_manager.task_manager import _lookup_payload_path
 
