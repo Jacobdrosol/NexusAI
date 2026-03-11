@@ -119,6 +119,54 @@
 
 <section class="panel" style="margin-bottom:1rem;">
   <div class="page-header" style="margin-bottom:0.75rem;">
+    <h2 class="panel-title">External Trigger Intake</h2>
+    <div>
+      <button class="btn btn-primary" onclick="saveExternalTrigger()">Save External Trigger</button>
+    </div>
+  </div>
+  <p class="mini-note" style="margin-bottom:0.75rem;">Allow external systems to start this bot directly through a webhook-style endpoint. This creates a normal queued task, so all downstream workflow triggers still run the same way.</p>
+  <div class="form-group">
+    <label><input type="checkbox" id="external-trigger-enabled"> Enable external trigger endpoint for this bot</label>
+  </div>
+  <div class="split-grid" style="grid-template-columns:1fr 1fr;">
+    <div class="form-group">
+      <label><input type="checkbox" id="external-trigger-require-auth" checked> Require auth token header</label>
+    </div>
+    <div class="form-group">
+      <label><input type="checkbox" id="external-trigger-allow-metadata"> Allow caller metadata override (<code>metadata</code> object)</label>
+    </div>
+  </div>
+  <div class="split-grid" style="grid-template-columns:1fr 1fr;">
+    <div class="form-group">
+      <label>Auth Header Name</label>
+      <input class="form-control" id="external-trigger-auth-header" placeholder="X-Nexus-Trigger-Token">
+    </div>
+    <div class="form-group">
+      <label>Auth Token</label>
+      <input class="form-control" id="external-trigger-auth-token" placeholder="set-a-long-random-token">
+      <div class="mini-note">If auth is required, the caller must send this exact token in the auth header.</div>
+    </div>
+  </div>
+  <div class="split-grid" style="grid-template-columns:1fr 1fr;">
+    <div class="form-group">
+      <label>Task Source Label</label>
+      <input class="form-control" id="external-trigger-source" placeholder="external_trigger">
+    </div>
+    <div class="form-group">
+      <label>Payload Field Path (optional)</label>
+      <input class="form-control" id="external-trigger-payload-field" placeholder="payload">
+      <div class="mini-note">Optional nested path inside the request JSON body to use as task payload, for example <code>event.data</code>.</div>
+    </div>
+  </div>
+  <div class="form-group">
+    <label>External Trigger URL</label>
+    <input class="form-control" id="external-trigger-url" readonly>
+    <div class="mini-note">Call this path on your control-plane base URL, not the dashboard UI URL.</div>
+  </div>
+</section>
+
+<section class="panel" style="margin-bottom:1rem;">
+  <div class="page-header" style="margin-bottom:0.75rem;">
     <h2 class="panel-title">Run Input Contract</h2>
     <div>
       <button class="btn btn-primary" onclick="saveInputContract()">Save Input Contract</button>
@@ -754,6 +802,11 @@ BOT.launch_profile = BOT.launch_profile && typeof BOT.launch_profile === 'object
   : ((BOT.routing_rules && typeof BOT.routing_rules === 'object' && BOT.routing_rules.launch_profile && typeof BOT.routing_rules.launch_profile === 'object')
     ? BOT.routing_rules.launch_profile
     : null);
+BOT.external_trigger = BOT.external_trigger && typeof BOT.external_trigger === 'object'
+  ? BOT.external_trigger
+  : ((BOT.routing_rules && typeof BOT.routing_rules === 'object' && BOT.routing_rules.external_trigger && typeof BOT.routing_rules.external_trigger === 'object')
+    ? BOT.routing_rules.external_trigger
+    : {enabled: false, require_auth: true, auth_header: '', auth_token: '', source: 'external_trigger', payload_field: '', allow_metadata: false});
 const ARTIFACTS_BY_TASK = ARTIFACTS.reduce((acc, artifact) => {
   const taskId = String(artifact.task_id || '');
   if (!taskId) return acc;
@@ -835,6 +888,7 @@ function botPayloadForSave() {
   routingRules.output_contract = normalizedOutputContract();
   routingRules.connection_context = normalizedConnectionContext();
   routingRules.launch_profile = normalizedLaunchProfile();
+  routingRules.external_trigger = normalizedExternalTrigger();
   payload.routing_rules = routingRules;
   payload.workflow = BOT.workflow;
   return payload;
@@ -1187,6 +1241,52 @@ function normalizedLaunchProfile() {
     is_pipeline: profile.is_pipeline === true,
     pipeline_name: String(profile.pipeline_name || profile.label || BOT.name || BOT.id || 'Pipeline').trim(),
   };
+}
+
+function externalTriggerPath() {
+  return '/v1/bots/' + encodeURIComponent(String(BOT_ID || '')) + '/trigger';
+}
+
+function normalizedExternalTrigger() {
+  const cfg = BOT.external_trigger && typeof BOT.external_trigger === 'object' ? BOT.external_trigger : {};
+  return {
+    enabled: cfg.enabled === true,
+    require_auth: cfg.require_auth !== false,
+    auth_header: String(cfg.auth_header || 'X-Nexus-Trigger-Token').trim() || 'X-Nexus-Trigger-Token',
+    auth_token: String(cfg.auth_token || '').trim(),
+    source: String(cfg.source || 'external_trigger').trim() || 'external_trigger',
+    payload_field: String(cfg.payload_field || '').trim() || null,
+    allow_metadata: cfg.allow_metadata === true,
+  };
+}
+
+function loadExternalTriggerEditor() {
+  const cfg = normalizedExternalTrigger();
+  document.getElementById('external-trigger-enabled').checked = cfg.enabled === true;
+  document.getElementById('external-trigger-require-auth').checked = cfg.require_auth !== false;
+  document.getElementById('external-trigger-auth-header').value = cfg.auth_header || 'X-Nexus-Trigger-Token';
+  document.getElementById('external-trigger-auth-token').value = cfg.auth_token || '';
+  document.getElementById('external-trigger-source').value = cfg.source || 'external_trigger';
+  document.getElementById('external-trigger-payload-field').value = cfg.payload_field || '';
+  document.getElementById('external-trigger-allow-metadata').checked = cfg.allow_metadata === true;
+  document.getElementById('external-trigger-url').value = externalTriggerPath();
+}
+
+function saveExternalTrigger() {
+  BOT.external_trigger = {
+    enabled: document.getElementById('external-trigger-enabled').checked,
+    require_auth: document.getElementById('external-trigger-require-auth').checked,
+    auth_header: String(document.getElementById('external-trigger-auth-header')?.value || '').trim() || 'X-Nexus-Trigger-Token',
+    auth_token: String(document.getElementById('external-trigger-auth-token')?.value || '').trim(),
+    source: String(document.getElementById('external-trigger-source')?.value || '').trim() || 'external_trigger',
+    payload_field: String(document.getElementById('external-trigger-payload-field')?.value || '').trim() || null,
+    allow_metadata: document.getElementById('external-trigger-allow-metadata').checked,
+  };
+  if (BOT.external_trigger.require_auth && !BOT.external_trigger.auth_token) {
+    alert('Auth token is required when "Require auth token header" is enabled.');
+    return;
+  }
+  persistBot('External trigger settings saved.');
 }
 
 function loadLaunchProfileEditor() {
@@ -1921,6 +2021,7 @@ loadInputContractEditor();
 loadInputTransformEditor();
 loadConnectionContextEditor();
 loadOutputContractEditor();
+loadExternalTriggerEditor();
 loadLaunchProfileEditor();
 if (RUNS.length) {
   selectRunArtifacts(RUNS[0].task_id);

@@ -50,6 +50,8 @@ def _merge_routing_rules(data: dict[str, Any], existing: Any = None) -> dict[str
         merged["connection_context"] = data.get("connection_context")
     if "launch_profile" in data:
         merged["launch_profile"] = data.get("launch_profile")
+    if "external_trigger" in data:
+        merged["external_trigger"] = data.get("external_trigger")
     return merged
 
 
@@ -70,6 +72,7 @@ def _bot_to_dict(b: Bot) -> dict[str, Any]:
         "output_contract": routing_rules.get("output_contract") if isinstance(routing_rules, dict) else None,
         "connection_context": routing_rules.get("connection_context") if isinstance(routing_rules, dict) else None,
         "launch_profile": routing_rules.get("launch_profile") if isinstance(routing_rules, dict) else None,
+        "external_trigger": routing_rules.get("external_trigger") if isinstance(routing_rules, dict) else None,
     }
 
 

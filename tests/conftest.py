@@ -1,4 +1,5 @@
 """Shared pytest fixtures for NexusAI test suite."""
+import re
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
@@ -88,6 +89,8 @@ async def cp_app(tmp_path):
         if not token:
             return await call_next(request)
         if request.url.path in {"/health", "/docs", "/redoc", "/openapi.json"}:
+            return await call_next(request)
+        if request.method.upper() == "POST" and re.fullmatch(r"/v1/bots/[^/]+/trigger", request.url.path):
             return await call_next(request)
         header_token = (request.headers.get("X-Nexus-API-Key", "") or "").strip()
         auth_header = (request.headers.get("Authorization", "") or "").strip()

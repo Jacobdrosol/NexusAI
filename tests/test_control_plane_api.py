@@ -264,6 +264,104 @@ async def test_create_bot(cp_client):
 
 
 @pytest.mark.anyio
+async def test_external_bot_trigger_creates_task_with_auth_and_payload_field(cp_client):
+    create = await cp_client.post(
+        "/v1/bots",
+        json={
+            "id": "bot-ext",
+            "name": "External Trigger Bot",
+            "role": "assistant",
+            "enabled": True,
+            "backends": [],
+            "routing_rules": {
+                "external_trigger": {
+                    "enabled": True,
+                    "require_auth": True,
+                    "auth_header": "X-Nexus-Trigger-Token",
+                    "auth_token": "topsecret",
+                    "payload_field": "event.data",
+                    "allow_metadata": True,
+                    "source": "webhook",
+                }
+            },
+        },
+    )
+    assert create.status_code == 200
+
+    trigger = await cp_client.post(
+        "/v1/bots/bot-ext/trigger",
+        json={
+            "event": {"data": {"instruction": "continue", "course_id": "course-1"}},
+            "metadata": {"project_id": "proj-1", "priority": 3},
+        },
+        headers={"X-Nexus-Trigger-Token": "topsecret"},
+    )
+    assert trigger.status_code == 200
+    body = trigger.json()
+    assert body["bot_id"] == "bot-ext"
+    assert body["payload"] == {"instruction": "continue", "course_id": "course-1"}
+    assert (body.get("metadata") or {}).get("source") == "webhook"
+    assert (body.get("metadata") or {}).get("project_id") == "proj-1"
+    assert (body.get("metadata") or {}).get("priority") == 3
+
+
+@pytest.mark.anyio
+async def test_external_bot_trigger_rejects_when_disabled(cp_client):
+    create = await cp_client.post(
+        "/v1/bots",
+        json={
+            "id": "bot-ext-disabled",
+            "name": "External Trigger Disabled",
+            "role": "assistant",
+            "enabled": True,
+            "backends": [],
+            "routing_rules": {"external_trigger": {"enabled": False}},
+        },
+    )
+    assert create.status_code == 200
+
+    trigger = await cp_client.post(
+        "/v1/bots/bot-ext-disabled/trigger",
+        json={"payload": {"instruction": "ignored"}},
+    )
+    assert trigger.status_code == 403
+
+
+@pytest.mark.anyio
+async def test_external_bot_trigger_bypasses_global_cp_token_when_bot_auth_is_valid(cp_app):
+    cp_app.state.control_plane_api_token = "global-cp-token"
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        create = await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-ext-auth",
+                "name": "External Trigger Auth",
+                "role": "assistant",
+                "enabled": True,
+                "backends": [],
+                "routing_rules": {
+                    "external_trigger": {
+                        "enabled": True,
+                        "require_auth": True,
+                        "auth_header": "X-External-Token",
+                        "auth_token": "external-secret",
+                    }
+                },
+            },
+            headers={"X-Nexus-API-Key": "global-cp-token"},
+        )
+        assert create.status_code == 200
+
+        trigger = await client.post(
+            "/v1/bots/bot-ext-auth/trigger",
+            json={"payload": {"instruction": "run"}},
+            headers={"X-External-Token": "external-secret"},
+        )
+        assert trigger.status_code == 200
+        assert trigger.json()["bot_id"] == "bot-ext-auth"
+
+
+@pytest.mark.anyio
 async def test_list_tasks_empty(cp_client):
     resp = await cp_client.get("/v1/tasks")
     assert resp.status_code == 200

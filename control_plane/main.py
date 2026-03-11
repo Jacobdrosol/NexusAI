@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import re
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
@@ -165,6 +166,8 @@ def create_app() -> FastAPI:
 
         path = request.url.path
         if path in {"/health", "/docs", "/redoc", "/openapi.json"}:
+            return await call_next(request)
+        if request.method.upper() == "POST" and re.fullmatch(r"/v1/bots/[^/]+/trigger", path):
             return await call_next(request)
 
         header_token = (request.headers.get("X-Nexus-API-Key", "") or "").strip()
