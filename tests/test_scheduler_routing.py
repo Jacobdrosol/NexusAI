@@ -857,6 +857,105 @@ async def test_scheduler_custom_http_connection_backend_executes_actions(monkeyp
 
 
 @pytest.mark.anyio
+async def test_scheduler_custom_http_connection_404_import_includes_endpoint_hint(monkeypatch):
+    from control_plane.scheduler.scheduler import Scheduler
+    from dashboard.models import BotConnection as DashboardBotConnection
+    from dashboard.models import Connection as DashboardConnection
+
+    class FakeQuery:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def filter(self, *args, **kwargs):
+            return self
+
+        def all(self):
+            return list(self._rows)
+
+    class FakeSession:
+        def query(self, model):
+            if model is DashboardBotConnection:
+                return FakeQuery([type("Link", (), {"connection_id": 7})()])
+            if model is DashboardConnection:
+                return FakeQuery(
+                    [
+                        type(
+                            "Conn",
+                            (),
+                            {
+                                "id": 7,
+                                "name": "platform-api",
+                                "kind": "http",
+                                "config_json": json.dumps({"base_url": "https://api.example.test"}),
+                                "auth_json": json.dumps({"type": "api_key", "api_key": "enc:ignored"}),
+                                "schema_text": json.dumps(
+                                    {
+                                        "openapi": "3.1.0",
+                                        "paths": {
+                                            "/api/agent/import/course-package": {
+                                                "post": {
+                                                    "operationId": "importCoursePackage",
+                                                }
+                                            }
+                                        },
+                                    }
+                                ),
+                            },
+                        )()
+                    ]
+                )
+            raise AssertionError(f"Unexpected model queried: {model}")
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr("dashboard.db.get_db", lambda: FakeSession())
+    monkeypatch.setattr("dashboard.connections_service.resolve_auth_payload", lambda payload: {"type": "api_key", "api_key": "live-key"})
+    monkeypatch.setattr(
+        "dashboard.connections_service.test_http_connection",
+        lambda **kwargs: {
+            "ok": False,
+            "status": 404,
+            "method": "POST",
+            "url": "https://api.example.test/api/agent/import/course-package",
+            "body_preview": "{\"title\":\"Not Found\",\"status\":404}",
+        },
+    )
+
+    bot_registry = AsyncMock()
+    bot_registry.get.return_value = Bot(
+        id="course-importer",
+        name="Course Importer",
+        role="importer",
+        system_prompt=None,
+        backends=[BackendConfig(type="custom", provider="http_connection", model="attached-http")],
+    )
+    scheduler = Scheduler(bot_registry=bot_registry, worker_registry=AsyncMock())
+    task = Task(
+        id="task-http-404",
+        bot_id="course-importer",
+        payload={
+            "connection": {"name": "platform-api"},
+            "connection_actions": [
+                {
+                    "operation_id": "importCoursePackage",
+                    "body_json": {"coursePackage": {"courseShell": {"title": "World History Survey"}}},
+                }
+            ],
+        },
+        status="queued",
+        created_at="now",
+        updated_at="now",
+    )
+
+    result = await scheduler.schedule(task)
+
+    assert result["import_status"] == "failed"
+    assert result["failed_actions"] == ["importCoursePackage"]
+    assert "Endpoint /api/agent/import/course-package is not available on the target server." in result["errors"][0]
+
+
+@pytest.mark.anyio
 async def test_scheduler_appends_output_contract_guidance_to_system_prompt():
     from control_plane.scheduler.scheduler import Scheduler
 

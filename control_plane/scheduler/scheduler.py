@@ -261,6 +261,28 @@ def _transform_template_value(template: Any, payload: Any) -> Any:
     return template
 
 
+def _http_action_error_hint(op_id: str, action: dict[str, Any], result: dict[str, Any]) -> str:
+    try:
+        status = int(result.get("status"))
+    except Exception:
+        return ""
+    if status != 404:
+        return ""
+
+    op = str(op_id or "").strip().lower()
+    path = str(action.get("path") or "").strip().lower()
+    url = str(result.get("url") or "").strip().lower()
+    if op == "importcoursepackage" or "/api/agent/import/course-package" in path or "/api/agent/import/course-package" in url:
+        return (
+            " Endpoint /api/agent/import/course-package is not available on the target server. "
+            "Deploy GlobeIQ build with agent bulk import support (commit 03f1270 or later) "
+            "or update the connection base_url to the server that hosts the agent API."
+        )
+    if path.startswith("/api/agent/") or "/api/agent/" in url:
+        return " Target server does not expose the requested /api/agent route. Verify base_url and deployed GlobeIQ API version."
+    return ""
+
+
 def _contract_prompt_suffix(bot: Any) -> str:
     routing_rules = getattr(bot, "routing_rules", None)
     if not isinstance(routing_rules, dict):
@@ -825,7 +847,8 @@ class Scheduler:
             else:
                 failed_actions.append(op_id)
                 detail = str(result.get("body_preview") or result.get("error") or "").strip()
-                errors.append(f"{op_id} failed with status {result.get('status')}: {detail}".strip())
+                hint = _http_action_error_hint(op_id, action, result)
+                errors.append(f"{op_id} failed with status {result.get('status')}: {detail}{hint}".strip())
                 if not continue_on_error:
                     break
 
