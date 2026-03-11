@@ -80,6 +80,15 @@
         {% endfor %}
       </div>
     </div>
+    {% if selected_conversation.project_id or (selected_conversation.bridge_project_ids and selected_conversation.bridge_project_ids|length > 0) %}
+    <div class="form-group">
+      <label class="context-item">
+        <input type="checkbox" id="include-project-context" checked>
+        <span>Auto include project repo context</span>
+      </label>
+      <p class="mini-note">Uses semantic query against project repo context for each message.</p>
+    </div>
+    {% endif %}
     {% endif %}
   </section>
 
@@ -672,9 +681,11 @@ async function sendMessage(streamMode) {
   const payload = {
     ...(function() {
       const ctx = selectedContextItems();
+      const includeProjectContext = document.getElementById('include-project-context');
       return {
         context_items: ctx.contexts,
         context_item_ids: ctx.contextItemIds,
+        include_project_context: includeProjectContext ? includeProjectContext.checked : true,
       };
     })(),
     conversation_id: fd.get('conversation_id'),
@@ -862,13 +873,15 @@ document.getElementById('form-assign')?.addEventListener('submit', async functio
   const fd = new FormData(this);
   const instruction = (fd.get('instruction') || '').toString().trim();
   if (!instruction) return;
+  const includeProjectContext = document.getElementById('include-project-context');
   const res = await fetch('/api/chat/messages', {
     method: 'POST',
     headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
     body: JSON.stringify({
       conversation_id: fd.get('conversation_id'),
       content: '@assign ' + instruction,
-      bot_id: fd.get('bot_id') || null
+      bot_id: fd.get('bot_id') || null,
+      include_project_context: includeProjectContext ? includeProjectContext.checked : true
     }),
   });
   if (!res.ok) {

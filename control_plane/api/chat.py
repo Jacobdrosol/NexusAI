@@ -27,6 +27,7 @@ class PostMessageRequest(BaseModel):
     bot_id: Optional[str] = None
     context_items: Optional[List[str]] = None
     context_item_ids: Optional[List[str]] = None
+    include_project_context: bool = True
 
 
 def _messages_to_payload(messages: List[ChatMessage], context_items: Optional[List[str]] = None) -> List[dict]:
@@ -37,29 +38,141 @@ def _messages_to_payload(messages: List[ChatMessage], context_items: Optional[Li
     return payload
 
 
-async def _resolve_context_items(request: Request, body: PostMessageRequest) -> List[str]:
+def _project_repo_namespace(project_id: str, project: Any) -> str:
+    default_namespace = f"project:{project_id}:repo"
+    settings = getattr(project, "settings_overrides", None)
+    if not isinstance(settings, dict):
+        return default_namespace
+    github_cfg = settings.get("github")
+    if not isinstance(github_cfg, dict):
+        return default_namespace
+    sync_cfg = github_cfg.get("context_sync")
+    if not isinstance(sync_cfg, dict):
+        return default_namespace
+    namespace = str(sync_cfg.get("namespace") or "").strip()
+    return namespace or default_namespace
+
+
+def _conversation_project_ids(conversation: Optional[ChatConversation]) -> List[str]:
+    if conversation is None:
+        return []
+    ids: List[str] = []
+    if conversation.project_id:
+        ids.append(str(conversation.project_id).strip())
+    ids.extend(str(pid).strip() for pid in conversation.bridge_project_ids if str(pid).strip())
+    return list(dict.fromkeys([pid for pid in ids if pid]))
+
+
+async def _resolve_project_repo_context_items(
+    request: Request,
+    *,
+    conversation: ChatConversation,
+    query: str,
+) -> List[str]:
+    vault_manager = getattr(request.app.state, "vault_manager", None)
+    if vault_manager is None:
+        return []
+
+    project_registry = getattr(request.app.state, "project_registry", None)
+    project_ids = _conversation_project_ids(conversation)
+    if not project_ids:
+        return []
+
+    max_total_items = 8
+    max_chars_per_item = 1800
+    max_total_chars = 12_000
+    project_count = max(len(project_ids), 1)
+    per_project_limit = max(2, min(4, max_total_items // project_count + 1))
+
+    resolved: List[str] = []
+    seen_chunks: set[str] = set()
+    used_chars = 0
+    for project_id in project_ids:
+        namespace = f"project:{project_id}:repo"
+        if project_registry is not None:
+            try:
+                project = await project_registry.get(project_id)
+                namespace = _project_repo_namespace(project_id, project)
+            except Exception:
+                namespace = f"project:{project_id}:repo"
+
+        try:
+            rows = await vault_manager.search(
+                query=query[:800],
+                namespace=namespace,
+                project_id=project_id,
+                limit=per_project_limit,
+            )
+        except Exception:
+            continue
+
+        for row in rows:
+            chunk_id = str(row.get("chunk_id") or "").strip()
+            if not chunk_id or chunk_id in seen_chunks:
+                continue
+            seen_chunks.add(chunk_id)
+            snippet = str(row.get("content") or "").strip()
+            if not snippet:
+                continue
+            snippet = snippet[:max_chars_per_item]
+            title = str(row.get("title") or "repo-context").strip() or "repo-context"
+            score_raw = row.get("score")
+            try:
+                score_text = f"{float(score_raw):.3f}"
+            except Exception:
+                score_text = "n/a"
+            text = f"[repo:{project_id}] {title} (namespace={namespace}, score={score_text})\n{snippet}"
+            if used_chars + len(text) > max_total_chars:
+                return resolved
+            resolved.append(text)
+            used_chars += len(text)
+            if len(resolved) >= max_total_items:
+                return resolved
+
+    return resolved
+
+
+async def _resolve_context_items(
+    request: Request,
+    body: PostMessageRequest,
+    *,
+    conversation: Optional[ChatConversation] = None,
+) -> List[str]:
     # Backward compatible direct context usage.
     resolved: List[str] = list(body.context_items or [])
     item_ids = [str(i).strip() for i in (body.context_item_ids or []) if str(i).strip()]
-    if not item_ids:
-        return resolved
-
     vault_manager = getattr(request.app.state, "vault_manager", None)
-    if vault_manager is None:
-        return resolved
-
-    for item_id in item_ids[:20]:
-        try:
-            item = await vault_manager.get_item(item_id)
-            text = (item.content or "").strip()
-            if not text:
+    if item_ids and vault_manager is not None:
+        for item_id in item_ids[:20]:
+            try:
+                item = await vault_manager.get_item(item_id)
+                text = (item.content or "").strip()
+                if not text:
+                    continue
+                # Bound payload size to reduce latency and accidental leakage.
+                snippet = text[:4000]
+                resolved.append(f"[vault:{item.id}] {item.title}\n{snippet}")
+            except Exception:
                 continue
-            # Bound payload size to reduce latency and accidental leakage.
-            snippet = text[:4000]
-            resolved.append(f"[vault:{item.id}] {item.title}\n{snippet}")
-        except Exception:
+
+    if body.include_project_context and conversation is not None:
+        resolved.extend(
+            await _resolve_project_repo_context_items(
+                request,
+                conversation=conversation,
+                query=body.content,
+            )
+        )
+
+    deduped: List[str] = []
+    seen: set[str] = set()
+    for entry in resolved:
+        normalized = entry.strip()
+        if not normalized or normalized in seen:
             continue
-    return resolved
+        seen.add(normalized)
+        deduped.append(entry)
+    return deduped[:30]
 
 
 def _extract_assign_instruction(content: str) -> Optional[str]:
@@ -183,7 +296,7 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
         )
         assign_instruction = _extract_assign_instruction(body.content)
         if assign_instruction is not None:
-            resolved_context = await _resolve_context_items(request, body)
+            resolved_context = await _resolve_context_items(request, body, conversation=conversation)
             assignment = await pm_orchestrator.orchestrate_assignment(
                 conversation_id=conversation_id,
                 instruction=assign_instruction,
@@ -210,7 +323,7 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
         if not target_bot_id:
             return {"user_message": user_message, "assistant_message": None}
 
-        resolved_context = await _resolve_context_items(request, body)
+        resolved_context = await _resolve_context_items(request, body, conversation=conversation)
         payload = _messages_to_payload(messages, context_items=resolved_context)
         task = Task(
             id=f"chat-{user_message.id}",
@@ -268,7 +381,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
             assign_instruction = _extract_assign_instruction(body.content)
             if assign_instruction is not None:
                 yield 'event: status\ndata: {"phase":"planning","label":"Planning task graph..."}\n\n'
-                resolved_context = await _resolve_context_items(request, body)
+                resolved_context = await _resolve_context_items(request, body, conversation=conversation)
                 assignment = await pm_orchestrator.orchestrate_assignment(
                     conversation_id=conversation_id,
                     instruction=assign_instruction,
@@ -336,7 +449,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                 yield "event: done\ndata: {}\n\n"
                 return
 
-            resolved_context = await _resolve_context_items(request, body)
+            resolved_context = await _resolve_context_items(request, body, conversation=conversation)
             payload = _messages_to_payload(messages, context_items=resolved_context)
             yield f'event: status\ndata: {json.dumps({"phase":"queued","label":"Queued on selected backend...","conversation_id":conversation_id,"message_count":len(messages)})}\n\n'
             task = Task(

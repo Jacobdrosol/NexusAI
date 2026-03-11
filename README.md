@@ -139,7 +139,9 @@ Chat and orchestration:
 
 - Persistent chat conversations with SSE streaming.
 - Context picker and one-click chat-to-vault ingestion.
+- Project-scoped and bridged chats can automatically pull semantic repo context from synced vault namespaces (`project:<id>:repo`) and can disable that per-message with `include_project_context=false`.
 - Inline `@assign` orchestration with PM task decomposition.
+- PM orchestration task payloads now include step-level acceptance criteria, deliverables, and quality gates for stronger implementation/test/review handoffs.
 - Task status streaming and DAG viewer actions in chat.
 
 Vault and context:

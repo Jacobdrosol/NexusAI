@@ -11,10 +11,12 @@ class PMOrchestrator:
     """Creates dependency-ordered tasks from a high-level chat assignment."""
 
     PM_SYSTEM_PROMPT = (
-        "You are the NexusAI Project Manager bot. Break the user's request into a "
-        "small ordered plan with dependencies and role hints. Return JSON only: "
-        '{"steps":[{"id":"step_1","title":"...","instruction":"...","role_hint":"coder",'
-        '"depends_on":[]}]}. Keep 2-6 steps.'
+        "You are the NexusAI Project Manager bot. Break the user's request into a deterministic "
+        "implementation workflow with explicit quality controls. Return JSON only with this shape: "
+        '{"global_acceptance_criteria":["..."],"global_quality_gates":["..."],"risks":["..."],'
+        '"steps":[{"id":"step_1","title":"...","instruction":"...","role_hint":"coder",'
+        '"depends_on":[],"acceptance_criteria":["..."],"deliverables":["..."],"quality_gates":["..."]}]}. '
+        "Keep 3-6 steps. Include stories/specification first, implementation next, and testing/review gates before completion."
     )
 
     def __init__(
@@ -52,10 +54,16 @@ class PMOrchestrator:
         orchestration_id = str(uuid.uuid4())
         task_ids_by_step: Dict[str, str] = {}
         created_tasks: List[Task] = []
+        global_acceptance_criteria = self._normalize_string_list(plan.get("global_acceptance_criteria"))
+        global_quality_gates = self._normalize_string_list(plan.get("global_quality_gates"))
+        global_risks = self._normalize_string_list(plan.get("risks"))
 
         for idx, step in enumerate(plan["steps"]):
             step_id = str(step.get("id") or f"step_{idx + 1}")
             role_hint = str(step.get("role_hint") or "").strip().lower()
+            acceptance_criteria = self._normalize_string_list(step.get("acceptance_criteria"))
+            deliverables = self._normalize_string_list(step.get("deliverables"))
+            quality_gates = self._normalize_string_list(step.get("quality_gates"))
             target_bot = self._pick_target_bot(bots, role_hint=role_hint, pm_bot_id=pm_bot.id)
             depends_ids = [
                 task_ids_by_step[d]
@@ -67,6 +75,16 @@ class PMOrchestrator:
                 payload={
                     "title": str(step.get("title") or step_id),
                     "instruction": str(step.get("instruction") or instruction),
+                    "role_hint": role_hint or "assistant",
+                    "step_number": idx + 1,
+                    "step_count": len(plan["steps"]),
+                    "depends_on_steps": [str(dep) for dep in (step.get("depends_on") or []) if str(dep).strip()],
+                    "acceptance_criteria": acceptance_criteria,
+                    "deliverables": deliverables,
+                    "quality_gates": quality_gates,
+                    "global_acceptance_criteria": global_acceptance_criteria,
+                    "global_quality_gates": global_quality_gates,
+                    "global_risks": global_risks,
                     "source": "chat_assign",
                     "project_id": project_id,
                     "conversation_id": conversation_id,
@@ -230,67 +248,149 @@ class PMOrchestrator:
                         "instruction": str(s.get("instruction") or ""),
                         "role_hint": str(s.get("role_hint") or "assistant").lower(),
                         "depends_on": [str(x) for x in (s.get("depends_on") or []) if x],
+                        "acceptance_criteria": self._normalize_string_list(s.get("acceptance_criteria")),
+                        "deliverables": self._normalize_string_list(s.get("deliverables")),
+                        "quality_gates": self._normalize_string_list(s.get("quality_gates")),
                     }
                 )
             if not steps:
                 return None
-            return {"steps": steps}
+            return {
+                "steps": steps,
+                "global_acceptance_criteria": self._normalize_string_list(parsed.get("global_acceptance_criteria")),
+                "global_quality_gates": self._normalize_string_list(parsed.get("global_quality_gates")),
+                "risks": self._normalize_string_list(parsed.get("risks")),
+            }
         except Exception:
             return None
 
     def _heuristic_plan(self, instruction: str, bots: List[Bot]) -> Dict[str, Any]:
         role_set = {str(b.role).lower() for b in bots}
         has_tester = any("test" in r for r in role_set)
-        has_reviewer = any("review" in r for r in role_set)
+        has_reviewer = any("review" in r or "audit" in r or "security" in r for r in role_set)
         has_research = any("research" in r for r in role_set)
+        has_dba = any("dba" in r or "database" in r or "data" in r for r in role_set)
+        needs_database = self._instruction_mentions_database(instruction)
 
         base_steps: List[Dict[str, Any]] = [
             {
                 "id": "step_1",
-                "title": "Clarify approach",
-                "instruction": f"Define acceptance criteria and approach for: {instruction}",
+                "title": "Write implementation specification",
+                "instruction": (
+                    "Produce user stories, acceptance criteria, failure cases, and scope boundaries for: "
+                    f"{instruction}"
+                ),
                 "role_hint": "researcher" if has_research else "assistant",
                 "depends_on": [],
-            },
-            {
-                "id": "step_2",
-                "title": "Implement core changes",
-                "instruction": f"Implement the main solution for: {instruction}",
-                "role_hint": "coder",
-                "depends_on": ["step_1"],
+                "acceptance_criteria": [
+                    "Stories are implementation-ready and testable",
+                    "Acceptance criteria are explicit and non-ambiguous",
+                ],
+                "deliverables": ["Specification notes", "Story list", "Acceptance criteria list"],
+                "quality_gates": ["No unresolved scope ambiguity"],
             },
         ]
-        if has_tester:
+
+        implementation_dep = "step_1"
+        if needs_database:
             base_steps.append(
                 {
-                    "id": "step_3",
-                    "title": "Add and run tests",
-                    "instruction": "Create coverage for the implementation and validate behavior.",
-                    "role_hint": "tester",
-                    "depends_on": ["step_2"],
+                    "id": "step_2",
+                    "title": "Plan and apply database changes",
+                    "instruction": (
+                        "Design required schema/query/data updates for this request, including rollback strategy and "
+                        "data-safety checks."
+                    ),
+                    "role_hint": "dba" if has_dba else "coder",
+                    "depends_on": ["step_1"],
+                    "acceptance_criteria": [
+                        "Schema/query updates are backward-compatible or have explicit migration plan",
+                        "Data integrity and rollback plan are documented",
+                    ],
+                    "deliverables": ["Migration/query plan", "DB safety checklist"],
+                    "quality_gates": ["No destructive operation without rollback path"],
                 }
             )
-        if has_reviewer:
-            depends = ["step_3"] if has_tester else ["step_2"]
-            base_steps.append(
-                {
-                    "id": "step_4",
-                    "title": "Review and polish",
-                    "instruction": "Review for regressions, edge cases, and quality risks.",
-                    "role_hint": "reviewer",
-                    "depends_on": depends,
-                }
-            )
-        return {"steps": base_steps}
+            implementation_dep = "step_2"
+
+        base_steps.append(
+            {
+                "id": "step_3",
+                "title": "Implement core changes",
+                "instruction": f"Implement the approved solution for: {instruction}",
+                "role_hint": "coder",
+                "depends_on": [implementation_dep],
+                "acceptance_criteria": [
+                    "Implementation matches stories and acceptance criteria",
+                    "Code paths include error handling and edge-case handling",
+                ],
+                "deliverables": ["Code changes", "Implementation notes"],
+                "quality_gates": ["No runtime errors in local test run"],
+            }
+        )
+
+        base_steps.append(
+            {
+                "id": "step_4",
+                "title": "Add and run tests",
+                "instruction": "Create and run tests for happy path, edge cases, regressions, and failure handling.",
+                "role_hint": "tester" if has_tester else "coder",
+                "depends_on": ["step_3"],
+                "acceptance_criteria": [
+                    "Automated tests cover core behavior and edge cases",
+                    "Failing tests are resolved before handoff",
+                ],
+                "deliverables": ["Test changes", "Test run evidence"],
+                "quality_gates": ["All required tests pass"],
+            }
+        )
+        depends = ["step_4"]
+        base_steps.append(
+            {
+                "id": "step_5",
+                "title": "Security and quality review",
+                "instruction": (
+                    "Review for security risks, data exposure, performance regressions, and deployment readiness."
+                ),
+                "role_hint": "reviewer" if has_reviewer else "security",
+                "depends_on": depends,
+                "acceptance_criteria": [
+                    "No known security leak paths or obvious privilege bypasses",
+                    "No unresolved high-severity quality issues",
+                ],
+                "deliverables": ["Review findings", "Final release recommendation"],
+                "quality_gates": ["Zero unresolved high-severity findings"],
+            }
+        )
+        return {
+            "steps": base_steps,
+            "global_acceptance_criteria": [
+                "Implementation matches user request and acceptance criteria",
+                "No known regressions in touched behavior",
+            ],
+            "global_quality_gates": [
+                "Tests pass",
+                "Security/quality review complete",
+            ],
+            "risks": [],
+        }
 
     def _select_pm_bot(self, bots: List[Bot], requested_pm_bot_id: Optional[str]) -> Optional[Bot]:
         if requested_pm_bot_id:
             for bot in bots:
                 if bot.id == requested_pm_bot_id and bot.enabled:
                     return bot
-        pm_roles = {"pm", "project_manager", "project manager"}
+        pm_patterns = [
+            r"\bpm\b",
+            r"project[_\s-]*manager",
+            r"program[_\s-]*manager",
+            r"orchestrator",
+            r"planner",
+        ]
         for bot in bots:
-            if str(bot.role).lower() in pm_roles and bot.enabled:
+            role = str(bot.role or "").lower()
+            name = str(bot.name or "").lower()
+            if bot.enabled and any(re.search(pattern, role) or re.search(pattern, name) for pattern in pm_patterns):
                 return bot
         return None
 
@@ -307,6 +407,9 @@ class PMOrchestrator:
             "tester": [r"test", r"qa"],
             "reviewer": [r"review", r"audit"],
             "researcher": [r"research", r"analyst", r"plan"],
+            "security": [r"security", r"audit", r"review"],
+            "dba": [r"\bdba\b", r"database", r"data", r"sql", r"migration"],
+            "qa": [r"\bqa\b", r"test", r"quality"],
             "assistant": [r"assist", r"general"],
         }
 
@@ -318,6 +421,34 @@ class PMOrchestrator:
 
         candidates.sort(key=lambda b: b.priority, reverse=True)
         return candidates[0]
+
+    def _normalize_string_list(self, value: Any) -> List[str]:
+        if not isinstance(value, list):
+            return []
+        result: List[str] = []
+        for item in value:
+            text = str(item or "").strip()
+            if text:
+                result.append(text)
+        return result
+
+    def _instruction_mentions_database(self, instruction: str) -> bool:
+        text = str(instruction or "").lower()
+        keywords = (
+            "database",
+            "db ",
+            "db.",
+            "migration",
+            "schema",
+            "sql",
+            "table",
+            "query",
+            "index",
+            "postgres",
+            "sqlite",
+            "mysql",
+        )
+        return any(keyword in text for keyword in keywords)
 
     def _extract_task_output(self, result: Any) -> str:
         if isinstance(result, dict):

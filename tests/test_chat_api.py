@@ -238,7 +238,12 @@ async def test_assign_message_creates_task_graph_and_summary(cp_app):
 
         tasks_resp = await client.get("/v1/tasks")
         assert tasks_resp.status_code == 200
-        assert len(tasks_resp.json()) >= 2
+        tasks = tasks_resp.json()
+        assert len(tasks) >= 2
+        first_payload = tasks[0].get("payload") if isinstance(tasks[0], dict) else {}
+        assert isinstance(first_payload, dict)
+        assert "acceptance_criteria" in first_payload
+        assert "quality_gates" in first_payload
 
 
 @pytest.mark.anyio
@@ -316,6 +321,97 @@ async def test_chat_context_item_ids_are_resolved_from_vault(cp_app):
         assert isinstance(payload, list)
         assert payload[0]["role"] == "system"
         assert "Context:\n" in payload[0]["content"]
+
+
+@pytest.mark.anyio
+async def test_chat_project_repo_context_is_auto_resolved(cp_app):
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "ok"})
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-repo-ctx"
+        create_project = await client.post(
+            "/v1/projects",
+            json={"id": project_id, "name": "Repo Context Project"},
+        )
+        assert create_project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={"title": "Project Repo Context", "project_id": project_id},
+        )
+        conversation_id = convo.json()["id"]
+        await client.post(
+            "/v1/bots",
+            json={"id": "bot-repo-ctx", "name": "Repo Ctx Bot", "role": "assistant", "backends": [], "enabled": True},
+        )
+        ingest = await client.post(
+            "/v1/vault/items",
+            json={
+                "title": "README",
+                "content": "PROJECT_REPO_CONTEXT_TOKEN architecture note for chat retrieval.",
+                "namespace": f"project:{project_id}:repo",
+                "project_id": project_id,
+            },
+        )
+        assert ingest.status_code == 200
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={"content": "How is this repo structured?", "bot_id": "bot-repo-ctx"},
+        )
+        assert resp.status_code == 200
+        task_arg = cp_app.state.scheduler.schedule.await_args[0][0]
+        payload = task_arg.payload
+        assert isinstance(payload, list)
+        assert payload[0]["role"] == "system"
+        assert "[repo:proj-repo-ctx]" in payload[0]["content"]
+        assert "PROJECT_REPO_CONTEXT_TOKEN" in payload[0]["content"]
+
+
+@pytest.mark.anyio
+async def test_chat_project_repo_context_can_be_disabled(cp_app):
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "ok"})
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-repo-off"
+        create_project = await client.post(
+            "/v1/projects",
+            json={"id": project_id, "name": "Repo Off Project"},
+        )
+        assert create_project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={"title": "Project Repo Off", "project_id": project_id},
+        )
+        conversation_id = convo.json()["id"]
+        await client.post(
+            "/v1/bots",
+            json={"id": "bot-repo-off", "name": "Repo Off Bot", "role": "assistant", "backends": [], "enabled": True},
+        )
+        ingest = await client.post(
+            "/v1/vault/items",
+            json={
+                "title": "README",
+                "content": "PROJECT_REPO_CONTEXT_DISABLED_TOKEN",
+                "namespace": f"project:{project_id}:repo",
+                "project_id": project_id,
+            },
+        )
+        assert ingest.status_code == 200
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": "Hello",
+                "bot_id": "bot-repo-off",
+                "include_project_context": False,
+            },
+        )
+        assert resp.status_code == 200
+        task_arg = cp_app.state.scheduler.schedule.await_args[0][0]
+        payload = task_arg.payload
+        assert isinstance(payload, list)
+        assert payload[0]["role"] == "user"
+        assert "PROJECT_REPO_CONTEXT_DISABLED_TOKEN" not in str(payload)
 
 
 @pytest.mark.anyio
