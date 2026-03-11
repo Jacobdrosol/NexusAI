@@ -752,6 +752,159 @@ async def test_project_chat_tool_access_rejects_too_long_workspace_root(cp_clien
 
 
 @pytest.mark.anyio
+async def test_project_repo_workspace_update_and_get(cp_client, tmp_path):
+    await cp_client.post(
+        "/v1/projects",
+        json={"id": "p-repo-workspace", "name": "Repo Workspace Project", "mode": "isolated"},
+    )
+    root = tmp_path / "workspace"
+    update = await cp_client.put(
+        "/v1/projects/p-repo-workspace/repo/workspace",
+        json={
+            "enabled": True,
+            "root_path": str(root),
+            "clone_url": "https://github.com/example/repo.git",
+            "default_branch": "main",
+            "allow_push": True,
+            "allow_command_execution": True,
+        },
+    )
+    assert update.status_code == 200
+    body = update.json()
+    assert body["enabled"] is True
+    assert body["root_path"] == str(root.resolve())
+    assert body["clone_url"] == "https://github.com/example/repo.git"
+    assert body["default_branch"] == "main"
+    assert body["allow_push"] is True
+    assert body["allow_command_execution"] is True
+
+    get_resp = await cp_client.get("/v1/projects/p-repo-workspace/repo/workspace")
+    assert get_resp.status_code == 200
+    got = get_resp.json()
+    assert got["enabled"] is True
+    assert got["root_path"] == str(root.resolve())
+    assert got["allow_push"] is True
+    assert got["allow_command_execution"] is True
+
+
+@pytest.mark.anyio
+async def test_project_repo_workspace_rejects_relative_root_path(cp_client):
+    await cp_client.post(
+        "/v1/projects",
+        json={"id": "p-repo-workspace-bad", "name": "Repo Workspace Bad", "mode": "isolated"},
+    )
+    update = await cp_client.put(
+        "/v1/projects/p-repo-workspace-bad/repo/workspace",
+        json={
+            "enabled": True,
+            "root_path": "relative/path",
+        },
+    )
+    assert update.status_code == 400
+    assert "absolute path" in (update.json().get("detail") or "").lower()
+
+
+@pytest.mark.anyio
+async def test_project_repo_workspace_run_command_requires_policy(cp_client, tmp_path):
+    await cp_client.post(
+        "/v1/projects",
+        json={"id": "p-repo-run-policy", "name": "Repo Run Policy", "mode": "isolated"},
+    )
+    root = tmp_path / "run-policy"
+    root.mkdir(parents=True, exist_ok=True)
+    update = await cp_client.put(
+        "/v1/projects/p-repo-run-policy/repo/workspace",
+        json={
+            "enabled": True,
+            "root_path": str(root),
+            "allow_command_execution": False,
+        },
+    )
+    assert update.status_code == 200
+
+    run_resp = await cp_client.post(
+        "/v1/projects/p-repo-run-policy/repo/workspace/run",
+        json={"command": ["py", "-m", "pytest", "-q"]},
+    )
+    assert run_resp.status_code == 403
+    assert "disabled" in (run_resp.json().get("detail") or "").lower()
+
+
+@pytest.mark.anyio
+async def test_project_repo_workspace_run_command_executes_allowed_command(cp_client, tmp_path, monkeypatch):
+    await cp_client.post(
+        "/v1/projects",
+        json={"id": "p-repo-run", "name": "Repo Run", "mode": "isolated"},
+    )
+    root = tmp_path / "run-workspace"
+    root.mkdir(parents=True, exist_ok=True)
+    update = await cp_client.put(
+        "/v1/projects/p-repo-run/repo/workspace",
+        json={
+            "enabled": True,
+            "root_path": str(root),
+            "allow_command_execution": True,
+        },
+    )
+    assert update.status_code == 200
+
+    captured = {}
+
+    async def _fake_run(args, *, cwd, timeout_seconds=None, env_overrides=None):
+        captured["args"] = args
+        captured["cwd"] = str(cwd)
+        captured["timeout_seconds"] = timeout_seconds
+        return {
+            "ok": True,
+            "returncode": 0,
+            "stdout": "tests passed",
+            "stderr": "",
+            "command": args,
+            "timeout_seconds": timeout_seconds or 120,
+        }
+
+    monkeypatch.setattr("control_plane.api.projects._run_repo_command", _fake_run)
+
+    run_resp = await cp_client.post(
+        "/v1/projects/p-repo-run/repo/workspace/run",
+        json={"command": ["py", "-m", "pytest", "-q"], "timeout_seconds": 90},
+    )
+    assert run_resp.status_code == 200
+    body = run_resp.json()
+    assert body["status"] == "ok"
+    assert body["result"]["ok"] is True
+    assert captured["args"] == ["py", "-m", "pytest", "-q"]
+    assert captured["cwd"] == str(root.resolve())
+    assert captured["timeout_seconds"] == 90
+
+
+@pytest.mark.anyio
+async def test_project_repo_workspace_push_requires_allow_push(cp_client, tmp_path):
+    await cp_client.post(
+        "/v1/projects",
+        json={"id": "p-repo-push", "name": "Repo Push", "mode": "isolated"},
+    )
+    root = tmp_path / "push-workspace"
+    root.mkdir(parents=True, exist_ok=True)
+    update = await cp_client.put(
+        "/v1/projects/p-repo-push/repo/workspace",
+        json={
+            "enabled": True,
+            "root_path": str(root),
+            "allow_push": False,
+        },
+    )
+    assert update.status_code == 200
+
+    push_resp = await cp_client.post(
+        "/v1/projects/p-repo-push/repo/workspace/push",
+        json={"remote": "origin", "branch": "main"},
+    )
+    assert push_resp.status_code == 403
+    assert "disabled" in (push_resp.json().get("detail") or "").lower()
+
+
+@pytest.mark.anyio
 async def test_project_github_webhook_ingestion_and_list(cp_client):
     await cp_client.post(
         "/v1/projects",

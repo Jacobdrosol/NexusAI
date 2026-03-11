@@ -378,6 +378,93 @@ class CPClient:
         }
         return self._put(f"/v1/projects/{project_id}/chat-tool-access", body)
 
+    def get_project_repo_workspace(self, project_id: str) -> Optional[Dict[str, Any]]:
+        return self._get(f"/v1/projects/{project_id}/repo/workspace")
+
+    def update_project_repo_workspace(
+        self,
+        project_id: str,
+        *,
+        enabled: bool,
+        root_path: Optional[str],
+        clone_url: Optional[str],
+        default_branch: Optional[str],
+        allow_push: bool,
+        allow_command_execution: bool,
+    ) -> Optional[Dict[str, Any]]:
+        body: Dict[str, Any] = {
+            "enabled": bool(enabled),
+            "root_path": root_path,
+            "clone_url": clone_url,
+            "default_branch": default_branch,
+            "allow_push": bool(allow_push),
+            "allow_command_execution": bool(allow_command_execution),
+        }
+        return self._put(f"/v1/projects/{project_id}/repo/workspace", body)
+
+    def get_project_repo_workspace_status(self, project_id: str) -> Optional[Dict[str, Any]]:
+        return self._get(f"/v1/projects/{project_id}/repo/workspace/status")
+
+    def clone_project_repo_workspace(
+        self,
+        project_id: str,
+        *,
+        clone_url: Optional[str] = None,
+        branch: Optional[str] = None,
+        depth: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
+        body: Dict[str, Any] = {}
+        if clone_url:
+            body["clone_url"] = clone_url
+        if branch:
+            body["branch"] = branch
+        if depth is not None:
+            body["depth"] = int(depth)
+        return self._post(f"/v1/projects/{project_id}/repo/workspace/clone", body, timeout=_INGEST_TIMEOUT)
+
+    def pull_project_repo_workspace(
+        self,
+        project_id: str,
+        *,
+        remote: str = "origin",
+        branch: Optional[str] = None,
+        rebase: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        body: Dict[str, Any] = {"remote": remote, "branch": branch, "rebase": bool(rebase)}
+        return self._post(f"/v1/projects/{project_id}/repo/workspace/pull", body, timeout=_INGEST_TIMEOUT)
+
+    def commit_project_repo_workspace(
+        self,
+        project_id: str,
+        *,
+        message: str,
+        add_all: bool = True,
+    ) -> Optional[Dict[str, Any]]:
+        body: Dict[str, Any] = {"message": message, "add_all": bool(add_all)}
+        return self._post(f"/v1/projects/{project_id}/repo/workspace/commit", body)
+
+    def push_project_repo_workspace(
+        self,
+        project_id: str,
+        *,
+        remote: str = "origin",
+        branch: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        body: Dict[str, Any] = {"remote": remote, "branch": branch}
+        return self._post(f"/v1/projects/{project_id}/repo/workspace/push", body, timeout=_INGEST_TIMEOUT)
+
+    def run_project_repo_workspace_command(
+        self,
+        project_id: str,
+        *,
+        command: List[str],
+        timeout_seconds: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
+        body: Dict[str, Any] = {"command": command}
+        if timeout_seconds is not None:
+            body["timeout_seconds"] = int(timeout_seconds)
+        return self._post(f"/v1/projects/{project_id}/repo/workspace/run", body, timeout=_INGEST_TIMEOUT)
+
     # Models
     def list_models(self) -> Optional[List[Dict[str, Any]]]:
         return self._get("/v1/models")

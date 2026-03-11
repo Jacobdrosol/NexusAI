@@ -5,6 +5,7 @@ import base64
 import hashlib
 import hmac
 import os
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Literal, Tuple
 
 import httpx
@@ -12,6 +13,11 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from control_plane.audit.utils import record_audit_event
+from control_plane.repo_workspace import (
+    build_github_http_auth_header,
+    normalize_workspace_root,
+    run_command as run_repo_command,
+)
 from control_plane.security.guards import enforce_body_size, enforce_rate_limit
 from shared.exceptions import APIKeyNotFoundError, ProjectNotFoundError
 from shared.models import Project, TaskMetadata
@@ -51,6 +57,42 @@ class UpdateProjectChatToolAccessRequest(BaseModel):
     filesystem: bool = False
     repo_search: bool = False
     workspace_root: Optional[str] = None
+
+
+class UpdateProjectRepoWorkspaceRequest(BaseModel):
+    enabled: bool = False
+    root_path: Optional[str] = None
+    clone_url: Optional[str] = None
+    default_branch: Optional[str] = None
+    allow_push: bool = False
+    allow_command_execution: bool = False
+
+
+class RepoWorkspaceCloneRequest(BaseModel):
+    clone_url: Optional[str] = None
+    branch: Optional[str] = None
+    depth: Optional[int] = None
+
+
+class RepoWorkspacePullRequest(BaseModel):
+    remote: str = "origin"
+    branch: Optional[str] = None
+    rebase: bool = False
+
+
+class RepoWorkspaceCommitRequest(BaseModel):
+    message: str
+    add_all: bool = True
+
+
+class RepoWorkspacePushRequest(BaseModel):
+    remote: str = "origin"
+    branch: Optional[str] = None
+
+
+class RepoWorkspaceRunRequest(BaseModel):
+    command: List[str] = Field(default_factory=list)
+    timeout_seconds: Optional[int] = None
 
 
 _CLOUD_POLICY_VALUES = {"allow", "redact", "block"}
@@ -178,6 +220,240 @@ def _validate_requested_project_chat_tool_access(body: UpdateProjectChatToolAcce
         "repo_search": bool(body.repo_search),
         "workspace_root": workspace_root,
     }
+
+
+def _extract_project_repo_workspace(project: Project) -> Dict[str, Any]:
+    settings = project.settings_overrides if isinstance(project.settings_overrides, dict) else {}
+    raw = settings.get("repo_workspace") if isinstance(settings.get("repo_workspace"), dict) else {}
+    root_path = str(raw.get("root_path") or "").strip() or None
+    clone_url = str(raw.get("clone_url") or "").strip() or None
+    default_branch = str(raw.get("default_branch") or "").strip() or None
+    return {
+        "enabled": bool(raw.get("enabled", False)),
+        "root_path": root_path,
+        "clone_url": clone_url,
+        "default_branch": default_branch,
+        "allow_push": bool(raw.get("allow_push", False)),
+        "allow_command_execution": bool(raw.get("allow_command_execution", False)),
+    }
+
+
+def _validate_requested_project_repo_workspace(body: UpdateProjectRepoWorkspaceRequest) -> Dict[str, Any]:
+    root_path = str(body.root_path or "").strip() or None
+    clone_url = str(body.clone_url or "").strip() or None
+    default_branch = str(body.default_branch or "").strip() or None
+
+    if root_path is not None and len(root_path) > 1024:
+        raise HTTPException(status_code=400, detail="root_path is too long")
+    if clone_url is not None and len(clone_url) > 1024:
+        raise HTTPException(status_code=400, detail="clone_url is too long")
+    if default_branch is not None and len(default_branch) > 256:
+        raise HTTPException(status_code=400, detail="default_branch is too long")
+
+    if bool(body.enabled):
+        if not root_path:
+            raise HTTPException(status_code=400, detail="root_path is required when repo workspace is enabled")
+        normalized = normalize_workspace_root(root_path)
+        if normalized is None:
+            raise HTTPException(status_code=400, detail="root_path must be an absolute path")
+        root_path = str(normalized)
+    elif root_path:
+        normalized = normalize_workspace_root(root_path)
+        if normalized is None:
+            raise HTTPException(status_code=400, detail="root_path must be an absolute path")
+        root_path = str(normalized)
+
+    if clone_url and not (
+        clone_url.startswith("https://")
+        or clone_url.startswith("http://")
+        or clone_url.startswith("ssh://")
+        or clone_url.startswith("git@")
+    ):
+        raise HTTPException(status_code=400, detail="clone_url must be an HTTPS/SSH git URL")
+
+    return {
+        "enabled": bool(body.enabled),
+        "root_path": root_path,
+        "clone_url": clone_url,
+        "default_branch": default_branch,
+        "allow_push": bool(body.allow_push),
+        "allow_command_execution": bool(body.allow_command_execution),
+    }
+
+
+def _resolve_repo_workspace_root(cfg: Dict[str, Any], *, require_enabled: bool = True) -> Path:
+    if require_enabled and not bool(cfg.get("enabled", False)):
+        raise HTTPException(status_code=400, detail="repo workspace is disabled for this project")
+    root = normalize_workspace_root(str(cfg.get("root_path") or "").strip() or None)
+    if root is None:
+        raise HTTPException(status_code=400, detail="repo workspace root_path is not configured")
+    return root
+
+
+async def _project_github_pat(project: Project, key_vault) -> Optional[str]:
+    settings = project.settings_overrides if isinstance(project.settings_overrides, dict) else {}
+    github_cfg = settings.get("github") if isinstance(settings.get("github"), dict) else {}
+    key_ref = str(github_cfg.get("pat_key_ref") or "").strip()
+    if not key_ref:
+        return None
+    try:
+        return await key_vault.get_secret(key_ref)
+    except Exception:
+        return None
+
+
+async def _run_repo_command(
+    args: List[str],
+    *,
+    cwd: Path,
+    timeout_seconds: Optional[int] = None,
+    env_overrides: Optional[Dict[str, str]] = None,
+) -> Dict[str, Any]:
+    return await run_repo_command(
+        args,
+        cwd=cwd,
+        timeout_seconds=timeout_seconds,
+        env_overrides=env_overrides,
+    )
+
+
+async def _repo_auth_git_args(
+    *,
+    cwd: Path,
+    remote: str,
+    github_pat: Optional[str],
+) -> List[str]:
+    token = str(github_pat or "").strip()
+    if not token:
+        return []
+    remote_res = await _run_repo_command(
+        ["git", "remote", "get-url", remote],
+        cwd=cwd,
+        timeout_seconds=15,
+    )
+    if not remote_res.get("ok"):
+        return []
+    remote_url = str(remote_res.get("stdout") or "").strip()
+    if "github.com" not in remote_url.lower():
+        return []
+    return ["-c", f"http.extraHeader={build_github_http_auth_header(token)}"]
+
+
+async def _repo_branch_name(cwd: Path) -> Optional[str]:
+    branch_res = await _run_repo_command(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        cwd=cwd,
+        timeout_seconds=15,
+    )
+    if not branch_res.get("ok"):
+        return None
+    branch = str(branch_res.get("stdout") or "").strip()
+    return branch or None
+
+
+async def _repo_status_snapshot(
+    *,
+    root: Path,
+    cfg: Dict[str, Any],
+) -> Dict[str, Any]:
+    exists = root.exists()
+    is_repo = False
+    branch: Optional[str] = None
+    porcelain_lines: List[str] = []
+    remotes: List[str] = []
+    last_commit: Dict[str, Any] = {}
+
+    if exists:
+        check_repo = await _run_repo_command(
+            ["git", "rev-parse", "--is-inside-work-tree"],
+            cwd=root,
+            timeout_seconds=15,
+        )
+        is_repo = bool(check_repo.get("ok")) and "true" in str(check_repo.get("stdout") or "").lower()
+
+    if exists and is_repo:
+        branch = await _repo_branch_name(root)
+
+        status_res = await _run_repo_command(
+            ["git", "status", "--porcelain", "-b"],
+            cwd=root,
+            timeout_seconds=20,
+        )
+        if status_res.get("ok"):
+            porcelain_lines = [
+                str(line).rstrip()
+                for line in str(status_res.get("stdout") or "").splitlines()
+                if str(line).strip()
+            ]
+
+        remote_res = await _run_repo_command(
+            ["git", "remote", "-v"],
+            cwd=root,
+            timeout_seconds=20,
+        )
+        if remote_res.get("ok"):
+            remotes = [
+                str(line).rstrip()
+                for line in str(remote_res.get("stdout") or "").splitlines()
+                if str(line).strip()
+            ]
+
+        commit_res = await _run_repo_command(
+            ["git", "log", "-1", "--pretty=format:%H%n%an%n%ad%n%s"],
+            cwd=root,
+            timeout_seconds=20,
+        )
+        if commit_res.get("ok"):
+            parts = str(commit_res.get("stdout") or "").splitlines()
+            if parts:
+                last_commit = {
+                    "sha": parts[0] if len(parts) > 0 else None,
+                    "author": parts[1] if len(parts) > 1 else None,
+                    "date": parts[2] if len(parts) > 2 else None,
+                    "subject": parts[3] if len(parts) > 3 else None,
+                }
+
+    dirty_lines = [line for line in porcelain_lines if not line.startswith("##")]
+    return {
+        "enabled": bool(cfg.get("enabled", False)),
+        "root_path": cfg.get("root_path"),
+        "clone_url": cfg.get("clone_url"),
+        "default_branch": cfg.get("default_branch"),
+        "allow_push": bool(cfg.get("allow_push", False)),
+        "allow_command_execution": bool(cfg.get("allow_command_execution", False)),
+        "workspace_exists": exists,
+        "is_repo": is_repo,
+        "branch": branch,
+        "clean": len(dirty_lines) == 0,
+        "porcelain": porcelain_lines,
+        "remotes": remotes,
+        "last_commit": last_commit,
+    }
+
+
+def _allowed_workspace_commands() -> set[str]:
+    raw = (
+        os.environ.get("NEXUSAI_REPO_WORKSPACE_ALLOWED_COMMANDS", "")
+        or "py,python,pytest,uv,pip,npm,pnpm,yarn,node,dotnet,go,cargo,make,git"
+    )
+    values = {part.strip().lower() for part in raw.split(",") if part.strip()}
+    return values
+
+
+def _safe_command_parts(parts: List[str]) -> List[str]:
+    if not isinstance(parts, list) or not parts:
+        raise HTTPException(status_code=400, detail="command must be a non-empty array")
+    cleaned: List[str] = []
+    for part in parts:
+        token = str(part or "").strip()
+        if not token:
+            raise HTTPException(status_code=400, detail="command contains an empty argument")
+        if len(token) > 512:
+            raise HTTPException(status_code=400, detail="command argument is too long")
+        if "\n" in token or "\r" in token:
+            raise HTTPException(status_code=400, detail="command arguments cannot contain newlines")
+        cleaned.append(token)
+    return cleaned
 
 
 async def _fetch_github_identity(token: str, repo_full_name: Optional[str] = None) -> Dict[str, Any]:
@@ -1578,3 +1854,386 @@ async def update_project_chat_tool_access(
         details=validated,
     )
     return {"status": "ok", "project_id": project_id, **validated}
+
+
+@router.get("/{project_id}/repo/workspace")
+async def get_project_repo_workspace(project_id: str, request: Request) -> dict:
+    project_registry = request.app.state.project_registry
+    try:
+        project = await project_registry.get(project_id)
+    except ProjectNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    cfg = _extract_project_repo_workspace(project)
+    return {"project_id": project_id, **cfg}
+
+
+@router.put("/{project_id}/repo/workspace")
+async def update_project_repo_workspace(
+    project_id: str,
+    request: Request,
+    body: UpdateProjectRepoWorkspaceRequest,
+) -> dict:
+    project_registry = request.app.state.project_registry
+    try:
+        project = await project_registry.get(project_id)
+    except ProjectNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    validated = _validate_requested_project_repo_workspace(body)
+    updated = project.model_copy(
+        update={"settings_overrides": _merge_settings(project, {"repo_workspace": validated})}
+    )
+    await project_registry.update(project_id, updated)
+    await record_audit_event(
+        request,
+        action="projects.repo_workspace.update",
+        resource=f"project:{project_id}",
+        details={
+            "enabled": validated["enabled"],
+            "root_path": validated["root_path"],
+            "clone_url": validated["clone_url"],
+            "default_branch": validated["default_branch"],
+            "allow_push": validated["allow_push"],
+            "allow_command_execution": validated["allow_command_execution"],
+        },
+    )
+    return {"status": "ok", "project_id": project_id, **validated}
+
+
+@router.get("/{project_id}/repo/workspace/status")
+async def get_project_repo_workspace_status(project_id: str, request: Request) -> dict:
+    project_registry = request.app.state.project_registry
+    try:
+        project = await project_registry.get(project_id)
+    except ProjectNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    cfg = _extract_project_repo_workspace(project)
+    root = normalize_workspace_root(cfg.get("root_path"))
+    if root is None:
+        return {
+            "project_id": project_id,
+            **cfg,
+            "workspace_exists": False,
+            "is_repo": False,
+            "branch": None,
+            "clean": True,
+            "porcelain": [],
+            "remotes": [],
+            "last_commit": {},
+        }
+
+    snapshot = await _repo_status_snapshot(root=root, cfg=cfg)
+    return {"project_id": project_id, **snapshot}
+
+
+@router.post("/{project_id}/repo/workspace/clone")
+async def clone_project_repo_workspace(
+    project_id: str,
+    request: Request,
+    body: RepoWorkspaceCloneRequest,
+) -> dict:
+    project_registry = request.app.state.project_registry
+    key_vault = request.app.state.key_vault
+    try:
+        project = await project_registry.get(project_id)
+    except ProjectNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    cfg = _extract_project_repo_workspace(project)
+    root = _resolve_repo_workspace_root(cfg, require_enabled=True)
+
+    clone_url = str(body.clone_url or "").strip() or str(cfg.get("clone_url") or "").strip()
+    if not clone_url:
+        settings = project.settings_overrides if isinstance(project.settings_overrides, dict) else {}
+        github_cfg = settings.get("github") if isinstance(settings.get("github"), dict) else {}
+        repo_full_name = str(github_cfg.get("repo_full_name") or "").strip()
+        if repo_full_name:
+            clone_url = f"https://github.com/{repo_full_name}.git"
+    if not clone_url:
+        raise HTTPException(status_code=400, detail="clone_url is required (or configure project github repo_full_name)")
+
+    if root.exists():
+        git_dir = root / ".git"
+        if git_dir.exists():
+            snapshot = await _repo_status_snapshot(root=root, cfg=cfg)
+            return {
+                "status": "already_cloned",
+                "project_id": project_id,
+                "message": "workspace already contains a git repository",
+                "workspace": snapshot,
+            }
+        try:
+            if any(root.iterdir()):
+                raise HTTPException(
+                    status_code=400,
+                    detail="workspace path exists and is not empty; choose an empty directory",
+                )
+        except PermissionError:
+            raise HTTPException(status_code=400, detail="workspace path cannot be accessed")
+    else:
+        root.parent.mkdir(parents=True, exist_ok=True)
+
+    branch = str(body.branch or "").strip() or str(cfg.get("default_branch") or "").strip() or None
+    depth = body.depth
+    if depth is not None and (depth < 1 or depth > 1000):
+        raise HTTPException(status_code=400, detail="depth must be between 1 and 1000")
+
+    cmd: List[str] = ["git"]
+    token = await _project_github_pat(project, key_vault)
+    if token and "github.com" in clone_url.lower():
+        cmd.extend(["-c", f"http.extraHeader={build_github_http_auth_header(token)}"])
+    cmd.extend(["clone"])
+    if depth is not None:
+        cmd.extend(["--depth", str(int(depth))])
+    if branch:
+        cmd.extend(["--branch", branch])
+    cmd.extend([clone_url, str(root)])
+
+    res = await _run_repo_command(cmd, cwd=root.parent, timeout_seconds=900)
+    if not res.get("ok"):
+        detail = str(res.get("stderr") or res.get("error") or "clone failed").strip() or "clone failed"
+        raise HTTPException(status_code=400, detail=detail)
+
+    if clone_url != cfg.get("clone_url"):
+        merged_cfg = dict(cfg)
+        merged_cfg["clone_url"] = clone_url
+        updated = project.model_copy(
+            update={"settings_overrides": _merge_settings(project, {"repo_workspace": merged_cfg})}
+        )
+        await project_registry.update(project_id, updated)
+        cfg = merged_cfg
+
+    snapshot = await _repo_status_snapshot(root=root, cfg=cfg)
+    await record_audit_event(
+        request,
+        action="projects.repo_workspace.clone",
+        resource=f"project:{project_id}",
+        details={"clone_url": clone_url, "branch": branch, "root_path": str(root)},
+    )
+    return {
+        "status": "ok",
+        "project_id": project_id,
+        "result": res,
+        "workspace": snapshot,
+    }
+
+
+@router.post("/{project_id}/repo/workspace/pull")
+async def pull_project_repo_workspace(
+    project_id: str,
+    request: Request,
+    body: RepoWorkspacePullRequest,
+) -> dict:
+    project_registry = request.app.state.project_registry
+    key_vault = request.app.state.key_vault
+    try:
+        project = await project_registry.get(project_id)
+    except ProjectNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    cfg = _extract_project_repo_workspace(project)
+    root = _resolve_repo_workspace_root(cfg, require_enabled=True)
+    snapshot = await _repo_status_snapshot(root=root, cfg=cfg)
+    if not snapshot.get("is_repo"):
+        raise HTTPException(status_code=400, detail="workspace is not a git repository")
+
+    remote = str(body.remote or "").strip() or "origin"
+    branch = str(body.branch or "").strip() or str(cfg.get("default_branch") or "").strip() or None
+    token = await _project_github_pat(project, key_vault)
+    auth_args = await _repo_auth_git_args(cwd=root, remote=remote, github_pat=token)
+
+    cmd: List[str] = ["git", *auth_args, "pull"]
+    if body.rebase:
+        cmd.append("--rebase")
+    cmd.append(remote)
+    if branch:
+        cmd.append(branch)
+
+    res = await _run_repo_command(cmd, cwd=root, timeout_seconds=600)
+    if not res.get("ok"):
+        detail = str(res.get("stderr") or res.get("error") or "pull failed").strip() or "pull failed"
+        raise HTTPException(status_code=400, detail=detail)
+
+    updated_snapshot = await _repo_status_snapshot(root=root, cfg=cfg)
+    await record_audit_event(
+        request,
+        action="projects.repo_workspace.pull",
+        resource=f"project:{project_id}",
+        details={"remote": remote, "branch": branch},
+    )
+    return {
+        "status": "ok",
+        "project_id": project_id,
+        "result": res,
+        "workspace": updated_snapshot,
+    }
+
+
+@router.post("/{project_id}/repo/workspace/commit")
+async def commit_project_repo_workspace(
+    project_id: str,
+    request: Request,
+    body: RepoWorkspaceCommitRequest,
+) -> dict:
+    project_registry = request.app.state.project_registry
+    try:
+        project = await project_registry.get(project_id)
+    except ProjectNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    cfg = _extract_project_repo_workspace(project)
+    root = _resolve_repo_workspace_root(cfg, require_enabled=True)
+    snapshot = await _repo_status_snapshot(root=root, cfg=cfg)
+    if not snapshot.get("is_repo"):
+        raise HTTPException(status_code=400, detail="workspace is not a git repository")
+
+    message = str(body.message or "").strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="commit message is required")
+    if len(message) > 512:
+        raise HTTPException(status_code=400, detail="commit message is too long")
+
+    if body.add_all:
+        add_res = await _run_repo_command(["git", "add", "-A"], cwd=root, timeout_seconds=120)
+        if not add_res.get("ok"):
+            detail = str(add_res.get("stderr") or add_res.get("error") or "git add failed").strip() or "git add failed"
+            raise HTTPException(status_code=400, detail=detail)
+
+    status_res = await _run_repo_command(["git", "status", "--porcelain"], cwd=root, timeout_seconds=20)
+    if not status_res.get("ok"):
+        detail = str(status_res.get("stderr") or status_res.get("error") or "git status failed").strip() or "git status failed"
+        raise HTTPException(status_code=400, detail=detail)
+    pending = [line for line in str(status_res.get("stdout") or "").splitlines() if str(line).strip()]
+    if not pending:
+        return {
+            "status": "no_changes",
+            "project_id": project_id,
+            "message": "no staged or unstaged changes to commit",
+            "workspace": snapshot,
+        }
+
+    commit_res = await _run_repo_command(["git", "commit", "-m", message], cwd=root, timeout_seconds=120)
+    if not commit_res.get("ok"):
+        detail = str(commit_res.get("stderr") or commit_res.get("error") or "commit failed").strip() or "commit failed"
+        raise HTTPException(status_code=400, detail=detail)
+
+    sha_res = await _run_repo_command(["git", "rev-parse", "HEAD"], cwd=root, timeout_seconds=20)
+    commit_sha = str(sha_res.get("stdout") or "").strip() if sha_res.get("ok") else None
+    updated_snapshot = await _repo_status_snapshot(root=root, cfg=cfg)
+    await record_audit_event(
+        request,
+        action="projects.repo_workspace.commit",
+        resource=f"project:{project_id}",
+        details={"message": message, "sha": commit_sha},
+    )
+    return {
+        "status": "ok",
+        "project_id": project_id,
+        "result": commit_res,
+        "commit_sha": commit_sha,
+        "workspace": updated_snapshot,
+    }
+
+
+@router.post("/{project_id}/repo/workspace/push")
+async def push_project_repo_workspace(
+    project_id: str,
+    request: Request,
+    body: RepoWorkspacePushRequest,
+) -> dict:
+    project_registry = request.app.state.project_registry
+    key_vault = request.app.state.key_vault
+    try:
+        project = await project_registry.get(project_id)
+    except ProjectNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    cfg = _extract_project_repo_workspace(project)
+    if not bool(cfg.get("allow_push", False)):
+        raise HTTPException(status_code=403, detail="push is disabled by project repo workspace policy")
+    root = _resolve_repo_workspace_root(cfg, require_enabled=True)
+    snapshot = await _repo_status_snapshot(root=root, cfg=cfg)
+    if not snapshot.get("is_repo"):
+        raise HTTPException(status_code=400, detail="workspace is not a git repository")
+
+    remote = str(body.remote or "").strip() or "origin"
+    branch = str(body.branch or "").strip() or str(cfg.get("default_branch") or "").strip() or snapshot.get("branch")
+    if not branch:
+        raise HTTPException(status_code=400, detail="branch is required for push")
+
+    token = await _project_github_pat(project, key_vault)
+    auth_args = await _repo_auth_git_args(cwd=root, remote=remote, github_pat=token)
+    cmd = ["git", *auth_args, "push", remote, str(branch)]
+    push_res = await _run_repo_command(cmd, cwd=root, timeout_seconds=600)
+    if not push_res.get("ok"):
+        detail = str(push_res.get("stderr") or push_res.get("error") or "push failed").strip() or "push failed"
+        raise HTTPException(status_code=400, detail=detail)
+
+    updated_snapshot = await _repo_status_snapshot(root=root, cfg=cfg)
+    await record_audit_event(
+        request,
+        action="projects.repo_workspace.push",
+        resource=f"project:{project_id}",
+        details={"remote": remote, "branch": branch},
+    )
+    return {
+        "status": "ok",
+        "project_id": project_id,
+        "result": push_res,
+        "workspace": updated_snapshot,
+    }
+
+
+@router.post("/{project_id}/repo/workspace/run")
+async def run_project_repo_workspace_command(
+    project_id: str,
+    request: Request,
+    body: RepoWorkspaceRunRequest,
+) -> dict:
+    project_registry = request.app.state.project_registry
+    try:
+        project = await project_registry.get(project_id)
+    except ProjectNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    cfg = _extract_project_repo_workspace(project)
+    if not bool(cfg.get("allow_command_execution", False)):
+        raise HTTPException(status_code=403, detail="command execution is disabled by project repo workspace policy")
+    root = _resolve_repo_workspace_root(cfg, require_enabled=True)
+    if not root.exists():
+        raise HTTPException(status_code=400, detail="workspace path does not exist")
+
+    command = _safe_command_parts(body.command)
+    executable = Path(command[0]).name.lower()
+    allowed = _allowed_workspace_commands()
+    if executable not in allowed:
+        raise HTTPException(
+            status_code=403,
+            detail=f"command '{executable}' is not allowed; allowed commands: {', '.join(sorted(allowed))}",
+        )
+
+    timeout = body.timeout_seconds
+    if timeout is not None:
+        timeout = max(1, min(int(timeout), 3600))
+
+    res = await _run_repo_command(
+        command,
+        cwd=root,
+        timeout_seconds=timeout,
+    )
+    await record_audit_event(
+        request,
+        action="projects.repo_workspace.run",
+        resource=f"project:{project_id}",
+        details={
+            "command": res.get("command"),
+            "ok": bool(res.get("ok")),
+            "returncode": res.get("returncode"),
+        },
+    )
+    return {
+        "status": "ok",
+        "project_id": project_id,
+        "result": res,
+    }

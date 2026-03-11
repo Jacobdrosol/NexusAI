@@ -173,6 +173,84 @@
 
 <section class="panel" style="margin-bottom:1rem;">
   <div class="page-header" style="margin-bottom:0.75rem;">
+    <h2 class="panel-title">Repository Workspace</h2>
+  </div>
+  <div id="repo-workspace-state" class="state-empty" style="margin-bottom:0.75rem;">No repository workspace action yet.</div>
+  <div class="split-grid" style="grid-template-columns:1fr 1fr; gap:0.75rem;">
+    <div>
+      <label style="display:block; margin-bottom:0.5rem;">
+        <input type="checkbox" id="repo-workspace-enabled" {% if repo_workspace.enabled %}checked{% endif %}> Enable repository workspace for this project
+      </label>
+      <label style="display:block; margin-bottom:0.5rem;">
+        <input type="checkbox" id="repo-workspace-allow-push" {% if repo_workspace.allow_push %}checked{% endif %}> Allow git push from dashboard
+      </label>
+      <label style="display:block; margin-bottom:0.6rem;">
+        <input type="checkbox" id="repo-workspace-allow-command-exec" {% if repo_workspace.allow_command_execution %}checked{% endif %}> Allow command execution from dashboard
+      </label>
+      <div class="form-group">
+        <label>Workspace Root Path</label>
+        <input class="form-control" id="repo-workspace-root-path" placeholder="C:\repo\project" value="{{ repo_workspace.root_path or '' }}">
+      </div>
+      <div class="form-group">
+        <label>Clone URL</label>
+        <input class="form-control" id="repo-workspace-clone-url" placeholder="https://github.com/org/repo.git" value="{{ repo_workspace.clone_url or '' }}">
+      </div>
+      <div class="form-group">
+        <label>Default Branch</label>
+        <input class="form-control" id="repo-workspace-default-branch" placeholder="main" value="{{ repo_workspace.default_branch or '' }}">
+      </div>
+      <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+        <button class="btn btn-primary" type="button" onclick="saveProjectRepoWorkspace()">Save Repo Workspace Policy</button>
+        <button class="btn" type="button" onclick="refreshProjectRepoWorkspaceStatus()">Refresh Repo Status</button>
+      </div>
+      <hr style="margin:0.8rem 0;">
+      <div><strong>Git Actions</strong></div>
+      <div class="split-grid" style="grid-template-columns:1fr 1fr 1fr; gap:0.5rem; margin-top:0.45rem;">
+        <input class="form-control" id="repo-action-branch" placeholder="branch (optional)">
+        <input class="form-control" id="repo-action-remote" placeholder="remote (default origin)">
+        <input class="form-control" id="repo-action-depth" placeholder="clone depth (optional)">
+      </div>
+      <div style="display:flex; gap:0.5rem; flex-wrap:wrap; margin-top:0.5rem;">
+        <button class="btn" type="button" onclick="cloneProjectRepoWorkspace()">Clone</button>
+        <button class="btn" type="button" onclick="pullProjectRepoWorkspace()">Pull</button>
+        <button class="btn" type="button" onclick="pushProjectRepoWorkspace()">Push</button>
+      </div>
+      <div class="form-group" style="margin-top:0.6rem;">
+        <label>Commit Message</label>
+        <input class="form-control" id="repo-commit-message" placeholder="feat: update pipeline contracts">
+      </div>
+      <label style="display:block; margin-bottom:0.5rem;">
+        <input type="checkbox" id="repo-commit-add-all" checked> Stage all changes before commit
+      </label>
+      <button class="btn" type="button" onclick="commitProjectRepoWorkspace()">Commit</button>
+      <hr style="margin:0.8rem 0;">
+      <div><strong>Command Runner</strong></div>
+      <div class="mini-note" style="margin:0.35rem 0;">
+        Use JSON array format. Example: <code>["py","-m","pytest","-q"]</code>
+      </div>
+      <div class="form-group">
+        <label>Command (JSON array)</label>
+        <textarea class="form-control" id="repo-command-json" rows="3">["py","-m","pytest","-q"]</textarea>
+      </div>
+      <div class="form-group">
+        <label>Timeout Seconds</label>
+        <input class="form-control" id="repo-command-timeout" placeholder="600">
+      </div>
+      <button class="btn" type="button" onclick="runProjectRepoWorkspaceCommand()">Run Command</button>
+    </div>
+    <div>
+      <div><strong>Current Repo Workspace Policy</strong></div>
+      <pre id="repo-workspace-policy-pre" style="white-space:pre-wrap; margin-top:0.35rem;">{{ repo_workspace | tojson(indent=2) }}</pre>
+      <div style="margin-top:0.55rem;"><strong>Repo Status</strong></div>
+      <pre id="repo-workspace-status-pre" style="white-space:pre-wrap; margin-top:0.35rem;">{}</pre>
+      <div style="margin-top:0.55rem;"><strong>Last Action Output</strong></div>
+      <pre id="repo-workspace-output-pre" style="white-space:pre-wrap; margin-top:0.35rem; max-height:16rem; overflow:auto;">{}</pre>
+    </div>
+  </div>
+</section>
+
+<section class="panel" style="margin-bottom:1rem;">
+  <div class="page-header" style="margin-bottom:0.75rem;">
     <h2 class="panel-title">Project Data Vault</h2>
   </div>
   <div class="mini-note" style="margin-bottom:0.75rem;">
@@ -547,6 +625,7 @@
 const PROJECT_ID = {{ project.id|tojson if project else "''" }};
 let CLOUD_POLICY = {provider_policies: {}, bot_overrides: {}};
 let PROJECT_CHAT_TOOL_ACCESS = {{ (chat_tool_access if chat_tool_access else {"enabled": false, "filesystem": false, "repo_search": false, "workspace_root": none}) | tojson }};
+let PROJECT_REPO_WORKSPACE = {{ (repo_workspace if repo_workspace else {"enabled": false, "root_path": none, "clone_url": none, "default_branch": none, "allow_push": false, "allow_command_execution": false}) | tojson }};
 let GITHUB_SYNC_POLL = null;
 let PROJECT_DATA_INGEST_POLL = null;
 let PROJECT_DATA_EDIT_MODE = false;
@@ -596,6 +675,291 @@ function setProjectDataState(cls, text) {
   if (!el) return;
   el.className = cls;
   el.textContent = text;
+}
+
+function _setRepoWorkspaceState(cls, text) {
+  const el = document.getElementById('repo-workspace-state');
+  if (!el) return;
+  el.className = cls;
+  el.textContent = text;
+}
+
+function _syncRepoWorkspaceInputs() {
+  const enabled = !!document.getElementById('repo-workspace-enabled')?.checked;
+  const allowPush = document.getElementById('repo-workspace-allow-push');
+  const allowExec = document.getElementById('repo-workspace-allow-command-exec');
+  const rootPath = document.getElementById('repo-workspace-root-path');
+  const cloneUrl = document.getElementById('repo-workspace-clone-url');
+  const defaultBranch = document.getElementById('repo-workspace-default-branch');
+  if (allowPush) {
+    allowPush.disabled = !enabled;
+    if (!enabled) allowPush.checked = false;
+  }
+  if (allowExec) {
+    allowExec.disabled = !enabled;
+    if (!enabled) allowExec.checked = false;
+  }
+  if (rootPath) {
+    rootPath.disabled = !enabled;
+    if (!enabled) rootPath.value = '';
+  }
+  if (cloneUrl) cloneUrl.disabled = !enabled;
+  if (defaultBranch) defaultBranch.disabled = !enabled;
+}
+
+function _applyProjectRepoWorkspacePolicy(policy) {
+  const cfg = {
+    enabled: !!policy?.enabled,
+    root_path: policy?.root_path || null,
+    clone_url: policy?.clone_url || null,
+    default_branch: policy?.default_branch || null,
+    allow_push: !!policy?.allow_push,
+    allow_command_execution: !!policy?.allow_command_execution,
+  };
+  PROJECT_REPO_WORKSPACE = cfg;
+  const enabled = document.getElementById('repo-workspace-enabled');
+  const allowPush = document.getElementById('repo-workspace-allow-push');
+  const allowExec = document.getElementById('repo-workspace-allow-command-exec');
+  const rootPath = document.getElementById('repo-workspace-root-path');
+  const cloneUrl = document.getElementById('repo-workspace-clone-url');
+  const defaultBranch = document.getElementById('repo-workspace-default-branch');
+  const pre = document.getElementById('repo-workspace-policy-pre');
+  if (enabled) enabled.checked = cfg.enabled;
+  if (allowPush) allowPush.checked = cfg.allow_push;
+  if (allowExec) allowExec.checked = cfg.allow_command_execution;
+  if (rootPath) rootPath.value = cfg.root_path || '';
+  if (cloneUrl) cloneUrl.value = cfg.clone_url || '';
+  if (defaultBranch) defaultBranch.value = cfg.default_branch || '';
+  if (pre) pre.textContent = JSON.stringify(cfg, null, 2);
+  _syncRepoWorkspaceInputs();
+}
+
+function _setRepoWorkspaceOutput(payload) {
+  const pre = document.getElementById('repo-workspace-output-pre');
+  if (!pre) return;
+  pre.textContent = JSON.stringify(payload || {}, null, 2);
+}
+
+async function refreshProjectRepoWorkspacePolicy() {
+  _setRepoWorkspaceState('state-loading', 'Loading repo workspace policy...');
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/repo/workspace');
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    _setRepoWorkspaceState('state-error', data.error || 'Failed to load repo workspace policy.');
+    return;
+  }
+  _applyProjectRepoWorkspacePolicy(data);
+  _setRepoWorkspaceState('state-info', 'Repo workspace policy loaded.');
+}
+
+async function saveProjectRepoWorkspace() {
+  const enabled = !!document.getElementById('repo-workspace-enabled')?.checked;
+  const allowPush = enabled && !!document.getElementById('repo-workspace-allow-push')?.checked;
+  const allowExec = enabled && !!document.getElementById('repo-workspace-allow-command-exec')?.checked;
+  const rootPath = (document.getElementById('repo-workspace-root-path')?.value || '').trim();
+  const cloneUrl = (document.getElementById('repo-workspace-clone-url')?.value || '').trim();
+  const defaultBranch = (document.getElementById('repo-workspace-default-branch')?.value || '').trim();
+  _setRepoWorkspaceState('state-loading', 'Saving repo workspace policy...');
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/repo/workspace', {
+    method: 'PUT',
+    headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify({
+      enabled,
+      root_path: rootPath || null,
+      clone_url: cloneUrl || null,
+      default_branch: defaultBranch || null,
+      allow_push: allowPush,
+      allow_command_execution: allowExec,
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    _setRepoWorkspaceState('state-error', data.error || 'Failed to save repo workspace policy.');
+    return;
+  }
+  _applyProjectRepoWorkspacePolicy(data);
+  _setRepoWorkspaceState('state-info', 'Repo workspace policy saved.');
+}
+
+async function refreshProjectRepoWorkspaceStatus() {
+  _setRepoWorkspaceState('state-loading', 'Loading repo status...');
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/repo/workspace/status');
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    _setRepoWorkspaceState('state-error', data.error || 'Failed to load repo workspace status.');
+    return;
+  }
+  const statusPre = document.getElementById('repo-workspace-status-pre');
+  if (statusPre) statusPre.textContent = JSON.stringify(data, null, 2);
+  _setRepoWorkspaceState('state-info', 'Repo status loaded.');
+}
+
+function _repoActionRemote() {
+  return (document.getElementById('repo-action-remote')?.value || '').trim() || 'origin';
+}
+
+function _repoActionBranch() {
+  return (document.getElementById('repo-action-branch')?.value || '').trim();
+}
+
+async function cloneProjectRepoWorkspace() {
+  _setRepoWorkspaceState('state-loading', 'Cloning repository...');
+  const depthRaw = (document.getElementById('repo-action-depth')?.value || '').trim();
+  let depth = null;
+  if (depthRaw) {
+    const parsed = Number(depthRaw);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      alert('Clone depth must be a positive integer.');
+      return;
+    }
+    depth = Math.floor(parsed);
+  }
+  const payload = {
+    clone_url: (document.getElementById('repo-workspace-clone-url')?.value || '').trim() || null,
+    branch: _repoActionBranch() || null,
+    depth,
+  };
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/repo/workspace/clone', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  _setRepoWorkspaceOutput(data);
+  if (!res.ok) {
+    _setRepoWorkspaceState('state-error', data.error || 'Repository clone failed.');
+    return;
+  }
+  if (data.workspace) {
+    const statusPre = document.getElementById('repo-workspace-status-pre');
+    if (statusPre) statusPre.textContent = JSON.stringify(data.workspace, null, 2);
+  }
+  _setRepoWorkspaceState('state-info', data.status === 'already_cloned' ? 'Repository already cloned.' : 'Repository cloned.');
+  await refreshProjectRepoWorkspacePolicy();
+}
+
+async function pullProjectRepoWorkspace() {
+  _setRepoWorkspaceState('state-loading', 'Pulling latest changes...');
+  const payload = {
+    remote: _repoActionRemote(),
+    branch: _repoActionBranch() || null,
+    rebase: false,
+  };
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/repo/workspace/pull', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  _setRepoWorkspaceOutput(data);
+  if (!res.ok) {
+    _setRepoWorkspaceState('state-error', data.error || 'Pull failed.');
+    return;
+  }
+  if (data.workspace) {
+    const statusPre = document.getElementById('repo-workspace-status-pre');
+    if (statusPre) statusPre.textContent = JSON.stringify(data.workspace, null, 2);
+  }
+  _setRepoWorkspaceState('state-info', 'Pull completed.');
+}
+
+async function commitProjectRepoWorkspace() {
+  const message = (document.getElementById('repo-commit-message')?.value || '').trim();
+  if (!message) {
+    alert('Commit message is required.');
+    return;
+  }
+  _setRepoWorkspaceState('state-loading', 'Creating commit...');
+  const payload = {
+    message,
+    add_all: !!document.getElementById('repo-commit-add-all')?.checked,
+  };
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/repo/workspace/commit', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  _setRepoWorkspaceOutput(data);
+  if (!res.ok) {
+    _setRepoWorkspaceState('state-error', data.error || 'Commit failed.');
+    return;
+  }
+  if (data.status === 'no_changes') {
+    _setRepoWorkspaceState('state-info', 'No changes to commit.');
+  } else {
+    _setRepoWorkspaceState('state-info', 'Commit created.');
+  }
+  if (data.workspace) {
+    const statusPre = document.getElementById('repo-workspace-status-pre');
+    if (statusPre) statusPre.textContent = JSON.stringify(data.workspace, null, 2);
+  }
+}
+
+async function pushProjectRepoWorkspace() {
+  _setRepoWorkspaceState('state-loading', 'Pushing to remote...');
+  const payload = {
+    remote: _repoActionRemote(),
+    branch: _repoActionBranch() || null,
+  };
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/repo/workspace/push', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  _setRepoWorkspaceOutput(data);
+  if (!res.ok) {
+    _setRepoWorkspaceState('state-error', data.error || 'Push failed.');
+    return;
+  }
+  if (data.workspace) {
+    const statusPre = document.getElementById('repo-workspace-status-pre');
+    if (statusPre) statusPre.textContent = JSON.stringify(data.workspace, null, 2);
+  }
+  _setRepoWorkspaceState('state-info', 'Push completed.');
+}
+
+async function runProjectRepoWorkspaceCommand() {
+  const raw = (document.getElementById('repo-command-json')?.value || '').trim();
+  if (!raw) {
+    alert('Command JSON array is required.');
+    return;
+  }
+  let command = [];
+  try {
+    command = JSON.parse(raw);
+  } catch (err) {
+    alert('Command must be valid JSON.');
+    return;
+  }
+  if (!Array.isArray(command) || !command.length) {
+    alert('Command must be a non-empty JSON array.');
+    return;
+  }
+  const timeoutRaw = (document.getElementById('repo-command-timeout')?.value || '').trim();
+  const payload = {
+    command,
+    timeout_seconds: timeoutRaw ? Number(timeoutRaw) : null,
+  };
+  if (timeoutRaw && (!Number.isFinite(payload.timeout_seconds) || payload.timeout_seconds <= 0)) {
+    alert('Timeout must be a positive number.');
+    return;
+  }
+  _setRepoWorkspaceState('state-loading', 'Running command...');
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/repo/workspace/run', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  _setRepoWorkspaceOutput(data);
+  if (!res.ok) {
+    _setRepoWorkspaceState('state-error', data.error || 'Command failed.');
+    return;
+  }
+  const ok = !!(data.result && data.result.ok);
+  _setRepoWorkspaceState(ok ? 'state-info' : 'state-error', ok ? 'Command completed.' : 'Command exited with failure.');
 }
 
 async function refreshProjectDataFiles() {
@@ -1399,6 +1763,7 @@ async function saveProjectChatToolAccess() {
 
 document.getElementById('policy-bot-provider')?.addEventListener('change', _syncBotPolicyOptions);
 document.getElementById('project-chat-tool-enabled')?.addEventListener('change', _syncProjectChatToolInputs);
+document.getElementById('repo-workspace-enabled')?.addEventListener('change', _syncRepoWorkspaceInputs);
 
 formatProjectDataTimestamps();
 document.querySelectorAll('.project-data-select').forEach((el) => {
@@ -1410,6 +1775,8 @@ refreshGithubSyncStatus().catch(() => {});
 refreshWebhookEvents();
 refreshCloudContextPolicy();
 refreshProjectChatToolAccess();
+refreshProjectRepoWorkspacePolicy();
+refreshProjectRepoWorkspaceStatus();
 refreshProjectDataIngestStatus().catch(() => {});
 </script>
 {% endblock %}

@@ -82,6 +82,7 @@ def test_project_detail_page_renders_with_partial_github_status(dashboard_client
     assert resp.status_code == 200
     assert b"Project Data Vault" in resp.data
     assert b"Chat Workspace Tools" in resp.data
+    assert b"Repository Workspace" in resp.data
     assert b"Project Database Context" in resp.data
     assert b"GitHub Integration (PAT)" in resp.data
     assert b"Connection Flags" in resp.data
@@ -925,6 +926,99 @@ def test_project_chat_tool_access_api_proxies_control_plane(dashboard_client):
     assert fake_cp.updated["project_id"] == "proj-1"
     assert fake_cp.updated["enabled"] is True
     assert fake_cp.updated["repo_search"] is True
+
+
+def test_project_repo_workspace_api_proxies_control_plane(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def __init__(self):
+            self.updated = None
+            self.clone_called = None
+            self.run_called = None
+
+        def get_project_repo_workspace(self, project_id):
+            return {
+                "project_id": project_id,
+                "enabled": True,
+                "root_path": "C:\\repo\\demo",
+                "clone_url": "https://github.com/org/demo.git",
+                "default_branch": "main",
+                "allow_push": True,
+                "allow_command_execution": True,
+            }
+
+        def update_project_repo_workspace(self, **kwargs):
+            self.updated = kwargs
+            return {"status": "ok", **kwargs}
+
+        def get_project_repo_workspace_status(self, project_id):
+            return {
+                "project_id": project_id,
+                "enabled": True,
+                "workspace_exists": True,
+                "is_repo": True,
+                "branch": "main",
+            }
+
+        def clone_project_repo_workspace(self, **kwargs):
+            self.clone_called = kwargs
+            return {"status": "ok", **kwargs}
+
+        def pull_project_repo_workspace(self, **kwargs):
+            return {"status": "ok", **kwargs}
+
+        def commit_project_repo_workspace(self, **kwargs):
+            return {"status": "ok", **kwargs}
+
+        def push_project_repo_workspace(self, **kwargs):
+            return {"status": "ok", **kwargs}
+
+        def run_project_repo_workspace_command(self, **kwargs):
+            self.run_called = kwargs
+            return {"status": "ok", "result": {"ok": True}, **kwargs}
+
+        def last_error(self):
+            return {}
+
+    fake_cp = FakeCP()
+    with patch("dashboard.routes.projects.get_cp_client", return_value=fake_cp):
+        get_resp = dashboard_client.get("/api/projects/proj-1/repo/workspace")
+        put_resp = dashboard_client.put(
+            "/api/projects/proj-1/repo/workspace",
+            json={
+                "enabled": True,
+                "root_path": "C:\\repo\\demo",
+                "clone_url": "https://github.com/org/demo.git",
+                "default_branch": "main",
+                "allow_push": True,
+                "allow_command_execution": True,
+            },
+        )
+        status_resp = dashboard_client.get("/api/projects/proj-1/repo/workspace/status")
+        clone_resp = dashboard_client.post(
+            "/api/projects/proj-1/repo/workspace/clone",
+            json={"clone_url": "https://github.com/org/demo.git", "branch": "main", "depth": 1},
+        )
+        run_resp = dashboard_client.post(
+            "/api/projects/proj-1/repo/workspace/run",
+            json={"command": ["py", "-m", "pytest", "-q"], "timeout_seconds": 90},
+        )
+
+    assert get_resp.status_code == 200
+    assert get_resp.get_json()["root_path"] == "C:\\repo\\demo"
+    assert put_resp.status_code == 200
+    assert fake_cp.updated is not None
+    assert fake_cp.updated["project_id"] == "proj-1"
+    assert fake_cp.updated["allow_push"] is True
+    assert status_resp.status_code == 200
+    assert status_resp.get_json()["is_repo"] is True
+    assert clone_resp.status_code == 200
+    assert fake_cp.clone_called is not None
+    assert fake_cp.clone_called["depth"] == 1
+    assert run_resp.status_code == 200
+    assert fake_cp.run_called is not None
+    assert fake_cp.run_called["command"] == ["py", "-m", "pytest", "-q"]
 
 
 def test_worker_detail_page_loads_when_logged_in(dashboard_client):

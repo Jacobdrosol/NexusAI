@@ -117,6 +117,22 @@ def _normalize_project_chat_tool_access(raw: Any) -> dict[str, Any]:
     }
 
 
+def _normalize_project_repo_workspace(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raw = {}
+    root_path = str(raw.get("root_path") or "").strip() or None
+    clone_url = str(raw.get("clone_url") or "").strip() or None
+    default_branch = str(raw.get("default_branch") or "").strip() or None
+    return {
+        "enabled": bool(raw.get("enabled", False)),
+        "root_path": root_path,
+        "clone_url": clone_url,
+        "default_branch": default_branch,
+        "allow_push": bool(raw.get("allow_push", False)),
+        "allow_command_execution": bool(raw.get("allow_command_execution", False)),
+    }
+
+
 def _cp_error_response(cp, fallback: str = "control plane unavailable") -> tuple[Any, int]:
     err = cp.last_error() if hasattr(cp, "last_error") else {}
     detail = ""
@@ -157,6 +173,7 @@ def project_detail_page(project_id: str):
             github_status=_normalize_github_status(None),
             webhook_events=[],
             chat_tool_access=_normalize_project_chat_tool_access(None),
+            repo_workspace=_normalize_project_repo_workspace(None),
             project_data_root=None,
             project_data_tree=None,
             project_connections=[],
@@ -198,6 +215,11 @@ def project_detail_page(project_id: str):
         if hasattr(cp, "get_project_chat_tool_access")
         else None
     )
+    repo_workspace = _normalize_project_repo_workspace(
+        cp.get_project_repo_workspace(project_id)
+        if hasattr(cp, "get_project_repo_workspace")
+        else None
+    )
     return render_template(
         "project_detail.html",
         project=project,
@@ -211,6 +233,7 @@ def project_detail_page(project_id: str):
             cp.list_project_github_webhook_events(project_id, limit=30)
         ),
         chat_tool_access=chat_tool_access,
+        repo_workspace=repo_workspace,
         project_data_root=str(project_data_root),
         project_data_tree=build_project_data_tree(project_id),
         project_connections=_project_connections(project_id),
@@ -446,6 +469,142 @@ def api_update_project_chat_tool_access(project_id: str):
     )
     if result is None:
         return _cp_error_response(cp, "failed to update chat tool access")
+    return jsonify(result)
+
+
+@bp.get("/api/projects/<project_id>/repo/workspace")
+@login_required
+def api_get_project_repo_workspace(project_id: str):
+    cp = get_cp_client()
+    result = cp.get_project_repo_workspace(project_id) if hasattr(cp, "get_project_repo_workspace") else None
+    if result is None:
+        return _cp_error_response(cp)
+    return jsonify(result)
+
+
+@bp.put("/api/projects/<project_id>/repo/workspace")
+@login_required
+def api_update_project_repo_workspace(project_id: str):
+    data: dict[str, Any] = request.get_json(force=True) or {}
+    cp = get_cp_client()
+    result = cp.update_project_repo_workspace(
+        project_id=project_id,
+        enabled=bool(data.get("enabled", False)),
+        root_path=(str(data.get("root_path") or "").strip() or None),
+        clone_url=(str(data.get("clone_url") or "").strip() or None),
+        default_branch=(str(data.get("default_branch") or "").strip() or None),
+        allow_push=bool(data.get("allow_push", False)),
+        allow_command_execution=bool(data.get("allow_command_execution", False)),
+    )
+    if result is None:
+        return _cp_error_response(cp, "failed to update repo workspace")
+    return jsonify(result)
+
+
+@bp.get("/api/projects/<project_id>/repo/workspace/status")
+@login_required
+def api_get_project_repo_workspace_status(project_id: str):
+    cp = get_cp_client()
+    result = cp.get_project_repo_workspace_status(project_id)
+    if result is None:
+        return _cp_error_response(cp, "failed to load repo workspace status")
+    return jsonify(result)
+
+
+@bp.post("/api/projects/<project_id>/repo/workspace/clone")
+@login_required
+def api_clone_project_repo_workspace(project_id: str):
+    data: dict[str, Any] = request.get_json(force=True) or {}
+    cp = get_cp_client()
+    depth_raw = data.get("depth")
+    depth: int | None = None
+    if depth_raw not in (None, ""):
+        try:
+            depth = int(depth_raw)
+        except Exception:
+            return jsonify({"error": "depth must be an integer"}), 400
+    result = cp.clone_project_repo_workspace(
+        project_id=project_id,
+        clone_url=(str(data.get("clone_url") or "").strip() or None),
+        branch=(str(data.get("branch") or "").strip() or None),
+        depth=depth,
+    )
+    if result is None:
+        return _cp_error_response(cp, "repo clone failed")
+    return jsonify(result)
+
+
+@bp.post("/api/projects/<project_id>/repo/workspace/pull")
+@login_required
+def api_pull_project_repo_workspace(project_id: str):
+    data: dict[str, Any] = request.get_json(force=True) or {}
+    cp = get_cp_client()
+    result = cp.pull_project_repo_workspace(
+        project_id=project_id,
+        remote=(str(data.get("remote") or "").strip() or "origin"),
+        branch=(str(data.get("branch") or "").strip() or None),
+        rebase=bool(data.get("rebase", False)),
+    )
+    if result is None:
+        return _cp_error_response(cp, "repo pull failed")
+    return jsonify(result)
+
+
+@bp.post("/api/projects/<project_id>/repo/workspace/commit")
+@login_required
+def api_commit_project_repo_workspace(project_id: str):
+    data: dict[str, Any] = request.get_json(force=True) or {}
+    message = (str(data.get("message") or "").strip())
+    if not message:
+        return jsonify({"error": "message is required"}), 400
+    cp = get_cp_client()
+    result = cp.commit_project_repo_workspace(
+        project_id=project_id,
+        message=message,
+        add_all=bool(data.get("add_all", True)),
+    )
+    if result is None:
+        return _cp_error_response(cp, "repo commit failed")
+    return jsonify(result)
+
+
+@bp.post("/api/projects/<project_id>/repo/workspace/push")
+@login_required
+def api_push_project_repo_workspace(project_id: str):
+    data: dict[str, Any] = request.get_json(force=True) or {}
+    cp = get_cp_client()
+    result = cp.push_project_repo_workspace(
+        project_id=project_id,
+        remote=(str(data.get("remote") or "").strip() or "origin"),
+        branch=(str(data.get("branch") or "").strip() or None),
+    )
+    if result is None:
+        return _cp_error_response(cp, "repo push failed")
+    return jsonify(result)
+
+
+@bp.post("/api/projects/<project_id>/repo/workspace/run")
+@login_required
+def api_run_project_repo_workspace_command(project_id: str):
+    data: dict[str, Any] = request.get_json(force=True) or {}
+    command = data.get("command")
+    if not isinstance(command, list) or not command:
+        return jsonify({"error": "command must be a non-empty array"}), 400
+    timeout_raw = data.get("timeout_seconds")
+    timeout_seconds: int | None = None
+    if timeout_raw not in (None, ""):
+        try:
+            timeout_seconds = int(timeout_raw)
+        except Exception:
+            return jsonify({"error": "timeout_seconds must be an integer"}), 400
+    cp = get_cp_client()
+    result = cp.run_project_repo_workspace_command(
+        project_id=project_id,
+        command=[str(part) for part in command],
+        timeout_seconds=timeout_seconds,
+    )
+    if result is None:
+        return _cp_error_response(cp, "repo command failed")
     return jsonify(result)
 
 
