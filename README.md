@@ -317,6 +317,12 @@ Recommended contract settings for long multi-stage content pipelines:
 - When multiple bots need the same platform schema or OpenAPI definition, attach the same connection to each bot instead of duplicating the connection definition.
 - For large block libraries, store only block names in the task payload and configure `connection_context` to fetch per-block schemas/examples from the attached platform connection at runtime.
 
+Bot export validation helper:
+
+- Use `py scripts/validate_bot_exports.py <exports_dir>` before importing changed bot exports.
+- The validator checks trigger targets, detects dead-end bots, and warns when `bot.workflow.triggers` and `routing_rules.workflow.triggers` diverge.
+- Use `--strict-dead-ends` when you want non-terminal dead-end stages to fail validation.
+
 ---
 
 ## Bootstrap Secrets
