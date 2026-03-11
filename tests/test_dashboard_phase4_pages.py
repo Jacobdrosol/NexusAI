@@ -81,6 +81,7 @@ def test_project_detail_page_renders_with_partial_github_status(dashboard_client
 
     assert resp.status_code == 200
     assert b"Project Data Vault" in resp.data
+    assert b"Chat Workspace Tools" in resp.data
     assert b"Project Database Context" in resp.data
     assert b"GitHub Integration (PAT)" in resp.data
     assert b"Connection Flags" in resp.data
@@ -721,6 +722,26 @@ def test_chat_archive_restore_conversation_apis_surface_success(dashboard_client
     assert restore_resp.get_json()["archived_at"] is None
 
 
+def test_chat_conversation_tool_access_api_surfaces_control_plane_error(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def update_conversation_tool_access(self, conversation_id, enabled, filesystem, repo_search):
+            return None
+
+        def last_error(self):
+            return {"status_code": 400, "detail": "tool access update blocked"}
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.put(
+            "/api/chat/conversations/c1/tool-access",
+            json={"enabled": True, "filesystem": True, "repo_search": True},
+        )
+
+    assert resp.status_code == 400
+    assert b"tool access update blocked" in resp.data
+
+
 def test_chat_stream_forwards_control_plane_auth_header(dashboard_client):
     _login_admin(dashboard_client)
 
@@ -859,6 +880,51 @@ def test_project_pr_review_config_api_handles_unavailable_cp(dashboard_client):
     _login_admin(dashboard_client)
     resp = dashboard_client.post("/api/projects/proj-x/github/pr-review/config", json={"enabled": True, "bot_id": "bot1"})
     assert resp.status_code == 502
+
+
+def test_project_chat_tool_access_api_proxies_control_plane(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def __init__(self):
+            self.updated = None
+
+        def get_project_chat_tool_access(self, project_id):
+            return {
+                "project_id": project_id,
+                "enabled": True,
+                "filesystem": True,
+                "repo_search": False,
+                "workspace_root": "C:\\repo\\demo",
+            }
+
+        def update_project_chat_tool_access(self, **kwargs):
+            self.updated = kwargs
+            return {"status": "ok", **kwargs}
+
+        def last_error(self):
+            return {}
+
+    fake_cp = FakeCP()
+    with patch("dashboard.routes.projects.get_cp_client", return_value=fake_cp):
+        get_resp = dashboard_client.get("/api/projects/proj-1/chat-tool-access")
+        put_resp = dashboard_client.put(
+            "/api/projects/proj-1/chat-tool-access",
+            json={
+                "enabled": True,
+                "filesystem": True,
+                "repo_search": True,
+                "workspace_root": "C:\\repo\\demo",
+            },
+        )
+
+    assert get_resp.status_code == 200
+    assert get_resp.get_json()["filesystem"] is True
+    assert put_resp.status_code == 200
+    assert fake_cp.updated is not None
+    assert fake_cp.updated["project_id"] == "proj-1"
+    assert fake_cp.updated["enabled"] is True
+    assert fake_cp.updated["repo_search"] is True
 
 
 def test_worker_detail_page_loads_when_logged_in(dashboard_client):

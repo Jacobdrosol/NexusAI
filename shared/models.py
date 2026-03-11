@@ -203,6 +203,9 @@ class ChatConversation(BaseModel):
     scope: Literal["global", "project", "bridged"] = "global"
     default_bot_id: Optional[str] = None
     default_model_id: Optional[str] = None
+    tool_access_enabled: bool = False
+    tool_access_filesystem: bool = False
+    tool_access_repo_search: bool = False
     archived_at: Optional[str] = None
     created_at: str
     updated_at: str

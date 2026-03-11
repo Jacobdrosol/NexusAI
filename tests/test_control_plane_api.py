@@ -700,6 +700,58 @@ async def test_project_cloud_context_policy_rejects_invalid_bot_allow_under_reda
 
 
 @pytest.mark.anyio
+async def test_project_chat_tool_access_update_and_get(cp_client):
+    await cp_client.post(
+        "/v1/projects",
+        json={"id": "p-chat-tools", "name": "Project Chat Tools", "mode": "isolated"},
+    )
+
+    update = await cp_client.put(
+        "/v1/projects/p-chat-tools/chat-tool-access",
+        json={
+            "enabled": True,
+            "filesystem": True,
+            "repo_search": True,
+            "workspace_root": "C:\\repo\\workspace",
+        },
+    )
+    assert update.status_code == 200
+    body = update.json()
+    assert body["enabled"] is True
+    assert body["filesystem"] is True
+    assert body["repo_search"] is True
+    assert body["workspace_root"] == "C:\\repo\\workspace"
+
+    get_resp = await cp_client.get("/v1/projects/p-chat-tools/chat-tool-access")
+    assert get_resp.status_code == 200
+    got = get_resp.json()
+    assert got["enabled"] is True
+    assert got["filesystem"] is True
+    assert got["repo_search"] is True
+    assert got["workspace_root"] == "C:\\repo\\workspace"
+
+
+@pytest.mark.anyio
+async def test_project_chat_tool_access_rejects_too_long_workspace_root(cp_client):
+    await cp_client.post(
+        "/v1/projects",
+        json={"id": "p-chat-tools-bad", "name": "Project Chat Tools Bad", "mode": "isolated"},
+    )
+    root = "x" * 2000
+    update = await cp_client.put(
+        "/v1/projects/p-chat-tools-bad/chat-tool-access",
+        json={
+            "enabled": True,
+            "filesystem": True,
+            "repo_search": True,
+            "workspace_root": root,
+        },
+    )
+    assert update.status_code == 400
+    assert "workspace_root" in (update.json().get("detail") or "")
+
+
+@pytest.mark.anyio
 async def test_project_github_webhook_ingestion_and_list(cp_client):
     await cp_client.post(
         "/v1/projects",

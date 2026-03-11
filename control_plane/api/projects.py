@@ -46,6 +46,13 @@ class UpdateCloudContextPolicyRequest(BaseModel):
     bot_overrides: Dict[str, Dict[str, str]] = Field(default_factory=dict)
 
 
+class UpdateProjectChatToolAccessRequest(BaseModel):
+    enabled: bool = False
+    filesystem: bool = False
+    repo_search: bool = False
+    workspace_root: Optional[str] = None
+
+
 _CLOUD_POLICY_VALUES = {"allow", "redact", "block"}
 _SUPPORTED_CLOUD_PROVIDERS = {"openai", "claude", "gemini"}
 
@@ -147,6 +154,29 @@ def _validate_requested_cloud_policy(body: UpdateCloudContextPolicyRequest) -> D
     return {
         "provider_policies": provider_policies,
         "bot_overrides": bot_overrides,
+    }
+
+
+def _extract_project_chat_tool_access(project: Project) -> Dict[str, Any]:
+    settings = project.settings_overrides if isinstance(project.settings_overrides, dict) else {}
+    raw = settings.get("chat_tool_access") if isinstance(settings.get("chat_tool_access"), dict) else {}
+    return {
+        "enabled": bool(raw.get("enabled", False)),
+        "filesystem": bool(raw.get("filesystem", False)),
+        "repo_search": bool(raw.get("repo_search", False)),
+        "workspace_root": str(raw.get("workspace_root") or "").strip() or None,
+    }
+
+
+def _validate_requested_project_chat_tool_access(body: UpdateProjectChatToolAccessRequest) -> Dict[str, Any]:
+    workspace_root = str(body.workspace_root or "").strip() or None
+    if workspace_root is not None and len(workspace_root) > 1024:
+        raise HTTPException(status_code=400, detail="workspace_root is too long")
+    return {
+        "enabled": bool(body.enabled),
+        "filesystem": bool(body.filesystem),
+        "repo_search": bool(body.repo_search),
+        "workspace_root": workspace_root,
     }
 
 
@@ -1507,6 +1537,43 @@ async def update_project_cloud_context_policy(
     await record_audit_event(
         request,
         action="projects.cloud_context_policy.update",
+        resource=f"project:{project_id}",
+        details=validated,
+    )
+    return {"status": "ok", "project_id": project_id, **validated}
+
+
+@router.get("/{project_id}/chat-tool-access")
+async def get_project_chat_tool_access(project_id: str, request: Request) -> dict:
+    project_registry = request.app.state.project_registry
+    try:
+        project = await project_registry.get(project_id)
+    except ProjectNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    cfg = _extract_project_chat_tool_access(project)
+    return {"project_id": project_id, **cfg}
+
+
+@router.put("/{project_id}/chat-tool-access")
+async def update_project_chat_tool_access(
+    project_id: str,
+    request: Request,
+    body: UpdateProjectChatToolAccessRequest,
+) -> dict:
+    project_registry = request.app.state.project_registry
+    try:
+        project = await project_registry.get(project_id)
+    except ProjectNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    validated = _validate_requested_project_chat_tool_access(body)
+    updated = project.model_copy(
+        update={"settings_overrides": _merge_settings(project, {"chat_tool_access": validated})}
+    )
+    await project_registry.update(project_id, updated)
+    await record_audit_event(
+        request,
+        action="projects.chat_tool_access.update",
         resource=f"project:{project_id}",
         details=validated,
     )

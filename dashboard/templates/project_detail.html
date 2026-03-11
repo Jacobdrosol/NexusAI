@@ -138,6 +138,41 @@
 
 <section class="panel" style="margin-bottom:1rem;">
   <div class="page-header" style="margin-bottom:0.75rem;">
+    <h2 class="panel-title">Chat Workspace Tools</h2>
+  </div>
+  <div id="chat-tool-access-state" class="state-empty" style="margin-bottom:0.75rem;">No workspace tool policy loaded yet.</div>
+  <div class="split-grid" style="grid-template-columns:1fr 1fr; gap:0.75rem;">
+    <div>
+      <label style="display:block; margin-bottom:0.5rem;">
+        <input type="checkbox" id="project-chat-tool-enabled" {% if chat_tool_access.enabled %}checked{% endif %}> Enable chat workspace tools for this project
+      </label>
+      <label style="display:block; margin-bottom:0.5rem;">
+        <input type="checkbox" id="project-chat-tool-filesystem" {% if chat_tool_access.filesystem %}checked{% endif %}> Allow filesystem read/search
+      </label>
+      <label style="display:block; margin-bottom:0.6rem;">
+        <input type="checkbox" id="project-chat-tool-repo-search" {% if chat_tool_access.repo_search %}checked{% endif %}> Allow semantic repo search
+      </label>
+      <div class="form-group">
+        <label>Workspace Root Path</label>
+        <input class="form-control" id="project-chat-tool-workspace-root" placeholder="C:\\repo\\project" value="{{ chat_tool_access.workspace_root or '' }}">
+      </div>
+      <div class="mini-note" style="margin-bottom:0.5rem;">
+        Workspace root is required for filesystem tools. Use an absolute path on the control-plane host.
+      </div>
+      <button class="btn btn-primary" onclick="saveProjectChatToolAccess()">Save Workspace Tool Policy</button>
+    </div>
+    <div>
+      <div><strong>Current Project Chat Tool Policy</strong></div>
+      <pre id="project-chat-tool-pre" style="white-space:pre-wrap; margin-top:0.35rem;">{{ chat_tool_access | tojson(indent=2) }}</pre>
+      <div class="mini-note" style="margin-top:0.5rem;">
+        Tools are usable only when bot-level + project-level + chat-level switches are all enabled.
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="panel" style="margin-bottom:1rem;">
+  <div class="page-header" style="margin-bottom:0.75rem;">
     <h2 class="panel-title">Project Data Vault</h2>
   </div>
   <div class="mini-note" style="margin-bottom:0.75rem;">
@@ -511,6 +546,7 @@
 <script>
 const PROJECT_ID = {{ project.id|tojson if project else "''" }};
 let CLOUD_POLICY = {provider_policies: {}, bot_overrides: {}};
+let PROJECT_CHAT_TOOL_ACCESS = {{ (chat_tool_access if chat_tool_access else {"enabled": false, "filesystem": false, "repo_search": false, "workspace_root": none}) | tojson }};
 let GITHUB_SYNC_POLL = null;
 let PROJECT_DATA_INGEST_POLL = null;
 let PROJECT_DATA_EDIT_MODE = false;
@@ -1276,7 +1312,93 @@ async function removeCloudBotOverride() {
   await _persistCloudPolicy();
 }
 
+function _setProjectChatToolState(cls, text) {
+  const el = document.getElementById('chat-tool-access-state');
+  if (!el) return;
+  el.className = cls;
+  el.textContent = text;
+}
+
+function _syncProjectChatToolInputs() {
+  const enabled = !!document.getElementById('project-chat-tool-enabled')?.checked;
+  const filesystem = document.getElementById('project-chat-tool-filesystem');
+  const repoSearch = document.getElementById('project-chat-tool-repo-search');
+  const workspaceRoot = document.getElementById('project-chat-tool-workspace-root');
+  if (filesystem) {
+    filesystem.disabled = !enabled;
+    if (!enabled) filesystem.checked = false;
+  }
+  if (repoSearch) {
+    repoSearch.disabled = !enabled;
+    if (!enabled) repoSearch.checked = false;
+  }
+  if (workspaceRoot) {
+    workspaceRoot.disabled = !enabled;
+    if (!enabled) workspaceRoot.value = '';
+  }
+}
+
+function _applyProjectChatToolPolicy(policy) {
+  const cfg = {
+    enabled: !!policy?.enabled,
+    filesystem: !!policy?.filesystem,
+    repo_search: !!policy?.repo_search,
+    workspace_root: (policy?.workspace_root || null),
+  };
+  PROJECT_CHAT_TOOL_ACCESS = cfg;
+  const enabled = document.getElementById('project-chat-tool-enabled');
+  const filesystem = document.getElementById('project-chat-tool-filesystem');
+  const repoSearch = document.getElementById('project-chat-tool-repo-search');
+  const workspaceRoot = document.getElementById('project-chat-tool-workspace-root');
+  const pre = document.getElementById('project-chat-tool-pre');
+  if (enabled) enabled.checked = cfg.enabled;
+  if (filesystem) filesystem.checked = cfg.filesystem;
+  if (repoSearch) repoSearch.checked = cfg.repo_search;
+  if (workspaceRoot) workspaceRoot.value = cfg.workspace_root || '';
+  if (pre) pre.textContent = JSON.stringify(cfg, null, 2);
+  _syncProjectChatToolInputs();
+}
+
+async function refreshProjectChatToolAccess() {
+  _setProjectChatToolState('state-loading', 'Loading chat workspace tool policy...');
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/chat-tool-access');
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    _setProjectChatToolState('state-error', data.error || 'Failed to load chat workspace tool policy.');
+    return;
+  }
+  const data = await res.json();
+  _applyProjectChatToolPolicy(data);
+  _setProjectChatToolState('state-info', 'Chat workspace tool policy loaded.');
+}
+
+async function saveProjectChatToolAccess() {
+  const enabled = !!document.getElementById('project-chat-tool-enabled')?.checked;
+  const filesystem = enabled && !!document.getElementById('project-chat-tool-filesystem')?.checked;
+  const repoSearch = enabled && !!document.getElementById('project-chat-tool-repo-search')?.checked;
+  const workspaceRoot = enabled ? (document.getElementById('project-chat-tool-workspace-root')?.value || '').trim() : '';
+  _setProjectChatToolState('state-loading', 'Saving chat workspace tool policy...');
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/chat-tool-access', {
+    method: 'PUT',
+    headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify({
+      enabled,
+      filesystem,
+      repo_search: repoSearch,
+      workspace_root: workspaceRoot || null,
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    _setProjectChatToolState('state-error', data.error || 'Failed to save chat workspace tool policy.');
+    return;
+  }
+  _applyProjectChatToolPolicy(data);
+  _setProjectChatToolState('state-info', 'Chat workspace tool policy saved.');
+}
+
 document.getElementById('policy-bot-provider')?.addEventListener('change', _syncBotPolicyOptions);
+document.getElementById('project-chat-tool-enabled')?.addEventListener('change', _syncProjectChatToolInputs);
 
 formatProjectDataTimestamps();
 document.querySelectorAll('.project-data-select').forEach((el) => {
@@ -1287,6 +1409,7 @@ refreshGithubStatus(false);
 refreshGithubSyncStatus().catch(() => {});
 refreshWebhookEvents();
 refreshCloudContextPolicy();
+refreshProjectChatToolAccess();
 refreshProjectDataIngestStatus().catch(() => {});
 </script>
 {% endblock %}

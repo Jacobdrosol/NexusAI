@@ -359,6 +359,25 @@ class CPClient:
         }
         return self._put(f"/v1/projects/{project_id}/cloud-context-policy", body)
 
+    def get_project_chat_tool_access(self, project_id: str) -> Optional[Dict[str, Any]]:
+        return self._get(f"/v1/projects/{project_id}/chat-tool-access")
+
+    def update_project_chat_tool_access(
+        self,
+        project_id: str,
+        enabled: bool,
+        filesystem: bool,
+        repo_search: bool,
+        workspace_root: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        body: Dict[str, Any] = {
+            "enabled": bool(enabled),
+            "filesystem": bool(filesystem),
+            "repo_search": bool(repo_search),
+            "workspace_root": workspace_root,
+        }
+        return self._put(f"/v1/projects/{project_id}/chat-tool-access", body)
+
     # Models
     def list_models(self) -> Optional[List[Dict[str, Any]]]:
         return self._get("/v1/models")
@@ -412,6 +431,20 @@ class CPClient:
 
     def post_message(self, conversation_id: str, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return self._post(f"/v1/chat/conversations/{conversation_id}/messages", body, timeout=_CHAT_TIMEOUT)
+
+    def update_conversation_tool_access(
+        self,
+        conversation_id: str,
+        enabled: bool,
+        filesystem: bool,
+        repo_search: bool,
+    ) -> Optional[Dict[str, Any]]:
+        body = {
+            "enabled": bool(enabled),
+            "filesystem": bool(filesystem),
+            "repo_search": bool(repo_search),
+        }
+        return self._put(f"/v1/chat/conversations/{conversation_id}/tool-access", body)
 
     # Vault
     def list_vault_items(

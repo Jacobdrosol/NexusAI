@@ -105,6 +105,18 @@ def _normalize_webhook_events(raw: Any) -> list[dict[str, Any]]:
     return [e for e in events if isinstance(e, dict)]
 
 
+def _normalize_project_chat_tool_access(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raw = {}
+    workspace_root = str(raw.get("workspace_root") or "").strip() or None
+    return {
+        "enabled": bool(raw.get("enabled", False)),
+        "filesystem": bool(raw.get("filesystem", False)),
+        "repo_search": bool(raw.get("repo_search", False)),
+        "workspace_root": workspace_root,
+    }
+
+
 def _cp_error_response(cp, fallback: str = "control plane unavailable") -> tuple[Any, int]:
     err = cp.last_error() if hasattr(cp, "last_error") else {}
     detail = ""
@@ -144,6 +156,7 @@ def project_detail_page(project_id: str):
             all_projects=[],
             github_status=_normalize_github_status(None),
             webhook_events=[],
+            chat_tool_access=_normalize_project_chat_tool_access(None),
             project_data_root=None,
             project_data_tree=None,
             project_connections=[],
@@ -180,6 +193,11 @@ def project_detail_page(project_id: str):
         if isinstance(md, dict) and str(md.get("project_id", "")) == str(project_id):
             project_tasks.append(t)
     project_data_root = ensure_project_data_layout(project_id)
+    chat_tool_access = _normalize_project_chat_tool_access(
+        cp.get_project_chat_tool_access(project_id)
+        if hasattr(cp, "get_project_chat_tool_access")
+        else None
+    )
     return render_template(
         "project_detail.html",
         project=project,
@@ -192,6 +210,7 @@ def project_detail_page(project_id: str):
         webhook_events=_normalize_webhook_events(
             cp.list_project_github_webhook_events(project_id, limit=30)
         ),
+        chat_tool_access=chat_tool_access,
         project_data_root=str(project_data_root),
         project_data_tree=build_project_data_tree(project_id),
         project_connections=_project_connections(project_id),
@@ -400,6 +419,33 @@ def api_update_project_cloud_context_policy(project_id: str):
     )
     if result is None:
         return _cp_error_response(cp, "failed to update cloud context policy")
+    return jsonify(result)
+
+
+@bp.get("/api/projects/<project_id>/chat-tool-access")
+@login_required
+def api_get_project_chat_tool_access(project_id: str):
+    cp = get_cp_client()
+    result = cp.get_project_chat_tool_access(project_id)
+    if result is None:
+        return _cp_error_response(cp)
+    return jsonify(result)
+
+
+@bp.put("/api/projects/<project_id>/chat-tool-access")
+@login_required
+def api_update_project_chat_tool_access(project_id: str):
+    data: dict[str, Any] = request.get_json(force=True) or {}
+    cp = get_cp_client()
+    result = cp.update_project_chat_tool_access(
+        project_id=project_id,
+        enabled=bool(data.get("enabled", False)),
+        filesystem=bool(data.get("filesystem", False)),
+        repo_search=bool(data.get("repo_search", False)),
+        workspace_root=(str(data.get("workspace_root") or "").strip() or None),
+    )
+    if result is None:
+        return _cp_error_response(cp, "failed to update chat tool access")
     return jsonify(result)
 
 

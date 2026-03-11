@@ -111,6 +111,25 @@
       <p class="mini-note">Optional per message. Uses semantic query against synced repo context.</p>
     </div>
     {% endif %}
+    <div class="form-group">
+      <label>Chat Tool Access</label>
+      <label class="context-item">
+        <input type="checkbox" id="chat-tool-enabled" {% if selected_conversation.tool_access_enabled %}checked{% endif %}>
+        <span>Enable workspace tools for this chat</span>
+      </label>
+      <label class="context-item">
+        <input type="checkbox" id="chat-tool-filesystem" {% if selected_conversation.tool_access_filesystem %}checked{% endif %}>
+        <span>Allow filesystem read/search</span>
+      </label>
+      <label class="context-item">
+        <input type="checkbox" id="chat-tool-repo-search" {% if selected_conversation.tool_access_repo_search %}checked{% endif %}>
+        <span>Allow repo semantic search</span>
+      </label>
+      <div style="margin-top:0.45rem;">
+        <button type="button" class="btn btn-sm" onclick="saveConversationToolAccess()">Save Chat Tool Access</button>
+      </div>
+      <p class="mini-note">Tool usage is allowed only when bot + project + chat switches are all enabled.</p>
+    </div>
     {% endif %}
   </section>
 
@@ -145,6 +164,10 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="conversation_id" value="{{ selected_conversation.id }}">
       <textarea class="form-control" name="content" placeholder="Type a message or use @assign ..." required></textarea>
+      <label class="context-item" style="margin-top:0.45rem;">
+        <input type="checkbox" id="use-workspace-tools-message" {% if selected_conversation.tool_access_enabled %}checked{% endif %}>
+        <span>Use workspace tools for this message (if policy allows)</span>
+      </label>
       <div class="chat-controls">
         <select class="form-control" name="bot_id">
           <option value="">Use conversation default</option>
@@ -211,6 +234,21 @@
           <option value="{{ b.id }}">{{ b.name }} ({{ b.id }})</option>
           {% endfor %}
         </select>
+      </div>
+      <div class="form-group">
+        <label>Chat Tool Access</label>
+        <label class="context-item">
+          <input type="checkbox" id="create-convo-tool-enabled" name="tool_access_enabled">
+          <span>Enable workspace tools for this chat</span>
+        </label>
+        <label class="context-item">
+          <input type="checkbox" id="create-convo-tool-filesystem" name="tool_access_filesystem">
+          <span>Allow filesystem read/search</span>
+        </label>
+        <label class="context-item">
+          <input type="checkbox" id="create-convo-tool-repo-search" name="tool_access_repo_search">
+          <span>Allow repo semantic search</span>
+        </label>
       </div>
       <div class="modal-actions">
         <button type="submit" class="btn btn-primary">Create</button>
@@ -300,6 +338,21 @@ function syncConversationScopeFields() {
   if (scope !== 'bridged' && bridgedPrimary) bridgedPrimary.value = '';
   if (scope !== 'bridged' && bridgeProjects) {
     Array.from(bridgeProjects.options).forEach((opt) => { opt.selected = false; });
+  }
+}
+
+function syncCreateConversationToolFields() {
+  const enabled = document.getElementById('create-convo-tool-enabled');
+  const filesystem = document.getElementById('create-convo-tool-filesystem');
+  const repo = document.getElementById('create-convo-tool-repo-search');
+  const isEnabled = !!enabled?.checked;
+  if (filesystem) {
+    filesystem.disabled = !isEnabled;
+    if (!isEnabled) filesystem.checked = false;
+  }
+  if (repo) {
+    repo.disabled = !isEnabled;
+    if (!isEnabled) repo.checked = false;
   }
 }
 
@@ -662,6 +715,42 @@ function bindConversationActions() {
   });
 }
 
+async function saveConversationToolAccess() {
+  if (!selectedConversationId) return;
+  const enabled = !!document.getElementById('chat-tool-enabled')?.checked;
+  const filesystem = enabled && !!document.getElementById('chat-tool-filesystem')?.checked;
+  const repoSearch = enabled && !!document.getElementById('chat-tool-repo-search')?.checked;
+  const res = await fetch('/api/chat/conversations/' + encodeURIComponent(selectedConversationId) + '/tool-access', {
+    method: 'PUT',
+    headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify({
+      enabled,
+      filesystem,
+      repo_search: repoSearch,
+    }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    alert(data.error || 'Failed to update chat tool access.');
+    return;
+  }
+  window.location.reload();
+}
+
+function syncConversationToolAccessEditor() {
+  const enabled = !!document.getElementById('chat-tool-enabled')?.checked;
+  const filesystem = document.getElementById('chat-tool-filesystem');
+  const repo = document.getElementById('chat-tool-repo-search');
+  if (filesystem) {
+    filesystem.disabled = !enabled;
+    if (!enabled) filesystem.checked = false;
+  }
+  if (repo) {
+    repo.disabled = !enabled;
+    if (!enabled) repo.checked = false;
+  }
+}
+
 function esc(s) {
   return (s || '').toString().replace(/[&<>"']/g, (c) => (
     {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;', "'":'&#39;'}[c]
@@ -708,6 +797,7 @@ async function sendMessage(streamMode) {
         context_items: ctx.contexts,
         context_item_ids: ctx.contextItemIds,
         include_project_context: includeProjectContext ? includeProjectContext.checked : false,
+        use_workspace_tools: !!document.getElementById('use-workspace-tools-message')?.checked,
       };
     })(),
     conversation_id: fd.get('conversation_id'),
@@ -878,7 +968,10 @@ document.getElementById('form-create-convo')?.addEventListener('submit', async f
       project_id: projectId,
       bridge_project_ids: bridgeProjectIds,
       scope,
-      default_bot_id: fd.get('default_bot_id') || null
+      default_bot_id: fd.get('default_bot_id') || null,
+      tool_access_enabled: !!document.getElementById('create-convo-tool-enabled')?.checked,
+      tool_access_filesystem: !!document.getElementById('create-convo-tool-filesystem')?.checked,
+      tool_access_repo_search: !!document.getElementById('create-convo-tool-repo-search')?.checked
     }),
   });
   if (!res.ok) {
@@ -903,7 +996,8 @@ document.getElementById('form-assign')?.addEventListener('submit', async functio
       conversation_id: fd.get('conversation_id'),
       content: '@assign ' + instruction,
       bot_id: fd.get('bot_id') || null,
-      include_project_context: includeProjectContext ? includeProjectContext.checked : false
+      include_project_context: includeProjectContext ? includeProjectContext.checked : false,
+      use_workspace_tools: !!document.getElementById('use-workspace-tools-message')?.checked
     }),
   });
   if (!res.ok) {
@@ -1106,7 +1200,11 @@ async function openDagViewer(orchestrationId) {
 
 bindConversationActions();
 document.getElementById('create-convo-scope')?.addEventListener('change', syncConversationScopeFields);
+document.getElementById('create-convo-tool-enabled')?.addEventListener('change', syncCreateConversationToolFields);
+document.getElementById('chat-tool-enabled')?.addEventListener('change', syncConversationToolAccessEditor);
 syncConversationScopeFields();
+syncCreateConversationToolFields();
+syncConversationToolAccessEditor();
 startMessagePolling();
 document.querySelectorAll('#messages .message-body').forEach((el) => renderMessageBody(el, el.textContent || ''));
 </script>

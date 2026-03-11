@@ -131,6 +131,9 @@ def api_create_conversation():
             "scope": data.get("scope", "global"),
             "default_bot_id": data.get("default_bot_id"),
             "default_model_id": data.get("default_model_id"),
+            "tool_access_enabled": bool(data.get("tool_access_enabled", False)),
+            "tool_access_filesystem": bool(data.get("tool_access_filesystem", False)),
+            "tool_access_repo_search": bool(data.get("tool_access_repo_search", False)),
         }
     )
     if created is None:
@@ -168,6 +171,22 @@ def api_restore_conversation(conversation_id: str):
     return jsonify(restored)
 
 
+@bp.put("/api/chat/conversations/<conversation_id>/tool-access")
+@login_required
+def api_update_conversation_tool_access(conversation_id: str):
+    data: dict[str, Any] = request.get_json(force=True) or {}
+    cp = get_cp_client()
+    updated = cp.update_conversation_tool_access(
+        conversation_id=conversation_id,
+        enabled=bool(data.get("enabled", False)),
+        filesystem=bool(data.get("filesystem", False)),
+        repo_search=bool(data.get("repo_search", False)),
+    )
+    if updated is None:
+        return _cp_error_response(cp, "conversation tool access update failed")
+    return jsonify(updated)
+
+
 @bp.post("/api/chat/messages")
 @login_required
 def api_send_message():
@@ -186,6 +205,7 @@ def api_send_message():
             "context_items": data.get("context_items"),
             "context_item_ids": data.get("context_item_ids"),
             "include_project_context": data.get("include_project_context", False),
+            "use_workspace_tools": data.get("use_workspace_tools", False),
         },
     )
     if resp is None:
@@ -225,6 +245,7 @@ def api_send_message_stream():
         "context_items": data.get("context_items"),
         "context_item_ids": data.get("context_item_ids"),
         "include_project_context": data.get("include_project_context", False),
+        "use_workspace_tools": data.get("use_workspace_tools", False),
     }
 
     def generate() -> Iterable[str]:

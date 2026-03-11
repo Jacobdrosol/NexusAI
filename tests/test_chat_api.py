@@ -330,18 +330,46 @@ async def test_chat_project_repo_context_is_attached_when_requested(cp_app):
         project_id = "proj-repo-ctx"
         create_project = await client.post(
             "/v1/projects",
-            json={"id": project_id, "name": "Repo Context Project"},
+            json={
+                "id": project_id,
+                "name": "Repo Context Project",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
         )
         assert create_project.status_code == 200
 
         convo = await client.post(
             "/v1/chat/conversations",
-            json={"title": "Project Repo Context", "project_id": project_id},
+            json={
+                "title": "Project Repo Context",
+                "project_id": project_id,
+                "tool_access_enabled": True,
+                "tool_access_repo_search": True,
+            },
         )
         conversation_id = convo.json()["id"]
         await client.post(
             "/v1/bots",
-            json={"id": "bot-repo-ctx", "name": "Repo Ctx Bot", "role": "assistant", "backends": [], "enabled": True},
+            json={
+                "id": "bot-repo-ctx",
+                "name": "Repo Ctx Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
         )
         ingest = await client.post(
             "/v1/vault/items",
@@ -360,6 +388,7 @@ async def test_chat_project_repo_context_is_attached_when_requested(cp_app):
                 "content": "How is this repo structured?",
                 "bot_id": "bot-repo-ctx",
                 "include_project_context": True,
+                "use_workspace_tools": True,
             },
         )
         assert resp.status_code == 200
@@ -415,6 +444,178 @@ async def test_chat_project_repo_context_is_not_attached_by_default(cp_app):
         assert isinstance(payload, list)
         assert payload[0]["role"] == "user"
         assert "PROJECT_REPO_CONTEXT_DISABLED_TOKEN" not in str(payload)
+
+
+@pytest.mark.anyio
+async def test_chat_workspace_filesystem_context_requires_three_switches(cp_app, tmp_path):
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "ok"})
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    (workspace_root / "README.md").write_text(
+        "WORKSPACE_FILESYSTEM_TOKEN architecture details",
+        encoding="utf-8",
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-workspace-files"
+        project = await client.post(
+            "/v1/projects",
+            json={
+                "id": project_id,
+                "name": "Workspace Files",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "filesystem": True,
+                        "repo_search": False,
+                        "workspace_root": str(workspace_root),
+                    }
+                },
+            },
+        )
+        assert project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Workspace Files Chat",
+                "project_id": project_id,
+                "tool_access_enabled": True,
+                "tool_access_filesystem": True,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        bot = await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-workspace-files",
+                "name": "Workspace Files Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "filesystem": True,
+                        "repo_search": False,
+                    }
+                },
+            },
+        )
+        assert bot.status_code == 200
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": "Please inspect README.md",
+                "bot_id": "bot-workspace-files",
+                "use_workspace_tools": True,
+            },
+        )
+        assert resp.status_code == 200
+
+        task_arg = cp_app.state.scheduler.schedule.await_args[0][0]
+        payload = task_arg.payload
+        assert isinstance(payload, list)
+        assert payload[0]["role"] == "system"
+        assert "[workspace:file]" in payload[0]["content"] or "[workspace:search]" in payload[0]["content"]
+        assert "WORKSPACE_FILESYSTEM_TOKEN" in payload[0]["content"]
+
+
+@pytest.mark.anyio
+async def test_chat_workspace_tools_blocked_when_chat_switch_off(cp_app, tmp_path):
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "ok"})
+    workspace_root = tmp_path / "workspace-blocked"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    (workspace_root / "README.md").write_text(
+        "WORKSPACE_BLOCKED_TOKEN should not appear",
+        encoding="utf-8",
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-workspace-blocked"
+        project = await client.post(
+            "/v1/projects",
+            json={
+                "id": project_id,
+                "name": "Workspace Blocked",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "filesystem": True,
+                        "repo_search": False,
+                        "workspace_root": str(workspace_root),
+                    }
+                },
+            },
+        )
+        assert project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Workspace Blocked Chat",
+                "project_id": project_id,
+                "tool_access_enabled": False,
+                "tool_access_filesystem": True,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        bot = await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-workspace-blocked",
+                "name": "Workspace Blocked Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "filesystem": True,
+                        "repo_search": False,
+                    }
+                },
+            },
+        )
+        assert bot.status_code == 200
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": "Please inspect README.md",
+                "bot_id": "bot-workspace-blocked",
+                "use_workspace_tools": True,
+            },
+        )
+        assert resp.status_code == 200
+
+        task_arg = cp_app.state.scheduler.schedule.await_args[0][0]
+        payload = task_arg.payload
+        assert isinstance(payload, list)
+        assert "WORKSPACE_BLOCKED_TOKEN" not in str(payload)
+
+
+@pytest.mark.anyio
+async def test_update_conversation_tool_access_endpoint(cp_app):
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        create_resp = await client.post("/v1/chat/conversations", json={"title": "Tool Access Conversation"})
+        assert create_resp.status_code == 200
+        conversation_id = create_resp.json()["id"]
+
+        update_resp = await client.put(
+            f"/v1/chat/conversations/{conversation_id}/tool-access",
+            json={"enabled": True, "filesystem": True, "repo_search": True},
+        )
+        assert update_resp.status_code == 200
+        body = update_resp.json()
+        assert body["tool_access_enabled"] is True
+        assert body["tool_access_filesystem"] is True
+        assert body["tool_access_repo_search"] is True
 
 
 @pytest.mark.anyio

@@ -22,6 +22,9 @@ CREATE TABLE IF NOT EXISTS conversations (
     scope TEXT NOT NULL,
     default_bot_id TEXT,
     default_model_id TEXT,
+    tool_access_enabled INTEGER NOT NULL DEFAULT 0,
+    tool_access_filesystem INTEGER NOT NULL DEFAULT 0,
+    tool_access_repo_search INTEGER NOT NULL DEFAULT 0,
     archived_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -81,6 +84,12 @@ class ChatManager:
             await db.execute("ALTER TABLE conversations ADD COLUMN archived_at TEXT")
         if "bridge_project_ids" not in columns:
             await db.execute("ALTER TABLE conversations ADD COLUMN bridge_project_ids TEXT")
+        if "tool_access_enabled" not in columns:
+            await db.execute("ALTER TABLE conversations ADD COLUMN tool_access_enabled INTEGER NOT NULL DEFAULT 0")
+        if "tool_access_filesystem" not in columns:
+            await db.execute("ALTER TABLE conversations ADD COLUMN tool_access_filesystem INTEGER NOT NULL DEFAULT 0")
+        if "tool_access_repo_search" not in columns:
+            await db.execute("ALTER TABLE conversations ADD COLUMN tool_access_repo_search INTEGER NOT NULL DEFAULT 0")
 
     async def create_conversation(
         self,
@@ -90,6 +99,9 @@ class ChatManager:
         scope: str = "global",
         default_bot_id: Optional[str] = None,
         default_model_id: Optional[str] = None,
+        tool_access_enabled: bool = False,
+        tool_access_filesystem: bool = False,
+        tool_access_repo_search: bool = False,
     ) -> ChatConversation:
         await self._ensure_db()
         now = datetime.now(timezone.utc).isoformat()
@@ -101,6 +113,9 @@ class ChatManager:
             scope=scope,
             default_bot_id=default_bot_id,
             default_model_id=default_model_id,
+            tool_access_enabled=bool(tool_access_enabled),
+            tool_access_filesystem=bool(tool_access_filesystem),
+            tool_access_repo_search=bool(tool_access_repo_search),
             archived_at=None,
             created_at=now,
             updated_at=now,
@@ -110,9 +125,9 @@ class ChatManager:
                 await db.execute(
                     """
                     INSERT INTO conversations (
-                        id, title, project_id, bridge_project_ids, scope, default_bot_id, default_model_id, archived_at, created_at, updated_at
+                        id, title, project_id, bridge_project_ids, scope, default_bot_id, default_model_id, tool_access_enabled, tool_access_filesystem, tool_access_repo_search, archived_at, created_at, updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         conversation.id,
@@ -122,6 +137,9 @@ class ChatManager:
                         conversation.scope,
                         conversation.default_bot_id,
                         conversation.default_model_id,
+                        1 if conversation.tool_access_enabled else 0,
+                        1 if conversation.tool_access_filesystem else 0,
+                        1 if conversation.tool_access_repo_search else 0,
                         conversation.archived_at,
                         conversation.created_at,
                         conversation.updated_at,
@@ -162,6 +180,9 @@ class ChatManager:
                             data["bridge_project_ids"] = []
                     else:
                         data["bridge_project_ids"] = []
+                    data["tool_access_enabled"] = bool(data.get("tool_access_enabled") or False)
+                    data["tool_access_filesystem"] = bool(data.get("tool_access_filesystem") or False)
+                    data["tool_access_repo_search"] = bool(data.get("tool_access_repo_search") or False)
                     result.append(ChatConversation.model_validate(data))
                 return result
 
@@ -185,6 +206,9 @@ class ChatManager:
                         data["bridge_project_ids"] = []
                 else:
                     data["bridge_project_ids"] = []
+                data["tool_access_enabled"] = bool(data.get("tool_access_enabled") or False)
+                data["tool_access_filesystem"] = bool(data.get("tool_access_filesystem") or False)
+                data["tool_access_repo_search"] = bool(data.get("tool_access_repo_search") or False)
                 return ChatConversation.model_validate(data)
 
     async def delete_conversation(self, conversation_id: str) -> None:
@@ -221,6 +245,35 @@ class ChatManager:
                 await db.execute(
                     "UPDATE conversations SET archived_at = NULL, updated_at = ? WHERE id = ?",
                     (now, conversation_id),
+                )
+                await db.commit()
+        return await self.get_conversation(conversation_id)
+
+    async def update_conversation_tool_access(
+        self,
+        conversation_id: str,
+        *,
+        tool_access_enabled: bool,
+        tool_access_filesystem: bool,
+        tool_access_repo_search: bool,
+    ) -> ChatConversation:
+        await self.get_conversation(conversation_id)
+        now = datetime.now(timezone.utc).isoformat()
+        async with self._lock:
+            async with aiosqlite.connect(self._db_path) as db:
+                await db.execute(
+                    """
+                    UPDATE conversations
+                    SET tool_access_enabled = ?, tool_access_filesystem = ?, tool_access_repo_search = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        1 if tool_access_enabled else 0,
+                        1 if tool_access_filesystem else 0,
+                        1 if tool_access_repo_search else 0,
+                        now,
+                        conversation_id,
+                    ),
                 )
                 await db.commit()
         return await self.get_conversation(conversation_id)

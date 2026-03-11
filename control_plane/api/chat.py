@@ -1,11 +1,18 @@
 import asyncio
 import json
+import os
 from typing import Any, AsyncGenerator, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from control_plane.chat.workspace_tools import (
+    extract_path_hints,
+    normalize_workspace_root,
+    read_workspace_file_snippet,
+    search_workspace_snippets,
+)
 from control_plane.security.guards import enforce_body_size, enforce_rate_limit
 from shared.exceptions import BotNotFoundError, ConversationNotFoundError
 from shared.models import ChatConversation, ChatMessage, Task, TaskMetadata
@@ -20,6 +27,9 @@ class CreateConversationRequest(BaseModel):
     scope: str = "global"
     default_bot_id: Optional[str] = None
     default_model_id: Optional[str] = None
+    tool_access_enabled: bool = False
+    tool_access_filesystem: bool = False
+    tool_access_repo_search: bool = False
 
 
 class PostMessageRequest(BaseModel):
@@ -28,6 +38,13 @@ class PostMessageRequest(BaseModel):
     context_items: Optional[List[str]] = None
     context_item_ids: Optional[List[str]] = None
     include_project_context: bool = False
+    use_workspace_tools: bool = False
+
+
+class UpdateConversationToolAccessRequest(BaseModel):
+    enabled: bool = False
+    filesystem: bool = False
+    repo_search: bool = False
 
 
 def _messages_to_payload(messages: List[ChatMessage], context_items: Optional[List[str]] = None) -> List[dict]:
@@ -61,6 +78,167 @@ def _conversation_project_ids(conversation: Optional[ChatConversation]) -> List[
         ids.append(str(conversation.project_id).strip())
     ids.extend(str(pid).strip() for pid in conversation.bridge_project_ids if str(pid).strip())
     return list(dict.fromkeys([pid for pid in ids if pid]))
+
+
+def _parse_tool_access_config(raw: Any) -> Dict[str, Any]:
+    cfg = raw if isinstance(raw, dict) else {}
+    return {
+        "enabled": bool(cfg.get("enabled", False)),
+        "filesystem": bool(cfg.get("filesystem", False)),
+        "repo_search": bool(cfg.get("repo_search", False)),
+        "workspace_root": str(cfg.get("workspace_root") or "").strip() or None,
+    }
+
+
+def _conversation_tool_access(conversation: ChatConversation) -> Dict[str, Any]:
+    return {
+        "enabled": bool(getattr(conversation, "tool_access_enabled", False)),
+        "filesystem": bool(getattr(conversation, "tool_access_filesystem", False)),
+        "repo_search": bool(getattr(conversation, "tool_access_repo_search", False)),
+    }
+
+
+def _bot_tool_access(bot: Any) -> Dict[str, Any]:
+    routing = getattr(bot, "routing_rules", None)
+    routing_rules = routing if isinstance(routing, dict) else {}
+    raw = routing_rules.get("chat_tool_access")
+    if not isinstance(raw, dict):
+        raw = routing_rules.get("tool_access")
+    return _parse_tool_access_config(raw)
+
+
+def _project_tool_access(project: Any) -> Dict[str, Any]:
+    settings = getattr(project, "settings_overrides", None)
+    if not isinstance(settings, dict):
+        return _parse_tool_access_config(None)
+    return _parse_tool_access_config(settings.get("chat_tool_access"))
+
+
+async def _effective_tool_access(
+    request: Request,
+    *,
+    conversation: ChatConversation,
+    target_bot_id: str | None,
+) -> Dict[str, Any]:
+    disabled = {
+        "enabled": False,
+        "filesystem": False,
+        "repo_search": False,
+        "workspace_root": None,
+    }
+    if not target_bot_id:
+        return disabled
+
+    bot_registry = getattr(request.app.state, "bot_registry", None)
+    if bot_registry is None:
+        return disabled
+    bot = await bot_registry.get(target_bot_id)
+    bot_cfg = _bot_tool_access(bot)
+    chat_cfg = _conversation_tool_access(conversation)
+
+    project_cfg = _parse_tool_access_config(None)
+    project_id = str(conversation.project_id or "").strip()
+    if project_id:
+        project_registry = getattr(request.app.state, "project_registry", None)
+        if project_registry is not None:
+            try:
+                project = await project_registry.get(project_id)
+                project_cfg = _project_tool_access(project)
+            except Exception:
+                project_cfg = _parse_tool_access_config(None)
+
+    all_enabled = bool(chat_cfg["enabled"] and bot_cfg["enabled"] and project_cfg["enabled"])
+    if not all_enabled:
+        return disabled
+    return {
+        "enabled": True,
+        "filesystem": bool(chat_cfg["filesystem"] and bot_cfg["filesystem"] and project_cfg["filesystem"]),
+        "repo_search": bool(chat_cfg["repo_search"] and bot_cfg["repo_search"] and project_cfg["repo_search"]),
+        "workspace_root": project_cfg.get("workspace_root"),
+    }
+
+
+def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
+    try:
+        value = int((os.environ.get(name, "") or "").strip() or default)
+    except Exception:
+        value = default
+    return max(minimum, min(value, maximum))
+
+
+async def _resolve_workspace_context_items(
+    *,
+    query: str,
+    workspace_root: str | None,
+) -> List[str]:
+    root = normalize_workspace_root(workspace_root)
+    if root is None:
+        return []
+
+    max_total_items = _env_int("NEXUSAI_CHAT_WORKSPACE_MAX_ITEMS", 8, minimum=1, maximum=20)
+    max_total_chars = _env_int("NEXUSAI_CHAT_WORKSPACE_MAX_TOTAL_CHARS", 12_000, minimum=1200, maximum=60_000)
+    max_file_bytes = _env_int("NEXUSAI_CHAT_WORKSPACE_MAX_FILE_BYTES", 200_000, minimum=4_000, maximum=2_000_000)
+    max_read_chars = _env_int("NEXUSAI_CHAT_WORKSPACE_READ_MAX_CHARS", 3_200, minimum=200, maximum=20_000)
+    search_max_files = _env_int("NEXUSAI_CHAT_WORKSPACE_SEARCH_MAX_FILES", 400, minimum=40, maximum=5_000)
+    search_max_hits = _env_int("NEXUSAI_CHAT_WORKSPACE_SEARCH_MAX_HITS", 6, minimum=1, maximum=20)
+
+    resolved: List[str] = []
+    seen_paths: set[str] = set()
+    used_chars = 0
+
+    hints = extract_path_hints(query, limit=max_total_items)
+    for hint in hints:
+        file_row = await asyncio.to_thread(
+            read_workspace_file_snippet,
+            root,
+            hint,
+            max_file_bytes=max_file_bytes,
+            max_chars=max_read_chars,
+        )
+        if not isinstance(file_row, dict):
+            continue
+        path = str(file_row.get("path") or "").strip()
+        if not path or path in seen_paths:
+            continue
+        seen_paths.add(path)
+        snippet = str(file_row.get("snippet") or "").strip()
+        if not snippet:
+            continue
+        text = f"[workspace:file] {path}\n{snippet}"
+        if used_chars + len(text) > max_total_chars:
+            return resolved
+        resolved.append(text)
+        used_chars += len(text)
+        if len(resolved) >= max_total_items:
+            return resolved
+
+    remaining = max(1, max_total_items - len(resolved))
+    hits = await asyncio.to_thread(
+        search_workspace_snippets,
+        root,
+        query,
+        limit=min(search_max_hits, remaining),
+        max_files=search_max_files,
+        max_file_bytes=max_file_bytes,
+        max_chars_per_snippet=320,
+    )
+    for hit in hits:
+        path = str(hit.get("path") or "").strip()
+        if not path or path in seen_paths:
+            continue
+        seen_paths.add(path)
+        snippet = str(hit.get("snippet") or "").strip()
+        if not snippet:
+            continue
+        score = hit.get("score")
+        text = f"[workspace:search] {path} (score={score})\n{snippet}"
+        if used_chars + len(text) > max_total_chars:
+            break
+        resolved.append(text)
+        used_chars += len(text)
+        if len(resolved) >= max_total_items:
+            break
+    return resolved
 
 
 async def _resolve_project_repo_context_items(
@@ -137,10 +315,15 @@ async def _resolve_context_items(
     body: PostMessageRequest,
     *,
     conversation: Optional[ChatConversation] = None,
+    tool_access: Optional[Dict[str, Any]] = None,
 ) -> List[str]:
     # Backward compatible direct context usage.
     resolved: List[str] = list(body.context_items or [])
     item_ids = [str(i).strip() for i in (body.context_item_ids or []) if str(i).strip()]
+    tool_cfg = tool_access if isinstance(tool_access, dict) else {}
+    repo_search_allowed = bool(tool_cfg.get("repo_search", False))
+    filesystem_allowed = bool(tool_cfg.get("filesystem", False))
+    workspace_root = str(tool_cfg.get("workspace_root") or "").strip() or None
     vault_manager = getattr(request.app.state, "vault_manager", None)
     if item_ids and vault_manager is not None:
         for item_id in item_ids[:20]:
@@ -155,12 +338,20 @@ async def _resolve_context_items(
             except Exception:
                 continue
 
-    if body.include_project_context and conversation is not None:
+    if (body.include_project_context or body.use_workspace_tools) and repo_search_allowed and conversation is not None:
         resolved.extend(
             await _resolve_project_repo_context_items(
                 request,
                 conversation=conversation,
                 query=body.content,
+            )
+        )
+
+    if body.use_workspace_tools and filesystem_allowed and workspace_root:
+        resolved.extend(
+            await _resolve_workspace_context_items(
+                query=body.content,
+                workspace_root=workspace_root,
             )
         )
 
@@ -215,6 +406,9 @@ async def create_conversation(request: Request, body: CreateConversationRequest)
         scope=body.scope,
         default_bot_id=body.default_bot_id,
         default_model_id=body.default_model_id,
+        tool_access_enabled=body.tool_access_enabled,
+        tool_access_filesystem=body.tool_access_filesystem,
+        tool_access_repo_search=body.tool_access_repo_search,
     )
 
 
@@ -233,6 +427,24 @@ async def get_conversation(conversation_id: str, request: Request) -> ChatConver
     chat_manager = request.app.state.chat_manager
     try:
         return await chat_manager.get_conversation(conversation_id)
+    except ConversationNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.put("/conversations/{conversation_id}/tool-access", response_model=ChatConversation)
+async def update_conversation_tool_access(
+    conversation_id: str,
+    request: Request,
+    body: UpdateConversationToolAccessRequest,
+) -> ChatConversation:
+    chat_manager = request.app.state.chat_manager
+    try:
+        return await chat_manager.update_conversation_tool_access(
+            conversation_id,
+            tool_access_enabled=body.enabled,
+            tool_access_filesystem=body.filesystem,
+            tool_access_repo_search=body.repo_search,
+        )
     except ConversationNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
@@ -296,7 +508,18 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
         )
         assign_instruction = _extract_assign_instruction(body.content)
         if assign_instruction is not None:
-            resolved_context = await _resolve_context_items(request, body, conversation=conversation)
+            assign_bot_id = body.bot_id or conversation.default_bot_id
+            tool_access = await _effective_tool_access(
+                request,
+                conversation=conversation,
+                target_bot_id=assign_bot_id,
+            )
+            resolved_context = await _resolve_context_items(
+                request,
+                body,
+                conversation=conversation,
+                tool_access=tool_access,
+            )
             assignment = await pm_orchestrator.orchestrate_assignment(
                 conversation_id=conversation_id,
                 instruction=assign_instruction,
@@ -323,7 +546,17 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
         if not target_bot_id:
             return {"user_message": user_message, "assistant_message": None}
 
-        resolved_context = await _resolve_context_items(request, body, conversation=conversation)
+        tool_access = await _effective_tool_access(
+            request,
+            conversation=conversation,
+            target_bot_id=target_bot_id,
+        )
+        resolved_context = await _resolve_context_items(
+            request,
+            body,
+            conversation=conversation,
+            tool_access=tool_access,
+        )
         payload = _messages_to_payload(messages, context_items=resolved_context)
         task = Task(
             id=f"chat-{user_message.id}",
@@ -381,7 +614,18 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
             assign_instruction = _extract_assign_instruction(body.content)
             if assign_instruction is not None:
                 yield 'event: status\ndata: {"phase":"planning","label":"Planning task graph..."}\n\n'
-                resolved_context = await _resolve_context_items(request, body, conversation=conversation)
+                assign_bot_id = body.bot_id or conversation.default_bot_id
+                tool_access = await _effective_tool_access(
+                    request,
+                    conversation=conversation,
+                    target_bot_id=assign_bot_id,
+                )
+                resolved_context = await _resolve_context_items(
+                    request,
+                    body,
+                    conversation=conversation,
+                    tool_access=tool_access,
+                )
                 assignment = await pm_orchestrator.orchestrate_assignment(
                     conversation_id=conversation_id,
                     instruction=assign_instruction,
@@ -449,7 +693,17 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                 yield "event: done\ndata: {}\n\n"
                 return
 
-            resolved_context = await _resolve_context_items(request, body, conversation=conversation)
+            tool_access = await _effective_tool_access(
+                request,
+                conversation=conversation,
+                target_bot_id=target_bot_id,
+            )
+            resolved_context = await _resolve_context_items(
+                request,
+                body,
+                conversation=conversation,
+                tool_access=tool_access,
+            )
             payload = _messages_to_payload(messages, context_items=resolved_context)
             yield f'event: status\ndata: {json.dumps({"phase":"queued","label":"Queued on selected backend...","conversation_id":conversation_id,"message_count":len(messages)})}\n\n'
             task = Task(
