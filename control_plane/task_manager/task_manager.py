@@ -594,10 +594,16 @@ class TaskManager:
             runner_tasks = [task for task in self._runner_tasks.values() if not task.done()]
             retry_tasks = [task for task in self._retry_tasks if not task.done()]
         pending = runner_tasks + retry_tasks
-        for pending_task in pending:
-            pending_task.cancel()
         if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
+            # Give active tasks a short grace period to finish DB writes before
+            # cancellation so aiosqlite worker threads do not outlive the loop.
+            done, still_pending = await asyncio.wait(pending, timeout=2.0)
+            if still_pending:
+                for pending_task in still_pending:
+                    pending_task.cancel()
+                await asyncio.gather(*still_pending, return_exceptions=True)
+            elif done:
+                await asyncio.gather(*done, return_exceptions=True)
         async with self._lock:
             self._runner_tasks.clear()
             self._retry_tasks.clear()
@@ -1759,6 +1765,49 @@ class TaskManager:
             )
         )
 
+    async def _record_join_wait_state(
+        self,
+        source_task: Task,
+        trigger_id: str,
+        target_bot_id: str,
+        group_value: Any,
+        expected_count: Optional[int],
+        received_count: int,
+        expected_branch_keys: List[str],
+        seen_branch_keys: List[str],
+        missing_branch_keys: List[str],
+        fanout_id: Optional[str],
+        reason: str,
+    ) -> None:
+        normalized_group = self._normalize_branch_token(group_value, fallback="group")
+        artifact_id = f"{source_task.id}:join-wait:{trigger_id or 'unknown'}:{normalized_group}"
+        details = {
+            "trigger_id": trigger_id,
+            "target_bot_id": target_bot_id,
+            "group_value": group_value,
+            "expected_count": expected_count,
+            "received_count": received_count,
+            "expected_branch_keys": expected_branch_keys,
+            "seen_branch_keys": seen_branch_keys,
+            "missing_branch_keys": missing_branch_keys,
+            "fanout_id": fanout_id,
+            "reason": reason,
+        }
+        safe_details = json.loads(json.dumps(details, default=str))
+        await self._upsert_artifact(
+            BotRunArtifact(
+                id=artifact_id,
+                run_id=source_task.id,
+                task_id=source_task.id,
+                bot_id=source_task.bot_id,
+                kind="note",
+                label="Join Waiting",
+                content=json.dumps(safe_details, indent=2, sort_keys=True),
+                metadata=safe_details,
+                created_at=datetime.now(timezone.utc).isoformat(),
+            )
+        )
+
     def _build_trigger_payload(self, task: Task, trigger: Any) -> Any:
         payload_template = trigger.payload_template
         base_payload: Dict[str, Any] = {
@@ -1986,6 +2035,19 @@ class TaskManager:
         expected_branch_keys = self._resolve_fanout_expected_branch_keys(payload)
         expected_count = self._resolve_join_expected_count(payload, expected_field, sibling_payloads, expected_branch_keys)
         if expected_count is None:
+            await self._record_join_wait_state(
+                source_task=task,
+                trigger_id=str(getattr(trigger, "id", "") or ""),
+                target_bot_id=target_bot_id,
+                group_value=group_value,
+                expected_count=None,
+                received_count=0,
+                expected_branch_keys=expected_branch_keys,
+                seen_branch_keys=[],
+                missing_branch_keys=[],
+                fanout_id=fanout_id,
+                reason="invalid_expected_count",
+            )
             logger.warning(
                 "Skipping join trigger %s for task %s because expected count is invalid: %r",
                 trigger.id,
@@ -2006,6 +2068,19 @@ class TaskManager:
         )
 
         if missing_branch_keys:
+            await self._record_join_wait_state(
+                source_task=task,
+                trigger_id=str(getattr(trigger, "id", "") or ""),
+                target_bot_id=target_bot_id,
+                group_value=group_value,
+                expected_count=expected_count,
+                received_count=len(selected_payloads),
+                expected_branch_keys=expected_branch_keys,
+                seen_branch_keys=selected_branch_keys,
+                missing_branch_keys=missing_branch_keys,
+                fanout_id=fanout_id,
+                reason="missing_branch_keys",
+            )
             logger.info(
                 "Join trigger %s waiting for missing branch keys for group %r: %s",
                 trigger.id,
@@ -2014,6 +2089,19 @@ class TaskManager:
             )
             return None
         if len(selected_payloads) < expected_count:
+            await self._record_join_wait_state(
+                source_task=task,
+                trigger_id=str(getattr(trigger, "id", "") or ""),
+                target_bot_id=target_bot_id,
+                group_value=group_value,
+                expected_count=expected_count,
+                received_count=len(selected_payloads),
+                expected_branch_keys=expected_branch_keys,
+                seen_branch_keys=selected_branch_keys,
+                missing_branch_keys=missing_branch_keys,
+                fanout_id=fanout_id,
+                reason="waiting_for_siblings",
+            )
             logger.info(
                 "Join trigger %s waiting for sibling outputs for group %r (%s/%s)",
                 trigger.id,

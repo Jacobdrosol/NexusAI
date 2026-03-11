@@ -23,6 +23,7 @@ def _status_summary(tasks: list[dict[str, Any]]) -> dict[str, int]:
         "running": counts.get("running", 0),
         "completed": counts.get("completed", 0),
         "failed": counts.get("failed", 0),
+        "retried": counts.get("retried", 0),
         "cancelled": counts.get("cancelled", 0),
     }
 
@@ -33,10 +34,12 @@ def _pipeline_status(tasks: list[dict[str, Any]]) -> str:
         return "running"
     if summary["failed"]:
         return "failed"
-    if summary["cancelled"] and not summary["completed"]:
+    if summary["cancelled"] and not summary["completed"] and not summary["retried"]:
         return "cancelled"
     if summary["completed"]:
         return "completed"
+    if summary["retried"]:
+        return "retried"
     return "unknown"
 
 

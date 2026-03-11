@@ -2314,6 +2314,32 @@ async def test_join_waits_for_latest_successful_branch_results(tmp_path):
         await asyncio.sleep(0.1)
 
     assert len(first_two) >= 2
+
+    join_wait_reports = []
+    for _ in range(40):
+        artifacts = await tm.list_bot_run_artifacts("unit-bot")
+        join_wait_reports = []
+        for artifact in artifacts:
+            if artifact.label != "Join Waiting" or not artifact.content:
+                continue
+            try:
+                join_wait_reports.append(json.loads(artifact.content))
+            except (TypeError, json.JSONDecodeError):
+                continue
+        if any(
+            int(report.get("expected_count") or 0) == 3
+            and int(report.get("received_count") or 0) < 3
+            for report in join_wait_reports
+        ):
+            break
+        await asyncio.sleep(0.05)
+
+    assert any(
+        int(report.get("expected_count") or 0) == 3
+        and int(report.get("received_count") or 0) < 3
+        for report in join_wait_reports
+    )
+
     await tm.retry_task(first_two[0].id)
     await asyncio.sleep(0.3)
 

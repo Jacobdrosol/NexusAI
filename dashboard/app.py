@@ -127,9 +127,12 @@ def create_app() -> Flask:
             offline_workers = sum(1 for w in workers if w.get("status") == "offline")
             active_bots = sum(1 for b in bots if b.get("enabled"))
             queued = sum(1 for t in tasks if t.get("status") == "queued")
+            blocked = sum(1 for t in tasks if t.get("status") == "blocked")
             running = sum(1 for t in tasks if t.get("status") == "running")
             completed = sum(1 for t in tasks if t.get("status") == "completed")
             failed = sum(1 for t in tasks if t.get("status") == "failed")
+            retried = sum(1 for t in tasks if t.get("status") == "retried")
+            cancelled = sum(1 for t in tasks if t.get("status") == "cancelled")
 
             worker_health = []
             for w in workers[:12]:
@@ -178,9 +181,12 @@ def create_app() -> Flask:
                 offline_workers = db.query(Worker).filter(Worker.status == "offline").count()
                 active_bots = db.query(Bot).filter(Bot.enabled.is_(True)).count()
                 queued = db.query(Task).filter(Task.status == "queued").count()
+                blocked = db.query(Task).filter(Task.status == "blocked").count()
                 running = db.query(Task).filter(Task.status == "running").count()
                 completed = db.query(Task).filter(Task.status == "completed").count()
                 failed = db.query(Task).filter(Task.status == "failed").count()
+                retried = db.query(Task).filter(Task.status == "retried").count()
+                cancelled = db.query(Task).filter(Task.status == "cancelled").count()
 
                 worker_health = []
                 for w in workers[:12]:
@@ -401,9 +407,12 @@ def create_app() -> Flask:
                 "workers_offline": offline_workers,
                 "bots_active": active_bots,
                 "tasks_queued": queued,
+                "tasks_blocked": blocked,
                 "tasks_running": running,
                 "tasks_completed": completed,
                 "tasks_failed": failed,
+                "tasks_retried": retried,
+                "tasks_cancelled": cancelled,
             },
             worker_health=worker_health,
             recent_activity=recent_activity,

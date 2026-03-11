@@ -18,8 +18,8 @@
     <div class="card-value card-blue" id="stat-bots-active">{{ stats.bots_active }}</div>
   </div>
   <div class="card">
-    <div class="card-label">Tasks queued</div>
-    <div class="card-value card-yellow" id="stat-tasks-queued">{{ stats.tasks_queued }}</div>
+    <div class="card-label">Tasks waiting</div>
+    <div class="card-value card-yellow" id="stat-tasks-queued">{{ stats.tasks_queued + stats.tasks_blocked }}</div>
   </div>
   <div class="card">
     <div class="card-label">Tasks running</div>
@@ -32,6 +32,14 @@
   <div class="card">
     <div class="card-label">Tasks failed</div>
     <div class="card-value card-red" id="stat-tasks-failed">{{ stats.tasks_failed }}</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Tasks retried</div>
+    <div class="card-value card-yellow" id="stat-tasks-retried">{{ stats.tasks_retried }}</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Tasks cancelled</div>
+    <div class="card-value card-gray" id="stat-tasks-cancelled">{{ stats.tasks_cancelled }}</div>
   </div>
 </div>
 
@@ -313,10 +321,12 @@ evtSrc.onmessage = function(e) {
   document.getElementById("stat-workers-online").textContent  = d.workers.online;
   document.getElementById("stat-workers-offline").textContent = d.workers.offline;
   document.getElementById("stat-bots-active").textContent     = d.bots.active;
-  document.getElementById("stat-tasks-queued").textContent    = d.tasks.queued;
+  document.getElementById("stat-tasks-queued").textContent    = (d.tasks.queued || 0) + (d.tasks.blocked || 0);
   document.getElementById("stat-tasks-running").textContent   = d.tasks.running;
   document.getElementById("stat-tasks-completed").textContent = d.tasks.completed;
   document.getElementById("stat-tasks-failed").textContent    = d.tasks.failed;
+  document.getElementById("stat-tasks-retried").textContent   = d.tasks.retried || 0;
+  document.getElementById("stat-tasks-cancelled").textContent = d.tasks.cancelled || 0;
 };
 
 const checklistStorageKey = 'nexus.overviewChecklist.hidden.v1';
