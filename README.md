@@ -322,6 +322,7 @@ Bot export validation helper:
 - Use `py scripts/validate_bot_exports.py <exports_dir>` before importing changed bot exports.
 - The validator checks trigger targets, detects dead-end bots, and warns when `bot.workflow.triggers` and `routing_rules.workflow.triggers` diverge.
 - Use `--strict-dead-ends` when you want non-terminal dead-end stages to fail validation.
+- Use `--strict-contracts` to enforce deterministic output contracts (description, example output, required/non-empty fields, and fail-closed model fallback policy).
 
 ---
 
