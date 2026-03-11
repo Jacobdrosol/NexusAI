@@ -138,7 +138,7 @@ def api_send_message():
             "bot_id": data.get("bot_id"),
             "context_items": data.get("context_items"),
             "context_item_ids": data.get("context_item_ids"),
-            "include_project_context": data.get("include_project_context", True),
+            "include_project_context": data.get("include_project_context", False),
         },
     )
     if resp is None:
@@ -177,7 +177,7 @@ def api_send_message_stream():
         "bot_id": data.get("bot_id"),
         "context_items": data.get("context_items"),
         "context_item_ids": data.get("context_item_ids"),
-        "include_project_context": data.get("include_project_context", True),
+        "include_project_context": data.get("include_project_context", False),
     }
 
     def generate() -> Iterable[str]:

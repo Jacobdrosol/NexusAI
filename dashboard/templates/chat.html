@@ -83,10 +83,10 @@
     {% if selected_conversation.project_id or (selected_conversation.bridge_project_ids and selected_conversation.bridge_project_ids|length > 0) %}
     <div class="form-group">
       <label class="context-item">
-        <input type="checkbox" id="include-project-context" checked>
-        <span>Auto include project repo context</span>
+        <input type="checkbox" id="include-project-context">
+        <span>Attach project repo context</span>
       </label>
-      <p class="mini-note">Uses semantic query against project repo context for each message.</p>
+      <p class="mini-note">Optional per message. Uses semantic query against synced repo context.</p>
     </div>
     {% endif %}
     {% endif %}
@@ -685,7 +685,7 @@ async function sendMessage(streamMode) {
       return {
         context_items: ctx.contexts,
         context_item_ids: ctx.contextItemIds,
-        include_project_context: includeProjectContext ? includeProjectContext.checked : true,
+        include_project_context: includeProjectContext ? includeProjectContext.checked : false,
       };
     })(),
     conversation_id: fd.get('conversation_id'),
@@ -881,7 +881,7 @@ document.getElementById('form-assign')?.addEventListener('submit', async functio
       conversation_id: fd.get('conversation_id'),
       content: '@assign ' + instruction,
       bot_id: fd.get('bot_id') || null,
-      include_project_context: includeProjectContext ? includeProjectContext.checked : true
+      include_project_context: includeProjectContext ? includeProjectContext.checked : false
     }),
   });
   if (!res.ok) {

@@ -324,7 +324,7 @@ async def test_chat_context_item_ids_are_resolved_from_vault(cp_app):
 
 
 @pytest.mark.anyio
-async def test_chat_project_repo_context_is_auto_resolved(cp_app):
+async def test_chat_project_repo_context_is_attached_when_requested(cp_app):
     cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "ok"})
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
         project_id = "proj-repo-ctx"
@@ -356,7 +356,11 @@ async def test_chat_project_repo_context_is_auto_resolved(cp_app):
 
         resp = await client.post(
             f"/v1/chat/conversations/{conversation_id}/messages",
-            json={"content": "How is this repo structured?", "bot_id": "bot-repo-ctx"},
+            json={
+                "content": "How is this repo structured?",
+                "bot_id": "bot-repo-ctx",
+                "include_project_context": True,
+            },
         )
         assert resp.status_code == 200
         task_arg = cp_app.state.scheduler.schedule.await_args[0][0]
@@ -368,7 +372,7 @@ async def test_chat_project_repo_context_is_auto_resolved(cp_app):
 
 
 @pytest.mark.anyio
-async def test_chat_project_repo_context_can_be_disabled(cp_app):
+async def test_chat_project_repo_context_is_not_attached_by_default(cp_app):
     cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "ok"})
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
         project_id = "proj-repo-off"
@@ -403,7 +407,6 @@ async def test_chat_project_repo_context_can_be_disabled(cp_app):
             json={
                 "content": "Hello",
                 "bot_id": "bot-repo-off",
-                "include_project_context": False,
             },
         )
         assert resp.status_code == 200

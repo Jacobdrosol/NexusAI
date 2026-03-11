@@ -27,7 +27,7 @@ class PostMessageRequest(BaseModel):
     bot_id: Optional[str] = None
     context_items: Optional[List[str]] = None
     context_item_ids: Optional[List[str]] = None
-    include_project_context: bool = True
+    include_project_context: bool = False
 
 
 def _messages_to_payload(messages: List[ChatMessage], context_items: Optional[List[str]] = None) -> List[dict]:
