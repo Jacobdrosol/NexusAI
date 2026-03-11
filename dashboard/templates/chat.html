@@ -69,12 +69,34 @@
     </div>
     <div class="form-group">
       <label>Vault Items</label>
+      {% if repo_context_sections and repo_context_sections|length > 0 %}
+      <div class="mini-note" style="margin-bottom:0.35rem;">Project Repo Context</div>
+      {% for section in repo_context_sections %}
+      <details style="margin-bottom:0.35rem;">
+        <summary style="cursor:pointer;">
+          {{ section.project_id }} ({{ section.namespace }}) · {{ section.items|length }} item{{ '' if section.items|length == 1 else 's' }}
+        </summary>
+        <div class="context-picker-list" style="margin-top:0.35rem;">
+          {% for v in section.items %}
+          {% set path_hint = (v.get('metadata') or {}).get('path') if v.get('metadata') else '' %}
+          <label class="context-item">
+            <input type="checkbox" class="context-vault" value="{{ v.id }}">
+            <span>{{ path_hint or v.title }}</span>
+          </label>
+          {% endfor %}
+        </div>
+      </details>
+      {% endfor %}
+      <div class="mini-note" style="margin:0.4rem 0 0.35rem;">Other Vault Items</div>
+      {% endif %}
       <div class="context-picker-list">
         {% for v in vault_items %}
+        {% if not repo_context_item_ids or v.id not in repo_context_item_ids %}
         <label class="context-item">
           <input type="checkbox" class="context-vault" value="{{ v.id }}">
           <span>{{ v.title }}</span>
         </label>
+        {% endif %}
         {% else %}
         <div class="empty">No vault items available</div>
         {% endfor %}

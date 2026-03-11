@@ -45,16 +45,60 @@ def chat_page() -> str:
     conversations = cp.list_conversations(archived="all") or []
     bots = cp.list_bots() or []
     projects = cp.list_projects() or []
-    vault_items = cp.list_vault_items(limit=50) or []
     selected_id = request.args.get("conversation_id")
     selected = None
     messages = []
+    repo_context_items: list[dict[str, Any]] = []
+    repo_context_sections: list[dict[str, Any]] = []
+    repo_context_item_ids: list[str] = []
     if selected_id:
         for c in conversations:
             if c.get("id") == selected_id:
                 selected = c
                 break
         messages = cp.list_messages(selected_id) or []
+
+    if selected:
+        project_ids: list[str] = []
+        project_id = str(selected.get("project_id") or "").strip()
+        if project_id:
+            project_ids.append(project_id)
+        for bridged in selected.get("bridge_project_ids") or []:
+            value = str(bridged or "").strip()
+            if value and value not in project_ids:
+                project_ids.append(value)
+
+        for pid in project_ids:
+            namespace = f"project:{pid}:repo"
+            if hasattr(cp, "get_project_github_context_sync_status"):
+                try:
+                    status = cp.get_project_github_context_sync_status(pid) or {}
+                    if isinstance(status, dict):
+                        context_sync = status.get("context_sync") if isinstance(status.get("context_sync"), dict) else {}
+                        ns = str(context_sync.get("namespace") or "").strip()
+                        if ns:
+                            namespace = ns
+                except Exception:
+                    namespace = f"project:{pid}:repo"
+            try:
+                items = cp.list_vault_items(namespace=namespace, project_id=pid, limit=120) or []
+            except Exception:
+                items = []
+            if items:
+                repo_context_sections.append(
+                    {
+                        "project_id": pid,
+                        "namespace": namespace,
+                        "items": items,
+                    }
+                )
+                repo_context_items.extend(items)
+                for item in items:
+                    item_id = str(item.get("id") or "").strip()
+                    if item_id and item_id not in repo_context_item_ids:
+                        repo_context_item_ids.append(item_id)
+
+    vault_items = cp.list_vault_items(limit=50) or []
     return render_template(
         "chat.html",
         conversations=[c for c in conversations if not c.get("archived_at")],
@@ -64,6 +108,9 @@ def chat_page() -> str:
         bots=bots,
         projects=projects,
         vault_items=vault_items,
+        repo_context_items=repo_context_items,
+        repo_context_sections=repo_context_sections,
+        repo_context_item_ids=repo_context_item_ids,
         error=None,
     )
 
