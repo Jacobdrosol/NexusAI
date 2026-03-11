@@ -905,6 +905,74 @@ async def test_project_repo_workspace_push_requires_allow_push(cp_client, tmp_pa
 
 
 @pytest.mark.anyio
+async def test_project_repo_workspace_run_records_usage_history(cp_client, tmp_path, monkeypatch):
+    await cp_client.post(
+        "/v1/projects",
+        json={"id": "p-repo-usage", "name": "Repo Usage", "mode": "isolated"},
+    )
+    root = tmp_path / "usage-workspace"
+    root.mkdir(parents=True, exist_ok=True)
+    update = await cp_client.put(
+        "/v1/projects/p-repo-usage/repo/workspace",
+        json={
+            "enabled": True,
+            "root_path": str(root),
+            "allow_command_execution": True,
+        },
+    )
+    assert update.status_code == 200
+
+    async def _fake_run(args, *, cwd, timeout_seconds=None, env_overrides=None):
+        return {
+            "ok": True,
+            "returncode": 0,
+            "stdout": "ok",
+            "stderr": "",
+            "command": args,
+            "timeout_seconds": timeout_seconds or 120,
+            "started_at": "2026-03-11T00:00:00+00:00",
+            "finished_at": "2026-03-11T00:00:03+00:00",
+            "duration_ms": 3000,
+            "resource_usage": {
+                "wall_time_ms": 3000,
+                "cpu_user_seconds": 1.2,
+                "cpu_system_seconds": 0.3,
+                "peak_rss_bytes": 12345678,
+                "peak_vms_bytes": 22334455,
+                "io_read_bytes": 1024,
+                "io_write_bytes": 2048,
+                "sample_count": 10,
+            },
+        }
+
+    monkeypatch.setattr("control_plane.api.projects._run_repo_command", _fake_run)
+
+    run_resp = await cp_client.post(
+        "/v1/projects/p-repo-usage/repo/workspace/run",
+        json={"command": ["py", "-m", "pytest", "-q"]},
+    )
+    assert run_resp.status_code == 200
+    assert run_resp.json()["status"] == "ok"
+    assert run_resp.json()["usage"]["peak_rss_bytes"] == 12345678
+
+    runs_resp = await cp_client.get("/v1/projects/p-repo-usage/repo/workspace/runs?limit=20")
+    assert runs_resp.status_code == 200
+    runs = runs_resp.json()["runs"]
+    assert len(runs) >= 1
+    assert runs[0]["action"] == "run"
+    assert runs[0]["status"] == "ok"
+    assert (runs[0]["metrics"] or {}).get("peak_rss_bytes") == 12345678
+
+    summary_resp = await cp_client.get("/v1/projects/p-repo-usage/repo/workspace/runs/summary?since_hours=24")
+    assert summary_resp.status_code == 200
+    summary = summary_resp.json()
+    totals = summary["totals"]
+    assert int(totals["total_runs"]) >= 1
+    assert int(totals["success_runs"]) >= 1
+    assert int(totals["peak_rss_bytes_max"]) >= 12345678
+
+
+@pytest.mark.anyio
 async def test_project_github_webhook_ingestion_and_list(cp_client):
     await cp_client.post(
         "/v1/projects",

@@ -236,6 +236,23 @@
         <label>Timeout Seconds</label>
         <input class="form-control" id="repo-command-timeout" placeholder="600">
       </div>
+      <label style="display:block; margin-bottom:0.45rem;">
+        <input type="checkbox" id="repo-command-use-temp-workspace"> Run in temporary isolated workspace
+      </label>
+      <div class="form-group">
+        <label>Temp Ref (optional branch/commit)</label>
+        <input class="form-control" id="repo-command-temp-ref" placeholder="main">
+      </div>
+      <label style="display:block; margin-bottom:0.45rem;">
+        <input type="checkbox" id="repo-command-bootstrap"> Bootstrap dependencies before command
+      </label>
+      <div class="form-group">
+        <label>Bootstrap Languages (comma-separated, optional)</label>
+        <input class="form-control" id="repo-command-bootstrap-languages" placeholder="python,node,dotnet,cpp">
+      </div>
+      <label style="display:block; margin-bottom:0.55rem;">
+        <input type="checkbox" id="repo-command-keep-temp-workspace"> Keep temporary workspace after run
+      </label>
       <button class="btn" type="button" onclick="runProjectRepoWorkspaceCommand()">Run Command</button>
     </div>
     <div>
@@ -243,6 +260,13 @@
       <pre id="repo-workspace-policy-pre" style="white-space:pre-wrap; margin-top:0.35rem;">{{ repo_workspace | tojson(indent=2) }}</pre>
       <div style="margin-top:0.55rem;"><strong>Repo Status</strong></div>
       <pre id="repo-workspace-status-pre" style="white-space:pre-wrap; margin-top:0.35rem;">{}</pre>
+      <div style="margin-top:0.55rem; display:flex; justify-content:space-between; align-items:center; gap:0.5rem;">
+        <strong>Usage Summary</strong>
+        <button class="btn btn-sm" type="button" onclick="refreshProjectRepoWorkspaceUsage()">Refresh Usage</button>
+      </div>
+      <pre id="repo-workspace-usage-summary-pre" style="white-space:pre-wrap; margin-top:0.35rem;">{}</pre>
+      <div style="margin-top:0.55rem;"><strong>Recent Runs</strong></div>
+      <pre id="repo-workspace-runs-pre" style="white-space:pre-wrap; margin-top:0.35rem; max-height:12rem; overflow:auto;">[]</pre>
       <div style="margin-top:0.55rem;"><strong>Last Action Output</strong></div>
       <pre id="repo-workspace-output-pre" style="white-space:pre-wrap; margin-top:0.35rem; max-height:16rem; overflow:auto;">{}</pre>
     </div>
@@ -626,6 +650,7 @@ const PROJECT_ID = {{ project.id|tojson if project else "''" }};
 let CLOUD_POLICY = {provider_policies: {}, bot_overrides: {}};
 let PROJECT_CHAT_TOOL_ACCESS = {{ (chat_tool_access if chat_tool_access else {"enabled": false, "filesystem": false, "repo_search": false, "workspace_root": none}) | tojson }};
 let PROJECT_REPO_WORKSPACE = {{ (repo_workspace if repo_workspace else {"enabled": false, "root_path": none, "clone_url": none, "default_branch": none, "allow_push": false, "allow_command_execution": false}) | tojson }};
+let PROJECT_REPO_WORKSPACE_USAGE_SUMMARY = {};
 let GITHUB_SYNC_POLL = null;
 let PROJECT_DATA_INGEST_POLL = null;
 let PROJECT_DATA_EDIT_MODE = false;
@@ -794,6 +819,28 @@ async function refreshProjectRepoWorkspaceStatus() {
   _setRepoWorkspaceState('state-info', 'Repo status loaded.');
 }
 
+async function refreshProjectRepoWorkspaceUsage() {
+  const summaryPre = document.getElementById('repo-workspace-usage-summary-pre');
+  const runsPre = document.getElementById('repo-workspace-runs-pre');
+  const [summaryRes, runsRes] = await Promise.all([
+    fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/repo/workspace/runs/summary?since_hours=720'),
+    fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/repo/workspace/runs?limit=20'),
+  ]);
+  const summaryData = await summaryRes.json().catch(() => ({}));
+  const runsData = await runsRes.json().catch(() => ({}));
+  if (!summaryRes.ok) {
+    if (summaryPre) summaryPre.textContent = JSON.stringify({error: summaryData.error || 'Failed to load usage summary'}, null, 2);
+  } else {
+    PROJECT_REPO_WORKSPACE_USAGE_SUMMARY = summaryData;
+    if (summaryPre) summaryPre.textContent = JSON.stringify(summaryData, null, 2);
+  }
+  if (!runsRes.ok) {
+    if (runsPre) runsPre.textContent = JSON.stringify({error: runsData.error || 'Failed to load run history'}, null, 2);
+  } else {
+    if (runsPre) runsPre.textContent = JSON.stringify(runsData.runs || [], null, 2);
+  }
+}
+
 function _repoActionRemote() {
   return (document.getElementById('repo-action-remote')?.value || '').trim() || 'origin';
 }
@@ -836,6 +883,7 @@ async function cloneProjectRepoWorkspace() {
   }
   _setRepoWorkspaceState('state-info', data.status === 'already_cloned' ? 'Repository already cloned.' : 'Repository cloned.');
   await refreshProjectRepoWorkspacePolicy();
+  await refreshProjectRepoWorkspaceUsage();
 }
 
 async function pullProjectRepoWorkspace() {
@@ -861,6 +909,7 @@ async function pullProjectRepoWorkspace() {
     if (statusPre) statusPre.textContent = JSON.stringify(data.workspace, null, 2);
   }
   _setRepoWorkspaceState('state-info', 'Pull completed.');
+  await refreshProjectRepoWorkspaceUsage();
 }
 
 async function commitProjectRepoWorkspace() {
@@ -894,6 +943,7 @@ async function commitProjectRepoWorkspace() {
     const statusPre = document.getElementById('repo-workspace-status-pre');
     if (statusPre) statusPre.textContent = JSON.stringify(data.workspace, null, 2);
   }
+  await refreshProjectRepoWorkspaceUsage();
 }
 
 async function pushProjectRepoWorkspace() {
@@ -918,6 +968,7 @@ async function pushProjectRepoWorkspace() {
     if (statusPre) statusPre.textContent = JSON.stringify(data.workspace, null, 2);
   }
   _setRepoWorkspaceState('state-info', 'Push completed.');
+  await refreshProjectRepoWorkspaceUsage();
 }
 
 async function runProjectRepoWorkspaceCommand() {
@@ -938,9 +989,18 @@ async function runProjectRepoWorkspaceCommand() {
     return;
   }
   const timeoutRaw = (document.getElementById('repo-command-timeout')?.value || '').trim();
+  const bootstrapLanguagesRaw = (document.getElementById('repo-command-bootstrap-languages')?.value || '').trim();
+  const bootstrapLanguages = bootstrapLanguagesRaw
+    ? bootstrapLanguagesRaw.split(',').map((x) => x.trim()).filter(Boolean)
+    : [];
   const payload = {
     command,
     timeout_seconds: timeoutRaw ? Number(timeoutRaw) : null,
+    use_temp_workspace: !!document.getElementById('repo-command-use-temp-workspace')?.checked,
+    temp_ref: (document.getElementById('repo-command-temp-ref')?.value || '').trim() || null,
+    bootstrap: !!document.getElementById('repo-command-bootstrap')?.checked,
+    bootstrap_languages: bootstrapLanguages,
+    keep_temp_workspace: !!document.getElementById('repo-command-keep-temp-workspace')?.checked,
   };
   if (timeoutRaw && (!Number.isFinite(payload.timeout_seconds) || payload.timeout_seconds <= 0)) {
     alert('Timeout must be a positive number.');
@@ -960,6 +1020,7 @@ async function runProjectRepoWorkspaceCommand() {
   }
   const ok = !!(data.result && data.result.ok);
   _setRepoWorkspaceState(ok ? 'state-info' : 'state-error', ok ? 'Command completed.' : 'Command exited with failure.');
+  await refreshProjectRepoWorkspaceUsage();
 }
 
 async function refreshProjectDataFiles() {
@@ -1777,6 +1838,7 @@ refreshCloudContextPolicy();
 refreshProjectChatToolAccess();
 refreshProjectRepoWorkspacePolicy();
 refreshProjectRepoWorkspaceStatus();
+refreshProjectRepoWorkspaceUsage();
 refreshProjectDataIngestStatus().catch(() => {});
 </script>
 {% endblock %}

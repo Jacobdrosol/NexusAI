@@ -6,7 +6,10 @@ import hashlib
 import hmac
 import os
 from pathlib import Path
+import shutil
+import tempfile
 from typing import Any, Dict, List, Optional, Literal, Tuple
+import uuid
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
@@ -93,6 +96,11 @@ class RepoWorkspacePushRequest(BaseModel):
 class RepoWorkspaceRunRequest(BaseModel):
     command: List[str] = Field(default_factory=list)
     timeout_seconds: Optional[int] = None
+    use_temp_workspace: bool = False
+    temp_ref: Optional[str] = None
+    bootstrap: bool = False
+    bootstrap_languages: List[str] = Field(default_factory=list)
+    keep_temp_workspace: bool = False
 
 
 _CLOUD_POLICY_VALUES = {"allow", "redact", "block"}
@@ -434,7 +442,10 @@ async def _repo_status_snapshot(
 def _allowed_workspace_commands() -> set[str]:
     raw = (
         os.environ.get("NEXUSAI_REPO_WORKSPACE_ALLOWED_COMMANDS", "")
-        or "py,python,pytest,uv,pip,npm,pnpm,yarn,node,dotnet,go,cargo,make,git"
+        or (
+            "py,python,pytest,uv,pip,pip3,npm,pnpm,yarn,node,npx,dotnet,go,cargo,make,ninja,cmake,"
+            "gcc,g++,clang,clang++,cl,msbuild,git"
+        )
     )
     values = {part.strip().lower() for part in raw.split(",") if part.strip()}
     return values
@@ -454,6 +465,257 @@ def _safe_command_parts(parts: List[str]) -> List[str]:
             raise HTTPException(status_code=400, detail="command arguments cannot contain newlines")
         cleaned.append(token)
     return cleaned
+
+
+def _result_usage(result: Dict[str, Any]) -> Dict[str, Any]:
+    usage = result.get("resource_usage")
+    return usage if isinstance(usage, dict) else {}
+
+
+def _aggregate_usage(usages: List[Dict[str, Any]]) -> Dict[str, Any]:
+    if not usages:
+        return {
+            "wall_time_ms": 0,
+            "cpu_user_seconds": 0.0,
+            "cpu_system_seconds": 0.0,
+            "peak_rss_bytes": 0,
+            "peak_vms_bytes": 0,
+            "io_read_bytes": 0,
+            "io_write_bytes": 0,
+            "sample_count": 0,
+        }
+    wall_time_ms = 0
+    cpu_user_seconds = 0.0
+    cpu_system_seconds = 0.0
+    peak_rss_bytes = 0
+    peak_vms_bytes = 0
+    io_read_bytes = 0
+    io_write_bytes = 0
+    sample_count = 0
+    for usage in usages:
+        wall_time_ms += int(usage.get("wall_time_ms") or 0)
+        cpu_user_seconds += float(usage.get("cpu_user_seconds") or 0.0)
+        cpu_system_seconds += float(usage.get("cpu_system_seconds") or 0.0)
+        peak_rss_bytes = max(peak_rss_bytes, int(usage.get("peak_rss_bytes") or 0))
+        peak_vms_bytes = max(peak_vms_bytes, int(usage.get("peak_vms_bytes") or 0))
+        io_read_bytes += int(usage.get("io_read_bytes") or 0)
+        io_write_bytes += int(usage.get("io_write_bytes") or 0)
+        sample_count += int(usage.get("sample_count") or 0)
+    return {
+        "wall_time_ms": int(wall_time_ms),
+        "cpu_user_seconds": round(cpu_user_seconds, 6),
+        "cpu_system_seconds": round(cpu_system_seconds, 6),
+        "peak_rss_bytes": int(peak_rss_bytes),
+        "peak_vms_bytes": int(peak_vms_bytes),
+        "io_read_bytes": int(io_read_bytes),
+        "io_write_bytes": int(io_write_bytes),
+        "sample_count": int(sample_count),
+    }
+
+
+async def _record_repo_workspace_usage(
+    request: Request,
+    *,
+    project_id: str,
+    action: str,
+    status: str,
+    command: Optional[List[str]] = None,
+    result: Optional[Dict[str, Any]] = None,
+    metrics: Optional[Dict[str, Any]] = None,
+    details: Optional[Dict[str, Any]] = None,
+) -> None:
+    store = getattr(request.app.state, "repo_workspace_usage_store", None)
+    if store is None:
+        try:
+            from control_plane.repo_workspace_usage_store import RepoWorkspaceUsageStore
+            store = RepoWorkspaceUsageStore()
+            request.app.state.repo_workspace_usage_store = store
+        except Exception:
+            return
+    safe_result = result if isinstance(result, dict) else {}
+    usage = metrics if isinstance(metrics, dict) else _result_usage(safe_result)
+    try:
+        await store.record_run(
+            project_id=project_id,
+            action=action,
+            status=status,
+            started_at=str(safe_result.get("started_at") or "").strip() or None,
+            finished_at=str(safe_result.get("finished_at") or "").strip() or None,
+            command=command or (safe_result.get("command") if isinstance(safe_result.get("command"), list) else []),
+            details=details or {},
+            metrics=usage or {},
+        )
+    except Exception:
+        return
+
+
+def _detect_bootstrap_languages(workspace: Path) -> List[str]:
+    detected: List[str] = []
+    if (workspace / "requirements.txt").exists() or (workspace / "pyproject.toml").exists() or (workspace / "setup.py").exists():
+        detected.append("python")
+    if (workspace / "package.json").exists():
+        detected.append("node")
+    has_dotnet = False
+    try:
+        if any(workspace.glob("*.sln")) or any(workspace.rglob("*.csproj")):
+            has_dotnet = True
+    except Exception:
+        has_dotnet = False
+    if has_dotnet:
+        detected.append("dotnet")
+    has_cpp = (workspace / "CMakeLists.txt").exists() or (workspace / "Makefile").exists()
+    if not has_cpp:
+        try:
+            if any(workspace.rglob("*.vcxproj")):
+                has_cpp = True
+        except Exception:
+            has_cpp = has_cpp
+    if has_cpp:
+        detected.append("cpp")
+    return detected
+
+
+def _python_venv_executable(venv_dir: Path) -> Path:
+    if os.name == "nt":
+        return venv_dir / "Scripts" / "python.exe"
+    return venv_dir / "bin" / "python"
+
+
+def _bootstrap_command_specs(workspace: Path, languages: List[str]) -> List[Dict[str, Any]]:
+    specs: List[Dict[str, Any]] = []
+    wanted = [str(lang or "").strip().lower() for lang in languages if str(lang or "").strip()]
+    if not wanted:
+        wanted = _detect_bootstrap_languages(workspace)
+
+    if "python" in wanted:
+        venv_dir = workspace / ".nexusai_venv"
+        py_bin = _python_venv_executable(venv_dir)
+        specs.append({
+            "label": "python_venv_create",
+            "command": ["py", "-m", "venv", str(venv_dir)],
+            "timeout_seconds": 300,
+        })
+        if (workspace / "requirements.txt").exists():
+            specs.append({
+                "label": "python_install_requirements",
+                "command": [str(py_bin), "-m", "pip", "install", "-r", "requirements.txt"],
+                "timeout_seconds": 1200,
+            })
+        elif (workspace / "pyproject.toml").exists() or (workspace / "setup.py").exists():
+            specs.append({
+                "label": "python_install_project",
+                "command": [str(py_bin), "-m", "pip", "install", "-e", "."],
+                "timeout_seconds": 1200,
+            })
+
+    if "node" in wanted and (workspace / "package.json").exists():
+        if (workspace / "pnpm-lock.yaml").exists():
+            specs.append({
+                "label": "node_install_pnpm",
+                "command": ["pnpm", "install", "--frozen-lockfile"],
+                "timeout_seconds": 1200,
+            })
+        elif (workspace / "yarn.lock").exists():
+            specs.append({
+                "label": "node_install_yarn",
+                "command": ["yarn", "install", "--frozen-lockfile"],
+                "timeout_seconds": 1200,
+            })
+        elif (workspace / "package-lock.json").exists():
+            specs.append({
+                "label": "node_install_npm_ci",
+                "command": ["npm", "ci"],
+                "timeout_seconds": 1200,
+            })
+        else:
+            specs.append({
+                "label": "node_install_npm",
+                "command": ["npm", "install"],
+                "timeout_seconds": 1200,
+            })
+
+    if "dotnet" in wanted:
+        specs.append({
+            "label": "dotnet_restore",
+            "command": ["dotnet", "restore"],
+            "timeout_seconds": 1200,
+        })
+
+    if "cpp" in wanted and (workspace / "CMakeLists.txt").exists():
+        specs.append({
+            "label": "cpp_cmake_configure",
+            "command": ["cmake", "-S", ".", "-B", "build"],
+            "timeout_seconds": 600,
+        })
+    return specs
+
+
+async def _is_git_repository(root: Path) -> bool:
+    check_repo = await _run_repo_command(
+        ["git", "rev-parse", "--is-inside-work-tree"],
+        cwd=root,
+        timeout_seconds=20,
+    )
+    return bool(check_repo.get("ok")) and "true" in str(check_repo.get("stdout") or "").lower()
+
+
+def _repo_temp_root(project_id: str) -> Path:
+    base = str(os.environ.get("NEXUSAI_REPO_WORKSPACE_TEMP_ROOT", "") or "").strip()
+    if base:
+        candidate = Path(base)
+    else:
+        candidate = Path(tempfile.gettempdir()) / "nexusai_repo_workspace"
+    return candidate / str(project_id) / f"run-{uuid.uuid4().hex[:12]}"
+
+
+async def _prepare_temp_workspace(
+    *,
+    project_id: str,
+    root: Path,
+    ref: Optional[str] = None,
+) -> Dict[str, Any]:
+    temp_root = _repo_temp_root(project_id)
+    temp_root.parent.mkdir(parents=True, exist_ok=True)
+
+    if await _is_git_repository(root):
+        cmd = ["git", "worktree", "add", "--detach", str(temp_root)]
+        wanted_ref = str(ref or "").strip()
+        if wanted_ref:
+            cmd.append(wanted_ref)
+        setup = await _run_repo_command(cmd, cwd=root, timeout_seconds=300)
+        if not setup.get("ok"):
+            detail = str(setup.get("stderr") or setup.get("error") or "failed to create temporary git worktree").strip()
+            raise HTTPException(status_code=400, detail=detail)
+        return {"mode": "git_worktree", "path": temp_root, "setup_result": setup}
+
+    try:
+        await asyncio.to_thread(shutil.copytree, str(root), str(temp_root), dirs_exist_ok=False)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"failed to create temporary workspace copy: {exc}")
+    return {"mode": "copy", "path": temp_root, "setup_result": None}
+
+
+async def _cleanup_temp_workspace(
+    *,
+    base_root: Path,
+    temp_root: Path,
+    mode: str,
+) -> Dict[str, Any]:
+    output: Dict[str, Any] = {"ok": True, "mode": mode, "path": str(temp_root)}
+    if mode == "git_worktree":
+        rm_res = await _run_repo_command(
+            ["git", "worktree", "remove", "--force", str(temp_root)],
+            cwd=base_root,
+            timeout_seconds=120,
+        )
+        output["remove_result"] = rm_res
+        if not rm_res.get("ok"):
+            output["ok"] = False
+    try:
+        await asyncio.to_thread(shutil.rmtree, str(temp_root), True)
+    except Exception:
+        pass
+    return output
 
 
 async def _fetch_github_identity(token: str, repo_full_name: Optional[str] = None) -> Dict[str, Any]:
@@ -1957,6 +2219,14 @@ async def clone_project_repo_workspace(
         git_dir = root / ".git"
         if git_dir.exists():
             snapshot = await _repo_status_snapshot(root=root, cfg=cfg)
+            await _record_repo_workspace_usage(
+                request,
+                project_id=project_id,
+                action="clone",
+                status="already_cloned",
+                command=["git", "clone", clone_url, str(root)],
+                details={"root_path": str(root), "clone_url": clone_url},
+            )
             return {
                 "status": "already_cloned",
                 "project_id": project_id,
@@ -1993,6 +2263,15 @@ async def clone_project_repo_workspace(
     res = await _run_repo_command(cmd, cwd=root.parent, timeout_seconds=900)
     if not res.get("ok"):
         detail = str(res.get("stderr") or res.get("error") or "clone failed").strip() or "clone failed"
+        await _record_repo_workspace_usage(
+            request,
+            project_id=project_id,
+            action="clone",
+            status="failed",
+            command=cmd,
+            result=res,
+            details={"root_path": str(root), "clone_url": clone_url, "branch": branch},
+        )
         raise HTTPException(status_code=400, detail=detail)
 
     if clone_url != cfg.get("clone_url"):
@@ -2010,6 +2289,15 @@ async def clone_project_repo_workspace(
         action="projects.repo_workspace.clone",
         resource=f"project:{project_id}",
         details={"clone_url": clone_url, "branch": branch, "root_path": str(root)},
+    )
+    await _record_repo_workspace_usage(
+        request,
+        project_id=project_id,
+        action="clone",
+        status="ok",
+        command=cmd,
+        result=res,
+        details={"root_path": str(root), "clone_url": clone_url, "branch": branch},
     )
     return {
         "status": "ok",
@@ -2053,6 +2341,15 @@ async def pull_project_repo_workspace(
     res = await _run_repo_command(cmd, cwd=root, timeout_seconds=600)
     if not res.get("ok"):
         detail = str(res.get("stderr") or res.get("error") or "pull failed").strip() or "pull failed"
+        await _record_repo_workspace_usage(
+            request,
+            project_id=project_id,
+            action="pull",
+            status="failed",
+            command=cmd,
+            result=res,
+            details={"remote": remote, "branch": branch},
+        )
         raise HTTPException(status_code=400, detail=detail)
 
     updated_snapshot = await _repo_status_snapshot(root=root, cfg=cfg)
@@ -2060,6 +2357,15 @@ async def pull_project_repo_workspace(
         request,
         action="projects.repo_workspace.pull",
         resource=f"project:{project_id}",
+        details={"remote": remote, "branch": branch},
+    )
+    await _record_repo_workspace_usage(
+        request,
+        project_id=project_id,
+        action="pull",
+        status="ok",
+        command=cmd,
+        result=res,
         details={"remote": remote, "branch": branch},
     )
     return {
@@ -2094,18 +2400,51 @@ async def commit_project_repo_workspace(
     if len(message) > 512:
         raise HTTPException(status_code=400, detail="commit message is too long")
 
+    usage_parts: List[Dict[str, Any]] = []
+    add_res: Optional[Dict[str, Any]] = None
     if body.add_all:
         add_res = await _run_repo_command(["git", "add", "-A"], cwd=root, timeout_seconds=120)
+        usage_parts.append(_result_usage(add_res))
         if not add_res.get("ok"):
             detail = str(add_res.get("stderr") or add_res.get("error") or "git add failed").strip() or "git add failed"
+            await _record_repo_workspace_usage(
+                request,
+                project_id=project_id,
+                action="commit",
+                status="failed",
+                command=["git", "add", "-A"],
+                result=add_res,
+                details={"stage": "add_all"},
+                metrics=_aggregate_usage(usage_parts),
+            )
             raise HTTPException(status_code=400, detail=detail)
 
     status_res = await _run_repo_command(["git", "status", "--porcelain"], cwd=root, timeout_seconds=20)
+    usage_parts.append(_result_usage(status_res))
     if not status_res.get("ok"):
         detail = str(status_res.get("stderr") or status_res.get("error") or "git status failed").strip() or "git status failed"
+        await _record_repo_workspace_usage(
+            request,
+            project_id=project_id,
+            action="commit",
+            status="failed",
+            command=["git", "status", "--porcelain"],
+            result=status_res,
+            details={"stage": "status"},
+            metrics=_aggregate_usage(usage_parts),
+        )
         raise HTTPException(status_code=400, detail=detail)
     pending = [line for line in str(status_res.get("stdout") or "").splitlines() if str(line).strip()]
     if not pending:
+        await _record_repo_workspace_usage(
+            request,
+            project_id=project_id,
+            action="commit",
+            status="no_changes",
+            command=["git", "commit", "-m", message],
+            details={"message": message, "add_all": bool(body.add_all)},
+            metrics=_aggregate_usage(usage_parts),
+        )
         return {
             "status": "no_changes",
             "project_id": project_id,
@@ -2114,24 +2453,48 @@ async def commit_project_repo_workspace(
         }
 
     commit_res = await _run_repo_command(["git", "commit", "-m", message], cwd=root, timeout_seconds=120)
+    usage_parts.append(_result_usage(commit_res))
     if not commit_res.get("ok"):
         detail = str(commit_res.get("stderr") or commit_res.get("error") or "commit failed").strip() or "commit failed"
+        await _record_repo_workspace_usage(
+            request,
+            project_id=project_id,
+            action="commit",
+            status="failed",
+            command=["git", "commit", "-m", message],
+            result=commit_res,
+            details={"message": message},
+            metrics=_aggregate_usage(usage_parts),
+        )
         raise HTTPException(status_code=400, detail=detail)
 
     sha_res = await _run_repo_command(["git", "rev-parse", "HEAD"], cwd=root, timeout_seconds=20)
+    usage_parts.append(_result_usage(sha_res))
     commit_sha = str(sha_res.get("stdout") or "").strip() if sha_res.get("ok") else None
     updated_snapshot = await _repo_status_snapshot(root=root, cfg=cfg)
+    aggregate_usage = _aggregate_usage(usage_parts)
     await record_audit_event(
         request,
         action="projects.repo_workspace.commit",
         resource=f"project:{project_id}",
         details={"message": message, "sha": commit_sha},
     )
+    await _record_repo_workspace_usage(
+        request,
+        project_id=project_id,
+        action="commit",
+        status="ok",
+        command=["git", "commit", "-m", message],
+        result=commit_res,
+        details={"message": message, "sha": commit_sha, "add_all": bool(body.add_all)},
+        metrics=aggregate_usage,
+    )
     return {
         "status": "ok",
         "project_id": project_id,
         "result": commit_res,
         "commit_sha": commit_sha,
+        "usage": aggregate_usage,
         "workspace": updated_snapshot,
     }
 
@@ -2168,6 +2531,15 @@ async def push_project_repo_workspace(
     push_res = await _run_repo_command(cmd, cwd=root, timeout_seconds=600)
     if not push_res.get("ok"):
         detail = str(push_res.get("stderr") or push_res.get("error") or "push failed").strip() or "push failed"
+        await _record_repo_workspace_usage(
+            request,
+            project_id=project_id,
+            action="push",
+            status="failed",
+            command=cmd,
+            result=push_res,
+            details={"remote": remote, "branch": branch},
+        )
         raise HTTPException(status_code=400, detail=detail)
 
     updated_snapshot = await _repo_status_snapshot(root=root, cfg=cfg)
@@ -2175,6 +2547,15 @@ async def push_project_repo_workspace(
         request,
         action="projects.repo_workspace.push",
         resource=f"project:{project_id}",
+        details={"remote": remote, "branch": branch},
+    )
+    await _record_repo_workspace_usage(
+        request,
+        project_id=project_id,
+        action="push",
+        status="ok",
+        command=cmd,
+        result=push_res,
         details={"remote": remote, "branch": branch},
     )
     return {
@@ -2217,23 +2598,160 @@ async def run_project_repo_workspace_command(
     if timeout is not None:
         timeout = max(1, min(int(timeout), 3600))
 
-    res = await _run_repo_command(
-        command,
-        cwd=root,
-        timeout_seconds=timeout,
-    )
+    execution_root = root
+    temp_ctx: Optional[Dict[str, Any]] = None
+    cleanup_result: Optional[Dict[str, Any]] = None
+    bootstrap_results: List[Dict[str, Any]] = []
+    usage_parts: List[Dict[str, Any]] = []
+    main_result: Optional[Dict[str, Any]] = None
+    failed_stage: Optional[str] = None
+
+    try:
+        if bool(body.use_temp_workspace):
+            temp_ctx = await _prepare_temp_workspace(
+                project_id=project_id,
+                root=root,
+                ref=(str(body.temp_ref or "").strip() or None),
+            )
+            execution_root = Path(temp_ctx["path"])
+
+        if bool(body.bootstrap):
+            specs = _bootstrap_command_specs(execution_root, list(body.bootstrap_languages or []))
+            for spec in specs:
+                bootstrap_cmd = _safe_command_parts(spec.get("command") or [])
+                bootstrap_exe = Path(bootstrap_cmd[0]).name.lower()
+                if bootstrap_exe not in allowed:
+                    # Bootstrap steps must obey the same command allowlist.
+                    raise HTTPException(
+                        status_code=403,
+                        detail=(
+                            f"bootstrap command '{bootstrap_exe}' is not allowed; "
+                            f"allowed commands: {', '.join(sorted(allowed))}"
+                        ),
+                    )
+                step_timeout = spec.get("timeout_seconds")
+                if step_timeout is None:
+                    step_timeout = timeout
+                if step_timeout is not None:
+                    step_timeout = max(1, min(int(step_timeout), 3600))
+                step_result = await _run_repo_command(
+                    bootstrap_cmd,
+                    cwd=execution_root,
+                    timeout_seconds=step_timeout,
+                )
+                usage_parts.append(_result_usage(step_result))
+                bootstrap_results.append(
+                    {
+                        "label": str(spec.get("label") or ""),
+                        "result": step_result,
+                    }
+                )
+                if not step_result.get("ok"):
+                    failed_stage = str(spec.get("label") or "bootstrap")
+                    break
+
+        if failed_stage is None:
+            main_result = await _run_repo_command(
+                command,
+                cwd=execution_root,
+                timeout_seconds=timeout,
+            )
+            usage_parts.append(_result_usage(main_result))
+            if not main_result.get("ok"):
+                failed_stage = "command"
+
+    finally:
+        if temp_ctx and not bool(body.keep_temp_workspace):
+            cleanup_result = await _cleanup_temp_workspace(
+                base_root=root,
+                temp_root=Path(temp_ctx["path"]),
+                mode=str(temp_ctx.get("mode") or "copy"),
+            )
+
+    usage_summary = _aggregate_usage(usage_parts)
+    status = "ok" if failed_stage is None else "failed"
+    details = {
+        "command": command,
+        "ok": status == "ok",
+        "failed_stage": failed_stage,
+        "use_temp_workspace": bool(body.use_temp_workspace),
+        "temp_ref": (str(body.temp_ref or "").strip() or None),
+        "bootstrap": bool(body.bootstrap),
+        "bootstrap_languages": list(body.bootstrap_languages or []),
+        "workspace_path": str(execution_root),
+    }
+    if main_result is not None:
+        details["returncode"] = main_result.get("returncode")
+
     await record_audit_event(
         request,
         action="projects.repo_workspace.run",
         resource=f"project:{project_id}",
+        details=details,
+    )
+    await _record_repo_workspace_usage(
+        request,
+        project_id=project_id,
+        action="run",
+        status=status,
+        command=command,
+        result=main_result if isinstance(main_result, dict) else {},
+        metrics=usage_summary,
         details={
-            "command": res.get("command"),
-            "ok": bool(res.get("ok")),
-            "returncode": res.get("returncode"),
+            **details,
+            "bootstrap_steps": [str(step.get("label") or "") for step in bootstrap_results],
         },
     )
     return {
-        "status": "ok",
+        "status": status,
         "project_id": project_id,
-        "result": res,
+        "workspace_path": str(execution_root),
+        "temporary_workspace": bool(body.use_temp_workspace),
+        "kept_temporary_workspace": bool(body.keep_temp_workspace),
+        "bootstrap_results": bootstrap_results,
+        "result": main_result,
+        "usage": usage_summary,
+        "cleanup": cleanup_result,
     }
+
+
+@router.get("/{project_id}/repo/workspace/runs")
+async def list_project_repo_workspace_runs(
+    project_id: str,
+    request: Request,
+    limit: int = 100,
+) -> dict:
+    project_registry = request.app.state.project_registry
+    try:
+        await project_registry.get(project_id)
+    except ProjectNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    store = getattr(request.app.state, "repo_workspace_usage_store", None)
+    if store is None:
+        return {"project_id": project_id, "runs": []}
+    rows = await store.list_runs(project_id=project_id, limit=limit)
+    return {"project_id": project_id, "runs": rows}
+
+
+@router.get("/{project_id}/repo/workspace/runs/summary")
+async def summarize_project_repo_workspace_runs(
+    project_id: str,
+    request: Request,
+    since_hours: Optional[int] = None,
+) -> dict:
+    project_registry = request.app.state.project_registry
+    try:
+        await project_registry.get(project_id)
+    except ProjectNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    if since_hours is not None:
+        since_hours = max(1, min(int(since_hours), 24 * 365))
+    store = getattr(request.app.state, "repo_workspace_usage_store", None)
+    if store is None:
+        return {
+            "project_id": project_id,
+            "since_hours": since_hours,
+            "totals": {},
+            "by_action": [],
+        }
+    return await store.summarize(project_id=project_id, since_hours=since_hours)

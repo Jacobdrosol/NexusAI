@@ -459,11 +459,44 @@ class CPClient:
         *,
         command: List[str],
         timeout_seconds: Optional[int] = None,
+        use_temp_workspace: bool = False,
+        temp_ref: Optional[str] = None,
+        bootstrap: bool = False,
+        bootstrap_languages: Optional[List[str]] = None,
+        keep_temp_workspace: bool = False,
     ) -> Optional[Dict[str, Any]]:
-        body: Dict[str, Any] = {"command": command}
+        body: Dict[str, Any] = {
+            "command": command,
+            "use_temp_workspace": bool(use_temp_workspace),
+            "temp_ref": temp_ref,
+            "bootstrap": bool(bootstrap),
+            "bootstrap_languages": list(bootstrap_languages or []),
+            "keep_temp_workspace": bool(keep_temp_workspace),
+        }
         if timeout_seconds is not None:
             body["timeout_seconds"] = int(timeout_seconds)
         return self._post(f"/v1/projects/{project_id}/repo/workspace/run", body, timeout=_INGEST_TIMEOUT)
+
+    def list_project_repo_workspace_runs(
+        self,
+        project_id: str,
+        *,
+        limit: int = 100,
+    ) -> Optional[Dict[str, Any]]:
+        safe_limit = max(1, min(int(limit), 1000))
+        return self._get(f"/v1/projects/{project_id}/repo/workspace/runs?limit={safe_limit}")
+
+    def summarize_project_repo_workspace_runs(
+        self,
+        project_id: str,
+        *,
+        since_hours: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
+        path = f"/v1/projects/{project_id}/repo/workspace/runs/summary"
+        if since_hours is not None:
+            safe_hours = max(1, min(int(since_hours), 24 * 365))
+            path += f"?since_hours={safe_hours}"
+        return self._get(path)
 
     # Models
     def list_models(self) -> Optional[List[Dict[str, Any]]]:

@@ -978,6 +978,17 @@ def test_project_repo_workspace_api_proxies_control_plane(dashboard_client):
             self.run_called = kwargs
             return {"status": "ok", "result": {"ok": True}, **kwargs}
 
+        def list_project_repo_workspace_runs(self, **kwargs):
+            return {"project_id": kwargs.get("project_id"), "runs": [{"id": "run-1", "action": "run", "status": "ok"}]}
+
+        def summarize_project_repo_workspace_runs(self, **kwargs):
+            return {
+                "project_id": kwargs.get("project_id"),
+                "since_hours": kwargs.get("since_hours"),
+                "totals": {"total_runs": 1, "success_runs": 1, "failed_runs": 0},
+                "by_action": [{"action": "run", "runs": 1}],
+            }
+
         def last_error(self):
             return {}
 
@@ -1002,8 +1013,18 @@ def test_project_repo_workspace_api_proxies_control_plane(dashboard_client):
         )
         run_resp = dashboard_client.post(
             "/api/projects/proj-1/repo/workspace/run",
-            json={"command": ["py", "-m", "pytest", "-q"], "timeout_seconds": 90},
+            json={
+                "command": ["py", "-m", "pytest", "-q"],
+                "timeout_seconds": 90,
+                "use_temp_workspace": True,
+                "temp_ref": "main",
+                "bootstrap": True,
+                "bootstrap_languages": ["python", "node"],
+                "keep_temp_workspace": False,
+            },
         )
+        runs_resp = dashboard_client.get("/api/projects/proj-1/repo/workspace/runs?limit=10")
+        summary_resp = dashboard_client.get("/api/projects/proj-1/repo/workspace/runs/summary?since_hours=24")
 
     assert get_resp.status_code == 200
     assert get_resp.get_json()["root_path"] == "C:\\repo\\demo"
@@ -1019,6 +1040,13 @@ def test_project_repo_workspace_api_proxies_control_plane(dashboard_client):
     assert run_resp.status_code == 200
     assert fake_cp.run_called is not None
     assert fake_cp.run_called["command"] == ["py", "-m", "pytest", "-q"]
+    assert fake_cp.run_called["use_temp_workspace"] is True
+    assert fake_cp.run_called["bootstrap"] is True
+    assert fake_cp.run_called["bootstrap_languages"] == ["python", "node"]
+    assert runs_resp.status_code == 200
+    assert runs_resp.get_json()["runs"][0]["id"] == "run-1"
+    assert summary_resp.status_code == 200
+    assert summary_resp.get_json()["totals"]["total_runs"] == 1
 
 
 def test_worker_detail_page_loads_when_logged_in(dashboard_client):

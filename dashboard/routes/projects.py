@@ -598,13 +598,57 @@ def api_run_project_repo_workspace_command(project_id: str):
         except Exception:
             return jsonify({"error": "timeout_seconds must be an integer"}), 400
     cp = get_cp_client()
+    bootstrap_languages = data.get("bootstrap_languages")
+    if bootstrap_languages is None:
+        bootstrap_languages_list: list[str] = []
+    elif isinstance(bootstrap_languages, list):
+        bootstrap_languages_list = [str(x).strip() for x in bootstrap_languages if str(x).strip()]
+    else:
+        return jsonify({"error": "bootstrap_languages must be an array of strings"}), 400
     result = cp.run_project_repo_workspace_command(
         project_id=project_id,
         command=[str(part) for part in command],
         timeout_seconds=timeout_seconds,
+        use_temp_workspace=bool(data.get("use_temp_workspace", False)),
+        temp_ref=(str(data.get("temp_ref") or "").strip() or None),
+        bootstrap=bool(data.get("bootstrap", False)),
+        bootstrap_languages=bootstrap_languages_list,
+        keep_temp_workspace=bool(data.get("keep_temp_workspace", False)),
     )
     if result is None:
         return _cp_error_response(cp, "repo command failed")
+    return jsonify(result)
+
+
+@bp.get("/api/projects/<project_id>/repo/workspace/runs")
+@login_required
+def api_list_project_repo_workspace_runs(project_id: str):
+    limit_raw = (request.args.get("limit") or "100").strip()
+    try:
+        limit = max(1, min(int(limit_raw), 1000))
+    except Exception:
+        limit = 100
+    cp = get_cp_client()
+    result = cp.list_project_repo_workspace_runs(project_id=project_id, limit=limit)
+    if result is None:
+        return _cp_error_response(cp, "failed to list repo workspace runs")
+    return jsonify(result)
+
+
+@bp.get("/api/projects/<project_id>/repo/workspace/runs/summary")
+@login_required
+def api_summarize_project_repo_workspace_runs(project_id: str):
+    since_raw = (request.args.get("since_hours") or "").strip()
+    since_hours: int | None = None
+    if since_raw:
+        try:
+            since_hours = max(1, min(int(since_raw), 24 * 365))
+        except Exception:
+            return jsonify({"error": "since_hours must be an integer"}), 400
+    cp = get_cp_client()
+    result = cp.summarize_project_repo_workspace_runs(project_id=project_id, since_hours=since_hours)
+    if result is None:
+        return _cp_error_response(cp, "failed to summarize repo workspace runs")
     return jsonify(result)
 
 
