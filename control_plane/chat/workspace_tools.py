@@ -60,6 +60,36 @@ _BLOCKED_SUFFIXES = {
     ".sqlite",
     ".db",
 }
+_CODE_SUFFIXES = {
+    ".py",
+    ".js",
+    ".ts",
+    ".tsx",
+    ".jsx",
+    ".cs",
+    ".go",
+    ".java",
+    ".kt",
+    ".swift",
+    ".rb",
+    ".php",
+    ".rs",
+    ".cpp",
+    ".cc",
+    ".c",
+    ".h",
+    ".hpp",
+}
+_DOC_SUFFIXES = {
+    ".md",
+    ".rst",
+    ".txt",
+    ".adoc",
+    ".json",
+    ".yml",
+    ".yaml",
+    ".toml",
+}
 
 _WINDOWS_PATH_RE = re.compile(r"([A-Za-z]:\\[^\s\"']+)")
 _POSIX_PATH_RE = re.compile(r"((?:\./|\../|/)[^\s\"']+)")
@@ -206,6 +236,25 @@ def _best_matching_snippet(text: str, terms: list[str], *, max_chars: int) -> st
     return snippet
 
 
+def _path_priority(path: str) -> int:
+    lowered = str(path or "").lower()
+    suffix = Path(lowered).suffix
+    priority = 0
+    if suffix in _CODE_SUFFIXES:
+        priority += 6
+    elif suffix in _DOC_SUFFIXES:
+        priority -= 2
+    if lowered.startswith(("src/", "backend/", "server/", "api/", "app/", "services/", "controllers/", "models/")):
+        priority += 4
+    if any(token in lowered for token in ("/src/", "/backend/", "/server/", "/api/", "/controllers/", "/services/", "/models/")):
+        priority += 2
+    if lowered.startswith(("docs/timeline/", "temp_issue_files/")):
+        priority -= 5
+    if "/tests/" in lowered or lowered.startswith(("tests/", "test/")):
+        priority -= 1
+    return priority
+
+
 def search_workspace_snippets(
     root: Path,
     query: str,
@@ -258,7 +307,7 @@ def search_workspace_snippets(
                 lowered = text.lower() if text else ""
                 content_hits = sum(1 for term in terms if term in lowered)
 
-            score = (path_hits * 4) + min(content_hits, 8)
+            score = (path_hits * 4) + min(content_hits, 8) + _path_priority(rel_path)
             snippet = _best_matching_snippet(text, terms, max_chars=max_chars_per_snippet)
             matches.append(
                 {

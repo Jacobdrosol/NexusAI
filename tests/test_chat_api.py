@@ -759,6 +759,90 @@ async def test_stream_message_emits_context_summary_event_when_repo_context_load
         assert "event: context_summary" in stream_resp.text
         assert "Files inspected (verified context)" in stream_resp.text
         assert "STREAM_CONTEXT_TOKEN" not in stream_resp.text
+        assert "event: token" not in stream_resp.text
+
+
+@pytest.mark.anyio
+async def test_repo_grounded_output_sanitizes_unverifiable_action_lines(cp_app):
+    cp_app.state.scheduler.schedule = AsyncMock(
+        return_value={
+            "output": (
+                "Let me search for authentication files.\n"
+                "**/auth*.ts\n"
+                "Based on verified context, auth is configured."
+            )
+        }
+    )
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-repo-sanitize"
+        create_project = await client.post(
+            "/v1/projects",
+            json={
+                "id": project_id,
+                "name": "Repo Sanitize Project",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        assert create_project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Repo Sanitize Chat",
+                "project_id": project_id,
+                "tool_access_enabled": True,
+                "tool_access_repo_search": True,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-repo-sanitize",
+                "name": "Repo Sanitize Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        ingest = await client.post(
+            "/v1/vault/items",
+            json={
+                "title": "README.md",
+                "content": "AUTH_SANITIZE_TOKEN",
+                "namespace": f"project:{project_id}:repo",
+                "project_id": project_id,
+            },
+        )
+        assert ingest.status_code == 200
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": "Search repository authentication setup",
+                "bot_id": "bot-repo-sanitize",
+            },
+        )
+        assert resp.status_code == 200
+        content = resp.json()["assistant_message"]["content"]
+        assert content.startswith("Files inspected (verified context)")
+        assert "Let me search" not in content
+        assert "**/auth*.ts" not in content
 
 
 @pytest.mark.anyio

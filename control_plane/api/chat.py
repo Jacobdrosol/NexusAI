@@ -53,6 +53,15 @@ _REPO_INTENT_RE = re.compile(
     r"\b(repo|repository|codebase|source code|files?|read|search|scan|audit|analy[sz]e|inspect)\b",
     re.IGNORECASE,
 )
+_SOURCE_SCORE_SUFFIX_RE = re.compile(r"\s*\(score=[^)]+\)\s*$", re.IGNORECASE)
+_UNVERIFIABLE_ACTION_LINE_RE = re.compile(
+    r"^\s*(let\s+me\s+|searching\b|i\s+searched\b|i\s+can\s+read\s+and\s+search\b|\*\*/)",
+    re.IGNORECASE,
+)
+_UNVERIFIABLE_ACTION_FRAGMENT_RE = re.compile(
+    r"\b(let\s+me\s+search|searching\s+for|i\s+searched)\b",
+    re.IGNORECASE,
+)
 
 
 def _repo_intent_requested(content: str) -> bool:
@@ -86,7 +95,8 @@ def _context_source_labels(context_items: Optional[List[str]], *, limit: int = 1
         detail = line[close + 1 :].strip()
         if not marker:
             continue
-        label = f"{marker} {detail}".strip()
+        cleaned_detail = _SOURCE_SCORE_SUFFIX_RE.sub("", detail).strip()
+        label = f"{marker} {cleaned_detail}".strip()
         if label in seen:
             continue
         seen.add(label)
@@ -115,6 +125,7 @@ def _messages_to_payload(
                 "Repository Evidence Policy:\n"
                 "- Use only the provided context snippets as verified repository evidence for this turn.\n"
                 "- Do not claim you searched/read/scanned files unless those files appear in verified sources.\n"
+                "- Do not simulate tool execution logs (for example: 'Let me search...', glob patterns, or pseudo command traces).\n"
                 "- If evidence is incomplete, explicitly state what you could not verify.\n"
                 "- For repository/code/security analysis, include a 'Files inspected' section with exact paths/markers.\n"
                 "Verified sources:\n"
@@ -145,7 +156,7 @@ def _apply_repo_evidence_envelope(output: str, *, require_repo_evidence: bool, c
         return output
     if not context_sources:
         return _repo_context_unavailable_message()
-    normalized = str(output or "").strip()
+    normalized = _sanitize_repo_grounded_output(output)
     if not normalized:
         normalized = "No model output was returned."
     files_section = "\n".join(f"- {source}" for source in context_sources[:12])
@@ -153,6 +164,29 @@ def _apply_repo_evidence_envelope(output: str, *, require_repo_evidence: bool, c
     if "files inspected" in normalized.lower():
         return normalized
     return f"{prefix}\n{normalized}"
+
+
+def _sanitize_repo_grounded_output(output: str) -> str:
+    text = str(output or "")
+    lines = text.splitlines()
+    kept: List[str] = []
+    for raw in lines:
+        line = str(raw or "")
+        stripped = line.strip()
+        if _UNVERIFIABLE_ACTION_LINE_RE.search(stripped):
+            continue
+        if stripped.startswith('"') and stripped.endswith('"') and _UNVERIFIABLE_ACTION_FRAGMENT_RE.search(stripped):
+            continue
+        kept.append(line)
+    compacted: List[str] = []
+    previous_blank = False
+    for line in kept:
+        is_blank = not str(line).strip()
+        if is_blank and previous_blank:
+            continue
+        compacted.append(line)
+        previous_blank = is_blank
+    return "\n".join(compacted).strip()
 
 
 def _project_repo_namespace(project_id: str, project: Any) -> str:
@@ -387,6 +421,28 @@ async def _resolve_workspace_context_items(
     return resolved
 
 
+def _repo_row_priority(row: Any) -> tuple[int, float]:
+    if not isinstance(row, dict):
+        return (-100, 0.0)
+    title = str(row.get("title") or "").strip()
+    lowered = title.lower()
+    priority = 0
+    if ":pr:" in lowered or ":issue" in lowered or ":discussion" in lowered:
+        priority -= 6
+    if ":commit:" in lowered:
+        priority -= 2
+    if re.search(r"[\\/][^\\/]+\.[a-z0-9]{1,8}$", title, flags=re.IGNORECASE):
+        priority += 6
+    if any(token in lowered for token in ("/src/", "/backend/", "/server/", "/api/", "/controllers/", "/services/", "/models/")):
+        priority += 3
+    score_value = 0.0
+    try:
+        score_value = float(row.get("score") or 0.0)
+    except Exception:
+        score_value = 0.0
+    return priority, score_value
+
+
 async def _resolve_project_repo_context_items(
     request: Request,
     *,
@@ -430,7 +486,15 @@ async def _resolve_project_repo_context_items(
         except Exception:
             continue
 
-        for row in rows:
+        ranked_rows = sorted(
+            list(rows or []),
+            key=lambda r: _repo_row_priority(r),
+            reverse=True,
+        )
+        high_quality = [row for row in ranked_rows if _repo_row_priority(row)[0] >= 2]
+        candidate_rows = high_quality if high_quality else ranked_rows
+
+        for row in candidate_rows:
             chunk_id = str(row.get("chunk_id") or "").strip()
             if not chunk_id or chunk_id in seen_chunks:
                 continue
@@ -927,10 +991,6 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                 yield f"event: assistant_message\ndata: {assistant_message.model_dump_json()}\n\n"
                 yield "event: done\ndata: {}\n\n"
                 return
-            evidence_prefix = ""
-            if require_repo_evidence and context_sources:
-                evidence_lines = "\n".join(f"- {source}" for source in context_sources[:12])
-                evidence_prefix = f"Files inspected (verified context)\n{evidence_lines}\n\n"
             payload = _messages_to_payload(
                 messages,
                 context_items=resolved_context,
@@ -955,9 +1015,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
             assistant_message: Optional[ChatMessage] = None
             stream_provider: Optional[str] = None
             stream_model: Optional[str] = None
-            if evidence_prefix:
-                streamed_chunks.append(evidence_prefix)
-                yield f'event: token\ndata: {json.dumps({"text": evidence_prefix})}\n\n'
+            token_counter = 0
             async for event in scheduler.stream(task):
                 event_name = str(event.get("event") or "")
                 if event_name == "backend_selected":
@@ -982,6 +1040,14 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                     chunk = str(event.get("text") or "")
                     if chunk:
                         streamed_chunks.append(chunk)
+                        if require_repo_evidence:
+                            token_counter += 1
+                            if token_counter % 32 == 0:
+                                yield (
+                                    'event: status\ndata: '
+                                    '{"phase":"analysis","label":"Analyzing verified repository context..."}\n\n'
+                                )
+                            continue
                         partial_content = "".join(streamed_chunks)
                         partial_metadata = {"streaming": True}
                         if assistant_message is None:
@@ -1002,7 +1068,8 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                                 model=stream_model,
                                 provider=stream_provider,
                             )
-                    yield f'event: token\ndata: {json.dumps({"text": chunk})}\n\n'
+                    if not require_repo_evidence:
+                        yield f'event: token\ndata: {json.dumps({"text": chunk})}\n\n'
                 elif event_name == "final":
                     result = dict(event)
                 elif event_name == "error":
