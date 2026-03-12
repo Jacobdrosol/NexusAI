@@ -167,7 +167,7 @@ GitHub integration:
 - Optional PR review task workflow.
 - Long GitHub ingests now run as background jobs and report status back to the project page instead of holding the HTTP request open.
 - Project-scoped `Repository Workspace` controls on Project Detail for:
-  - configuring a local repo root path and clone defaults
+  - configuring managed repository workspace policy and clone defaults
   - repository clone/status/pull/commit/push operations from the dashboard
   - optional guarded command execution for test/build commands (`run`) with an allowlist policy
 - Repository workspace run history with per-run resource metrics (duration, CPU, peak memory, IO) and aggregate summaries for internal tracking.

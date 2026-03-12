@@ -386,7 +386,8 @@ class CPClient:
         project_id: str,
         *,
         enabled: bool,
-        root_path: Optional[str],
+        managed_path_mode: bool = True,
+        root_path: Optional[str] = None,
         clone_url: Optional[str],
         default_branch: Optional[str],
         allow_push: bool,
@@ -394,6 +395,7 @@ class CPClient:
     ) -> Optional[Dict[str, Any]]:
         body: Dict[str, Any] = {
             "enabled": bool(enabled),
+            "managed_path_mode": bool(managed_path_mode),
             "root_path": root_path,
             "clone_url": clone_url,
             "default_branch": default_branch,

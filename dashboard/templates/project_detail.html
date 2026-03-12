@@ -152,12 +152,8 @@
       <label style="display:block; margin-bottom:0.6rem;">
         <input type="checkbox" id="project-chat-tool-repo-search" {% if chat_tool_access.repo_search %}checked{% endif %}> Allow semantic repo search
       </label>
-      <div class="form-group">
-        <label>Workspace Root Path</label>
-        <input class="form-control" id="project-chat-tool-workspace-root" placeholder="C:\\repo\\project" value="{{ chat_tool_access.workspace_root or '' }}">
-      </div>
       <div class="mini-note" style="margin-bottom:0.5rem;">
-        Workspace root is required for filesystem tools. Use an absolute path on the control-plane host.
+        Filesystem tools use the project's managed repository workspace path automatically.
       </div>
       <button class="btn btn-primary" onclick="saveProjectChatToolAccess()">Save Workspace Tool Policy</button>
     </div>
@@ -187,9 +183,8 @@
       <label style="display:block; margin-bottom:0.6rem;">
         <input type="checkbox" id="repo-workspace-allow-command-exec" {% if repo_workspace.allow_command_execution %}checked{% endif %}> Allow command execution from dashboard
       </label>
-      <div class="form-group">
-        <label>Workspace Root Path</label>
-        <input class="form-control" id="repo-workspace-root-path" placeholder="C:\repo\project" value="{{ repo_workspace.root_path or '' }}">
+      <div class="mini-note" style="margin-bottom:0.6rem;">
+        Workspace path is managed by the server for this project and is not user-configurable in the UI.
       </div>
       <div class="form-group">
         <label>Clone URL</label>
@@ -649,7 +644,7 @@
 const PROJECT_ID = {{ project.id|tojson if project else "''" }};
 let CLOUD_POLICY = {provider_policies: {}, bot_overrides: {}};
 let PROJECT_CHAT_TOOL_ACCESS = {{ (chat_tool_access if chat_tool_access else {"enabled": false, "filesystem": false, "repo_search": false, "workspace_root": none}) | tojson }};
-let PROJECT_REPO_WORKSPACE = {{ (repo_workspace if repo_workspace else {"enabled": false, "root_path": none, "clone_url": none, "default_branch": none, "allow_push": false, "allow_command_execution": false}) | tojson }};
+let PROJECT_REPO_WORKSPACE = {{ (repo_workspace if repo_workspace else {"enabled": false, "managed_path_mode": true, "workspace_binding": "managed", "root_path": none, "clone_url": none, "default_branch": none, "allow_push": false, "allow_command_execution": false}) | tojson }};
 let PROJECT_REPO_WORKSPACE_USAGE_SUMMARY = {};
 let GITHUB_SYNC_POLL = null;
 let PROJECT_DATA_INGEST_POLL = null;
@@ -713,7 +708,6 @@ function _syncRepoWorkspaceInputs() {
   const enabled = !!document.getElementById('repo-workspace-enabled')?.checked;
   const allowPush = document.getElementById('repo-workspace-allow-push');
   const allowExec = document.getElementById('repo-workspace-allow-command-exec');
-  const rootPath = document.getElementById('repo-workspace-root-path');
   const cloneUrl = document.getElementById('repo-workspace-clone-url');
   const defaultBranch = document.getElementById('repo-workspace-default-branch');
   if (allowPush) {
@@ -724,10 +718,6 @@ function _syncRepoWorkspaceInputs() {
     allowExec.disabled = !enabled;
     if (!enabled) allowExec.checked = false;
   }
-  if (rootPath) {
-    rootPath.disabled = !enabled;
-    if (!enabled) rootPath.value = '';
-  }
   if (cloneUrl) cloneUrl.disabled = !enabled;
   if (defaultBranch) defaultBranch.disabled = !enabled;
 }
@@ -735,6 +725,8 @@ function _syncRepoWorkspaceInputs() {
 function _applyProjectRepoWorkspacePolicy(policy) {
   const cfg = {
     enabled: !!policy?.enabled,
+    managed_path_mode: policy?.managed_path_mode !== false,
+    workspace_binding: policy?.workspace_binding || 'managed',
     root_path: policy?.root_path || null,
     clone_url: policy?.clone_url || null,
     default_branch: policy?.default_branch || null,
@@ -745,14 +737,12 @@ function _applyProjectRepoWorkspacePolicy(policy) {
   const enabled = document.getElementById('repo-workspace-enabled');
   const allowPush = document.getElementById('repo-workspace-allow-push');
   const allowExec = document.getElementById('repo-workspace-allow-command-exec');
-  const rootPath = document.getElementById('repo-workspace-root-path');
   const cloneUrl = document.getElementById('repo-workspace-clone-url');
   const defaultBranch = document.getElementById('repo-workspace-default-branch');
   const pre = document.getElementById('repo-workspace-policy-pre');
   if (enabled) enabled.checked = cfg.enabled;
   if (allowPush) allowPush.checked = cfg.allow_push;
   if (allowExec) allowExec.checked = cfg.allow_command_execution;
-  if (rootPath) rootPath.value = cfg.root_path || '';
   if (cloneUrl) cloneUrl.value = cfg.clone_url || '';
   if (defaultBranch) defaultBranch.value = cfg.default_branch || '';
   if (pre) pre.textContent = JSON.stringify(cfg, null, 2);
@@ -781,7 +771,6 @@ async function saveProjectRepoWorkspace() {
   const enabled = !!document.getElementById('repo-workspace-enabled')?.checked;
   const allowPush = enabled && !!document.getElementById('repo-workspace-allow-push')?.checked;
   const allowExec = enabled && !!document.getElementById('repo-workspace-allow-command-exec')?.checked;
-  const rootPath = (document.getElementById('repo-workspace-root-path')?.value || '').trim();
   const cloneUrl = (document.getElementById('repo-workspace-clone-url')?.value || '').trim();
   const defaultBranch = (document.getElementById('repo-workspace-default-branch')?.value || '').trim();
   _setRepoWorkspaceState('state-loading', 'Saving repo workspace policy...');
@@ -790,7 +779,8 @@ async function saveProjectRepoWorkspace() {
     headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
     body: JSON.stringify({
       enabled,
-      root_path: rootPath || null,
+      managed_path_mode: true,
+      root_path: null,
       clone_url: cloneUrl || null,
       default_branch: defaultBranch || null,
       allow_push: allowPush,
@@ -1748,7 +1738,6 @@ function _syncProjectChatToolInputs() {
   const enabled = !!document.getElementById('project-chat-tool-enabled')?.checked;
   const filesystem = document.getElementById('project-chat-tool-filesystem');
   const repoSearch = document.getElementById('project-chat-tool-repo-search');
-  const workspaceRoot = document.getElementById('project-chat-tool-workspace-root');
   if (filesystem) {
     filesystem.disabled = !enabled;
     if (!enabled) filesystem.checked = false;
@@ -1757,10 +1746,6 @@ function _syncProjectChatToolInputs() {
     repoSearch.disabled = !enabled;
     if (!enabled) repoSearch.checked = false;
   }
-  if (workspaceRoot) {
-    workspaceRoot.disabled = !enabled;
-    if (!enabled) workspaceRoot.value = '';
-  }
 }
 
 function _applyProjectChatToolPolicy(policy) {
@@ -1768,18 +1753,15 @@ function _applyProjectChatToolPolicy(policy) {
     enabled: !!policy?.enabled,
     filesystem: !!policy?.filesystem,
     repo_search: !!policy?.repo_search,
-    workspace_root: (policy?.workspace_root || null),
   };
   PROJECT_CHAT_TOOL_ACCESS = cfg;
   const enabled = document.getElementById('project-chat-tool-enabled');
   const filesystem = document.getElementById('project-chat-tool-filesystem');
   const repoSearch = document.getElementById('project-chat-tool-repo-search');
-  const workspaceRoot = document.getElementById('project-chat-tool-workspace-root');
   const pre = document.getElementById('project-chat-tool-pre');
   if (enabled) enabled.checked = cfg.enabled;
   if (filesystem) filesystem.checked = cfg.filesystem;
   if (repoSearch) repoSearch.checked = cfg.repo_search;
-  if (workspaceRoot) workspaceRoot.value = cfg.workspace_root || '';
   if (pre) pre.textContent = JSON.stringify(cfg, null, 2);
   _syncProjectChatToolInputs();
 }
@@ -1801,7 +1783,6 @@ async function saveProjectChatToolAccess() {
   const enabled = !!document.getElementById('project-chat-tool-enabled')?.checked;
   const filesystem = enabled && !!document.getElementById('project-chat-tool-filesystem')?.checked;
   const repoSearch = enabled && !!document.getElementById('project-chat-tool-repo-search')?.checked;
-  const workspaceRoot = enabled ? (document.getElementById('project-chat-tool-workspace-root')?.value || '').trim() : '';
   _setProjectChatToolState('state-loading', 'Saving chat workspace tool policy...');
   const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/chat-tool-access', {
     method: 'PUT',
@@ -1810,7 +1791,7 @@ async function saveProjectChatToolAccess() {
       enabled,
       filesystem,
       repo_search: repoSearch,
-      workspace_root: workspaceRoot || null,
+      workspace_root: null,
     }),
   });
   const data = await res.json().catch(() => ({}));

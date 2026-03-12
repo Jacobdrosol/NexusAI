@@ -941,7 +941,9 @@ def test_project_repo_workspace_api_proxies_control_plane(dashboard_client):
             return {
                 "project_id": project_id,
                 "enabled": True,
-                "root_path": "C:\\repo\\demo",
+                "managed_path_mode": True,
+                "workspace_binding": "managed",
+                "root_path": None,
                 "clone_url": "https://github.com/org/demo.git",
                 "default_branch": "main",
                 "allow_push": True,
@@ -999,7 +1001,8 @@ def test_project_repo_workspace_api_proxies_control_plane(dashboard_client):
             "/api/projects/proj-1/repo/workspace",
             json={
                 "enabled": True,
-                "root_path": "C:\\repo\\demo",
+                "managed_path_mode": True,
+                "root_path": None,
                 "clone_url": "https://github.com/org/demo.git",
                 "default_branch": "main",
                 "allow_push": True,
@@ -1027,7 +1030,8 @@ def test_project_repo_workspace_api_proxies_control_plane(dashboard_client):
         summary_resp = dashboard_client.get("/api/projects/proj-1/repo/workspace/runs/summary?since_hours=24")
 
     assert get_resp.status_code == 200
-    assert get_resp.get_json()["root_path"] == "C:\\repo\\demo"
+    assert get_resp.get_json()["root_path"] is None
+    assert get_resp.get_json()["managed_path_mode"] is True
     assert put_resp.status_code == 200
     assert fake_cp.updated is not None
     assert fake_cp.updated["project_id"] == "proj-1"

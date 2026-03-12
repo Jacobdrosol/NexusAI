@@ -9,14 +9,14 @@ This guide sets up a project so chat can use repository context, PM orchestratio
    - `http://<control-plane-host>:8000/health`
    - `http://<dashboard-host>:5000`
 3. You have a control-plane API token if your environment enforces API auth.
-4. The target repository path is on the control-plane host filesystem.
+4. The control plane host has write access to `NEXUSAI_REPO_WORKSPACE_ROOT` (or default `data/repo_workspaces`).
 
 ## 2. Configure Repository Workspace (Project Level)
 
 In `Projects -> <project> -> Repository Workspace`:
 
 1. Enable `Repository Workspace`.
-2. Set `Workspace Root Path` (absolute path on control-plane host).
+2. Keep managed workspace mode (default). Do not set a host path in UI.
 3. Set `Clone URL` and `Default Branch`.
 4. Enable `Allow git push` only if needed.
 5. Enable `Allow command execution` if you want build/test from UI.
@@ -36,8 +36,7 @@ In `Projects -> <project> -> Chat Workspace Tools`:
 1. Enable `chat workspace tools for this project`.
 2. Enable `Allow semantic repo search`.
 3. Enable `Allow filesystem read/search` if needed.
-4. Set `Workspace Root Path` (same repo root as project workspace).
-5. Save workspace tool policy.
+4. Save workspace tool policy.
 
 ## 4. Install PM Bot Pack (Ollama Cloud)
 
@@ -97,7 +96,7 @@ If any switch is off, workspace tool usage is denied.
 
 1. Tools not used in chat:
    - verify all three switches
-   - verify project workspace root path exists on control-plane host
+   - verify project repository workspace is enabled and cloned
 2. Filesystem snippets missing:
    - verify project-level `filesystem` is enabled
    - verify bot-level `filesystem` is enabled

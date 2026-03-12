@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import os
 from pathlib import Path
+import re
 import shutil
 import tempfile
 from typing import Any, Dict, List, Optional, Literal, Tuple
@@ -64,6 +65,7 @@ class UpdateProjectChatToolAccessRequest(BaseModel):
 
 class UpdateProjectRepoWorkspaceRequest(BaseModel):
     enabled: bool = False
+    managed_path_mode: bool = True
     root_path: Optional[str] = None
     clone_url: Optional[str] = None
     default_branch: Optional[str] = None
@@ -233,11 +235,15 @@ def _validate_requested_project_chat_tool_access(body: UpdateProjectChatToolAcce
 def _extract_project_repo_workspace(project: Project) -> Dict[str, Any]:
     settings = project.settings_overrides if isinstance(project.settings_overrides, dict) else {}
     raw = settings.get("repo_workspace") if isinstance(settings.get("repo_workspace"), dict) else {}
+    managed_path_mode = bool(raw.get("managed_path_mode", True))
     root_path = str(raw.get("root_path") or "").strip() or None
     clone_url = str(raw.get("clone_url") or "").strip() or None
     default_branch = str(raw.get("default_branch") or "").strip() or None
+    if managed_path_mode:
+        root_path = None
     return {
         "enabled": bool(raw.get("enabled", False)),
+        "managed_path_mode": managed_path_mode,
         "root_path": root_path,
         "clone_url": clone_url,
         "default_branch": default_branch,
@@ -246,7 +252,99 @@ def _extract_project_repo_workspace(project: Project) -> Dict[str, Any]:
     }
 
 
+def _project_workspace_slug(project_id: str) -> str:
+    token = str(project_id or "").strip()
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", token).strip("-")
+    return slug or "project"
+
+
+def _repo_workspace_base_root() -> Path:
+    raw = str(os.environ.get("NEXUSAI_REPO_WORKSPACE_ROOT", "") or "").strip()
+    candidate = Path(raw).expanduser() if raw else (Path("data") / "repo_workspaces")
+    try:
+        if candidate.is_absolute():
+            return candidate.resolve(strict=False)
+        return (Path.cwd() / candidate).resolve(strict=False)
+    except Exception:
+        return (Path.cwd() / "data" / "repo_workspaces").resolve(strict=False)
+
+
+def _managed_repo_workspace_root(project_id: str) -> Path:
+    return _repo_workspace_base_root() / _project_workspace_slug(project_id) / "repo"
+
+
+def _repo_workspace_binding(cfg: Dict[str, Any]) -> str:
+    return "managed" if bool(cfg.get("managed_path_mode", True)) else "custom"
+
+
+def _public_repo_workspace_config(project_id: str, cfg: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "project_id": project_id,
+        "enabled": bool(cfg.get("enabled", False)),
+        "managed_path_mode": bool(cfg.get("managed_path_mode", True)),
+        "workspace_binding": _repo_workspace_binding(cfg),
+        "root_path": None,
+        "clone_url": str(cfg.get("clone_url") or "").strip() or None,
+        "default_branch": str(cfg.get("default_branch") or "").strip() or None,
+        "allow_push": bool(cfg.get("allow_push", False)),
+        "allow_command_execution": bool(cfg.get("allow_command_execution", False)),
+    }
+
+
+def _sanitize_workspace_value(value: Any, *, root: Path) -> Any:
+    root_path = str(root)
+    variants = {
+        root_path,
+        root_path.replace("\\", "/"),
+        root_path.replace("/", "\\"),
+    }
+    variants = {v for v in variants if v}
+
+    if isinstance(value, str):
+        out = value
+        for token in variants:
+            out = out.replace(token, "<workspace>")
+        return out
+    if isinstance(value, list):
+        return [_sanitize_workspace_value(item, root=root) for item in value]
+    if isinstance(value, dict):
+        cleaned: Dict[str, Any] = {}
+        for key, item in value.items():
+            # Do not expose host filesystem path fields in API payloads.
+            if str(key).strip().lower() in {"root_path", "workspace_path", "path"}:
+                cleaned[key] = "<workspace>"
+                continue
+            cleaned[key] = _sanitize_workspace_value(item, root=root)
+        return cleaned
+    return value
+
+
+def _sanitize_repo_run_row(row: Dict[str, Any], *, root: Path) -> Dict[str, Any]:
+    if not isinstance(row, dict):
+        return row
+    data = dict(row)
+    command = data.get("command")
+    if isinstance(command, list):
+        data["command"] = _sanitize_workspace_value(command, root=root)
+    details = data.get("details")
+    if isinstance(details, dict):
+        safe_details = dict(details)
+        safe_details.pop("root_path", None)
+        safe_details.pop("workspace_path", None)
+        data["details"] = _sanitize_workspace_value(safe_details, root=root)
+    return data
+
+
+def _sanitize_repo_command_result(result: Dict[str, Any], *, root: Path) -> Dict[str, Any]:
+    if not isinstance(result, dict):
+        return {}
+    safe = dict(result)
+    safe.pop("cwd", None)
+    return _sanitize_workspace_value(safe, root=root)
+
+
 def _validate_requested_project_repo_workspace(body: UpdateProjectRepoWorkspaceRequest) -> Dict[str, Any]:
+    managed_path_mode = bool(body.managed_path_mode)
     root_path = str(body.root_path or "").strip() or None
     clone_url = str(body.clone_url or "").strip() or None
     default_branch = str(body.default_branch or "").strip() or None
@@ -258,18 +356,21 @@ def _validate_requested_project_repo_workspace(body: UpdateProjectRepoWorkspaceR
     if default_branch is not None and len(default_branch) > 256:
         raise HTTPException(status_code=400, detail="default_branch is too long")
 
-    if bool(body.enabled):
+    if bool(body.enabled) and not managed_path_mode:
         if not root_path:
-            raise HTTPException(status_code=400, detail="root_path is required when repo workspace is enabled")
+            raise HTTPException(status_code=400, detail="root_path is required when managed_path_mode is false")
         normalized = normalize_workspace_root(root_path)
         if normalized is None:
             raise HTTPException(status_code=400, detail="root_path must be an absolute path")
         root_path = str(normalized)
     elif root_path:
-        normalized = normalize_workspace_root(root_path)
-        if normalized is None:
-            raise HTTPException(status_code=400, detail="root_path must be an absolute path")
-        root_path = str(normalized)
+        if managed_path_mode:
+            root_path = None
+        else:
+            normalized = normalize_workspace_root(root_path)
+            if normalized is None:
+                raise HTTPException(status_code=400, detail="root_path must be an absolute path")
+            root_path = str(normalized)
 
     if clone_url and not (
         clone_url.startswith("https://")
@@ -281,6 +382,7 @@ def _validate_requested_project_repo_workspace(body: UpdateProjectRepoWorkspaceR
 
     return {
         "enabled": bool(body.enabled),
+        "managed_path_mode": managed_path_mode,
         "root_path": root_path,
         "clone_url": clone_url,
         "default_branch": default_branch,
@@ -289,9 +391,11 @@ def _validate_requested_project_repo_workspace(body: UpdateProjectRepoWorkspaceR
     }
 
 
-def _resolve_repo_workspace_root(cfg: Dict[str, Any], *, require_enabled: bool = True) -> Path:
+def _resolve_repo_workspace_root(project_id: str, cfg: Dict[str, Any], *, require_enabled: bool = True) -> Path:
     if require_enabled and not bool(cfg.get("enabled", False)):
         raise HTTPException(status_code=400, detail="repo workspace is disabled for this project")
+    if bool(cfg.get("managed_path_mode", True)):
+        return _managed_repo_workspace_root(project_id)
     root = normalize_workspace_root(str(cfg.get("root_path") or "").strip() or None)
     if root is None:
         raise HTTPException(status_code=400, detail="repo workspace root_path is not configured")
@@ -424,7 +528,9 @@ async def _repo_status_snapshot(
     dirty_lines = [line for line in porcelain_lines if not line.startswith("##")]
     return {
         "enabled": bool(cfg.get("enabled", False)),
-        "root_path": cfg.get("root_path"),
+        "managed_path_mode": bool(cfg.get("managed_path_mode", True)),
+        "workspace_binding": _repo_workspace_binding(cfg),
+        "root_path": None,
         "clone_url": cfg.get("clone_url"),
         "default_branch": cfg.get("default_branch"),
         "allow_push": bool(cfg.get("allow_push", False)),
@@ -2126,7 +2232,7 @@ async def get_project_repo_workspace(project_id: str, request: Request) -> dict:
     except ProjectNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     cfg = _extract_project_repo_workspace(project)
-    return {"project_id": project_id, **cfg}
+    return _public_repo_workspace_config(project_id, cfg)
 
 
 @router.put("/{project_id}/repo/workspace")
@@ -2152,14 +2258,14 @@ async def update_project_repo_workspace(
         resource=f"project:{project_id}",
         details={
             "enabled": validated["enabled"],
-            "root_path": validated["root_path"],
+            "managed_path_mode": validated["managed_path_mode"],
             "clone_url": validated["clone_url"],
             "default_branch": validated["default_branch"],
             "allow_push": validated["allow_push"],
             "allow_command_execution": validated["allow_command_execution"],
         },
     )
-    return {"status": "ok", "project_id": project_id, **validated}
+    return {"status": "ok", **_public_repo_workspace_config(project_id, validated)}
 
 
 @router.get("/{project_id}/repo/workspace/status")
@@ -2171,11 +2277,9 @@ async def get_project_repo_workspace_status(project_id: str, request: Request) -
         raise HTTPException(status_code=404, detail=str(e))
 
     cfg = _extract_project_repo_workspace(project)
-    root = normalize_workspace_root(cfg.get("root_path"))
-    if root is None:
+    if not bool(cfg.get("enabled", False)):
         return {
-            "project_id": project_id,
-            **cfg,
+            **_public_repo_workspace_config(project_id, cfg),
             "workspace_exists": False,
             "is_repo": False,
             "branch": None,
@@ -2185,6 +2289,7 @@ async def get_project_repo_workspace_status(project_id: str, request: Request) -
             "last_commit": {},
         }
 
+    root = _resolve_repo_workspace_root(project_id, cfg, require_enabled=False)
     snapshot = await _repo_status_snapshot(root=root, cfg=cfg)
     return {"project_id": project_id, **snapshot}
 
@@ -2203,7 +2308,7 @@ async def clone_project_repo_workspace(
         raise HTTPException(status_code=404, detail=str(e))
 
     cfg = _extract_project_repo_workspace(project)
-    root = _resolve_repo_workspace_root(cfg, require_enabled=True)
+    root = _resolve_repo_workspace_root(project_id, cfg, require_enabled=True)
 
     clone_url = str(body.clone_url or "").strip() or str(cfg.get("clone_url") or "").strip()
     if not clone_url:
@@ -2224,8 +2329,8 @@ async def clone_project_repo_workspace(
                 project_id=project_id,
                 action="clone",
                 status="already_cloned",
-                command=["git", "clone", clone_url, str(root)],
-                details={"root_path": str(root), "clone_url": clone_url},
+                command=["git", "clone", clone_url, "<workspace>"],
+                details={"clone_url": clone_url},
             )
             return {
                 "status": "already_cloned",
@@ -2259,8 +2364,10 @@ async def clone_project_repo_workspace(
     if branch:
         cmd.extend(["--branch", branch])
     cmd.extend([clone_url, str(root)])
+    usage_cmd = [part for part in cmd[:-1]] + ["<workspace>"]
 
     res = await _run_repo_command(cmd, cwd=root.parent, timeout_seconds=900)
+    safe_res = _sanitize_repo_command_result(res, root=root)
     if not res.get("ok"):
         detail = str(res.get("stderr") or res.get("error") or "clone failed").strip() or "clone failed"
         await _record_repo_workspace_usage(
@@ -2268,9 +2375,9 @@ async def clone_project_repo_workspace(
             project_id=project_id,
             action="clone",
             status="failed",
-            command=cmd,
-            result=res,
-            details={"root_path": str(root), "clone_url": clone_url, "branch": branch},
+            command=usage_cmd,
+            result=safe_res,
+            details={"clone_url": clone_url, "branch": branch},
         )
         raise HTTPException(status_code=400, detail=detail)
 
@@ -2288,21 +2395,21 @@ async def clone_project_repo_workspace(
         request,
         action="projects.repo_workspace.clone",
         resource=f"project:{project_id}",
-        details={"clone_url": clone_url, "branch": branch, "root_path": str(root)},
+        details={"clone_url": clone_url, "branch": branch},
     )
     await _record_repo_workspace_usage(
         request,
         project_id=project_id,
         action="clone",
         status="ok",
-        command=cmd,
-        result=res,
-        details={"root_path": str(root), "clone_url": clone_url, "branch": branch},
+        command=usage_cmd,
+        result=safe_res,
+        details={"clone_url": clone_url, "branch": branch},
     )
     return {
         "status": "ok",
         "project_id": project_id,
-        "result": res,
+        "result": safe_res,
         "workspace": snapshot,
     }
 
@@ -2321,7 +2428,7 @@ async def pull_project_repo_workspace(
         raise HTTPException(status_code=404, detail=str(e))
 
     cfg = _extract_project_repo_workspace(project)
-    root = _resolve_repo_workspace_root(cfg, require_enabled=True)
+    root = _resolve_repo_workspace_root(project_id, cfg, require_enabled=True)
     snapshot = await _repo_status_snapshot(root=root, cfg=cfg)
     if not snapshot.get("is_repo"):
         raise HTTPException(status_code=400, detail="workspace is not a git repository")
@@ -2389,7 +2496,7 @@ async def commit_project_repo_workspace(
         raise HTTPException(status_code=404, detail=str(e))
 
     cfg = _extract_project_repo_workspace(project)
-    root = _resolve_repo_workspace_root(cfg, require_enabled=True)
+    root = _resolve_repo_workspace_root(project_id, cfg, require_enabled=True)
     snapshot = await _repo_status_snapshot(root=root, cfg=cfg)
     if not snapshot.get("is_repo"):
         raise HTTPException(status_code=400, detail="workspace is not a git repository")
@@ -2515,7 +2622,7 @@ async def push_project_repo_workspace(
     cfg = _extract_project_repo_workspace(project)
     if not bool(cfg.get("allow_push", False)):
         raise HTTPException(status_code=403, detail="push is disabled by project repo workspace policy")
-    root = _resolve_repo_workspace_root(cfg, require_enabled=True)
+    root = _resolve_repo_workspace_root(project_id, cfg, require_enabled=True)
     snapshot = await _repo_status_snapshot(root=root, cfg=cfg)
     if not snapshot.get("is_repo"):
         raise HTTPException(status_code=400, detail="workspace is not a git repository")
@@ -2581,7 +2688,7 @@ async def run_project_repo_workspace_command(
     cfg = _extract_project_repo_workspace(project)
     if not bool(cfg.get("allow_command_execution", False)):
         raise HTTPException(status_code=403, detail="command execution is disabled by project repo workspace policy")
-    root = _resolve_repo_workspace_root(cfg, require_enabled=True)
+    root = _resolve_repo_workspace_root(project_id, cfg, require_enabled=True)
     if not root.exists():
         raise HTTPException(status_code=400, detail="workspace path does not exist")
 
@@ -2678,7 +2785,6 @@ async def run_project_repo_workspace_command(
         "temp_ref": (str(body.temp_ref or "").strip() or None),
         "bootstrap": bool(body.bootstrap),
         "bootstrap_languages": list(body.bootstrap_languages or []),
-        "workspace_path": str(execution_root),
     }
     if main_result is not None:
         details["returncode"] = main_result.get("returncode")
@@ -2689,13 +2795,16 @@ async def run_project_repo_workspace_command(
         resource=f"project:{project_id}",
         details=details,
     )
+    safe_main_result = _sanitize_repo_command_result(main_result if isinstance(main_result, dict) else {}, root=root)
+    safe_bootstrap_results = _sanitize_workspace_value(bootstrap_results, root=root)
+    safe_cleanup_result = _sanitize_workspace_value(cleanup_result, root=root) if cleanup_result is not None else None
     await _record_repo_workspace_usage(
         request,
         project_id=project_id,
         action="run",
         status=status,
         command=command,
-        result=main_result if isinstance(main_result, dict) else {},
+        result=safe_main_result,
         metrics=usage_summary,
         details={
             **details,
@@ -2705,13 +2814,13 @@ async def run_project_repo_workspace_command(
     return {
         "status": status,
         "project_id": project_id,
-        "workspace_path": str(execution_root),
+        "workspace_binding": _repo_workspace_binding(cfg),
         "temporary_workspace": bool(body.use_temp_workspace),
         "kept_temporary_workspace": bool(body.keep_temp_workspace),
-        "bootstrap_results": bootstrap_results,
-        "result": main_result,
+        "bootstrap_results": safe_bootstrap_results,
+        "result": safe_main_result,
         "usage": usage_summary,
-        "cleanup": cleanup_result,
+        "cleanup": safe_cleanup_result,
     }
 
 
@@ -2729,8 +2838,12 @@ async def list_project_repo_workspace_runs(
     store = getattr(request.app.state, "repo_workspace_usage_store", None)
     if store is None:
         return {"project_id": project_id, "runs": []}
+    project = await project_registry.get(project_id)
+    cfg = _extract_project_repo_workspace(project)
+    root = _resolve_repo_workspace_root(project_id, cfg, require_enabled=False)
     rows = await store.list_runs(project_id=project_id, limit=limit)
-    return {"project_id": project_id, "runs": rows}
+    safe_rows = [_sanitize_repo_run_row(dict(row), root=root) for row in rows if isinstance(row, dict)]
+    return {"project_id": project_id, "runs": safe_rows}
 
 
 @router.get("/{project_id}/repo/workspace/runs/summary")

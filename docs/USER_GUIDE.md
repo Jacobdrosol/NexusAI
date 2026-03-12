@@ -289,7 +289,7 @@ Workspace tools are gated by three required switches:
 Rules:
 
 - if any switch is disabled, tool access is denied
-- filesystem snippets require project workspace root configured on the control-plane host
+- filesystem snippets require project repository workspace to be enabled for that project
 - repo semantic search requires `repo_search` enabled at all three levels
 
 ## 7. GitHub Integration

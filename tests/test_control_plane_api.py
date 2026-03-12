@@ -752,17 +752,16 @@ async def test_project_chat_tool_access_rejects_too_long_workspace_root(cp_clien
 
 
 @pytest.mark.anyio
-async def test_project_repo_workspace_update_and_get(cp_client, tmp_path):
+async def test_project_repo_workspace_update_and_get(cp_client):
     await cp_client.post(
         "/v1/projects",
         json={"id": "p-repo-workspace", "name": "Repo Workspace Project", "mode": "isolated"},
     )
-    root = tmp_path / "workspace"
     update = await cp_client.put(
         "/v1/projects/p-repo-workspace/repo/workspace",
         json={
             "enabled": True,
-            "root_path": str(root),
+            "managed_path_mode": True,
             "clone_url": "https://github.com/example/repo.git",
             "default_branch": "main",
             "allow_push": True,
@@ -772,7 +771,8 @@ async def test_project_repo_workspace_update_and_get(cp_client, tmp_path):
     assert update.status_code == 200
     body = update.json()
     assert body["enabled"] is True
-    assert body["root_path"] == str(root.resolve())
+    assert body["managed_path_mode"] is True
+    assert body["root_path"] is None
     assert body["clone_url"] == "https://github.com/example/repo.git"
     assert body["default_branch"] == "main"
     assert body["allow_push"] is True
@@ -782,7 +782,8 @@ async def test_project_repo_workspace_update_and_get(cp_client, tmp_path):
     assert get_resp.status_code == 200
     got = get_resp.json()
     assert got["enabled"] is True
-    assert got["root_path"] == str(root.resolve())
+    assert got["managed_path_mode"] is True
+    assert got["root_path"] is None
     assert got["allow_push"] is True
     assert got["allow_command_execution"] is True
 
@@ -797,6 +798,7 @@ async def test_project_repo_workspace_rejects_relative_root_path(cp_client):
         "/v1/projects/p-repo-workspace-bad/repo/workspace",
         json={
             "enabled": True,
+            "managed_path_mode": False,
             "root_path": "relative/path",
         },
     )
@@ -805,18 +807,19 @@ async def test_project_repo_workspace_rejects_relative_root_path(cp_client):
 
 
 @pytest.mark.anyio
-async def test_project_repo_workspace_run_command_requires_policy(cp_client, tmp_path):
+async def test_project_repo_workspace_run_command_requires_policy(cp_client, tmp_path, monkeypatch):
     await cp_client.post(
         "/v1/projects",
         json={"id": "p-repo-run-policy", "name": "Repo Run Policy", "mode": "isolated"},
     )
-    root = tmp_path / "run-policy"
+    root = tmp_path / "repo-workspaces" / "p-repo-run-policy" / "repo"
     root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("NEXUSAI_REPO_WORKSPACE_ROOT", str(tmp_path / "repo-workspaces"))
     update = await cp_client.put(
         "/v1/projects/p-repo-run-policy/repo/workspace",
         json={
             "enabled": True,
-            "root_path": str(root),
+            "managed_path_mode": True,
             "allow_command_execution": False,
         },
     )
@@ -836,13 +839,14 @@ async def test_project_repo_workspace_run_command_executes_allowed_command(cp_cl
         "/v1/projects",
         json={"id": "p-repo-run", "name": "Repo Run", "mode": "isolated"},
     )
-    root = tmp_path / "run-workspace"
+    root = tmp_path / "repo-workspaces" / "p-repo-run" / "repo"
     root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("NEXUSAI_REPO_WORKSPACE_ROOT", str(tmp_path / "repo-workspaces"))
     update = await cp_client.put(
         "/v1/projects/p-repo-run/repo/workspace",
         json={
             "enabled": True,
-            "root_path": str(root),
+            "managed_path_mode": True,
             "allow_command_execution": True,
         },
     )
@@ -879,18 +883,19 @@ async def test_project_repo_workspace_run_command_executes_allowed_command(cp_cl
 
 
 @pytest.mark.anyio
-async def test_project_repo_workspace_push_requires_allow_push(cp_client, tmp_path):
+async def test_project_repo_workspace_push_requires_allow_push(cp_client, tmp_path, monkeypatch):
     await cp_client.post(
         "/v1/projects",
         json={"id": "p-repo-push", "name": "Repo Push", "mode": "isolated"},
     )
-    root = tmp_path / "push-workspace"
+    root = tmp_path / "repo-workspaces" / "p-repo-push" / "repo"
     root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("NEXUSAI_REPO_WORKSPACE_ROOT", str(tmp_path / "repo-workspaces"))
     update = await cp_client.put(
         "/v1/projects/p-repo-push/repo/workspace",
         json={
             "enabled": True,
-            "root_path": str(root),
+            "managed_path_mode": True,
             "allow_push": False,
         },
     )
@@ -910,13 +915,14 @@ async def test_project_repo_workspace_run_records_usage_history(cp_client, tmp_p
         "/v1/projects",
         json={"id": "p-repo-usage", "name": "Repo Usage", "mode": "isolated"},
     )
-    root = tmp_path / "usage-workspace"
+    root = tmp_path / "repo-workspaces" / "p-repo-usage" / "repo"
     root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("NEXUSAI_REPO_WORKSPACE_ROOT", str(tmp_path / "repo-workspaces"))
     update = await cp_client.put(
         "/v1/projects/p-repo-usage/repo/workspace",
         json={
             "enabled": True,
-            "root_path": str(root),
+            "managed_path_mode": True,
             "allow_command_execution": True,
         },
     )
@@ -963,7 +969,7 @@ async def test_project_repo_workspace_run_records_usage_history(cp_client, tmp_p
     assert runs[0]["status"] == "ok"
     assert (runs[0]["metrics"] or {}).get("peak_rss_bytes") == 12345678
 
-    summary_resp = await cp_client.get("/v1/projects/p-repo-usage/repo/workspace/runs/summary?since_hours=24")
+    summary_resp = await cp_client.get("/v1/projects/p-repo-usage/repo/workspace/runs/summary?since_hours=720")
     assert summary_resp.status_code == 200
     summary = summary_resp.json()
     totals = summary["totals"]

@@ -120,12 +120,13 @@ def _normalize_project_chat_tool_access(raw: Any) -> dict[str, Any]:
 def _normalize_project_repo_workspace(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raw = {}
-    root_path = str(raw.get("root_path") or "").strip() or None
     clone_url = str(raw.get("clone_url") or "").strip() or None
     default_branch = str(raw.get("default_branch") or "").strip() or None
     return {
         "enabled": bool(raw.get("enabled", False)),
-        "root_path": root_path,
+        "managed_path_mode": bool(raw.get("managed_path_mode", True)),
+        "workspace_binding": str(raw.get("workspace_binding") or "managed"),
+        "root_path": None,
         "clone_url": clone_url,
         "default_branch": default_branch,
         "allow_push": bool(raw.get("allow_push", False)),
@@ -490,6 +491,7 @@ def api_update_project_repo_workspace(project_id: str):
     result = cp.update_project_repo_workspace(
         project_id=project_id,
         enabled=bool(data.get("enabled", False)),
+        managed_path_mode=bool(data.get("managed_path_mode", True)),
         root_path=(str(data.get("root_path") or "").strip() or None),
         clone_url=(str(data.get("clone_url") or "").strip() or None),
         default_branch=(str(data.get("default_branch") or "").strip() or None),

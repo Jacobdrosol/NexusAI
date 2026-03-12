@@ -1,6 +1,8 @@
 import asyncio
 import json
 import os
+from pathlib import Path
+import re
 from typing import Any, AsyncGenerator, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -114,6 +116,43 @@ def _project_tool_access(project: Any) -> Dict[str, Any]:
     return _parse_tool_access_config(settings.get("chat_tool_access"))
 
 
+def _project_workspace_slug(project_id: str) -> str:
+    token = str(project_id or "").strip()
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", token).strip("-")
+    return slug or "project"
+
+
+def _repo_workspace_base_root() -> Path:
+    raw = str(os.environ.get("NEXUSAI_REPO_WORKSPACE_ROOT", "") or "").strip()
+    candidate = Path(raw).expanduser() if raw else (Path("data") / "repo_workspaces")
+    try:
+        if candidate.is_absolute():
+            return candidate.resolve(strict=False)
+        return (Path.cwd() / candidate).resolve(strict=False)
+    except Exception:
+        return (Path.cwd() / "data" / "repo_workspaces").resolve(strict=False)
+
+
+def _managed_repo_workspace_root(project_id: str) -> str:
+    return str((_repo_workspace_base_root() / _project_workspace_slug(project_id) / "repo").resolve(strict=False))
+
+
+def _project_repo_workspace_root(project: Any) -> str | None:
+    settings = getattr(project, "settings_overrides", None)
+    if not isinstance(settings, dict):
+        return None
+    raw = settings.get("repo_workspace")
+    cfg = raw if isinstance(raw, dict) else {}
+    if not bool(cfg.get("enabled", False)):
+        return None
+    managed = bool(cfg.get("managed_path_mode", True))
+    if managed:
+        project_id = str(getattr(project, "id", "") or "").strip()
+        return _managed_repo_workspace_root(project_id) if project_id else None
+    root = normalize_workspace_root(str(cfg.get("root_path") or "").strip() or None)
+    return str(root) if root is not None else None
+
+
 async def _effective_tool_access(
     request: Request,
     *,
@@ -150,11 +189,20 @@ async def _effective_tool_access(
     all_enabled = bool(chat_cfg["enabled"] and bot_cfg["enabled"] and project_cfg["enabled"])
     if not all_enabled:
         return disabled
+    workspace_root = project_cfg.get("workspace_root")
+    if not workspace_root and bool(project_cfg.get("filesystem", False)) and project_id:
+        project_registry = getattr(request.app.state, "project_registry", None)
+        if project_registry is not None:
+            try:
+                project = await project_registry.get(project_id)
+                workspace_root = _project_repo_workspace_root(project)
+            except Exception:
+                workspace_root = None
     return {
         "enabled": True,
         "filesystem": bool(chat_cfg["filesystem"] and bot_cfg["filesystem"] and project_cfg["filesystem"]),
         "repo_search": bool(chat_cfg["repo_search"] and bot_cfg["repo_search"] and project_cfg["repo_search"]),
-        "workspace_root": project_cfg.get("workspace_root"),
+        "workspace_root": workspace_root,
     }
 
 
