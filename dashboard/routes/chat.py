@@ -139,99 +139,114 @@ def _normalize_message_rows(rows: Any) -> list[dict[str, Any]]:
 def chat_page() -> str:
     cp = get_cp_client()
     page_error: str | None = None
-
     try:
-        conversations = _normalize_conversation_rows(cp.list_conversations(archived="all") or [])
-    except Exception:
-        conversations = []
-        page_error = "Conversation list is temporarily unavailable."
-
-    try:
-        bots = cp.list_bots() or []
-    except Exception:
-        bots = []
-
-    try:
-        projects = cp.list_projects() or []
-    except Exception:
-        projects = []
-
-    selected_id = str(request.args.get("conversation_id") or "").strip()
-    selected = None
-    messages: list[dict[str, Any]] = []
-    repo_context_items: list[dict[str, Any]] = []
-    repo_context_sections: list[dict[str, Any]] = []
-    repo_context_item_ids: list[str] = []
-    if selected_id:
-        for c in conversations:
-            if c.get("id") == selected_id:
-                selected = c
-                break
         try:
-            messages = _normalize_message_rows(cp.list_messages(selected_id) or [])
+            conversations = _normalize_conversation_rows(cp.list_conversations(archived="all") or [])
         except Exception:
-            messages = []
-            page_error = page_error or "Selected conversation messages could not be loaded."
+            conversations = []
+            page_error = "Conversation list is temporarily unavailable."
 
-    if selected:
-        project_ids: list[str] = []
-        project_id = str(selected.get("project_id") or "").strip()
-        if project_id:
-            project_ids.append(project_id)
-        for bridged in selected.get("bridge_project_ids") or []:
-            value = str(bridged or "").strip()
-            if value and value not in project_ids:
-                project_ids.append(value)
+        try:
+            bots = cp.list_bots() or []
+        except Exception:
+            bots = []
 
-        for pid in project_ids:
-            namespace = f"project:{pid}:repo"
-            if hasattr(cp, "get_project_github_context_sync_status"):
-                try:
-                    status = cp.get_project_github_context_sync_status(pid) or {}
-                    if isinstance(status, dict):
-                        context_sync = status.get("context_sync") if isinstance(status.get("context_sync"), dict) else {}
-                        ns = str(context_sync.get("namespace") or "").strip()
-                        if ns:
-                            namespace = ns
-                except Exception:
-                    namespace = f"project:{pid}:repo"
+        try:
+            projects = cp.list_projects() or []
+        except Exception:
+            projects = []
+
+        selected_id = str(request.args.get("conversation_id") or "").strip()
+        selected = None
+        messages: list[dict[str, Any]] = []
+        repo_context_items: list[dict[str, Any]] = []
+        repo_context_sections: list[dict[str, Any]] = []
+        repo_context_item_ids: list[str] = []
+        if selected_id:
+            for c in conversations:
+                if c.get("id") == selected_id:
+                    selected = c
+                    break
             try:
-                items = cp.list_vault_items(namespace=namespace, project_id=pid, limit=120) or []
+                messages = _normalize_message_rows(cp.list_messages(selected_id) or [])
             except Exception:
-                items = []
-            if items:
-                repo_context_sections.append(
-                    {
-                        "project_id": pid,
-                        "namespace": namespace,
-                        "items": items,
-                    }
-                )
-                repo_context_items.extend(items)
-                for item in items:
-                    item_id = str(item.get("id") or "").strip()
-                    if item_id and item_id not in repo_context_item_ids:
-                        repo_context_item_ids.append(item_id)
+                messages = []
+                page_error = page_error or "Selected conversation messages could not be loaded."
 
-    try:
-        vault_items = cp.list_vault_items(limit=50) or []
+        if selected:
+            project_ids: list[str] = []
+            project_id = str(selected.get("project_id") or "").strip()
+            if project_id:
+                project_ids.append(project_id)
+            for bridged in selected.get("bridge_project_ids") or []:
+                value = str(bridged or "").strip()
+                if value and value not in project_ids:
+                    project_ids.append(value)
+
+            for pid in project_ids:
+                namespace = f"project:{pid}:repo"
+                if hasattr(cp, "get_project_github_context_sync_status"):
+                    try:
+                        status = cp.get_project_github_context_sync_status(pid) or {}
+                        if isinstance(status, dict):
+                            context_sync = status.get("context_sync") if isinstance(status.get("context_sync"), dict) else {}
+                            ns = str(context_sync.get("namespace") or "").strip()
+                            if ns:
+                                namespace = ns
+                    except Exception:
+                        namespace = f"project:{pid}:repo"
+                try:
+                    items = cp.list_vault_items(namespace=namespace, project_id=pid, limit=120) or []
+                except Exception:
+                    items = []
+                if items:
+                    repo_context_sections.append(
+                        {
+                            "project_id": pid,
+                            "namespace": namespace,
+                            "items": items,
+                        }
+                    )
+                    repo_context_items.extend(items)
+                    for item in items:
+                        item_id = str(item.get("id") or "").strip()
+                        if item_id and item_id not in repo_context_item_ids:
+                            repo_context_item_ids.append(item_id)
+
+        try:
+            vault_items = cp.list_vault_items(limit=50) or []
+        except Exception:
+            vault_items = []
+
+        return render_template(
+            "chat.html",
+            conversations=[c for c in conversations if not c.get("archived_at")],
+            archived_conversations=[c for c in conversations if c.get("archived_at")],
+            selected_conversation=selected,
+            messages=messages,
+            bots=bots,
+            projects=projects,
+            vault_items=vault_items,
+            repo_context_items=repo_context_items,
+            repo_context_sections=repo_context_sections,
+            repo_context_item_ids=repo_context_item_ids,
+            error=page_error,
+        )
     except Exception:
-        vault_items = []
-
-    return render_template(
-        "chat.html",
-        conversations=[c for c in conversations if not c.get("archived_at")],
-        archived_conversations=[c for c in conversations if c.get("archived_at")],
-        selected_conversation=selected,
-        messages=messages,
-        bots=bots,
-        projects=projects,
-        vault_items=vault_items,
-        repo_context_items=repo_context_items,
-        repo_context_sections=repo_context_sections,
-        repo_context_item_ids=repo_context_item_ids,
-        error=page_error,
-    )
+        return render_template(
+            "chat.html",
+            conversations=[],
+            archived_conversations=[],
+            selected_conversation=None,
+            messages=[],
+            bots=[],
+            projects=[],
+            vault_items=[],
+            repo_context_items=[],
+            repo_context_sections=[],
+            repo_context_item_ids=[],
+            error="Chat view is temporarily unavailable. Start a new chat or refresh.",
+        )
 
 
 @bp.post("/api/chat/conversations")

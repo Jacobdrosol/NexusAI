@@ -314,6 +314,33 @@ def test_chat_page_handles_conversation_list_error_gracefully(dashboard_client):
     assert b"No conversations yet" in resp.data
 
 
+def test_chat_page_unexpected_error_falls_back_to_safe_shell(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_conversations(self, archived="all", project_id=None):
+            return []
+
+        def list_bots(self):
+            return []
+
+        def list_projects(self):
+            return []
+
+        def list_vault_items(self, **kwargs):
+            return []
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()), patch(
+        "dashboard.routes.chat._normalize_conversation_rows",
+        return_value=[None],
+    ):
+        resp = dashboard_client.get("/chat")
+
+    assert resp.status_code == 200
+    assert b"Chat view is temporarily unavailable. Start a new chat or refresh." in resp.data
+    assert b"No conversations yet" in resp.data
+
+
 def test_vault_page_loads_when_logged_in(dashboard_client):
     _login_admin(dashboard_client)
     resp = dashboard_client.get("/vault")
