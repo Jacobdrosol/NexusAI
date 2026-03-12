@@ -228,6 +228,68 @@ def test_chat_page_loads_when_logged_in(dashboard_client):
     assert b"create-convo-bridge-project-ids" in resp.data
 
 
+def test_chat_page_handles_legacy_selected_conversation_shapes(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_conversations(self, archived="all", project_id=None):
+            return [
+                {
+                    "id": "c-legacy",
+                    "title": "Legacy Active",
+                    "project_id": "globeiq",
+                    "bridge_project_ids": 1,
+                    "updated_at": "2026-03-10T12:00:00+00:00",
+                    "archived_at": None,
+                    "tool_access_enabled": True,
+                    "tool_access_filesystem": True,
+                    "tool_access_repo_search": True,
+                },
+                {
+                    "id": "c-archived",
+                    "title": "Archived",
+                    "project_id": None,
+                    "bridge_project_ids": "[]",
+                    "updated_at": "2026-03-01T12:00:00+00:00",
+                    "archived_at": "2026-03-05T00:00:00+00:00",
+                    "tool_access_enabled": False,
+                    "tool_access_filesystem": False,
+                    "tool_access_repo_search": False,
+                },
+            ]
+
+        def list_messages(self, conversation_id):
+            if conversation_id == "c-legacy":
+                return [
+                    {
+                        "id": "m-1",
+                        "role": "assistant",
+                        "content": "hello",
+                        "metadata": "not-json",
+                    }
+                ]
+            return []
+
+        def list_bots(self):
+            return []
+
+        def list_projects(self):
+            return []
+
+        def list_vault_items(self, **kwargs):
+            return []
+
+        def get_project_github_context_sync_status(self, project_id):
+            return {}
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/chat?conversation_id=c-legacy")
+
+    assert resp.status_code == 200
+    assert b"Legacy Active" in resp.data
+    assert b"No vault items available" in resp.data
+
+
 def test_vault_page_loads_when_logged_in(dashboard_client):
     _login_admin(dashboard_client)
     resp = dashboard_client.get("/vault")

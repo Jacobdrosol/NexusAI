@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import json
 from typing import Any, Dict, Iterable
 
 import requests
@@ -38,16 +39,111 @@ def _stream_cp_headers(cp) -> dict[str, str]:
     return headers
 
 
+def _normalize_bridge_project_ids(raw: Any) -> list[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, (list, tuple, set)):
+        values = [str(item or "").strip() for item in raw]
+        return [value for value in values if value]
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return []
+        # Legacy rows may store JSON text or a single project id.
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            return [text]
+        if isinstance(parsed, (list, tuple, set)):
+            values = [str(item or "").strip() for item in parsed]
+            return [value for value in values if value]
+        if isinstance(parsed, str):
+            value = parsed.strip()
+            return [value] if value else []
+        return []
+    return []
+
+
+def _normalize_conversation_row(raw: Any) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    cid = str(raw.get("id") or "").strip()
+    if not cid:
+        return None
+    normalized = dict(raw)
+    normalized["id"] = cid
+    title = str(raw.get("title") or "").strip()
+    normalized["title"] = title or cid
+    normalized["project_id"] = str(raw.get("project_id") or "").strip() or None
+    normalized["scope"] = str(raw.get("scope") or "").strip() or "global"
+    normalized["default_bot_id"] = str(raw.get("default_bot_id") or "").strip() or None
+    normalized["default_model_id"] = str(raw.get("default_model_id") or "").strip() or None
+    normalized["created_at"] = str(raw.get("created_at") or "").strip() or None
+    normalized["updated_at"] = str(raw.get("updated_at") or "").strip() or None
+    normalized["archived_at"] = str(raw.get("archived_at") or "").strip() or None
+    normalized["bridge_project_ids"] = _normalize_bridge_project_ids(raw.get("bridge_project_ids"))
+    normalized["tool_access_enabled"] = bool(raw.get("tool_access_enabled") or False)
+    normalized["tool_access_filesystem"] = bool(raw.get("tool_access_filesystem") or False)
+    normalized["tool_access_repo_search"] = bool(raw.get("tool_access_repo_search") or False)
+    return normalized
+
+
+def _normalize_conversation_rows(rows: Any) -> list[dict[str, Any]]:
+    if not isinstance(rows, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        normalized = _normalize_conversation_row(row)
+        if normalized is not None:
+            result.append(normalized)
+    return result
+
+
+def _normalize_message_row(raw: Any) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    mid = str(raw.get("id") or "").strip()
+    if not mid:
+        return None
+    normalized = dict(raw)
+    normalized["id"] = mid
+    normalized["role"] = str(raw.get("role") or "").strip() or "assistant"
+    normalized["content"] = str(raw.get("content") or "")
+    metadata = raw.get("metadata")
+    if isinstance(metadata, dict):
+        normalized["metadata"] = metadata
+    elif isinstance(metadata, str):
+        try:
+            parsed = json.loads(metadata)
+            normalized["metadata"] = parsed if isinstance(parsed, dict) else None
+        except Exception:
+            normalized["metadata"] = None
+    else:
+        normalized["metadata"] = None
+    return normalized
+
+
+def _normalize_message_rows(rows: Any) -> list[dict[str, Any]]:
+    if not isinstance(rows, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        normalized = _normalize_message_row(row)
+        if normalized is not None:
+            result.append(normalized)
+    return result
+
+
 @bp.get("/chat")
 @login_required
 def chat_page() -> str:
     cp = get_cp_client()
-    conversations = cp.list_conversations(archived="all") or []
+    conversations = _normalize_conversation_rows(cp.list_conversations(archived="all") or [])
     bots = cp.list_bots() or []
     projects = cp.list_projects() or []
-    selected_id = request.args.get("conversation_id")
+    selected_id = str(request.args.get("conversation_id") or "").strip()
     selected = None
-    messages = []
+    messages: list[dict[str, Any]] = []
     repo_context_items: list[dict[str, Any]] = []
     repo_context_sections: list[dict[str, Any]] = []
     repo_context_item_ids: list[str] = []
@@ -56,7 +152,7 @@ def chat_page() -> str:
             if c.get("id") == selected_id:
                 selected = c
                 break
-        messages = cp.list_messages(selected_id) or []
+        messages = _normalize_message_rows(cp.list_messages(selected_id) or [])
 
     if selected:
         project_ids: list[str] = []
