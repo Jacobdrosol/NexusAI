@@ -530,6 +530,98 @@ async def test_chat_repo_intent_auto_attaches_project_context(cp_app):
 
 
 @pytest.mark.anyio
+async def test_chat_repo_intent_prefers_workspace_as_source_of_truth(cp_app, tmp_path):
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "ok"})
+    workspace_root = tmp_path / "workspace-repo-truth"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    (workspace_root / "backend" / "auth").mkdir(parents=True, exist_ok=True)
+    (workspace_root / "backend" / "auth" / "login.ts").write_text(
+        "WORKSPACE_AUTH_TOKEN current login implementation",
+        encoding="utf-8",
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-repo-truth"
+        create_project = await client.post(
+            "/v1/projects",
+            json={
+                "id": project_id,
+                "name": "Repo Truth Project",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": True,
+                        "workspace_root": str(workspace_root),
+                    }
+                },
+            },
+        )
+        assert create_project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Repo Truth Chat",
+                "project_id": project_id,
+                "tool_access_enabled": True,
+                "tool_access_repo_search": True,
+                "tool_access_filesystem": True,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-repo-truth",
+                "name": "Repo Truth Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": True,
+                    }
+                },
+            },
+        )
+        ingest = await client.post(
+            "/v1/vault/items",
+            json={
+                "title": "docs/legacy-auth.md",
+                "content": "INGESTED_AUTH_TOKEN historical note",
+                "namespace": f"project:{project_id}:repo",
+                "project_id": project_id,
+            },
+        )
+        assert ingest.status_code == 200
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": "Search the repository auth implementation and hardening opportunities",
+                "bot_id": "bot-repo-truth",
+            },
+        )
+        assert resp.status_code == 200
+        task_arg = cp_app.state.scheduler.schedule.await_args[0][0]
+        payload = task_arg.payload
+        assert isinstance(payload, list)
+        assert payload[0]["role"] == "system"
+        context_blob = payload[0]["content"]
+        assert "[workspace:file]" in context_blob or "[workspace:search]" in context_blob
+        assert "WORKSPACE_AUTH_TOKEN" in context_blob
+        assert "INGESTED_AUTH_TOKEN" in context_blob
+        assert context_blob.index("WORKSPACE_AUTH_TOKEN") < context_blob.index("INGESTED_AUTH_TOKEN")
+        policy_blob = payload[1]["content"] if len(payload) > 1 else ""
+        assert "Treat workspace snippets as source of truth" in policy_blob
+
+
+@pytest.mark.anyio
 async def test_chat_workspace_filesystem_context_requires_three_switches(cp_app, tmp_path):
     cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "ok"})
     workspace_root = tmp_path / "workspace"
@@ -841,6 +933,8 @@ async def test_repo_grounded_output_sanitizes_unverifiable_action_lines(cp_app):
         assert resp.status_code == 200
         content = resp.json()["assistant_message"]["content"]
         assert content.startswith("Files inspected (verified context)")
+        assert "Source-of-truth (workspace repo)" in content
+        assert "Supporting context (ingested repo/docs/history)" in content
         assert "Let me search" not in content
         assert "**/auth*.ts" not in content
 

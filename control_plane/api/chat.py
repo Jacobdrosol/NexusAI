@@ -106,6 +106,54 @@ def _context_source_labels(context_items: Optional[List[str]], *, limit: int = 1
     return labels
 
 
+def _source_tier(label: str) -> int:
+    lowered = str(label or "").lower()
+    if lowered.startswith("workspace:file") or lowered.startswith("workspace:search"):
+        return 0
+    if lowered.startswith("repo:"):
+        return 1
+    if lowered.startswith("vault:"):
+        return 2
+    return 3
+
+
+def _split_sources_by_tier(labels: List[str]) -> tuple[List[str], List[str], List[str], List[str]]:
+    workspace: List[str] = []
+    repo: List[str] = []
+    vault: List[str] = []
+    other: List[str] = []
+    for label in labels:
+        tier = _source_tier(label)
+        if tier == 0:
+            workspace.append(label)
+        elif tier == 1:
+            repo.append(label)
+        elif tier == 2:
+            vault.append(label)
+        else:
+            other.append(label)
+    return workspace, repo, vault, other
+
+
+def _order_context_items(entries: List[str], *, limit: int = 30) -> List[str]:
+    parsed: List[tuple[int, int, str]] = []
+    for index, entry in enumerate(entries):
+        first_line = str(entry or "").splitlines()[0].strip()
+        parsed.append((_source_tier(first_line), index, entry))
+    parsed.sort(key=lambda row: (row[0], row[1]))
+    ordered: List[str] = []
+    seen: set[str] = set()
+    for _, _, entry in parsed:
+        normalized = str(entry or "").strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        ordered.append(entry)
+        if len(ordered) >= limit:
+            break
+    return ordered
+
+
 def _messages_to_payload(
     messages: List[ChatMessage],
     *,
@@ -123,6 +171,8 @@ def _messages_to_payload(
             source_lines = "\n".join(f"- {source}" for source in sources)
             policy = (
                 "Repository Evidence Policy:\n"
+                "- Treat workspace snippets as source of truth for current code state.\n"
+                "- Use ingested repo/docs/PR/commit context only as supporting context.\n"
                 "- Use only the provided context snippets as verified repository evidence for this turn.\n"
                 "- Do not claim you searched/read/scanned files unless those files appear in verified sources.\n"
                 "- Do not simulate tool execution logs (for example: 'Let me search...', glob patterns, or pseudo command traces).\n"
@@ -159,8 +209,17 @@ def _apply_repo_evidence_envelope(output: str, *, require_repo_evidence: bool, c
     normalized = _sanitize_repo_grounded_output(output)
     if not normalized:
         normalized = "No model output was returned."
-    files_section = "\n".join(f"- {source}" for source in context_sources[:12])
-    prefix = f"Files inspected (verified context)\n{files_section}\n"
+    workspace, repo, vault, other = _split_sources_by_tier(context_sources[:12])
+    sections: List[str] = ["Files inspected (verified context)"]
+    sections.append("Source-of-truth (workspace repo)")
+    if workspace:
+        sections.extend(f"- {source}" for source in workspace)
+    else:
+        sections.append("- unavailable in this turn (workspace context not resolved)")
+    if repo or vault or other:
+        sections.append("Supporting context (ingested repo/docs/history)")
+        sections.extend(f"- {source}" for source in [*repo, *vault, *other])
+    prefix = "\n".join(sections) + "\n"
     if "files inspected" in normalized.lower():
         return normalized
     return f"{prefix}\n{normalized}"
@@ -458,11 +517,11 @@ async def _resolve_project_repo_context_items(
     if not project_ids:
         return []
 
-    max_total_items = 8
+    max_total_items = 10
     max_chars_per_item = 1800
     max_total_chars = 12_000
     project_count = max(len(project_ids), 1)
-    per_project_limit = max(2, min(4, max_total_items // project_count + 1))
+    per_project_limit = max(8, min(24, (max_total_items * 2) // project_count + 2))
 
     resolved: List[str] = []
     seen_chunks: set[str] = set()
@@ -527,15 +586,18 @@ async def _resolve_context_items(
     conversation: Optional[ChatConversation] = None,
     tool_access: Optional[Dict[str, Any]] = None,
     force_project_context: bool = False,
+    force_workspace_context: bool = False,
 ) -> List[str]:
     # Backward compatible direct context usage.
-    resolved: List[str] = list(body.context_items or [])
+    manual_context: List[str] = list(body.context_items or [])
+    resolved: List[str] = []
     item_ids = [str(i).strip() for i in (body.context_item_ids or []) if str(i).strip()]
     tool_cfg = tool_access if isinstance(tool_access, dict) else {}
     repo_search_allowed = bool(tool_cfg.get("repo_search", False))
     filesystem_allowed = bool(tool_cfg.get("filesystem", False))
     workspace_root = str(tool_cfg.get("workspace_root") or "").strip() or None
     vault_manager = getattr(request.app.state, "vault_manager", None)
+    vault_items: List[str] = []
     if item_ids and vault_manager is not None:
         for item_id in item_ids[:20]:
             try:
@@ -545,36 +607,31 @@ async def _resolve_context_items(
                     continue
                 # Bound payload size to reduce latency and accidental leakage.
                 snippet = text[:4000]
-                resolved.append(f"[vault:{item.id}] {item.title}\n{snippet}")
+                vault_items.append(f"[vault:{item.id}] {item.title}\n{snippet}")
             except Exception:
                 continue
 
+    workspace_context: List[str] = []
+    if (body.use_workspace_tools or force_workspace_context) and filesystem_allowed and workspace_root:
+        workspace_context = await _resolve_workspace_context_items(
+            query=body.content,
+            workspace_root=workspace_root,
+        )
+
+    repo_context: List[str] = []
     if (body.include_project_context or body.use_workspace_tools or force_project_context) and repo_search_allowed and conversation is not None:
-        resolved.extend(
-            await _resolve_project_repo_context_items(
-                request,
-                conversation=conversation,
-                query=body.content,
-            )
+        repo_context = await _resolve_project_repo_context_items(
+            request,
+            conversation=conversation,
+            query=body.content,
         )
 
-    if body.use_workspace_tools and filesystem_allowed and workspace_root:
-        resolved.extend(
-            await _resolve_workspace_context_items(
-                query=body.content,
-                workspace_root=workspace_root,
-            )
-        )
-
-    deduped: List[str] = []
-    seen: set[str] = set()
-    for entry in resolved:
-        normalized = entry.strip()
-        if not normalized or normalized in seen:
-            continue
-        seen.add(normalized)
-        deduped.append(entry)
-    return deduped[:30]
+    # Source-of-truth ordering: workspace -> ingested repo -> explicitly-selected vault -> manual context
+    resolved.extend(workspace_context)
+    resolved.extend(repo_context)
+    resolved.extend(vault_items)
+    resolved.extend(manual_context)
+    return _order_context_items(resolved, limit=30)
 
 
 def _extract_assign_instruction(content: str) -> Optional[str]:
@@ -758,7 +815,9 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
             return {"user_message": user_message, "assistant_message": None}
 
         require_repo_evidence = _context_resolution_requested(body)
-        force_project_context = _repo_intent_requested(body.content)
+        repo_intent = _repo_intent_requested(body.content)
+        force_project_context = repo_intent
+        force_workspace_context = repo_intent
         tool_access = await _effective_tool_access(
             request,
             conversation=conversation,
@@ -770,6 +829,7 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
             conversation=conversation,
             tool_access=tool_access,
             force_project_context=force_project_context,
+            force_workspace_context=force_workspace_context,
         )
         context_sources = _context_source_labels(resolved_context, limit=12)
         if not context_sources and resolved_context:
@@ -861,6 +921,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                     body,
                     conversation=conversation,
                     tool_access=tool_access,
+                    force_workspace_context=_repo_intent_requested(assign_instruction),
                 )
                 context_sources = _context_source_labels(resolved_context, limit=8)
                 if context_sources:
@@ -947,7 +1008,9 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                 return
 
             require_repo_evidence = _context_resolution_requested(body)
-            force_project_context = _repo_intent_requested(body.content)
+            repo_intent = _repo_intent_requested(body.content)
+            force_project_context = repo_intent
+            force_workspace_context = repo_intent
             tool_access = await _effective_tool_access(
                 request,
                 conversation=conversation,
@@ -961,6 +1024,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                 conversation=conversation,
                 tool_access=tool_access,
                 force_project_context=force_project_context,
+                force_workspace_context=force_workspace_context,
             )
             context_sources = _context_source_labels(resolved_context, limit=8)
             if not context_sources and resolved_context:
