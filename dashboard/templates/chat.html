@@ -6,6 +6,9 @@
   <h1>Chat</h1>
   <button class="btn btn-primary" onclick="showCreateConversation()">+ New Conversation</button>
 </div>
+{% if error %}
+<div class="alert alert-error">{{ error }}</div>
+{% endif %}
 
 <div class="split-grid">
   <section class="panel">

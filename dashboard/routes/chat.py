@@ -138,9 +138,24 @@ def _normalize_message_rows(rows: Any) -> list[dict[str, Any]]:
 @login_required
 def chat_page() -> str:
     cp = get_cp_client()
-    conversations = _normalize_conversation_rows(cp.list_conversations(archived="all") or [])
-    bots = cp.list_bots() or []
-    projects = cp.list_projects() or []
+    page_error: str | None = None
+
+    try:
+        conversations = _normalize_conversation_rows(cp.list_conversations(archived="all") or [])
+    except Exception:
+        conversations = []
+        page_error = "Conversation list is temporarily unavailable."
+
+    try:
+        bots = cp.list_bots() or []
+    except Exception:
+        bots = []
+
+    try:
+        projects = cp.list_projects() or []
+    except Exception:
+        projects = []
+
     selected_id = str(request.args.get("conversation_id") or "").strip()
     selected = None
     messages: list[dict[str, Any]] = []
@@ -152,7 +167,11 @@ def chat_page() -> str:
             if c.get("id") == selected_id:
                 selected = c
                 break
-        messages = _normalize_message_rows(cp.list_messages(selected_id) or [])
+        try:
+            messages = _normalize_message_rows(cp.list_messages(selected_id) or [])
+        except Exception:
+            messages = []
+            page_error = page_error or "Selected conversation messages could not be loaded."
 
     if selected:
         project_ids: list[str] = []
@@ -194,7 +213,11 @@ def chat_page() -> str:
                     if item_id and item_id not in repo_context_item_ids:
                         repo_context_item_ids.append(item_id)
 
-    vault_items = cp.list_vault_items(limit=50) or []
+    try:
+        vault_items = cp.list_vault_items(limit=50) or []
+    except Exception:
+        vault_items = []
+
     return render_template(
         "chat.html",
         conversations=[c for c in conversations if not c.get("archived_at")],
@@ -207,7 +230,7 @@ def chat_page() -> str:
         repo_context_items=repo_context_items,
         repo_context_sections=repo_context_sections,
         repo_context_item_ids=repo_context_item_ids,
-        error=None,
+        error=page_error,
     )
 
 
