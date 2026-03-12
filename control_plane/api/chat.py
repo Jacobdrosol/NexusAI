@@ -49,11 +49,72 @@ class UpdateConversationToolAccessRequest(BaseModel):
     repo_search: bool = False
 
 
-def _messages_to_payload(messages: List[ChatMessage], context_items: Optional[List[str]] = None) -> List[dict]:
+def _context_resolution_requested(body: PostMessageRequest) -> bool:
+    return bool(
+        body.context_items
+        or body.context_item_ids
+        or body.include_project_context
+        or body.use_workspace_tools
+    )
+
+
+def _context_source_labels(context_items: Optional[List[str]], *, limit: int = 12) -> List[str]:
+    labels: List[str] = []
+    seen: set[str] = set()
+    for entry in context_items or []:
+        line = str(entry or "").splitlines()[0].strip()
+        if not line.startswith("["):
+            continue
+        close = line.find("]")
+        if close <= 1:
+            continue
+        marker = line[1:close].strip()
+        detail = line[close + 1 :].strip()
+        if not marker:
+            continue
+        label = f"{marker} {detail}".strip()
+        if label in seen:
+            continue
+        seen.add(label)
+        labels.append(label)
+        if len(labels) >= limit:
+            break
+    return labels
+
+
+def _messages_to_payload(
+    messages: List[ChatMessage],
+    *,
+    context_items: Optional[List[str]] = None,
+    require_repo_evidence: bool = False,
+) -> List[dict]:
     payload = [{"role": m.role, "content": m.content} for m in messages]
-    if context_items:
-        joined = "\n".join(context_items)
+    resolved_context = list(context_items or [])
+    sources = _context_source_labels(resolved_context, limit=12)
+    if resolved_context:
+        joined = "\n".join(resolved_context)
         payload.insert(0, {"role": "system", "content": f"Context:\n{joined}"})
+    if require_repo_evidence:
+        if sources:
+            source_lines = "\n".join(f"- {source}" for source in sources)
+            policy = (
+                "Repository Evidence Policy:\n"
+                "- Use only the provided context snippets as verified repository evidence for this turn.\n"
+                "- Do not claim you searched/read/scanned files unless those files appear in verified sources.\n"
+                "- If evidence is incomplete, explicitly state what you could not verify.\n"
+                "- For repository/code/security analysis, include a 'Files inspected' section with exact paths/markers.\n"
+                "Verified sources:\n"
+                f"{source_lines}"
+            )
+        else:
+            policy = (
+                "Repository Evidence Policy:\n"
+                "- No repository snippets were retrieved for this turn.\n"
+                "- Do not claim you searched/read/scanned repository files.\n"
+                "- Explain that evidence is unavailable and request project context/workspace-tool access or specific files."
+            )
+        insert_at = 1 if resolved_context else 0
+        payload.insert(insert_at, {"role": "system", "content": policy})
     return payload
 
 
@@ -605,7 +666,11 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
             conversation=conversation,
             tool_access=tool_access,
         )
-        payload = _messages_to_payload(messages, context_items=resolved_context)
+        payload = _messages_to_payload(
+            messages,
+            context_items=resolved_context,
+            require_repo_evidence=_context_resolution_requested(body),
+        )
         task = Task(
             id=f"chat-{user_message.id}",
             bot_id=target_bot_id,
@@ -668,12 +733,31 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                     conversation=conversation,
                     target_bot_id=assign_bot_id,
                 )
+                if _context_resolution_requested(body):
+                    yield 'event: status\ndata: {"phase":"context","label":"Collecting repository context..."}\n\n'
                 resolved_context = await _resolve_context_items(
                     request,
                     body,
                     conversation=conversation,
                     tool_access=tool_access,
                 )
+                context_sources = _context_source_labels(resolved_context, limit=8)
+                if context_sources:
+                    context_payload = {
+                        "snippet_count": len(resolved_context),
+                        "source_count": len(context_sources),
+                        "sources": context_sources,
+                    }
+                    yield f"event: context_summary\ndata: {json.dumps(context_payload)}\n\n"
+                    yield (
+                        'event: status\ndata: '
+                        f'{json.dumps({"phase":"context","label":f"Loaded {len(resolved_context)} context snippets from {len(context_sources)} sources."})}\n\n'
+                    )
+                elif _context_resolution_requested(body):
+                    yield (
+                        'event: status\ndata: '
+                        '{"phase":"context","label":"No repository context retrieved. The response will avoid unverifiable file claims."}\n\n'
+                    )
                 assignment = await pm_orchestrator.orchestrate_assignment(
                     conversation_id=conversation_id,
                     instruction=assign_instruction,
@@ -746,13 +830,36 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                 conversation=conversation,
                 target_bot_id=target_bot_id,
             )
+            if _context_resolution_requested(body):
+                yield 'event: status\ndata: {"phase":"context","label":"Collecting repository context..."}\n\n'
             resolved_context = await _resolve_context_items(
                 request,
                 body,
                 conversation=conversation,
                 tool_access=tool_access,
             )
-            payload = _messages_to_payload(messages, context_items=resolved_context)
+            context_sources = _context_source_labels(resolved_context, limit=8)
+            if context_sources:
+                context_payload = {
+                    "snippet_count": len(resolved_context),
+                    "source_count": len(context_sources),
+                    "sources": context_sources,
+                }
+                yield f"event: context_summary\ndata: {json.dumps(context_payload)}\n\n"
+                yield (
+                    'event: status\ndata: '
+                    f'{json.dumps({"phase":"context","label":f"Loaded {len(resolved_context)} context snippets from {len(context_sources)} sources."})}\n\n'
+                )
+            elif _context_resolution_requested(body):
+                yield (
+                    'event: status\ndata: '
+                    '{"phase":"context","label":"No repository context retrieved. The response will avoid unverifiable file claims."}\n\n'
+                )
+            payload = _messages_to_payload(
+                messages,
+                context_items=resolved_context,
+                require_repo_evidence=_context_resolution_requested(body),
+            )
             yield f'event: status\ndata: {json.dumps({"phase":"queued","label":"Queued on selected backend...","conversation_id":conversation_id,"message_count":len(messages)})}\n\n'
             task = Task(
                 id=f"chat-{user_message.id}",

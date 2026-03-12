@@ -938,6 +938,14 @@ async function sendMessage(streamMode) {
                 stateEl.textContent = 'Task graph completed.';
               }
             }
+          } else if (eventType === 'context_summary') {
+            const sources = Array.isArray(parsed.sources) ? parsed.sources.filter(Boolean) : [];
+            if (sources.length > 0) {
+              const preview = sources.slice(0, 3).join('; ');
+              setPendingAssistantStatus(`Using repo context from: ${preview}`, pending);
+            } else {
+              setPendingAssistantStatus('No repository context was resolved for this turn.', pending);
+            }
           } else if (eventType === 'status') {
             setPendingAssistantStatus(parsed.label || 'Working...', pending);
           } else if (eventType === 'token') {
@@ -972,7 +980,7 @@ async function sendMessage(streamMode) {
 
 document.getElementById('chat-send-form')?.addEventListener('submit', function(e) {
   e.preventDefault();
-  sendMessage(false);
+  sendMessage(true);
 });
 
 document.getElementById('form-create-convo')?.addEventListener('submit', async function(e) {

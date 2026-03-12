@@ -398,6 +398,11 @@ async def test_chat_project_repo_context_is_attached_when_requested(cp_app):
         assert payload[0]["role"] == "system"
         assert "[repo:proj-repo-ctx]" in payload[0]["content"]
         assert "PROJECT_REPO_CONTEXT_TOKEN" in payload[0]["content"]
+        assert any(
+            m.get("role") == "system" and "Repository Evidence Policy:" in str(m.get("content", ""))
+            for m in payload
+        )
+        assert any("Files inspected" in str(m.get("content", "")) for m in payload if m.get("role") == "system")
 
 
 @pytest.mark.anyio
@@ -598,6 +603,87 @@ async def test_chat_workspace_tools_blocked_when_chat_switch_off(cp_app, tmp_pat
         payload = task_arg.payload
         assert isinstance(payload, list)
         assert "WORKSPACE_BLOCKED_TOKEN" not in str(payload)
+        assert payload[0]["role"] == "system"
+        assert "No repository snippets were retrieved for this turn." in payload[0]["content"]
+
+
+@pytest.mark.anyio
+async def test_stream_message_emits_context_summary_event_when_repo_context_loaded(cp_app):
+    async def _stream(_task):
+        yield {"event": "backend_selected", "provider": "ollama", "model": "llama3.1:8b", "worker_id": "w1"}
+        yield {"event": "token", "text": "ok"}
+        yield {"event": "final", "output": "ok", "usage": {}}
+
+    cp_app.state.scheduler.stream = _stream
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-context-stream"
+        create_project = await client.post(
+            "/v1/projects",
+            json={
+                "id": project_id,
+                "name": "Repo Context Stream",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        assert create_project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Context Stream",
+                "project_id": project_id,
+                "tool_access_enabled": True,
+                "tool_access_repo_search": True,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-context-stream",
+                "name": "Context Stream Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        ingest = await client.post(
+            "/v1/vault/items",
+            json={
+                "title": "README",
+                "content": "STREAM_CONTEXT_TOKEN",
+                "namespace": f"project:{project_id}:repo",
+                "project_id": project_id,
+            },
+        )
+        assert ingest.status_code == 200
+
+        stream_resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/stream",
+            json={
+                "content": "Review auth hardening",
+                "bot_id": "bot-context-stream",
+                "include_project_context": True,
+            },
+        )
+        assert stream_resp.status_code == 200
+        assert "event: context_summary" in stream_resp.text
+        assert "STREAM_CONTEXT_TOKEN" not in stream_resp.text
 
 
 @pytest.mark.anyio
