@@ -568,15 +568,15 @@ function appendMessage(role, content, id='temp-' + Date.now(), meta=null) {
   return div;
 }
 
-function setPendingAssistantStatus(text) {
-  const pending = document.querySelector('.message[data-pending-assistant="true"]');
+function setPendingAssistantStatus(text, pendingEl = null) {
+  const pending = pendingEl || document.querySelector('.message[data-pending-assistant="true"]');
   if (!pending) return;
   const bodyEl = pending.querySelector('.message-body');
   if (bodyEl && !(pending.dataset.streamingStarted === 'true')) renderMessageBody(bodyEl, text);
 }
 
-function appendPendingAssistantToken(text) {
-  const pending = document.querySelector('.message[data-pending-assistant="true"]');
+function appendPendingAssistantToken(text, pendingEl = null) {
+  const pending = pendingEl || document.querySelector('.message[data-pending-assistant="true"]');
   if (!pending) return;
   const bodyEl = pending.querySelector('.message-body');
   if (!bodyEl) return;
@@ -602,19 +602,10 @@ function reconcilePendingElement(message) {
   )) || null;
 }
 
-function upsertMessage(message) {
-  if (!message || !message.id) return null;
+function hydrateMessageElement(el, message) {
+  if (!el || !message || !message.id) return null;
   const id = String(message.id);
   messageMap.set(id, message);
-
-  let el = document.querySelector(`.message[data-message-id="${id}"]`);
-  if (!el) {
-    el = reconcilePendingElement(message);
-  }
-  if (!el) {
-    el = appendMessage(message.role || 'assistant', message.content || '', id, message.metadata || null);
-  }
-  if (!el) return null;
 
   el.className = 'message ' + (message.role || 'assistant');
   el.dataset.messageId = id;
@@ -622,6 +613,7 @@ function upsertMessage(message) {
   el.dataset.content = message.content || '';
   delete el.dataset.pending;
   delete el.dataset.pendingAssistant;
+  delete el.dataset.streamingStarted;
   if (message.metadata) {
     el.dataset.meta = JSON.stringify(message.metadata);
   } else {
@@ -635,6 +627,25 @@ function upsertMessage(message) {
   if (bodyEl) renderMessageBody(bodyEl, message.content || '');
   if (actionsEl) actionsEl.innerHTML = renderMessageActions(message.metadata || null);
   return el;
+}
+
+function upsertMessage(message, preferredElement = null) {
+  if (!message || !message.id) return null;
+  const id = String(message.id);
+  messageMap.set(id, message);
+
+  let el = document.querySelector(`.message[data-message-id="${id}"]`);
+  if (!el && preferredElement && preferredElement.isConnected) {
+    el = preferredElement;
+  }
+  if (!el) {
+    el = reconcilePendingElement(message);
+  }
+  if (!el) {
+    el = appendMessage(message.role || 'assistant', message.content || '', id, message.metadata || null);
+  }
+  if (!el) return null;
+  return hydrateMessageElement(el, message);
 }
 
 async function refreshMessages() {
@@ -819,38 +830,48 @@ async function sendMessage(streamMode) {
     }
     form.querySelector('textarea[name=content]').value = '';
     startMessagePolling();
-
-    const res = await fetch('/api/chat/messages', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      if (pending) {
-        pending.querySelector('.message-body').textContent = 'Still waiting on a reply. Rechecking conversation state...';
-      }
-      refreshMessagesUntilSettled(12, 1000).then((recovered) => {
-        if (!recovered && pending) {
-          pending.querySelector('.message-body').textContent = 'Request timed out locally. If the backend eventually finishes, the saved reply will appear here automatically.';
-        }
+    try {
+      const res = await fetch('/api/chat/messages', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
+        body: JSON.stringify(payload),
       });
-      const error = (data.error || '').toString().trim();
-      if (error) {
-        alert(error);
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        if (pending) {
+          pending.querySelector('.message-body').textContent = 'Still waiting on a reply. Rechecking conversation state...';
+        }
+        refreshMessagesUntilSettled(12, 1000).then((recovered) => {
+          if (!recovered && pending) {
+            pending.querySelector('.message-body').textContent = 'Request timed out locally. If the backend eventually finishes, the saved reply will appear here automatically.';
+          }
+        });
+        const error = (data.error || '').toString().trim();
+        if (error) {
+          alert(error);
+        }
+        return;
+      }
+      const data = await res.json();
+      if (data.user_message) upsertMessage(data.user_message, tempUser);
+      if (data.assistant_message) upsertMessage(data.assistant_message, pending);
+      if (data.mode === 'assign') {
+        const orchestrationId = data.assignment?.orchestration_id || 'unknown';
+        alert('Assignment completed: ' + orchestrationId);
+        return;
+      }
+      setTimeout(refreshMessages, 250);
+      return;
+    } catch (_) {
+      if (pending) {
+        pending.querySelector('.message-body').textContent = 'Connection issue while sending. Rechecking conversation state...';
+      }
+      const recovered = await refreshMessagesUntilSettled(12, 1000);
+      if (!recovered && pending) {
+        pending.querySelector('.message-body').textContent = 'Connection dropped before the response finished. If saved, the reply will appear after refresh.';
       }
       return;
     }
-    const data = await res.json();
-    if (data.user_message) upsertMessage(data.user_message);
-    if (data.assistant_message) upsertMessage(data.assistant_message);
-    if (data.mode === 'assign') {
-      const orchestrationId = data.assignment?.orchestration_id || 'unknown';
-      alert('Assignment completed: ' + orchestrationId);
-      return;
-    }
-    setTimeout(refreshMessages, 250);
-    return;
   }
 
   const tempUser = appendMessage('user', content);
@@ -863,83 +884,88 @@ async function sendMessage(streamMode) {
     pending.dataset.pendingAssistant = 'true';
   }
   form.reset();
-
-  const res = await fetch('/api/chat/stream', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok || !res.body) {
-    const data = await res.json().catch(() => ({}));
-    alert(data.error || 'Stream send failed');
-    return;
-  }
-
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
   let sawDone = false;
-  while (true) {
-    const {done, value} = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, {stream: true});
-    let idx;
-    while ((idx = buffer.indexOf('\n\n')) >= 0) {
-      const block = buffer.slice(0, idx);
-      buffer = buffer.slice(idx + 2);
-      let eventType = 'message';
-      let dataText = '';
-      block.split('\n').forEach((line) => {
-        if (line.startsWith('event:')) eventType = line.slice(6).trim();
-        if (line.startsWith('data:')) dataText += line.slice(5).trim();
-      });
-      if (!dataText) continue;
-      try {
-        const parsed = JSON.parse(dataText);
-        if (eventType === 'task_graph') {
-          (parsed.tasks || []).forEach((t) => {
-            upsertTaskEvent({
-              task_id: t.id,
-              status: t.status || 'queued',
-              bot_id: t.bot_id,
-              title: (t.payload && t.payload.title) || '',
+  try {
+    const res = await fetch('/api/chat/stream', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok || !res.body) {
+      const data = await res.json().catch(() => ({}));
+      alert(data.error || 'Stream send failed');
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, {stream: true});
+      let idx;
+      while ((idx = buffer.indexOf('\n\n')) >= 0) {
+        const block = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 2);
+        let eventType = 'message';
+        const dataLines = [];
+        block.split('\n').forEach((rawLine) => {
+          const line = rawLine.replace(/\r$/, '');
+          if (line.startsWith('event:')) eventType = line.slice(6).trim();
+          if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart());
+        });
+        const dataText = dataLines.join('\n');
+        if (!dataText) continue;
+        try {
+          const parsed = JSON.parse(dataText);
+          if (eventType === 'task_graph') {
+            (parsed.tasks || []).forEach((t) => {
+              upsertTaskEvent({
+                task_id: t.id,
+                status: t.status || 'queued',
+                bot_id: t.bot_id,
+                title: (t.payload && t.payload.title) || '',
+              });
             });
-          });
-        } else if (eventType === 'task_status') {
-          upsertTaskEvent(parsed);
-          const statuses = Array.from(taskEventMap.values()).map((t) => t.status);
-          if (statuses.length > 0 && statuses.every((s) => s === 'completed' || s === 'failed')) {
-            const stateEl = document.getElementById('task-event-state');
-            if (stateEl) {
-              stateEl.className = 'state-info';
-              stateEl.textContent = 'Task graph completed.';
+          } else if (eventType === 'task_status') {
+            upsertTaskEvent(parsed);
+            const statuses = Array.from(taskEventMap.values()).map((t) => t.status);
+            if (statuses.length > 0 && statuses.every((s) => s === 'completed' || s === 'failed')) {
+              const stateEl = document.getElementById('task-event-state');
+              if (stateEl) {
+                stateEl.className = 'state-info';
+                stateEl.textContent = 'Task graph completed.';
+              }
             }
+          } else if (eventType === 'status') {
+            setPendingAssistantStatus(parsed.label || 'Working...', pending);
+          } else if (eventType === 'token') {
+            appendPendingAssistantToken(parsed.text || '', pending);
+          } else if (eventType === 'user_message') {
+            upsertMessage(parsed, tempUser);
+          } else if (eventType === 'assistant_message' && pending) {
+            upsertMessage(parsed, pending);
+          } else if (eventType === 'error') {
+            setPendingAssistantStatus(parsed.error || 'Stream error', pending);
+            alert(parsed.error || 'Stream error');
+          } else if (eventType === 'done') {
+            sawDone = true;
+            setTimeout(refreshMessages, 150);
           }
-        } else if (eventType === 'status') {
-          setPendingAssistantStatus(parsed.label || 'Working...');
-        } else if (eventType === 'token') {
-          appendPendingAssistantToken(parsed.text || '');
-        } else if (eventType === 'user_message') {
-          upsertMessage(parsed);
-        } else if (eventType === 'assistant_message' && pending) {
-          upsertMessage(parsed);
-        } else if (eventType === 'error') {
-          setPendingAssistantStatus(parsed.error || 'Stream error');
-          alert(parsed.error || 'Stream error');
-        } else if (eventType === 'done') {
-          sawDone = true;
-          setTimeout(refreshMessages, 150);
+        } catch (_) {
+          // ignore malformed frames
         }
-      } catch (_) {
-        // ignore malformed frames
       }
     }
+  } catch (_) {
+    setPendingAssistantStatus('Stream connection failed. Rechecking saved response...', pending);
   }
   if (!sawDone) {
-    setPendingAssistantStatus('Stream closed unexpectedly. Rechecking saved response...');
+    setPendingAssistantStatus('Stream closed unexpectedly. Rechecking saved response...', pending);
     const recovered = await refreshMessagesUntilSettled();
     if (!recovered) {
-      setPendingAssistantStatus('Generation stopped before completion. Partial output was kept if anything was saved.');
+      setPendingAssistantStatus('Generation stopped before completion. Partial output was kept if anything was saved.', pending);
     }
   }
 }
