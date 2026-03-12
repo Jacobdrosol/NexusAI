@@ -150,6 +150,44 @@ def _normalize_message_rows(rows: Any) -> list[dict[str, Any]]:
     return result
 
 
+def _normalize_vault_item_row(raw: Any) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    item_id = str(raw.get("id") or "").strip()
+    if not item_id:
+        return None
+    metadata = raw.get("metadata")
+    return {
+        "id": item_id,
+        "title": str(raw.get("title") or item_id).strip() or item_id,
+        "namespace": str(raw.get("namespace") or "").strip() or None,
+        "project_id": str(raw.get("project_id") or "").strip() or None,
+        "content": str(raw.get("content") or ""),
+        "created_at": str(raw.get("created_at") or "").strip() or None,
+        "updated_at": str(raw.get("updated_at") or "").strip() or None,
+        "metadata": _json_safe(metadata) if isinstance(metadata, dict) else None,
+    }
+
+
+def _normalize_vault_item_rows(raw: Any) -> list[dict[str, Any]]:
+    if isinstance(raw, dict):
+        for key in ("items", "results", "data"):
+            candidate = raw.get(key)
+            if isinstance(candidate, list):
+                raw = candidate
+                break
+        else:
+            return []
+    if not isinstance(raw, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for row in raw:
+        normalized = _normalize_vault_item_row(row)
+        if normalized is not None:
+            result.append(normalized)
+    return result
+
+
 @bp.get("/chat")
 @login_required
 def chat_page() -> str:
@@ -212,9 +250,10 @@ def chat_page() -> str:
                     except Exception:
                         namespace = f"project:{pid}:repo"
                 try:
-                    items = cp.list_vault_items(namespace=namespace, project_id=pid, limit=120) or []
+                    items_raw = cp.list_vault_items(namespace=namespace, project_id=pid, limit=120) or []
                 except Exception:
-                    items = []
+                    items_raw = []
+                items = _normalize_vault_item_rows(items_raw)
                 if items:
                     repo_context_sections.append(
                         {
@@ -230,9 +269,10 @@ def chat_page() -> str:
                             repo_context_item_ids.append(item_id)
 
         try:
-            vault_items = cp.list_vault_items(limit=50) or []
+            vault_items_raw = cp.list_vault_items(limit=50) or []
         except Exception:
-            vault_items = []
+            vault_items_raw = []
+        vault_items = _normalize_vault_item_rows(vault_items_raw)
 
         return render_template(
             "chat.html",

@@ -365,6 +365,60 @@ def test_chat_page_handles_non_json_serializable_message_fields(dashboard_client
     assert b"hello" in resp.data
 
 
+def test_chat_page_handles_wrapped_vault_item_responses(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_conversations(self, archived="all", project_id=None):
+            return [
+                {
+                    "id": "c-proj-vault",
+                    "title": "Project Vault Chat",
+                    "project_id": "globeiq",
+                    "bridge_project_ids": [],
+                    "updated_at": "2026-03-12T00:00:00+00:00",
+                    "archived_at": None,
+                    "tool_access_enabled": True,
+                    "tool_access_filesystem": True,
+                    "tool_access_repo_search": True,
+                }
+            ]
+
+        def list_messages(self, conversation_id):
+            return [{"id": "m-1", "role": "assistant", "content": "ok"}]
+
+        def list_bots(self):
+            return []
+
+        def list_projects(self):
+            return [{"id": "globeiq", "name": "GlobeIQ"}]
+
+        def list_vault_items(self, **kwargs):
+            if kwargs.get("namespace"):
+                return {
+                    "items": [
+                        {
+                            "id": "v-proj-1",
+                            "title": "README.md",
+                            "metadata": {"path": "README.md"},
+                        }
+                    ]
+                }
+            return {"items": [{"id": "v-global-1", "title": "General Doc"}]}
+
+        def get_project_github_context_sync_status(self, project_id):
+            return {}
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/chat?conversation_id=c-proj-vault")
+
+    assert resp.status_code == 200
+    assert b"Project Vault Chat" in resp.data
+    assert b"README.md" in resp.data
+    assert b"General Doc" in resp.data
+    assert b"Chat view is temporarily unavailable" not in resp.data
+
+
 def test_chat_page_unexpected_error_falls_back_to_safe_shell(dashboard_client):
     _login_admin(dashboard_client)
 

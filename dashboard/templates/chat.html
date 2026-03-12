@@ -1,4 +1,4 @@
-{% extends "base.html" %}
+﻿{% extends "base.html" %}
 {% set active_page = "chat" %}
 {% block title %}Chat{% endblock %}
 {% block content %}
@@ -77,10 +77,10 @@
       {% for section in repo_context_sections %}
       <details style="margin-bottom:0.35rem;">
         <summary style="cursor:pointer;">
-          {{ section.project_id }} ({{ section.namespace }}) · {{ section.items|length }} item{{ '' if section.items|length == 1 else 's' }}
+          {{ section.project_id }} ({{ section.namespace }}) Â· {{ section["items"]|length }} item{{ '' if section["items"]|length == 1 else 's' }}
         </summary>
         <div class="context-picker-list" style="margin-top:0.35rem;">
-          {% for v in section.items %}
+          {% for v in section["items"] %}
           {% set path_hint = (v.get('metadata') or {}).get('path') if v.get('metadata') else '' %}
           <label class="context-item">
             <input type="checkbox" class="context-vault" value="{{ v.id }}">
@@ -778,7 +778,7 @@ function upsertTaskEvent(task) {
           <strong>${title}</strong>
           <span class="badge badge-${t.status}">${t.status}</span>
         </div>
-        <div class="mini-note">Task ${t.task_id} · Bot ${t.bot_id || 'unknown'}</div>
+        <div class="mini-note">Task ${t.task_id} Â· Bot ${t.bot_id || 'unknown'}</div>
         ${errorText}
       </div>
     `;
@@ -1212,3 +1212,4 @@ startMessagePolling();
 document.querySelectorAll('#messages .message-body').forEach((el) => renderMessageBody(el, el.textContent || ''));
 </script>
 {% endblock %}
+
