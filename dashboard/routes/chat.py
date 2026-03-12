@@ -39,6 +39,19 @@ def _stream_cp_headers(cp) -> dict[str, str]:
     return headers
 
 
+def _json_safe(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        safe: dict[str, Any] = {}
+        for key, raw in value.items():
+            safe[str(key)] = _json_safe(raw)
+        return safe
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(item) for item in value]
+    return str(value)
+
+
 def _normalize_bridge_project_ids(raw: Any) -> list[str]:
     if raw is None:
         return []
@@ -105,21 +118,22 @@ def _normalize_message_row(raw: Any) -> dict[str, Any] | None:
     mid = str(raw.get("id") or "").strip()
     if not mid:
         return None
-    normalized = dict(raw)
-    normalized["id"] = mid
-    normalized["role"] = str(raw.get("role") or "").strip() or "assistant"
-    normalized["content"] = str(raw.get("content") or "")
+    normalized: dict[str, Any] = {
+        "id": mid,
+        "role": str(raw.get("role") or "").strip() or "assistant",
+        "content": str(raw.get("content") or ""),
+        "created_at": str(raw.get("created_at") or "").strip() or None,
+        "metadata": None,
+    }
     metadata = raw.get("metadata")
     if isinstance(metadata, dict):
-        normalized["metadata"] = metadata
+        normalized["metadata"] = _json_safe(metadata)
     elif isinstance(metadata, str):
         try:
             parsed = json.loads(metadata)
-            normalized["metadata"] = parsed if isinstance(parsed, dict) else None
+            normalized["metadata"] = _json_safe(parsed) if isinstance(parsed, dict) else None
         except Exception:
             normalized["metadata"] = None
-    else:
-        normalized["metadata"] = None
     return normalized
 
 

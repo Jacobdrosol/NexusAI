@@ -2,6 +2,7 @@
 
 import bcrypt
 import io
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 
@@ -312,6 +313,56 @@ def test_chat_page_handles_conversation_list_error_gracefully(dashboard_client):
     assert resp.status_code == 200
     assert b"Conversation list is temporarily unavailable." in resp.data
     assert b"No conversations yet" in resp.data
+
+
+def test_chat_page_handles_non_json_serializable_message_fields(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_conversations(self, archived="all", project_id=None):
+            return [
+                {
+                    "id": "c-proj",
+                    "title": "Project Chat",
+                    "project_id": "globeiq",
+                    "bridge_project_ids": [],
+                    "updated_at": "2026-03-12T00:00:00+00:00",
+                    "archived_at": None,
+                    "tool_access_enabled": True,
+                    "tool_access_filesystem": True,
+                    "tool_access_repo_search": True,
+                }
+            ]
+
+        def list_messages(self, conversation_id):
+            return [
+                {
+                    "id": "m-weird",
+                    "role": "assistant",
+                    "content": "hello",
+                    "created_at": datetime(2026, 3, 12, 10, 0, tzinfo=timezone.utc),
+                    "metadata": {"seen_at": datetime(2026, 3, 12, 10, 1, tzinfo=timezone.utc)},
+                }
+            ]
+
+        def list_bots(self):
+            return []
+
+        def list_projects(self):
+            return [{"id": "globeiq", "name": "GlobeIQ"}]
+
+        def list_vault_items(self, **kwargs):
+            return []
+
+        def get_project_github_context_sync_status(self, project_id):
+            return {}
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/chat?conversation_id=c-proj")
+
+    assert resp.status_code == 200
+    assert b"Project Chat" in resp.data
+    assert b"hello" in resp.data
 
 
 def test_chat_page_unexpected_error_falls_back_to_safe_shell(dashboard_client):
