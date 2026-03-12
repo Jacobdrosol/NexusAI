@@ -42,6 +42,12 @@ Generate import bundles:
 py scripts/setup_pm_bot_pack.py --export-dir "<path-to-export-bundles>"
 ```
 
+Generate bundles with bot-level chat workspace tools pre-enabled:
+
+```bash
+py scripts/setup_pm_bot_pack.py --export-dir "<path-to-export-bundles>" --chat-tools-mode repo_and_filesystem
+```
+
 Apply directly to control plane:
 
 ```bash
@@ -53,6 +59,16 @@ Generate and apply in one command:
 ```bash
 py scripts/setup_pm_bot_pack.py --export-dir "<path-to-export-bundles>" --apply --base-url http://127.0.0.1:8000 --api-token <token>
 ```
+
+### Chat Tool Access Modes
+
+`setup_pm_bot_pack.py` supports bot-level chat workspace tool defaults:
+
+1. `--chat-tools-mode off` (default)
+2. `--chat-tools-mode repo_search`
+3. `--chat-tools-mode repo_and_filesystem`
+
+These flags only set the bot-level gate. Runtime access is still denied unless project-level and chat-level tool access are also enabled.
 
 ## Database Workflows
 
@@ -67,3 +83,7 @@ For DB schema/query/migration tasks:
 
 - If a PM bot returns invalid plan JSON, orchestration falls back to a deterministic heuristic plan.
 - Keep roles explicit (`pm`, `coder`, `tester`, `reviewer`, `security`, `dba`) so routing stays predictable.
+- Workspace tools use strict three-switch gating:
+  1. bot routing rules (`chat_tool_access`)
+  2. project chat workspace tool policy
+  3. conversation chat tool access plus per-message `use_workspace_tools`

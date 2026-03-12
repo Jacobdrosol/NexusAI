@@ -3,6 +3,7 @@
 
 Usage examples:
   py scripts/setup_pm_bot_pack.py --export-dir "C:\\tmp\\pm-pack"
+  py scripts/setup_pm_bot_pack.py --export-dir "C:\\tmp\\pm-pack" --chat-tools-mode repo_and_filesystem
   py scripts/setup_pm_bot_pack.py --apply --base-url http://127.0.0.1:8000 --api-token <token>
   py scripts/setup_pm_bot_pack.py --export-dir "C:\\tmp\\pm-pack" --apply
 """
@@ -21,6 +22,7 @@ from urllib import error, request
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8000"
 DEFAULT_API_KEY_REF = "Ollama_Cloud1"
+DEFAULT_CHAT_TOOLS_MODE = "off"
 
 
 @dataclass(frozen=True)
@@ -146,7 +148,16 @@ def _backend_payload(spec: BotSpec, api_key_ref: str) -> Dict[str, Any]:
     }
 
 
-def _routing_rules_payload(spec: BotSpec) -> Dict[str, Any]:
+def _chat_tool_access_payload(mode: str) -> Dict[str, Any]:
+    mode_clean = str(mode or "").strip().lower() or DEFAULT_CHAT_TOOLS_MODE
+    if mode_clean == "repo_search":
+        return {"enabled": True, "filesystem": False, "repo_search": True}
+    if mode_clean == "repo_and_filesystem":
+        return {"enabled": True, "filesystem": True, "repo_search": True}
+    return {"enabled": False, "filesystem": False, "repo_search": False}
+
+
+def _routing_rules_payload(spec: BotSpec, chat_tools_mode: str) -> Dict[str, Any]:
     output_contract: Dict[str, Any] = {
         "enabled": bool(spec.output_contract_json),
         "description": (
@@ -188,10 +199,11 @@ def _routing_rules_payload(spec: BotSpec) -> Dict[str, Any]:
             "notes": "",
             "triggers": [],
         },
+        "chat_tool_access": _chat_tool_access_payload(chat_tools_mode),
     }
 
 
-def _bot_payload(spec: BotSpec, api_key_ref: str) -> Dict[str, Any]:
+def _bot_payload(spec: BotSpec, api_key_ref: str, chat_tools_mode: str) -> Dict[str, Any]:
     return {
         "id": spec.bot_id,
         "name": spec.name,
@@ -200,7 +212,7 @@ def _bot_payload(spec: BotSpec, api_key_ref: str) -> Dict[str, Any]:
         "priority": spec.priority,
         "enabled": True,
         "backends": [_backend_payload(spec, api_key_ref)],
-        "routing_rules": _routing_rules_payload(spec),
+        "routing_rules": _routing_rules_payload(spec, chat_tools_mode),
         "workflow": {
             "notes": "",
             "triggers": [],
@@ -208,11 +220,11 @@ def _bot_payload(spec: BotSpec, api_key_ref: str) -> Dict[str, Any]:
     }
 
 
-def _bundle_payload(spec: BotSpec, api_key_ref: str) -> Dict[str, Any]:
+def _bundle_payload(spec: BotSpec, api_key_ref: str, chat_tools_mode: str) -> Dict[str, Any]:
     return {
         "schema_version": "nexusai.bot-export.v1",
         "exported_at": datetime.now(timezone.utc).isoformat(),
-        "bot": _bot_payload(spec, api_key_ref),
+        "bot": _bot_payload(spec, api_key_ref, chat_tools_mode),
         "connections": [],
     }
 
@@ -303,6 +315,15 @@ def main() -> int:
         help=f"Ollama Cloud API key reference to store on each bot backend (default: {DEFAULT_API_KEY_REF}).",
     )
     parser.add_argument(
+        "--chat-tools-mode",
+        choices=["off", "repo_search", "repo_and_filesystem"],
+        default=DEFAULT_CHAT_TOOLS_MODE,
+        help=(
+            "Bot-level chat workspace tool policy for generated PM bots: "
+            "off, repo_search, or repo_and_filesystem."
+        ),
+    )
+    parser.add_argument(
         "--export-dir",
         type=Path,
         default=None,
@@ -321,7 +342,7 @@ def main() -> int:
     args = parser.parse_args()
 
     specs = _pm_specs()
-    bundles = [(spec, _bundle_payload(spec, args.api_key_ref)) for spec in specs]
+    bundles = [(spec, _bundle_payload(spec, args.api_key_ref, args.chat_tools_mode)) for spec in specs]
 
     if args.export_dir is not None:
         outputs = _write_exports(bundles, args.export_dir)
@@ -351,4 +372,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

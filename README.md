@@ -19,6 +19,7 @@
 ## Documentation
 
 - Getting started: `docs/GETTING_STARTED.md`
+- Chat/PM/workspace setup: `docs/CHAT_PM_WORKSPACE_SETUP.md`
 - Product usage: `docs/USER_GUIDE.md`
 - Operations and security: `docs/OPERATIONS.md`
 - Blue/green deployment: `docs/DEPLOY_BLUEGREEN.md`
@@ -169,7 +170,7 @@ GitHub integration:
   - configuring a local repo root path and clone defaults
   - repository clone/status/pull/commit/push operations from the dashboard
   - optional guarded command execution for test/build commands (`run`) with an allowlist policy
-- Repository workspace run history with per-run resource metrics (duration, CPU, peak memory, IO) and aggregate summaries for internal tracking and future usage billing models.
+- Repository workspace run history with per-run resource metrics (duration, CPU, peak memory, IO) and aggregate summaries for internal tracking.
 - Optional isolated temporary workspace runs for checks (`use_temp_workspace`) with dependency bootstrap helpers for Python, Node, .NET, and C++ projects.
 
 Security and ops:

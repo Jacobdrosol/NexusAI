@@ -167,6 +167,28 @@
 
 <section class="panel" style="margin-bottom:1rem;">
   <div class="page-header" style="margin-bottom:0.75rem;">
+    <h2 class="panel-title">Chat Tool Access</h2>
+    <div>
+      <button class="btn btn-primary" onclick="saveChatToolAccess()">Save Chat Tool Access</button>
+    </div>
+  </div>
+  <p class="mini-note" style="margin-bottom:0.75rem;">Bot-level workspace tool policy is one gate in a strict 3-switch hierarchy. Tools are available only when bot, project, and chat settings are all enabled.</p>
+  <div class="form-group">
+    <label><input type="checkbox" id="bot-chat-tool-enabled"> Enable workspace tools for this bot</label>
+  </div>
+  <div class="split-grid" style="grid-template-columns:1fr 1fr;">
+    <div class="form-group">
+      <label><input type="checkbox" id="bot-chat-tool-filesystem"> Allow filesystem read/search</label>
+    </div>
+    <div class="form-group">
+      <label><input type="checkbox" id="bot-chat-tool-repo-search"> Allow semantic repo search</label>
+    </div>
+  </div>
+  <div class="mini-note">Workspace root path is configured at project level. Per-message usage still requires enabling tools in the chat composer.</div>
+</section>
+
+<section class="panel" style="margin-bottom:1rem;">
+  <div class="page-header" style="margin-bottom:0.75rem;">
     <h2 class="panel-title">Run Input Contract</h2>
     <div>
       <button class="btn btn-primary" onclick="saveInputContract()">Save Input Contract</button>
@@ -807,6 +829,13 @@ BOT.external_trigger = BOT.external_trigger && typeof BOT.external_trigger === '
   : ((BOT.routing_rules && typeof BOT.routing_rules === 'object' && BOT.routing_rules.external_trigger && typeof BOT.routing_rules.external_trigger === 'object')
     ? BOT.routing_rules.external_trigger
     : {enabled: false, require_auth: true, auth_header: '', auth_token: '', source: 'external_trigger', payload_field: '', allow_metadata: false});
+BOT.chat_tool_access = BOT.chat_tool_access && typeof BOT.chat_tool_access === 'object'
+  ? BOT.chat_tool_access
+  : ((BOT.routing_rules && typeof BOT.routing_rules === 'object' && BOT.routing_rules.chat_tool_access && typeof BOT.routing_rules.chat_tool_access === 'object')
+    ? BOT.routing_rules.chat_tool_access
+    : ((BOT.routing_rules && typeof BOT.routing_rules === 'object' && BOT.routing_rules.tool_access && typeof BOT.routing_rules.tool_access === 'object')
+      ? BOT.routing_rules.tool_access
+      : {enabled: false, filesystem: false, repo_search: false}));
 const ARTIFACTS_BY_TASK = ARTIFACTS.reduce((acc, artifact) => {
   const taskId = String(artifact.task_id || '');
   if (!taskId) return acc;
@@ -889,6 +918,7 @@ function botPayloadForSave() {
   routingRules.connection_context = normalizedConnectionContext();
   routingRules.launch_profile = normalizedLaunchProfile();
   routingRules.external_trigger = normalizedExternalTrigger();
+  routingRules.chat_tool_access = normalizedChatToolAccess();
   payload.routing_rules = routingRules;
   payload.workflow = BOT.workflow;
   return payload;
@@ -1241,6 +1271,49 @@ function normalizedLaunchProfile() {
     is_pipeline: profile.is_pipeline === true,
     pipeline_name: String(profile.pipeline_name || profile.label || BOT.name || BOT.id || 'Pipeline').trim(),
   };
+}
+
+function normalizedChatToolAccess() {
+  const cfg = BOT.chat_tool_access && typeof BOT.chat_tool_access === 'object' ? BOT.chat_tool_access : {};
+  return {
+    enabled: cfg.enabled === true,
+    filesystem: cfg.filesystem === true,
+    repo_search: cfg.repo_search === true,
+  };
+}
+
+function syncChatToolAccessInputs() {
+  const enabled = !!document.getElementById('bot-chat-tool-enabled')?.checked;
+  const filesystem = document.getElementById('bot-chat-tool-filesystem');
+  const repoSearch = document.getElementById('bot-chat-tool-repo-search');
+  if (filesystem) {
+    filesystem.disabled = !enabled;
+    if (!enabled) filesystem.checked = false;
+  }
+  if (repoSearch) {
+    repoSearch.disabled = !enabled;
+    if (!enabled) repoSearch.checked = false;
+  }
+}
+
+function loadChatToolAccessEditor() {
+  const cfg = normalizedChatToolAccess();
+  const enabled = document.getElementById('bot-chat-tool-enabled');
+  const filesystem = document.getElementById('bot-chat-tool-filesystem');
+  const repoSearch = document.getElementById('bot-chat-tool-repo-search');
+  if (enabled) enabled.checked = cfg.enabled;
+  if (filesystem) filesystem.checked = cfg.filesystem;
+  if (repoSearch) repoSearch.checked = cfg.repo_search;
+  syncChatToolAccessInputs();
+}
+
+function saveChatToolAccess() {
+  BOT.chat_tool_access = {
+    enabled: !!document.getElementById('bot-chat-tool-enabled')?.checked,
+    filesystem: !!document.getElementById('bot-chat-tool-filesystem')?.checked,
+    repo_search: !!document.getElementById('bot-chat-tool-repo-search')?.checked,
+  };
+  persistBot('Chat tool access saved.');
 }
 
 function externalTriggerPath() {
@@ -2023,6 +2096,7 @@ loadConnectionContextEditor();
 loadOutputContractEditor();
 loadExternalTriggerEditor();
 loadLaunchProfileEditor();
+loadChatToolAccessEditor();
 if (RUNS.length) {
   selectRunArtifacts(RUNS[0].task_id);
 }
@@ -2041,5 +2115,6 @@ document.querySelector('#form-backend select[name=type]')?.addEventListener('cha
   refreshModelOptions();
   applyBackendDefaults();
 });
+document.getElementById('bot-chat-tool-enabled')?.addEventListener('change', syncChatToolAccessInputs);
 </script>
 {% endblock %}
