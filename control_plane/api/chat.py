@@ -49,12 +49,26 @@ class UpdateConversationToolAccessRequest(BaseModel):
     repo_search: bool = False
 
 
+_REPO_INTENT_RE = re.compile(
+    r"\b(repo|repository|codebase|source code|files?|read|search|scan|audit|analy[sz]e|inspect)\b",
+    re.IGNORECASE,
+)
+
+
+def _repo_intent_requested(content: str) -> bool:
+    text = str(content or "").strip()
+    if not text:
+        return False
+    return bool(_REPO_INTENT_RE.search(text))
+
+
 def _context_resolution_requested(body: PostMessageRequest) -> bool:
     return bool(
         body.context_items
         or body.context_item_ids
         or body.include_project_context
         or body.use_workspace_tools
+        or _repo_intent_requested(body.content)
     )
 
 
@@ -116,6 +130,29 @@ def _messages_to_payload(
         insert_at = 1 if resolved_context else 0
         payload.insert(insert_at, {"role": "system", "content": policy})
     return payload
+
+
+def _repo_context_unavailable_message() -> str:
+    return (
+        "I could not retrieve repository context for this turn, so I cannot verify the current code state.\n\n"
+        "I am intentionally not claiming file reads/search results without evidence. "
+        "Enable project repo context/workspace tools for this chat and try again."
+    )
+
+
+def _apply_repo_evidence_envelope(output: str, *, require_repo_evidence: bool, context_sources: List[str]) -> str:
+    if not require_repo_evidence:
+        return output
+    if not context_sources:
+        return _repo_context_unavailable_message()
+    normalized = str(output or "").strip()
+    if not normalized:
+        normalized = "No model output was returned."
+    files_section = "\n".join(f"- {source}" for source in context_sources[:12])
+    prefix = f"Files inspected (verified context)\n{files_section}\n"
+    if "files inspected" in normalized.lower():
+        return normalized
+    return f"{prefix}\n{normalized}"
 
 
 def _project_repo_namespace(project_id: str, project: Any) -> str:
@@ -425,6 +462,7 @@ async def _resolve_context_items(
     *,
     conversation: Optional[ChatConversation] = None,
     tool_access: Optional[Dict[str, Any]] = None,
+    force_project_context: bool = False,
 ) -> List[str]:
     # Backward compatible direct context usage.
     resolved: List[str] = list(body.context_items or [])
@@ -447,7 +485,7 @@ async def _resolve_context_items(
             except Exception:
                 continue
 
-    if (body.include_project_context or body.use_workspace_tools) and repo_search_allowed and conversation is not None:
+    if (body.include_project_context or body.use_workspace_tools or force_project_context) and repo_search_allowed and conversation is not None:
         resolved.extend(
             await _resolve_project_repo_context_items(
                 request,
@@ -655,6 +693,8 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
         if not target_bot_id:
             return {"user_message": user_message, "assistant_message": None}
 
+        require_repo_evidence = _context_resolution_requested(body)
+        force_project_context = _repo_intent_requested(body.content)
         tool_access = await _effective_tool_access(
             request,
             conversation=conversation,
@@ -665,11 +705,23 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
             body,
             conversation=conversation,
             tool_access=tool_access,
+            force_project_context=force_project_context,
         )
+        context_sources = _context_source_labels(resolved_context, limit=12)
+        if not context_sources and resolved_context:
+            context_sources = ["context snippets (unlabeled)"]
+        if require_repo_evidence and not resolved_context:
+            assistant_message = await chat_manager.add_message(
+                conversation_id=conversation_id,
+                role="assistant",
+                content=_repo_context_unavailable_message(),
+                bot_id=target_bot_id,
+            )
+            return {"user_message": user_message, "assistant_message": assistant_message}
         payload = _messages_to_payload(
             messages,
             context_items=resolved_context,
-            require_repo_evidence=_context_resolution_requested(body),
+            require_repo_evidence=require_repo_evidence,
         )
         task = Task(
             id=f"chat-{user_message.id}",
@@ -686,6 +738,11 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
         )
         result = await scheduler.schedule(task)
         assistant_output = _extract_task_output(result)
+        assistant_output = _apply_repo_evidence_envelope(
+            assistant_output,
+            require_repo_evidence=require_repo_evidence,
+            context_sources=context_sources,
+        )
         assistant_message = await chat_manager.add_message(
             conversation_id=conversation_id,
             role="assistant",
@@ -825,20 +882,25 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                 yield "event: done\ndata: {}\n\n"
                 return
 
+            require_repo_evidence = _context_resolution_requested(body)
+            force_project_context = _repo_intent_requested(body.content)
             tool_access = await _effective_tool_access(
                 request,
                 conversation=conversation,
                 target_bot_id=target_bot_id,
             )
-            if _context_resolution_requested(body):
+            if require_repo_evidence:
                 yield 'event: status\ndata: {"phase":"context","label":"Collecting repository context..."}\n\n'
             resolved_context = await _resolve_context_items(
                 request,
                 body,
                 conversation=conversation,
                 tool_access=tool_access,
+                force_project_context=force_project_context,
             )
             context_sources = _context_source_labels(resolved_context, limit=8)
+            if not context_sources and resolved_context:
+                context_sources = ["context snippets (unlabeled)"]
             if context_sources:
                 context_payload = {
                     "snippet_count": len(resolved_context),
@@ -850,15 +912,25 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                     'event: status\ndata: '
                     f'{json.dumps({"phase":"context","label":f"Loaded {len(resolved_context)} context snippets from {len(context_sources)} sources."})}\n\n'
                 )
-            elif _context_resolution_requested(body):
+            elif require_repo_evidence:
                 yield (
                     'event: status\ndata: '
                     '{"phase":"context","label":"No repository context retrieved. The response will avoid unverifiable file claims."}\n\n'
                 )
+            if require_repo_evidence and not resolved_context:
+                assistant_message = await chat_manager.add_message(
+                    conversation_id=conversation_id,
+                    role="assistant",
+                    content=_repo_context_unavailable_message(),
+                    bot_id=target_bot_id,
+                )
+                yield f"event: assistant_message\ndata: {assistant_message.model_dump_json()}\n\n"
+                yield "event: done\ndata: {}\n\n"
+                return
             payload = _messages_to_payload(
                 messages,
                 context_items=resolved_context,
-                require_repo_evidence=_context_resolution_requested(body),
+                require_repo_evidence=require_repo_evidence,
             )
             yield f'event: status\ndata: {json.dumps({"phase":"queued","label":"Queued on selected backend...","conversation_id":conversation_id,"message_count":len(messages)})}\n\n'
             task = Task(
@@ -941,6 +1013,11 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                 yield f"event: error\ndata: {payload}\n\n"
                 return
             assistant_output = _extract_task_output(result)
+            assistant_output = _apply_repo_evidence_envelope(
+                assistant_output,
+                require_repo_evidence=require_repo_evidence,
+                context_sources=context_sources,
+            )
             yield 'event: status\ndata: {"phase":"persisting","label":"Saving response..."}\n\n'
             metadata = {"usage": (result or {}).get("usage", {})} if isinstance(result, dict) else {}
             metadata["streaming"] = False

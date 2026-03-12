@@ -452,6 +452,84 @@ async def test_chat_project_repo_context_is_not_attached_by_default(cp_app):
 
 
 @pytest.mark.anyio
+async def test_chat_repo_intent_auto_attaches_project_context(cp_app):
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "ok"})
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-repo-auto"
+        create_project = await client.post(
+            "/v1/projects",
+            json={
+                "id": project_id,
+                "name": "Repo Auto Project",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        assert create_project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Repo Auto Chat",
+                "project_id": project_id,
+                "tool_access_enabled": True,
+                "tool_access_repo_search": True,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-repo-auto",
+                "name": "Repo Auto Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        ingest = await client.post(
+            "/v1/vault/items",
+            json={
+                "title": "README",
+                "content": "PROJECT_REPO_AUTO_TOKEN",
+                "namespace": f"project:{project_id}:repo",
+                "project_id": project_id,
+            },
+        )
+        assert ingest.status_code == 200
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": "Search the repository and explain auth hardening gaps.",
+                "bot_id": "bot-repo-auto",
+            },
+        )
+        assert resp.status_code == 200
+        assert cp_app.state.scheduler.schedule.await_count == 1
+        task_arg = cp_app.state.scheduler.schedule.await_args[0][0]
+        payload = task_arg.payload
+        assert isinstance(payload, list)
+        assert payload[0]["role"] == "system"
+        assert "[repo:proj-repo-auto]" in payload[0]["content"]
+        assert "PROJECT_REPO_AUTO_TOKEN" in payload[0]["content"]
+
+
+@pytest.mark.anyio
 async def test_chat_workspace_filesystem_context_requires_three_switches(cp_app, tmp_path):
     cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "ok"})
     workspace_root = tmp_path / "workspace"
@@ -598,13 +676,9 @@ async def test_chat_workspace_tools_blocked_when_chat_switch_off(cp_app, tmp_pat
             },
         )
         assert resp.status_code == 200
-
-        task_arg = cp_app.state.scheduler.schedule.await_args[0][0]
-        payload = task_arg.payload
-        assert isinstance(payload, list)
-        assert "WORKSPACE_BLOCKED_TOKEN" not in str(payload)
-        assert payload[0]["role"] == "system"
-        assert "No repository snippets were retrieved for this turn." in payload[0]["content"]
+        body = resp.json()
+        assert body["assistant_message"]["content"].startswith("I could not retrieve repository context")
+        assert cp_app.state.scheduler.schedule.await_count == 0
 
 
 @pytest.mark.anyio
