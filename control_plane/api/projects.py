@@ -2408,14 +2408,18 @@ async def clone_project_repo_workspace(
             }
         try:
             if any(root.iterdir()):
-                raise HTTPException(
-                    status_code=400,
-                    detail="workspace path exists and is not empty; choose an empty directory",
-                )
+                # Managed workspaces are dedicated per project; if stale non-repo files remain,
+                # reset the folder so clone can proceed without manual host-path cleanup.
+                if bool(cfg.get("managed_path_mode", True)):
+                    shutil.rmtree(root, ignore_errors=False)
+                else:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="workspace path exists and is not empty; choose an empty directory",
+                    )
         except PermissionError:
             raise HTTPException(status_code=400, detail="workspace path cannot be accessed")
-    else:
-        root.parent.mkdir(parents=True, exist_ok=True)
+    root.parent.mkdir(parents=True, exist_ok=True)
 
     branch = str(body.branch or "").strip() or str(cfg.get("default_branch") or "").strip() or None
     depth = body.depth

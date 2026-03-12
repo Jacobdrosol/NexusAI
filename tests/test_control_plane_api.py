@@ -827,6 +827,67 @@ async def test_project_repo_workspace_redacts_and_preserves_clone_url_when_omitt
 
 
 @pytest.mark.anyio
+async def test_project_repo_workspace_clone_resets_stale_managed_workspace(cp_client, tmp_path, monkeypatch):
+    await cp_client.post(
+        "/v1/projects",
+        json={"id": "p-repo-clone-reset", "name": "Repo Clone Reset", "mode": "isolated"},
+    )
+    base_root = tmp_path / "repo-workspaces"
+    root = base_root / "p-repo-clone-reset" / "repo"
+    root.mkdir(parents=True, exist_ok=True)
+    stale_file = root / "stale.txt"
+    stale_file.write_text("stale", encoding="utf-8")
+    monkeypatch.setenv("NEXUSAI_REPO_WORKSPACE_ROOT", str(base_root))
+
+    update = await cp_client.put(
+        "/v1/projects/p-repo-clone-reset/repo/workspace",
+        json={
+            "enabled": True,
+            "managed_path_mode": True,
+            "clone_url": "https://github.com/example/repo.git",
+            "allow_push": False,
+            "allow_command_execution": False,
+        },
+    )
+    assert update.status_code == 200
+
+    async def _fake_run(args, *, cwd, timeout_seconds=None, env_overrides=None):
+        return {
+            "ok": True,
+            "returncode": 0,
+            "stdout": "",
+            "stderr": "",
+            "command": args,
+        }
+
+    async def _fake_snapshot(*, root, cfg):
+        return {
+            "enabled": True,
+            "managed_path_mode": True,
+            "workspace_binding": "managed",
+            "root_path": None,
+            "clone_url": cfg.get("clone_url"),
+            "default_branch": cfg.get("default_branch"),
+            "allow_push": False,
+            "allow_command_execution": False,
+            "workspace_exists": True,
+            "is_repo": True,
+            "branch": "Main",
+            "clean": True,
+            "porcelain": [],
+            "remotes": [],
+            "last_commit": {},
+        }
+
+    monkeypatch.setattr("control_plane.api.projects._run_repo_command", _fake_run)
+    monkeypatch.setattr("control_plane.api.projects._repo_status_snapshot", _fake_snapshot)
+
+    clone_resp = await cp_client.post("/v1/projects/p-repo-clone-reset/repo/workspace/clone", json={})
+    assert clone_resp.status_code == 200
+    assert stale_file.exists() is False
+
+
+@pytest.mark.anyio
 async def test_project_repo_workspace_rejects_relative_root_path(cp_client):
     await cp_client.post(
         "/v1/projects",
