@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import json
+import logging
 from typing import Any, Dict, Iterable
 
 import requests
@@ -12,6 +13,7 @@ from flask_login import login_required
 from dashboard.cp_client import get_cp_client
 
 bp = Blueprint("chat", __name__)
+logger = logging.getLogger(__name__)
 
 
 def _cp_error_response(cp, fallback: str = "control plane unavailable"):
@@ -247,6 +249,10 @@ def chat_page() -> str:
             error=page_error,
         )
     except Exception:
+        logger.exception(
+            "chat_page failed unexpectedly",
+            extra={"conversation_id": str(request.args.get("conversation_id") or "").strip() or None},
+        )
         return render_template(
             "chat.html",
             conversations=[],
