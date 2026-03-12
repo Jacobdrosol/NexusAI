@@ -2768,7 +2768,10 @@ async def run_project_repo_workspace_command(
         raise HTTPException(status_code=403, detail="command execution is disabled by project repo workspace policy")
     root = _resolve_repo_workspace_root(project_id, cfg, require_enabled=True)
     if not root.exists():
-        raise HTTPException(status_code=400, detail="workspace path does not exist")
+        if bool(cfg.get("managed_path_mode", True)):
+            root.mkdir(parents=True, exist_ok=True)
+        else:
+            raise HTTPException(status_code=400, detail="workspace path does not exist")
 
     command = _safe_command_parts(body.command)
     executable = Path(command[0]).name.lower()

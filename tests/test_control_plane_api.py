@@ -982,6 +982,46 @@ async def test_project_repo_workspace_run_command_executes_allowed_command(cp_cl
 
 
 @pytest.mark.anyio
+async def test_project_repo_workspace_run_command_creates_missing_managed_workspace(cp_client, tmp_path, monkeypatch):
+    await cp_client.post(
+        "/v1/projects",
+        json={"id": "p-repo-run-create-root", "name": "Repo Run Create Root", "mode": "isolated"},
+    )
+    base_root = tmp_path / "repo-workspaces"
+    root = base_root / "p-repo-run-create-root" / "repo"
+    monkeypatch.setenv("NEXUSAI_REPO_WORKSPACE_ROOT", str(base_root))
+    update = await cp_client.put(
+        "/v1/projects/p-repo-run-create-root/repo/workspace",
+        json={
+            "enabled": True,
+            "managed_path_mode": True,
+            "allow_command_execution": True,
+        },
+    )
+    assert update.status_code == 200
+    assert root.exists() is False
+
+    async def _fake_run(args, *, cwd, timeout_seconds=None, env_overrides=None):
+        return {
+            "ok": True,
+            "returncode": 0,
+            "stdout": "git version 2.47.3",
+            "stderr": "",
+            "command": args,
+            "timeout_seconds": timeout_seconds or 120,
+        }
+
+    monkeypatch.setattr("control_plane.api.projects._run_repo_command", _fake_run)
+    run_resp = await cp_client.post(
+        "/v1/projects/p-repo-run-create-root/repo/workspace/run",
+        json={"command": ["git", "--version"]},
+    )
+    assert run_resp.status_code == 200
+    assert root.exists() is True
+    assert run_resp.json()["status"] == "ok"
+
+
+@pytest.mark.anyio
 async def test_project_repo_workspace_push_requires_allow_push(cp_client, tmp_path, monkeypatch):
     await cp_client.post(
         "/v1/projects",
