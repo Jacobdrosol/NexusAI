@@ -254,6 +254,12 @@ async def run_command(
     try:
         return await asyncio.to_thread(_runner)
     except FileNotFoundError:
+        missing = ""
+        try:
+            missing = str(args[0])
+        except Exception:
+            missing = ""
+        detail = f"command not found: {missing}" if missing else "command not found"
         return {
             "ok": False,
             "returncode": None,
@@ -261,7 +267,7 @@ async def run_command(
             "stderr": "",
             "command": redact_command(args),
             "timeout_seconds": timeout,
-            "error": "command not found",
+            "error": detail,
             "resource_usage": {"wall_time_ms": 0},
         }
     except Exception as exc:
