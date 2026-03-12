@@ -488,6 +488,8 @@ def api_get_project_repo_workspace(project_id: str):
 def api_update_project_repo_workspace(project_id: str):
     data: dict[str, Any] = request.get_json(force=True) or {}
     cp = get_cp_client()
+    include_clone_url = "clone_url" in data
+    include_default_branch = "default_branch" in data
     result = cp.update_project_repo_workspace(
         project_id=project_id,
         enabled=bool(data.get("enabled", False)),
@@ -497,6 +499,8 @@ def api_update_project_repo_workspace(project_id: str):
         default_branch=(str(data.get("default_branch") or "").strip() or None),
         allow_push=bool(data.get("allow_push", False)),
         allow_command_execution=bool(data.get("allow_command_execution", False)),
+        include_clone_url=include_clone_url,
+        include_default_branch=include_default_branch,
     )
     if result is None:
         return _cp_error_response(cp, "failed to update repo workspace")

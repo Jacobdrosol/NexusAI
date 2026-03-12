@@ -10,6 +10,7 @@ import re
 import shutil
 import tempfile
 from typing import Any, Dict, List, Optional, Literal, Tuple
+from urllib.parse import urlsplit, urlunsplit
 import uuid
 
 import httpx
@@ -107,6 +108,7 @@ class RepoWorkspaceRunRequest(BaseModel):
 
 _CLOUD_POLICY_VALUES = {"allow", "redact", "block"}
 _SUPPORTED_CLOUD_PROVIDERS = {"openai", "claude", "gemini"}
+_URL_WITH_AUTH_RE = re.compile(r"((?:https?|ssh)://)([^@\s/]+)@", re.IGNORECASE)
 
 
 def _normalize_cloud_policy_value(value: Any, default: str = "allow") -> str:
@@ -277,6 +279,60 @@ def _repo_workspace_binding(cfg: Dict[str, Any]) -> str:
     return "managed" if bool(cfg.get("managed_path_mode", True)) else "custom"
 
 
+def _redact_url_credentials_in_text(value: str) -> str:
+    text = str(value or "")
+    if not text:
+        return text
+
+    def _repl(match: re.Match[str]) -> str:
+        scheme = match.group(1)
+        userinfo = str(match.group(2) or "")
+        if ":" in userinfo:
+            username = userinfo.split(":", 1)[0].strip()
+            if username:
+                return f"{scheme}{username}:***@"
+        return f"{scheme}***@"
+
+    return _URL_WITH_AUTH_RE.sub(_repl, text)
+
+
+def _redact_clone_url(value: Optional[str]) -> Optional[str]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = urlsplit(raw)
+    except Exception:
+        return _redact_url_credentials_in_text(raw)
+    if not parsed.netloc or "@" not in parsed.netloc:
+        return raw
+    userinfo, host = parsed.netloc.rsplit("@", 1)
+    if ":" in userinfo:
+        username = userinfo.split(":", 1)[0].strip()
+        masked_userinfo = f"{username}:***" if username else "***"
+    else:
+        masked_userinfo = "***"
+    return urlunsplit((parsed.scheme, f"{masked_userinfo}@{host}", parsed.path, parsed.query, parsed.fragment))
+
+
+def _redact_repo_value(value: Any) -> Any:
+    if isinstance(value, str):
+        lowered = value.lower()
+        if lowered.startswith("http.extraheader="):
+            return "http.extraHeader=<redacted>"
+        return _redact_url_credentials_in_text(value)
+    if isinstance(value, list):
+        return [_redact_repo_value(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _redact_repo_value(item) for key, item in value.items()}
+    return value
+
+
+def _sanitize_repo_command_for_record(command: Optional[List[str]]) -> List[str]:
+    parts = command if isinstance(command, list) else []
+    return [_redact_repo_value(str(part or "")) for part in parts]
+
+
 def _public_repo_workspace_config(project_id: str, cfg: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "project_id": project_id,
@@ -284,7 +340,7 @@ def _public_repo_workspace_config(project_id: str, cfg: Dict[str, Any]) -> Dict[
         "managed_path_mode": bool(cfg.get("managed_path_mode", True)),
         "workspace_binding": _repo_workspace_binding(cfg),
         "root_path": None,
-        "clone_url": str(cfg.get("clone_url") or "").strip() or None,
+        "clone_url": _redact_clone_url(str(cfg.get("clone_url") or "").strip() or None),
         "default_branch": str(cfg.get("default_branch") or "").strip() or None,
         "allow_push": bool(cfg.get("allow_push", False)),
         "allow_command_execution": bool(cfg.get("allow_command_execution", False)),
@@ -325,13 +381,13 @@ def _sanitize_repo_run_row(row: Dict[str, Any], *, root: Path) -> Dict[str, Any]
     data = dict(row)
     command = data.get("command")
     if isinstance(command, list):
-        data["command"] = _sanitize_workspace_value(command, root=root)
+        data["command"] = _redact_repo_value(_sanitize_workspace_value(command, root=root))
     details = data.get("details")
     if isinstance(details, dict):
         safe_details = dict(details)
         safe_details.pop("root_path", None)
         safe_details.pop("workspace_path", None)
-        data["details"] = _sanitize_workspace_value(safe_details, root=root)
+        data["details"] = _redact_repo_value(_sanitize_workspace_value(safe_details, root=root))
     return data
 
 
@@ -340,7 +396,7 @@ def _sanitize_repo_command_result(result: Dict[str, Any], *, root: Path) -> Dict
         return {}
     safe = dict(result)
     safe.pop("cwd", None)
-    return _sanitize_workspace_value(safe, root=root)
+    return _redact_repo_value(_sanitize_workspace_value(safe, root=root))
 
 
 def _validate_requested_project_repo_workspace(body: UpdateProjectRepoWorkspaceRequest) -> Dict[str, Any]:
@@ -531,7 +587,7 @@ async def _repo_status_snapshot(
         "managed_path_mode": bool(cfg.get("managed_path_mode", True)),
         "workspace_binding": _repo_workspace_binding(cfg),
         "root_path": None,
-        "clone_url": cfg.get("clone_url"),
+        "clone_url": _redact_clone_url(cfg.get("clone_url")),
         "default_branch": cfg.get("default_branch"),
         "allow_push": bool(cfg.get("allow_push", False)),
         "allow_command_execution": bool(cfg.get("allow_command_execution", False)),
@@ -540,7 +596,7 @@ async def _repo_status_snapshot(
         "branch": branch,
         "clean": len(dirty_lines) == 0,
         "porcelain": porcelain_lines,
-        "remotes": remotes,
+        "remotes": [_redact_url_credentials_in_text(line) for line in remotes],
         "last_commit": last_commit,
     }
 
@@ -640,6 +696,12 @@ async def _record_repo_workspace_usage(
             return
     safe_result = result if isinstance(result, dict) else {}
     usage = metrics if isinstance(metrics, dict) else _result_usage(safe_result)
+    source_command = command or (safe_result.get("command") if isinstance(safe_result.get("command"), list) else [])
+    safe_command = _sanitize_repo_command_for_record(source_command)
+    raw_details = details if isinstance(details, dict) else {}
+    safe_details = _redact_repo_value(raw_details)
+    if not isinstance(safe_details, dict):
+        safe_details = {}
     try:
         await store.record_run(
             project_id=project_id,
@@ -647,8 +709,8 @@ async def _record_repo_workspace_usage(
             status=status,
             started_at=str(safe_result.get("started_at") or "").strip() or None,
             finished_at=str(safe_result.get("finished_at") or "").strip() or None,
-            command=command or (safe_result.get("command") if isinstance(safe_result.get("command"), list) else []),
-            details=details or {},
+            command=safe_command,
+            details=safe_details,
             metrics=usage or {},
         )
     except Exception:
@@ -2247,9 +2309,14 @@ async def update_project_repo_workspace(
     except ProjectNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
+    current_cfg = _extract_project_repo_workspace(project)
     validated = _validate_requested_project_repo_workspace(body)
+    effective_cfg = dict(validated)
+    if "clone_url" not in body.model_fields_set:
+        effective_cfg["clone_url"] = current_cfg.get("clone_url")
+
     updated = project.model_copy(
-        update={"settings_overrides": _merge_settings(project, {"repo_workspace": validated})}
+        update={"settings_overrides": _merge_settings(project, {"repo_workspace": effective_cfg})}
     )
     await project_registry.update(project_id, updated)
     await record_audit_event(
@@ -2257,15 +2324,15 @@ async def update_project_repo_workspace(
         action="projects.repo_workspace.update",
         resource=f"project:{project_id}",
         details={
-            "enabled": validated["enabled"],
-            "managed_path_mode": validated["managed_path_mode"],
-            "clone_url": validated["clone_url"],
-            "default_branch": validated["default_branch"],
-            "allow_push": validated["allow_push"],
-            "allow_command_execution": validated["allow_command_execution"],
+            "enabled": effective_cfg["enabled"],
+            "managed_path_mode": effective_cfg["managed_path_mode"],
+            "clone_url": _redact_clone_url(effective_cfg["clone_url"]),
+            "default_branch": effective_cfg["default_branch"],
+            "allow_push": effective_cfg["allow_push"],
+            "allow_command_execution": effective_cfg["allow_command_execution"],
         },
     )
-    return {"status": "ok", **_public_repo_workspace_config(project_id, validated)}
+    return {"status": "ok", **_public_repo_workspace_config(project_id, effective_cfg)}
 
 
 @router.get("/{project_id}/repo/workspace/status")
@@ -2319,6 +2386,7 @@ async def clone_project_repo_workspace(
             clone_url = f"https://github.com/{repo_full_name}.git"
     if not clone_url:
         raise HTTPException(status_code=400, detail="clone_url is required (or configure project github repo_full_name)")
+    safe_clone_url = _redact_clone_url(clone_url) or clone_url
 
     if root.exists():
         git_dir = root / ".git"
@@ -2330,7 +2398,7 @@ async def clone_project_repo_workspace(
                 action="clone",
                 status="already_cloned",
                 command=["git", "clone", clone_url, "<workspace>"],
-                details={"clone_url": clone_url},
+                details={"clone_url": safe_clone_url},
             )
             return {
                 "status": "already_cloned",
@@ -2377,7 +2445,7 @@ async def clone_project_repo_workspace(
             status="failed",
             command=usage_cmd,
             result=safe_res,
-            details={"clone_url": clone_url, "branch": branch},
+            details={"clone_url": safe_clone_url, "branch": branch},
         )
         raise HTTPException(status_code=400, detail=detail)
 
@@ -2395,7 +2463,7 @@ async def clone_project_repo_workspace(
         request,
         action="projects.repo_workspace.clone",
         resource=f"project:{project_id}",
-        details={"clone_url": clone_url, "branch": branch},
+        details={"clone_url": safe_clone_url, "branch": branch},
     )
     await _record_repo_workspace_usage(
         request,
@@ -2404,7 +2472,7 @@ async def clone_project_repo_workspace(
         status="ok",
         command=usage_cmd,
         result=safe_res,
-        details={"clone_url": clone_url, "branch": branch},
+        details={"clone_url": safe_clone_url, "branch": branch},
     )
     return {
         "status": "ok",

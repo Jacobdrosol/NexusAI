@@ -789,6 +789,44 @@ async def test_project_repo_workspace_update_and_get(cp_client):
 
 
 @pytest.mark.anyio
+async def test_project_repo_workspace_redacts_and_preserves_clone_url_when_omitted(cp_client):
+    await cp_client.post(
+        "/v1/projects",
+        json={"id": "p-repo-workspace-redact", "name": "Repo Workspace Redact", "mode": "isolated"},
+    )
+    update = await cp_client.put(
+        "/v1/projects/p-repo-workspace-redact/repo/workspace",
+        json={
+            "enabled": True,
+            "managed_path_mode": True,
+            "clone_url": "https://octocat:ghp_super_secret_token@github.com/example/private-repo.git",
+            "default_branch": "main",
+            "allow_push": False,
+            "allow_command_execution": False,
+        },
+    )
+    assert update.status_code == 200
+    assert update.json()["clone_url"] == "https://octocat:***@github.com/example/private-repo.git"
+
+    update_without_clone = await cp_client.put(
+        "/v1/projects/p-repo-workspace-redact/repo/workspace",
+        json={
+            "enabled": True,
+            "managed_path_mode": True,
+            "default_branch": "main",
+            "allow_push": True,
+            "allow_command_execution": True,
+        },
+    )
+    assert update_without_clone.status_code == 200
+    assert update_without_clone.json()["clone_url"] == "https://octocat:***@github.com/example/private-repo.git"
+
+    get_resp = await cp_client.get("/v1/projects/p-repo-workspace-redact/repo/workspace")
+    assert get_resp.status_code == 200
+    assert get_resp.json()["clone_url"] == "https://octocat:***@github.com/example/private-repo.git"
+
+
+@pytest.mark.anyio
 async def test_project_repo_workspace_rejects_relative_root_path(cp_client):
     await cp_client.post(
         "/v1/projects",

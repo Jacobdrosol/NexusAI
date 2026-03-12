@@ -392,16 +392,20 @@ class CPClient:
         default_branch: Optional[str],
         allow_push: bool,
         allow_command_execution: bool,
+        include_clone_url: bool = True,
+        include_default_branch: bool = True,
     ) -> Optional[Dict[str, Any]]:
         body: Dict[str, Any] = {
             "enabled": bool(enabled),
             "managed_path_mode": bool(managed_path_mode),
             "root_path": root_path,
-            "clone_url": clone_url,
-            "default_branch": default_branch,
             "allow_push": bool(allow_push),
             "allow_command_execution": bool(allow_command_execution),
         }
+        if include_clone_url:
+            body["clone_url"] = clone_url
+        if include_default_branch:
+            body["default_branch"] = default_branch
         return self._put(f"/v1/projects/{project_id}/repo/workspace", body)
 
     def get_project_repo_workspace_status(self, project_id: str) -> Optional[Dict[str, Any]]:

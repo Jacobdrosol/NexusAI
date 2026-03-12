@@ -188,7 +188,8 @@
       </div>
       <div class="form-group">
         <label>Clone URL</label>
-        <input class="form-control" id="repo-workspace-clone-url" placeholder="https://github.com/org/repo.git" value="{{ repo_workspace.clone_url or '' }}">
+        <input class="form-control" id="repo-workspace-clone-url" type="password" autocomplete="off" placeholder="https://github.com/org/repo.git" value="">
+        <div id="repo-workspace-clone-url-note" class="mini-note" style="margin-top:0.35rem;">Leave blank to keep the currently saved clone URL.</div>
       </div>
       <div class="form-group">
         <label>Default Branch</label>
@@ -252,18 +253,18 @@
     </div>
     <div>
       <div><strong>Current Repo Workspace Policy</strong></div>
-      <pre id="repo-workspace-policy-pre" style="white-space:pre-wrap; margin-top:0.35rem;">{{ repo_workspace | tojson(indent=2) }}</pre>
+      <pre id="repo-workspace-policy-pre" style="white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; margin-top:0.35rem; max-width:100%; overflow:auto;">{{ repo_workspace | tojson(indent=2) }}</pre>
       <div style="margin-top:0.55rem;"><strong>Repo Status</strong></div>
-      <pre id="repo-workspace-status-pre" style="white-space:pre-wrap; margin-top:0.35rem;">{}</pre>
+      <pre id="repo-workspace-status-pre" style="white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; margin-top:0.35rem; max-width:100%; overflow:auto;">{}</pre>
       <div style="margin-top:0.55rem; display:flex; justify-content:space-between; align-items:center; gap:0.5rem;">
         <strong>Usage Summary</strong>
         <button class="btn btn-sm" type="button" onclick="refreshProjectRepoWorkspaceUsage()">Refresh Usage</button>
       </div>
-      <pre id="repo-workspace-usage-summary-pre" style="white-space:pre-wrap; margin-top:0.35rem;">{}</pre>
+      <pre id="repo-workspace-usage-summary-pre" style="white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; margin-top:0.35rem; max-width:100%; overflow:auto;">{}</pre>
       <div style="margin-top:0.55rem;"><strong>Recent Runs</strong></div>
-      <pre id="repo-workspace-runs-pre" style="white-space:pre-wrap; margin-top:0.35rem; max-height:12rem; overflow:auto;">[]</pre>
+      <pre id="repo-workspace-runs-pre" style="white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; margin-top:0.35rem; max-width:100%; max-height:12rem; overflow:auto;">[]</pre>
       <div style="margin-top:0.55rem;"><strong>Last Action Output</strong></div>
-      <pre id="repo-workspace-output-pre" style="white-space:pre-wrap; margin-top:0.35rem; max-height:16rem; overflow:auto;">{}</pre>
+      <pre id="repo-workspace-output-pre" style="white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; margin-top:0.35rem; max-width:100%; max-height:16rem; overflow:auto;">{}</pre>
     </div>
   </div>
 </section>
@@ -704,6 +705,33 @@ function _setRepoWorkspaceState(cls, text) {
   el.textContent = text;
 }
 
+function _redactRepoCredentialText(value) {
+  const text = String(value || '');
+  if (!text) return text;
+  const withMaskedHeaders = text.replace(/http\.extraHeader=.*$/i, 'http.extraHeader=<redacted>');
+  return withMaskedHeaders.replace(/((?:https?|ssh):\/\/)([^@\s/]+)@/gi, (_m, scheme, userinfo) => {
+    const idx = String(userinfo).indexOf(':');
+    if (idx > 0) {
+      const username = String(userinfo).slice(0, idx);
+      return `${scheme}${username}:***@`;
+    }
+    return `${scheme}***@`;
+  });
+}
+
+function _redactRepoDisplayValue(value) {
+  if (typeof value === 'string') return _redactRepoCredentialText(value);
+  if (Array.isArray(value)) return value.map((item) => _redactRepoDisplayValue(item));
+  if (value && typeof value === 'object') {
+    const out = {};
+    Object.entries(value).forEach(([key, item]) => {
+      out[key] = _redactRepoDisplayValue(item);
+    });
+    return out;
+  }
+  return value;
+}
+
 function _syncRepoWorkspaceInputs() {
   const enabled = !!document.getElementById('repo-workspace-enabled')?.checked;
   const allowPush = document.getElementById('repo-workspace-allow-push');
@@ -738,21 +766,27 @@ function _applyProjectRepoWorkspacePolicy(policy) {
   const allowPush = document.getElementById('repo-workspace-allow-push');
   const allowExec = document.getElementById('repo-workspace-allow-command-exec');
   const cloneUrl = document.getElementById('repo-workspace-clone-url');
+  const cloneUrlNote = document.getElementById('repo-workspace-clone-url-note');
   const defaultBranch = document.getElementById('repo-workspace-default-branch');
   const pre = document.getElementById('repo-workspace-policy-pre');
   if (enabled) enabled.checked = cfg.enabled;
   if (allowPush) allowPush.checked = cfg.allow_push;
   if (allowExec) allowExec.checked = cfg.allow_command_execution;
-  if (cloneUrl) cloneUrl.value = cfg.clone_url || '';
+  if (cloneUrl && document.activeElement !== cloneUrl) cloneUrl.value = '';
+  if (cloneUrlNote) {
+    cloneUrlNote.textContent = cfg.clone_url
+      ? 'Saved clone URL is configured (hidden). Enter a new URL only to rotate it.'
+      : 'Leave blank to keep the currently saved clone URL.';
+  }
   if (defaultBranch) defaultBranch.value = cfg.default_branch || '';
-  if (pre) pre.textContent = JSON.stringify(cfg, null, 2);
+  if (pre) pre.textContent = JSON.stringify(_redactRepoDisplayValue(cfg), null, 2);
   _syncRepoWorkspaceInputs();
 }
 
 function _setRepoWorkspaceOutput(payload) {
   const pre = document.getElementById('repo-workspace-output-pre');
   if (!pre) return;
-  pre.textContent = JSON.stringify(payload || {}, null, 2);
+  pre.textContent = JSON.stringify(_redactRepoDisplayValue(payload || {}), null, 2);
 }
 
 async function refreshProjectRepoWorkspacePolicy() {
@@ -774,18 +808,21 @@ async function saveProjectRepoWorkspace() {
   const cloneUrl = (document.getElementById('repo-workspace-clone-url')?.value || '').trim();
   const defaultBranch = (document.getElementById('repo-workspace-default-branch')?.value || '').trim();
   _setRepoWorkspaceState('state-loading', 'Saving repo workspace policy...');
+  const payload = {
+    enabled,
+    managed_path_mode: true,
+    root_path: null,
+    default_branch: defaultBranch || null,
+    allow_push: allowPush,
+    allow_command_execution: allowExec,
+  };
+  if (cloneUrl) {
+    payload.clone_url = cloneUrl;
+  }
   const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/repo/workspace', {
     method: 'PUT',
     headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
-    body: JSON.stringify({
-      enabled,
-      managed_path_mode: true,
-      root_path: null,
-      clone_url: cloneUrl || null,
-      default_branch: defaultBranch || null,
-      allow_push: allowPush,
-      allow_command_execution: allowExec,
-    }),
+    body: JSON.stringify(payload),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -805,7 +842,7 @@ async function refreshProjectRepoWorkspaceStatus() {
     return;
   }
   const statusPre = document.getElementById('repo-workspace-status-pre');
-  if (statusPre) statusPre.textContent = JSON.stringify(data, null, 2);
+  if (statusPre) statusPre.textContent = JSON.stringify(_redactRepoDisplayValue(data), null, 2);
   _setRepoWorkspaceState('state-info', 'Repo status loaded.');
 }
 
@@ -819,15 +856,15 @@ async function refreshProjectRepoWorkspaceUsage() {
   const summaryData = await summaryRes.json().catch(() => ({}));
   const runsData = await runsRes.json().catch(() => ({}));
   if (!summaryRes.ok) {
-    if (summaryPre) summaryPre.textContent = JSON.stringify({error: summaryData.error || 'Failed to load usage summary'}, null, 2);
+    if (summaryPre) summaryPre.textContent = JSON.stringify(_redactRepoDisplayValue({error: summaryData.error || 'Failed to load usage summary'}), null, 2);
   } else {
     PROJECT_REPO_WORKSPACE_USAGE_SUMMARY = summaryData;
-    if (summaryPre) summaryPre.textContent = JSON.stringify(summaryData, null, 2);
+    if (summaryPre) summaryPre.textContent = JSON.stringify(_redactRepoDisplayValue(summaryData), null, 2);
   }
   if (!runsRes.ok) {
-    if (runsPre) runsPre.textContent = JSON.stringify({error: runsData.error || 'Failed to load run history'}, null, 2);
+    if (runsPre) runsPre.textContent = JSON.stringify(_redactRepoDisplayValue({error: runsData.error || 'Failed to load run history'}), null, 2);
   } else {
-    if (runsPre) runsPre.textContent = JSON.stringify(runsData.runs || [], null, 2);
+    if (runsPre) runsPre.textContent = JSON.stringify(_redactRepoDisplayValue(runsData.runs || []), null, 2);
   }
 }
 
