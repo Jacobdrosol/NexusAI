@@ -45,7 +45,8 @@ Notes:
 - `NEXUSAI_STOP_PREVIOUS_COLOR=0` keeps both colors running after switch for faster rollback and lower disruption risk.
 - `NEXUSAI_DB_DRIFT_AUTO_SYNC=1` auto-reconciles host/legacy DB copies during deploy to reduce manual operator commands.
 - The deploy runner now defaults to blue/green strategy and `./scripts/switch-dashboard-color.sh` if unset, but explicit `-e` pass-through is recommended.
-- `NEXUSAI_DEPLOY_RECREATE_CORE=1` is the default and recreates `control_plane` and `worker_agent` from `docker-compose.yml` before switching dashboard traffic.
+- `NEXUSAI_DEPLOY_RECREATE_CORE=1` is the default and force-recreates `control_plane` and `worker_agent` from `docker-compose.yml` before switching dashboard traffic.
+- Core service recreate now uses the same compose project namespace (`NEXUSAI_COMPOSE_PROJECT_NAME`) as the blue/green dashboard stack to avoid updating the wrong compose project.
 - Set `NEXUSAI_DEPLOY_CORE_SERVICES` if you need a different core service list.
 - `NEXUSAI_DEPLOY_RECREATE_GATEWAY=1` is the default and force-recreates `dashboard_gateway` on each deploy so gateway config changes are applied without manual shell work.
 
@@ -101,7 +102,7 @@ This starts:
 
 Deployment behavior:
 
-- refreshes core runtime services first (`control_plane`, `worker_agent` by default)
+- refreshes core runtime services first (`control_plane`, `worker_agent` by default) with `--force-recreate`
 - verifies control plane health before proceeding
 - force-recreates `dashboard_gateway` by default so nginx/runtime routing changes are applied
 - starts candidate color container (`blue` or `green`)

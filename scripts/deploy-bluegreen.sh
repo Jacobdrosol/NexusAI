@@ -4,6 +4,7 @@ set -eu
 echo "[deploy] starting blue/green deploy runner"
 COMPOSE_PROJECT_NAME="${NEXUSAI_COMPOSE_PROJECT_NAME:-nexusai}"
 COMPOSE_ARGS="-p $COMPOSE_PROJECT_NAME -f docker-compose.bluegreen.yml"
+CORE_COMPOSE_ARGS="-p $COMPOSE_PROJECT_NAME -f docker-compose.yml"
 STOP_PREVIOUS_COLOR="${NEXUSAI_STOP_PREVIOUS_COLOR:-0}"
 
 echo "[deploy] checking DB drift guard"
@@ -84,14 +85,14 @@ ensure_runtime_nginx_conf
 
 print_control_plane_diagnostics() {
   echo "[deploy] control_plane diagnostics:"
-  docker compose ps control_plane || true
-  docker compose logs --tail=120 control_plane || true
+  docker compose $CORE_COMPOSE_ARGS ps control_plane || true
+  docker compose $CORE_COMPOSE_ARGS logs --tail=120 control_plane || true
 }
 
 wait_for_control_plane_health() {
   ATTEMPTS=0
   while true; do
-    CONTAINER_ID="$(docker compose ps -q control_plane 2>/dev/null || true)"
+    CONTAINER_ID="$(docker compose $CORE_COMPOSE_ARGS ps -q control_plane 2>/dev/null || true)"
     if [ -n "$CONTAINER_ID" ]; then
       HEALTH_STATUS="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$CONTAINER_ID" 2>/dev/null || true)"
       if [ "$HEALTH_STATUS" = "healthy" ] || [ "$HEALTH_STATUS" = "running" ]; then
@@ -116,7 +117,9 @@ git pull --ff-only origin main
 
 if [ "$CORE_RECREATE" = "1" ] && [ -f "docker-compose.yml" ]; then
   echo "[deploy] recreating core runtime services against persistent ./data state"
-  docker compose up -d --build $CORE_SERVICES
+  echo "[deploy] compose project: $COMPOSE_PROJECT_NAME"
+  echo "[deploy] core services: $CORE_SERVICES"
+  docker compose $CORE_COMPOSE_ARGS up -d --build --force-recreate $CORE_SERVICES
 else
   echo "[deploy] skipping core runtime recreate (NEXUSAI_DEPLOY_RECREATE_CORE=$CORE_RECREATE)"
 fi
