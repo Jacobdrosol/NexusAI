@@ -2438,6 +2438,12 @@ async def clone_project_repo_workspace(
     safe_res = _sanitize_repo_command_result(res, root=root)
     if not res.get("ok"):
         detail = str(res.get("stderr") or res.get("error") or "clone failed").strip() or "clone failed"
+        lowered = detail.lower()
+        if branch and "remote branch" in lowered and "not found" in lowered:
+            detail = (
+                f"{detail} (Tip: git branch names are case-sensitive. "
+                "Use the exact branch name, usually 'main', or clear Default Branch.)"
+            )
         await _record_repo_workspace_usage(
             request,
             project_id=project_id,
