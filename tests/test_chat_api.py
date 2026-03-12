@@ -757,6 +757,7 @@ async def test_stream_message_emits_context_summary_event_when_repo_context_load
         )
         assert stream_resp.status_code == 200
         assert "event: context_summary" in stream_resp.text
+        assert "Files inspected (verified context)" in stream_resp.text
         assert "STREAM_CONTEXT_TOKEN" not in stream_resp.text
 
 

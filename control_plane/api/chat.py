@@ -927,6 +927,10 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                 yield f"event: assistant_message\ndata: {assistant_message.model_dump_json()}\n\n"
                 yield "event: done\ndata: {}\n\n"
                 return
+            evidence_prefix = ""
+            if require_repo_evidence and context_sources:
+                evidence_lines = "\n".join(f"- {source}" for source in context_sources[:12])
+                evidence_prefix = f"Files inspected (verified context)\n{evidence_lines}\n\n"
             payload = _messages_to_payload(
                 messages,
                 context_items=resolved_context,
@@ -951,6 +955,9 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
             assistant_message: Optional[ChatMessage] = None
             stream_provider: Optional[str] = None
             stream_model: Optional[str] = None
+            if evidence_prefix:
+                streamed_chunks.append(evidence_prefix)
+                yield f'event: token\ndata: {json.dumps({"text": evidence_prefix})}\n\n'
             async for event in scheduler.stream(task):
                 event_name = str(event.get("event") or "")
                 if event_name == "backend_selected":
