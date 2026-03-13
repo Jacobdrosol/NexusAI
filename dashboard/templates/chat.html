@@ -15,8 +15,8 @@
     <h2 class="panel-title">Conversations</h2>
     <div class="list">
       {% for c in conversations %}
-      <div class="list-item {% if selected_conversation and selected_conversation.id == c.id %}active{% endif %}" style="display:flex;align-items:flex-start;justify-content:space-between;gap:0.75rem;">
-        <a href="{{ url_for('chat.chat_page') }}?conversation_id={{ c.id }}" style="flex:1;min-width:0;color:inherit;text-decoration:none;">
+      <div class="list-item chat-conversation-row {% if selected_conversation and selected_conversation.id == c.id %}active{% endif %}">
+        <a href="{{ url_for('chat.chat_page') }}?conversation_id={{ c.id }}" class="chat-conversation-link">
           <div>{{ c.title }}</div>
           <small>{{ (c.updated_at[:19] if c.updated_at else '') | replace('T', ' ') }}</small>
         </a>
@@ -32,17 +32,17 @@
       {% endfor %}
     </div>
 
-    <hr style="margin:0.9rem 0;">
+    <hr class="chat-divider">
     <details {% if selected_conversation and selected_conversation.archived_at %}open{% endif %}>
-      <summary style="cursor:pointer;">Archived Conversations ({{ archived_conversations|length }})</summary>
-      <div class="list" style="margin-top:0.75rem;">
+      <summary class="chat-summary">Archived Conversations ({{ archived_conversations|length }})</summary>
+      <div class="list chat-archived-list">
         {% for c in archived_conversations %}
-        <div class="list-item {% if selected_conversation and selected_conversation.id == c.id %}active{% endif %}" style="display:flex;align-items:flex-start;justify-content:space-between;gap:0.75rem;">
-          <a href="{{ url_for('chat.chat_page') }}?conversation_id={{ c.id }}" style="flex:1;min-width:0;color:inherit;text-decoration:none;">
+        <div class="list-item chat-conversation-row {% if selected_conversation and selected_conversation.id == c.id %}active{% endif %}">
+          <a href="{{ url_for('chat.chat_page') }}?conversation_id={{ c.id }}" class="chat-conversation-link">
             <div>{{ c.title }}</div>
             <small>Archived {{ (c.archived_at[:19] if c.archived_at else '') | replace('T', ' ') }}</small>
           </a>
-          <div style="display:flex;gap:0.4rem;flex-wrap:wrap;">
+          <div class="chat-row-actions">
             <button type="button" class="btn btn-sm restore-conversation-btn" data-conversation-id="{{ c.id }}">Restore</button>
             <button
               type="button"
@@ -59,8 +59,8 @@
     </details>
 
     {% if selected_conversation %}
-    <hr style="margin:0.9rem 0;">
-    <h3 style="font-size:0.9rem;margin-bottom:0.35rem;">Context Picker</h3>
+    <hr class="chat-divider">
+    <h3 class="chat-section-title">Context Picker</h3>
     <div class="form-group">
       <label>Past Chats</label>
       <select class="form-control" id="context-conversation-select">
@@ -73,13 +73,13 @@
     <div class="form-group">
       <label>Vault Items</label>
       {% if repo_context_sections and repo_context_sections|length > 0 %}
-      <div class="mini-note" style="margin-bottom:0.35rem;">Project Repo Context</div>
+      <div class="mini-note chat-mini-block">Project Repo Context</div>
       {% for section in repo_context_sections %}
-      <details style="margin-bottom:0.35rem;">
-        <summary style="cursor:pointer;">
+      <details class="chat-context-details">
+        <summary class="chat-summary">
           {{ section.project_id }} ({{ section.namespace }}) Â· {{ section["items"]|length }} item{{ '' if section["items"]|length == 1 else 's' }}
         </summary>
-        <div class="context-picker-list" style="margin-top:0.35rem;">
+        <div class="context-picker-list chat-context-list">
           {% for v in section["items"] %}
           {% set path_hint = (v.get('metadata') or {}).get('path') if v.get('metadata') else '' %}
           <label class="context-item">
@@ -90,7 +90,7 @@
         </div>
       </details>
       {% endfor %}
-      <div class="mini-note" style="margin:0.4rem 0 0.35rem;">Other Vault Items</div>
+      <div class="mini-note chat-mini-block">Other Vault Items</div>
       {% endif %}
       <div class="context-picker-list">
         {% for v in vault_items %}
@@ -128,7 +128,7 @@
         <input type="checkbox" id="chat-tool-repo-search" {% if selected_conversation.tool_access_repo_search %}checked{% endif %}>
         <span>Allow repo semantic search</span>
       </label>
-      <div style="margin-top:0.45rem;">
+      <div class="chat-tool-save-wrap">
         <button type="button" class="btn btn-sm" onclick="saveConversationToolAccess()">Save Chat Tool Access</button>
       </div>
       <p class="mini-note">Tool usage is allowed only when bot + project + chat switches are all enabled.</p>
@@ -139,12 +139,12 @@
   <section class="panel chat-panel-main">
     <h2 class="panel-title">Messages</h2>
     {% if selected_conversation %}
-    <div style="margin-bottom:0.5rem; display:flex; gap:0.5rem; flex-wrap:wrap;">
+    <div class="chat-main-actions">
       <button class="btn" type="button" onclick="ingestConversation('{{ selected_conversation.id }}')">Ingest This Chat</button>
       <button class="btn" type="button" onclick="openAssignModal()">Assign Message to PM</button>
     </div>
-    <div id="task-event-state" class="state-empty" style="margin-bottom:0.5rem;">No task events yet.</div>
-    <div id="task-events" class="list" style="margin-bottom:0.75rem;"></div>
+    <div id="task-event-state" class="state-empty chat-task-state">No task events yet.</div>
+    <div id="task-events" class="list chat-task-events"></div>
     <div id="messages" class="messages chat-messages">
       {% for m in messages %}
       <div class="message {{ m.role }}" data-message-id="{{ m.id }}">
@@ -167,7 +167,7 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="conversation_id" value="{{ selected_conversation.id }}">
       <textarea class="form-control" name="content" placeholder="Type a message or use @assign ..." required></textarea>
-      <label class="context-item" style="margin-top:0.45rem;">
+      <label class="context-item chat-message-tools-toggle">
         <input type="checkbox" id="use-workspace-tools-message">
         <span>Use workspace tools for this message (if policy allows)</span>
       </label>
