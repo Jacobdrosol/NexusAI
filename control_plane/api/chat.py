@@ -72,6 +72,11 @@ _UNVERIFIABLE_ACTION_FRAGMENT_RE = re.compile(
 _SOURCE_CITATION_RE = re.compile(r"\[S\d+\]")
 _PATH_LIKE_TOKEN_RE = re.compile(r"[A-Za-z0-9_.-]+(?:[\\/][A-Za-z0-9_.-]+)+")
 _QUOTED_TERM_LIST_RE = re.compile(r'^(?:"[^"]+"\s*){2,}$')
+_SOURCE_HEADER_LINE_RE = re.compile(
+    r"^\s*(files inspected \(verified context\)|source-of-truth \(workspace repo\)|supporting context \(ingested repo/docs/history\))\s*$",
+    re.IGNORECASE,
+)
+_SOURCE_BULLET_LINE_RE = re.compile(r"^\s*-\s*\[S\d+\]\s+.+$")
 _CITATION_TAIL_RATIO = 0.75
 _CITATION_DENSITY_WINDOW = 900
 
@@ -249,8 +254,6 @@ def _apply_repo_evidence_envelope(output: str, *, require_repo_evidence: bool, c
         density_ok = (len(citation_matches) * _CITATION_DENSITY_WINDOW) >= len(normalized)
         if not tail_cited or not density_ok:
             has_inline_citation = False
-    if "files inspected" in normalized.lower():
-        return normalized
     if has_inline_citation:
         return f"{prefix}\n{normalized}"
     uncited_summary = (
@@ -298,9 +301,17 @@ def _sanitize_repo_grounded_output(output: str) -> str:
     text = str(output or "")
     lines = text.splitlines()
     kept: List[str] = []
+    dropping_model_source_block = False
     for raw in lines:
         line = str(raw or "")
         stripped = line.strip()
+        if _SOURCE_HEADER_LINE_RE.match(stripped):
+            dropping_model_source_block = True
+            continue
+        if dropping_model_source_block:
+            if _SOURCE_HEADER_LINE_RE.match(stripped) or _SOURCE_BULLET_LINE_RE.match(stripped) or not stripped:
+                continue
+            dropping_model_source_block = False
         if _UNVERIFIABLE_ACTION_LINE_RE.search(stripped):
             continue
         if stripped.startswith('"') and stripped.endswith('"') and _UNVERIFIABLE_ACTION_FRAGMENT_RE.search(stripped):

@@ -1268,6 +1268,93 @@ async def test_repo_grounded_output_rejects_weak_front_loaded_citations(cp_app):
 
 
 @pytest.mark.anyio
+async def test_repo_grounded_output_ignores_model_generated_files_inspected_block(cp_app):
+    cp_app.state.scheduler.schedule = AsyncMock(
+        return_value={
+            "output": (
+                "Files inspected (verified context)\n"
+                "Source-of-truth (workspace repo)\n"
+                "- [S1] workspace:search fake/path1.cs\n"
+                "- [S2] workspace:search fake/path2.cs\n"
+                "Code Review: very long uncited analysis text."
+            )
+        }
+    )
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-repo-model-files-inspected"
+        create_project = await client.post(
+            "/v1/projects",
+            json={
+                "id": project_id,
+                "name": "Repo Model Header Project",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        assert create_project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Repo Model Header Chat",
+                "project_id": project_id,
+                "tool_access_enabled": True,
+                "tool_access_repo_search": True,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-repo-model-header",
+                "name": "Repo Model Header Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        ingest = await client.post(
+            "/v1/vault/items",
+            json={
+                "title": "README.md",
+                "content": "AUTH_MODEL_HEADER_TOKEN",
+                "namespace": f"project:{project_id}:repo",
+                "project_id": project_id,
+            },
+        )
+        assert ingest.status_code == 200
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": "Search repository authentication setup",
+                "bot_id": "bot-repo-model-header",
+            },
+        )
+        assert resp.status_code == 200
+        content = resp.json()["assistant_message"]["content"]
+        assert content.startswith("Files inspected (verified context)")
+        assert "workspace:search fake/path1.cs" not in content
+        assert "workspace:search fake/path2.cs" not in content
+        assert "Code Review: very long uncited analysis text." not in content
+        assert "I can only provide a limited grounded response for this turn" in content
+
+
+@pytest.mark.anyio
 async def test_update_conversation_tool_access_endpoint(cp_app):
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
         create_resp = await client.post("/v1/chat/conversations", json={"title": "Tool Access Conversation"})
