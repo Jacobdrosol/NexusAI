@@ -79,6 +79,8 @@ _SOURCE_HEADER_LINE_RE = re.compile(
 _SOURCE_BULLET_LINE_RE = re.compile(r"^\s*-\s*\[S\d+\]\s+.+$")
 _CITATION_TAIL_RATIO = 0.75
 _CITATION_DENSITY_WINDOW = 900
+_UNCITED_MAX_LINES = 28
+_UNCITED_MAX_CHARS = 1800
 
 
 def _repo_intent_requested(content: str) -> bool:
@@ -256,14 +258,10 @@ def _apply_repo_evidence_envelope(output: str, *, require_repo_evidence: bool, c
             has_inline_citation = False
     if has_inline_citation:
         return f"{prefix}\n{normalized}"
-    uncited_summary = (
-        "I can only provide a limited grounded response for this turn because the reply did not include inline [S#] "
-        "citations. I am not asserting code-level details beyond the verified sources listed above."
-    )
+    uncited_summary = _condense_uncited_grounded_output(normalized)
     return (
         f"{prefix}\n{uncited_summary}\n\n"
-        "Grounding note: inline [S#] citations were not generated in this reply; "
-        "treat it as a best-effort summary of the verified sources listed above."
+        "Grounding note: inline [S#] citations were not generated; response kept concise."
     )
 
 
@@ -328,6 +326,42 @@ def _sanitize_repo_grounded_output(output: str) -> str:
         compacted.append(line)
         previous_blank = is_blank
     return "\n".join(compacted).strip()
+
+
+def _condense_uncited_grounded_output(text: str) -> str:
+    normalized = str(text or "").strip()
+    if not normalized:
+        return "No grounded response content was generated for this turn."
+    lines = normalized.splitlines()
+    kept: List[str] = []
+    for raw in lines:
+        line = str(raw or "").strip()
+        if not line:
+            if kept and kept[-1] != "":
+                kept.append("")
+            continue
+        lowered = line.lower()
+        if lowered.startswith(
+            (
+                "code review:",
+                "executive summary",
+                "phase ",
+                "data models -",
+                "service layer -",
+                "controller layer -",
+                "frontend components -",
+                "database schema -",
+                "expansion plan -",
+            )
+        ):
+            continue
+        kept.append(line)
+        if len(kept) >= _UNCITED_MAX_LINES:
+            break
+    compacted = "\n".join(kept).strip()
+    if len(compacted) > _UNCITED_MAX_CHARS:
+        compacted = compacted[:_UNCITED_MAX_CHARS].rstrip() + "..."
+    return compacted
 
 
 def _project_repo_namespace(project_id: str, project: Any) -> str:
