@@ -948,6 +948,7 @@ async def test_repo_grounded_output_sanitizes_unverifiable_action_lines(cp_app):
                 "Let me search for authentication files.\n"
                 "I'll read through the actual files in your repository to give you a proper review.\n"
                 "Now let me read what I found:\n"
+                "Now I have the actual file contents.\n"
                 "GlobeIQ.Server/Models/Lesson.cs\n"
                 "GlobeIQ.Server/Controllers/LessonsController.cs\n"
                 "\"BlockType\" \"LessonBlock\" \"BlockSettings\"\n"
@@ -1029,6 +1030,7 @@ async def test_repo_grounded_output_sanitizes_unverifiable_action_lines(cp_app):
         assert "Let me search" not in content
         assert "I'll read through the actual files" not in content
         assert "Now let me read what I found" not in content
+        assert "Now I have the actual file contents" not in content
         assert "GlobeIQ.Server/Models/Lesson.cs" not in content
         assert '"BlockType" "LessonBlock" "BlockSettings"' not in content
         assert "**/auth*.ts" not in content
@@ -1105,7 +1107,8 @@ async def test_repo_grounded_output_adds_grounding_note_when_citations_missing(c
         assert resp.status_code == 200
         content = resp.json()["assistant_message"]["content"]
         assert content.startswith("Files inspected (verified context)")
-        assert "Authentication is configured with modern defaults." in content
+        assert "Authentication is configured with modern defaults." not in content
+        assert "I can only provide a limited grounded response for this turn" in content
         assert "Grounding note: inline [S#] citations were not generated" in content
         assert "[S1]" in content
 

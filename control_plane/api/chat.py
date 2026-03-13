@@ -58,6 +58,8 @@ _SOURCE_SCORE_SUFFIX_RE = re.compile(r"\s*\(score=[^)]+\)\s*$", re.IGNORECASE)
 _UNVERIFIABLE_ACTION_LINE_RE = re.compile(
     r"^\s*((?:now\s+)?let\s+me\s+|searching\b|i\s+searched\b|"
     r"i(?:\s+will|\s+am\s+going\s+to|\s*['’]ll)\s+(?:search|read|scan|review|look|check)\b|"
+    r"now\s+i\s+have\s+the\s+actual\s+file\s+contents\b|"
+    r"after\s+reviewing\s+your\s+actual\s+codebase\b|"
     r"i\s+can\s+read\s+and\s+search\b|\*\*/)",
     re.IGNORECASE,
 )
@@ -240,8 +242,12 @@ def _apply_repo_evidence_envelope(output: str, *, require_repo_evidence: bool, c
         return normalized
     if has_inline_citation:
         return f"{prefix}\n{normalized}"
+    uncited_summary = (
+        "I can only provide a limited grounded response for this turn because the reply did not include inline [S#] "
+        "citations. I am not asserting code-level details beyond the verified sources listed above."
+    )
     return (
-        f"{prefix}\n{normalized}\n\n"
+        f"{prefix}\n{uncited_summary}\n\n"
         "Grounding note: inline [S#] citations were not generated in this reply; "
         "treat it as a best-effort summary of the verified sources listed above."
     )
