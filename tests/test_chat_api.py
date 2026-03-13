@@ -530,6 +530,92 @@ async def test_chat_repo_intent_auto_attaches_project_context(cp_app):
 
 
 @pytest.mark.anyio
+async def test_chat_repo_context_search_uses_focused_query_terms(cp_app):
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "ok"})
+    cp_app.state.vault_manager.search = AsyncMock(
+        return_value=[
+            {
+                "chunk_id": "row-lesson-1",
+                "title": "GlobeIQ.Server/Services/LessonBuilderService.cs",
+                "content": "FOCUSED_LESSON_CONTEXT_TOKEN",
+                "score": 0.72,
+            }
+        ]
+    )
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-repo-focus-query"
+        create_project = await client.post(
+            "/v1/projects",
+            json={
+                "id": project_id,
+                "name": "Repo Focus Query Project",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        assert create_project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Repo Focus Query Chat",
+                "project_id": project_id,
+                "tool_access_enabled": True,
+                "tool_access_repo_search": True,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-repo-focus-query",
+                "name": "Repo Focus Query Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": (
+                    "Testing repo awareness and proper file searching. Can you look through everything "
+                    "related to my lesson builder system and lesson blocks and tell me what is done?"
+                ),
+                "bot_id": "bot-repo-focus-query",
+            },
+        )
+        assert resp.status_code == 200
+        assert cp_app.state.vault_manager.search.await_count >= 1
+        search_query = str(cp_app.state.vault_manager.search.await_args_list[0].kwargs.get("query") or "")
+        assert "lesson" in search_query
+        assert "builder" in search_query
+        assert "blocks" in search_query
+        assert "awareness" not in search_query
+        assert "proper" not in search_query
+
+        task_arg = cp_app.state.scheduler.schedule.await_args[0][0]
+        payload = task_arg.payload
+        assert isinstance(payload, list)
+        assert "FOCUSED_LESSON_CONTEXT_TOKEN" in payload[0]["content"]
+
+
+@pytest.mark.anyio
 async def test_chat_repo_intent_prefers_workspace_as_source_of_truth(cp_app, tmp_path):
     cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "ok"})
     workspace_root = tmp_path / "workspace-repo-truth"

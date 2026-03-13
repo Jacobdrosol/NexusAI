@@ -1,4 +1,4 @@
-from control_plane.chat.workspace_tools import _query_terms, search_workspace_snippets
+from control_plane.chat.workspace_tools import _query_terms, build_focus_query, search_workspace_snippets
 
 
 def test_query_terms_filters_generic_stop_terms():
@@ -35,3 +35,17 @@ def test_search_workspace_snippets_prioritizes_code_paths(tmp_path):
     assert hits
     assert hits[0]["path"].startswith("src/")
 
+
+def test_build_focus_query_prioritizes_domain_terms_from_long_prompt():
+    query = (
+        "Testing repo awareness and proper file searching. "
+        "Can you look through everything related to my lesson builder system "
+        "and lesson blocks and tell me what is done?"
+    )
+    focused = build_focus_query(query, max_terms=6)
+    terms = focused.split()
+    assert "lesson" in terms
+    assert "builder" in terms
+    assert "blocks" in terms
+    assert "awareness" not in terms
+    assert "proper" not in terms

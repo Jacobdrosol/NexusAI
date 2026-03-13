@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from control_plane.chat.workspace_tools import (
+    build_focus_query,
     extract_path_hints,
     normalize_workspace_root,
     read_workspace_file_snippet,
@@ -516,6 +517,16 @@ def _repo_row_priority(row: Any) -> tuple[int, float]:
     return priority, score_value
 
 
+def _repo_row_match_boost(row: Any, query_terms: set[str]) -> int:
+    if not isinstance(row, dict) or not query_terms:
+        return 0
+    title = str(row.get("title") or "").lower()
+    content = str(row.get("content") or "").lower()
+    title_hits = sum(1 for term in query_terms if term in title)
+    content_hits = sum(1 for term in query_terms if term in content)
+    return (title_hits * 5) + min(content_hits, 3)
+
+
 async def _resolve_project_repo_context_items(
     request: Request,
     *,
@@ -536,6 +547,14 @@ async def _resolve_project_repo_context_items(
     max_total_chars = 12_000
     project_count = max(len(project_ids), 1)
     per_project_limit = max(8, min(24, (max_total_items * 2) // project_count + 2))
+    focused_query = build_focus_query(query, max_terms=12)
+    raw_query = str(query or "").strip()[:800]
+    search_queries: List[str] = []
+    if focused_query:
+        search_queries.append(focused_query)
+    if raw_query and raw_query not in search_queries:
+        search_queries.append(raw_query)
+    query_terms = set(focused_query.split())
 
     resolved: List[str] = []
     seen_chunks: set[str] = set()
@@ -549,19 +568,28 @@ async def _resolve_project_repo_context_items(
             except Exception:
                 namespace = f"project:{project_id}:repo"
 
-        try:
-            rows = await vault_manager.search(
-                query=query[:800],
-                namespace=namespace,
-                project_id=project_id,
-                limit=per_project_limit,
-            )
-        except Exception:
-            continue
+        rows: List[dict] = []
+        for search_query in search_queries:
+            if not search_query:
+                continue
+            try:
+                rows = await vault_manager.search(
+                    query=search_query,
+                    namespace=namespace,
+                    project_id=project_id,
+                    limit=per_project_limit,
+                )
+            except Exception:
+                rows = []
+            if rows:
+                break
 
         ranked_rows = sorted(
             list(rows or []),
-            key=lambda r: _repo_row_priority(r),
+            key=lambda r: (
+                _repo_row_priority(r)[0] + _repo_row_match_boost(r, query_terms),
+                _repo_row_priority(r)[1],
+            ),
             reverse=True,
         )
         high_quality = [row for row in ranked_rows if _repo_row_priority(row)[0] >= 2]

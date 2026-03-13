@@ -91,30 +91,116 @@ _DOC_SUFFIXES = {
     ".toml",
 }
 _STOP_TERMS = {
+    "a",
+    "an",
+    "are",
+    "as",
+    "at",
+    "be",
+    "been",
+    "being",
+    "by",
+    "can",
+    "could",
+    "did",
+    "do",
+    "does",
+    "everything",
+    "from",
+    "get",
+    "go",
+    "had",
+    "has",
+    "have",
+    "he",
+    "her",
+    "here",
+    "him",
+    "his",
+    "how",
+    "i",
+    "if",
+    "in",
+    "is",
+    "it",
+    "its",
+    "just",
+    "let",
+    "look",
+    "made",
+    "make",
+    "marked",
+    "me",
+    "my",
+    "no",
+    "of",
+    "on",
+    "or",
+    "our",
+    "out",
+    "please",
+    "proper",
+    "related",
+    "should",
+    "so",
+    "still",
+    "tell",
     "the",
+    "their",
+    "them",
+    "then",
+    "there",
+    "these",
+    "they",
+    "those",
+    "to",
+    "too",
+    "under",
+    "until",
+    "up",
+    "us",
+    "very",
+    "was",
+    "we",
+    "were",
+    "when",
+    "where",
+    "which",
+    "who",
+    "why",
+    "will",
+    "work",
+    "worked",
+    "working",
+    "you",
+    "your",
     "and",
     "for",
     "with",
     "this",
     "that",
-    "from",
     "into",
     "through",
     "able",
     "ability",
+    "awareness",
     "using",
     "within",
     "application",
     "project",
     "projects",
+    "system",
     "repo",
     "repository",
     "search",
+    "searching",
     "read",
+    "file",
     "files",
     "context",
     "connection",
     "ensure",
+    "verified",
     "testing",
     "test",
     "feature",
@@ -127,6 +213,30 @@ _STOP_TERMS = {
     "gather",
     "information",
     "move",
+}
+_TERM_HINT_BOOST = {
+    "auth",
+    "authentication",
+    "badge",
+    "block",
+    "blocks",
+    "bot",
+    "builder",
+    "code",
+    "course",
+    "lesson",
+    "lessons",
+    "model",
+    "module",
+    "pipeline",
+    "quiz",
+    "security",
+    "service",
+    "test",
+    "tests",
+    "token",
+    "unit",
+    "workflow",
 }
 
 _WINDOWS_PATH_RE = re.compile(r"([A-Za-z]:\\[^\s\"']+)")
@@ -241,21 +351,49 @@ def read_workspace_file_snippet(
 
 def _query_terms(query: str, *, max_terms: int = 8) -> list[str]:
     tokens = re.findall(r"[A-Za-z0-9_./-]+", str(query or "").lower())
-    terms: list[str] = []
-    seen: set[str] = set()
-    for token in tokens:
-        cleaned = token.strip("._-/")
-        if len(cleaned) < 3:
+    counts: dict[str, int] = {}
+    first_index: dict[str, int] = {}
+    order = 0
+    for raw_token in tokens:
+        cleaned = raw_token.strip("._-/")
+        if not cleaned:
             continue
-        if cleaned in _STOP_TERMS:
-            continue
-        if cleaned in seen:
-            continue
-        seen.add(cleaned)
-        terms.append(cleaned)
-        if len(terms) >= max_terms:
-            break
-    return terms
+        parts = [part for part in re.split(r"[._/\-]+", cleaned) if part]
+        if not parts:
+            parts = [cleaned]
+        for part in parts:
+            if len(part) < 3:
+                continue
+            if part in _STOP_TERMS:
+                continue
+            counts[part] = counts.get(part, 0) + 1
+            if part not in first_index:
+                first_index[part] = order
+            order += 1
+
+    if not counts:
+        return []
+
+    def _score(term: str) -> float:
+        freq = counts.get(term, 0)
+        score = float(freq * 8)
+        score += min(len(term), 12) / 6.0
+        if term in _TERM_HINT_BOOST:
+            score += 4.0
+        if any(ch.isdigit() for ch in term):
+            score += 1.0
+        return score
+
+    ranked = sorted(
+        counts.keys(),
+        key=lambda term: (-_score(term), first_index.get(term, 0), term),
+    )
+    return ranked[: max(1, max_terms)]
+
+
+def build_focus_query(query: str, *, max_terms: int = 12) -> str:
+    terms = _query_terms(query, max_terms=max_terms)
+    return " ".join(terms)
 
 
 def _best_matching_snippet(text: str, terms: list[str], *, max_chars: int) -> str:
