@@ -1609,6 +1609,7 @@ async def test_repo_grounded_output_strips_tool_echo_only_output(cp_app):
                 "read_file\n"
                 "search_file\n"
                 "pattern: **/Blocks/**/*.cs\n"
+                "pattern: /Blocks//*.cspattern: /LessonBuilder//*.razorpattern: /Models//Lesson*.cs\n"
                 "```text\n"
                 "read_file\n"
                 "```"
@@ -1686,6 +1687,7 @@ async def test_repo_grounded_output_strips_tool_echo_only_output(cp_app):
         assert "read_file" not in content
         assert "search_file" not in content
         assert "pattern: **/Blocks/**/*.cs" not in content
+        assert "pattern: /Blocks//*.cspattern: /LessonBuilder//*.razorpattern: /Models//Lesson*.cs" not in content
         assert "I reviewed the verified context listed above and can answer directly from it." in content
 
 

@@ -94,7 +94,7 @@ _TOOL_ECHO_LINE_RE = re.compile(
     re.IGNORECASE,
 )
 _TOOL_ARG_LINE_RE = re.compile(
-    r"^\s*(pattern|path|file|query|glob|limit|max_results|recursive)\s*:\s*.+$",
+    r"(^|\b)(pattern|path|file|query|glob|limit|max_results|recursive)\s*:\s*",
     re.IGNORECASE,
 )
 _CODE_FENCE_LINE_RE = re.compile(r"^\s*```[\w-]*\s*$")
@@ -285,6 +285,18 @@ def _apply_repo_evidence_envelope(output: str, *, require_repo_evidence: bool, c
 
 
 def _sanitize_repo_grounded_output(output: str) -> str:
+    def _is_tool_artifact_line(line: str) -> bool:
+        stripped_line = str(line or "").strip()
+        if not stripped_line:
+            return False
+        if not _TOOL_ARG_LINE_RE.search(stripped_line):
+            return False
+        lowered_line = stripped_line.lower()
+        # Keep natural-language "file:" references, strip CLI-like argument lines.
+        if lowered_line.startswith("files inspected"):
+            return False
+        return any(token in stripped_line for token in ("*", "/", "\\", ".cs", ".razor", ".py", ".ts"))
+
     def _is_unverified_path_list_line(line: str) -> bool:
         stripped_line = str(line or "").strip()
         if not stripped_line:
@@ -338,6 +350,8 @@ def _sanitize_repo_grounded_output(output: str) -> str:
         if previous_was_tool_echo and (_TOOL_ARG_LINE_RE.search(stripped) or not stripped):
             continue
         previous_was_tool_echo = False
+        if _is_tool_artifact_line(stripped):
+            continue
         if _UNVERIFIABLE_ACTION_LINE_RE.search(stripped):
             continue
         if _REQUEST_PERMISSION_LINE_RE.search(stripped):
@@ -397,6 +411,8 @@ def _condense_uncited_grounded_output(text: str) -> str:
         if _GROUNDING_NOTE_LINE_RE.search(line):
             continue
         if _PLANNING_PREAMBLE_LINE_RE.search(line):
+            continue
+        if _TOOL_ARG_LINE_RE.search(line) and any(token in line for token in ("*", "/", "\\", ".cs", ".razor", ".py", ".ts")):
             continue
         kept.append(line)
         if len(kept) >= _UNCITED_MAX_LINES:
