@@ -50,8 +50,24 @@ class UpdateConversationToolAccessRequest(BaseModel):
     repo_search: bool = False
 
 
-_REPO_INTENT_RE = re.compile(
-    r"\b(repo|repository|codebase|source code|files?|read|search|scan|audit|analy[sz]e|inspect)\b",
+_REPO_ACTION_RE = re.compile(
+    r"\b(read|search|scan|inspect|review|audit|analy[sz]e|open|look\s+through|walk\s+through)\b",
+    re.IGNORECASE,
+)
+_REPO_TARGET_RE = re.compile(
+    r"\b(repo(?:sitory)?|codebase|source\s+code|workspace|project\s+files?|file\s+tree|files?|folders?|directories?)\b",
+    re.IGNORECASE,
+)
+_REPO_REQUEST_CUE_RE = re.compile(
+    r"\b((?:can|could|would|will)\s+you|please|help(?:\s+me)?|i\s+need\s+you\s+to|let(?:'|â€™)?s)\b",
+    re.IGNORECASE,
+)
+_REPO_TRANSCRIPT_MARKER_RE = re.compile(
+    r"^\s*(files inspected \(verified context\)|source-of-truth|supporting context|\[S\d+\]|assistant|response|copy|re-run|send to vault)\b",
+    re.IGNORECASE,
+)
+_REPO_NEGATION_RE = re.compile(
+    r"\b(don['â€™]?t|do\s+not|doesn['â€™]?t|does\s+not|stop|avoid|without|instead)\b[^.\n]{0,80}\b(repo(?:sitory)?|repo\s+search|workspace\s+tools?|project\s+context)\b",
     re.IGNORECASE,
 )
 _SOURCE_SCORE_SUFFIX_RE = re.compile(r"\s*\(score=[^)]+\)\s*$", re.IGNORECASE)
@@ -115,7 +131,43 @@ def _repo_intent_requested(content: str) -> bool:
     text = str(content or "").strip()
     if not text:
         return False
-    return bool(_REPO_INTENT_RE.search(text))
+    candidate_lines: List[str] = []
+    total_chars = 0
+    for raw in text.splitlines():
+        line = str(raw or "").strip()
+        if not line and candidate_lines:
+            break
+        if _REPO_TRANSCRIPT_MARKER_RE.match(line):
+            break
+        if not line:
+            continue
+        candidate_lines.append(line)
+        total_chars += len(line) + 1
+        if total_chars >= 420:
+            break
+    candidate = " ".join(candidate_lines).strip() if candidate_lines else text[:420].strip()
+    if not candidate:
+        return False
+    if _REPO_NEGATION_RE.search(candidate):
+        return False
+    lowered_candidate = candidate.lower()
+    if "code review" in lowered_candidate and (
+        bool(_REPO_REQUEST_CUE_RE.search(candidate))
+        or candidate.endswith("?")
+        or lowered_candidate.startswith(("code review", "do a code review"))
+    ):
+        return True
+    if not _REPO_ACTION_RE.search(candidate):
+        return False
+    if not _REPO_TARGET_RE.search(candidate):
+        return False
+    return bool(
+        _REPO_REQUEST_CUE_RE.search(candidate)
+        or candidate.endswith("?")
+        or lowered_candidate.startswith(
+            ("read ", "search ", "scan ", "inspect ", "review ", "analyze ", "analyse ", "open ", "look through ", "walk through ")
+        )
+    )
 
 
 def _context_resolution_requested(body: PostMessageRequest) -> bool:

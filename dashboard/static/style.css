@@ -635,16 +635,25 @@ select.form-control {
 
 /* Chat page viewport fit */
 .page-chat {
+  display: flex;
+  flex-direction: column;
   min-height: 100dvh;
+  overflow: hidden;
+}
+
+.page-chat nav {
+  flex: 0 0 auto;
 }
 
 .page-chat .container {
   max-width: none;
   margin: 0;
   padding: 0.9rem 1rem 1rem;
-  min-height: calc(100dvh - 64px);
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .page-chat .chat-page-header {
@@ -654,7 +663,9 @@ select.form-control {
 
 .page-chat .chat-split-grid {
   flex: 1 1 auto;
+  height: 100%;
   min-height: 0;
+  overflow: hidden;
   grid-template-columns: minmax(300px, 340px) minmax(0, 1fr);
 }
 
@@ -684,12 +695,12 @@ select.form-control {
   max-height: none;
   overflow-y: auto;
   margin-bottom: 0.55rem;
+  padding-right: 0.15rem;
 }
 
 .page-chat .chat-composer {
   flex: 0 0 auto;
-  position: sticky;
-  bottom: 0;
+  position: relative;
   background: var(--surface);
   border-top: 1px solid var(--line);
   padding-top: 0.45rem;
@@ -1298,8 +1309,9 @@ select.form-control {
   }
 
   .page-chat .container {
-    min-height: auto;
+    min-height: 0;
     padding: 0.7rem 0.75rem 0.9rem;
+    overflow: visible;
   }
 
   .page-chat .chat-split-grid {
@@ -1312,8 +1324,8 @@ select.form-control {
   }
 
   .page-chat .chat-messages {
-    min-height: 42vh;
-    max-height: 54vh;
+    min-height: 44vh;
+    max-height: none;
   }
 
   .page-chat .chat-composer {

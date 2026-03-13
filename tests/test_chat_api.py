@@ -530,6 +530,86 @@ async def test_chat_repo_intent_auto_attaches_project_context(cp_app):
 
 
 @pytest.mark.anyio
+async def test_chat_repo_intent_does_not_trigger_for_complaint_or_transcript(cp_app):
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "ok"})
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-repo-noise"
+        create_project = await client.post(
+            "/v1/projects",
+            json={
+                "id": project_id,
+                "name": "Repo Noise Project",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        assert create_project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Repo Noise Chat",
+                "project_id": project_id,
+                "tool_access_enabled": True,
+                "tool_access_repo_search": True,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-repo-noise",
+                "name": "Repo Noise Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        ingest = await client.post(
+            "/v1/vault/items",
+            json={
+                "title": "README",
+                "content": "PROJECT_REPO_NOISE_TOKEN",
+                "namespace": f"project:{project_id}:repo",
+                "project_id": project_id,
+            },
+        )
+        assert ingest.status_code == 200
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": (
+                    "It's still trying to use repo search even when it should just respond.\n\n"
+                    "user\nCan you read through the actual files?\n"
+                    "assistant\nFiles inspected (verified context)"
+                ),
+                "bot_id": "bot-repo-noise",
+            },
+        )
+        assert resp.status_code == 200
+        task_arg = cp_app.state.scheduler.schedule.await_args[0][0]
+        payload = task_arg.payload
+        assert isinstance(payload, list)
+        assert payload[0]["role"] == "user"
+        assert "PROJECT_REPO_NOISE_TOKEN" not in str(payload)
+
+
+@pytest.mark.anyio
 async def test_chat_repo_context_search_uses_focused_query_terms(cp_app):
     cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "ok"})
     cp_app.state.vault_manager.search = AsyncMock(

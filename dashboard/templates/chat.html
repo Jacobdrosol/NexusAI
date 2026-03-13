@@ -168,7 +168,7 @@
       <input type="hidden" name="conversation_id" value="{{ selected_conversation.id }}">
       <textarea class="form-control" name="content" placeholder="Type a message or use @assign ..." required></textarea>
       <label class="context-item" style="margin-top:0.45rem;">
-        <input type="checkbox" id="use-workspace-tools-message" {% if selected_conversation.tool_access_enabled %}checked{% endif %}>
+        <input type="checkbox" id="use-workspace-tools-message">
         <span>Use workspace tools for this message (if policy allows)</span>
       </label>
       <div class="chat-controls">
