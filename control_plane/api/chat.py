@@ -83,6 +83,12 @@ _REQUEST_PERMISSION_LINE_RE = re.compile(
     re.IGNORECASE,
 )
 _GROUNDING_NOTE_LINE_RE = re.compile(r"^\s*grounding\s+note\s*:\s*", re.IGNORECASE)
+_PLANNING_PREAMBLE_LINE_RE = re.compile(
+    r"^\s*(i(?:\s*['’]ll|\s+will)\s+help\s+you\b|"
+    r"let\s+me\s+start\s+by\s+(?:reading|reviewing|checking)\b|"
+    r"i(?:\s*['’]m|\s+am)\s+going\s+to\s+(?:read|review|check|scan)\b)",
+    re.IGNORECASE,
+)
 _CITATION_TAIL_RATIO = 0.75
 _CITATION_DENSITY_WINDOW = 900
 _UNCITED_MAX_LINES = 28
@@ -320,6 +326,8 @@ def _sanitize_repo_grounded_output(output: str) -> str:
             continue
         if _GROUNDING_NOTE_LINE_RE.search(stripped):
             continue
+        if _PLANNING_PREAMBLE_LINE_RE.search(stripped):
+            continue
         if stripped.startswith('"') and stripped.endswith('"') and _UNVERIFIABLE_ACTION_FRAGMENT_RE.search(stripped):
             continue
         if _is_unverified_path_list_line(stripped):
@@ -369,6 +377,8 @@ def _condense_uncited_grounded_output(text: str) -> str:
         if _REQUEST_PERMISSION_LINE_RE.search(line):
             continue
         if _GROUNDING_NOTE_LINE_RE.search(line):
+            continue
+        if _PLANNING_PREAMBLE_LINE_RE.search(line):
             continue
         kept.append(line)
         if len(kept) >= _UNCITED_MAX_LINES:
