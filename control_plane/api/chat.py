@@ -179,7 +179,7 @@ def _messages_to_payload(
                 "- Use only the provided context snippets as verified repository evidence for this turn.\n"
                 "- Do not claim you searched/read/scanned files unless those files appear in verified sources.\n"
                 "- Do not simulate tool execution logs (for example: 'Let me search...', glob patterns, or pseudo command traces).\n"
-                "- Every concrete claim must include at least one source citation like [S1].\n"
+                "- Prefer source citations like [S1] for concrete claims when practical.\n"
                 "- If evidence is incomplete, explicitly state what you could not verify.\n"
                 "- For repository/code/security analysis, include a 'Files inspected' section with exact paths/markers.\n"
                 "Verified sources:\n"
@@ -229,15 +229,16 @@ def _apply_repo_evidence_envelope(output: str, *, require_repo_evidence: bool, c
             if source in repo or source in vault or source in other:
                 sections.append(f"- [{sid}] {source}")
     prefix = "\n".join(sections) + "\n"
-    if not _SOURCE_CITATION_RE.search(normalized):
-        return (
-            f"{prefix}\n"
-            "I could not produce a fully grounded answer with required source citations ([S#]). "
-            "Please narrow the request to specific files/components and try again."
-        )
+    has_inline_citation = bool(_SOURCE_CITATION_RE.search(normalized))
     if "files inspected" in normalized.lower():
         return normalized
-    return f"{prefix}\n{normalized}"
+    if has_inline_citation:
+        return f"{prefix}\n{normalized}"
+    return (
+        f"{prefix}\n{normalized}\n\n"
+        "Grounding note: inline [S#] citations were not generated in this reply; "
+        "treat it as a best-effort summary of the verified sources listed above."
+    )
 
 
 def _sanitize_repo_grounded_output(output: str) -> str:
@@ -505,6 +506,12 @@ def _repo_row_priority(row: Any) -> tuple[int, float]:
         priority -= 6
     if ":commit:" in lowered:
         priority -= 2
+    if "temp issue files/" in lowered or "temp_issue_files/" in lowered:
+        priority -= 12
+    if lowered.endswith(".designer.cs"):
+        priority -= 6
+    if "/migrations/" in lowered or ":migrations/" in lowered:
+        priority -= 10
     if re.search(r"[\\/][^\\/]+\.[a-z0-9]{1,8}$", title, flags=re.IGNORECASE):
         priority += 6
     if any(token in lowered for token in ("/src/", "/backend/", "/server/", "/api/", "/controllers/", "/services/", "/models/")):

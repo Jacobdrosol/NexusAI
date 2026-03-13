@@ -49,3 +49,37 @@ def test_build_focus_query_prioritizes_domain_terms_from_long_prompt():
     assert "blocks" in terms
     assert "awareness" not in terms
     assert "proper" not in terms
+
+
+def test_search_workspace_snippets_deprioritizes_migrations_and_temp_issue_files(tmp_path):
+    migrations = tmp_path / "GlobeIQ.Server" / "Migrations"
+    migrations.mkdir(parents=True, exist_ok=True)
+    (migrations / "20250907194502_AddLessonContentModeAndRawCode.Designer.cs").write_text(
+        "migration for lesson content mode",
+        encoding="utf-8",
+    )
+
+    temp_issues = tmp_path / "TEMP ISSUE FILES"
+    temp_issues.mkdir(parents=True, exist_ok=True)
+    (temp_issues / "programming_code_blocks_family.csv").write_text(
+        "lesson,blocks,builder",
+        encoding="utf-8",
+    )
+
+    services = tmp_path / "GlobeIQ.Server" / "Services"
+    services.mkdir(parents=True, exist_ok=True)
+    (services / "LessonBuilderService.cs").write_text(
+        "public class LessonBuilderService { /* lesson block assembly */ }",
+        encoding="utf-8",
+    )
+
+    hits = search_workspace_snippets(
+        tmp_path,
+        "lesson builder blocks for course services",
+        limit=3,
+        max_files=200,
+    )
+    assert hits
+    assert "Migrations" not in hits[0]["path"]
+    assert "TEMP ISSUE FILES" not in hits[0]["path"]
+    assert hits[0]["path"].endswith("LessonBuilderService.cs")

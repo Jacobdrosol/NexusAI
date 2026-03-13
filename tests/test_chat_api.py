@@ -1026,7 +1026,7 @@ async def test_repo_grounded_output_sanitizes_unverifiable_action_lines(cp_app):
 
 
 @pytest.mark.anyio
-async def test_repo_grounded_output_requires_source_citations(cp_app):
+async def test_repo_grounded_output_adds_grounding_note_when_citations_missing(cp_app):
     cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "Authentication is configured with modern defaults."})
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
         project_id = "proj-repo-citation-required"
@@ -1096,7 +1096,8 @@ async def test_repo_grounded_output_requires_source_citations(cp_app):
         assert resp.status_code == 200
         content = resp.json()["assistant_message"]["content"]
         assert content.startswith("Files inspected (verified context)")
-        assert "required source citations ([S#])" in content
+        assert "Authentication is configured with modern defaults." in content
+        assert "Grounding note: inline [S#] citations were not generated" in content
         assert "[S1]" in content
 
 
@@ -1172,7 +1173,7 @@ async def test_repo_grounded_output_keeps_cited_claims(cp_app):
         content = resp.json()["assistant_message"]["content"]
         assert content.startswith("Files inspected (verified context)")
         assert "Authentication middleware exists in current setup [S1]." in content
-        assert "required source citations ([S#])" not in content
+        assert "Grounding note: inline [S#] citations were not generated" not in content
 
 
 @pytest.mark.anyio

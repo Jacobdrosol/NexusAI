@@ -428,9 +428,29 @@ def _path_priority(path: str) -> int:
         priority += 2
     if lowered.startswith(("docs/timeline/", "temp_issue_files/")):
         priority -= 5
+    if "temp issue files/" in lowered or "/temp_issue_files/" in lowered:
+        priority -= 10
+    if lowered.startswith("migrations/") or "/migrations/" in lowered:
+        priority -= 12
+    if lowered.endswith(".designer.cs"):
+        priority -= 6
+    if re.search(r"(?:^|/)\d{10,}_[^/]+\.cs$", lowered):
+        priority -= 5
     if "/tests/" in lowered or lowered.startswith(("tests/", "test/")):
         priority -= 1
     return priority
+
+
+def _directory_priority(path: str) -> int:
+    lowered = str(path or "").replace("\\", "/").lower().strip("/")
+    if not lowered:
+        return 0
+    score = 0
+    if any(token in lowered for token in ("src", "server", "api", "app", "services", "controllers", "models", "features", "modules")):
+        score += 6
+    if any(token in lowered for token in ("migrations", "docs/timeline", "temp issue files", "temp_issue_files", "archives", "archive")):
+        score -= 8
+    return score
 
 
 def search_workspace_snippets(
@@ -450,15 +470,22 @@ def search_workspace_snippets(
     scanned = 0
     stop = False
     for current_root, dir_names, file_names in os.walk(root):
+        base_path = Path(current_root)
         dir_names[:] = [name for name in dir_names if name not in _IGNORE_DIR_NAMES]
+        dir_names.sort(
+            key=lambda name: (
+                -_directory_priority(str((base_path / name).relative_to(root)).replace("\\", "/")),
+                name.lower(),
+            )
+        )
         for file_name in file_names:
+            full_path = Path(current_root) / file_name
+            if not _is_probably_text_file(full_path, max_file_bytes=max_file_bytes):
+                continue
             scanned += 1
             if scanned > max_files:
                 stop = True
                 break
-            full_path = Path(current_root) / file_name
-            if not _is_probably_text_file(full_path, max_file_bytes=max_file_bytes):
-                continue
 
             try:
                 rel_path = str(full_path.relative_to(root)).replace("\\", "/")
