@@ -714,6 +714,70 @@ select.form-control {
   margin-bottom: 0.45rem;
 }
 
+.page-chat .chat-main-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+
+.page-chat .chat-main-header .panel-title {
+  margin-bottom: 0;
+}
+
+.page-chat .chat-main-header-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.page-chat .chat-bot-selector {
+  min-width: 160px;
+  max-width: 220px;
+  padding: 0.3rem 0.5rem;
+  font-size: 0.82rem;
+}
+
+.page-chat .chat-overflow-menu {
+  position: relative;
+}
+
+.page-chat .chat-overflow-menu[open] {
+  z-index: 4;
+}
+
+.page-chat .chat-overflow-trigger {
+  min-width: 2rem;
+  padding: 0.2rem 0.5rem;
+  line-height: 1;
+  list-style: none;
+}
+
+.page-chat .chat-overflow-trigger::-webkit-details-marker {
+  display: none;
+}
+
+.page-chat .chat-overflow-menu-items {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.3rem);
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  min-width: 180px;
+  padding: 0.4rem;
+  border-radius: 8px;
+  border: 1px solid #2a3b54;
+  background: #0d1625;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.35);
+}
+
+.page-chat .chat-overflow-menu-items .btn {
+  width: 100%;
+  text-align: left;
+}
+
 .page-chat .chat-conversation-row {
   display: flex;
   align-items: flex-start;
@@ -780,13 +844,6 @@ select.form-control {
   margin-top: 0.45rem;
 }
 
-.page-chat .chat-main-actions {
-  margin-bottom: 0.35rem;
-  display: flex;
-  gap: 0.35rem;
-  flex-wrap: wrap;
-}
-
 .page-chat .chat-task-state {
   margin-bottom: 0.35rem;
 }
@@ -829,7 +886,8 @@ select.form-control {
 
 .page-chat .chat-controls {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: auto auto;
+  justify-content: end;
   gap: 0.35rem;
   align-items: center;
 }
@@ -1563,6 +1621,20 @@ select.form-control {
     height: auto;
   }
 
+  .page-chat .chat-main-header {
+    align-items: flex-start;
+  }
+
+  .page-chat .chat-main-header-controls {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .page-chat .chat-bot-selector {
+    min-width: 130px;
+    max-width: 180px;
+  }
+
   .page-chat .chat-messages {
     min-height: 42vh;
     max-height: 54vh;
@@ -1575,7 +1647,8 @@ select.form-control {
   }
 
   .page-chat .chat-controls {
-    grid-template-columns: 1fr;
+    grid-template-columns: auto auto;
+    justify-content: end;
   }
 
   .search-row {
