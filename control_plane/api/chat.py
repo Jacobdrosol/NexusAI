@@ -56,14 +56,20 @@ _REPO_INTENT_RE = re.compile(
 )
 _SOURCE_SCORE_SUFFIX_RE = re.compile(r"\s*\(score=[^)]+\)\s*$", re.IGNORECASE)
 _UNVERIFIABLE_ACTION_LINE_RE = re.compile(
-    r"^\s*(let\s+me\s+|searching\b|i\s+searched\b|i\s+can\s+read\s+and\s+search\b|\*\*/)",
+    r"^\s*((?:now\s+)?let\s+me\s+|searching\b|i\s+searched\b|"
+    r"i(?:\s+will|\s+am\s+going\s+to|\s*['’]ll)\s+(?:search|read|scan|review|look|check)\b|"
+    r"i\s+can\s+read\s+and\s+search\b|\*\*/)",
     re.IGNORECASE,
 )
 _UNVERIFIABLE_ACTION_FRAGMENT_RE = re.compile(
-    r"\b(let\s+me\s+search|searching\s+for|i\s+searched)\b",
+    r"\b(let\s+me\s+(?:search|read|scan|review|look|check)|"
+    r"searching\s+for|i\s+searched|"
+    r"i(?:\s+will|\s+am\s+going\s+to|\s*['’]ll)\s+(?:search|read|scan|review|look|check))\b",
     re.IGNORECASE,
 )
 _SOURCE_CITATION_RE = re.compile(r"\[S\d+\]")
+_PATH_LIKE_TOKEN_RE = re.compile(r"[A-Za-z0-9_.-]+(?:[\\/][A-Za-z0-9_.-]+)+")
+_QUOTED_TERM_LIST_RE = re.compile(r'^(?:"[^"]+"\s*){2,}$')
 
 
 def _repo_intent_requested(content: str) -> bool:
@@ -242,6 +248,36 @@ def _apply_repo_evidence_envelope(output: str, *, require_repo_evidence: bool, c
 
 
 def _sanitize_repo_grounded_output(output: str) -> str:
+    def _is_unverified_path_list_line(line: str) -> bool:
+        stripped_line = str(line or "").strip()
+        if not stripped_line:
+            return False
+        if _SOURCE_CITATION_RE.search(stripped_line):
+            return False
+        lowered_line = stripped_line.lower()
+        if lowered_line.startswith(
+            (
+                "files inspected",
+                "source-of-truth",
+                "supporting context",
+                "grounding note",
+                "- [s",
+            )
+        ):
+            return False
+        if _QUOTED_TERM_LIST_RE.match(stripped_line):
+            return True
+        tokens = _PATH_LIKE_TOKEN_RE.findall(stripped_line)
+        if not tokens:
+            return False
+        if len(tokens) >= 2:
+            return True
+        token = tokens[0]
+        if stripped_line == token:
+            return True
+        token_coverage = len(token) / max(len(stripped_line), 1)
+        return token_coverage >= 0.75
+
     text = str(output or "")
     lines = text.splitlines()
     kept: List[str] = []
@@ -251,6 +287,8 @@ def _sanitize_repo_grounded_output(output: str) -> str:
         if _UNVERIFIABLE_ACTION_LINE_RE.search(stripped):
             continue
         if stripped.startswith('"') and stripped.endswith('"') and _UNVERIFIABLE_ACTION_FRAGMENT_RE.search(stripped):
+            continue
+        if _is_unverified_path_list_line(stripped):
             continue
         kept.append(line)
     compacted: List[str] = []
