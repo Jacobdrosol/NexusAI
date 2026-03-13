@@ -254,10 +254,7 @@ def _apply_repo_evidence_envelope(output: str, *, require_repo_evidence: bool, c
                 sections.append(f"- [{sid}] {source}")
     prefix = "\n".join(sections) + "\n"
     if not normalized:
-        return (
-            f"{prefix}\n{_condense_uncited_grounded_output('')}\n\n"
-            "Grounding note: inline [S#] citations were not generated; response kept concise."
-        )
+        return f"{prefix}\n{_condense_uncited_grounded_output('')}"
     citation_matches = list(_SOURCE_CITATION_RE.finditer(normalized))
     has_inline_citation = bool(citation_matches)
     if has_inline_citation and len(normalized) > 1200:
@@ -269,10 +266,7 @@ def _apply_repo_evidence_envelope(output: str, *, require_repo_evidence: bool, c
     if has_inline_citation:
         return f"{prefix}\n{normalized}"
     uncited_summary = _condense_uncited_grounded_output(normalized)
-    return (
-        f"{prefix}\n{uncited_summary}\n\n"
-        "Grounding note: inline [S#] citations were not generated; response kept concise."
-    )
+    return f"{prefix}\n{uncited_summary}"
 
 
 def _sanitize_repo_grounded_output(output: str) -> str:

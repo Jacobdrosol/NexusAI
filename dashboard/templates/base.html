@@ -6,7 +6,7 @@
   <title>NexusAI – {% block title %}Dashboard{% endblock %}</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
-<body>
+<body class="{% if active_page %}page-{{ active_page }}{% endif %}">
   <div class="ambient-bg"></div>
   <nav>
     <a href="{{ url_for('main.index') }}" class="brand">NexusAI</a>

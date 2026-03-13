@@ -2,7 +2,7 @@
 {% set active_page = "chat" %}
 {% block title %}Chat{% endblock %}
 {% block content %}
-<div class="page-header">
+<div class="page-header chat-page-header">
   <h1>Chat</h1>
   <button class="btn btn-primary" onclick="showCreateConversation()">+ New Conversation</button>
 </div>
@@ -10,8 +10,8 @@
 <div class="alert alert-error">{{ error }}</div>
 {% endif %}
 
-<div class="split-grid">
-  <section class="panel">
+<div class="split-grid chat-split-grid">
+  <section class="panel chat-panel-side">
     <h2 class="panel-title">Conversations</h2>
     <div class="list">
       {% for c in conversations %}
@@ -136,7 +136,7 @@
     {% endif %}
   </section>
 
-  <section class="panel">
+  <section class="panel chat-panel-main">
     <h2 class="panel-title">Messages</h2>
     {% if selected_conversation %}
     <div style="margin-bottom:0.5rem; display:flex; gap:0.5rem; flex-wrap:wrap;">
@@ -145,7 +145,7 @@
     </div>
     <div id="task-event-state" class="state-empty" style="margin-bottom:0.5rem;">No task events yet.</div>
     <div id="task-events" class="list" style="margin-bottom:0.75rem;"></div>
-    <div id="messages" class="messages">
+    <div id="messages" class="messages chat-messages">
       {% for m in messages %}
       <div class="message {{ m.role }}" data-message-id="{{ m.id }}">
         <div class="message-role">{{ m.role }}</div>
@@ -163,7 +163,7 @@
       <div class="empty">No messages yet</div>
       {% endfor %}
     </div>
-    <form id="chat-send-form" class="chat-input">
+    <form id="chat-send-form" class="chat-input chat-composer">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="conversation_id" value="{{ selected_conversation.id }}">
       <textarea class="form-control" name="content" placeholder="Type a message or use @assign ..." required></textarea>

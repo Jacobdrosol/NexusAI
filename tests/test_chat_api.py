@@ -1113,7 +1113,7 @@ async def test_repo_grounded_output_adds_grounding_note_when_citations_missing(c
         assert content.startswith("Files inspected (verified context)")
         assert "Authentication is configured with modern defaults." in content
         assert "I can only provide a limited grounded response for this turn" not in content
-        assert "Grounding note: inline [S#] citations were not generated; response kept concise." in content
+        assert "Grounding note: inline [S#] citations were not generated; response kept concise." not in content
         assert "[S1]" in content
 
 
@@ -1267,7 +1267,7 @@ async def test_repo_grounded_output_rejects_weak_front_loaded_citations(cp_app):
         content = resp.json()["assistant_message"]["content"]
         assert content.startswith("Files inspected (verified context)")
         assert "I can only provide a limited grounded response for this turn" not in content
-        assert "Grounding note: inline [S#] citations were not generated; response kept concise." in content
+        assert "Grounding note: inline [S#] citations were not generated; response kept concise." not in content
         assert len(content) < 3200
 
 
@@ -1355,7 +1355,7 @@ async def test_repo_grounded_output_ignores_model_generated_files_inspected_bloc
         assert "workspace:search fake/path1.cs" not in content
         assert "workspace:search fake/path2.cs" not in content
         assert "Code Review: very long uncited analysis text." not in content
-        assert "Grounding note: inline [S#] citations were not generated; response kept concise." in content
+        assert "Grounding note: inline [S#] citations were not generated; response kept concise." not in content
 
 
 @pytest.mark.anyio
