@@ -89,6 +89,15 @@ _PLANNING_PREAMBLE_LINE_RE = re.compile(
     r"i(?:\s*['’]m|\s+am)\s+going\s+to\s+(?:read|review|check|scan)\b)",
     re.IGNORECASE,
 )
+_TOOL_ECHO_LINE_RE = re.compile(
+    r"^\s*(read_file|search_file|open_file|list_files|scan_repo|inspect_file|analyze_file)\b",
+    re.IGNORECASE,
+)
+_TOOL_ARG_LINE_RE = re.compile(
+    r"^\s*(pattern|path|file|query|glob|limit|max_results|recursive)\s*:\s*.+$",
+    re.IGNORECASE,
+)
+_CODE_FENCE_LINE_RE = re.compile(r"^\s*```[\w-]*\s*$")
 _CITATION_TAIL_RATIO = 0.75
 _CITATION_DENSITY_WINDOW = 900
 _UNCITED_MAX_LINES = 28
@@ -310,6 +319,7 @@ def _sanitize_repo_grounded_output(output: str) -> str:
     lines = text.splitlines()
     kept: List[str] = []
     dropping_model_source_block = False
+    previous_was_tool_echo = False
     for raw in lines:
         line = str(raw or "")
         stripped = line.strip()
@@ -320,6 +330,14 @@ def _sanitize_repo_grounded_output(output: str) -> str:
             if _SOURCE_HEADER_LINE_RE.match(stripped) or _SOURCE_BULLET_LINE_RE.match(stripped) or not stripped:
                 continue
             dropping_model_source_block = False
+        if _CODE_FENCE_LINE_RE.match(stripped):
+            continue
+        if _TOOL_ECHO_LINE_RE.search(stripped):
+            previous_was_tool_echo = True
+            continue
+        if previous_was_tool_echo and (_TOOL_ARG_LINE_RE.search(stripped) or not stripped):
+            continue
+        previous_was_tool_echo = False
         if _UNVERIFIABLE_ACTION_LINE_RE.search(stripped):
             continue
         if _REQUEST_PERMISSION_LINE_RE.search(stripped):
