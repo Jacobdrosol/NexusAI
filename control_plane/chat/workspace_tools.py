@@ -90,6 +90,44 @@ _DOC_SUFFIXES = {
     ".yaml",
     ".toml",
 }
+_STOP_TERMS = {
+    "the",
+    "and",
+    "for",
+    "with",
+    "this",
+    "that",
+    "from",
+    "into",
+    "through",
+    "able",
+    "ability",
+    "using",
+    "within",
+    "application",
+    "project",
+    "projects",
+    "repo",
+    "repository",
+    "search",
+    "read",
+    "files",
+    "context",
+    "connection",
+    "ensure",
+    "testing",
+    "test",
+    "feature",
+    "goal",
+    "forward",
+    "would",
+    "like",
+    "want",
+    "looking",
+    "gather",
+    "information",
+    "move",
+}
 
 _WINDOWS_PATH_RE = re.compile(r"([A-Za-z]:\\[^\s\"']+)")
 _POSIX_PATH_RE = re.compile(r"((?:\./|\../|/)[^\s\"']+)")
@@ -208,6 +246,8 @@ def _query_terms(query: str, *, max_terms: int = 8) -> list[str]:
     for token in tokens:
         cleaned = token.strip("._-/")
         if len(cleaned) < 3:
+            continue
+        if cleaned in _STOP_TERMS:
             continue
         if cleaned in seen:
             continue

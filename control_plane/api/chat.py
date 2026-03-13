@@ -62,6 +62,7 @@ _UNVERIFIABLE_ACTION_FRAGMENT_RE = re.compile(
     r"\b(let\s+me\s+search|searching\s+for|i\s+searched)\b",
     re.IGNORECASE,
 )
+_SOURCE_CITATION_RE = re.compile(r"\[S\d+\]")
 
 
 def _repo_intent_requested(content: str) -> bool:
@@ -167,8 +168,9 @@ def _messages_to_payload(
         joined = "\n".join(resolved_context)
         payload.insert(0, {"role": "system", "content": f"Context:\n{joined}"})
     if require_repo_evidence:
+        indexed_sources = [(f"S{idx + 1}", source) for idx, source in enumerate(sources)]
         if sources:
-            source_lines = "\n".join(f"- {source}" for source in sources)
+            source_lines = "\n".join(f"- [{sid}] {source}" for sid, source in indexed_sources)
             policy = (
                 "Repository Evidence Policy:\n"
                 "- Treat workspace snippets as source of truth for current code state.\n"
@@ -176,6 +178,7 @@ def _messages_to_payload(
                 "- Use only the provided context snippets as verified repository evidence for this turn.\n"
                 "- Do not claim you searched/read/scanned files unless those files appear in verified sources.\n"
                 "- Do not simulate tool execution logs (for example: 'Let me search...', glob patterns, or pseudo command traces).\n"
+                "- Every concrete claim must include at least one source citation like [S1].\n"
                 "- If evidence is incomplete, explicitly state what you could not verify.\n"
                 "- For repository/code/security analysis, include a 'Files inspected' section with exact paths/markers.\n"
                 "Verified sources:\n"
@@ -209,17 +212,28 @@ def _apply_repo_evidence_envelope(output: str, *, require_repo_evidence: bool, c
     normalized = _sanitize_repo_grounded_output(output)
     if not normalized:
         normalized = "No model output was returned."
-    workspace, repo, vault, other = _split_sources_by_tier(context_sources[:12])
+    indexed_sources = [(f"S{idx + 1}", source) for idx, source in enumerate(context_sources[:12])]
+    workspace, repo, vault, other = _split_sources_by_tier([source for _, source in indexed_sources])
     sections: List[str] = ["Files inspected (verified context)"]
     sections.append("Source-of-truth (workspace repo)")
     if workspace:
-        sections.extend(f"- {source}" for source in workspace)
+        for sid, source in indexed_sources:
+            if source in workspace:
+                sections.append(f"- [{sid}] {source}")
     else:
         sections.append("- unavailable in this turn (workspace context not resolved)")
     if repo or vault or other:
         sections.append("Supporting context (ingested repo/docs/history)")
-        sections.extend(f"- {source}" for source in [*repo, *vault, *other])
+        for sid, source in indexed_sources:
+            if source in repo or source in vault or source in other:
+                sections.append(f"- [{sid}] {source}")
     prefix = "\n".join(sections) + "\n"
+    if not _SOURCE_CITATION_RE.search(normalized):
+        return (
+            f"{prefix}\n"
+            "I could not produce a fully grounded answer with required source citations ([S#]). "
+            "Please narrow the request to specific files/components and try again."
+        )
     if "files inspected" in normalized.lower():
         return normalized
     return f"{prefix}\n{normalized}"

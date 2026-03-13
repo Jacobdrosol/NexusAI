@@ -940,6 +940,156 @@ async def test_repo_grounded_output_sanitizes_unverifiable_action_lines(cp_app):
 
 
 @pytest.mark.anyio
+async def test_repo_grounded_output_requires_source_citations(cp_app):
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "Authentication is configured with modern defaults."})
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-repo-citation-required"
+        create_project = await client.post(
+            "/v1/projects",
+            json={
+                "id": project_id,
+                "name": "Repo Citation Project",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        assert create_project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Repo Citation Chat",
+                "project_id": project_id,
+                "tool_access_enabled": True,
+                "tool_access_repo_search": True,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-repo-citation",
+                "name": "Repo Citation Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        ingest = await client.post(
+            "/v1/vault/items",
+            json={
+                "title": "README.md",
+                "content": "AUTH_CITATION_TOKEN",
+                "namespace": f"project:{project_id}:repo",
+                "project_id": project_id,
+            },
+        )
+        assert ingest.status_code == 200
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": "Search repository authentication setup",
+                "bot_id": "bot-repo-citation",
+            },
+        )
+        assert resp.status_code == 200
+        content = resp.json()["assistant_message"]["content"]
+        assert content.startswith("Files inspected (verified context)")
+        assert "required source citations ([S#])" in content
+        assert "[S1]" in content
+
+
+@pytest.mark.anyio
+async def test_repo_grounded_output_keeps_cited_claims(cp_app):
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "Authentication middleware exists in current setup [S1]."})
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-repo-citation-kept"
+        create_project = await client.post(
+            "/v1/projects",
+            json={
+                "id": project_id,
+                "name": "Repo Citation Kept Project",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        assert create_project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Repo Citation Kept Chat",
+                "project_id": project_id,
+                "tool_access_enabled": True,
+                "tool_access_repo_search": True,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-repo-citation-kept",
+                "name": "Repo Citation Kept Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        ingest = await client.post(
+            "/v1/vault/items",
+            json={
+                "title": "README.md",
+                "content": "AUTH_CITATION_KEPT_TOKEN",
+                "namespace": f"project:{project_id}:repo",
+                "project_id": project_id,
+            },
+        )
+        assert ingest.status_code == 200
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": "Search repository authentication setup",
+                "bot_id": "bot-repo-citation-kept",
+            },
+        )
+        assert resp.status_code == 200
+        content = resp.json()["assistant_message"]["content"]
+        assert content.startswith("Files inspected (verified context)")
+        assert "Authentication middleware exists in current setup [S1]." in content
+        assert "required source citations ([S#])" not in content
+
+
+@pytest.mark.anyio
 async def test_update_conversation_tool_access_endpoint(cp_app):
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
         create_resp = await client.post("/v1/chat/conversations", json={"title": "Tool Access Conversation"})
