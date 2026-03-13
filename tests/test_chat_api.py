@@ -1438,7 +1438,7 @@ async def test_repo_grounded_output_replaces_permission_prompt_with_direct_fallb
         assert content.startswith("Files inspected (verified context)")
         assert "Please confirm which files you'd like me to read first" not in content
         assert "Should I start with the controller files" not in content
-        assert "I reviewed the verified context listed above and can answer directly from it." in content
+        assert "Actionable next steps from verified context:" in content
 
 
 @pytest.mark.anyio
@@ -1514,7 +1514,7 @@ async def test_repo_grounded_output_strips_model_grounding_note_only_output(cp_a
         assert resp.status_code == 200
         content = resp.json()["assistant_message"]["content"]
         assert content.startswith("Files inspected (verified context)")
-        assert "I reviewed the verified context listed above and can answer directly from it." in content
+        assert "Actionable next steps from verified context:" in content
 
 
 @pytest.mark.anyio
@@ -1597,7 +1597,7 @@ async def test_repo_grounded_output_strips_planning_preamble_only_output(cp_app)
         assert content.startswith("Files inspected (verified context)")
         assert "I'll help you conduct a thorough code review" not in content
         assert "Let me start by reading through the key files" not in content
-        assert "I reviewed the verified context listed above and can answer directly from it." in content
+        assert "Actionable next steps from verified context:" in content
 
 
 @pytest.mark.anyio
@@ -1688,7 +1688,7 @@ async def test_repo_grounded_output_strips_tool_echo_only_output(cp_app):
         assert "search_file" not in content
         assert "pattern: **/Blocks/**/*.cs" not in content
         assert "pattern: /Blocks//*.cspattern: /LessonBuilder//*.razorpattern: /Models//Lesson*.cs" not in content
-        assert "I reviewed the verified context listed above and can answer directly from it." in content
+        assert "Actionable next steps from verified context:" in content
 
 
 @pytest.mark.anyio

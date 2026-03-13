@@ -102,6 +102,13 @@ _CITATION_TAIL_RATIO = 0.75
 _CITATION_DENSITY_WINDOW = 900
 _UNCITED_MAX_LINES = 28
 _UNCITED_MAX_CHARS = 1800
+_DEFAULT_GROUNDED_FALLBACK = (
+    "Actionable next steps from verified context:\n"
+    "1. Build a gap list: current controllers/schemas vs required lesson-block capabilities.\n"
+    "2. Expand context to models + services + UI renderer files, then prioritize missing contracts.\n"
+    "3. Implement in phases: schema/contracts, backend services/controllers, UI block components, tests.\n"
+    "4. Run one end-to-end validation pass and capture follow-up fixes."
+)
 
 
 def _repo_intent_requested(content: str) -> bool:
@@ -379,10 +386,7 @@ def _sanitize_repo_grounded_output(output: str) -> str:
 def _condense_uncited_grounded_output(text: str) -> str:
     normalized = str(text or "").strip()
     if not normalized:
-        return (
-            "I reviewed the verified context listed above and can answer directly from it. "
-            "Request a focused summary (for example: architecture, gaps, or next steps)."
-        )
+        return _DEFAULT_GROUNDED_FALLBACK
     lines = normalized.splitlines()
     kept: List[str] = []
     for raw in lines:
@@ -419,10 +423,7 @@ def _condense_uncited_grounded_output(text: str) -> str:
             break
     compacted = "\n".join(kept).strip()
     if not compacted:
-        return (
-            "I reviewed the verified context listed above and can answer directly from it. "
-            "Request a focused summary (for example: architecture, gaps, or next steps)."
-        )
+        return _DEFAULT_GROUNDED_FALLBACK
     if len(compacted) > _UNCITED_MAX_CHARS:
         compacted = compacted[:_UNCITED_MAX_CHARS].rstrip() + "..."
     return compacted
