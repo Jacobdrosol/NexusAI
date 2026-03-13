@@ -655,7 +655,7 @@ select.form-control {
 .page-chat .container {
   max-width: none;
   margin: 0;
-  padding: 0.85rem 1rem 1rem;
+  padding: 0.65rem 0.8rem 0.8rem;
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
@@ -664,13 +664,13 @@ select.form-control {
 }
 
 .page-chat .chat-page-header {
-  margin-bottom: 0.7rem;
+  margin-bottom: 0.45rem;
   flex: 0 0 auto;
 }
 
 .page-chat .chat-page-header h1 {
   margin: 0;
-  font-size: 2.75rem;
+  font-size: 1.95rem;
   line-height: 1;
   letter-spacing: -0.02em;
 }
@@ -682,7 +682,7 @@ select.form-control {
   display: grid;
   grid-template-columns: minmax(300px, 340px) minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
-  gap: 0.9rem;
+  gap: 0.65rem;
   align-items: stretch;
   overflow: hidden;
 }
@@ -698,20 +698,20 @@ select.form-control {
 }
 
 .page-chat .chat-panel-side {
-  padding: 0.95rem;
+  padding: 0.72rem;
   overflow-y: auto;
   overflow-x: hidden;
 }
 
 .page-chat .chat-panel-main {
-  padding: 0.95rem;
+  padding: 0.72rem;
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
 
 .page-chat .panel-title {
-  margin-bottom: 0.7rem;
+  margin-bottom: 0.45rem;
 }
 
 .page-chat .chat-conversation-row {
@@ -781,19 +781,19 @@ select.form-control {
 }
 
 .page-chat .chat-main-actions {
-  margin-bottom: 0.5rem;
+  margin-bottom: 0.35rem;
   display: flex;
-  gap: 0.5rem;
+  gap: 0.35rem;
   flex-wrap: wrap;
 }
 
 .page-chat .chat-task-state {
-  margin-bottom: 0.5rem;
+  margin-bottom: 0.35rem;
 }
 
 .page-chat .chat-task-events {
-  margin-bottom: 0.75rem;
-  max-height: 16vh;
+  margin-bottom: 0.45rem;
+  max-height: 12vh;
   overflow-y: auto;
 }
 
@@ -802,8 +802,8 @@ select.form-control {
   min-height: 0;
   max-height: none;
   overflow-y: auto;
-  margin-bottom: 0.5rem;
-  padding: 0.55rem 0.25rem 0 0;
+  margin-bottom: 0.35rem;
+  padding: 0.35rem 0.15rem 0 0;
   border-top: 1px solid #20314a;
 }
 
@@ -812,36 +812,39 @@ select.form-control {
   position: sticky;
   bottom: 0;
   z-index: 2;
-  margin-top: 0.15rem;
+  margin-top: 0.08rem;
   border-top: 1px solid #24364e;
-  padding-top: 0.6rem;
+  padding-top: 0.35rem;
   background: linear-gradient(180deg, rgba(17, 26, 40, 0.6), #111a28 26%);
 }
 
 .page-chat .chat-composer textarea {
-  min-height: 96px;
-  max-height: 24vh;
+  min-height: 68px;
+  max-height: 18vh;
 }
 
 .page-chat .chat-message-tools-toggle {
-  margin-top: 0.45rem;
+  margin-top: 0.3rem;
 }
 
 .page-chat .chat-controls {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
-  gap: 0.5rem;
+  gap: 0.35rem;
   align-items: center;
 }
 
 .page-chat .chat-controls .btn {
-  align-self: stretch;
+  align-self: center;
+  white-space: nowrap;
+  min-height: 2.2rem;
+  padding: 0.34rem 0.78rem;
 }
 
 .page-chat .message {
   border-radius: 12px;
   border: 1px solid #2a3a52;
-  padding: 0.75rem 0.85rem;
+  padding: 0.58rem 0.7rem;
 }
 
 .page-chat .message.user {
@@ -883,6 +886,15 @@ select.form-control {
   background: #0d1625;
   border-color: #2a3b54;
   color: #ccd7e8;
+  padding: 0.32rem 0.72rem;
+  font-size: 0.85rem;
+  line-height: 1.2;
+  border-radius: 8px;
+}
+
+.page-chat .btn-sm {
+  padding: 0.22rem 0.52rem;
+  font-size: 0.78rem;
 }
 
 .page-chat .btn:hover {
