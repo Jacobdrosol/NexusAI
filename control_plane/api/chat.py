@@ -72,6 +72,8 @@ _UNVERIFIABLE_ACTION_FRAGMENT_RE = re.compile(
 _SOURCE_CITATION_RE = re.compile(r"\[S\d+\]")
 _PATH_LIKE_TOKEN_RE = re.compile(r"[A-Za-z0-9_.-]+(?:[\\/][A-Za-z0-9_.-]+)+")
 _QUOTED_TERM_LIST_RE = re.compile(r'^(?:"[^"]+"\s*){2,}$')
+_CITATION_TAIL_RATIO = 0.75
+_CITATION_DENSITY_WINDOW = 900
 
 
 def _repo_intent_requested(content: str) -> bool:
@@ -188,6 +190,8 @@ def _messages_to_payload(
                 "- Do not claim you searched/read/scanned files unless those files appear in verified sources.\n"
                 "- Do not simulate tool execution logs (for example: 'Let me search...', glob patterns, or pseudo command traces).\n"
                 "- Prefer source citations like [S1] for concrete claims when practical.\n"
+                "- Keep responses concise and evidence-first (summary + key findings + concrete next steps).\n"
+                "- Do not output reconstructed full class/interface definitions unless directly shown in verified snippets.\n"
                 "- If evidence is incomplete, explicitly state what you could not verify.\n"
                 "- For repository/code/security analysis, include a 'Files inspected' section with exact paths/markers.\n"
                 "Verified sources:\n"
@@ -237,7 +241,14 @@ def _apply_repo_evidence_envelope(output: str, *, require_repo_evidence: bool, c
             if source in repo or source in vault or source in other:
                 sections.append(f"- [{sid}] {source}")
     prefix = "\n".join(sections) + "\n"
-    has_inline_citation = bool(_SOURCE_CITATION_RE.search(normalized))
+    citation_matches = list(_SOURCE_CITATION_RE.finditer(normalized))
+    has_inline_citation = bool(citation_matches)
+    if has_inline_citation and len(normalized) > 1200:
+        last_citation_end = citation_matches[-1].end()
+        tail_cited = last_citation_end >= int(len(normalized) * _CITATION_TAIL_RATIO)
+        density_ok = (len(citation_matches) * _CITATION_DENSITY_WINDOW) >= len(normalized)
+        if not tail_cited or not density_ok:
+            has_inline_citation = False
     if "files inspected" in normalized.lower():
         return normalized
     if has_inline_citation:
