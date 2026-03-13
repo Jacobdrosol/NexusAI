@@ -952,6 +952,8 @@ async def test_repo_grounded_output_sanitizes_unverifiable_action_lines(cp_app):
                 "GlobeIQ.Server/Models/Lesson.cs\n"
                 "GlobeIQ.Server/Controllers/LessonsController.cs\n"
                 "\"BlockType\" \"LessonBlock\" \"BlockSettings\"\n"
+                "Please confirm which files you'd like me to read first.\n"
+                "Should I start with the controller files?\n"
                 "**/auth*.ts\n"
                 "Based on verified context, auth is configured."
             )
@@ -1033,6 +1035,8 @@ async def test_repo_grounded_output_sanitizes_unverifiable_action_lines(cp_app):
         assert "Now I have the actual file contents" not in content
         assert "GlobeIQ.Server/Models/Lesson.cs" not in content
         assert '"BlockType" "LessonBlock" "BlockSettings"' not in content
+        assert "Please confirm which files you'd like me to read first" not in content
+        assert "Should I start with the controller files" not in content
         assert "**/auth*.ts" not in content
 
 
@@ -1352,6 +1356,89 @@ async def test_repo_grounded_output_ignores_model_generated_files_inspected_bloc
         assert "workspace:search fake/path2.cs" not in content
         assert "Code Review: very long uncited analysis text." not in content
         assert "Grounding note: inline [S#] citations were not generated; response kept concise." in content
+
+
+@pytest.mark.anyio
+async def test_repo_grounded_output_replaces_permission_prompt_with_direct_fallback(cp_app):
+    cp_app.state.scheduler.schedule = AsyncMock(
+        return_value={
+            "output": (
+                "Please confirm which files you'd like me to read first.\n"
+                "Should I start with the controller files and then move to models?"
+            )
+        }
+    )
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-repo-permission-fallback"
+        create_project = await client.post(
+            "/v1/projects",
+            json={
+                "id": project_id,
+                "name": "Repo Permission Fallback",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        assert create_project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Repo Permission Fallback Chat",
+                "project_id": project_id,
+                "tool_access_enabled": True,
+                "tool_access_repo_search": True,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-repo-permission-fallback",
+                "name": "Repo Permission Fallback Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        ingest = await client.post(
+            "/v1/vault/items",
+            json={
+                "title": "README.md",
+                "content": "AUTH_PERMISSION_FALLBACK_TOKEN",
+                "namespace": f"project:{project_id}:repo",
+                "project_id": project_id,
+            },
+        )
+        assert ingest.status_code == 200
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": "Search repository authentication setup",
+                "bot_id": "bot-repo-permission-fallback",
+            },
+        )
+        assert resp.status_code == 200
+        content = resp.json()["assistant_message"]["content"]
+        assert content.startswith("Files inspected (verified context)")
+        assert "Please confirm which files you'd like me to read first" not in content
+        assert "Should I start with the controller files" not in content
+        assert "I reviewed the verified context listed above and can answer directly from it." in content
 
 
 @pytest.mark.anyio

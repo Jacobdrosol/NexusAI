@@ -77,6 +77,11 @@ _SOURCE_HEADER_LINE_RE = re.compile(
     re.IGNORECASE,
 )
 _SOURCE_BULLET_LINE_RE = re.compile(r"^\s*-\s*\[S\d+\]\s+.+$")
+_REQUEST_PERMISSION_LINE_RE = re.compile(
+    r"^\s*(please\s+confirm\s+which\s+files|should\s+i\s+start\s+with|"
+    r"let\s+me\s+know\s+which\s+files|which\s+files\s+would\s+you\s+like\s+me\s+to\s+read)\b",
+    re.IGNORECASE,
+)
 _CITATION_TAIL_RATIO = 0.75
 _CITATION_DENSITY_WINDOW = 900
 _UNCITED_MAX_LINES = 28
@@ -199,6 +204,7 @@ def _messages_to_payload(
                 "- Prefer source citations like [S1] for concrete claims when practical.\n"
                 "- Keep responses concise and evidence-first (summary + key findings + concrete next steps).\n"
                 "- Do not output reconstructed full class/interface definitions unless directly shown in verified snippets.\n"
+                "- Do not ask permission to read files already in verified sources; answer directly from current context.\n"
                 "- If evidence is incomplete, explicitly state what you could not verify.\n"
                 "- For repository/code/security analysis, include a 'Files inspected' section with exact paths/markers.\n"
                 "Verified sources:\n"
@@ -230,8 +236,6 @@ def _apply_repo_evidence_envelope(output: str, *, require_repo_evidence: bool, c
     if not context_sources:
         return _repo_context_unavailable_message()
     normalized = _sanitize_repo_grounded_output(output)
-    if not normalized:
-        normalized = "No model output was returned."
     indexed_sources = [(f"S{idx + 1}", source) for idx, source in enumerate(context_sources[:12])]
     workspace, repo, vault, other = _split_sources_by_tier([source for _, source in indexed_sources])
     sections: List[str] = ["Files inspected (verified context)"]
@@ -248,6 +252,11 @@ def _apply_repo_evidence_envelope(output: str, *, require_repo_evidence: bool, c
             if source in repo or source in vault or source in other:
                 sections.append(f"- [{sid}] {source}")
     prefix = "\n".join(sections) + "\n"
+    if not normalized:
+        return (
+            f"{prefix}\n{_condense_uncited_grounded_output('')}\n\n"
+            "Grounding note: inline [S#] citations were not generated; response kept concise."
+        )
     citation_matches = list(_SOURCE_CITATION_RE.finditer(normalized))
     has_inline_citation = bool(citation_matches)
     if has_inline_citation and len(normalized) > 1200:
@@ -312,6 +321,8 @@ def _sanitize_repo_grounded_output(output: str) -> str:
             dropping_model_source_block = False
         if _UNVERIFIABLE_ACTION_LINE_RE.search(stripped):
             continue
+        if _REQUEST_PERMISSION_LINE_RE.search(stripped):
+            continue
         if stripped.startswith('"') and stripped.endswith('"') and _UNVERIFIABLE_ACTION_FRAGMENT_RE.search(stripped):
             continue
         if _is_unverified_path_list_line(stripped):
@@ -331,7 +342,10 @@ def _sanitize_repo_grounded_output(output: str) -> str:
 def _condense_uncited_grounded_output(text: str) -> str:
     normalized = str(text or "").strip()
     if not normalized:
-        return "No grounded response content was generated for this turn."
+        return (
+            "I reviewed the verified context listed above and can answer directly from it. "
+            "Request a focused summary (for example: architecture, gaps, or next steps)."
+        )
     lines = normalized.splitlines()
     kept: List[str] = []
     for raw in lines:
@@ -355,10 +369,17 @@ def _condense_uncited_grounded_output(text: str) -> str:
             )
         ):
             continue
+        if _REQUEST_PERMISSION_LINE_RE.search(line):
+            continue
         kept.append(line)
         if len(kept) >= _UNCITED_MAX_LINES:
             break
     compacted = "\n".join(kept).strip()
+    if not compacted:
+        return (
+            "I reviewed the verified context listed above and can answer directly from it. "
+            "Request a focused summary (for example: architecture, gaps, or next steps)."
+        )
     if len(compacted) > _UNCITED_MAX_CHARS:
         compacted = compacted[:_UNCITED_MAX_CHARS].rstrip() + "..."
     return compacted
