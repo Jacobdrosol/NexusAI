@@ -845,12 +845,20 @@ select.form-control {
 }
 
 .page-chat .chat-task-state {
-  margin-bottom: 0.35rem;
+  margin-bottom: 0.2rem;
+}
+
+.page-chat .chat-task-shell {
+  margin-bottom: 0.25rem;
+}
+
+.page-chat .chat-task-shell[hidden] {
+  display: none !important;
 }
 
 .page-chat .chat-task-events {
-  margin-bottom: 0.45rem;
-  max-height: 12vh;
+  margin-bottom: 0.2rem;
+  max-height: 9vh;
   overflow-y: auto;
 }
 
@@ -881,7 +889,8 @@ select.form-control {
 }
 
 .page-chat .chat-message-tools-toggle {
-  margin-top: 0.3rem;
+  margin-top: 0.2rem;
+  font-size: 0.82rem;
 }
 
 .page-chat .chat-controls {

@@ -160,8 +160,10 @@
       {% endif %}
     </div>
     {% if selected_conversation %}
-    <div id="task-event-state" class="state-empty chat-task-state">No task events yet.</div>
-    <div id="task-events" class="list chat-task-events"></div>
+    <div id="task-events-shell" class="chat-task-shell" hidden>
+      <div id="task-event-state" class="state-info chat-task-state"></div>
+      <div id="task-events" class="list chat-task-events"></div>
+    </div>
     <div id="messages" class="messages chat-messages">
       {% for m in messages %}
       <div class="message {{ m.role }}" data-message-id="{{ m.id }}">
@@ -185,14 +187,14 @@
       <input type="hidden" name="conversation_id" value="{{ selected_conversation.id }}">
       <input type="hidden" name="bot_id" id="chat-send-bot-id" value="{{ selected_conversation.default_bot_id or '' }}">
       <textarea class="form-control" name="content" placeholder="Type a message or use @assign ..." required></textarea>
-      <label class="context-item chat-message-tools-toggle">
-        <input type="checkbox" id="use-workspace-tools-message">
-        <span>Use workspace tools for this message (if policy allows)</span>
-      </label>
       <div class="chat-controls">
         <button type="button" class="btn" onclick="sendMessage(false)">Send</button>
         <button type="button" class="btn btn-primary" onclick="sendMessage(true)">Stream Send</button>
       </div>
+      <label class="context-item chat-message-tools-toggle">
+        <input type="checkbox" id="use-workspace-tools-message">
+        <span>Use workspace tools for this message (if policy allows)</span>
+      </label>
     </form>
     {% else %}
     <div class="empty">Choose a conversation to begin.</div>
@@ -784,6 +786,19 @@ function syncSendBotSelection() {
   hidden.value = selector ? (selector.value || '') : '';
 }
 
+function setTaskEventsVisible(visible) {
+  const shell = document.getElementById('task-events-shell');
+  const stateEl = document.getElementById('task-event-state');
+  const listEl = document.getElementById('task-events');
+  if (!shell) return;
+  shell.hidden = !visible;
+  if (!visible) {
+    taskEventMap.clear();
+    if (stateEl) stateEl.textContent = '';
+    if (listEl) listEl.innerHTML = '';
+  }
+}
+
 function esc(s) {
   return (s || '').toString().replace(/[&<>"']/g, (c) => (
     {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;', "'":'&#39;'}[c]
@@ -792,6 +807,7 @@ function esc(s) {
 
 function upsertTaskEvent(task) {
   if (!task || !task.task_id) return;
+  setTaskEventsVisible(true);
   taskEventMap.set(task.task_id, task);
   const stateEl = document.getElementById('task-event-state');
   const listEl = document.getElementById('task-events');
@@ -818,6 +834,7 @@ function upsertTaskEvent(task) {
 async function sendMessage(streamMode) {
   const form = document.getElementById('chat-send-form');
   if (!form || !selectedConversationId) return;
+  setTaskEventsVisible(false);
   const fd = new FormData(form);
   const content = (fd.get('content') || '').toString().trim();
   if (!content) return;
@@ -1264,6 +1281,7 @@ syncConversationScopeFields();
 syncCreateConversationToolFields();
 syncConversationToolAccessEditor();
 syncSendBotSelection();
+setTaskEventsVisible(false);
 startMessagePolling();
 document.querySelectorAll('#messages .message-body').forEach((el) => renderMessageBody(el, el.textContent || ''));
 </script>
