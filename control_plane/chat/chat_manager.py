@@ -46,6 +46,16 @@ CREATE TABLE IF NOT EXISTS messages (
 )
 """
 
+_CREATE_MESSAGES_CONVERSATION_CREATED_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_messages_conversation_created_at
+ON messages(conversation_id, created_at)
+"""
+
+_CREATE_CONVERSATIONS_ARCHIVED_UPDATED_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_conversations_archived_updated_at
+ON conversations(archived_at, updated_at)
+"""
+
 
 class ChatManager:
     def __init__(self, db_path: Optional[str] = None) -> None:
@@ -73,6 +83,8 @@ class ChatManager:
                 await db.execute("PRAGMA foreign_keys = ON")
                 await db.execute(_CREATE_CONVERSATIONS)
                 await db.execute(_CREATE_MESSAGES)
+                await db.execute(_CREATE_MESSAGES_CONVERSATION_CREATED_INDEX)
+                await db.execute(_CREATE_CONVERSATIONS_ARCHIVED_UPDATED_INDEX)
                 await self._ensure_conversation_columns(db)
                 await db.commit()
             self._db_ready = True
@@ -330,18 +342,33 @@ class ChatManager:
                 await db.commit()
         return message
 
-    async def list_messages(self, conversation_id: str) -> List[ChatMessage]:
+    async def list_messages(self, conversation_id: str, limit: Optional[int] = None) -> List[ChatMessage]:
         await self.get_conversation(conversation_id)
+        safe_limit = None
+        if isinstance(limit, int) and limit > 0:
+            safe_limit = min(limit, 2000)
         async with aiosqlite.connect(self._db_path) as db:
             db.row_factory = aiosqlite.Row
-            async with db.execute(
+            if safe_limit is None:
+                query = """
+                    SELECT * FROM messages
+                    WHERE conversation_id = ?
+                    ORDER BY created_at ASC
                 """
-                SELECT * FROM messages
-                WHERE conversation_id = ?
-                ORDER BY created_at ASC
-                """,
-                (conversation_id,),
-            ) as cursor:
+                params: tuple[Any, ...] = (conversation_id,)
+            else:
+                # Pull latest N rows using indexed DESC scan, then restore chronological order.
+                query = """
+                    SELECT * FROM (
+                        SELECT * FROM messages
+                        WHERE conversation_id = ?
+                        ORDER BY created_at DESC
+                        LIMIT ?
+                    ) recent
+                    ORDER BY created_at ASC
+                """
+                params = (conversation_id, safe_limit)
+            async with db.execute(query, params) as cursor:
                 rows = await cursor.fetchall()
                 result: List[ChatMessage] = []
                 for row in rows:

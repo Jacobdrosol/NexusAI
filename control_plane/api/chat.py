@@ -1013,10 +1013,14 @@ async def restore_conversation(conversation_id: str, request: Request) -> ChatCo
 
 
 @router.get("/conversations/{conversation_id}/messages", response_model=List[ChatMessage])
-async def list_messages(conversation_id: str, request: Request) -> List[ChatMessage]:
+async def list_messages(
+    conversation_id: str,
+    request: Request,
+    limit: int = Query(default=120, ge=1, le=1000),
+) -> List[ChatMessage]:
     chat_manager = request.app.state.chat_manager
     try:
-        return await chat_manager.list_messages(conversation_id)
+        return await chat_manager.list_messages(conversation_id, limit=limit)
     except ConversationNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
 

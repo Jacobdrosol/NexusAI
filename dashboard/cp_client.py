@@ -552,8 +552,11 @@ class CPClient:
     def restore_conversation(self, conversation_id: str) -> Optional[Dict[str, Any]]:
         return self._post(f"/v1/chat/conversations/{conversation_id}/restore", {})
 
-    def list_messages(self, conversation_id: str) -> Optional[List[Dict[str, Any]]]:
-        return self._get(f"/v1/chat/conversations/{conversation_id}/messages")
+    def list_messages(self, conversation_id: str, limit: Optional[int] = None) -> Optional[List[Dict[str, Any]]]:
+        path = f"/v1/chat/conversations/{conversation_id}/messages"
+        if isinstance(limit, int) and limit > 0:
+            path += f"?limit={int(limit)}"
+        return self._get(path)
 
     def post_message(self, conversation_id: str, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return self._post(f"/v1/chat/conversations/{conversation_id}/messages", body, timeout=_CHAT_TIMEOUT)
@@ -578,8 +581,9 @@ class CPClient:
         namespace: Optional[str] = None,
         project_id: Optional[str] = None,
         limit: int = 100,
+        include_content: bool = True,
     ) -> Optional[List[Dict[str, Any]]]:
-        parts = [f"limit={limit}"]
+        parts = [f"limit={limit}", f"include_content={'true' if include_content else 'false'}"]
         if namespace:
             parts.append(f"namespace={namespace}")
         if project_id:

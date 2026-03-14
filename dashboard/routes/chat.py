@@ -188,6 +188,32 @@ def _normalize_vault_item_rows(raw: Any) -> list[dict[str, Any]]:
     return result
 
 
+def _cp_list_messages_safe(cp: Any, conversation_id: str, *, limit: int) -> Any:
+    try:
+        return cp.list_messages(conversation_id, limit=limit)
+    except TypeError:
+        return cp.list_messages(conversation_id)
+
+
+def _cp_list_vault_items_safe(
+    cp: Any,
+    *,
+    namespace: str | None = None,
+    project_id: str | None = None,
+    limit: int = 100,
+    include_content: bool = True,
+) -> Any:
+    try:
+        return cp.list_vault_items(
+            namespace=namespace,
+            project_id=project_id,
+            limit=limit,
+            include_content=include_content,
+        )
+    except TypeError:
+        return cp.list_vault_items(namespace=namespace, project_id=project_id, limit=limit)
+
+
 @bp.get("/chat")
 @login_required
 def chat_page() -> str:
@@ -222,7 +248,7 @@ def chat_page() -> str:
                     selected = c
                     break
             try:
-                messages = _normalize_message_rows(cp.list_messages(selected_id) or [])
+                messages = _normalize_message_rows(_cp_list_messages_safe(cp, selected_id, limit=120) or [])
             except Exception:
                 messages = []
                 page_error = page_error or "Selected conversation messages could not be loaded."
@@ -250,7 +276,13 @@ def chat_page() -> str:
                     except Exception:
                         namespace = f"project:{pid}:repo"
                 try:
-                    items_raw = cp.list_vault_items(namespace=namespace, project_id=pid, limit=120) or []
+                    items_raw = _cp_list_vault_items_safe(
+                        cp,
+                        namespace=namespace,
+                        project_id=pid,
+                        limit=30,
+                        include_content=False,
+                    ) or []
                 except Exception:
                     items_raw = []
                 items = _normalize_vault_item_rows(items_raw)
@@ -269,7 +301,7 @@ def chat_page() -> str:
                             repo_context_item_ids.append(item_id)
 
         try:
-            vault_items_raw = cp.list_vault_items(limit=50) or []
+            vault_items_raw = _cp_list_vault_items_safe(cp, limit=30, include_content=False) or []
         except Exception:
             vault_items_raw = []
         vault_items = _normalize_vault_item_rows(vault_items_raw)
@@ -411,7 +443,12 @@ def api_send_message():
 @login_required
 def api_list_messages(conversation_id: str):
     cp = get_cp_client()
-    messages = cp.list_messages(conversation_id)
+    raw_limit = request.args.get("limit", "120")
+    try:
+        limit = max(1, min(int(raw_limit), 1000))
+    except Exception:
+        limit = 120
+    messages = _cp_list_messages_safe(cp, conversation_id, limit=limit)
     if messages is None:
         return _cp_error_response(cp, "chat messages unavailable")
     return jsonify(messages)

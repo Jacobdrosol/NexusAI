@@ -321,6 +321,7 @@ class VaultManager:
         namespace: Optional[str] = None,
         project_id: Optional[str] = None,
         limit: int = 100,
+        include_content: bool = True,
     ) -> List[VaultItem]:
         await self._ensure_db()
         clauses: List[str] = []
@@ -332,8 +333,16 @@ class VaultManager:
             clauses.append("project_id = ?")
             params.append(project_id)
         where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        if include_content:
+            select_clause = "*"
+        else:
+            # For list/picker UIs, skip transferring full item bodies.
+            select_clause = (
+                "id, source_type, source_ref, title, '' AS content, namespace, "
+                "project_id, metadata, embedding_status, created_at, updated_at"
+            )
         query = f"""
-            SELECT * FROM vault_items
+            SELECT {select_clause} FROM vault_items
             {where_clause}
             ORDER BY updated_at DESC
             LIMIT ?
