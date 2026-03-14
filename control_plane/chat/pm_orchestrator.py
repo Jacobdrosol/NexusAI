@@ -406,21 +406,49 @@ class PMOrchestrator:
             "coder": [r"code", r"dev", r"engineer", r"implement"],
             "tester": [r"test", r"qa"],
             "reviewer": [r"review", r"audit"],
-            "researcher": [r"research", r"analyst", r"plan"],
+            "researcher": [r"research", r"analyst", r"requirements?", r"spec"],
             "security": [r"security", r"audit", r"review"],
             "dba": [r"\bdba\b", r"database", r"data", r"sql", r"migration"],
             "qa": [r"\bqa\b", r"test", r"quality"],
             "assistant": [r"assist", r"general"],
         }
 
+        def _bot_signature(bot: Bot) -> str:
+            return f"{bot.id} {bot.name} {bot.role}".lower()
+
+        def _is_media_planner(bot: Bot) -> bool:
+            signature = _bot_signature(bot)
+            is_media = any(token in signature for token in ("image", "asset", "thumbnail", "media", "art"))
+            is_planner = any(token in signature for token in ("planner", "planning", "plan"))
+            return is_media and is_planner
+
+        def _skip_for_generic_step(bot: Bot) -> bool:
+            if role_hint in {"coder", "tester", "reviewer", "researcher", "security", "dba", "qa", "assistant"}:
+                return _is_media_planner(bot)
+            return False
+
         patterns = role_patterns.get(role_hint, [re.escape(role_hint)] if role_hint else [])
         for bot in candidates:
-            role = str(bot.role).lower()
-            if any(re.search(p, role) for p in patterns):
+            if _skip_for_generic_step(bot):
+                continue
+            signature = _bot_signature(bot)
+            if any(re.search(p, signature) for p in patterns):
                 return bot
 
-        candidates.sort(key=lambda b: b.priority, reverse=True)
-        return candidates[0]
+        # If a pure researcher bot is unavailable, prefer a general coding/PM bot over domain-specific planners.
+        if role_hint in {"researcher", "assistant"}:
+            fallback_patterns = [r"coder", r"dev", r"engineer", r"\bpm\b", r"manager", r"orchestrator"]
+            for bot in candidates:
+                if _skip_for_generic_step(bot):
+                    continue
+                signature = _bot_signature(bot)
+                if any(re.search(p, signature) for p in fallback_patterns):
+                    return bot
+
+        generic_candidates = [b for b in candidates if not _skip_for_generic_step(b)]
+        pool = generic_candidates or candidates
+        pool.sort(key=lambda b: b.priority, reverse=True)
+        return pool[0]
 
     def _normalize_string_list(self, value: Any) -> List[str]:
         if not isinstance(value, list):
