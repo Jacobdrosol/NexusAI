@@ -86,9 +86,9 @@ def test_project_detail_page_renders_with_partial_github_status(dashboard_client
     assert b"Repository Workspace" in resp.data
     assert b"Project Database Context" in resp.data
     assert b"GitHub Integration (PAT)" in resp.data
-    assert b"Check Uncommitted Files" in resp.data
     assert b"Connection Flags" in resp.data
     assert b"Run Data Ingest" in resp.data
+    assert b"Show File Status" in resp.data
 
 
 def test_project_git_status_api_reports_uncommitted_files(dashboard_client):

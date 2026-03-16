@@ -210,6 +210,7 @@
         <button class="btn" type="button" onclick="cloneProjectRepoWorkspace()">Clone</button>
         <button class="btn" type="button" onclick="pullProjectRepoWorkspace()">Pull</button>
         <button class="btn" type="button" onclick="pushProjectRepoWorkspace()">Push</button>
+        <button class="btn" type="button" onclick="refreshProjectRepoWorkspaceStatus()">Show File Status</button>
       </div>
       <div class="form-group" style="margin-top:0.6rem;">
         <label>Commit Message</label>
@@ -219,6 +220,13 @@
         <input type="checkbox" id="repo-commit-add-all" checked> Stage all changes before commit
       </label>
       <button class="btn" type="button" onclick="commitProjectRepoWorkspace()">Commit</button>
+      <div style="margin-top:0.8rem;">
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:0.5rem;">
+          <strong>File Status</strong>
+          <span id="repo-workspace-file-status-summary" class="mini-note">No repo status loaded.</span>
+        </div>
+        <div id="repo-workspace-file-status" class="empty" style="margin-top:0.35rem;">Click `Show File Status` or `Refresh Repo Status` to load staged and uncommitted files.</div>
+      </div>
       <hr style="margin:0.8rem 0;">
       <div><strong>Command Runner</strong></div>
       <div class="mini-note" style="margin:0.35rem 0;">
@@ -483,19 +491,6 @@
         <button class="btn" onclick="savePrReviewConfig()">Save PR Review Config</button>
       </div>
       <div id="gh-pr-review-state" class="state-empty" style="margin-top:0.5rem;">No PR review config update yet.</div>
-      <hr style="margin:0.8rem 0;">
-      <div><strong>Git Actions</strong></div>
-      <div class="mini-note" style="margin-top:0.35rem;">
-        Use this after a code run to see which files in the local repo still have uncommitted changes.
-      </div>
-      <div style="margin-top:0.5rem;">
-        <button class="btn" type="button" onclick="refreshProjectGitStatus()">Check Uncommitted Files</button>
-      </div>
-      <div id="git-actions-state" class="state-empty" style="margin-top:0.5rem;">No git status check yet.</div>
-      <pre id="git-status-pre" style="white-space:pre-wrap; margin-top:0.5rem;">{
-  "branch": null,
-  "entries": []
-}</pre>
     </div>
   </div>
 </section>
@@ -704,13 +699,6 @@ function setGithubState(cls, text) {
   el.textContent = text;
 }
 
-function setGitActionsState(cls, text) {
-  const el = document.getElementById('git-actions-state');
-  if (!el) return;
-  el.className = cls;
-  el.textContent = text;
-}
-
 function setProjectDataState(cls, text) {
   const el = document.getElementById('project-data-state');
   if (!el) return;
@@ -809,6 +797,68 @@ function _setRepoWorkspaceOutput(payload) {
   pre.textContent = JSON.stringify(_redactRepoDisplayValue(payload || {}), null, 2);
 }
 
+function _escapeRepoStatusHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function _describeRepoPorcelainCode(code) {
+  const normalized = String(code || '  ').padEnd(2, ' ').slice(0, 2);
+  const indexCode = normalized[0];
+  const worktreeCode = normalized[1];
+  if (normalized === '??') return 'Untracked';
+  if (normalized === '!!') return 'Ignored';
+  if (indexCode !== ' ' && worktreeCode !== ' ') return 'Staged + unstaged';
+  if (indexCode !== ' ') return 'Staged';
+  if (worktreeCode !== ' ') return 'Unstaged';
+  return 'Clean';
+}
+
+function _renderRepoWorkspaceFileStatus(status) {
+  const wrap = document.getElementById('repo-workspace-file-status');
+  const summary = document.getElementById('repo-workspace-file-status-summary');
+  if (!wrap || !summary) return;
+  const porcelain = Array.isArray(status?.porcelain) ? status.porcelain : [];
+  const branch = status?.branch || 'unknown';
+  const rows = porcelain.filter((line) => !String(line || '').startsWith('##'));
+  if (!status || !status.is_repo) {
+    summary.textContent = 'Repository not available.';
+    wrap.className = 'empty';
+    wrap.textContent = 'This workspace is not currently a git repository.';
+    return;
+  }
+  if (!rows.length) {
+    summary.textContent = 'Working tree clean on ' + branch + '.';
+    wrap.className = 'state-info';
+    wrap.textContent = 'No staged, unstaged, or untracked files.';
+    return;
+  }
+
+  summary.textContent = rows.length + ' changed file(s) on ' + branch + '.';
+  wrap.className = '';
+  wrap.innerHTML = `
+    <table style="margin-top:0.35rem;">
+      <thead><tr><th>Status</th><th>Code</th><th>Path</th></tr></thead>
+      <tbody>
+        ${rows.map((line) => {
+          const raw = String(line || '');
+          const code = raw.slice(0, 2);
+          const path = raw.slice(3).trim();
+          return `<tr>
+            <td>${_escapeRepoStatusHtml(_describeRepoPorcelainCode(code))}</td>
+            <td><code>${_escapeRepoStatusHtml(code)}</code></td>
+            <td><code>${_escapeRepoStatusHtml(path)}</code></td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
 async function refreshProjectRepoWorkspacePolicy() {
   _setRepoWorkspaceState('state-loading', 'Loading repo workspace policy...');
   const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/repo/workspace');
@@ -863,6 +913,7 @@ async function refreshProjectRepoWorkspaceStatus() {
   }
   const statusPre = document.getElementById('repo-workspace-status-pre');
   if (statusPre) statusPre.textContent = JSON.stringify(_redactRepoDisplayValue(data), null, 2);
+  _renderRepoWorkspaceFileStatus(data);
   _setRepoWorkspaceState('state-info', 'Repo status loaded.');
 }
 
@@ -1484,29 +1535,6 @@ async function savePrReviewConfig() {
     stateEl.textContent = 'PR review config saved.';
   }
   await refreshGithubStatus(false);
-}
-
-async function refreshProjectGitStatus() {
-  setGitActionsState('state-loading', 'Checking git working tree...');
-  const preEl = document.getElementById('git-status-pre');
-  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/git/status');
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    setGitActionsState('state-error', data.error || 'Failed to load git status.');
-    return;
-  }
-  if (preEl) {
-    preEl.textContent = JSON.stringify(data, null, 2);
-  }
-  if (data.error) {
-    setGitActionsState('state-error', data.error);
-    return;
-  }
-  if (data.has_changes) {
-    setGitActionsState('state-info', (data.summary || 'Uncommitted files found.') + ' Branch: ' + (data.branch || 'unknown') + '.');
-    return;
-  }
-  setGitActionsState('state-empty', 'Working tree clean.');
 }
 
 async function connectGithubPat() {
