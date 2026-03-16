@@ -218,8 +218,12 @@ class CPClient:
         statuses: Optional[List[str]] = None,
         bot_id: Optional[str] = None,
         limit: int = 200,
+        include_content: bool = True,
     ) -> Optional[List[Dict[str, Any]]]:
-        params: List[str] = [f"limit={max(1, int(limit))}"]
+        params: List[str] = [
+            f"limit={max(1, int(limit))}",
+            f"include_content={'true' if include_content else 'false'}",
+        ]
         if orchestration_id:
             params.append(f"orchestration_id={orchestration_id}")
         if statuses:

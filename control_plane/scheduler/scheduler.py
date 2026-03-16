@@ -1137,7 +1137,15 @@ class Scheduler:
             response.raise_for_status()
             data = response.json()
             output = data["choices"][0]["message"]["content"]
-            return {"output": output, "usage": data.get("usage", {})}
+            finish_reason = ""
+            try:
+                finish_reason = str((data.get("choices") or [{}])[0].get("finish_reason") or "").strip()
+            except Exception:
+                finish_reason = ""
+            result = {"output": output, "usage": data.get("usage", {})}
+            if finish_reason:
+                result["finish_reason"] = finish_reason
+            return result
 
     async def _call_ollama_cloud(self, backend: BackendConfig, payload: Any) -> Any:
         api_key_ref = backend.api_key_ref or "OLLAMA_API_KEY"
@@ -1191,7 +1199,11 @@ class Scheduler:
                 "prompt_tokens": data.get("prompt_eval_count", 0),
                 "completion_tokens": data.get("eval_count", 0),
             }
-            return {"output": output, "usage": usage}
+            finish_reason = str(data.get("done_reason") or data.get("finish_reason") or "").strip()
+            result = {"output": output, "usage": usage}
+            if finish_reason:
+                result["finish_reason"] = finish_reason
+            return result
 
     async def _call_claude(self, backend: BackendConfig, payload: Any) -> Any:
         api_key_ref = backend.api_key_ref or "ANTHROPIC_API_KEY"
@@ -1227,7 +1239,11 @@ class Scheduler:
             response.raise_for_status()
             data = response.json()
             output = data["content"][0]["text"]
-            return {"output": output, "usage": data.get("usage", {})}
+            finish_reason = str(data.get("stop_reason") or "").strip()
+            result = {"output": output, "usage": data.get("usage", {})}
+            if finish_reason:
+                result["finish_reason"] = finish_reason
+            return result
 
     async def _call_gemini(self, backend: BackendConfig, payload: Any) -> Any:
         api_key_ref = backend.api_key_ref or "GEMINI_API_KEY"
@@ -1265,7 +1281,15 @@ class Scheduler:
             response.raise_for_status()
             data = response.json()
             output = data["candidates"][0]["content"]["parts"][0]["text"]
-            return {"output": output, "usage": data.get("usageMetadata", {})}
+            finish_reason = ""
+            try:
+                finish_reason = str((data.get("candidates") or [{}])[0].get("finishReason") or "").strip()
+            except Exception:
+                finish_reason = ""
+            result = {"output": output, "usage": data.get("usageMetadata", {})}
+            if finish_reason:
+                result["finish_reason"] = finish_reason
+            return result
 
     async def _resolve_api_key(self, api_key_ref: str, default_env_var: str) -> str:
         if self.key_vault and api_key_ref:

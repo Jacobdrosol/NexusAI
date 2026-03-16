@@ -23,4 +23,12 @@ async def infer(
         response.raise_for_status()
         data = response.json()
         output = data["choices"][0]["message"]["content"]
-        return {"output": output, "usage": data.get("usage", {})}
+        finish_reason = ""
+        try:
+            finish_reason = str((data.get("choices") or [{}])[0].get("finish_reason") or "").strip()
+        except Exception:
+            finish_reason = ""
+        result = {"output": output, "usage": data.get("usage", {})}
+        if finish_reason:
+            result["finish_reason"] = finish_reason
+        return result

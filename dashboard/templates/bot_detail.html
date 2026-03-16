@@ -1915,10 +1915,21 @@ function persistBot(successMessage) {
 }
 
 function openTaskModal(taskId) {
-  const task = TASKS.find(t => String(t.id) === String(taskId)) || RUNS.find(t => String(t.task_id) === String(taskId));
-  if (!task) return;
-  document.getElementById('task-detail-pre').textContent = JSON.stringify(task, null, 2);
-  document.getElementById('modal-task-detail').style.display = 'flex';
+  const fallback = TASKS.find(t => String(t.id) === String(taskId)) || RUNS.find(t => String(t.task_id) === String(taskId));
+  fetch('/api/tasks/' + encodeURIComponent(taskId) + '?include_content=true', {
+    headers: {'X-CSRFToken': getCsrf()}
+  })
+  .then(async (r) => {
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || 'Task load failed');
+    document.getElementById('task-detail-pre').textContent = JSON.stringify(data, null, 2);
+    document.getElementById('modal-task-detail').style.display = 'flex';
+  })
+  .catch(() => {
+    if (!fallback) return;
+    document.getElementById('task-detail-pre').textContent = JSON.stringify(fallback, null, 2);
+    document.getElementById('modal-task-detail').style.display = 'flex';
+  });
 }
 
 function artifactsForTask(taskId) {

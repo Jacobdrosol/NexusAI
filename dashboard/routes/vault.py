@@ -17,7 +17,7 @@ bp = Blueprint("vault", __name__)
 def vault_page() -> str:
     cp = get_cp_client()
     namespace = request.args.get("namespace")
-    items = cp.list_vault_items(namespace=namespace, limit=100) or []
+    items = cp.list_vault_items(namespace=namespace, limit=100, include_content=False) or []
     namespaces = cp.list_vault_namespaces() or sorted(
         list({str(i.get("namespace", "global")) for i in items})
     )

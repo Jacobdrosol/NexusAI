@@ -149,6 +149,7 @@ async def test_scheduler_ollama_cloud_uses_bearer_key_and_chat_endpoint(monkeypa
         "message": {"content": "ok"},
         "prompt_eval_count": 3,
         "eval_count": 5,
+        "done_reason": "length",
     }
 
     mock_client = AsyncMock()
@@ -163,6 +164,37 @@ async def test_scheduler_ollama_cloud_uses_bearer_key_and_chat_endpoint(monkeypa
     assert args[0] == "https://ollama.com/api/chat"
     assert kwargs["headers"]["Authorization"] == "Bearer ollama-secret"
     assert result["output"] == "ok"
+    assert result["finish_reason"] == "length"
+
+
+@pytest.mark.anyio
+async def test_scheduler_openai_includes_finish_reason():
+    from control_plane.scheduler.scheduler import Scheduler
+
+    key_vault = AsyncMock()
+    key_vault.get_secret.return_value = "openai-secret"
+    scheduler = Scheduler(bot_registry=AsyncMock(), worker_registry=AsyncMock(), key_vault=key_vault)
+
+    backend = BackendConfig(type="cloud_api", model="gpt-4o-mini", provider="openai", api_key_ref="OPENAI_API_KEY")
+    payload = [{"role": "user", "content": "hello"}]
+
+    fake_response = MagicMock()
+    fake_response.raise_for_status.return_value = None
+    fake_response.json.return_value = {
+        "choices": [{"message": {"content": "ok"}, "finish_reason": "length"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 2},
+    }
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__.return_value = mock_client
+    mock_client.__aexit__.return_value = False
+    mock_client.post.return_value = fake_response
+
+    with patch("control_plane.scheduler.scheduler.httpx.AsyncClient", return_value=mock_client):
+        result = await scheduler._call_openai(backend, payload)
+
+    assert result["output"] == "ok"
+    assert result["finish_reason"] == "length"
 
 
 @pytest.mark.anyio

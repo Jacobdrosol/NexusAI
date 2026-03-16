@@ -3009,6 +3009,67 @@ async def test_output_contract_non_empty_fields_fail_incomplete_output(tmp_path)
 
 
 @pytest.mark.anyio
+async def test_output_contract_error_includes_truncation_hint_when_finish_reason_is_length(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {
+                "output": json.dumps(
+                    {
+                        "unit_asset_plan": {
+                            "title": "",
+                            "images": [],
+                        }
+                    }
+                ),
+                "usage": {
+                    "prompt_tokens": 120,
+                    "completion_tokens": 4096,
+                },
+                "finish_reason": "length",
+            }
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "truncate-hint-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="asset-bot",
+            name="Asset Planner",
+            role="assistant",
+            backends=[],
+            routing_rules={
+                "output_contract": {
+                    "enabled": True,
+                    "mode": "model_output",
+                    "format": "json_object",
+                    "required_fields": ["unit_asset_plan"],
+                    "non_empty_fields": ["unit_asset_plan.title", "unit_asset_plan.images"],
+                    "fallback_mode": "disabled",
+                }
+            },
+        )
+    )
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "truncate-hint.db"), bot_registry=bot_registry)
+    task = await tm.create_task(bot_id="asset-bot", payload={"instruction": "build unit assets"})
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.1)
+
+    assert updated.status == "failed"
+    assert updated.error is not None
+    assert "non-empty fields" in updated.error.message
+    assert "likely truncated model output" in updated.error.message
+
+
+@pytest.mark.anyio
 async def test_output_contract_disabled_fallback_mode_does_not_mask_parse_failures(tmp_path, monkeypatch):
     import asyncio
 

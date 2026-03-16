@@ -214,6 +214,13 @@ def _cp_list_vault_items_safe(
         return cp.list_vault_items(namespace=namespace, project_id=project_id, limit=limit)
 
 
+def _cp_list_tasks_safe(cp: Any, **kwargs) -> Any:
+    try:
+        return cp.list_tasks(**kwargs)
+    except TypeError:
+        return cp.list_tasks()
+
+
 @bp.get("/chat")
 @login_required
 def chat_page() -> str:
@@ -585,7 +592,7 @@ def api_ingest_message_to_vault():
 @login_required
 def api_orchestration_graph(orchestration_id: str):
     cp = get_cp_client()
-    tasks = cp.list_tasks(orchestration_id=orchestration_id)
+    tasks = _cp_list_tasks_safe(cp, orchestration_id=orchestration_id, include_content=False)
     if tasks is None:
         return jsonify({"error": "control plane unavailable"}), 502
 
@@ -593,10 +600,13 @@ def api_orchestration_graph(orchestration_id: str):
     edges = []
     for t in tasks:
         task_id = str(t.get("id"))
-        payload = t.get("payload") or {}
-        title = ""
-        if isinstance(payload, dict):
-            title = str(payload.get("title") or payload.get("instruction") or task_id)
+        metadata = t.get("metadata") or {}
+        title = str(
+            metadata.get("step_id")
+            or metadata.get("pipeline_name")
+            or metadata.get("source")
+            or task_id
+        )
         depends_on = t.get("depends_on") or []
         nodes.append(
             {

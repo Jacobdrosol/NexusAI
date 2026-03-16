@@ -374,21 +374,31 @@ function cancelTask(taskId) {
   .catch((error) => alert(error.message || 'Task cancel failed'));
 }
 
-function openTaskRerunModal(task) {
+async function openTaskRerunModal(task) {
   const textarea = document.getElementById('task-rerun-payload');
   const submitBtn = document.getElementById('task-rerun-submit-btn');
   const modal = document.getElementById('modal-task-rerun');
   if (!textarea || !submitBtn || !modal) return;
-  textarea.value = JSON.stringify(task.payload ?? {}, null, 2);
+  let payload = {};
+  try {
+    const response = await fetch('/api/tasks/' + encodeURIComponent(task.id) + '?section=payload');
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Task payload load failed');
+    payload = data.content ?? {};
+  } catch (error) {
+    alert(error.message || 'Task payload load failed');
+    return;
+  }
+  textarea.value = JSON.stringify(payload, null, 2);
   submitBtn.onclick = () => {
-    let payload;
+    let parsedPayload;
     try {
-      payload = JSON.parse(textarea.value || '{}');
+      parsedPayload = JSON.parse(textarea.value || '{}');
     } catch (error) {
       alert('Payload JSON is invalid');
       return;
     }
-    retryTask(task.id, payload, 'Edited rerun');
+    retryTask(task.id, parsedPayload, 'Edited rerun');
   };
   modal.style.display = 'flex';
 }

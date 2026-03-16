@@ -99,7 +99,7 @@ def tasks_page() -> str:
     from dashboard.bot_launch import launchable_bots
 
     cp = get_cp_client()
-    cp_data = _safe_cp_list_tasks(cp, limit=400)
+    cp_data = _safe_cp_list_tasks(cp, limit=400, include_content=False)
     if cp_data is not None:
         now = datetime.now(timezone.utc)
         recent_cutoff = now - timedelta(hours=24)
@@ -131,7 +131,7 @@ def tasks_page() -> str:
     db = get_db()
     try:
         tasks = db.query(Task).order_by(Task.created_at.desc()).limit(100).all()
-        task_rows = [_task_to_dict(t) for t in tasks]
+        task_rows = [_task_summary(_task_to_dict(t)) for t in tasks]
         return render_template(
             "tasks.html",
             tasks=task_rows,
@@ -161,6 +161,7 @@ def api_list_tasks():
         limit = min(int(limit_str), 500)
     except (ValueError, TypeError):
         limit = 100
+    include_content = str(request.args.get("include_content") or "").strip().lower() == "true"
     statuses = [part.strip() for part in str(status or "").split(",") if part.strip()]
     cp_tasks = _safe_cp_list_tasks(
         cp,
@@ -168,6 +169,7 @@ def api_list_tasks():
         statuses=statuses or None,
         bot_id=bot_id,
         limit=limit,
+        include_content=include_content,
     )
     if cp_tasks is not None:
         return jsonify(cp_tasks)
@@ -180,7 +182,10 @@ def api_list_tasks():
         if bot_id:
             query = query.filter(Task.bot_id == int(bot_id))
         tasks = query.order_by(Task.created_at.desc()).limit(limit).all()
-        return jsonify([_task_to_dict(t) for t in tasks])
+        rows = [_task_to_dict(t) for t in tasks]
+        if include_content:
+            return jsonify(rows)
+        return jsonify([_task_summary(row) for row in rows])
     finally:
         db.close()
 

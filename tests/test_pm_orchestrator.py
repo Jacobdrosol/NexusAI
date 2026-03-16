@@ -35,3 +35,26 @@ def test_pick_target_bot_still_selects_research_bot_when_available() -> None:
 
     picked = orchestrator._pick_target_bot(bots, role_hint="researcher", pm_bot_id="pm-main")
     assert picked.id == "research-bot"
+
+
+def test_truncation_hint_detects_finish_reason_length() -> None:
+    orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
+    hint = orchestrator._truncation_hint(
+        {
+            "output": "partial output",
+            "usage": {"completion_tokens": 4096},
+            "finish_reason": "length",
+        }
+    )
+    assert "token limit" in hint.lower()
+
+
+def test_truncation_hint_detects_high_completion_tokens_without_finish_reason() -> None:
+    orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
+    hint = orchestrator._truncation_hint(
+        {
+            "output": "partial output",
+            "usage": {"completion_tokens": 4096},
+        }
+    )
+    assert "4096" in hint

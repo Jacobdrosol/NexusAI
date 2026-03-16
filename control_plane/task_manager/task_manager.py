@@ -1,4 +1,5 @@
 import asyncio
+import heapq
 import json
 import logging
 import os
@@ -402,6 +403,71 @@ def _usage_summary(usage: dict[str, Any]) -> dict[str, Any]:
         if key not in summary:
             summary[key] = value
     return {key: value for key, value in summary.items() if value not in (None, "")}
+
+
+def _is_output_contract_error_message(message: str) -> bool:
+    text = str(message or "").strip().lower()
+    if not text:
+        return False
+    return "output contract" in text
+
+
+def _extract_result_usage(result: Any) -> dict[str, Any]:
+    if not isinstance(result, dict):
+        return {}
+    usage = result.get("usage")
+    return usage if isinstance(usage, dict) else {}
+
+
+def _extract_result_finish_reason(result: Any) -> str:
+    if not isinstance(result, dict):
+        return ""
+    raw = result.get("finish_reason")
+    if raw in (None, ""):
+        usage = _extract_result_usage(result)
+        raw = usage.get("finish_reason")
+    return str(raw or "").strip().lower()
+
+
+def _extract_completion_tokens(result: Any) -> Optional[int]:
+    usage = _extract_result_usage(result)
+    for key in ("completion_tokens", "output_tokens", "candidatesTokenCount", "eval_count"):
+        if key in usage:
+            try:
+                return int(usage.get(key))
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
+def _extract_result_output_text(result: Any) -> str:
+    if isinstance(result, str):
+        return result
+    if not isinstance(result, dict):
+        return ""
+    for key in ("output", "content", "text", "result"):
+        value = result.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
+def _looks_like_truncated_result(result: Any) -> bool:
+    finish_reason = _extract_result_finish_reason(result)
+    if finish_reason in {"length", "max_tokens", "max_output_tokens", "token_limit", "max_new_tokens"}:
+        return True
+    completion_tokens = _extract_completion_tokens(result)
+    if completion_tokens is None:
+        return False
+    output = _extract_result_output_text(result).strip()
+    if completion_tokens >= 4096:
+        if not output:
+            return True
+        if output.endswith(("...", "```", "`", ":", ",", "(", "[", "{", "|")):
+            return True
+        if output[-1:] and output[-1] not in (".", "!", "?", ")", "]", "}", "\"", "'"):
+            return True
+    return False
 
 
 def _execution_summary(task: Task) -> dict[str, Any]:
@@ -1085,9 +1151,19 @@ class TaskManager:
             tasks = [t for t in tasks if t.status.lower() in wanted]
         if bot_id:
             tasks = [t for t in tasks if str(t.bot_id) == str(bot_id)]
-        tasks.sort(key=lambda task: (task.updated_at or "", task.created_at or ""), reverse=True)
+        safe_limit: Optional[int] = None
         if limit is not None:
-            tasks = tasks[: max(1, int(limit))]
+            safe_limit = max(1, int(limit))
+        if safe_limit is not None and len(tasks) > safe_limit:
+            tasks = heapq.nlargest(
+                safe_limit,
+                tasks,
+                key=lambda task: (task.updated_at or "", task.created_at or ""),
+            )
+        else:
+            tasks.sort(key=lambda task: (task.updated_at or "", task.created_at or ""), reverse=True)
+            if safe_limit is not None:
+                tasks = tasks[:safe_limit]
         return tasks
 
     async def list_bot_runs(self, bot_id: str, limit: int = 50) -> List[BotRun]:
@@ -1457,6 +1533,7 @@ class TaskManager:
             await self._try_unblock_tasks()
 
     async def _run_task(self, task_id: str) -> None:
+        raw_result: Any = None
         try:
             if self._is_closing:
                 return
@@ -1475,7 +1552,13 @@ class TaskManager:
         except Exception as e:
             logger.error("Task %s failed: %s", task_id, e)
             task = await self.get_task(task_id)
-            task_error = TaskError(message=str(e))
+            error_message = str(e)
+            if _is_output_contract_error_message(error_message) and _looks_like_truncated_result(raw_result):
+                error_message = (
+                    f"{error_message} (likely truncated model output at token limit; "
+                    "increase max_tokens/num_predict or reduce expected output size)"
+                )
+            task_error = TaskError(message=error_message)
             if await self._requeue_for_retry(task, task_error):
                 logger.info("Task %s queued for automatic retry", task_id)
             else:

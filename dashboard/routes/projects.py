@@ -32,6 +32,13 @@ from dashboard.project_data_ingest import latest_job_for_project, start_project_
 bp = Blueprint("projects", __name__)
 
 
+def _cp_list_tasks_safe(cp, **kwargs):
+    try:
+        return cp.list_tasks(**kwargs)
+    except TypeError:
+        return cp.list_tasks()
+
+
 def _parse_json(raw: str, default: Any) -> Any:
     try:
         return json.loads(raw)
@@ -183,8 +190,8 @@ def project_detail_page(project_id: str):
 
     all_projects = cp.list_projects() or []
     bots = cp.list_bots() or []
-    tasks = cp.list_tasks() or []
-    vault_items = cp.list_vault_items(project_id=project_id, limit=100) or []
+    tasks = _cp_list_tasks_safe(cp, limit=400, include_content=False) or []
+    vault_items = cp.list_vault_items(project_id=project_id, limit=100, include_content=False) or []
 
     project_bot_ids = set(project.get("bot_ids") or [])
     project_bots = [b for b in bots if str(b.get("id")) in project_bot_ids] if project_bot_ids else []
