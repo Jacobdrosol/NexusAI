@@ -509,6 +509,10 @@
             <input class="form-control" type="number" name="num_ctx" placeholder="Auto: 8192 for local Ollama chat">
           </div>
           <div class="form-group">
+            <label>Num Width</label>
+            <input class="form-control" type="number" name="num_width" placeholder="Auto / runtime default">
+          </div>
+          <div class="form-group">
             <label>GPU Layers</label>
             <input class="form-control" type="number" name="num_gpu" placeholder="Auto / Ollama default">
           </div>
@@ -1638,6 +1642,7 @@ function editBackend(index) {
   form.temperature.value = b.params?.temperature ?? '';
   form.max_tokens.value = b.params?.max_tokens ?? '';
   form.num_ctx.value = b.params?.num_ctx ?? '';
+  form.num_width.value = b.params?.num_width ?? '';
   form.num_gpu.value = b.params?.num_gpu ?? '';
   form.main_gpu.value = b.params?.main_gpu ?? '';
   form.num_thread.value = b.params?.num_thread ?? '';
@@ -1662,16 +1667,18 @@ function saveBackendForm() {
   const temp = (fd.get('temperature') || '').toString().trim();
   const maxTokens = (fd.get('max_tokens') || '').toString().trim();
   const numCtx = (fd.get('num_ctx') || '').toString().trim();
+  const numWidth = (fd.get('num_width') || '').toString().trim();
   const numGpu = (fd.get('num_gpu') || '').toString().trim();
   const mainGpu = (fd.get('main_gpu') || '').toString().trim();
   const numThread = (fd.get('num_thread') || '').toString().trim();
   const topP = (fd.get('top_p') || '').toString().trim();
   const repeatPenalty = (fd.get('repeat_penalty') || '').toString().trim();
-  if (temp || maxTokens || numCtx || numGpu || mainGpu || numThread || topP || repeatPenalty) {
+  if (temp || maxTokens || numCtx || numWidth || numGpu || mainGpu || numThread || topP || repeatPenalty) {
     backend.params = {};
     if (temp) backend.params.temperature = Number(temp);
     if (maxTokens) backend.params.max_tokens = parseInt(maxTokens, 10);
     if (numCtx) backend.params.num_ctx = parseInt(numCtx, 10);
+    if (numWidth) backend.params.num_width = parseInt(numWidth, 10);
     if (numGpu) backend.params.num_gpu = parseInt(numGpu, 10);
     if (mainGpu) backend.params.main_gpu = parseInt(mainGpu, 10);
     if (numThread) backend.params.num_thread = parseInt(numThread, 10);

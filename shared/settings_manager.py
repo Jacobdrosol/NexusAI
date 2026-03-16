@@ -94,6 +94,10 @@ _DEFAULTS: List[tuple] = [
      "Maximum number of retry attempts for a failed task."),
     ("task_retry_delay", "5.0", "float", "advanced", "Task Retry Delay (s)",
      "Seconds to wait between task retry attempts."),
+    ("task_retry_max_tokens_increment", "512", "int", "advanced", "Task Retry Max Tokens Increment",
+     "Additional max_tokens applied for each retry attempt when a backend already defines max_tokens."),
+    ("task_retry_num_width_increment", "256", "int", "advanced", "Task Retry Num Width Increment",
+     "Additional num_width applied for each retry attempt. If num_width is unset, the same increment is applied to num_ctx."),
     ("bot_trigger_max_depth", "20", "int", "advanced", "Bot Trigger Max Depth",
      "Maximum number of chained bot-trigger hops allowed in one workflow or pipeline run."),
 ]

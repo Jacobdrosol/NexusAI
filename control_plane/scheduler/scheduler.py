@@ -8,7 +8,7 @@ from typing import Any, AsyncGenerator
 import httpx
 
 from shared.exceptions import BackendError, BotNotFoundError, NoViableBackendError
-from shared.models import BackendConfig, Task, Worker
+from shared.models import BackendConfig, BackendParams, Task, Worker
 from shared.settings_manager import SettingsManager
 
 logger = logging.getLogger(__name__)
@@ -46,6 +46,62 @@ def _cloud_timeout() -> float:
         return float(configured)
     except Exception:
         return env_default
+
+
+def _settings_int(name: str, default: int) -> int:
+    try:
+        return int(SettingsManager.instance().get(name, default))
+    except Exception:
+        return default
+
+
+def _retry_incremented_value(value: Any, increment: int, retry_attempt: int) -> Any:
+    try:
+        return int(value) + (max(0, increment) * max(0, retry_attempt))
+    except Exception:
+        return value
+
+
+def _backend_with_retry_params(backend: BackendConfig, task: Task | None = None) -> BackendConfig:
+    if task is None or task.metadata is None:
+        return backend
+    retry_attempt = int(task.metadata.retry_attempt or 0)
+    if retry_attempt <= 0:
+        return backend
+
+    params_model = backend.params
+    params_dict = params_model.model_dump(exclude_none=True) if params_model else {}
+    if not params_dict:
+        return backend
+
+    max_tokens_increment = _settings_int("task_retry_max_tokens_increment", 512)
+    num_width_increment = _settings_int("task_retry_num_width_increment", 256)
+    updates: dict[str, Any] = {}
+
+    if "max_tokens" in params_dict and max_tokens_increment > 0:
+        updates["max_tokens"] = _retry_incremented_value(
+            params_dict["max_tokens"],
+            max_tokens_increment,
+            retry_attempt,
+        )
+
+    width_key = None
+    if "num_width" in params_dict:
+        width_key = "num_width"
+    elif "num_ctx" in params_dict:
+        width_key = "num_ctx"
+    if width_key and num_width_increment > 0:
+        updates[width_key] = _retry_incremented_value(
+            params_dict[width_key],
+            num_width_increment,
+            retry_attempt,
+        )
+
+    if not updates:
+        return backend
+
+    updated_params = params_model.model_copy(update=updates) if params_model else BackendParams(**updates)
+    return backend.model_copy(update={"params": updated_params})
 
 
 def _payload_to_messages(payload: Any) -> list[dict[str, str]]:
@@ -546,8 +602,9 @@ class Scheduler:
         transformed_payload = self._apply_input_transform(bot, task.payload)
         for backend in bot.backends:
             try:
-                prepared_payload = _prepare_payload_for_backend(bot, backend, transformed_payload, task=task)
-                result = await self._dispatch_backend(backend, prepared_payload, task=task)
+                effective_backend = _backend_with_retry_params(backend, task)
+                prepared_payload = _prepare_payload_for_backend(bot, effective_backend, transformed_payload, task=task)
+                result = await self._dispatch_backend(effective_backend, prepared_payload, task=task)
                 return result
             except Exception as e:
                 attempts.append(f"{backend.provider}/{backend.model}: {str(e or '').strip() or repr(e)}")
@@ -577,14 +634,15 @@ class Scheduler:
         transformed_payload = self._apply_input_transform(bot, task.payload)
         for backend in bot.backends:
             try:
-                prepared_payload = _prepare_payload_for_backend(bot, backend, transformed_payload, task=task)
+                effective_backend = _backend_with_retry_params(backend, task)
+                prepared_payload = _prepare_payload_for_backend(bot, effective_backend, transformed_payload, task=task)
                 yield {
                     "event": "backend_selected",
-                    "provider": backend.provider,
-                    "model": backend.model,
-                    "worker_id": backend.worker_id,
+                    "provider": effective_backend.provider,
+                    "model": effective_backend.model,
+                    "worker_id": effective_backend.worker_id,
                 }
-                async for event in self._dispatch_backend_stream(backend, prepared_payload, task=task):
+                async for event in self._dispatch_backend_stream(effective_backend, prepared_payload, task=task):
                     yield event
                 return
             except Exception as e:

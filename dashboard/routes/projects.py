@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from flask import Blueprint, jsonify, render_template, request
@@ -30,6 +32,7 @@ from dashboard.project_data import (
 from dashboard.project_data_ingest import latest_job_for_project, start_project_data_ingest
 
 bp = Blueprint("projects", __name__)
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _parse_json(raw: str, default: Any) -> Any:
@@ -115,6 +118,46 @@ def _cp_error_response(cp, fallback: str = "control plane unavailable") -> tuple
         if isinstance(raw_code, int) and 400 <= raw_code <= 599:
             status_code = raw_code
     return jsonify({"error": detail or fallback}), (status_code or 502)
+
+
+def _run_git(args: list[str]) -> tuple[str | None, str | None]:
+    try:
+        cp = subprocess.run(
+            ["git", *args],
+            cwd=str(_REPO_ROOT),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return (cp.stdout or "").rstrip(), None
+    except subprocess.CalledProcessError as exc:
+        err = (exc.stderr or exc.stdout or str(exc)).strip()
+        return None, err or "git command failed"
+    except Exception as exc:
+        return None, str(exc)
+
+
+def _git_working_tree_status() -> dict[str, Any]:
+    branch, branch_error = _run_git(["rev-parse", "--abbrev-ref", "HEAD"])
+    raw_status, status_error = _run_git(["status", "--short", "--untracked-files=all"])
+    entries: list[dict[str, str]] = []
+    if raw_status:
+        for line in raw_status.splitlines():
+            if not line.strip():
+                continue
+            code = line[:2]
+            path = line[3:].strip() if len(line) > 3 else ""
+            entries.append({"code": code, "path": path})
+    error = status_error or branch_error
+    return {
+        "branch": branch,
+        "repo_root": str(_REPO_ROOT),
+        "has_changes": bool(entries),
+        "count": len(entries),
+        "entries": entries,
+        "summary": f"{len(entries)} uncommitted file(s)." if entries else "Working tree clean.",
+        "error": error,
+    }
 
 
 @bp.get("/projects")
@@ -374,6 +417,15 @@ def api_configure_project_github_pr_review(project_id: str):
     if result is None:
         return _cp_error_response(cp, "failed to save PR review config")
     return jsonify(result)
+
+
+@bp.get("/api/projects/<project_id>/git/status")
+@login_required
+def api_project_git_status(project_id: str):
+    cp = get_cp_client()
+    if cp.get_project(project_id) is None:
+        return _cp_error_response(cp, "project not found")
+    return jsonify(_git_working_tree_status())
 
 
 @bp.get("/api/projects/<project_id>/cloud-context-policy")

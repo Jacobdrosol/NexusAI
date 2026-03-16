@@ -36,6 +36,7 @@ class BackendParams(BaseModel):
     max_tokens: Optional[int] = None
     top_p: Optional[float] = None
     num_ctx: Optional[int] = None
+    num_width: Optional[int] = None
     num_gpu: Optional[int] = None
     main_gpu: Optional[int] = None
     num_thread: Optional[int] = None

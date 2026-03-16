@@ -83,8 +83,41 @@ def test_project_detail_page_renders_with_partial_github_status(dashboard_client
     assert b"Project Data Vault" in resp.data
     assert b"Project Database Context" in resp.data
     assert b"GitHub Integration (PAT)" in resp.data
+    assert b"Check Uncommitted Files" in resp.data
     assert b"Connection Flags" in resp.data
     assert b"Run Data Ingest" in resp.data
+
+
+def test_project_git_status_api_reports_uncommitted_files(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def get_project(self, project_id):
+            return {"id": project_id, "name": project_id}
+
+    def _fake_run(args, cwd=None, capture_output=None, text=None, check=None):
+        class Result:
+            def __init__(self, stdout):
+                self.stdout = stdout
+                self.stderr = ""
+
+        if args == ["git", "rev-parse", "--abbrev-ref", "HEAD"]:
+            return Result("main\n")
+        if args == ["git", "status", "--short", "--untracked-files=all"]:
+            return Result(" M dashboard/templates/project_detail.html\n?? tests/test_dashboard_phase4_pages.py\n")
+        raise AssertionError(f"Unexpected git command: {args}")
+
+    with patch("dashboard.routes.projects.get_cp_client", return_value=FakeCP()), \
+         patch("dashboard.routes.projects.subprocess.run", side_effect=_fake_run):
+        resp = dashboard_client.get("/api/projects/proj-git/git/status")
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["branch"] == "main"
+    assert body["has_changes"] is True
+    assert body["count"] == 2
+    assert body["entries"][0]["path"] == "dashboard/templates/project_detail.html"
+    assert body["entries"][1]["code"] == "??"
 
 
 def test_project_data_folder_and_upload_apis_write_files(dashboard_client, tmp_path, monkeypatch):

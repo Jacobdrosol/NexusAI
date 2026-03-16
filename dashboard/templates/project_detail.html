@@ -350,6 +350,19 @@
         <button class="btn" onclick="savePrReviewConfig()">Save PR Review Config</button>
       </div>
       <div id="gh-pr-review-state" class="state-empty" style="margin-top:0.5rem;">No PR review config update yet.</div>
+      <hr style="margin:0.8rem 0;">
+      <div><strong>Git Actions</strong></div>
+      <div class="mini-note" style="margin-top:0.35rem;">
+        Use this after a code run to see which files in the local repo still have uncommitted changes.
+      </div>
+      <div style="margin-top:0.5rem;">
+        <button class="btn" type="button" onclick="refreshProjectGitStatus()">Check Uncommitted Files</button>
+      </div>
+      <div id="git-actions-state" class="state-empty" style="margin-top:0.5rem;">No git status check yet.</div>
+      <pre id="git-status-pre" style="white-space:pre-wrap; margin-top:0.5rem;">{
+  "branch": null,
+  "entries": []
+}</pre>
     </div>
   </div>
 </section>
@@ -550,6 +563,13 @@ async function removeBridge(target) {
 
 function setGithubState(cls, text) {
   const el = document.getElementById('github-state');
+  if (!el) return;
+  el.className = cls;
+  el.textContent = text;
+}
+
+function setGitActionsState(cls, text) {
+  const el = document.getElementById('git-actions-state');
   if (!el) return;
   el.className = cls;
   el.textContent = text;
@@ -976,6 +996,29 @@ async function savePrReviewConfig() {
     stateEl.textContent = 'PR review config saved.';
   }
   await refreshGithubStatus(false);
+}
+
+async function refreshProjectGitStatus() {
+  setGitActionsState('state-loading', 'Checking git working tree...');
+  const preEl = document.getElementById('git-status-pre');
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/git/status');
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    setGitActionsState('state-error', data.error || 'Failed to load git status.');
+    return;
+  }
+  if (preEl) {
+    preEl.textContent = JSON.stringify(data, null, 2);
+  }
+  if (data.error) {
+    setGitActionsState('state-error', data.error);
+    return;
+  }
+  if (data.has_changes) {
+    setGitActionsState('state-info', (data.summary || 'Uncommitted files found.') + ' Branch: ' + (data.branch || 'unknown') + '.');
+    return;
+  }
+  setGitActionsState('state-empty', 'Working tree clean.');
 }
 
 async function connectGithubPat() {
