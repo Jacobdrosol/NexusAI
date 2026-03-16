@@ -114,7 +114,7 @@ class PMOrchestrator:
         self,
         assignment: Dict[str, Any],
         poll_interval_seconds: float = 0.4,
-        max_wait_seconds: float = 120.0,
+        max_wait_seconds: float = 900.0,
     ) -> Dict[str, Any]:
         import asyncio
         import time
@@ -122,6 +122,7 @@ class PMOrchestrator:
         task_ids = [str(t.get("id")) for t in assignment.get("tasks", []) if t.get("id")]
         deadline = time.monotonic() + max_wait_seconds
         snapshots: Dict[str, Task] = {}
+        all_terminal = False
 
         while time.monotonic() < deadline:
             all_terminal = True
@@ -140,6 +141,17 @@ class PMOrchestrator:
             f"Assignment summary ({len(task_ids)} tasks):",
             "",
         ]
+        if not all_terminal and task_ids:
+            lines.extend(
+                [
+                    (
+                        "Note: This is a snapshot summary. Some tasks were still running or blocked "
+                        "when the summary timeout was reached."
+                    ),
+                    "Check the DAG or Tasks page for the latest final statuses.",
+                    "",
+                ]
+            )
         for task_id in task_ids:
             task = snapshots.get(task_id) or await self._task_manager.get_task(task_id)
             if task.status == "completed":
@@ -165,6 +177,7 @@ class PMOrchestrator:
             "completed": completed,
             "failed": failed,
             "task_count": len(task_ids),
+            "all_terminal": all_terminal,
             "tasks": [snapshots[t].model_dump() if t in snapshots else None for t in task_ids],
         }
 
