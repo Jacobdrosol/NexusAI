@@ -330,6 +330,26 @@ async function refreshMessagesUntilSettled(maxAttempts = 6, delayMs = 600) {
   return false;
 }
 
+function hasAssignmentTerminalMessage(orchestrationId) {
+  if (!orchestrationId) return false;
+  return Array.from(messageMap.values()).some((message) => {
+    const metadata = message && typeof message === 'object' ? message.metadata : null;
+    if (!metadata || typeof metadata !== 'object') return false;
+    if (String(metadata.orchestration_id || '') !== String(orchestrationId)) return false;
+    return metadata.mode === 'assign_summary' || metadata.mode === 'assign_error';
+  });
+}
+
+async function pollForAssignmentSummary(orchestrationId, maxAttempts = 20, delayMs = 1500) {
+  if (!orchestrationId) return false;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    await refreshMessages();
+    if (hasAssignmentTerminalMessage(orchestrationId)) return true;
+    await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+  }
+  return false;
+}
+
 function showCreateConversation() { document.getElementById('modal-create-convo').style.display='flex'; }
 function openAssignModal() { document.getElementById('modal-assign').style.display='flex'; }
 function hideModal(id) { document.getElementById(id).style.display='none'; }
@@ -899,7 +919,8 @@ async function sendMessage(streamMode) {
         const orchestrationId = data.assignment?.orchestration_id || 'unknown';
         closeAssignModal();
         alert('Assignment queued: ' + orchestrationId);
-        setTimeout(refreshMessages, 1000);
+        refreshMessages().catch(() => {});
+        pollForAssignmentSummary(orchestrationId).catch(() => {});
         return;
       }
       setTimeout(refreshMessages, 250);
@@ -1087,9 +1108,12 @@ document.getElementById('form-assign')?.addEventListener('submit', async functio
   }
   const data = await res.json();
   const orchestrationId = data.assignment?.orchestration_id || 'unknown';
+  if (data.user_message) upsertMessage(data.user_message);
+  if (data.assistant_message) upsertMessage(data.assistant_message);
   closeAssignModal();
   alert('Assignment queued: ' + orchestrationId);
-  location.reload();
+  refreshMessages().catch(() => {});
+  pollForAssignmentSummary(orchestrationId).catch(() => {});
 });
 
 function getMessageData(buttonEl) {
