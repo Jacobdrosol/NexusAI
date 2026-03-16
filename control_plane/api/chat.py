@@ -1065,18 +1065,52 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                 context_items=resolved_context,
                 project_id=conversation.project_id,
             )
-            completion = await pm_orchestrator.wait_for_completion(assignment)
-            assistant_message = await pm_orchestrator.persist_summary_message(
+            assistant_message = await chat_manager.add_message(
                 conversation_id=conversation_id,
-                assignment=assignment,
-                completion=completion,
+                role="assistant",
+                content=(
+                    f"Assignment queued ({len(assignment.get('tasks', []))} tasks).\n"
+                    f"Orchestration ID: {assignment.get('orchestration_id')}\n"
+                    "A full assignment summary will be posted when the workflow finishes."
+                ),
+                bot_id=str(assignment.get("pm_bot_id") or assign_bot_id or ""),
+                metadata={
+                    "mode": "assign_pending",
+                    "orchestration_id": assignment.get("orchestration_id"),
+                    "task_count": len(assignment.get("tasks", [])),
+                },
             )
+
+            async def _persist_assignment_summary() -> None:
+                try:
+                    completion = await pm_orchestrator.wait_for_completion(assignment)
+                    await pm_orchestrator.persist_summary_message(
+                        conversation_id=conversation_id,
+                        assignment=assignment,
+                        completion=completion,
+                    )
+                except Exception as exc:
+                    await chat_manager.add_message(
+                        conversation_id=conversation_id,
+                        role="assistant",
+                        content=(
+                            f"Assignment orchestration {assignment.get('orchestration_id')} "
+                            f"failed while summarizing: {exc}"
+                        ),
+                        bot_id=str(assignment.get("pm_bot_id") or assign_bot_id or ""),
+                        metadata={
+                            "mode": "assign_error",
+                            "orchestration_id": assignment.get("orchestration_id"),
+                        },
+                    )
+
+            asyncio.create_task(_persist_assignment_summary())
             return {
                 "mode": "assign",
                 "user_message": user_message,
                 "assistant_message": assistant_message,
                 "assignment": assignment,
-                "completion": completion,
+                "completion": None,
             }
 
         messages = await chat_manager.list_messages(conversation_id)

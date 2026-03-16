@@ -1,5 +1,6 @@
 """Integration tests for chat API routes."""
 
+import asyncio
 from unittest.mock import AsyncMock
 
 import pytest
@@ -234,7 +235,7 @@ async def test_assign_message_creates_task_graph_and_summary(cp_app):
         data = post_resp.json()
         assert data["mode"] == "assign"
         assert len(data["assignment"]["tasks"]) >= 2
-        assert "Assignment summary" in data["assistant_message"]["content"]
+        assert "Assignment queued" in data["assistant_message"]["content"]
 
         tasks_resp = await client.get("/v1/tasks")
         assert tasks_resp.status_code == 200
@@ -244,6 +245,15 @@ async def test_assign_message_creates_task_graph_and_summary(cp_app):
         assert isinstance(first_payload, dict)
         assert "acceptance_criteria" in first_payload
         assert "quality_gates" in first_payload
+
+        for _ in range(20):
+            messages_resp = await client.get(f"/v1/chat/conversations/{conversation_id}/messages")
+            messages = messages_resp.json()
+            if any("Assignment summary" in str(message.get("content") or "") for message in messages):
+                break
+            await asyncio.sleep(0.05)
+
+        assert any("Assignment summary" in str(message.get("content") or "") for message in messages)
 
 
 @pytest.mark.anyio
