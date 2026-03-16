@@ -2,6 +2,7 @@
 
 import bcrypt
 import io
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 
@@ -81,6 +82,8 @@ def test_project_detail_page_renders_with_partial_github_status(dashboard_client
 
     assert resp.status_code == 200
     assert b"Project Data Vault" in resp.data
+    assert b"Chat Workspace Tools" in resp.data
+    assert b"Repository Workspace" in resp.data
     assert b"Project Database Context" in resp.data
     assert b"GitHub Integration (PAT)" in resp.data
     assert b"Check Uncommitted Files" in resp.data
@@ -257,6 +260,223 @@ def test_chat_page_loads_when_logged_in(dashboard_client):
     assert b"create-convo-scope" in resp.data
     assert b"create-convo-project-id" in resp.data
     assert b"create-convo-bridge-project-ids" in resp.data
+
+
+def test_chat_page_handles_legacy_selected_conversation_shapes(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_conversations(self, archived="all", project_id=None):
+            return [
+                {
+                    "id": "c-legacy",
+                    "title": "Legacy Active",
+                    "project_id": "globeiq",
+                    "bridge_project_ids": 1,
+                    "updated_at": "2026-03-10T12:00:00+00:00",
+                    "archived_at": None,
+                    "tool_access_enabled": True,
+                    "tool_access_filesystem": True,
+                    "tool_access_repo_search": True,
+                },
+                {
+                    "id": "c-archived",
+                    "title": "Archived",
+                    "project_id": None,
+                    "bridge_project_ids": "[]",
+                    "updated_at": "2026-03-01T12:00:00+00:00",
+                    "archived_at": "2026-03-05T00:00:00+00:00",
+                    "tool_access_enabled": False,
+                    "tool_access_filesystem": False,
+                    "tool_access_repo_search": False,
+                },
+            ]
+
+        def list_messages(self, conversation_id):
+            if conversation_id == "c-legacy":
+                return [
+                    {
+                        "id": "m-1",
+                        "role": "assistant",
+                        "content": "hello",
+                        "metadata": "not-json",
+                    }
+                ]
+            return []
+
+        def list_bots(self):
+            return []
+
+        def list_projects(self):
+            return []
+
+        def list_vault_items(self, **kwargs):
+            return []
+
+        def get_project_github_context_sync_status(self, project_id):
+            return {}
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/chat?conversation_id=c-legacy")
+
+    assert resp.status_code == 200
+    assert b"Legacy Active" in resp.data
+    assert b"No vault items available" in resp.data
+
+
+def test_chat_page_handles_conversation_list_error_gracefully(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_conversations(self, archived="all", project_id=None):
+            raise RuntimeError("cp conversation list failed")
+
+        def list_bots(self):
+            return []
+
+        def list_projects(self):
+            return []
+
+        def list_vault_items(self, **kwargs):
+            return []
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/chat")
+
+    assert resp.status_code == 200
+    assert b"Conversation list is temporarily unavailable." in resp.data
+    assert b"No conversations yet" in resp.data
+
+
+def test_chat_page_handles_non_json_serializable_message_fields(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_conversations(self, archived="all", project_id=None):
+            return [
+                {
+                    "id": "c-proj",
+                    "title": "Project Chat",
+                    "project_id": "globeiq",
+                    "bridge_project_ids": [],
+                    "updated_at": "2026-03-12T00:00:00+00:00",
+                    "archived_at": None,
+                    "tool_access_enabled": True,
+                    "tool_access_filesystem": True,
+                    "tool_access_repo_search": True,
+                }
+            ]
+
+        def list_messages(self, conversation_id):
+            return [
+                {
+                    "id": "m-weird",
+                    "role": "assistant",
+                    "content": "hello",
+                    "created_at": datetime(2026, 3, 12, 10, 0, tzinfo=timezone.utc),
+                    "metadata": {"seen_at": datetime(2026, 3, 12, 10, 1, tzinfo=timezone.utc)},
+                }
+            ]
+
+        def list_bots(self):
+            return []
+
+        def list_projects(self):
+            return [{"id": "globeiq", "name": "GlobeIQ"}]
+
+        def list_vault_items(self, **kwargs):
+            return []
+
+        def get_project_github_context_sync_status(self, project_id):
+            return {}
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/chat?conversation_id=c-proj")
+
+    assert resp.status_code == 200
+    assert b"Project Chat" in resp.data
+    assert b"hello" in resp.data
+
+
+def test_chat_page_handles_wrapped_vault_item_responses(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_conversations(self, archived="all", project_id=None):
+            return [
+                {
+                    "id": "c-proj-vault",
+                    "title": "Project Vault Chat",
+                    "project_id": "globeiq",
+                    "bridge_project_ids": [],
+                    "updated_at": "2026-03-12T00:00:00+00:00",
+                    "archived_at": None,
+                    "tool_access_enabled": True,
+                    "tool_access_filesystem": True,
+                    "tool_access_repo_search": True,
+                }
+            ]
+
+        def list_messages(self, conversation_id):
+            return [{"id": "m-1", "role": "assistant", "content": "ok"}]
+
+        def list_bots(self):
+            return []
+
+        def list_projects(self):
+            return [{"id": "globeiq", "name": "GlobeIQ"}]
+
+        def list_vault_items(self, **kwargs):
+            if kwargs.get("namespace"):
+                return {
+                    "items": [
+                        {
+                            "id": "v-proj-1",
+                            "title": "README.md",
+                            "metadata": {"path": "README.md"},
+                        }
+                    ]
+                }
+            return {"items": [{"id": "v-global-1", "title": "General Doc"}]}
+
+        def get_project_github_context_sync_status(self, project_id):
+            return {}
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/chat?conversation_id=c-proj-vault")
+
+    assert resp.status_code == 200
+    assert b"Project Vault Chat" in resp.data
+    assert b"README.md" in resp.data
+    assert b"General Doc" in resp.data
+    assert b"Chat view is temporarily unavailable" not in resp.data
+
+
+def test_chat_page_unexpected_error_falls_back_to_safe_shell(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_conversations(self, archived="all", project_id=None):
+            return []
+
+        def list_bots(self):
+            return []
+
+        def list_projects(self):
+            return []
+
+        def list_vault_items(self, **kwargs):
+            return []
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()), patch(
+        "dashboard.routes.chat._normalize_conversation_rows",
+        return_value=[None],
+    ):
+        resp = dashboard_client.get("/chat")
+
+    assert resp.status_code == 200
+    assert b"Chat view is temporarily unavailable. Start a new chat or refresh." in resp.data
+    assert b"No conversations yet" in resp.data
 
 
 def test_vault_page_loads_when_logged_in(dashboard_client):
@@ -754,6 +974,26 @@ def test_chat_archive_restore_conversation_apis_surface_success(dashboard_client
     assert restore_resp.get_json()["archived_at"] is None
 
 
+def test_chat_conversation_tool_access_api_surfaces_control_plane_error(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def update_conversation_tool_access(self, conversation_id, enabled, filesystem, repo_search):
+            return None
+
+        def last_error(self):
+            return {"status_code": 400, "detail": "tool access update blocked"}
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.put(
+            "/api/chat/conversations/c1/tool-access",
+            json={"enabled": True, "filesystem": True, "repo_search": True},
+        )
+
+    assert resp.status_code == 400
+    assert b"tool access update blocked" in resp.data
+
+
 def test_chat_stream_forwards_control_plane_auth_header(dashboard_client):
     _login_admin(dashboard_client)
 
@@ -892,6 +1132,176 @@ def test_project_pr_review_config_api_handles_unavailable_cp(dashboard_client):
     _login_admin(dashboard_client)
     resp = dashboard_client.post("/api/projects/proj-x/github/pr-review/config", json={"enabled": True, "bot_id": "bot1"})
     assert resp.status_code == 502
+
+
+def test_project_chat_tool_access_api_proxies_control_plane(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def __init__(self):
+            self.updated = None
+
+        def get_project_chat_tool_access(self, project_id):
+            return {
+                "project_id": project_id,
+                "enabled": True,
+                "filesystem": True,
+                "repo_search": False,
+                "workspace_root": "C:\\repo\\demo",
+            }
+
+        def update_project_chat_tool_access(self, **kwargs):
+            self.updated = kwargs
+            return {"status": "ok", **kwargs}
+
+        def last_error(self):
+            return {}
+
+    fake_cp = FakeCP()
+    with patch("dashboard.routes.projects.get_cp_client", return_value=fake_cp):
+        get_resp = dashboard_client.get("/api/projects/proj-1/chat-tool-access")
+        put_resp = dashboard_client.put(
+            "/api/projects/proj-1/chat-tool-access",
+            json={
+                "enabled": True,
+                "filesystem": True,
+                "repo_search": True,
+                "workspace_root": "C:\\repo\\demo",
+            },
+        )
+
+    assert get_resp.status_code == 200
+    assert get_resp.get_json()["filesystem"] is True
+    assert put_resp.status_code == 200
+    assert fake_cp.updated is not None
+    assert fake_cp.updated["project_id"] == "proj-1"
+    assert fake_cp.updated["enabled"] is True
+    assert fake_cp.updated["repo_search"] is True
+
+
+def test_project_repo_workspace_api_proxies_control_plane(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def __init__(self):
+            self.updated = None
+            self.clone_called = None
+            self.run_called = None
+
+        def get_project_repo_workspace(self, project_id):
+            return {
+                "project_id": project_id,
+                "enabled": True,
+                "managed_path_mode": True,
+                "workspace_binding": "managed",
+                "root_path": None,
+                "clone_url": "https://github.com/org/demo.git",
+                "default_branch": "main",
+                "allow_push": True,
+                "allow_command_execution": True,
+            }
+
+        def update_project_repo_workspace(self, **kwargs):
+            self.updated = kwargs
+            return {"status": "ok", **kwargs}
+
+        def get_project_repo_workspace_status(self, project_id):
+            return {
+                "project_id": project_id,
+                "enabled": True,
+                "workspace_exists": True,
+                "is_repo": True,
+                "branch": "main",
+            }
+
+        def clone_project_repo_workspace(self, **kwargs):
+            self.clone_called = kwargs
+            return {"status": "ok", **kwargs}
+
+        def pull_project_repo_workspace(self, **kwargs):
+            return {"status": "ok", **kwargs}
+
+        def commit_project_repo_workspace(self, **kwargs):
+            return {"status": "ok", **kwargs}
+
+        def push_project_repo_workspace(self, **kwargs):
+            return {"status": "ok", **kwargs}
+
+        def run_project_repo_workspace_command(self, **kwargs):
+            self.run_called = kwargs
+            return {"status": "ok", "result": {"ok": True}, **kwargs}
+
+        def list_project_repo_workspace_runs(self, **kwargs):
+            return {"project_id": kwargs.get("project_id"), "runs": [{"id": "run-1", "action": "run", "status": "ok"}]}
+
+        def summarize_project_repo_workspace_runs(self, **kwargs):
+            return {
+                "project_id": kwargs.get("project_id"),
+                "since_hours": kwargs.get("since_hours"),
+                "totals": {"total_runs": 1, "success_runs": 1, "failed_runs": 0},
+                "by_action": [{"action": "run", "runs": 1}],
+            }
+
+        def last_error(self):
+            return {}
+
+    fake_cp = FakeCP()
+    with patch("dashboard.routes.projects.get_cp_client", return_value=fake_cp):
+        get_resp = dashboard_client.get("/api/projects/proj-1/repo/workspace")
+        put_resp = dashboard_client.put(
+            "/api/projects/proj-1/repo/workspace",
+            json={
+                "enabled": True,
+                "managed_path_mode": True,
+                "root_path": None,
+                "clone_url": "https://github.com/org/demo.git",
+                "default_branch": "main",
+                "allow_push": True,
+                "allow_command_execution": True,
+            },
+        )
+        status_resp = dashboard_client.get("/api/projects/proj-1/repo/workspace/status")
+        clone_resp = dashboard_client.post(
+            "/api/projects/proj-1/repo/workspace/clone",
+            json={"clone_url": "https://github.com/org/demo.git", "branch": "main", "depth": 1},
+        )
+        run_resp = dashboard_client.post(
+            "/api/projects/proj-1/repo/workspace/run",
+            json={
+                "command": ["py", "-m", "pytest", "-q"],
+                "timeout_seconds": 90,
+                "use_temp_workspace": True,
+                "temp_ref": "main",
+                "bootstrap": True,
+                "bootstrap_languages": ["python", "node"],
+                "keep_temp_workspace": False,
+            },
+        )
+        runs_resp = dashboard_client.get("/api/projects/proj-1/repo/workspace/runs?limit=10")
+        summary_resp = dashboard_client.get("/api/projects/proj-1/repo/workspace/runs/summary?since_hours=24")
+
+    assert get_resp.status_code == 200
+    assert get_resp.get_json()["root_path"] is None
+    assert get_resp.get_json()["managed_path_mode"] is True
+    assert put_resp.status_code == 200
+    assert fake_cp.updated is not None
+    assert fake_cp.updated["project_id"] == "proj-1"
+    assert fake_cp.updated["allow_push"] is True
+    assert status_resp.status_code == 200
+    assert status_resp.get_json()["is_repo"] is True
+    assert clone_resp.status_code == 200
+    assert fake_cp.clone_called is not None
+    assert fake_cp.clone_called["depth"] == 1
+    assert run_resp.status_code == 200
+    assert fake_cp.run_called is not None
+    assert fake_cp.run_called["command"] == ["py", "-m", "pytest", "-q"]
+    assert fake_cp.run_called["use_temp_workspace"] is True
+    assert fake_cp.run_called["bootstrap"] is True
+    assert fake_cp.run_called["bootstrap_languages"] == ["python", "node"]
+    assert runs_resp.status_code == 200
+    assert runs_resp.get_json()["runs"][0]["id"] == "run-1"
+    assert summary_resp.status_code == 200
+    assert summary_resp.get_json()["totals"]["total_runs"] == 1
 
 
 def test_worker_detail_page_loads_when_logged_in(dashboard_client):

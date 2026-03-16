@@ -19,6 +19,7 @@
 ## Documentation
 
 - Getting started: `docs/GETTING_STARTED.md`
+- Chat/PM/workspace setup: `docs/CHAT_PM_WORKSPACE_SETUP.md`
 - Product usage: `docs/USER_GUIDE.md`
 - Operations and security: `docs/OPERATIONS.md`
 - Blue/green deployment: `docs/DEPLOY_BLUEGREEN.md`
@@ -139,7 +140,12 @@ Chat and orchestration:
 
 - Persistent chat conversations with SSE streaming.
 - Context picker and one-click chat-to-vault ingestion.
+- Project-scoped and bridged chats can optionally attach semantic repo context from synced vault namespaces (`project:<id>:repo`) per message with `include_project_context=true`.
+- Optional workspace tooling in chat supports Codex-style repo help with strict three-level access control: bot policy, project policy, and chat policy must all be enabled or workspace tool access is denied.
+- Workspace tooling supports two independently controlled capabilities: repository search snippets and filesystem file snippet reads rooted to the project's configured workspace root.
+- Message-level workspace tool usage can be toggled on/off (`use_workspace_tools`) so operators can keep a chat configured for tools but disable tool use for specific prompts.
 - Inline `@assign` orchestration with PM task decomposition.
+- PM orchestration task payloads now include step-level acceptance criteria, deliverables, and quality gates for stronger implementation/test/review handoffs.
 - Task status streaming and DAG viewer actions in chat.
 
 Vault and context:
@@ -160,6 +166,12 @@ GitHub integration:
   - `Update Ingest`: only changed/newer repository data since the last successful sync
 - Optional PR review task workflow.
 - Long GitHub ingests now run as background jobs and report status back to the project page instead of holding the HTTP request open.
+- Project-scoped `Repository Workspace` controls on Project Detail for:
+  - configuring managed repository workspace policy and clone defaults
+  - repository clone/status/pull/commit/push operations from the dashboard
+  - optional guarded command execution for test/build commands (`run`) with an allowlist policy
+- Repository workspace run history with per-run resource metrics (duration, CPU, peak memory, IO) and aggregate summaries for internal tracking.
+- Optional isolated temporary workspace runs for checks (`use_temp_workspace`) with dependency bootstrap helpers for Python, Node, .NET, and C++ projects.
 
 Security and ops:
 
@@ -174,6 +186,7 @@ For detailed walkthroughs, use:
 - `docs/GETTING_STARTED.md`
 - `docs/USER_GUIDE.md`
 - `docs/OPERATIONS.md`
+- `docs/PM_BOT_PACK_OLLAMA_CLOUD.md`
 
 ---
 
@@ -277,10 +290,27 @@ Saved launch profiles:
 - Launching a saved pipeline run assigns a shared orchestration ID to the root task and all downstream triggered tasks.
 - The `Pipelines` page then shows the grouped run with status, usage, reports, and rerun/download controls.
 
+External bot triggers:
+
+- Each bot can expose a dedicated external trigger intake endpoint from the bot detail page.
+- External trigger calls create normal queued tasks, so existing workflow triggers/fan-out/join behavior runs unchanged.
+- Per-bot external trigger auth is configurable (`require_auth`, header name, token), so integrations are not tied to a single global workflow.
+- Optional `payload_field` lets you map nested webhook envelopes (for example `event.data`) to the queued task payload.
+- Optional `allow_metadata` permits limited caller metadata overrides (`project_id`, `priority`, `conversation_id`, `orchestration_id`).
+
 API endpoints:
 
 - `GET /v1/bots/{bot_id}/runs`
 - `GET /v1/bots/{bot_id}/artifacts`
+- `POST /v1/bots/{bot_id}/trigger`
+
+Runtime settings for external trigger intake:
+
+- `external_trigger_default_auth_header`
+- `external_trigger_default_source`
+- `external_trigger_max_body_bytes`
+- `external_trigger_rate_limit_count`
+- `external_trigger_rate_limit_window_seconds`
 
 QC pattern:
 
@@ -299,6 +329,13 @@ Recommended contract settings for long multi-stage content pipelines:
 - For join aggregators, consume the collected branch payload array plus the helper fields `join_results` and `join_task_ids` instead of reconstructing the merge from deeply nested wrappers.
 - When multiple bots need the same platform schema or OpenAPI definition, attach the same connection to each bot instead of duplicating the connection definition.
 - For large block libraries, store only block names in the task payload and configure `connection_context` to fetch per-block schemas/examples from the attached platform connection at runtime.
+
+Bot export validation helper:
+
+- Use `py scripts/validate_bot_exports.py <exports_dir>` before importing changed bot exports.
+- The validator checks trigger targets, detects dead-end bots, and warns when `bot.workflow.triggers` and `routing_rules.workflow.triggers` diverge.
+- Use `--strict-dead-ends` when you want non-terminal dead-end stages to fail validation.
+- Use `--strict-contracts` to enforce deterministic output contracts (description, example output, required/non-empty fields, and fail-closed model fallback policy).
 
 ---
 

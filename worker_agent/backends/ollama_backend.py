@@ -24,4 +24,8 @@ async def infer(
             "prompt_tokens": data.get("prompt_eval_count", 0),
             "completion_tokens": data.get("eval_count", 0),
         }
-        return {"output": output, "usage": usage}
+        finish_reason = str(data.get("done_reason") or data.get("finish_reason") or "").strip()
+        result = {"output": output, "usage": usage}
+        if finish_reason:
+            result["finish_reason"] = finish_reason
+        return result

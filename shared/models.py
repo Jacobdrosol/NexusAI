@@ -111,6 +111,7 @@ class TaskMetadata(BaseModel):
     retry_attempt: Optional[int] = None
     original_task_id: Optional[str] = None
     retry_of_task_id: Optional[str] = None
+    retried_by_task_id: Optional[str] = None
     workflow_root_task_id: Optional[str] = None
     pipeline_name: Optional[str] = None
     pipeline_entry_bot_id: Optional[str] = None
@@ -130,7 +131,7 @@ class Task(BaseModel):
     payload: Any
     metadata: Optional[TaskMetadata] = None
     depends_on: List[str] = Field(default_factory=list)
-    status: Literal["queued", "blocked", "running", "completed", "failed", "cancelled"] = "queued"
+    status: Literal["queued", "blocked", "running", "completed", "failed", "cancelled", "retried"] = "queued"
     result: Optional[Any] = None
     error: Optional[TaskError] = None
     created_at: str
@@ -142,7 +143,7 @@ class BotRun(BaseModel):
     id: str
     task_id: str
     bot_id: str
-    status: Literal["queued", "blocked", "running", "completed", "failed", "cancelled"] = "queued"
+    status: Literal["queued", "blocked", "running", "completed", "failed", "cancelled", "retried"] = "queued"
     payload: Any
     metadata: Optional[TaskMetadata] = None
     result: Optional[Any] = None
@@ -203,6 +204,9 @@ class ChatConversation(BaseModel):
     scope: Literal["global", "project", "bridged"] = "global"
     default_bot_id: Optional[str] = None
     default_model_id: Optional[str] = None
+    tool_access_enabled: bool = False
+    tool_access_filesystem: bool = False
+    tool_access_repo_search: bool = False
     archived_at: Optional[str] = None
     created_at: str
     updated_at: str

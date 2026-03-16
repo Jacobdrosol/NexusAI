@@ -17,6 +17,13 @@ logger = logging.getLogger(__name__)
 bp = Blueprint("workers", __name__)
 
 
+def _cp_list_tasks_safe(cp, **kwargs):
+    try:
+        return cp.list_tasks(**kwargs)
+    except TypeError:
+        return cp.list_tasks()
+
+
 def _worker_to_dict(w: Worker) -> dict[str, Any]:
     """Serialise a Worker ORM row to a plain dict."""
     return {
@@ -70,8 +77,8 @@ def worker_detail_page(worker_id: str):
 
     cp = get_cp_client()
     worker = cp.get_worker(worker_id)
-    tasks = cp.list_tasks() or []
-    running_tasks = [t for t in tasks if t.get("status") == "running"]
+    running_tasks = _cp_list_tasks_safe(cp, statuses=["running"], limit=200, include_content=False) or []
+    running_tasks = [t for t in running_tasks if t.get("status") == "running"]
     if worker is not None:
         return render_template("worker_detail.html", worker=worker, running_tasks=running_tasks, error=None)
 
@@ -241,8 +248,8 @@ def api_worker_live(worker_id: str):
     cp = get_cp_client()
     cp_worker = cp.get_worker(worker_id)
     if cp_worker is not None:
-        tasks = cp.list_tasks() or []
-        running_tasks = [t for t in tasks if t.get("status") == "running"]
+        running_tasks = _cp_list_tasks_safe(cp, statuses=["running"], limit=200, include_content=False) or []
+        running_tasks = [t for t in running_tasks if t.get("status") == "running"]
         return jsonify({"worker": cp_worker, "running_tasks": running_tasks})
 
     db = get_db()

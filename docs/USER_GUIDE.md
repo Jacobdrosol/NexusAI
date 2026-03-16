@@ -278,6 +278,20 @@ Recommended pattern:
 - PM bot decomposes work into dependency-ordered tasks.
 - Task graph updates stream back into chat.
 
+### 6.4 Workspace Tool Access (Repo Search + Filesystem)
+
+Workspace tools are gated by three required switches:
+
+1. Bot-level policy (`Bots -> <bot> -> Chat Tool Access`)
+2. Project-level policy (`Projects -> <project> -> Chat Workspace Tools`)
+3. Conversation-level policy (`Chat -> Chat Tool Access`) and per-message `Use workspace tools`
+
+Rules:
+
+- if any switch is disabled, tool access is denied
+- filesystem snippets require project repository workspace to be enabled for that project
+- repo semantic search requires `repo_search` enabled at all three levels
+
 ## 7. GitHub Integration
 
 Per project you can:

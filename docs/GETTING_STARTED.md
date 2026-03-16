@@ -209,6 +209,7 @@ python -m dashboard.app
 
 ## 10. Where to Go Next
 
+- Chat + PM + repo workspace setup: `docs/CHAT_PM_WORKSPACE_SETUP.md`
 - End-to-end feature usage: `docs/USER_GUIDE.md`
 - Security, operations, troubleshooting: `docs/OPERATIONS.md`
 - UAT checklist: `docs/UAT_RUNBOOK.md`

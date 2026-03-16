@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import re
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
@@ -17,6 +18,7 @@ from control_plane.observability import install_observability
 from control_plane.registry.bot_registry import BotRegistry
 from control_plane.registry.model_registry import ModelRegistry
 from control_plane.registry.project_registry import ProjectRegistry
+from control_plane.repo_workspace_usage_store import RepoWorkspaceUsageStore
 from control_plane.registry.worker_registry import WorkerRegistry
 from control_plane.scheduler.scheduler import Scheduler
 from control_plane.task_manager.task_manager import TaskManager
@@ -53,6 +55,7 @@ async def lifespan(app: FastAPI):
     mcp_broker = MCPBroker(vault_manager)
     github_webhook_store = GitHubWebhookStore()
     audit_log = AuditLog()
+    repo_workspace_usage_store = RepoWorkspaceUsageStore()
 
     # Load from YAML configs
     workers_dir = cp_cfg.get("workers_config_dir", "config/workers")
@@ -93,6 +96,7 @@ async def lifespan(app: FastAPI):
     app.state.mcp_broker = mcp_broker
     app.state.github_webhook_store = github_webhook_store
     app.state.audit_log = audit_log
+    app.state.repo_workspace_usage_store = repo_workspace_usage_store
     app.state.scheduler = scheduler
     app.state.task_manager = task_manager
     app.state.pm_orchestrator = pm_orchestrator
@@ -165,6 +169,8 @@ def create_app() -> FastAPI:
 
         path = request.url.path
         if path in {"/health", "/docs", "/redoc", "/openapi.json"}:
+            return await call_next(request)
+        if request.method.upper() == "POST" and re.fullmatch(r"/v1/bots/[^/]+/trigger", path):
             return await call_next(request)
 
         header_token = (request.headers.get("X-Nexus-API-Key", "") or "").strip()

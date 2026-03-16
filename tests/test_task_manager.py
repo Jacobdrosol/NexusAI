@@ -1,7 +1,26 @@
 """Unit tests for TaskManager."""
 import json
+from typing import Any, Dict, List, Set
+
 import pytest
 from unittest.mock import AsyncMock
+
+
+@pytest.fixture(autouse=True)
+async def _close_task_managers_after_each_test(monkeypatch):
+    from control_plane.task_manager.task_manager import TaskManager
+
+    created: List[TaskManager] = []
+    original_init = TaskManager.__init__
+
+    def _tracked_init(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        created.append(self)
+
+    monkeypatch.setattr(TaskManager, "__init__", _tracked_init)
+    yield
+    for manager in reversed(created):
+        await manager.close()
 
 
 def test_lookup_payload_path_supports_list_indexes():
@@ -182,12 +201,13 @@ async def test_task_manager_auto_retries_invalid_structured_output(tmp_path, mon
 
 @pytest.mark.anyio
 async def test_manual_retry_creates_new_task_with_override(tmp_path):
+    import asyncio
+
     from control_plane.task_manager.task_manager import TaskManager
-    from shared.models import TaskError
 
     class StubScheduler:
         async def schedule(self, task):
-            return {"ok": True}
+            raise RuntimeError("simulated failure")
 
     tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "manual-retry.db"))
     original = await tm.create_task(
@@ -195,7 +215,11 @@ async def test_manual_retry_creates_new_task_with_override(tmp_path):
         payload={"q": "hello"},
         metadata=None,
     )
-    await tm.update_status(original.id, "failed", error=TaskError(message="failed"))
+    for _ in range(40):
+        current = await tm.get_task(original.id)
+        if current.status == "failed":
+            break
+        await asyncio.sleep(0.1)
 
     retried = await tm.retry_task(original.id, payload_override={"q": "fixed"})
 
@@ -206,6 +230,15 @@ async def test_manual_retry_creates_new_task_with_override(tmp_path):
     assert retried.metadata.retry_attempt == 1
     assert retried.metadata.original_task_id == original.id
     assert retried.metadata.retry_of_task_id == original.id
+
+    original_after_retry = await tm.get_task(original.id)
+    assert original_after_retry.status == "retried"
+    assert original_after_retry.metadata is not None
+    assert original_after_retry.metadata.retried_by_task_id == retried.id
+    assert original_after_retry.error is not None
+    assert original_after_retry.error.code == "retried"
+    assert isinstance(original_after_retry.error.details, dict)
+    assert original_after_retry.error.details.get("retried_by_task_id") == retried.id
 
 
 @pytest.mark.anyio
@@ -932,10 +965,77 @@ async def test_trigger_dispatch_failure_does_not_fail_parent_task(tmp_path):
     tasks = await tm.list_tasks()
     assert len(tasks) == 1
 
-    artifacts = await tm.list_bot_run_artifacts("bot-a", task_id=root.id)
+    artifacts = []
+    for _ in range(40):
+        artifacts = await tm.list_bot_run_artifacts("bot-a", task_id=root.id)
+        if any(artifact.label == "Trigger Dispatch Error" for artifact in artifacts):
+            break
+        await asyncio.sleep(0.05)
+
     trigger_errors = [artifact for artifact in artifacts if artifact.label == "Trigger Dispatch Error"]
     assert len(trigger_errors) == 1
     assert "revision_context" in (trigger_errors[0].content or "")
+
+
+@pytest.mark.anyio
+async def test_trigger_skip_records_diagnostics_when_fan_out_produces_no_payloads(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {"unit_blueprint": {"unit_number": 1, "title": "Unit 1"}}
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "trigger-skip-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="unit-builder-bot",
+            name="Unit Builder",
+            role="assistant",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "fanout-lessons",
+                        "event": "task_completed",
+                        "target_bot_id": "lesson-writer-bot",
+                        "condition": "has_result",
+                        "fan_out_field": "source_result.unit_blueprint.lesson_plans",
+                        "fan_out_alias": "lesson",
+                        "fan_out_index_alias": "lesson_index",
+                    }
+                ]
+            },
+        )
+    )
+    await bot_registry.register(Bot(id="lesson-writer-bot", name="Lesson Writer", role="assistant", backends=[]))
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "trigger-skip-tasks.db"), bot_registry=bot_registry)
+    root = await tm.create_task(bot_id="unit-builder-bot", payload={"instruction": "build unit"})
+
+    for _ in range(40):
+        updated = await tm.get_task(root.id)
+        if updated.status == "completed":
+            break
+        await asyncio.sleep(0.1)
+
+    tasks = await tm.list_tasks()
+    assert len([task for task in tasks if task.bot_id == "lesson-writer-bot"]) == 0
+
+    artifacts = []
+    for _ in range(40):
+        artifacts = await tm.list_bot_run_artifacts("unit-builder-bot", task_id=root.id)
+        if any(artifact.label == "Trigger Dispatch Skipped" for artifact in artifacts):
+            break
+        await asyncio.sleep(0.05)
+
+    skipped = [artifact for artifact in artifacts if artifact.label == "Trigger Dispatch Skipped"]
+    assert len(skipped) == 1
+    assert '"reason": "fan_out_field_not_list"' in (skipped[0].content or "")
+    assert '"fan_out_field": "source_result.unit_blueprint.lesson_plans"' in (skipped[0].content or "")
 
 
 @pytest.mark.anyio
@@ -1249,6 +1349,8 @@ async def test_trigger_can_fan_out_many_downstream_tasks(tmp_path):
     assert unit_tasks[0].payload["unit"]["title"] == "Unit 1"
     assert unit_tasks[1].payload["unit_index"] == 1
     assert unit_tasks[2].payload["fanout_count"] == 3
+    assert unit_tasks[0].payload["fanout_branch_key"] == "0"
+    assert unit_tasks[2].payload["fanout_expected_branch_keys"] == ["0", "1", "2"]
 
 
 @pytest.mark.anyio
@@ -1387,6 +1489,626 @@ async def test_trigger_can_join_sibling_branch_outputs(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_nested_fanout_is_isolated_per_parent_branch(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot
+
+    class StubScheduler:
+        async def schedule(self, task):
+            if task.bot_id == "outline-bot":
+                return {
+                    "approved_units": [
+                        {
+                            "unit_number": 1,
+                            "title": "Unit 1",
+                            "lessons": [
+                                {"lesson_number": 1, "title": "U1-L1"},
+                                {"lesson_number": 2, "title": "U1-L2"},
+                            ],
+                        },
+                        {
+                            "unit_number": 2,
+                            "title": "Unit 2",
+                            "lessons": [
+                                {"lesson_number": 1, "title": "U2-L1"},
+                                {"lesson_number": 2, "title": "U2-L2"},
+                            ],
+                        },
+                    ]
+                }
+            if task.bot_id == "unit-bot":
+                return {
+                    "unit_blueprint": {
+                        "unit_number": task.payload["unit"]["unit_number"],
+                        "title": task.payload["unit"]["title"],
+                        "lesson_plans": task.payload["unit"]["lessons"],
+                    }
+                }
+            if task.bot_id == "lesson-bot":
+                lesson = task.payload["lesson"]
+                return {
+                    "approved_lesson": {
+                        "unit_number": task.payload["source_result"]["unit_blueprint"]["unit_number"],
+                        "lesson_number": lesson["lesson_number"],
+                        "title": lesson["title"],
+                    }
+                }
+            return {"ok": True}
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "nested-fanout-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="outline-bot",
+            name="Outline",
+            role="assistant",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "fan-out-units",
+                        "event": "task_completed",
+                        "target_bot_id": "unit-bot",
+                        "condition": "has_result",
+                        "fan_out_field": "source_result.approved_units",
+                        "fan_out_alias": "unit",
+                        "fan_out_index_alias": "unit_index",
+                    }
+                ]
+            },
+        )
+    )
+    await bot_registry.register(
+        Bot(
+            id="unit-bot",
+            name="Unit",
+            role="assistant",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "fan-out-lessons",
+                        "event": "task_completed",
+                        "target_bot_id": "lesson-bot",
+                        "condition": "has_result",
+                        "fan_out_field": "source_result.unit_blueprint.lesson_plans",
+                        "fan_out_alias": "lesson",
+                        "fan_out_index_alias": "lesson_index",
+                    }
+                ]
+            },
+        )
+    )
+    await bot_registry.register(Bot(id="lesson-bot", name="Lesson", role="assistant", backends=[]))
+
+    tm = TaskManager(
+        StubScheduler(),
+        db_path=str(tmp_path / "nested-fanout-tasks.db"),
+        bot_registry=bot_registry,
+    )
+    await tm.create_task(bot_id="outline-bot", payload={"instruction": "build outline"})
+
+    for _ in range(80):
+        tasks = await tm.list_tasks()
+        lesson_tasks = [task for task in tasks if task.bot_id == "lesson-bot" and task.status == "completed"]
+        if len(lesson_tasks) == 4:
+            break
+        await asyncio.sleep(0.1)
+
+    tasks = await tm.list_tasks()
+    lesson_tasks = [task for task in tasks if task.bot_id == "lesson-bot"]
+    assert len(lesson_tasks) == 4
+
+    step_ids = [task.metadata.step_id for task in lesson_tasks if task.metadata and task.metadata.step_id]
+    assert len(step_ids) == 4
+    assert len(set(step_ids)) == 4
+
+    fanout_ids = {str(task.payload.get("fanout_id")) for task in lesson_tasks if isinstance(task.payload, dict)}
+    assert len(fanout_ids) == 2
+
+    lessons_per_unit: Dict[int, int] = {}
+    for task in lesson_tasks:
+        assert task.payload["fanout_count"] == 2
+        unit_number = int(task.payload["source_result"]["unit_blueprint"]["unit_number"])
+        lessons_per_unit[unit_number] = lessons_per_unit.get(unit_number, 0) + 1
+    assert lessons_per_unit == {1: 2, 2: 2}
+
+
+@pytest.mark.anyio
+async def test_join_without_group_field_dedupes_per_fanout_set(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot
+
+    class StubScheduler:
+        async def schedule(self, task):
+            if task.bot_id == "outline-bot":
+                return {
+                    "approved_units": [
+                        {
+                            "unit_number": 1,
+                            "title": "Unit 1",
+                            "lessons": [
+                                {"lesson_number": 1, "title": "U1-L1"},
+                                {"lesson_number": 2, "title": "U1-L2"},
+                            ],
+                        },
+                        {
+                            "unit_number": 2,
+                            "title": "Unit 2",
+                            "lessons": [
+                                {"lesson_number": 1, "title": "U2-L1"},
+                                {"lesson_number": 2, "title": "U2-L2"},
+                            ],
+                        },
+                    ]
+                }
+            if task.bot_id == "unit-bot":
+                return {
+                    "unit_blueprint": {
+                        "unit_number": task.payload["unit"]["unit_number"],
+                        "title": task.payload["unit"]["title"],
+                        "lesson_plans": task.payload["unit"]["lessons"],
+                    }
+                }
+            if task.bot_id == "lesson-bot":
+                lesson = task.payload["lesson"]
+                return {
+                    "approved_lesson": {
+                        "unit_number": task.payload["source_result"]["unit_blueprint"]["unit_number"],
+                        "lesson_number": lesson["lesson_number"],
+                    }
+                }
+            return {"ok": True}
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "join-fanout-scope-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="outline-bot",
+            name="Outline",
+            role="assistant",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "fan-out-units",
+                        "event": "task_completed",
+                        "target_bot_id": "unit-bot",
+                        "condition": "has_result",
+                        "fan_out_field": "approved_units",
+                        "fan_out_alias": "unit",
+                        "fan_out_index_alias": "unit_index",
+                    }
+                ]
+            },
+        )
+    )
+    await bot_registry.register(
+        Bot(
+            id="unit-bot",
+            name="Unit",
+            role="assistant",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "fan-out-lessons",
+                        "event": "task_completed",
+                        "target_bot_id": "lesson-bot",
+                        "condition": "has_result",
+                        "fan_out_field": "source_result.unit_blueprint.lesson_plans",
+                        "fan_out_alias": "lesson",
+                        "fan_out_index_alias": "lesson_index",
+                    }
+                ]
+            },
+        )
+    )
+    await bot_registry.register(
+        Bot(
+            id="lesson-bot",
+            name="Lesson",
+            role="assistant",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "join-lessons",
+                        "event": "task_completed",
+                        "target_bot_id": "unit-packager",
+                        "condition": "has_result",
+                        "join_expected_field": "fanout_count",
+                        "join_items_alias": "lesson_bundles",
+                        "join_result_field": "source_result.approved_lesson",
+                        "join_result_items_alias": "approved_lessons",
+                        "join_sort_field": "source_result.approved_lesson.lesson_number",
+                    }
+                ]
+            },
+        )
+    )
+    await bot_registry.register(Bot(id="unit-packager", name="Packager", role="assistant", backends=[]))
+
+    tm = TaskManager(
+        StubScheduler(),
+        db_path=str(tmp_path / "join-fanout-scope-tasks.db"),
+        bot_registry=bot_registry,
+    )
+    await tm.create_task(bot_id="outline-bot", payload={"instruction": "build outline"})
+
+    for _ in range(100):
+        tasks = await tm.list_tasks()
+        packagers = [task for task in tasks if task.bot_id == "unit-packager" and task.status == "completed"]
+        if len(packagers) == 2:
+            break
+        await asyncio.sleep(0.1)
+
+    tasks = await tm.list_tasks()
+    packagers = [task for task in tasks if task.bot_id == "unit-packager"]
+    assert len(packagers) == 2
+
+    join_fanout_ids = {str(task.payload.get("join_fanout_id")) for task in packagers}
+    assert len(join_fanout_ids) == 2
+
+    packaged_units: Set[int] = set()
+    for packager in packagers:
+        assert packager.payload["join_expected_count"] == 2
+        assert packager.payload["join_count"] == 2
+        approved_lessons = packager.payload["approved_lessons"]
+        assert len(approved_lessons) == 2
+        unit_numbers = {int(item["unit_number"]) for item in approved_lessons}
+        assert len(unit_numbers) == 1
+        packaged_units.update(unit_numbers)
+    assert packaged_units == {1, 2}
+
+
+@pytest.mark.anyio
+async def test_course_pipeline_cardinality_matches_expected_branch_counts(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot
+
+    units = [
+        {
+            "unit_number": unit_number,
+            "title": f"Unit {unit_number}",
+            "lessons": [
+                {
+                    "lesson_number": lesson_number,
+                    "title": f"U{unit_number}-L{lesson_number}",
+                }
+                for lesson_number in range(1, 5)
+            ],
+        }
+        for unit_number in range(1, 4)
+    ]
+
+    class StubScheduler:
+        async def schedule(self, task):
+            if task.bot_id == "intake-bot":
+                return {"ok": True}
+            if task.bot_id == "outline-bot":
+                return {"units": units}
+            if task.bot_id == "outline-qc-bot":
+                return {"qc_status": "pass", "approved_units": task.payload["source_result"]["units"]}
+            if task.bot_id == "unit-builder-bot":
+                unit = task.payload["unit"]
+                return {
+                    "unit_blueprint": {
+                        "unit_number": unit["unit_number"],
+                        "title": unit["title"],
+                        "lesson_plans": unit["lessons"],
+                    }
+                }
+            if task.bot_id == "lesson-writer-bot":
+                unit_number = task.payload["source_result"]["unit_blueprint"]["unit_number"]
+                lesson = task.payload["lesson"]
+                return {
+                    "lesson_output": {
+                        "unit_number": unit_number,
+                        "lesson_number": lesson["lesson_number"],
+                        "title": lesson["title"],
+                    }
+                }
+            if task.bot_id == "lesson-qc-bot":
+                return {
+                    "qc_status": "pass",
+                    "approved_lesson": task.payload["source_result"]["lesson_output"],
+                }
+            if task.bot_id == "unit-aggregator-bot":
+                return {"approved_unit": {"unit_number": task.payload["join_group"]}}
+            if task.bot_id == "image-planner-bot":
+                return {"unit_image_plan": {"unit_number": task.payload["source_result"]["approved_unit"]["unit_number"]}}
+            if task.bot_id == "unit-question-bank-bot":
+                return {
+                    "unit_question_bank": {
+                        "unit_number": task.payload["source_result"]["approved_unit"]["unit_number"],
+                    }
+                }
+            if task.bot_id == "unit-question-bank-qc-bot":
+                return {
+                    "qc_status": "pass",
+                    "approved_unit_package": {
+                        "unit_number": task.payload["source_result"]["unit_question_bank"]["unit_number"],
+                    },
+                }
+            if task.bot_id == "course-aggregator-bot":
+                return {"course_package": {"units": task.payload["approved_units"]}}
+            return {"ok": True}
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "pipeline-counts-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="intake-bot",
+            name="Intake",
+            role="intake",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "to-outline",
+                        "event": "task_completed",
+                        "target_bot_id": "outline-bot",
+                        "condition": "has_result",
+                    }
+                ]
+            },
+        )
+    )
+    await bot_registry.register(
+        Bot(
+            id="outline-bot",
+            name="Outline",
+            role="assistant",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "to-outline-qc",
+                        "event": "task_completed",
+                        "target_bot_id": "outline-qc-bot",
+                        "condition": "has_result",
+                    }
+                ]
+            },
+        )
+    )
+    await bot_registry.register(
+        Bot(
+            id="outline-qc-bot",
+            name="Outline QC",
+            role="quality",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "fan-out-units",
+                        "event": "task_completed",
+                        "target_bot_id": "unit-builder-bot",
+                        "condition": "has_result",
+                        "result_field": "qc_status",
+                        "result_equals": "pass",
+                        "fan_out_field": "approved_units",
+                        "fan_out_alias": "unit",
+                        "fan_out_index_alias": "unit_index",
+                    }
+                ]
+            },
+        )
+    )
+    await bot_registry.register(
+        Bot(
+            id="unit-builder-bot",
+            name="Unit Builder",
+            role="assistant",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "fan-out-lessons",
+                        "event": "task_completed",
+                        "target_bot_id": "lesson-writer-bot",
+                        "condition": "has_result",
+                        "fan_out_field": "source_result.unit_blueprint.lesson_plans",
+                        "fan_out_alias": "lesson",
+                        "fan_out_index_alias": "lesson_index",
+                        "payload_template": {
+                            "course_unit_count": "{{source_payload.fanout_count}}",
+                            "unit_blueprint": "{{source_result.unit_blueprint}}",
+                        },
+                    }
+                ]
+            },
+        )
+    )
+    await bot_registry.register(
+        Bot(
+            id="lesson-writer-bot",
+            name="Lesson Writer",
+            role="assistant",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "to-lesson-qc",
+                        "event": "task_completed",
+                        "target_bot_id": "lesson-qc-bot",
+                        "condition": "has_result",
+                        "payload_template": {
+                            "course_unit_count": "{{source_payload.course_unit_count}}",
+                            "unit_blueprint": "{{source_payload.unit_blueprint}}",
+                            "lesson_output": "{{source_result.lesson_output}}",
+                        },
+                    }
+                ]
+            },
+        )
+    )
+    await bot_registry.register(
+        Bot(
+            id="lesson-qc-bot",
+            name="Lesson QC",
+            role="quality",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "join-lessons",
+                        "event": "task_completed",
+                        "target_bot_id": "unit-aggregator-bot",
+                        "condition": "has_result",
+                        "result_field": "qc_status",
+                        "result_equals": "pass",
+                        "join_group_field": "source_payload.unit_blueprint.unit_number",
+                        "join_expected_field": "source_payload.fanout_count",
+                        "join_items_alias": "lesson_bundles",
+                        "join_result_field": "source_result.approved_lesson",
+                        "join_result_items_alias": "approved_lessons",
+                        "join_sort_field": "source_result.approved_lesson.lesson_number",
+                        "payload_template": {
+                            "course_unit_count": "{{source_payload.course_unit_count}}",
+                            "unit_blueprint": "{{source_payload.unit_blueprint}}",
+                        },
+                    }
+                ]
+            },
+        )
+    )
+    await bot_registry.register(
+        Bot(
+            id="unit-aggregator-bot",
+            name="Unit Aggregator",
+            role="assistant",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "to-image-planner",
+                        "event": "task_completed",
+                        "target_bot_id": "image-planner-bot",
+                        "condition": "has_result",
+                        "payload_template": {
+                            "course_unit_count": "{{source_payload.course_unit_count}}",
+                            "approved_unit": "{{source_result.approved_unit}}",
+                        },
+                    },
+                    {
+                        "id": "to-unit-question-bank",
+                        "event": "task_completed",
+                        "target_bot_id": "unit-question-bank-bot",
+                        "condition": "has_result",
+                        "payload_template": {
+                            "course_unit_count": "{{source_payload.course_unit_count}}",
+                            "approved_unit": "{{source_result.approved_unit}}",
+                        },
+                    },
+                ]
+            },
+        )
+    )
+    await bot_registry.register(Bot(id="image-planner-bot", name="Image Planner", role="assistant", backends=[]))
+    await bot_registry.register(
+        Bot(
+            id="unit-question-bank-bot",
+            name="Unit Question Bank",
+            role="assistant",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "to-unit-question-bank-qc",
+                        "event": "task_completed",
+                        "target_bot_id": "unit-question-bank-qc-bot",
+                        "condition": "has_result",
+                        "payload_template": {
+                            "course_unit_count": "{{source_payload.course_unit_count}}",
+                            "unit_question_bank": "{{source_result.unit_question_bank}}",
+                        },
+                    }
+                ]
+            },
+        )
+    )
+    await bot_registry.register(
+        Bot(
+            id="unit-question-bank-qc-bot",
+            name="Unit Question Bank QC",
+            role="quality",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "join-approved-units",
+                        "event": "task_completed",
+                        "target_bot_id": "course-aggregator-bot",
+                        "condition": "has_result",
+                        "result_field": "qc_status",
+                        "result_equals": "pass",
+                        "join_expected_field": "source_payload.course_unit_count",
+                        "join_items_alias": "approved_units",
+                        "join_result_field": "source_result.approved_unit_package",
+                        "join_result_items_alias": "approved_unit_packages",
+                        "join_sort_field": "source_result.approved_unit_package.unit_number",
+                    }
+                ]
+            },
+        )
+    )
+    await bot_registry.register(Bot(id="course-aggregator-bot", name="Course Aggregator", role="assistant", backends=[]))
+
+    tm = TaskManager(
+        StubScheduler(),
+        db_path=str(tmp_path / "pipeline-counts-tasks.db"),
+        bot_registry=bot_registry,
+    )
+    await tm.create_task(bot_id="intake-bot", payload={"instruction": "start"})
+
+    for _ in range(240):
+        tasks = await tm.list_tasks()
+        if any(task.bot_id == "course-aggregator-bot" and task.status == "completed" for task in tasks):
+            break
+        await asyncio.sleep(0.1)
+
+    expected_total = 43
+    for _ in range(240):
+        tasks = await tm.list_tasks()
+        if len(tasks) == expected_total and all(task.status == "completed" for task in tasks):
+            break
+        await asyncio.sleep(0.1)
+
+    tasks = await tm.list_tasks()
+    assert len(tasks) == expected_total
+    assert all(task.status == "completed" for task in tasks)
+
+    counts = {}
+    for task in tasks:
+        counts[task.bot_id] = counts.get(task.bot_id, 0) + 1
+
+    assert counts.get("intake-bot", 0) == 1
+    assert counts.get("outline-bot", 0) == 1
+    assert counts.get("outline-qc-bot", 0) == 1
+    assert counts.get("unit-builder-bot", 0) == 3
+    assert counts.get("lesson-writer-bot", 0) == 12
+    assert counts.get("lesson-qc-bot", 0) == 12
+    assert counts.get("unit-aggregator-bot", 0) == 3
+    assert counts.get("image-planner-bot", 0) == 3
+    assert counts.get("unit-question-bank-bot", 0) == 3
+    assert counts.get("unit-question-bank-qc-bot", 0) == 3
+    assert counts.get("course-aggregator-bot", 0) == 1
+
+    unit_aggregators = [task for task in tasks if task.bot_id == "unit-aggregator-bot"]
+    assert len(unit_aggregators) == 3
+    for task in unit_aggregators:
+        assert task.payload["join_expected_count"] == 4
+        assert task.payload["join_count"] == 4
+
+@pytest.mark.anyio
 async def test_trigger_can_fan_out_from_bare_result_field(tmp_path):
     import asyncio
 
@@ -1481,6 +2203,36 @@ def test_transform_template_can_read_list_index_paths():
     assert transformed["unit_blueprint"]["title"] == "Land-Based Empires"
 
 
+def test_transform_template_coalesce_supports_literal_fallbacks():
+    from control_plane.task_manager.task_manager import _transform_template_value
+
+    payload = {
+        "items": [],
+        "backup_items": ["fallback-item"],
+    }
+    notes = []
+
+    transformed = _transform_template_value(
+        {
+            "title": "{{coalesce:payload.title,'Generated Course'}}",
+            "subject": "{{coalesce:payload.subject,''}}",
+            "estimated_hours": "{{coalesce:payload.estimated_hours,0}}",
+            "badge_enabled": "{{coalesce:payload.badge_enabled,true}}",
+            "preferred_items": "{{coalesce:payload.items,payload.backup_items,[]}}",
+            "empty_items_default": "{{coalesce:payload.missing_items,[]}}",
+        },
+        payload,
+        notes,
+    )
+
+    assert transformed["title"] == "Generated Course"
+    assert transformed["subject"] == ""
+    assert transformed["estimated_hours"] == 0
+    assert transformed["badge_enabled"] is True
+    assert transformed["preferred_items"] == ["fallback-item"]
+    assert transformed["empty_items_default"] == []
+
+
 @pytest.mark.anyio
 async def test_join_waits_for_latest_successful_branch_results(tmp_path):
     import asyncio
@@ -1562,6 +2314,32 @@ async def test_join_waits_for_latest_successful_branch_results(tmp_path):
         await asyncio.sleep(0.1)
 
     assert len(first_two) >= 2
+
+    join_wait_reports = []
+    for _ in range(40):
+        artifacts = await tm.list_bot_run_artifacts("unit-bot")
+        join_wait_reports = []
+        for artifact in artifacts:
+            if artifact.label != "Join Waiting" or not artifact.content:
+                continue
+            try:
+                join_wait_reports.append(json.loads(artifact.content))
+            except (TypeError, json.JSONDecodeError):
+                continue
+        if any(
+            int(report.get("expected_count") or 0) == 3
+            and int(report.get("received_count") or 0) < 3
+            for report in join_wait_reports
+        ):
+            break
+        await asyncio.sleep(0.05)
+
+    assert any(
+        int(report.get("expected_count") or 0) == 3
+        and int(report.get("received_count") or 0) < 3
+        for report in join_wait_reports
+    )
+
     await tm.retry_task(first_two[0].id)
     await asyncio.sleep(0.3)
 
@@ -1579,6 +2357,104 @@ async def test_join_waits_for_latest_successful_branch_results(tmp_path):
     assert len(packagers) == 1
     assert packagers[0].payload["join_expected_count"] == 3
     assert packagers[0].payload["join_count"] == 3
+
+
+@pytest.mark.anyio
+async def test_join_can_use_fanout_branch_metadata_when_expected_field_is_missing(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot
+
+    class StubScheduler:
+        async def schedule(self, task):
+            if task.bot_id == "outline-bot":
+                return {
+                    "approved_units": [
+                        {"unit_number": 1, "title": "Unit 1"},
+                        {"unit_number": 2, "title": "Unit 2"},
+                    ]
+                }
+            if task.bot_id == "unit-bot":
+                return {
+                    "approved_unit": {
+                        "unit_number": task.payload["unit"]["unit_number"],
+                        "title": task.payload["unit"]["title"],
+                    }
+                }
+            return {"ok": True}
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "join-fanout-meta-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="outline-bot",
+            name="Outline",
+            role="assistant",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "fan-out-units",
+                        "event": "task_completed",
+                        "target_bot_id": "unit-bot",
+                        "condition": "has_result",
+                        "fan_out_field": "approved_units",
+                        "fan_out_alias": "unit",
+                        "fan_out_index_alias": "unit_index",
+                    }
+                ]
+            },
+        )
+    )
+    await bot_registry.register(
+        Bot(
+            id="unit-bot",
+            name="Unit",
+            role="assistant",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "join-units",
+                        "event": "task_completed",
+                        "target_bot_id": "packager-bot",
+                        "condition": "has_result",
+                        "join_expected_field": "source_payload.missing_count",
+                        "join_items_alias": "approved_units",
+                        "join_result_field": "source_result.approved_unit",
+                        "join_result_items_alias": "approved_unit_results",
+                        "join_sort_field": "source_result.approved_unit.unit_number",
+                    }
+                ]
+            },
+        )
+    )
+    await bot_registry.register(Bot(id="packager-bot", name="Packager", role="assistant", backends=[]))
+
+    tm = TaskManager(
+        StubScheduler(),
+        db_path=str(tmp_path / "join-fanout-meta-tasks.db"),
+        bot_registry=bot_registry,
+    )
+    await tm.create_task(bot_id="outline-bot", payload={"instruction": "build outline"})
+
+    for _ in range(80):
+        tasks = await tm.list_tasks()
+        if any(task.bot_id == "packager-bot" and task.status == "completed" for task in tasks):
+            break
+        await asyncio.sleep(0.1)
+
+    tasks = await tm.list_tasks()
+    packagers = [task for task in tasks if task.bot_id == "packager-bot"]
+    assert len(packagers) == 1
+    payload = packagers[0].payload
+    assert payload["join_expected_count"] == 2
+    assert payload["join_count"] == 2
+    assert payload["join_expected_branch_keys"] == ["0", "1"]
+    assert payload["join_branch_keys"] == ["0", "1"]
+    assert payload["join_missing_branch_keys"] == []
+    assert len(payload["approved_unit_results"]) == 2
 
 
 @pytest.mark.anyio
@@ -1607,10 +2483,18 @@ async def test_run_reports_capture_usage_metadata(tmp_path):
             break
         await asyncio.sleep(0.1)
 
-    artifacts = await tm.list_bot_run_artifacts("usage-bot")
-    usage_artifact = next(a for a in artifacts if a.label == "Usage Report")
+    artifacts = []
+    for _ in range(40):
+        artifacts = await tm.list_bot_run_artifacts("usage-bot")
+        if any(a.label == "Usage Report" for a in artifacts):
+            break
+        await asyncio.sleep(0.05)
+
+    usage_artifact = next((a for a in artifacts if a.label == "Usage Report"), None)
+    assert usage_artifact is not None
     assert '"prompt_tokens": 11' in str(usage_artifact.content)
-    execution_artifact = next(a for a in artifacts if a.label == "Execution Report")
+    execution_artifact = next((a for a in artifacts if a.label == "Execution Report"), None)
+    assert execution_artifact is not None
     assert execution_artifact.metadata["usage"]["total_tokens"] == 18
 
 
@@ -2122,6 +3006,67 @@ async def test_output_contract_non_empty_fields_fail_incomplete_output(tmp_path)
     assert updated.error is not None
     assert "non-empty fields" in updated.error.message
     assert "course_structure.units" in updated.error.message
+
+
+@pytest.mark.anyio
+async def test_output_contract_error_includes_truncation_hint_when_finish_reason_is_length(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {
+                "output": json.dumps(
+                    {
+                        "unit_asset_plan": {
+                            "title": "",
+                            "images": [],
+                        }
+                    }
+                ),
+                "usage": {
+                    "prompt_tokens": 120,
+                    "completion_tokens": 4096,
+                },
+                "finish_reason": "length",
+            }
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "truncate-hint-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="asset-bot",
+            name="Asset Planner",
+            role="assistant",
+            backends=[],
+            routing_rules={
+                "output_contract": {
+                    "enabled": True,
+                    "mode": "model_output",
+                    "format": "json_object",
+                    "required_fields": ["unit_asset_plan"],
+                    "non_empty_fields": ["unit_asset_plan.title", "unit_asset_plan.images"],
+                    "fallback_mode": "disabled",
+                }
+            },
+        )
+    )
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "truncate-hint.db"), bot_registry=bot_registry)
+    task = await tm.create_task(bot_id="asset-bot", payload={"instruction": "build unit assets"})
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.1)
+
+    assert updated.status == "failed"
+    assert updated.error is not None
+    assert "non-empty fields" in updated.error.message
+    assert "likely truncated model output" in updated.error.message
 
 
 @pytest.mark.anyio

@@ -6,7 +6,7 @@ import time
 from datetime import timedelta
 from pathlib import Path
 
-from flask import Flask, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, g, jsonify, redirect, render_template, request, session, url_for
 from flask_login import LoginManager, current_user, login_required, logout_user
 from flask_wtf.csrf import CSRFProtect
 
@@ -34,6 +34,7 @@ def create_app() -> Flask:
     app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
     app.config["WTF_CSRF_ENABLED"] = True
     app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(minutes=60)
+    slow_request_threshold = float(os.environ.get("DASHBOARD_SLOW_REQUEST_SECONDS", "1.5"))
 
     # Initialise extensions
     csrf = CSRFProtect(app)
@@ -95,6 +96,12 @@ def create_app() -> Flask:
 
     main_bp = Blueprint("main", __name__)
 
+    def _cp_list_tasks_safe(cp, **kwargs):
+        try:
+            return cp.list_tasks(**kwargs)
+        except TypeError:
+            return cp.list_tasks()
+
     @main_bp.get("/")
     @login_required
     def index():
@@ -108,7 +115,7 @@ def create_app() -> Flask:
         cp_workers = cp.list_workers()
         cp_bots = cp.list_bots()
         cp_projects = cp.list_projects()
-        cp_tasks = cp.list_tasks()
+        cp_tasks = _cp_list_tasks_safe(cp, limit=200, include_content=False)
         cp_endpoint_checks = cp.probe_paths(
             ["/health", "/v1/projects", "/v1/bots", "/v1/workers"]
         )
@@ -127,9 +134,12 @@ def create_app() -> Flask:
             offline_workers = sum(1 for w in workers if w.get("status") == "offline")
             active_bots = sum(1 for b in bots if b.get("enabled"))
             queued = sum(1 for t in tasks if t.get("status") == "queued")
+            blocked = sum(1 for t in tasks if t.get("status") == "blocked")
             running = sum(1 for t in tasks if t.get("status") == "running")
             completed = sum(1 for t in tasks if t.get("status") == "completed")
             failed = sum(1 for t in tasks if t.get("status") == "failed")
+            retried = sum(1 for t in tasks if t.get("status") == "retried")
+            cancelled = sum(1 for t in tasks if t.get("status") == "cancelled")
 
             worker_health = []
             for w in workers[:12]:
@@ -178,9 +188,12 @@ def create_app() -> Flask:
                 offline_workers = db.query(Worker).filter(Worker.status == "offline").count()
                 active_bots = db.query(Bot).filter(Bot.enabled.is_(True)).count()
                 queued = db.query(Task).filter(Task.status == "queued").count()
+                blocked = db.query(Task).filter(Task.status == "blocked").count()
                 running = db.query(Task).filter(Task.status == "running").count()
                 completed = db.query(Task).filter(Task.status == "completed").count()
                 failed = db.query(Task).filter(Task.status == "failed").count()
+                retried = db.query(Task).filter(Task.status == "retried").count()
+                cancelled = db.query(Task).filter(Task.status == "cancelled").count()
 
                 worker_health = []
                 for w in workers[:12]:
@@ -401,9 +414,12 @@ def create_app() -> Flask:
                 "workers_offline": offline_workers,
                 "bots_active": active_bots,
                 "tasks_queued": queued,
+                "tasks_blocked": blocked,
                 "tasks_running": running,
                 "tasks_completed": completed,
                 "tasks_failed": failed,
+                "tasks_retried": retried,
+                "tasks_cancelled": cancelled,
             },
             worker_health=worker_health,
             recent_activity=recent_activity,
@@ -418,16 +434,27 @@ def create_app() -> Flask:
             cp_endpoint_checks=cp_endpoint_checks,
         )
 
-    @app.context_processor
-    def inject_cp_status():
-        from dashboard.cp_client import get_cp_client
-        try:
-            available = get_cp_client().health()
-        except Exception:
-            available = False
-        return {"cp_available": available}
-
     app.register_blueprint(main_bp)
+
+    @app.before_request
+    def _track_request_start():
+        g._request_start_ts = time.perf_counter()
+
+    @app.after_request
+    def _log_slow_requests(response):
+        start = getattr(g, "_request_start_ts", None)
+        if start is None:
+            return response
+        elapsed = time.perf_counter() - start
+        if elapsed >= slow_request_threshold:
+            app.logger.warning(
+                "slow_request method=%s path=%s status=%s elapsed_s=%.3f",
+                request.method,
+                request.path,
+                response.status_code,
+                elapsed,
+            )
+        return response
 
     @app.before_request
     def enforce_session_inactivity_timeout():

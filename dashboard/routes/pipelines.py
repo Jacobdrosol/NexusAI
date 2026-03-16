@@ -11,6 +11,13 @@ from dashboard.cp_client import get_cp_client
 bp = Blueprint("pipelines", __name__)
 
 
+def _cp_list_tasks_safe(cp, **kwargs):
+    try:
+        return cp.list_tasks(**kwargs)
+    except TypeError:
+        return cp.list_tasks()
+
+
 def _task_sort_key(task: dict[str, Any]) -> tuple[str, str]:
     return (str(task.get("created_at") or ""), str(task.get("updated_at") or ""))
 
@@ -23,6 +30,7 @@ def _status_summary(tasks: list[dict[str, Any]]) -> dict[str, int]:
         "running": counts.get("running", 0),
         "completed": counts.get("completed", 0),
         "failed": counts.get("failed", 0),
+        "retried": counts.get("retried", 0),
         "cancelled": counts.get("cancelled", 0),
     }
 
@@ -33,17 +41,21 @@ def _pipeline_status(tasks: list[dict[str, Any]]) -> str:
         return "running"
     if summary["failed"]:
         return "failed"
-    if summary["cancelled"] and not summary["completed"]:
+    if summary["cancelled"] and not summary["completed"] and not summary["retried"]:
         return "cancelled"
     if summary["completed"]:
         return "completed"
+    if summary["retried"]:
+        return "retried"
     return "unknown"
 
 
 def _usage_totals(tasks: list[dict[str, Any]]) -> dict[str, int]:
     totals = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
     for task in tasks:
-        usage = ((task.get("result") or {}).get("usage") if isinstance(task.get("result"), dict) else None) or {}
+        usage = task.get("usage")
+        if not isinstance(usage, dict):
+            usage = ((task.get("result") or {}).get("usage") if isinstance(task.get("result"), dict) else None) or {}
         for key in totals:
             try:
                 totals[key] += int(usage.get(key) or 0)
@@ -98,7 +110,7 @@ def _pipeline_groups(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _pipeline_detail(cp, orchestration_id: str) -> dict[str, Any] | None:
-    tasks = cp.list_tasks(orchestration_id=orchestration_id, limit=1000) or []
+    tasks = _cp_list_tasks_safe(cp, orchestration_id=orchestration_id, limit=1000, include_content=False) or []
     if not tasks:
         return None
     tasks = sorted(tasks, key=_task_sort_key)
@@ -129,7 +141,7 @@ def _pipeline_detail(cp, orchestration_id: str) -> dict[str, Any] | None:
 @login_required
 def pipelines_page() -> str:
     cp = get_cp_client()
-    cp_tasks = cp.list_tasks(limit=1000)
+    cp_tasks = _cp_list_tasks_safe(cp, limit=1000, include_content=False)
     if cp_tasks is None:
         return render_template("pipelines.html", pipelines=[], error="Control plane unavailable", active_page="pipelines")
     return render_template("pipelines.html", pipelines=_pipeline_groups(cp_tasks), error=None, active_page="pipelines")
@@ -149,7 +161,7 @@ def pipeline_detail_page(orchestration_id: str) -> str:
 @login_required
 def api_list_pipelines():
     cp = get_cp_client()
-    cp_tasks = cp.list_tasks(limit=1000)
+    cp_tasks = _cp_list_tasks_safe(cp, limit=1000, include_content=False)
     if cp_tasks is None:
         return jsonify({"error": "control plane unavailable"}), 502
     return jsonify(_pipeline_groups(cp_tasks))

@@ -21,6 +21,8 @@
     <div><strong>Queued:</strong> {{ pipeline.status_summary.queued + pipeline.status_summary.blocked }}</div>
     <div><strong>Completed:</strong> {{ pipeline.status_summary.completed }}</div>
     <div><strong>Failed:</strong> {{ pipeline.status_summary.failed }}</div>
+    <div><strong>Retried:</strong> {{ pipeline.status_summary.retried }}</div>
+    <div><strong>Cancelled:</strong> {{ pipeline.status_summary.cancelled }}</div>
     <div><strong>Prompt Tokens:</strong> {{ pipeline.usage.prompt_tokens }}</div>
     <div><strong>Completion Tokens:</strong> {{ pipeline.usage.completion_tokens }}</div>
     <div><strong>Total Tokens:</strong> {{ pipeline.usage.total_tokens }}</div>

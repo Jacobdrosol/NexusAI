@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from typing import Any, AsyncGenerator
 
@@ -142,9 +143,20 @@ def _lookup_payload_path(payload: Any, path: str) -> Any:
         key = part.strip()
         if not key:
             continue
-        if not isinstance(current, dict) or key not in current:
-            return None
-        current = current[key]
+        if isinstance(current, dict):
+            if key not in current:
+                return None
+            current = current[key]
+            continue
+        if isinstance(current, list):
+            if not key.isdigit():
+                return None
+            index = int(key)
+            if index < 0 or index >= len(current):
+                return None
+            current = current[index]
+            continue
+        return None
     return current
 
 
@@ -170,6 +182,67 @@ def _split_transform_expr_list(expr: str) -> list[str]:
     return parts
 
 
+def _parse_transform_literal(expr: str) -> tuple[bool, Any]:
+    value = str(expr or "").strip()
+    if value == "":
+        return False, None
+    lowered = value.lower()
+    if lowered == "null":
+        return True, None
+    if lowered == "true":
+        return True, True
+    if lowered == "false":
+        return True, False
+    if value.startswith("'") and value.endswith("'") and len(value) >= 2:
+        inner = value[1:-1]
+        inner = inner.replace("\\'", "'").replace("\\\\", "\\")
+        return True, inner
+    if value.startswith('"') and value.endswith('"') and len(value) >= 2:
+        try:
+            return True, json.loads(value)
+        except json.JSONDecodeError:
+            return True, value[1:-1]
+    if re.fullmatch(r"-?\d+", value):
+        try:
+            return True, int(value)
+        except ValueError:
+            return False, None
+    if re.fullmatch(r"-?(?:\d+\.\d*|\d*\.\d+)", value):
+        try:
+            return True, float(value)
+        except ValueError:
+            return False, None
+    if (value.startswith("[") and value.endswith("]")) or (value.startswith("{") and value.endswith("}")):
+        try:
+            return True, json.loads(value)
+        except json.JSONDecodeError:
+            return False, None
+    return False, None
+
+
+def _camelize_key(key: str) -> str:
+    text = str(key or "")
+    if "_" not in text:
+        return text
+    parts = [part for part in text.split("_") if part]
+    if not parts:
+        return text
+    first = parts[0]
+    rest = "".join(part[:1].upper() + part[1:] for part in parts[1:])
+    return first + rest
+
+
+def _camelize_json_keys(value: Any) -> Any:
+    if isinstance(value, dict):
+        converted: dict[str, Any] = {}
+        for key, item in value.items():
+            converted[_camelize_key(str(key))] = _camelize_json_keys(item)
+        return converted
+    if isinstance(value, list):
+        return [_camelize_json_keys(item) for item in value]
+    return value
+
+
 def _transform_template_value(template: Any, payload: Any) -> Any:
     if isinstance(template, dict):
         return {str(key): _transform_template_value(value, payload) for key, value in template.items()}
@@ -186,21 +259,44 @@ def _transform_template_value(template: Any, payload: Any) -> Any:
         if expr.startswith("json:"):
             mode = "json"
             path = expr[5:].strip()
+        camelize = False
+        while path.startswith("camelize:"):
+            camelize = True
+            path = path[len("camelize:") :].strip()
         if path.startswith("render:"):
             render_path = path[len("render:") :].strip()
             if render_path.startswith("payload."):
                 render_path = render_path[8:].strip()
             rendered = _transform_template_value(_lookup_payload_path(payload, render_path), payload)
+            if camelize:
+                rendered = _camelize_json_keys(rendered)
             if mode == "json":
                 return rendered
             return rendered
         if path.startswith("coalesce:"):
             candidates = _split_transform_expr_list(path[len("coalesce:") :])
             for candidate in candidates:
-                value = _transform_template_value("{{" + (("json:" + candidate) if mode == "json" else candidate) + "}}", payload)
+                literal_ok, literal_value = _parse_transform_literal(candidate)
+                if literal_ok:
+                    if literal_value is not None:
+                        if camelize:
+                            literal_value = _camelize_json_keys(literal_value)
+                        return literal_value
+                    continue
+                nested_expr = candidate
+                if camelize:
+                    nested_expr = "camelize:" + nested_expr
+                if mode == "json":
+                    nested_expr = "json:" + nested_expr
+                value = _transform_template_value("{{" + nested_expr + "}}", payload)
                 if value not in (None, "", [], {}):
                     return value
             return None
+        literal_ok, literal_value = _parse_transform_literal(path)
+        if literal_ok:
+            if camelize:
+                literal_value = _camelize_json_keys(literal_value)
+            return literal_value
         if path.startswith("payload."):
             path = path[8:].strip()
         value = _lookup_payload_path(payload, path)
@@ -208,10 +304,39 @@ def _transform_template_value(template: Any, payload: Any) -> Any:
             if value in (None, ""):
                 return None
             if isinstance(value, (dict, list)):
+                if camelize:
+                    return _camelize_json_keys(value)
                 return value
-            return json.loads(str(value))
+            parsed_json = json.loads(str(value))
+            if camelize:
+                return _camelize_json_keys(parsed_json)
+            return parsed_json
+        if camelize:
+            return _camelize_json_keys(value)
         return value
     return template
+
+
+def _http_action_error_hint(op_id: str, action: dict[str, Any], result: dict[str, Any]) -> str:
+    try:
+        status = int(result.get("status"))
+    except Exception:
+        return ""
+    if status != 404:
+        return ""
+
+    op = str(op_id or "").strip().lower()
+    path = str(action.get("path") or "").strip().lower()
+    url = str(result.get("url") or "").strip().lower()
+    if op == "importcoursepackage" or "/api/agent/import/course-package" in path or "/api/agent/import/course-package" in url:
+        return (
+            " Endpoint /api/agent/import/course-package is not available on the target server. "
+            "Deploy GlobeIQ build with agent bulk import support (commit 03f1270 or later) "
+            "or update the connection base_url to the server that hosts the agent API."
+        )
+    if path.startswith("/api/agent/") or "/api/agent/" in url:
+        return " Target server does not expose the requested /api/agent route. Verify base_url and deployed GlobeIQ API version."
+    return ""
 
 
 def _contract_prompt_suffix(bot: Any) -> str:
@@ -780,7 +905,8 @@ class Scheduler:
             else:
                 failed_actions.append(op_id)
                 detail = str(result.get("body_preview") or result.get("error") or "").strip()
-                errors.append(f"{op_id} failed with status {result.get('status')}: {detail}".strip())
+                hint = _http_action_error_hint(op_id, action, result)
+                errors.append(f"{op_id} failed with status {result.get('status')}: {detail}{hint}".strip())
                 if not continue_on_error:
                     break
 
@@ -1069,7 +1195,15 @@ class Scheduler:
             response.raise_for_status()
             data = response.json()
             output = data["choices"][0]["message"]["content"]
-            return {"output": output, "usage": data.get("usage", {})}
+            finish_reason = ""
+            try:
+                finish_reason = str((data.get("choices") or [{}])[0].get("finish_reason") or "").strip()
+            except Exception:
+                finish_reason = ""
+            result = {"output": output, "usage": data.get("usage", {})}
+            if finish_reason:
+                result["finish_reason"] = finish_reason
+            return result
 
     async def _call_ollama_cloud(self, backend: BackendConfig, payload: Any) -> Any:
         api_key_ref = backend.api_key_ref or "OLLAMA_API_KEY"
@@ -1123,7 +1257,11 @@ class Scheduler:
                 "prompt_tokens": data.get("prompt_eval_count", 0),
                 "completion_tokens": data.get("eval_count", 0),
             }
-            return {"output": output, "usage": usage}
+            finish_reason = str(data.get("done_reason") or data.get("finish_reason") or "").strip()
+            result = {"output": output, "usage": usage}
+            if finish_reason:
+                result["finish_reason"] = finish_reason
+            return result
 
     async def _call_claude(self, backend: BackendConfig, payload: Any) -> Any:
         api_key_ref = backend.api_key_ref or "ANTHROPIC_API_KEY"
@@ -1159,7 +1297,11 @@ class Scheduler:
             response.raise_for_status()
             data = response.json()
             output = data["content"][0]["text"]
-            return {"output": output, "usage": data.get("usage", {})}
+            finish_reason = str(data.get("stop_reason") or "").strip()
+            result = {"output": output, "usage": data.get("usage", {})}
+            if finish_reason:
+                result["finish_reason"] = finish_reason
+            return result
 
     async def _call_gemini(self, backend: BackendConfig, payload: Any) -> Any:
         api_key_ref = backend.api_key_ref or "GEMINI_API_KEY"
@@ -1197,7 +1339,15 @@ class Scheduler:
             response.raise_for_status()
             data = response.json()
             output = data["candidates"][0]["content"]["parts"][0]["text"]
-            return {"output": output, "usage": data.get("usageMetadata", {})}
+            finish_reason = ""
+            try:
+                finish_reason = str((data.get("candidates") or [{}])[0].get("finishReason") or "").strip()
+            except Exception:
+                finish_reason = ""
+            result = {"output": output, "usage": data.get("usageMetadata", {})}
+            if finish_reason:
+                result["finish_reason"] = finish_reason
+            return result
 
     async def _resolve_api_key(self, api_key_ref: str, default_env_var: str) -> str:
         if self.key_vault and api_key_ref:

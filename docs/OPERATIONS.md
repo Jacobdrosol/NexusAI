@@ -272,4 +272,5 @@ Operational note:
 - the dashboard will refuse to run deployment when guardrails are not satisfied
 - this prevents accidental in-place restarts that can disrupt running workloads
 - bootstrap/deploy scripts now block when host DB and legacy volume DB diverge
-- the deploy runner now recreates core runtime services by default so control plane and workers are refreshed against the same persistent `./data/nexusai.db` used by blue/green dashboard services
+- the deploy runner now force-recreates core runtime services by default so control plane and workers are refreshed against the same persistent `./data/nexusai.db` used by blue/green dashboard services
+- core service recreate is pinned to `NEXUSAI_COMPOSE_PROJECT_NAME` to avoid updating a different compose project than the active blue/green stack

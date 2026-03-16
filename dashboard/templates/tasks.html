@@ -117,7 +117,7 @@
 
       <div>
         <div class="page-header" style="margin-bottom:0.5rem;">
-          <h2 class="panel-title">Recent Failed (24h)</h2>
+          <h2 class="panel-title">Recent Failed / Retried (24h)</h2>
           <div class="mini-note">{{ recent_failed_tasks|length }} recent</div>
         </div>
         <div class="table-wrap">
@@ -279,7 +279,10 @@ function renderTaskDetail(task) {
     if (actionsEl) actionsEl.style.display = 'none';
     return;
   }
-  statusEl.textContent = task.status + ' · ' + task.bot_id;
+  const retriedBy = task.metadata && task.metadata.retried_by_task_id
+    ? (' | retried by ' + String(task.metadata.retried_by_task_id).slice(0, 8) + '...')
+    : '';
+  statusEl.textContent = task.status + ' | ' + task.bot_id + retriedBy;
   summaryEl.textContent = 'Task ' + task.id;
   if (actionsEl) actionsEl.style.display = 'flex';
   if (retryBtn) {
@@ -287,11 +290,11 @@ function renderTaskDetail(task) {
     retryBtn.onclick = () => retryTask(task.id, null, 'Retry Failed Branch');
   }
   if (rerunBtn) {
-    rerunBtn.style.display = ['completed', 'failed'].includes(task.status) ? 'inline-flex' : 'none';
+    rerunBtn.style.display = ['completed', 'failed', 'retried'].includes(task.status) ? 'inline-flex' : 'none';
     rerunBtn.onclick = () => retryTask(task.id, null, 'Rerun as New');
   }
   if (editRerunBtn) {
-    editRerunBtn.style.display = ['completed', 'failed'].includes(task.status) ? 'inline-flex' : 'none';
+    editRerunBtn.style.display = ['completed', 'failed', 'retried'].includes(task.status) ? 'inline-flex' : 'none';
     editRerunBtn.onclick = () => openTaskRerunModal(task);
   }
   if (cancelBtn) {
@@ -371,21 +374,31 @@ function cancelTask(taskId) {
   .catch((error) => alert(error.message || 'Task cancel failed'));
 }
 
-function openTaskRerunModal(task) {
+async function openTaskRerunModal(task) {
   const textarea = document.getElementById('task-rerun-payload');
   const submitBtn = document.getElementById('task-rerun-submit-btn');
   const modal = document.getElementById('modal-task-rerun');
   if (!textarea || !submitBtn || !modal) return;
-  textarea.value = JSON.stringify(task.payload ?? {}, null, 2);
+  let payload = {};
+  try {
+    const response = await fetch('/api/tasks/' + encodeURIComponent(task.id) + '?section=payload');
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Task payload load failed');
+    payload = data.content ?? {};
+  } catch (error) {
+    alert(error.message || 'Task payload load failed');
+    return;
+  }
+  textarea.value = JSON.stringify(payload, null, 2);
   submitBtn.onclick = () => {
-    let payload;
+    let parsedPayload;
     try {
-      payload = JSON.parse(textarea.value || '{}');
+      parsedPayload = JSON.parse(textarea.value || '{}');
     } catch (error) {
       alert('Payload JSON is invalid');
       return;
     }
-    retryTask(task.id, payload, 'Edited rerun');
+    retryTask(task.id, parsedPayload, 'Edited rerun');
   };
   modal.style.display = 'flex';
 }
@@ -436,3 +449,4 @@ if (TASKS.length > 0) {
 }
 </script>
 {% endblock %}
+

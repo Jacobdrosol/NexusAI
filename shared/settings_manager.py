@@ -100,6 +100,21 @@ _DEFAULTS: List[tuple] = [
      "Additional num_width applied for each retry attempt. If num_width is unset, the same increment is applied to num_ctx."),
     ("bot_trigger_max_depth", "20", "int", "advanced", "Bot Trigger Max Depth",
      "Maximum number of chained bot-trigger hops allowed in one workflow or pipeline run."),
+    ("external_trigger_default_auth_header", "X-Nexus-Trigger-Token", "string", "advanced",
+     "External Trigger Auth Header",
+     "Default header name checked for per-bot external trigger token authentication."),
+    ("external_trigger_default_source", "external_trigger", "string", "advanced",
+     "External Trigger Source Label",
+     "Default task metadata source value for tasks created by external trigger intake."),
+    ("external_trigger_max_body_bytes", "1000000", "int", "advanced",
+     "External Trigger Max Body (bytes)",
+     "Maximum allowed request body size for external trigger calls."),
+    ("external_trigger_rate_limit_count", "120", "int", "advanced",
+     "External Trigger Rate Limit Count",
+     "Maximum external trigger requests allowed per client within the configured rate window."),
+    ("external_trigger_rate_limit_window_seconds", "60", "int", "advanced",
+     "External Trigger Rate Limit Window (s)",
+     "Sliding window size for external trigger request rate limiting."),
 ]
 
 

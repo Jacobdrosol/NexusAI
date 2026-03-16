@@ -23,9 +23,12 @@ def _build_snapshot() -> str:
         offline_workers = db.query(Worker).filter(Worker.status == "offline").count()
         active_bots = db.query(Bot).filter(Bot.enabled.is_(True)).count()
         queued_tasks = db.query(Task).filter(Task.status == "queued").count()
+        blocked_tasks = db.query(Task).filter(Task.status == "blocked").count()
         running_tasks = db.query(Task).filter(Task.status == "running").count()
         completed_tasks = db.query(Task).filter(Task.status == "completed").count()
         failed_tasks = db.query(Task).filter(Task.status == "failed").count()
+        retried_tasks = db.query(Task).filter(Task.status == "retried").count()
+        cancelled_tasks = db.query(Task).filter(Task.status == "cancelled").count()
         payload = {
             "workers": {
                 "total": total_workers,
@@ -35,9 +38,12 @@ def _build_snapshot() -> str:
             "bots": {"active": active_bots},
             "tasks": {
                 "queued": queued_tasks,
+                "blocked": blocked_tasks,
                 "running": running_tasks,
                 "completed": completed_tasks,
                 "failed": failed_tasks,
+                "retried": retried_tasks,
+                "cancelled": cancelled_tasks,
             },
         }
         return f"data: {json.dumps(payload)}\n\n"

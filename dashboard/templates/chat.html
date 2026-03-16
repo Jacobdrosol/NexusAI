@@ -1,19 +1,22 @@
-{% extends "base.html" %}
+﻿{% extends "base.html" %}
 {% set active_page = "chat" %}
 {% block title %}Chat{% endblock %}
 {% block content %}
-<div class="page-header">
+<div class="page-header chat-page-header">
   <h1>Chat</h1>
   <button class="btn btn-primary" onclick="showCreateConversation()">+ New Conversation</button>
 </div>
+{% if error %}
+<div class="alert alert-error">{{ error }}</div>
+{% endif %}
 
-<div class="split-grid">
-  <section class="panel">
+<div class="split-grid chat-split-grid">
+  <section class="panel chat-panel-side">
     <h2 class="panel-title">Conversations</h2>
     <div class="list">
       {% for c in conversations %}
-      <div class="list-item {% if selected_conversation and selected_conversation.id == c.id %}active{% endif %}" style="display:flex;align-items:flex-start;justify-content:space-between;gap:0.75rem;">
-        <a href="{{ url_for('chat.chat_page') }}?conversation_id={{ c.id }}" style="flex:1;min-width:0;color:inherit;text-decoration:none;">
+      <div class="list-item chat-conversation-row {% if selected_conversation and selected_conversation.id == c.id %}active{% endif %}">
+        <a href="{{ url_for('chat.chat_page') }}?conversation_id={{ c.id }}" class="chat-conversation-link">
           <div>{{ c.title }}</div>
           <small>{{ (c.updated_at[:19] if c.updated_at else '') | replace('T', ' ') }}</small>
         </a>
@@ -29,17 +32,17 @@
       {% endfor %}
     </div>
 
-    <hr style="margin:0.9rem 0;">
+    <hr class="chat-divider">
     <details {% if selected_conversation and selected_conversation.archived_at %}open{% endif %}>
-      <summary style="cursor:pointer;">Archived Conversations ({{ archived_conversations|length }})</summary>
-      <div class="list" style="margin-top:0.75rem;">
+      <summary class="chat-summary">Archived Conversations ({{ archived_conversations|length }})</summary>
+      <div class="list chat-archived-list">
         {% for c in archived_conversations %}
-        <div class="list-item {% if selected_conversation and selected_conversation.id == c.id %}active{% endif %}" style="display:flex;align-items:flex-start;justify-content:space-between;gap:0.75rem;">
-          <a href="{{ url_for('chat.chat_page') }}?conversation_id={{ c.id }}" style="flex:1;min-width:0;color:inherit;text-decoration:none;">
+        <div class="list-item chat-conversation-row {% if selected_conversation and selected_conversation.id == c.id %}active{% endif %}">
+          <a href="{{ url_for('chat.chat_page') }}?conversation_id={{ c.id }}" class="chat-conversation-link">
             <div>{{ c.title }}</div>
             <small>Archived {{ (c.archived_at[:19] if c.archived_at else '') | replace('T', ' ') }}</small>
           </a>
-          <div style="display:flex;gap:0.4rem;flex-wrap:wrap;">
+          <div class="chat-row-actions">
             <button type="button" class="btn btn-sm restore-conversation-btn" data-conversation-id="{{ c.id }}">Restore</button>
             <button
               type="button"
@@ -56,8 +59,8 @@
     </details>
 
     {% if selected_conversation %}
-    <hr style="margin:0.9rem 0;">
-    <h3 style="font-size:0.9rem;margin-bottom:0.35rem;">Context Picker</h3>
+    <hr class="chat-divider">
+    <h3 class="chat-section-title">Context Picker</h3>
     <div class="form-group">
       <label>Past Chats</label>
       <select class="form-control" id="context-conversation-select">
@@ -69,30 +72,99 @@
     </div>
     <div class="form-group">
       <label>Vault Items</label>
+      {% if repo_context_sections and repo_context_sections|length > 0 %}
+      <div class="mini-note chat-mini-block">Project Repo Context</div>
+      {% for section in repo_context_sections %}
+      <details class="chat-context-details">
+        <summary class="chat-summary">
+          {{ section.project_id }} ({{ section.namespace }}) Â· {{ section["items"]|length }} item{{ '' if section["items"]|length == 1 else 's' }}
+        </summary>
+        <div class="context-picker-list chat-context-list">
+          {% for v in section["items"] %}
+          {% set path_hint = (v.get('metadata') or {}).get('path') if v.get('metadata') else '' %}
+          <label class="context-item">
+            <input type="checkbox" class="context-vault" value="{{ v.id }}">
+            <span>{{ path_hint or v.title }}</span>
+          </label>
+          {% endfor %}
+        </div>
+      </details>
+      {% endfor %}
+      <div class="mini-note chat-mini-block">Other Vault Items</div>
+      {% endif %}
       <div class="context-picker-list">
         {% for v in vault_items %}
+        {% if not repo_context_item_ids or v.id not in repo_context_item_ids %}
         <label class="context-item">
           <input type="checkbox" class="context-vault" value="{{ v.id }}">
           <span>{{ v.title }}</span>
         </label>
+        {% endif %}
         {% else %}
         <div class="empty">No vault items available</div>
         {% endfor %}
       </div>
     </div>
+    {% if selected_conversation.project_id or (selected_conversation.bridge_project_ids and selected_conversation.bridge_project_ids|length > 0) %}
+    <div class="form-group">
+      <label class="context-item">
+        <input type="checkbox" id="include-project-context">
+        <span>Attach project repo context</span>
+      </label>
+      <p class="mini-note">Optional per message. Uses semantic query against synced repo context.</p>
+    </div>
+    {% endif %}
+    <div class="form-group">
+      <label>Chat Tool Access</label>
+      <label class="context-item">
+        <input type="checkbox" id="chat-tool-enabled" {% if selected_conversation.tool_access_enabled %}checked{% endif %}>
+        <span>Enable workspace tools for this chat</span>
+      </label>
+      <label class="context-item">
+        <input type="checkbox" id="chat-tool-filesystem" {% if selected_conversation.tool_access_filesystem %}checked{% endif %}>
+        <span>Allow filesystem read/search</span>
+      </label>
+      <label class="context-item">
+        <input type="checkbox" id="chat-tool-repo-search" {% if selected_conversation.tool_access_repo_search %}checked{% endif %}>
+        <span>Allow repo semantic search</span>
+      </label>
+      <div class="chat-tool-save-wrap">
+        <button type="button" class="btn btn-sm" onclick="saveConversationToolAccess()">Save Chat Tool Access</button>
+      </div>
+      <p class="mini-note">Tool usage is allowed only when bot + project + chat switches are all enabled.</p>
+    </div>
     {% endif %}
   </section>
 
-  <section class="panel">
-    <h2 class="panel-title">Messages</h2>
-    {% if selected_conversation %}
-    <div style="margin-bottom:0.5rem; display:flex; gap:0.5rem; flex-wrap:wrap;">
-      <button class="btn" type="button" onclick="ingestConversation('{{ selected_conversation.id }}')">Ingest This Chat</button>
-      <button class="btn" type="button" onclick="openAssignModal()">Assign Message to PM</button>
+  <section class="panel chat-panel-main">
+    <div class="chat-main-header">
+      <h2 class="panel-title">Messages</h2>
+      {% if selected_conversation %}
+      <div class="chat-main-header-controls">
+        <select id="chat-bot-selector" class="form-control chat-bot-selector" aria-label="Message bot">
+          <option value="">Conversation Bot</option>
+          {% for b in bots %}
+          <option value="{{ b.id }}" {% if selected_conversation.default_bot_id and selected_conversation.default_bot_id == b.id %}selected{% endif %}>
+            {{ b.name }}
+          </option>
+          {% endfor %}
+        </select>
+        <details class="chat-overflow-menu">
+          <summary class="btn btn-sm chat-overflow-trigger" aria-label="Message actions">...</summary>
+          <div class="chat-overflow-menu-items">
+            <button class="btn btn-sm" type="button" onclick="ingestConversation('{{ selected_conversation.id }}')">Ingest This Chat</button>
+            <button class="btn btn-sm" type="button" onclick="openAssignModal()">Assign Message to PM</button>
+          </div>
+        </details>
+      </div>
+      {% endif %}
     </div>
-    <div id="task-event-state" class="state-empty" style="margin-bottom:0.5rem;">No task events yet.</div>
-    <div id="task-events" class="list" style="margin-bottom:0.75rem;"></div>
-    <div id="messages" class="messages">
+    {% if selected_conversation %}
+    <div id="task-events-shell" class="chat-task-shell" hidden>
+      <div id="task-event-state" class="state-info chat-task-state"></div>
+      <div id="task-events" class="list chat-task-events"></div>
+    </div>
+    <div id="messages" class="messages chat-messages">
       {% for m in messages %}
       <div class="message {{ m.role }}" data-message-id="{{ m.id }}">
         <div class="message-role">{{ m.role }}</div>
@@ -110,20 +182,18 @@
       <div class="empty">No messages yet</div>
       {% endfor %}
     </div>
-    <form id="chat-send-form" class="chat-input">
+    <form id="chat-send-form" class="chat-input chat-composer">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="conversation_id" value="{{ selected_conversation.id }}">
-      <textarea class="form-control" name="content" placeholder="Type a message or use @assign ..." required></textarea>
-      <div class="chat-controls">
-        <select class="form-control" name="bot_id">
-          <option value="">Use conversation default</option>
-          {% for b in bots %}
-          <option value="{{ b.id }}">{{ b.name }} ({{ b.id }})</option>
-          {% endfor %}
-        </select>
-        <button type="button" class="btn" onclick="sendMessage(false)">Send</button>
-        <button type="button" class="btn btn-primary" onclick="sendMessage(true)">Stream Send</button>
+      <input type="hidden" name="bot_id" id="chat-send-bot-id" value="{{ selected_conversation.default_bot_id or '' }}">
+      <div class="chat-compose-row">
+        <textarea class="form-control" name="content" placeholder="Type a message or use @assign ..." required></textarea>
+        <button type="button" class="btn btn-primary chat-stream-btn" onclick="sendMessage(true)">Stream Message</button>
       </div>
+      <label class="context-item chat-message-tools-toggle">
+        <input type="checkbox" id="use-workspace-tools-message">
+        <span>Use workspace tools for this message (if policy allows)</span>
+      </label>
     </form>
     {% else %}
     <div class="empty">Choose a conversation to begin.</div>
@@ -180,6 +250,21 @@
           <option value="{{ b.id }}">{{ b.name }} ({{ b.id }})</option>
           {% endfor %}
         </select>
+      </div>
+      <div class="form-group">
+        <label>Chat Tool Access</label>
+        <label class="context-item">
+          <input type="checkbox" id="create-convo-tool-enabled" name="tool_access_enabled">
+          <span>Enable workspace tools for this chat</span>
+        </label>
+        <label class="context-item">
+          <input type="checkbox" id="create-convo-tool-filesystem" name="tool_access_filesystem">
+          <span>Allow filesystem read/search</span>
+        </label>
+        <label class="context-item">
+          <input type="checkbox" id="create-convo-tool-repo-search" name="tool_access_repo_search">
+          <span>Allow repo semantic search</span>
+        </label>
       </div>
       <div class="modal-actions">
         <button type="submit" class="btn btn-primary">Create</button>
@@ -269,6 +354,21 @@ function syncConversationScopeFields() {
   if (scope !== 'bridged' && bridgedPrimary) bridgedPrimary.value = '';
   if (scope !== 'bridged' && bridgeProjects) {
     Array.from(bridgeProjects.options).forEach((opt) => { opt.selected = false; });
+  }
+}
+
+function syncCreateConversationToolFields() {
+  const enabled = document.getElementById('create-convo-tool-enabled');
+  const filesystem = document.getElementById('create-convo-tool-filesystem');
+  const repo = document.getElementById('create-convo-tool-repo-search');
+  const isEnabled = !!enabled?.checked;
+  if (filesystem) {
+    filesystem.disabled = !isEnabled;
+    if (!isEnabled) filesystem.checked = false;
+  }
+  if (repo) {
+    repo.disabled = !isEnabled;
+    if (!isEnabled) repo.checked = false;
   }
 }
 
@@ -481,15 +581,15 @@ function appendMessage(role, content, id='temp-' + Date.now(), meta=null) {
   return div;
 }
 
-function setPendingAssistantStatus(text) {
-  const pending = document.querySelector('.message[data-pending-assistant="true"]');
+function setPendingAssistantStatus(text, pendingEl = null) {
+  const pending = pendingEl || document.querySelector('.message[data-pending-assistant="true"]');
   if (!pending) return;
   const bodyEl = pending.querySelector('.message-body');
   if (bodyEl && !(pending.dataset.streamingStarted === 'true')) renderMessageBody(bodyEl, text);
 }
 
-function appendPendingAssistantToken(text) {
-  const pending = document.querySelector('.message[data-pending-assistant="true"]');
+function appendPendingAssistantToken(text, pendingEl = null) {
+  const pending = pendingEl || document.querySelector('.message[data-pending-assistant="true"]');
   if (!pending) return;
   const bodyEl = pending.querySelector('.message-body');
   if (!bodyEl) return;
@@ -515,19 +615,10 @@ function reconcilePendingElement(message) {
   )) || null;
 }
 
-function upsertMessage(message) {
-  if (!message || !message.id) return null;
+function hydrateMessageElement(el, message) {
+  if (!el || !message || !message.id) return null;
   const id = String(message.id);
   messageMap.set(id, message);
-
-  let el = document.querySelector(`.message[data-message-id="${id}"]`);
-  if (!el) {
-    el = reconcilePendingElement(message);
-  }
-  if (!el) {
-    el = appendMessage(message.role || 'assistant', message.content || '', id, message.metadata || null);
-  }
-  if (!el) return null;
 
   el.className = 'message ' + (message.role || 'assistant');
   el.dataset.messageId = id;
@@ -535,6 +626,7 @@ function upsertMessage(message) {
   el.dataset.content = message.content || '';
   delete el.dataset.pending;
   delete el.dataset.pendingAssistant;
+  delete el.dataset.streamingStarted;
   if (message.metadata) {
     el.dataset.meta = JSON.stringify(message.metadata);
   } else {
@@ -548,6 +640,25 @@ function upsertMessage(message) {
   if (bodyEl) renderMessageBody(bodyEl, message.content || '');
   if (actionsEl) actionsEl.innerHTML = renderMessageActions(message.metadata || null);
   return el;
+}
+
+function upsertMessage(message, preferredElement = null) {
+  if (!message || !message.id) return null;
+  const id = String(message.id);
+  messageMap.set(id, message);
+
+  let el = document.querySelector(`.message[data-message-id="${id}"]`);
+  if (!el && preferredElement && preferredElement.isConnected) {
+    el = preferredElement;
+  }
+  if (!el) {
+    el = reconcilePendingElement(message);
+  }
+  if (!el) {
+    el = appendMessage(message.role || 'assistant', message.content || '', id, message.metadata || null);
+  }
+  if (!el) return null;
+  return hydrateMessageElement(el, message);
 }
 
 async function refreshMessages() {
@@ -631,6 +742,62 @@ function bindConversationActions() {
   });
 }
 
+async function saveConversationToolAccess() {
+  if (!selectedConversationId) return;
+  const enabled = !!document.getElementById('chat-tool-enabled')?.checked;
+  const filesystem = enabled && !!document.getElementById('chat-tool-filesystem')?.checked;
+  const repoSearch = enabled && !!document.getElementById('chat-tool-repo-search')?.checked;
+  const res = await fetch('/api/chat/conversations/' + encodeURIComponent(selectedConversationId) + '/tool-access', {
+    method: 'PUT',
+    headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify({
+      enabled,
+      filesystem,
+      repo_search: repoSearch,
+    }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    alert(data.error || 'Failed to update chat tool access.');
+    return;
+  }
+  window.location.reload();
+}
+
+function syncConversationToolAccessEditor() {
+  const enabled = !!document.getElementById('chat-tool-enabled')?.checked;
+  const filesystem = document.getElementById('chat-tool-filesystem');
+  const repo = document.getElementById('chat-tool-repo-search');
+  if (filesystem) {
+    filesystem.disabled = !enabled;
+    if (!enabled) filesystem.checked = false;
+  }
+  if (repo) {
+    repo.disabled = !enabled;
+    if (!enabled) repo.checked = false;
+  }
+}
+
+function syncSendBotSelection() {
+  const selector = document.getElementById('chat-bot-selector');
+  const hidden = document.getElementById('chat-send-bot-id');
+  if (!hidden) return;
+  hidden.value = selector ? (selector.value || '') : '';
+}
+
+function setTaskEventsVisible(visible) {
+  const shell = document.getElementById('task-events-shell');
+  const stateEl = document.getElementById('task-event-state');
+  const listEl = document.getElementById('task-events');
+  if (!shell) return;
+  shell.hidden = !visible;
+  if (!visible) {
+    taskEventMap.clear();
+    if (stateEl) stateEl.textContent = '';
+    if (listEl) listEl.innerHTML = '';
+  }
+}
+
 function esc(s) {
   return (s || '').toString().replace(/[&<>"']/g, (c) => (
     {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;', "'":'&#39;'}[c]
@@ -639,6 +806,7 @@ function esc(s) {
 
 function upsertTaskEvent(task) {
   if (!task || !task.task_id) return;
+  setTaskEventsVisible(true);
   taskEventMap.set(task.task_id, task);
   const stateEl = document.getElementById('task-event-state');
   const listEl = document.getElementById('task-events');
@@ -655,7 +823,7 @@ function upsertTaskEvent(task) {
           <strong>${title}</strong>
           <span class="badge badge-${t.status}">${t.status}</span>
         </div>
-        <div class="mini-note">Task ${t.task_id} · Bot ${t.bot_id || 'unknown'}</div>
+        <div class="mini-note">Task ${t.task_id} Â· Bot ${t.bot_id || 'unknown'}</div>
         ${errorText}
       </div>
     `;
@@ -665,6 +833,7 @@ function upsertTaskEvent(task) {
 async function sendMessage(streamMode) {
   const form = document.getElementById('chat-send-form');
   if (!form || !selectedConversationId) return;
+  setTaskEventsVisible(false);
   const fd = new FormData(form);
   const content = (fd.get('content') || '').toString().trim();
   if (!content) return;
@@ -672,9 +841,12 @@ async function sendMessage(streamMode) {
   const payload = {
     ...(function() {
       const ctx = selectedContextItems();
+      const includeProjectContext = document.getElementById('include-project-context');
       return {
         context_items: ctx.contexts,
         context_item_ids: ctx.contextItemIds,
+        include_project_context: includeProjectContext ? includeProjectContext.checked : false,
+        use_workspace_tools: !!document.getElementById('use-workspace-tools-message')?.checked,
       };
     })(),
     conversation_id: fd.get('conversation_id'),
@@ -693,38 +865,48 @@ async function sendMessage(streamMode) {
     }
     form.querySelector('textarea[name=content]').value = '';
     startMessagePolling();
-
-    const res = await fetch('/api/chat/messages', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      if (pending) {
-        pending.querySelector('.message-body').textContent = 'Still waiting on a reply. Rechecking conversation state...';
-      }
-      refreshMessagesUntilSettled(12, 1000).then((recovered) => {
-        if (!recovered && pending) {
-          pending.querySelector('.message-body').textContent = 'Request timed out locally. If the backend eventually finishes, the saved reply will appear here automatically.';
-        }
+    try {
+      const res = await fetch('/api/chat/messages', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
+        body: JSON.stringify(payload),
       });
-      const error = (data.error || '').toString().trim();
-      if (error) {
-        alert(error);
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        if (pending) {
+          pending.querySelector('.message-body').textContent = 'Still waiting on a reply. Rechecking conversation state...';
+        }
+        refreshMessagesUntilSettled(12, 1000).then((recovered) => {
+          if (!recovered && pending) {
+            pending.querySelector('.message-body').textContent = 'Request timed out locally. If the backend eventually finishes, the saved reply will appear here automatically.';
+          }
+        });
+        const error = (data.error || '').toString().trim();
+        if (error) {
+          alert(error);
+        }
+        return;
+      }
+      const data = await res.json();
+      if (data.user_message) upsertMessage(data.user_message, tempUser);
+      if (data.assistant_message) upsertMessage(data.assistant_message, pending);
+      if (data.mode === 'assign') {
+        const orchestrationId = data.assignment?.orchestration_id || 'unknown';
+        alert('Assignment completed: ' + orchestrationId);
+        return;
+      }
+      setTimeout(refreshMessages, 250);
+      return;
+    } catch (_) {
+      if (pending) {
+        pending.querySelector('.message-body').textContent = 'Connection issue while sending. Rechecking conversation state...';
+      }
+      const recovered = await refreshMessagesUntilSettled(12, 1000);
+      if (!recovered && pending) {
+        pending.querySelector('.message-body').textContent = 'Connection dropped before the response finished. If saved, the reply will appear after refresh.';
       }
       return;
     }
-    const data = await res.json();
-    if (data.user_message) upsertMessage(data.user_message);
-    if (data.assistant_message) upsertMessage(data.assistant_message);
-    if (data.mode === 'assign') {
-      const orchestrationId = data.assignment?.orchestration_id || 'unknown';
-      alert('Assignment completed: ' + orchestrationId);
-      return;
-    }
-    setTimeout(refreshMessages, 250);
-    return;
   }
 
   const tempUser = appendMessage('user', content);
@@ -737,90 +919,104 @@ async function sendMessage(streamMode) {
     pending.dataset.pendingAssistant = 'true';
   }
   form.reset();
-
-  const res = await fetch('/api/chat/stream', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok || !res.body) {
-    const data = await res.json().catch(() => ({}));
-    alert(data.error || 'Stream send failed');
-    return;
-  }
-
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
+  syncSendBotSelection();
   let sawDone = false;
-  while (true) {
-    const {done, value} = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, {stream: true});
-    let idx;
-    while ((idx = buffer.indexOf('\n\n')) >= 0) {
-      const block = buffer.slice(0, idx);
-      buffer = buffer.slice(idx + 2);
-      let eventType = 'message';
-      let dataText = '';
-      block.split('\n').forEach((line) => {
-        if (line.startsWith('event:')) eventType = line.slice(6).trim();
-        if (line.startsWith('data:')) dataText += line.slice(5).trim();
-      });
-      if (!dataText) continue;
-      try {
-        const parsed = JSON.parse(dataText);
-        if (eventType === 'task_graph') {
-          (parsed.tasks || []).forEach((t) => {
-            upsertTaskEvent({
-              task_id: t.id,
-              status: t.status || 'queued',
-              bot_id: t.bot_id,
-              title: (t.payload && t.payload.title) || '',
+  try {
+    const res = await fetch('/api/chat/stream', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok || !res.body) {
+      const data = await res.json().catch(() => ({}));
+      alert(data.error || 'Stream send failed');
+      return;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, {stream: true});
+      let idx;
+      while ((idx = buffer.indexOf('\n\n')) >= 0) {
+        const block = buffer.slice(0, idx);
+        buffer = buffer.slice(idx + 2);
+        let eventType = 'message';
+        const dataLines = [];
+        block.split('\n').forEach((rawLine) => {
+          const line = rawLine.replace(/\r$/, '');
+          if (line.startsWith('event:')) eventType = line.slice(6).trim();
+          if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart());
+        });
+        const dataText = dataLines.join('\n');
+        if (!dataText) continue;
+        try {
+          const parsed = JSON.parse(dataText);
+          if (eventType === 'task_graph') {
+            (parsed.tasks || []).forEach((t) => {
+              upsertTaskEvent({
+                task_id: t.id,
+                status: t.status || 'queued',
+                bot_id: t.bot_id,
+                title: (t.payload && t.payload.title) || '',
+              });
             });
-          });
-        } else if (eventType === 'task_status') {
-          upsertTaskEvent(parsed);
-          const statuses = Array.from(taskEventMap.values()).map((t) => t.status);
-          if (statuses.length > 0 && statuses.every((s) => s === 'completed' || s === 'failed')) {
-            const stateEl = document.getElementById('task-event-state');
-            if (stateEl) {
-              stateEl.className = 'state-info';
-              stateEl.textContent = 'Task graph completed.';
+          } else if (eventType === 'task_status') {
+            upsertTaskEvent(parsed);
+            const statuses = Array.from(taskEventMap.values()).map((t) => t.status);
+            if (statuses.length > 0 && statuses.every((s) => s === 'completed' || s === 'failed')) {
+              const stateEl = document.getElementById('task-event-state');
+              if (stateEl) {
+                stateEl.className = 'state-info';
+                stateEl.textContent = 'Task graph completed.';
+              }
             }
+          } else if (eventType === 'context_summary') {
+            const sources = Array.isArray(parsed.sources) ? parsed.sources.filter(Boolean) : [];
+            if (sources.length > 0) {
+              const preview = sources.slice(0, 3).join('; ');
+              setPendingAssistantStatus(`Using repo context from: ${preview}`, pending);
+            } else {
+              setPendingAssistantStatus('No repository context was resolved for this turn.', pending);
+            }
+          } else if (eventType === 'status') {
+            setPendingAssistantStatus(parsed.label || 'Working...', pending);
+          } else if (eventType === 'token') {
+            appendPendingAssistantToken(parsed.text || '', pending);
+          } else if (eventType === 'user_message') {
+            upsertMessage(parsed, tempUser);
+          } else if (eventType === 'assistant_message' && pending) {
+            upsertMessage(parsed, pending);
+          } else if (eventType === 'error') {
+            setPendingAssistantStatus(parsed.error || 'Stream error', pending);
+            alert(parsed.error || 'Stream error');
+          } else if (eventType === 'done') {
+            sawDone = true;
+            setTimeout(refreshMessages, 150);
           }
-        } else if (eventType === 'status') {
-          setPendingAssistantStatus(parsed.label || 'Working...');
-        } else if (eventType === 'token') {
-          appendPendingAssistantToken(parsed.text || '');
-        } else if (eventType === 'user_message') {
-          upsertMessage(parsed);
-        } else if (eventType === 'assistant_message' && pending) {
-          upsertMessage(parsed);
-        } else if (eventType === 'error') {
-          setPendingAssistantStatus(parsed.error || 'Stream error');
-          alert(parsed.error || 'Stream error');
-        } else if (eventType === 'done') {
-          sawDone = true;
-          setTimeout(refreshMessages, 150);
+        } catch (_) {
+          // ignore malformed frames
         }
-      } catch (_) {
-        // ignore malformed frames
       }
     }
+  } catch (_) {
+    setPendingAssistantStatus('Stream connection failed. Rechecking saved response...', pending);
   }
   if (!sawDone) {
-    setPendingAssistantStatus('Stream closed unexpectedly. Rechecking saved response...');
+    setPendingAssistantStatus('Stream closed unexpectedly. Rechecking saved response...', pending);
     const recovered = await refreshMessagesUntilSettled();
     if (!recovered) {
-      setPendingAssistantStatus('Generation stopped before completion. Partial output was kept if anything was saved.');
+      setPendingAssistantStatus('Generation stopped before completion. Partial output was kept if anything was saved.', pending);
     }
   }
 }
 
 document.getElementById('chat-send-form')?.addEventListener('submit', function(e) {
   e.preventDefault();
-  sendMessage(false);
+  sendMessage(true);
 });
 
 document.getElementById('form-create-convo')?.addEventListener('submit', async function(e) {
@@ -845,7 +1041,10 @@ document.getElementById('form-create-convo')?.addEventListener('submit', async f
       project_id: projectId,
       bridge_project_ids: bridgeProjectIds,
       scope,
-      default_bot_id: fd.get('default_bot_id') || null
+      default_bot_id: fd.get('default_bot_id') || null,
+      tool_access_enabled: !!document.getElementById('create-convo-tool-enabled')?.checked,
+      tool_access_filesystem: !!document.getElementById('create-convo-tool-filesystem')?.checked,
+      tool_access_repo_search: !!document.getElementById('create-convo-tool-repo-search')?.checked
     }),
   });
   if (!res.ok) {
@@ -862,13 +1061,16 @@ document.getElementById('form-assign')?.addEventListener('submit', async functio
   const fd = new FormData(this);
   const instruction = (fd.get('instruction') || '').toString().trim();
   if (!instruction) return;
+  const includeProjectContext = document.getElementById('include-project-context');
   const res = await fetch('/api/chat/messages', {
     method: 'POST',
     headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
     body: JSON.stringify({
       conversation_id: fd.get('conversation_id'),
       content: '@assign ' + instruction,
-      bot_id: fd.get('bot_id') || null
+      bot_id: fd.get('bot_id') || null,
+      include_project_context: includeProjectContext ? includeProjectContext.checked : false,
+      use_workspace_tools: !!document.getElementById('use-workspace-tools-message')?.checked
     }),
   });
   if (!res.ok) {
@@ -1071,8 +1273,16 @@ async function openDagViewer(orchestrationId) {
 
 bindConversationActions();
 document.getElementById('create-convo-scope')?.addEventListener('change', syncConversationScopeFields);
+document.getElementById('create-convo-tool-enabled')?.addEventListener('change', syncCreateConversationToolFields);
+document.getElementById('chat-tool-enabled')?.addEventListener('change', syncConversationToolAccessEditor);
+document.getElementById('chat-bot-selector')?.addEventListener('change', syncSendBotSelection);
 syncConversationScopeFields();
+syncCreateConversationToolFields();
+syncConversationToolAccessEditor();
+syncSendBotSelection();
+setTaskEventsVisible(false);
 startMessagePolling();
 document.querySelectorAll('#messages .message-body').forEach((el) => renderMessageBody(el, el.textContent || ''));
 </script>
 {% endblock %}
+

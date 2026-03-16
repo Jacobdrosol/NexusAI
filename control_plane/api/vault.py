@@ -87,9 +87,15 @@ async def list_items(
     namespace: Optional[str] = Query(default=None),
     project_id: Optional[str] = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
+    include_content: bool = Query(default=True),
 ) -> List[VaultItem]:
     vault_manager = request.app.state.vault_manager
-    return await vault_manager.list_items(namespace=namespace, project_id=project_id, limit=limit)
+    return await vault_manager.list_items(
+        namespace=namespace,
+        project_id=project_id,
+        limit=limit,
+        include_content=include_content,
+    )
 
 
 @router.get("/items/{item_id}", response_model=VaultItem)

@@ -21,6 +21,13 @@ logger = logging.getLogger(__name__)
 bp = Blueprint("bots", __name__)
 
 
+def _cp_list_tasks_safe(cp, **kwargs):
+    try:
+        return cp.list_tasks(**kwargs)
+    except TypeError:
+        return cp.list_tasks()
+
+
 def _slugify_bot_id(name: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", str(name or "").strip().lower()).strip("-")
     return slug or "bot"
@@ -50,6 +57,8 @@ def _merge_routing_rules(data: dict[str, Any], existing: Any = None) -> dict[str
         merged["connection_context"] = data.get("connection_context")
     if "launch_profile" in data:
         merged["launch_profile"] = data.get("launch_profile")
+    if "external_trigger" in data:
+        merged["external_trigger"] = data.get("external_trigger")
     return merged
 
 
@@ -70,6 +79,7 @@ def _bot_to_dict(b: Bot) -> dict[str, Any]:
         "output_contract": routing_rules.get("output_contract") if isinstance(routing_rules, dict) else None,
         "connection_context": routing_rules.get("connection_context") if isinstance(routing_rules, dict) else None,
         "launch_profile": routing_rules.get("launch_profile") if isinstance(routing_rules, dict) else None,
+        "external_trigger": routing_rules.get("external_trigger") if isinstance(routing_rules, dict) else None,
     }
 
 
@@ -182,7 +192,7 @@ def bot_detail_page(bot_id: str):
 
     cp = get_cp_client()
     cp_bot = cp.get_bot(bot_id)
-    cp_tasks = cp.list_tasks()
+    cp_tasks = _cp_list_tasks_safe(cp, bot_id=bot_id, limit=300, include_content=False)
     cp_runs = cp.list_bot_runs(bot_id) or []
     cp_artifacts = cp.list_bot_artifacts(bot_id, limit=300, include_content=False) or []
     cp_workers = cp.list_workers() or []
@@ -219,9 +229,9 @@ def bot_detail_page(bot_id: str):
                     "id": t.id,
                     "bot_id": t.bot_id,
                     "status": t.status,
-                    "payload": t.payload_as_dict(),
-                    "result": json.loads(t.result) if t.result else None,
-                    "error": json.loads(t.error) if t.error else None,
+                    "has_payload": bool(t.payload),
+                    "has_result": bool(t.result),
+                    "has_error": bool(t.error),
                     "created_at": t.created_at.isoformat() if t.created_at else "",
                     "updated_at": t.updated_at.isoformat() if t.updated_at else "",
                 }

@@ -119,6 +119,76 @@
 
 <section class="panel" style="margin-bottom:1rem;">
   <div class="page-header" style="margin-bottom:0.75rem;">
+    <h2 class="panel-title">External Trigger Intake</h2>
+    <div>
+      <button class="btn btn-primary" onclick="saveExternalTrigger()">Save External Trigger</button>
+    </div>
+  </div>
+  <p class="mini-note" style="margin-bottom:0.75rem;">Allow external systems to start this bot directly through a webhook-style endpoint. This creates a normal queued task, so all downstream workflow triggers still run the same way.</p>
+  <div class="form-group">
+    <label><input type="checkbox" id="external-trigger-enabled"> Enable external trigger endpoint for this bot</label>
+  </div>
+  <div class="split-grid" style="grid-template-columns:1fr 1fr;">
+    <div class="form-group">
+      <label><input type="checkbox" id="external-trigger-require-auth" checked> Require auth token header</label>
+    </div>
+    <div class="form-group">
+      <label><input type="checkbox" id="external-trigger-allow-metadata"> Allow caller metadata override (<code>metadata</code> object)</label>
+    </div>
+  </div>
+  <div class="split-grid" style="grid-template-columns:1fr 1fr;">
+    <div class="form-group">
+      <label>Auth Header Name</label>
+      <input class="form-control" id="external-trigger-auth-header" placeholder="X-Nexus-Trigger-Token">
+    </div>
+    <div class="form-group">
+      <label>Auth Token</label>
+      <input class="form-control" id="external-trigger-auth-token" placeholder="set-a-long-random-token">
+      <div class="mini-note">If auth is required, the caller must send this exact token in the auth header.</div>
+    </div>
+  </div>
+  <div class="split-grid" style="grid-template-columns:1fr 1fr;">
+    <div class="form-group">
+      <label>Task Source Label</label>
+      <input class="form-control" id="external-trigger-source" placeholder="external_trigger">
+    </div>
+    <div class="form-group">
+      <label>Payload Field Path (optional)</label>
+      <input class="form-control" id="external-trigger-payload-field" placeholder="payload">
+      <div class="mini-note">Optional nested path inside the request JSON body to use as task payload, for example <code>event.data</code>.</div>
+    </div>
+  </div>
+  <div class="form-group">
+    <label>External Trigger URL</label>
+    <input class="form-control" id="external-trigger-url" readonly>
+    <div class="mini-note">Call this path on your control-plane base URL, not the dashboard UI URL.</div>
+  </div>
+</section>
+
+<section class="panel" style="margin-bottom:1rem;">
+  <div class="page-header" style="margin-bottom:0.75rem;">
+    <h2 class="panel-title">Chat Tool Access</h2>
+    <div>
+      <button class="btn btn-primary" onclick="saveChatToolAccess()">Save Chat Tool Access</button>
+    </div>
+  </div>
+  <p class="mini-note" style="margin-bottom:0.75rem;">Bot-level workspace tool policy is one gate in a strict 3-switch hierarchy. Tools are available only when bot, project, and chat settings are all enabled.</p>
+  <div class="form-group">
+    <label><input type="checkbox" id="bot-chat-tool-enabled"> Enable workspace tools for this bot</label>
+  </div>
+  <div class="split-grid" style="grid-template-columns:1fr 1fr;">
+    <div class="form-group">
+      <label><input type="checkbox" id="bot-chat-tool-filesystem"> Allow filesystem read/search</label>
+    </div>
+    <div class="form-group">
+      <label><input type="checkbox" id="bot-chat-tool-repo-search"> Allow semantic repo search</label>
+    </div>
+  </div>
+  <div class="mini-note">Workspace root path is configured at project level. Per-message usage still requires enabling tools in the chat composer.</div>
+</section>
+
+<section class="panel" style="margin-bottom:1rem;">
+  <div class="page-header" style="margin-bottom:0.75rem;">
     <h2 class="panel-title">Run Input Contract</h2>
     <div>
       <button class="btn btn-primary" onclick="saveInputContract()">Save Input Contract</button>
@@ -758,6 +828,18 @@ BOT.launch_profile = BOT.launch_profile && typeof BOT.launch_profile === 'object
   : ((BOT.routing_rules && typeof BOT.routing_rules === 'object' && BOT.routing_rules.launch_profile && typeof BOT.routing_rules.launch_profile === 'object')
     ? BOT.routing_rules.launch_profile
     : null);
+BOT.external_trigger = BOT.external_trigger && typeof BOT.external_trigger === 'object'
+  ? BOT.external_trigger
+  : ((BOT.routing_rules && typeof BOT.routing_rules === 'object' && BOT.routing_rules.external_trigger && typeof BOT.routing_rules.external_trigger === 'object')
+    ? BOT.routing_rules.external_trigger
+    : {enabled: false, require_auth: true, auth_header: '', auth_token: '', source: 'external_trigger', payload_field: '', allow_metadata: false});
+BOT.chat_tool_access = BOT.chat_tool_access && typeof BOT.chat_tool_access === 'object'
+  ? BOT.chat_tool_access
+  : ((BOT.routing_rules && typeof BOT.routing_rules === 'object' && BOT.routing_rules.chat_tool_access && typeof BOT.routing_rules.chat_tool_access === 'object')
+    ? BOT.routing_rules.chat_tool_access
+    : ((BOT.routing_rules && typeof BOT.routing_rules === 'object' && BOT.routing_rules.tool_access && typeof BOT.routing_rules.tool_access === 'object')
+      ? BOT.routing_rules.tool_access
+      : {enabled: false, filesystem: false, repo_search: false}));
 const ARTIFACTS_BY_TASK = ARTIFACTS.reduce((acc, artifact) => {
   const taskId = String(artifact.task_id || '');
   if (!taskId) return acc;
@@ -839,6 +921,8 @@ function botPayloadForSave() {
   routingRules.output_contract = normalizedOutputContract();
   routingRules.connection_context = normalizedConnectionContext();
   routingRules.launch_profile = normalizedLaunchProfile();
+  routingRules.external_trigger = normalizedExternalTrigger();
+  routingRules.chat_tool_access = normalizedChatToolAccess();
   payload.routing_rules = routingRules;
   payload.workflow = BOT.workflow;
   return payload;
@@ -1191,6 +1275,95 @@ function normalizedLaunchProfile() {
     is_pipeline: profile.is_pipeline === true,
     pipeline_name: String(profile.pipeline_name || profile.label || BOT.name || BOT.id || 'Pipeline').trim(),
   };
+}
+
+function normalizedChatToolAccess() {
+  const cfg = BOT.chat_tool_access && typeof BOT.chat_tool_access === 'object' ? BOT.chat_tool_access : {};
+  return {
+    enabled: cfg.enabled === true,
+    filesystem: cfg.filesystem === true,
+    repo_search: cfg.repo_search === true,
+  };
+}
+
+function syncChatToolAccessInputs() {
+  const enabled = !!document.getElementById('bot-chat-tool-enabled')?.checked;
+  const filesystem = document.getElementById('bot-chat-tool-filesystem');
+  const repoSearch = document.getElementById('bot-chat-tool-repo-search');
+  if (filesystem) {
+    filesystem.disabled = !enabled;
+    if (!enabled) filesystem.checked = false;
+  }
+  if (repoSearch) {
+    repoSearch.disabled = !enabled;
+    if (!enabled) repoSearch.checked = false;
+  }
+}
+
+function loadChatToolAccessEditor() {
+  const cfg = normalizedChatToolAccess();
+  const enabled = document.getElementById('bot-chat-tool-enabled');
+  const filesystem = document.getElementById('bot-chat-tool-filesystem');
+  const repoSearch = document.getElementById('bot-chat-tool-repo-search');
+  if (enabled) enabled.checked = cfg.enabled;
+  if (filesystem) filesystem.checked = cfg.filesystem;
+  if (repoSearch) repoSearch.checked = cfg.repo_search;
+  syncChatToolAccessInputs();
+}
+
+function saveChatToolAccess() {
+  BOT.chat_tool_access = {
+    enabled: !!document.getElementById('bot-chat-tool-enabled')?.checked,
+    filesystem: !!document.getElementById('bot-chat-tool-filesystem')?.checked,
+    repo_search: !!document.getElementById('bot-chat-tool-repo-search')?.checked,
+  };
+  persistBot('Chat tool access saved.');
+}
+
+function externalTriggerPath() {
+  return '/v1/bots/' + encodeURIComponent(String(BOT_ID || '')) + '/trigger';
+}
+
+function normalizedExternalTrigger() {
+  const cfg = BOT.external_trigger && typeof BOT.external_trigger === 'object' ? BOT.external_trigger : {};
+  return {
+    enabled: cfg.enabled === true,
+    require_auth: cfg.require_auth !== false,
+    auth_header: String(cfg.auth_header || 'X-Nexus-Trigger-Token').trim() || 'X-Nexus-Trigger-Token',
+    auth_token: String(cfg.auth_token || '').trim(),
+    source: String(cfg.source || 'external_trigger').trim() || 'external_trigger',
+    payload_field: String(cfg.payload_field || '').trim() || null,
+    allow_metadata: cfg.allow_metadata === true,
+  };
+}
+
+function loadExternalTriggerEditor() {
+  const cfg = normalizedExternalTrigger();
+  document.getElementById('external-trigger-enabled').checked = cfg.enabled === true;
+  document.getElementById('external-trigger-require-auth').checked = cfg.require_auth !== false;
+  document.getElementById('external-trigger-auth-header').value = cfg.auth_header || 'X-Nexus-Trigger-Token';
+  document.getElementById('external-trigger-auth-token').value = cfg.auth_token || '';
+  document.getElementById('external-trigger-source').value = cfg.source || 'external_trigger';
+  document.getElementById('external-trigger-payload-field').value = cfg.payload_field || '';
+  document.getElementById('external-trigger-allow-metadata').checked = cfg.allow_metadata === true;
+  document.getElementById('external-trigger-url').value = externalTriggerPath();
+}
+
+function saveExternalTrigger() {
+  BOT.external_trigger = {
+    enabled: document.getElementById('external-trigger-enabled').checked,
+    require_auth: document.getElementById('external-trigger-require-auth').checked,
+    auth_header: String(document.getElementById('external-trigger-auth-header')?.value || '').trim() || 'X-Nexus-Trigger-Token',
+    auth_token: String(document.getElementById('external-trigger-auth-token')?.value || '').trim(),
+    source: String(document.getElementById('external-trigger-source')?.value || '').trim() || 'external_trigger',
+    payload_field: String(document.getElementById('external-trigger-payload-field')?.value || '').trim() || null,
+    allow_metadata: document.getElementById('external-trigger-allow-metadata').checked,
+  };
+  if (BOT.external_trigger.require_auth && !BOT.external_trigger.auth_token) {
+    alert('Auth token is required when "Require auth token header" is enabled.');
+    return;
+  }
+  persistBot('External trigger settings saved.');
 }
 
 function loadLaunchProfileEditor() {
@@ -1749,10 +1922,21 @@ function persistBot(successMessage) {
 }
 
 function openTaskModal(taskId) {
-  const task = TASKS.find(t => String(t.id) === String(taskId)) || RUNS.find(t => String(t.task_id) === String(taskId));
-  if (!task) return;
-  document.getElementById('task-detail-pre').textContent = JSON.stringify(task, null, 2);
-  document.getElementById('modal-task-detail').style.display = 'flex';
+  const fallback = TASKS.find(t => String(t.id) === String(taskId)) || RUNS.find(t => String(t.task_id) === String(taskId));
+  fetch('/api/tasks/' + encodeURIComponent(taskId) + '?include_content=true', {
+    headers: {'X-CSRFToken': getCsrf()}
+  })
+  .then(async (r) => {
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || 'Task load failed');
+    document.getElementById('task-detail-pre').textContent = JSON.stringify(data, null, 2);
+    document.getElementById('modal-task-detail').style.display = 'flex';
+  })
+  .catch(() => {
+    if (!fallback) return;
+    document.getElementById('task-detail-pre').textContent = JSON.stringify(fallback, null, 2);
+    document.getElementById('modal-task-detail').style.display = 'flex';
+  });
 }
 
 function artifactsForTask(taskId) {
@@ -1928,7 +2112,9 @@ loadInputContractEditor();
 loadInputTransformEditor();
 loadConnectionContextEditor();
 loadOutputContractEditor();
+loadExternalTriggerEditor();
 loadLaunchProfileEditor();
+loadChatToolAccessEditor();
 if (RUNS.length) {
   selectRunArtifacts(RUNS[0].task_id);
 }
@@ -1947,5 +2133,6 @@ document.querySelector('#form-backend select[name=type]')?.addEventListener('cha
   refreshModelOptions();
   applyBackendDefaults();
 });
+document.getElementById('bot-chat-tool-enabled')?.addEventListener('change', syncChatToolAccessInputs);
 </script>
 {% endblock %}

@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import os
+import json
+import logging
 from typing import Any, Dict, Iterable
 
 import requests
@@ -11,6 +13,7 @@ from flask_login import login_required
 from dashboard.cp_client import get_cp_client
 
 bp = Blueprint("chat", __name__)
+logger = logging.getLogger(__name__)
 
 
 def _cp_error_response(cp, fallback: str = "control plane unavailable"):
@@ -38,34 +41,311 @@ def _stream_cp_headers(cp) -> dict[str, str]:
     return headers
 
 
+def _json_safe(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        safe: dict[str, Any] = {}
+        for key, raw in value.items():
+            safe[str(key)] = _json_safe(raw)
+        return safe
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(item) for item in value]
+    return str(value)
+
+
+def _normalize_bridge_project_ids(raw: Any) -> list[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, (list, tuple, set)):
+        values = [str(item or "").strip() for item in raw]
+        return [value for value in values if value]
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return []
+        # Legacy rows may store JSON text or a single project id.
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            return [text]
+        if isinstance(parsed, (list, tuple, set)):
+            values = [str(item or "").strip() for item in parsed]
+            return [value for value in values if value]
+        if isinstance(parsed, str):
+            value = parsed.strip()
+            return [value] if value else []
+        return []
+    return []
+
+
+def _normalize_conversation_row(raw: Any) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    cid = str(raw.get("id") or "").strip()
+    if not cid:
+        return None
+    normalized = dict(raw)
+    normalized["id"] = cid
+    title = str(raw.get("title") or "").strip()
+    normalized["title"] = title or cid
+    normalized["project_id"] = str(raw.get("project_id") or "").strip() or None
+    normalized["scope"] = str(raw.get("scope") or "").strip() or "global"
+    normalized["default_bot_id"] = str(raw.get("default_bot_id") or "").strip() or None
+    normalized["default_model_id"] = str(raw.get("default_model_id") or "").strip() or None
+    normalized["created_at"] = str(raw.get("created_at") or "").strip() or None
+    normalized["updated_at"] = str(raw.get("updated_at") or "").strip() or None
+    normalized["archived_at"] = str(raw.get("archived_at") or "").strip() or None
+    normalized["bridge_project_ids"] = _normalize_bridge_project_ids(raw.get("bridge_project_ids"))
+    normalized["tool_access_enabled"] = bool(raw.get("tool_access_enabled") or False)
+    normalized["tool_access_filesystem"] = bool(raw.get("tool_access_filesystem") or False)
+    normalized["tool_access_repo_search"] = bool(raw.get("tool_access_repo_search") or False)
+    return normalized
+
+
+def _normalize_conversation_rows(rows: Any) -> list[dict[str, Any]]:
+    if not isinstance(rows, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        normalized = _normalize_conversation_row(row)
+        if normalized is not None:
+            result.append(normalized)
+    return result
+
+
+def _normalize_message_row(raw: Any) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    mid = str(raw.get("id") or "").strip()
+    if not mid:
+        return None
+    normalized: dict[str, Any] = {
+        "id": mid,
+        "role": str(raw.get("role") or "").strip() or "assistant",
+        "content": str(raw.get("content") or ""),
+        "created_at": str(raw.get("created_at") or "").strip() or None,
+        "metadata": None,
+    }
+    metadata = raw.get("metadata")
+    if isinstance(metadata, dict):
+        normalized["metadata"] = _json_safe(metadata)
+    elif isinstance(metadata, str):
+        try:
+            parsed = json.loads(metadata)
+            normalized["metadata"] = _json_safe(parsed) if isinstance(parsed, dict) else None
+        except Exception:
+            normalized["metadata"] = None
+    return normalized
+
+
+def _normalize_message_rows(rows: Any) -> list[dict[str, Any]]:
+    if not isinstance(rows, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        normalized = _normalize_message_row(row)
+        if normalized is not None:
+            result.append(normalized)
+    return result
+
+
+def _normalize_vault_item_row(raw: Any) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    item_id = str(raw.get("id") or "").strip()
+    if not item_id:
+        return None
+    metadata = raw.get("metadata")
+    return {
+        "id": item_id,
+        "title": str(raw.get("title") or item_id).strip() or item_id,
+        "namespace": str(raw.get("namespace") or "").strip() or None,
+        "project_id": str(raw.get("project_id") or "").strip() or None,
+        "content": str(raw.get("content") or ""),
+        "created_at": str(raw.get("created_at") or "").strip() or None,
+        "updated_at": str(raw.get("updated_at") or "").strip() or None,
+        "metadata": _json_safe(metadata) if isinstance(metadata, dict) else None,
+    }
+
+
+def _normalize_vault_item_rows(raw: Any) -> list[dict[str, Any]]:
+    if isinstance(raw, dict):
+        for key in ("items", "results", "data"):
+            candidate = raw.get(key)
+            if isinstance(candidate, list):
+                raw = candidate
+                break
+        else:
+            return []
+    if not isinstance(raw, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for row in raw:
+        normalized = _normalize_vault_item_row(row)
+        if normalized is not None:
+            result.append(normalized)
+    return result
+
+
+def _cp_list_messages_safe(cp: Any, conversation_id: str, *, limit: int) -> Any:
+    try:
+        return cp.list_messages(conversation_id, limit=limit)
+    except TypeError:
+        return cp.list_messages(conversation_id)
+
+
+def _cp_list_vault_items_safe(
+    cp: Any,
+    *,
+    namespace: str | None = None,
+    project_id: str | None = None,
+    limit: int = 100,
+    include_content: bool = True,
+) -> Any:
+    try:
+        return cp.list_vault_items(
+            namespace=namespace,
+            project_id=project_id,
+            limit=limit,
+            include_content=include_content,
+        )
+    except TypeError:
+        return cp.list_vault_items(namespace=namespace, project_id=project_id, limit=limit)
+
+
+def _cp_list_tasks_safe(cp: Any, **kwargs) -> Any:
+    try:
+        return cp.list_tasks(**kwargs)
+    except TypeError:
+        return cp.list_tasks()
+
+
 @bp.get("/chat")
 @login_required
 def chat_page() -> str:
     cp = get_cp_client()
-    conversations = cp.list_conversations(archived="all") or []
-    bots = cp.list_bots() or []
-    projects = cp.list_projects() or []
-    vault_items = cp.list_vault_items(limit=50) or []
-    selected_id = request.args.get("conversation_id")
-    selected = None
-    messages = []
-    if selected_id:
-        for c in conversations:
-            if c.get("id") == selected_id:
-                selected = c
-                break
-        messages = cp.list_messages(selected_id) or []
-    return render_template(
-        "chat.html",
-        conversations=[c for c in conversations if not c.get("archived_at")],
-        archived_conversations=[c for c in conversations if c.get("archived_at")],
-        selected_conversation=selected,
-        messages=messages,
-        bots=bots,
-        projects=projects,
-        vault_items=vault_items,
-        error=None,
-    )
+    page_error: str | None = None
+    try:
+        try:
+            conversations = _normalize_conversation_rows(cp.list_conversations(archived="all") or [])
+        except Exception:
+            conversations = []
+            page_error = "Conversation list is temporarily unavailable."
+
+        try:
+            bots = cp.list_bots() or []
+        except Exception:
+            bots = []
+
+        try:
+            projects = cp.list_projects() or []
+        except Exception:
+            projects = []
+
+        selected_id = str(request.args.get("conversation_id") or "").strip()
+        selected = None
+        messages: list[dict[str, Any]] = []
+        repo_context_items: list[dict[str, Any]] = []
+        repo_context_sections: list[dict[str, Any]] = []
+        repo_context_item_ids: list[str] = []
+        if selected_id:
+            for c in conversations:
+                if c.get("id") == selected_id:
+                    selected = c
+                    break
+            try:
+                messages = _normalize_message_rows(_cp_list_messages_safe(cp, selected_id, limit=120) or [])
+            except Exception:
+                messages = []
+                page_error = page_error or "Selected conversation messages could not be loaded."
+
+        if selected:
+            project_ids: list[str] = []
+            project_id = str(selected.get("project_id") or "").strip()
+            if project_id:
+                project_ids.append(project_id)
+            for bridged in selected.get("bridge_project_ids") or []:
+                value = str(bridged or "").strip()
+                if value and value not in project_ids:
+                    project_ids.append(value)
+
+            for pid in project_ids:
+                namespace = f"project:{pid}:repo"
+                if hasattr(cp, "get_project_github_context_sync_status"):
+                    try:
+                        status = cp.get_project_github_context_sync_status(pid) or {}
+                        if isinstance(status, dict):
+                            context_sync = status.get("context_sync") if isinstance(status.get("context_sync"), dict) else {}
+                            ns = str(context_sync.get("namespace") or "").strip()
+                            if ns:
+                                namespace = ns
+                    except Exception:
+                        namespace = f"project:{pid}:repo"
+                try:
+                    items_raw = _cp_list_vault_items_safe(
+                        cp,
+                        namespace=namespace,
+                        project_id=pid,
+                        limit=30,
+                        include_content=False,
+                    ) or []
+                except Exception:
+                    items_raw = []
+                items = _normalize_vault_item_rows(items_raw)
+                if items:
+                    repo_context_sections.append(
+                        {
+                            "project_id": pid,
+                            "namespace": namespace,
+                            "items": items,
+                        }
+                    )
+                    repo_context_items.extend(items)
+                    for item in items:
+                        item_id = str(item.get("id") or "").strip()
+                        if item_id and item_id not in repo_context_item_ids:
+                            repo_context_item_ids.append(item_id)
+
+        try:
+            vault_items_raw = _cp_list_vault_items_safe(cp, limit=30, include_content=False) or []
+        except Exception:
+            vault_items_raw = []
+        vault_items = _normalize_vault_item_rows(vault_items_raw)
+
+        return render_template(
+            "chat.html",
+            conversations=[c for c in conversations if not c.get("archived_at")],
+            archived_conversations=[c for c in conversations if c.get("archived_at")],
+            selected_conversation=selected,
+            messages=messages,
+            bots=bots,
+            projects=projects,
+            vault_items=vault_items,
+            repo_context_items=repo_context_items,
+            repo_context_sections=repo_context_sections,
+            repo_context_item_ids=repo_context_item_ids,
+            error=page_error,
+        )
+    except Exception:
+        logger.exception(
+            "chat_page failed unexpectedly",
+            extra={"conversation_id": str(request.args.get("conversation_id") or "").strip() or None},
+        )
+        return render_template(
+            "chat.html",
+            conversations=[],
+            archived_conversations=[],
+            selected_conversation=None,
+            messages=[],
+            bots=[],
+            projects=[],
+            vault_items=[],
+            repo_context_items=[],
+            repo_context_sections=[],
+            repo_context_item_ids=[],
+            error="Chat view is temporarily unavailable. Start a new chat or refresh.",
+        )
 
 
 @bp.post("/api/chat/conversations")
@@ -84,6 +364,9 @@ def api_create_conversation():
             "scope": data.get("scope", "global"),
             "default_bot_id": data.get("default_bot_id"),
             "default_model_id": data.get("default_model_id"),
+            "tool_access_enabled": bool(data.get("tool_access_enabled", False)),
+            "tool_access_filesystem": bool(data.get("tool_access_filesystem", False)),
+            "tool_access_repo_search": bool(data.get("tool_access_repo_search", False)),
         }
     )
     if created is None:
@@ -121,6 +404,22 @@ def api_restore_conversation(conversation_id: str):
     return jsonify(restored)
 
 
+@bp.put("/api/chat/conversations/<conversation_id>/tool-access")
+@login_required
+def api_update_conversation_tool_access(conversation_id: str):
+    data: dict[str, Any] = request.get_json(force=True) or {}
+    cp = get_cp_client()
+    updated = cp.update_conversation_tool_access(
+        conversation_id=conversation_id,
+        enabled=bool(data.get("enabled", False)),
+        filesystem=bool(data.get("filesystem", False)),
+        repo_search=bool(data.get("repo_search", False)),
+    )
+    if updated is None:
+        return _cp_error_response(cp, "conversation tool access update failed")
+    return jsonify(updated)
+
+
 @bp.post("/api/chat/messages")
 @login_required
 def api_send_message():
@@ -138,6 +437,8 @@ def api_send_message():
             "bot_id": data.get("bot_id"),
             "context_items": data.get("context_items"),
             "context_item_ids": data.get("context_item_ids"),
+            "include_project_context": data.get("include_project_context", False),
+            "use_workspace_tools": data.get("use_workspace_tools", False),
         },
     )
     if resp is None:
@@ -149,7 +450,12 @@ def api_send_message():
 @login_required
 def api_list_messages(conversation_id: str):
     cp = get_cp_client()
-    messages = cp.list_messages(conversation_id)
+    raw_limit = request.args.get("limit", "120")
+    try:
+        limit = max(1, min(int(raw_limit), 1000))
+    except Exception:
+        limit = 120
+    messages = _cp_list_messages_safe(cp, conversation_id, limit=limit)
     if messages is None:
         return _cp_error_response(cp, "chat messages unavailable")
     return jsonify(messages)
@@ -176,6 +482,8 @@ def api_send_message_stream():
         "bot_id": data.get("bot_id"),
         "context_items": data.get("context_items"),
         "context_item_ids": data.get("context_item_ids"),
+        "include_project_context": data.get("include_project_context", False),
+        "use_workspace_tools": data.get("use_workspace_tools", False),
     }
 
     def generate() -> Iterable[str]:
@@ -284,7 +592,7 @@ def api_ingest_message_to_vault():
 @login_required
 def api_orchestration_graph(orchestration_id: str):
     cp = get_cp_client()
-    tasks = cp.list_tasks(orchestration_id=orchestration_id)
+    tasks = _cp_list_tasks_safe(cp, orchestration_id=orchestration_id, include_content=False)
     if tasks is None:
         return jsonify({"error": "control plane unavailable"}), 502
 
@@ -292,10 +600,13 @@ def api_orchestration_graph(orchestration_id: str):
     edges = []
     for t in tasks:
         task_id = str(t.get("id"))
-        payload = t.get("payload") or {}
-        title = ""
-        if isinstance(payload, dict):
-            title = str(payload.get("title") or payload.get("instruction") or task_id)
+        metadata = t.get("metadata") or {}
+        title = str(
+            metadata.get("step_id")
+            or metadata.get("pipeline_name")
+            or metadata.get("source")
+            or task_id
+        )
         depends_on = t.get("depends_on") or []
         nodes.append(
             {

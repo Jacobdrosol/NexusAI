@@ -238,7 +238,12 @@ async def test_assign_message_creates_task_graph_and_summary(cp_app):
 
         tasks_resp = await client.get("/v1/tasks")
         assert tasks_resp.status_code == 200
-        assert len(tasks_resp.json()) >= 2
+        tasks = tasks_resp.json()
+        assert len(tasks) >= 2
+        first_payload = tasks[0].get("payload") if isinstance(tasks[0], dict) else {}
+        assert isinstance(first_payload, dict)
+        assert "acceptance_criteria" in first_payload
+        assert "quality_gates" in first_payload
 
 
 @pytest.mark.anyio
@@ -316,6 +321,1472 @@ async def test_chat_context_item_ids_are_resolved_from_vault(cp_app):
         assert isinstance(payload, list)
         assert payload[0]["role"] == "system"
         assert "Context:\n" in payload[0]["content"]
+
+
+@pytest.mark.anyio
+async def test_chat_project_repo_context_is_attached_when_requested(cp_app):
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "ok"})
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-repo-ctx"
+        create_project = await client.post(
+            "/v1/projects",
+            json={
+                "id": project_id,
+                "name": "Repo Context Project",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        assert create_project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Project Repo Context",
+                "project_id": project_id,
+                "tool_access_enabled": True,
+                "tool_access_repo_search": True,
+            },
+        )
+        conversation_id = convo.json()["id"]
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-repo-ctx",
+                "name": "Repo Ctx Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        ingest = await client.post(
+            "/v1/vault/items",
+            json={
+                "title": "README",
+                "content": "PROJECT_REPO_CONTEXT_TOKEN architecture note for chat retrieval.",
+                "namespace": f"project:{project_id}:repo",
+                "project_id": project_id,
+            },
+        )
+        assert ingest.status_code == 200
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": "How is this repo structured?",
+                "bot_id": "bot-repo-ctx",
+                "include_project_context": True,
+                "use_workspace_tools": True,
+            },
+        )
+        assert resp.status_code == 200
+        task_arg = cp_app.state.scheduler.schedule.await_args[0][0]
+        payload = task_arg.payload
+        assert isinstance(payload, list)
+        assert payload[0]["role"] == "system"
+        assert "[repo:proj-repo-ctx]" in payload[0]["content"]
+        assert "PROJECT_REPO_CONTEXT_TOKEN" in payload[0]["content"]
+        assert any(
+            m.get("role") == "system" and "Repository Evidence Policy:" in str(m.get("content", ""))
+            for m in payload
+        )
+        assert any("Files inspected" in str(m.get("content", "")) for m in payload if m.get("role") == "system")
+
+
+@pytest.mark.anyio
+async def test_chat_project_repo_context_is_not_attached_by_default(cp_app):
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "ok"})
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-repo-off"
+        create_project = await client.post(
+            "/v1/projects",
+            json={"id": project_id, "name": "Repo Off Project"},
+        )
+        assert create_project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={"title": "Project Repo Off", "project_id": project_id},
+        )
+        conversation_id = convo.json()["id"]
+        await client.post(
+            "/v1/bots",
+            json={"id": "bot-repo-off", "name": "Repo Off Bot", "role": "assistant", "backends": [], "enabled": True},
+        )
+        ingest = await client.post(
+            "/v1/vault/items",
+            json={
+                "title": "README",
+                "content": "PROJECT_REPO_CONTEXT_DISABLED_TOKEN",
+                "namespace": f"project:{project_id}:repo",
+                "project_id": project_id,
+            },
+        )
+        assert ingest.status_code == 200
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": "Hello",
+                "bot_id": "bot-repo-off",
+            },
+        )
+        assert resp.status_code == 200
+        task_arg = cp_app.state.scheduler.schedule.await_args[0][0]
+        payload = task_arg.payload
+        assert isinstance(payload, list)
+        assert payload[0]["role"] == "user"
+        assert "PROJECT_REPO_CONTEXT_DISABLED_TOKEN" not in str(payload)
+
+
+@pytest.mark.anyio
+async def test_chat_repo_intent_auto_attaches_project_context(cp_app):
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "ok"})
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-repo-auto"
+        create_project = await client.post(
+            "/v1/projects",
+            json={
+                "id": project_id,
+                "name": "Repo Auto Project",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        assert create_project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Repo Auto Chat",
+                "project_id": project_id,
+                "tool_access_enabled": True,
+                "tool_access_repo_search": True,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-repo-auto",
+                "name": "Repo Auto Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        ingest = await client.post(
+            "/v1/vault/items",
+            json={
+                "title": "README",
+                "content": "PROJECT_REPO_AUTO_TOKEN",
+                "namespace": f"project:{project_id}:repo",
+                "project_id": project_id,
+            },
+        )
+        assert ingest.status_code == 200
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": "Search the repository and explain auth hardening gaps.",
+                "bot_id": "bot-repo-auto",
+            },
+        )
+        assert resp.status_code == 200
+        assert cp_app.state.scheduler.schedule.await_count == 1
+        task_arg = cp_app.state.scheduler.schedule.await_args[0][0]
+        payload = task_arg.payload
+        assert isinstance(payload, list)
+        assert payload[0]["role"] == "system"
+        assert "[repo:proj-repo-auto]" in payload[0]["content"]
+        assert "PROJECT_REPO_AUTO_TOKEN" in payload[0]["content"]
+
+
+@pytest.mark.anyio
+async def test_chat_repo_intent_does_not_trigger_for_complaint_or_transcript(cp_app):
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "ok"})
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-repo-noise"
+        create_project = await client.post(
+            "/v1/projects",
+            json={
+                "id": project_id,
+                "name": "Repo Noise Project",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        assert create_project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Repo Noise Chat",
+                "project_id": project_id,
+                "tool_access_enabled": True,
+                "tool_access_repo_search": True,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-repo-noise",
+                "name": "Repo Noise Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        ingest = await client.post(
+            "/v1/vault/items",
+            json={
+                "title": "README",
+                "content": "PROJECT_REPO_NOISE_TOKEN",
+                "namespace": f"project:{project_id}:repo",
+                "project_id": project_id,
+            },
+        )
+        assert ingest.status_code == 200
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": (
+                    "It's still trying to use repo search even when it should just respond.\n\n"
+                    "user\nCan you read through the actual files?\n"
+                    "assistant\nFiles inspected (verified context)"
+                ),
+                "bot_id": "bot-repo-noise",
+            },
+        )
+        assert resp.status_code == 200
+        task_arg = cp_app.state.scheduler.schedule.await_args[0][0]
+        payload = task_arg.payload
+        assert isinstance(payload, list)
+        assert payload[0]["role"] == "user"
+        assert "PROJECT_REPO_NOISE_TOKEN" not in str(payload)
+
+
+@pytest.mark.anyio
+async def test_chat_repo_context_search_uses_focused_query_terms(cp_app):
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "ok"})
+    cp_app.state.vault_manager.search = AsyncMock(
+        return_value=[
+            {
+                "chunk_id": "row-lesson-1",
+                "title": "GlobeIQ.Server/Services/LessonBuilderService.cs",
+                "content": "FOCUSED_LESSON_CONTEXT_TOKEN",
+                "score": 0.72,
+            }
+        ]
+    )
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-repo-focus-query"
+        create_project = await client.post(
+            "/v1/projects",
+            json={
+                "id": project_id,
+                "name": "Repo Focus Query Project",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        assert create_project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Repo Focus Query Chat",
+                "project_id": project_id,
+                "tool_access_enabled": True,
+                "tool_access_repo_search": True,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-repo-focus-query",
+                "name": "Repo Focus Query Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": (
+                    "Testing repo awareness and proper file searching. Can you look through everything "
+                    "related to my lesson builder system and lesson blocks and tell me what is done?"
+                ),
+                "bot_id": "bot-repo-focus-query",
+            },
+        )
+        assert resp.status_code == 200
+        assert cp_app.state.vault_manager.search.await_count >= 1
+        search_query = str(cp_app.state.vault_manager.search.await_args_list[0].kwargs.get("query") or "")
+        assert "lesson" in search_query
+        assert "builder" in search_query
+        assert "blocks" in search_query
+        assert "awareness" not in search_query
+        assert "proper" not in search_query
+
+        task_arg = cp_app.state.scheduler.schedule.await_args[0][0]
+        payload = task_arg.payload
+        assert isinstance(payload, list)
+        assert "FOCUSED_LESSON_CONTEXT_TOKEN" in payload[0]["content"]
+
+
+@pytest.mark.anyio
+async def test_chat_repo_intent_prefers_workspace_as_source_of_truth(cp_app, tmp_path):
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "ok"})
+    workspace_root = tmp_path / "workspace-repo-truth"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    (workspace_root / "backend" / "auth").mkdir(parents=True, exist_ok=True)
+    (workspace_root / "backend" / "auth" / "login.ts").write_text(
+        "WORKSPACE_AUTH_TOKEN current login implementation",
+        encoding="utf-8",
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-repo-truth"
+        create_project = await client.post(
+            "/v1/projects",
+            json={
+                "id": project_id,
+                "name": "Repo Truth Project",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": True,
+                        "workspace_root": str(workspace_root),
+                    }
+                },
+            },
+        )
+        assert create_project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Repo Truth Chat",
+                "project_id": project_id,
+                "tool_access_enabled": True,
+                "tool_access_repo_search": True,
+                "tool_access_filesystem": True,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-repo-truth",
+                "name": "Repo Truth Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": True,
+                    }
+                },
+            },
+        )
+        ingest = await client.post(
+            "/v1/vault/items",
+            json={
+                "title": "docs/legacy-auth.md",
+                "content": "INGESTED_AUTH_TOKEN historical note",
+                "namespace": f"project:{project_id}:repo",
+                "project_id": project_id,
+            },
+        )
+        assert ingest.status_code == 200
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": "Search the repository auth implementation and hardening opportunities",
+                "bot_id": "bot-repo-truth",
+            },
+        )
+        assert resp.status_code == 200
+        task_arg = cp_app.state.scheduler.schedule.await_args[0][0]
+        payload = task_arg.payload
+        assert isinstance(payload, list)
+        assert payload[0]["role"] == "system"
+        context_blob = payload[0]["content"]
+        assert "[workspace:file]" in context_blob or "[workspace:search]" in context_blob
+        assert "WORKSPACE_AUTH_TOKEN" in context_blob
+        assert "INGESTED_AUTH_TOKEN" in context_blob
+        assert context_blob.index("WORKSPACE_AUTH_TOKEN") < context_blob.index("INGESTED_AUTH_TOKEN")
+        policy_blob = payload[1]["content"] if len(payload) > 1 else ""
+        assert "Treat workspace snippets as source of truth" in policy_blob
+
+
+@pytest.mark.anyio
+async def test_chat_workspace_filesystem_context_requires_three_switches(cp_app, tmp_path):
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "ok"})
+    workspace_root = tmp_path / "workspace"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    (workspace_root / "README.md").write_text(
+        "WORKSPACE_FILESYSTEM_TOKEN architecture details",
+        encoding="utf-8",
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-workspace-files"
+        project = await client.post(
+            "/v1/projects",
+            json={
+                "id": project_id,
+                "name": "Workspace Files",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "filesystem": True,
+                        "repo_search": False,
+                        "workspace_root": str(workspace_root),
+                    }
+                },
+            },
+        )
+        assert project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Workspace Files Chat",
+                "project_id": project_id,
+                "tool_access_enabled": True,
+                "tool_access_filesystem": True,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        bot = await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-workspace-files",
+                "name": "Workspace Files Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "filesystem": True,
+                        "repo_search": False,
+                    }
+                },
+            },
+        )
+        assert bot.status_code == 200
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": "Please inspect README.md",
+                "bot_id": "bot-workspace-files",
+                "use_workspace_tools": True,
+            },
+        )
+        assert resp.status_code == 200
+
+        task_arg = cp_app.state.scheduler.schedule.await_args[0][0]
+        payload = task_arg.payload
+        assert isinstance(payload, list)
+        assert payload[0]["role"] == "system"
+        assert "[workspace:file]" in payload[0]["content"] or "[workspace:search]" in payload[0]["content"]
+        assert "WORKSPACE_FILESYSTEM_TOKEN" in payload[0]["content"]
+
+
+@pytest.mark.anyio
+async def test_chat_workspace_tools_blocked_when_chat_switch_off(cp_app, tmp_path):
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "ok"})
+    workspace_root = tmp_path / "workspace-blocked"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    (workspace_root / "README.md").write_text(
+        "WORKSPACE_BLOCKED_TOKEN should not appear",
+        encoding="utf-8",
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-workspace-blocked"
+        project = await client.post(
+            "/v1/projects",
+            json={
+                "id": project_id,
+                "name": "Workspace Blocked",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "filesystem": True,
+                        "repo_search": False,
+                        "workspace_root": str(workspace_root),
+                    }
+                },
+            },
+        )
+        assert project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Workspace Blocked Chat",
+                "project_id": project_id,
+                "tool_access_enabled": False,
+                "tool_access_filesystem": True,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        bot = await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-workspace-blocked",
+                "name": "Workspace Blocked Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "filesystem": True,
+                        "repo_search": False,
+                    }
+                },
+            },
+        )
+        assert bot.status_code == 200
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": "Please inspect README.md",
+                "bot_id": "bot-workspace-blocked",
+                "use_workspace_tools": True,
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["assistant_message"]["content"].startswith("I could not retrieve repository context")
+        assert cp_app.state.scheduler.schedule.await_count == 0
+
+
+@pytest.mark.anyio
+async def test_stream_message_emits_context_summary_event_when_repo_context_loaded(cp_app):
+    async def _stream(_task):
+        yield {"event": "backend_selected", "provider": "ollama", "model": "llama3.1:8b", "worker_id": "w1"}
+        yield {"event": "token", "text": "ok"}
+        yield {"event": "final", "output": "ok", "usage": {}}
+
+    cp_app.state.scheduler.stream = _stream
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-context-stream"
+        create_project = await client.post(
+            "/v1/projects",
+            json={
+                "id": project_id,
+                "name": "Repo Context Stream",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        assert create_project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Context Stream",
+                "project_id": project_id,
+                "tool_access_enabled": True,
+                "tool_access_repo_search": True,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-context-stream",
+                "name": "Context Stream Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        ingest = await client.post(
+            "/v1/vault/items",
+            json={
+                "title": "README",
+                "content": "STREAM_CONTEXT_TOKEN",
+                "namespace": f"project:{project_id}:repo",
+                "project_id": project_id,
+            },
+        )
+        assert ingest.status_code == 200
+
+        stream_resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/stream",
+            json={
+                "content": "Review auth hardening",
+                "bot_id": "bot-context-stream",
+                "include_project_context": True,
+            },
+        )
+        assert stream_resp.status_code == 200
+        assert "event: context_summary" in stream_resp.text
+        assert "Files inspected (verified context)" in stream_resp.text
+        assert "STREAM_CONTEXT_TOKEN" not in stream_resp.text
+        assert "event: token" not in stream_resp.text
+
+
+@pytest.mark.anyio
+async def test_repo_grounded_output_sanitizes_unverifiable_action_lines(cp_app):
+    cp_app.state.scheduler.schedule = AsyncMock(
+        return_value={
+            "output": (
+                "Let me search for authentication files.\n"
+                "I'll read through the actual files in your repository to give you a proper review.\n"
+                "Now let me read what I found:\n"
+                "Now I have the actual file contents.\n"
+                "GlobeIQ.Server/Models/Lesson.cs\n"
+                "GlobeIQ.Server/Controllers/LessonsController.cs\n"
+                "\"BlockType\" \"LessonBlock\" \"BlockSettings\"\n"
+                "Please confirm which files you'd like me to read first.\n"
+                "Should I start with the controller files?\n"
+                "**/auth*.ts\n"
+                "Based on verified context, auth is configured."
+            )
+        }
+    )
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-repo-sanitize"
+        create_project = await client.post(
+            "/v1/projects",
+            json={
+                "id": project_id,
+                "name": "Repo Sanitize Project",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        assert create_project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Repo Sanitize Chat",
+                "project_id": project_id,
+                "tool_access_enabled": True,
+                "tool_access_repo_search": True,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-repo-sanitize",
+                "name": "Repo Sanitize Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        ingest = await client.post(
+            "/v1/vault/items",
+            json={
+                "title": "README.md",
+                "content": "AUTH_SANITIZE_TOKEN",
+                "namespace": f"project:{project_id}:repo",
+                "project_id": project_id,
+            },
+        )
+        assert ingest.status_code == 200
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": "Search repository authentication setup",
+                "bot_id": "bot-repo-sanitize",
+            },
+        )
+        assert resp.status_code == 200
+        content = resp.json()["assistant_message"]["content"]
+        assert content.startswith("Files inspected (verified context)")
+        assert "Source-of-truth (workspace repo)" in content
+        assert "Supporting context (ingested repo/docs/history)" in content
+        assert "Let me search" not in content
+        assert "I'll read through the actual files" not in content
+        assert "Now let me read what I found" not in content
+        assert "Now I have the actual file contents" not in content
+        assert "GlobeIQ.Server/Models/Lesson.cs" not in content
+        assert '"BlockType" "LessonBlock" "BlockSettings"' not in content
+        assert "Please confirm which files you'd like me to read first" not in content
+        assert "Should I start with the controller files" not in content
+        assert "**/auth*.ts" not in content
+
+
+@pytest.mark.anyio
+async def test_repo_grounded_output_adds_grounding_note_when_citations_missing(cp_app):
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "Authentication is configured with modern defaults."})
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-repo-citation-required"
+        create_project = await client.post(
+            "/v1/projects",
+            json={
+                "id": project_id,
+                "name": "Repo Citation Project",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        assert create_project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Repo Citation Chat",
+                "project_id": project_id,
+                "tool_access_enabled": True,
+                "tool_access_repo_search": True,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-repo-citation",
+                "name": "Repo Citation Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        ingest = await client.post(
+            "/v1/vault/items",
+            json={
+                "title": "README.md",
+                "content": "AUTH_CITATION_TOKEN",
+                "namespace": f"project:{project_id}:repo",
+                "project_id": project_id,
+            },
+        )
+        assert ingest.status_code == 200
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": "Search repository authentication setup",
+                "bot_id": "bot-repo-citation",
+            },
+        )
+        assert resp.status_code == 200
+        content = resp.json()["assistant_message"]["content"]
+        assert content.startswith("Files inspected (verified context)")
+        assert "Authentication is configured with modern defaults." in content
+        assert "I can only provide a limited grounded response for this turn" not in content
+        assert "Grounding note: inline [S#] citations were not generated; response kept concise." not in content
+        assert "[S1]" in content
+
+
+@pytest.mark.anyio
+async def test_repo_grounded_output_keeps_cited_claims(cp_app):
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "Authentication middleware exists in current setup [S1]."})
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-repo-citation-kept"
+        create_project = await client.post(
+            "/v1/projects",
+            json={
+                "id": project_id,
+                "name": "Repo Citation Kept Project",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        assert create_project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Repo Citation Kept Chat",
+                "project_id": project_id,
+                "tool_access_enabled": True,
+                "tool_access_repo_search": True,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-repo-citation-kept",
+                "name": "Repo Citation Kept Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        ingest = await client.post(
+            "/v1/vault/items",
+            json={
+                "title": "README.md",
+                "content": "AUTH_CITATION_KEPT_TOKEN",
+                "namespace": f"project:{project_id}:repo",
+                "project_id": project_id,
+            },
+        )
+        assert ingest.status_code == 200
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": "Search repository authentication setup",
+                "bot_id": "bot-repo-citation-kept",
+            },
+        )
+        assert resp.status_code == 200
+        content = resp.json()["assistant_message"]["content"]
+        assert content.startswith("Files inspected (verified context)")
+        assert "Authentication middleware exists in current setup [S1]." in content
+        assert "Grounding note: inline [S#] citations were not generated; response kept concise." not in content
+
+
+@pytest.mark.anyio
+async def test_repo_grounded_output_rejects_weak_front_loaded_citations(cp_app):
+    long_uncited_body = " ".join(["Detailed claim without citation."] * 220)
+    cp_app.state.scheduler.schedule = AsyncMock(
+        return_value={"output": f"Short cited opener [S1].\n\n{long_uncited_body}"}
+    )
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-repo-citation-weak-density"
+        create_project = await client.post(
+            "/v1/projects",
+            json={
+                "id": project_id,
+                "name": "Repo Citation Weak Density",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        assert create_project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Repo Citation Weak Density Chat",
+                "project_id": project_id,
+                "tool_access_enabled": True,
+                "tool_access_repo_search": True,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-repo-citation-weak-density",
+                "name": "Repo Citation Weak Density Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        ingest = await client.post(
+            "/v1/vault/items",
+            json={
+                "title": "README.md",
+                "content": "AUTH_CITATION_WEAK_DENSITY_TOKEN",
+                "namespace": f"project:{project_id}:repo",
+                "project_id": project_id,
+            },
+        )
+        assert ingest.status_code == 200
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": "Search repository authentication setup",
+                "bot_id": "bot-repo-citation-weak-density",
+            },
+        )
+        assert resp.status_code == 200
+        content = resp.json()["assistant_message"]["content"]
+        assert content.startswith("Files inspected (verified context)")
+        assert "I can only provide a limited grounded response for this turn" not in content
+        assert "Grounding note: inline [S#] citations were not generated; response kept concise." not in content
+        assert len(content) < 3200
+
+
+@pytest.mark.anyio
+async def test_repo_grounded_output_ignores_model_generated_files_inspected_block(cp_app):
+    cp_app.state.scheduler.schedule = AsyncMock(
+        return_value={
+            "output": (
+                "Files inspected (verified context)\n"
+                "Source-of-truth (workspace repo)\n"
+                "- [S1] workspace:search fake/path1.cs\n"
+                "- [S2] workspace:search fake/path2.cs\n"
+                "Code Review: very long uncited analysis text."
+            )
+        }
+    )
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-repo-model-files-inspected"
+        create_project = await client.post(
+            "/v1/projects",
+            json={
+                "id": project_id,
+                "name": "Repo Model Header Project",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        assert create_project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Repo Model Header Chat",
+                "project_id": project_id,
+                "tool_access_enabled": True,
+                "tool_access_repo_search": True,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-repo-model-header",
+                "name": "Repo Model Header Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        ingest = await client.post(
+            "/v1/vault/items",
+            json={
+                "title": "README.md",
+                "content": "AUTH_MODEL_HEADER_TOKEN",
+                "namespace": f"project:{project_id}:repo",
+                "project_id": project_id,
+            },
+        )
+        assert ingest.status_code == 200
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": "Search repository authentication setup",
+                "bot_id": "bot-repo-model-header",
+            },
+        )
+        assert resp.status_code == 200
+        content = resp.json()["assistant_message"]["content"]
+        assert content.startswith("Files inspected (verified context)")
+        assert "workspace:search fake/path1.cs" not in content
+        assert "workspace:search fake/path2.cs" not in content
+        assert "Code Review: very long uncited analysis text." not in content
+        assert "Grounding note: inline [S#] citations were not generated; response kept concise." not in content
+
+
+@pytest.mark.anyio
+async def test_repo_grounded_output_replaces_permission_prompt_with_direct_fallback(cp_app):
+    cp_app.state.scheduler.schedule = AsyncMock(
+        return_value={
+            "output": (
+                "Please confirm which files you'd like me to read first.\n"
+                "Should I start with the controller files and then move to models?"
+            )
+        }
+    )
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-repo-permission-fallback"
+        create_project = await client.post(
+            "/v1/projects",
+            json={
+                "id": project_id,
+                "name": "Repo Permission Fallback",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        assert create_project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Repo Permission Fallback Chat",
+                "project_id": project_id,
+                "tool_access_enabled": True,
+                "tool_access_repo_search": True,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-repo-permission-fallback",
+                "name": "Repo Permission Fallback Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        ingest = await client.post(
+            "/v1/vault/items",
+            json={
+                "title": "README.md",
+                "content": "AUTH_PERMISSION_FALLBACK_TOKEN",
+                "namespace": f"project:{project_id}:repo",
+                "project_id": project_id,
+            },
+        )
+        assert ingest.status_code == 200
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": "Search repository authentication setup",
+                "bot_id": "bot-repo-permission-fallback",
+            },
+        )
+        assert resp.status_code == 200
+        content = resp.json()["assistant_message"]["content"]
+        assert content.startswith("Files inspected (verified context)")
+        assert "Please confirm which files you'd like me to read first" not in content
+        assert "Should I start with the controller files" not in content
+        assert "Actionable next steps from verified context:" in content
+
+
+@pytest.mark.anyio
+async def test_repo_grounded_output_strips_model_grounding_note_only_output(cp_app):
+    cp_app.state.scheduler.schedule = AsyncMock(
+        return_value={"output": "Grounding note: inline [S#] citations were not generated; response kept concise."}
+    )
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-repo-grounding-note-only"
+        create_project = await client.post(
+            "/v1/projects",
+            json={
+                "id": project_id,
+                "name": "Repo Grounding Note Only",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        assert create_project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Repo Grounding Note Only Chat",
+                "project_id": project_id,
+                "tool_access_enabled": True,
+                "tool_access_repo_search": True,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-repo-grounding-note-only",
+                "name": "Repo Grounding Note Only Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        ingest = await client.post(
+            "/v1/vault/items",
+            json={
+                "title": "README.md",
+                "content": "AUTH_GROUNDING_NOTE_ONLY_TOKEN",
+                "namespace": f"project:{project_id}:repo",
+                "project_id": project_id,
+            },
+        )
+        assert ingest.status_code == 200
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": "Search repository authentication setup",
+                "bot_id": "bot-repo-grounding-note-only",
+            },
+        )
+        assert resp.status_code == 200
+        content = resp.json()["assistant_message"]["content"]
+        assert content.startswith("Files inspected (verified context)")
+        assert "Actionable next steps from verified context:" in content
+
+
+@pytest.mark.anyio
+async def test_repo_grounded_output_strips_planning_preamble_only_output(cp_app):
+    cp_app.state.scheduler.schedule = AsyncMock(
+        return_value={
+            "output": (
+                "I'll help you conduct a thorough code review of the lesson blocks and lesson builder system.\n"
+                "Let me start by reading through the key files to understand the current architecture."
+            )
+        }
+    )
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-repo-planning-preamble-only"
+        create_project = await client.post(
+            "/v1/projects",
+            json={
+                "id": project_id,
+                "name": "Repo Planning Preamble Only",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        assert create_project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Repo Planning Preamble Only Chat",
+                "project_id": project_id,
+                "tool_access_enabled": True,
+                "tool_access_repo_search": True,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-repo-planning-preamble-only",
+                "name": "Repo Planning Preamble Only Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        ingest = await client.post(
+            "/v1/vault/items",
+            json={
+                "title": "README.md",
+                "content": "AUTH_PLANNING_PREAMBLE_ONLY_TOKEN",
+                "namespace": f"project:{project_id}:repo",
+                "project_id": project_id,
+            },
+        )
+        assert ingest.status_code == 200
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": "Search repository authentication setup",
+                "bot_id": "bot-repo-planning-preamble-only",
+            },
+        )
+        assert resp.status_code == 200
+        content = resp.json()["assistant_message"]["content"]
+        assert content.startswith("Files inspected (verified context)")
+        assert "I'll help you conduct a thorough code review" not in content
+        assert "Let me start by reading through the key files" not in content
+        assert "Actionable next steps from verified context:" in content
+
+
+@pytest.mark.anyio
+async def test_repo_grounded_output_strips_tool_echo_only_output(cp_app):
+    cp_app.state.scheduler.schedule = AsyncMock(
+        return_value={
+            "output": (
+                "read_file\n"
+                "read_file\n"
+                "search_file\n"
+                "pattern: **/Blocks/**/*.cs\n"
+                "pattern: /Blocks//*.cspattern: /LessonBuilder//*.razorpattern: /Models//Lesson*.cs\n"
+                "```text\n"
+                "read_file\n"
+                "```"
+            )
+        }
+    )
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-repo-tool-echo-only"
+        create_project = await client.post(
+            "/v1/projects",
+            json={
+                "id": project_id,
+                "name": "Repo Tool Echo Only",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        assert create_project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Repo Tool Echo Only Chat",
+                "project_id": project_id,
+                "tool_access_enabled": True,
+                "tool_access_repo_search": True,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-repo-tool-echo-only",
+                "name": "Repo Tool Echo Only Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        ingest = await client.post(
+            "/v1/vault/items",
+            json={
+                "title": "README.md",
+                "content": "AUTH_TOOL_ECHO_ONLY_TOKEN",
+                "namespace": f"project:{project_id}:repo",
+                "project_id": project_id,
+            },
+        )
+        assert ingest.status_code == 200
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": "Search repository authentication setup",
+                "bot_id": "bot-repo-tool-echo-only",
+            },
+        )
+        assert resp.status_code == 200
+        content = resp.json()["assistant_message"]["content"]
+        assert content.startswith("Files inspected (verified context)")
+        assert "read_file" not in content
+        assert "search_file" not in content
+        assert "pattern: **/Blocks/**/*.cs" not in content
+        assert "pattern: /Blocks//*.cspattern: /LessonBuilder//*.razorpattern: /Models//Lesson*.cs" not in content
+        assert "Actionable next steps from verified context:" in content
+
+
+@pytest.mark.anyio
+async def test_update_conversation_tool_access_endpoint(cp_app):
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        create_resp = await client.post("/v1/chat/conversations", json={"title": "Tool Access Conversation"})
+        assert create_resp.status_code == 200
+        conversation_id = create_resp.json()["id"]
+
+        update_resp = await client.put(
+            f"/v1/chat/conversations/{conversation_id}/tool-access",
+            json={"enabled": True, "filesystem": True, "repo_search": True},
+        )
+        assert update_resp.status_code == 200
+        body = update_resp.json()
+        assert body["tool_access_enabled"] is True
+        assert body["tool_access_filesystem"] is True
+        assert body["tool_access_repo_search"] is True
 
 
 @pytest.mark.anyio
