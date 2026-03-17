@@ -215,6 +215,42 @@ def test_build_step_instruction_mentions_diagram_source_and_concise_spec() -> No
     assert "Keep the artifact concise" in instruction
 
 
+def test_expand_test_execution_steps_splits_test_file_creation_from_execution() -> None:
+    orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
+
+    expanded = orchestrator._expand_test_execution_steps(
+        {
+            "steps": [
+                {
+                    "id": "step_1",
+                    "title": "Write and Execute Tests",
+                    "instruction": "Create tests and run them.",
+                    "role_hint": "tester",
+                    "step_kind": "test_execution",
+                    "depends_on": ["step_0"],
+                    "deliverables": [
+                        "tests/test_geometry.py",
+                        "tests/test_math.py",
+                        "reports/test_report.xml",
+                        "reports/coverage_summary.txt",
+                    ],
+                    "acceptance_criteria": ["Tests pass"],
+                    "quality_gates": ["Coverage >= 90%"],
+                }
+            ]
+        }
+    )
+
+    assert len(expanded["steps"]) == 2
+    create_step, execute_step = expanded["steps"]
+    assert create_step["step_kind"] == "repo_change"
+    assert create_step["deliverables"] == ["tests/test_geometry.py", "tests/test_math.py"]
+    assert create_step["depends_on"] == ["step_0"]
+    assert execute_step["step_kind"] == "test_execution"
+    assert execute_step["deliverables"] == ["reports/test_report.xml", "reports/coverage_summary.txt"]
+    assert execute_step["depends_on"] == ["step_1_create_tests"]
+
+
 async def test_wait_for_completion_labels_chat_preview_truncation() -> None:
     long_output = "A" * 260
     completed_task = Task(

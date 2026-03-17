@@ -55,6 +55,7 @@ class PMOrchestrator:
             bots=bots,
             context_items=context_items or [],
         )
+        plan = self._expand_test_execution_steps(plan)
 
         orchestration_id = str(uuid.uuid4())
         task_ids_by_step: Dict[str, str] = {}
@@ -642,6 +643,120 @@ class PMOrchestrator:
             ],
         }
         return list(defaults.get(step_kind, defaults["planning"]))
+
+    def _is_test_source_file(self, value: str) -> bool:
+        text = str(value or "").strip().replace("\\", "/").lower()
+        if not self._looks_like_repo_file(text):
+            return False
+        if text.startswith("reports/") or text.startswith("coverage/"):
+            return False
+        leaf = text.rsplit("/", 1)[-1]
+        return (
+            text.startswith("tests/")
+            or "/tests/" in text
+            or leaf.startswith("test_")
+            or ".test." in leaf
+            or ".spec." in leaf
+        )
+
+    def _is_execution_artifact_file(self, value: str) -> bool:
+        text = str(value or "").strip().replace("\\", "/").lower()
+        if not self._looks_like_repo_file(text):
+            return False
+        return (
+            text.startswith("reports/")
+            or text.startswith("coverage/")
+            or text.endswith((".xml", ".html", ".txt", ".json", ".log"))
+        )
+
+    def _expand_test_execution_steps(self, plan: Dict[str, Any]) -> Dict[str, Any]:
+        raw_steps = plan.get("steps")
+        if not isinstance(raw_steps, list):
+            return plan
+
+        expanded: List[Dict[str, Any]] = []
+        step_id_map: Dict[str, List[str]] = {}
+
+        for idx, step in enumerate(raw_steps):
+            if not isinstance(step, dict):
+                continue
+            original_step_id = str(step.get("id") or f"step_{idx + 1}")
+            step_kind = self._normalize_step_kind(
+                step.get("step_kind"),
+                title=str(step.get("title") or ""),
+                instruction=str(step.get("instruction") or ""),
+                role_hint=str(step.get("role_hint") or ""),
+                deliverables=self._normalize_string_list(step.get("deliverables")),
+            )
+            deliverables = self._normalize_string_list(step.get("deliverables"))
+            test_source_files = [item for item in deliverables if self._is_test_source_file(item)]
+            execution_artifacts = [item for item in deliverables if self._is_execution_artifact_file(item) and item not in test_source_files]
+            passthrough_deliverables = [
+                item for item in deliverables if item not in test_source_files and item not in execution_artifacts
+            ]
+
+            if step_kind != "test_execution" or not test_source_files:
+                expanded.append(step)
+                step_id_map[original_step_id] = [original_step_id]
+                continue
+
+            create_step_id = f"{original_step_id}_create_tests"
+            execute_step_id = f"{original_step_id}_execute_tests"
+            role_hint = str(step.get("role_hint") or "").strip().lower()
+            create_role = "coder" if role_hint in {"tester", "qa", ""} else role_hint
+
+            create_step = {
+                "id": create_step_id,
+                "title": f"Create test files for {str(step.get('title') or 'test execution').strip()}",
+                "instruction": (
+                    "Create the automated test files needed for this feature. "
+                    "Do not claim test execution in this step."
+                ),
+                "role_hint": create_role,
+                "step_kind": "repo_change",
+                "depends_on": [str(dep) for dep in (step.get("depends_on") or []) if str(dep).strip()],
+                "acceptance_criteria": self._normalize_string_list(step.get("acceptance_criteria")) or [
+                    "Test files cover the intended behavior and edge cases"
+                ],
+                "deliverables": test_source_files,
+                "quality_gates": ["Test sources are ready for execution"],
+                "evidence_requirements": [
+                    "Proposed repo file artifacts or patches for changed files",
+                    "Concrete changed-file evidence tied to deliverables",
+                ],
+            }
+
+            execute_deliverables = execution_artifacts or passthrough_deliverables
+            execute_step = {
+                "id": execute_step_id,
+                "title": str(step.get("title") or "Execute automated tests"),
+                "instruction": str(step.get("instruction") or "Execute the automated tests and return real results."),
+                "role_hint": role_hint or "tester",
+                "step_kind": "test_execution",
+                "depends_on": [create_step_id],
+                "acceptance_criteria": self._normalize_string_list(step.get("acceptance_criteria")),
+                "deliverables": execute_deliverables,
+                "quality_gates": self._normalize_string_list(step.get("quality_gates")),
+                "evidence_requirements": [
+                    "Executed test command output",
+                    "Pass/fail or coverage evidence from the test run",
+                ],
+            }
+
+            expanded.extend([create_step, execute_step])
+            step_id_map[original_step_id] = [create_step_id, execute_step_id]
+
+        for step in expanded:
+            depends = []
+            for dep in step.get("depends_on") or []:
+                mapped = step_id_map.get(str(dep), [str(dep)])
+                depends.extend(mapped[-1:])
+            step["depends_on"] = depends
+
+        return {
+            **plan,
+            "steps": expanded,
+        }
 
     def _looks_like_repo_file(self, value: str) -> bool:
         text = str(value or "").strip().replace("\\", "/").strip("`")
