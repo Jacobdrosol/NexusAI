@@ -796,6 +796,21 @@ def _assignment_python_coverage_target(paths: List[str]) -> Optional[str]:
     return candidates[0]
 
 
+def _assignment_execution_language(*, applied_paths: List[str], test_files: List[str], root: Path) -> str:
+    prioritized = [str(path or "").strip().lower() for path in (test_files + applied_paths) if str(path or "").strip()]
+    if any(path.endswith(".py") for path in prioritized):
+        return "python"
+    if any(path.endswith((".ts", ".tsx", ".js", ".jsx")) for path in prioritized):
+        return "node"
+    if any(path.endswith(".cs") for path in prioritized):
+        return "dotnet"
+    if (root / "package.json").exists():
+        return "node"
+    if any(root.glob("*.sln")) or any(root.rglob("*.csproj")):
+        return "dotnet"
+    return "python"
+
+
 def _find_repo_paths_in_text(text: str) -> List[str]:
     if not text:
         return []
@@ -2345,12 +2360,11 @@ class TaskManager:
 
         usage_parts: List[Dict[str, Any]] = []
         command_results: List[Dict[str, Any]] = []
-        language = "python"
-        lowered_paths = [path.lower() for path in applied_paths]
-        if any(path.endswith(".cs") for path in lowered_paths) or any(root.glob("*.sln")) or any(root.rglob("*.csproj")):
-            language = "dotnet"
-        elif any(path.endswith((".ts", ".tsx", ".js", ".jsx")) for path in lowered_paths) or (root / "package.json").exists():
-            language = "node"
+        language = _assignment_execution_language(
+            applied_paths=applied_paths,
+            test_files=test_files,
+            root=root,
+        )
 
         if language == "python":
             for spec in _bootstrap_command_specs(root, ["python"]):

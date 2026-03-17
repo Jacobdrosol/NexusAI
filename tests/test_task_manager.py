@@ -3999,6 +3999,23 @@ async def test_chat_assign_test_execution_detects_and_runs_generated_dotnet_test
     assert any(str(item.get("path") or "") == "coverage/report.xml" for item in artifacts)
 
 
+def test_assignment_execution_language_prefers_generated_python_tests_over_repo_dotnet_markers(tmp_path):
+    from control_plane.task_manager.task_manager import _assignment_execution_language
+
+    root = tmp_path / "repo"
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "GlobeIQ.sln").write_text("Microsoft Visual Studio Solution File\n", encoding="utf-8")
+    (root / "GlobeIQ.Tests.csproj").write_text("<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n", encoding="utf-8")
+
+    language = _assignment_execution_language(
+        applied_paths=["src/lessons/geometry.py", "tests/test_geometry.py"],
+        test_files=["tests/test_geometry.py"],
+        root=root,
+    )
+
+    assert language == "python"
+
+
 @pytest.mark.anyio
 async def test_chat_assign_release_fails_when_output_is_only_checklist_guidance(tmp_path, monkeypatch):
     import asyncio

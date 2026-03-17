@@ -42,3 +42,26 @@ def test_extract_file_candidates_prefers_explicit_artifacts_for_same_path() -> N
     assert candidates[0]["path"] == "src/lessonBlocks/MathBlock.tsx"
     assert candidates[0]["content"] == "export const rightValue = 2;\n"
     assert candidates[0]["source"] == "explicit_artifact"
+
+
+def test_extract_file_candidates_ignores_prose_before_code_fence() -> None:
+    result = {
+        "output": (
+            "# Geometry Lesson Blocks\n"
+            "\n"
+            "The primary interface for creating geometric entities.\n"
+            "```typescript\n"
+            "interface GeometryBlock { render(): void }\n"
+            "```\n"
+            "\n"
+            "Deliverable: docs/geometry_lesson_blocks.md\n"
+            "```markdown\n"
+            "# Geometry Lesson Blocks\n"
+            "```\n"
+        )
+    }
+
+    candidates = extract_file_candidates(result)
+
+    assert len(candidates) == 1
+    assert candidates[0]["path"] == "docs/geometry_lesson_blocks.md"

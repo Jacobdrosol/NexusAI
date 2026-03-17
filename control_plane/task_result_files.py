@@ -124,17 +124,19 @@ def _find_nearest_path_hint(lines: List[str], start_index: int) -> Optional[str]
         if not raw:
             continue
         inspected += 1
-        candidate = _normalize_candidate_line(raw)
+        candidate = _normalize_candidate_line(raw, require_path_style=True)
         if candidate:
             return candidate
     return None
 
 
-def _normalize_candidate_line(raw: str) -> Optional[str]:
+def _normalize_candidate_line(raw: str, *, require_path_style: bool = False) -> Optional[str]:
     text = str(raw or "").strip()
     if not text:
         return None
 
+    original = text
+    had_label_prefix = bool(_LABEL_PREFIX_RE.match(original))
     text = text.replace("`", "").strip()
     text = _LABEL_PREFIX_RE.sub("", text).strip()
     if ":" in text:
@@ -143,7 +145,21 @@ def _normalize_candidate_line(raw: str) -> Optional[str]:
             text = tail.strip()
         elif "/" in head or "\\" in head:
             text = head.strip()
-    return _normalize_candidate_path(text)
+    candidate = _normalize_candidate_path(text)
+    if not candidate:
+        return None
+    if not require_path_style:
+        return candidate
+    stripped_original = original.replace("`", "").strip()
+    if had_label_prefix:
+        return candidate
+    if "/" not in candidate and candidate not in _KNOWN_FILENAMES:
+        return None
+    if stripped_original == candidate:
+        return candidate
+    if stripped_original.endswith(candidate) and ("/" in candidate or "\\" in candidate):
+        return candidate
+    return None
 
 
 def _normalize_candidate_path(raw: Any) -> Optional[str]:
