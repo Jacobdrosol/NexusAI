@@ -841,11 +841,15 @@ def _requires_link_evidence(payload: Dict[str, Any]) -> bool:
     link_markers = (
         "url",
         "urls",
-        "link",
-        "links",
         "github issue",
         "milestone",
         "project board",
+        "github actions",
+        "workflow run",
+        "ci run",
+        "pull request url",
+        "pr url",
+        "tag url",
     )
     return any(marker in combined for marker in link_markers)
 

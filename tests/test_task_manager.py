@@ -3614,6 +3614,71 @@ async def test_chat_assign_repo_change_succeeds_when_commit_and_pr_evidence_are_
 
 
 @pytest.mark.anyio
+async def test_chat_assign_docs_repo_change_allows_internal_hyperlink_language(tmp_path, monkeypatch):
+    import asyncio
+
+    from control_plane.task_manager import task_manager as task_manager_module
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import TaskMetadata
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {
+                "output": (
+                    "Deliverable: docs/lessons/math_lesson.md\n"
+                    "```markdown\n"
+                    "# Math Lesson\n"
+                    "\n"
+                    "See [API Reference](../api/math_geom_api.md).\n"
+                    "```\n"
+                    "Deliverable: README.md\n"
+                    "```markdown\n"
+                    "## Lesson Blocks\n"
+                    "- [Math lesson](docs/lessons/math_lesson.md)\n"
+                    "```\n"
+                )
+            }
+
+    monkeypatch.setattr(
+        task_manager_module,
+        "_settings_int",
+        lambda name, default: 0 if name == "max_task_retries" else default,
+    )
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "chat-assign-doc-links.db"))
+    task = await tm.create_task(
+        bot_id="bot1",
+        payload={
+            "instruction": "write docs",
+            "role_hint": "coder",
+            "step_kind": "repo_change",
+            "deliverables": [
+                "docs/lessons/math_lesson.md",
+                "README.md (updated section)",
+            ],
+            "evidence_requirements": [
+                "Rendered markdown files in docs/lessons/ and docs/api/",
+                "README section added with hyperlinks.",
+            ],
+        },
+        metadata=TaskMetadata(
+            source="chat_assign",
+            project_id="proj-1",
+            orchestration_id="orch-1",
+        ),
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.1)
+
+    assert updated.status == "completed"
+    assert updated.result is not None
+
+
+@pytest.mark.anyio
 async def test_chat_assign_test_execution_fails_when_reports_are_mocked(tmp_path, monkeypatch):
     import asyncio
 
