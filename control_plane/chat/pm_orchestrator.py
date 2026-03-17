@@ -803,6 +803,11 @@ class PMOrchestrator:
                 token in lowered for token in ("merged pull request", "git tag", "release notes", "changelog", "merge")
             ):
                 continue
+            if step_kind == "test_execution" and any(
+                token in lowered for token in ("github actions run", "ci run", "workflow run", "run #")
+            ):
+                text = "Test run log artifact"
+                lowered = text.lower()
 
             if step_kind == "review":
                 if "pull request" in lowered and ("<" in lowered or "placeholder" in lowered):
@@ -849,6 +854,7 @@ class PMOrchestrator:
         has_repo_files = any(self._looks_like_repo_file(item) for item in deliverables)
         mentions_links = any(token in f"{deliverable_text} {evidence_text}" for token in ("github issue", "milestone", "project board", "url", "link"))
         mentions_git_side_effects = any(token in evidence_text for token in ("commit sha", "pull request", "pr ", "approved", "ci", "merged"))
+        mentions_ci_links = any(token in f"{deliverable_text} {evidence_text}" for token in ("github actions", "ci run", "workflow run", "run logs"))
 
         if step_kind in {"specification", "planning"} and has_repo_files:
             return [
@@ -864,6 +870,11 @@ class PMOrchestrator:
             return [
                 "Proposed repo file artifacts or patches for changed files",
                 "Only include non-placeholder commit or pull request evidence if it actually exists",
+            ]
+        if step_kind == "test_execution" and mentions_ci_links:
+            return [
+                "Executed test command output",
+                "Coverage report file or test run log artifact",
             ]
         return normalized
 

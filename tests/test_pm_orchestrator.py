@@ -200,6 +200,22 @@ def test_normalize_deliverables_for_test_step_removes_release_side_effects() -> 
     assert all("changelog" not in item.lower() for item in deliverables)
 
 
+def test_normalize_deliverables_for_test_step_rewrites_ci_run_links() -> None:
+    orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
+
+    deliverables = orchestrator._normalize_deliverables_for_step(
+        step_kind="test_execution",
+        deliverables=[
+            "GitHub Actions run #<run_id> (link)",
+            "coverage/geometry_coverage.xml",
+        ],
+    )
+
+    assert "Test run log artifact" in deliverables
+    assert "coverage/geometry_coverage.xml" in deliverables
+    assert all("github actions" not in item.lower() for item in deliverables)
+
+
 def test_normalize_deliverables_for_repo_change_and_release_steps_drop_placeholders() -> None:
     orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
 
@@ -224,6 +240,22 @@ def test_normalize_deliverables_for_repo_change_and_release_steps_drop_placehold
     assert "Release tag proposal" in release_deliverables
     assert "Release readiness summary" in release_deliverables
     assert "Updated CHANGELOG.md" in release_deliverables
+
+
+def test_normalize_evidence_requirements_rewrites_ci_link_requirements_for_test_steps() -> None:
+    orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
+
+    requirements = orchestrator._normalize_evidence_requirements(
+        step_kind="test_execution",
+        deliverables=["Test run log artifact", "coverage/geometry_coverage.xml"],
+        evidence_requirements=[
+            "CI run logs (GitHub Actions) showing all stages passed",
+            "Coverage report file: coverage/geometry_coverage.xml",
+        ],
+    )
+
+    assert requirements[0] == "Executed test command output"
+    assert "Coverage report file or test run log artifact" in requirements[1]
 
 
 def test_build_step_instruction_requires_deliverable_file_format() -> None:
