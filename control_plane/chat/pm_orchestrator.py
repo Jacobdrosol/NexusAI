@@ -15,8 +15,11 @@ class PMOrchestrator:
         "implementation workflow with explicit quality controls. Return JSON only with this shape: "
         '{"global_acceptance_criteria":["..."],"global_quality_gates":["..."],"risks":["..."],'
         '"steps":[{"id":"step_1","title":"...","instruction":"...","role_hint":"coder",'
-        '"depends_on":[],"acceptance_criteria":["..."],"deliverables":["..."],"quality_gates":["..."]}]}. '
-        "Keep 3-6 steps. Include stories/specification first, implementation next, and testing/review gates before completion."
+        '"step_kind":"specification|planning|repo_change|test_execution|review|release",'
+        '"evidence_requirements":["..."],"depends_on":[],"acceptance_criteria":["..."],'
+        '"deliverables":["..."],"quality_gates":["..."]}]}. '
+        "Keep 3-6 steps. Include stories/specification first, implementation next, and testing/review gates before completion. "
+        "Do not classify a step as test_execution, review, or release unless it can produce execution-backed evidence rather than generic advice."
     )
 
     def __init__(
@@ -64,6 +67,14 @@ class PMOrchestrator:
             acceptance_criteria = self._normalize_string_list(step.get("acceptance_criteria"))
             deliverables = self._normalize_string_list(step.get("deliverables"))
             quality_gates = self._normalize_string_list(step.get("quality_gates"))
+            step_kind = self._normalize_step_kind(
+                step.get("step_kind"),
+                title=str(step.get("title") or ""),
+                instruction=str(step.get("instruction") or ""),
+                role_hint=role_hint,
+                deliverables=deliverables,
+            )
+            evidence_requirements = self._normalize_string_list(step.get("evidence_requirements")) or self._default_evidence_requirements(step_kind)
             target_bot = self._pick_target_bot(bots, role_hint=role_hint, pm_bot_id=pm_bot.id)
             depends_ids = [
                 task_ids_by_step[d]
@@ -76,6 +87,8 @@ class PMOrchestrator:
                     "title": str(step.get("title") or step_id),
                     "instruction": str(step.get("instruction") or instruction),
                     "role_hint": role_hint or "assistant",
+                    "step_kind": step_kind,
+                    "evidence_requirements": evidence_requirements,
                     "step_number": idx + 1,
                     "step_count": len(plan["steps"]),
                     "depends_on_steps": [str(dep) for dep in (step.get("depends_on") or []) if str(dep).strip()],
@@ -261,15 +274,29 @@ class PMOrchestrator:
                 if not isinstance(s, dict):
                     continue
                 step_id = str(s.get("id") or f"step_{idx + 1}")
+                deliverables = self._normalize_string_list(s.get("deliverables"))
+                role_hint = str(s.get("role_hint") or "assistant").lower()
+                step_kind = self._normalize_step_kind(
+                    s.get("step_kind"),
+                    title=str(s.get("title") or f"Step {idx + 1}"),
+                    instruction=str(s.get("instruction") or ""),
+                    role_hint=role_hint,
+                    deliverables=deliverables,
+                )
                 steps.append(
                     {
                         "id": step_id,
                         "title": str(s.get("title") or f"Step {idx + 1}"),
                         "instruction": str(s.get("instruction") or ""),
-                        "role_hint": str(s.get("role_hint") or "assistant").lower(),
+                        "role_hint": role_hint,
                         "depends_on": [str(x) for x in (s.get("depends_on") or []) if x],
+                        "step_kind": step_kind,
+                        "evidence_requirements": (
+                            self._normalize_string_list(s.get("evidence_requirements"))
+                            or self._default_evidence_requirements(step_kind)
+                        ),
                         "acceptance_criteria": self._normalize_string_list(s.get("acceptance_criteria")),
-                        "deliverables": self._normalize_string_list(s.get("deliverables")),
+                        "deliverables": deliverables,
                         "quality_gates": self._normalize_string_list(s.get("quality_gates")),
                     }
                 )
@@ -301,12 +328,14 @@ class PMOrchestrator:
                     f"{instruction}"
                 ),
                 "role_hint": "researcher" if has_research else "assistant",
+                "step_kind": "specification",
                 "depends_on": [],
                 "acceptance_criteria": [
                     "Stories are implementation-ready and testable",
                     "Acceptance criteria are explicit and non-ambiguous",
                 ],
                 "deliverables": ["Specification notes", "Story list", "Acceptance criteria list"],
+                "evidence_requirements": ["Specification document or requirements artifact"],
                 "quality_gates": ["No unresolved scope ambiguity"],
             },
         ]
@@ -322,12 +351,14 @@ class PMOrchestrator:
                         "data-safety checks."
                     ),
                     "role_hint": "dba" if has_dba else "coder",
+                    "step_kind": "planning",
                     "depends_on": ["step_1"],
                     "acceptance_criteria": [
                         "Schema/query updates are backward-compatible or have explicit migration plan",
                         "Data integrity and rollback plan are documented",
                     ],
                     "deliverables": ["Migration/query plan", "DB safety checklist"],
+                    "evidence_requirements": ["Migration plan or schema artifact"],
                     "quality_gates": ["No destructive operation without rollback path"],
                 }
             )
@@ -339,12 +370,14 @@ class PMOrchestrator:
                 "title": "Implement core changes",
                 "instruction": f"Implement the approved solution for: {instruction}",
                 "role_hint": "coder",
+                "step_kind": "repo_change",
                 "depends_on": [implementation_dep],
                 "acceptance_criteria": [
                     "Implementation matches stories and acceptance criteria",
                     "Code paths include error handling and edge-case handling",
                 ],
                 "deliverables": ["Code changes", "Implementation notes"],
+                "evidence_requirements": ["Proposed files or code artifacts"],
                 "quality_gates": ["No runtime errors in local test run"],
             }
         )
@@ -355,12 +388,14 @@ class PMOrchestrator:
                 "title": "Add and run tests",
                 "instruction": "Create and run tests for happy path, edge cases, regressions, and failure handling.",
                 "role_hint": "tester" if has_tester else "coder",
+                "step_kind": "test_execution",
                 "depends_on": ["step_3"],
                 "acceptance_criteria": [
                     "Automated tests cover core behavior and edge cases",
                     "Failing tests are resolved before handoff",
                 ],
                 "deliverables": ["Test changes", "Test run evidence"],
+                "evidence_requirements": ["Executed test command output", "Coverage or pass/fail evidence"],
                 "quality_gates": ["All required tests pass"],
             }
         )
@@ -373,12 +408,14 @@ class PMOrchestrator:
                     "Review for security risks, data exposure, performance regressions, and deployment readiness."
                 ),
                 "role_hint": "reviewer" if has_reviewer else "security",
+                "step_kind": "review",
                 "depends_on": depends,
                 "acceptance_criteria": [
                     "No known security leak paths or obvious privilege bypasses",
                     "No unresolved high-severity quality issues",
                 ],
                 "deliverables": ["Review findings", "Final release recommendation"],
+                "evidence_requirements": ["Concrete findings tied to changed files or executed evidence"],
                 "quality_gates": ["Zero unresolved high-severity findings"],
             }
         )
@@ -479,6 +516,118 @@ class PMOrchestrator:
             if text:
                 result.append(text)
         return result
+
+    def _normalize_step_kind(
+        self,
+        value: Any,
+        *,
+        title: str,
+        instruction: str,
+        role_hint: str,
+        deliverables: List[str],
+    ) -> str:
+        normalized = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+        aliases = {
+            "spec": "specification",
+            "requirements": "specification",
+            "requirement": "specification",
+            "design": "planning",
+            "architecture": "planning",
+            "implementation": "repo_change",
+            "implement": "repo_change",
+            "coding": "repo_change",
+            "code": "repo_change",
+            "testing": "test_execution",
+            "tests": "test_execution",
+            "qa": "test_execution",
+            "reviewer": "review",
+            "security_review": "review",
+            "release_review": "release",
+            "ship": "release",
+            "merge": "release",
+        }
+        normalized = aliases.get(normalized, normalized)
+        valid = {"specification", "planning", "repo_change", "test_execution", "review", "release"}
+        if normalized in valid:
+            return normalized
+        return self._infer_step_kind(
+            title=title,
+            instruction=instruction,
+            role_hint=role_hint,
+            deliverables=deliverables,
+        )
+
+    def _infer_step_kind(
+        self,
+        *,
+        title: str,
+        instruction: str,
+        role_hint: str,
+        deliverables: List[str],
+    ) -> str:
+        haystack = " ".join(
+            [
+                str(title or ""),
+                str(instruction or ""),
+                str(role_hint or ""),
+                " ".join(deliverables),
+            ]
+        ).lower()
+        role = str(role_hint or "").lower()
+
+        if role in {"tester", "qa"}:
+            return "test_execution"
+        if role in {"reviewer", "security", "security-reviewer"}:
+            return "review"
+        if role in {"researcher", "analyst"}:
+            return "specification"
+        if role in {"coder", "developer", "engineer"} and any("/" in item or "." in item for item in deliverables):
+            return "repo_change"
+        if any(token in haystack for token in ("release", "merge", "deploy", "ship", "tag", "cutover")):
+            return "release"
+        if any(token in haystack for token in ("test", "coverage", "qa", "pytest", "integration", "verification")):
+            return "test_execution"
+        if any(token in haystack for token in ("review", "audit", "security", "findings", "approval")):
+            return "review"
+        if any(token in haystack for token in ("spec", "requirement", "acceptance criteria", "user story")):
+            return "specification"
+        if any(
+            marker in haystack
+            for marker in ("implement", "code", "file", "component", "api route", "refactor", "patch", "fix")
+        ) or any("/" in item or "." in item for item in deliverables):
+            return "repo_change"
+        if any(token in haystack for token in ("plan", "design", "architecture", "migration", "rollback")):
+            return "planning"
+        return "planning"
+
+    def _default_evidence_requirements(self, step_kind: str) -> List[str]:
+        defaults = {
+            "specification": [
+                "Specification artifact with explicit acceptance criteria",
+                "Requirements or scope assumptions documented",
+            ],
+            "planning": [
+                "Implementation or migration plan artifact",
+                "Risk, rollback, or dependency notes",
+            ],
+            "repo_change": [
+                "Proposed repo file artifacts or code patches",
+                "Concrete changed-file evidence tied to deliverables",
+            ],
+            "test_execution": [
+                "Executed test command output",
+                "Pass/fail or coverage evidence from the test run",
+            ],
+            "review": [
+                "Concrete findings tied to changed files, diffs, or execution artifacts",
+                "Merge-readiness verdict backed by evidence",
+            ],
+            "release": [
+                "Pull request, merge, or release artifact",
+                "Version, tag, commit, or deployment evidence",
+            ],
+        }
+        return list(defaults.get(step_kind, defaults["planning"]))
 
     def _instruction_mentions_database(self, instruction: str) -> bool:
         text = str(instruction or "").lower()

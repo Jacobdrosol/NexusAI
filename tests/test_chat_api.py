@@ -209,7 +209,34 @@ async def test_stream_message_persists_partial_when_final_missing(cp_app):
 
 @pytest.mark.anyio
 async def test_assign_message_creates_task_graph_and_summary(cp_app):
-    cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "ok"})
+    async def _schedule(task):
+        payload = task.payload if isinstance(task.payload, dict) else {}
+        if str(task.id).startswith("pm-plan-"):
+            return {"output": "ok"}
+        step_kind = str(payload.get("step_kind") or "").strip().lower()
+        if step_kind == "repo_change":
+            return {
+                "output": (
+                    "Deliverable: src/auth/api.py\n"
+                    "```python\n"
+                    "def create_token(user_id):\n"
+                    "    return f'token:{user_id}'\n"
+                    "```\n"
+                )
+            }
+        if step_kind == "test_execution":
+            return {"output": "=== test session starts ===\ncollected 2 items\n2 passed in 0.10s\ncoverage 96%\n"}
+        if step_kind == "review":
+            return {
+                "output": (
+                    "Review findings ordered by severity\n"
+                    "No findings.\n"
+                    "Files reviewed: src/auth/api.py\n"
+                )
+            }
+        return {"output": "Specification and acceptance criteria complete."}
+
+    cp_app.state.scheduler.schedule = AsyncMock(side_effect=_schedule)
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
         create_resp = await client.post("/v1/chat/conversations", json={"title": "Assign Chat"})
         conversation_id = create_resp.json()["id"]
@@ -265,12 +292,22 @@ async def test_stream_assign_emits_task_events(cp_app):
             return {
                 "output": (
                     '{"steps":['
-                    '{"id":"step_1","title":"Design","instruction":"Design API","role_hint":"coder","depends_on":[]},'
-                    '{"id":"step_2","title":"Implement","instruction":"Implement API","role_hint":"coder","depends_on":["step_1"]}'
+                    '{"id":"step_1","title":"Design","instruction":"Design API","role_hint":"coder","step_kind":"planning","depends_on":[]},'
+                    '{"id":"step_2","title":"Implement","instruction":"Implement API","role_hint":"coder","step_kind":"repo_change","deliverables":["src/api/routes.py"],"depends_on":["step_1"]}'
                     "]} "
                 )
             }
         await asyncio.sleep(0.05)
+        payload = task.payload if isinstance(task.payload, dict) else {}
+        if str(payload.get("step_kind") or "") == "repo_change":
+            return {
+                "output": (
+                    "Deliverable: src/api/routes.py\n"
+                    "```python\n"
+                    "router = []\n"
+                    "```\n"
+                )
+            }
         return {"output": f"done:{task.id}"}
 
     cp_app.state.scheduler.schedule = AsyncMock(side_effect=_schedule)

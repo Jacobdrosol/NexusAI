@@ -579,6 +579,191 @@ def _prefers_truncation_retry(task: Task) -> bool:
     return bool(metadata.orchestration_id)
 
 
+def _normalize_string_list(value: Any) -> List[str]:
+    if not isinstance(value, list):
+        return []
+    result: List[str] = []
+    for item in value:
+        text = str(item or "").strip()
+        if text:
+            result.append(text)
+    return result
+
+
+def _normalize_assignment_step_kind(value: Any) -> str:
+    normalized = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "spec": "specification",
+        "requirements": "specification",
+        "design": "planning",
+        "architecture": "planning",
+        "implementation": "repo_change",
+        "implement": "repo_change",
+        "code": "repo_change",
+        "testing": "test_execution",
+        "tests": "test_execution",
+        "qa": "test_execution",
+        "reviewer": "review",
+        "security_review": "review",
+        "ship": "release",
+        "merge": "release",
+    }
+    normalized = aliases.get(normalized, normalized)
+    if normalized in {"specification", "planning", "repo_change", "test_execution", "review", "release"}:
+        return normalized
+    return ""
+
+
+def _looks_like_repo_path(value: str) -> bool:
+    text = str(value or "").strip().replace("\\", "/")
+    if "/" not in text:
+        return False
+    leaf = text.rsplit("/", 1)[-1]
+    return "." in leaf and " " not in leaf
+
+
+def _infer_assignment_step_kind(payload: Dict[str, Any]) -> str:
+    role_hint = str(payload.get("role_hint") or "").strip().lower()
+    deliverables = _normalize_string_list(payload.get("deliverables"))
+    text = " ".join(
+        [
+            str(payload.get("title") or ""),
+            str(payload.get("instruction") or ""),
+            role_hint,
+            " ".join(deliverables),
+        ]
+    ).lower()
+    if role_hint in {"tester", "qa"}:
+        return "test_execution"
+    if role_hint in {"reviewer", "security", "security-reviewer"}:
+        return "review"
+    if role_hint in {"researcher", "analyst"}:
+        return "specification"
+    if role_hint in {"coder", "developer", "engineer"} and any(_looks_like_repo_path(item) for item in deliverables):
+        return "repo_change"
+    if any(token in text for token in ("release", "merge", "deploy", "tag", "ship")):
+        return "release"
+    if any(token in text for token in ("test", "coverage", "qa", "pytest", "verification")):
+        return "test_execution"
+    if any(token in text for token in ("review", "audit", "security", "finding")):
+        return "review"
+    if any(token in text for token in ("spec", "requirement", "acceptance criteria", "user story")):
+        return "specification"
+    if any(token in text for token in ("implement", "code", "patch", "refactor", "api route", "component")):
+        return "repo_change"
+    if any(_looks_like_repo_path(item) for item in deliverables):
+        return "repo_change"
+    if any(token in text for token in ("plan", "design", "architecture", "migration", "rollback")):
+        return "planning"
+    return ""
+
+
+def _assignment_step_kind(payload: Dict[str, Any]) -> str:
+    explicit = _normalize_assignment_step_kind(payload.get("step_kind"))
+    if explicit:
+        return explicit
+    return _infer_assignment_step_kind(payload)
+
+
+def _assignment_expected_repo_files(payload: Dict[str, Any]) -> List[str]:
+    files: List[str] = []
+    for item in _normalize_string_list(payload.get("deliverables")):
+        normalized = str(item).strip().replace("\\", "/").strip("`")
+        if _looks_like_repo_path(normalized):
+            files.append(normalized)
+    return files
+
+
+def _result_explicit_artifacts(result: Any) -> List[Dict[str, Any]]:
+    if not isinstance(result, dict):
+        return []
+    artifacts = result.get("artifacts")
+    if not isinstance(artifacts, list):
+        return []
+    return [item for item in artifacts if isinstance(item, dict)]
+
+
+def _has_repo_change_evidence(_payload: Dict[str, Any], result: Any) -> bool:
+    if extract_file_candidates(result):
+        return True
+    explicit_artifacts = _result_explicit_artifacts(result)
+    if any(str(item.get("path") or "").strip() for item in explicit_artifacts):
+        return True
+    return False
+
+
+def _has_test_execution_evidence(result: Any, text: str) -> bool:
+    if isinstance(result, dict):
+        for key in ("executed_commands", "command_results", "coverage", "coverage_report", "test_results", "exit_code"):
+            if result.get(key) not in (None, "", [], {}):
+                return True
+    explicit_artifacts = _result_explicit_artifacts(result)
+    if any(
+        str(item.get("label") or "").strip().lower().find("coverage") >= 0
+        or str(item.get("path") or "").strip().lower().endswith((".xml", ".json", ".txt", ".html"))
+        for item in explicit_artifacts
+    ):
+        return True
+    patterns = (
+        r"\b\d+\s+passed\b",
+        r"\b\d+\s+failed\b",
+        r"\bcollected\s+\d+\s+items\b",
+        r"\btotal\b[^\n]{0,40}\b\d{1,3}%",
+        r"\bcoverage\b[^\n]{0,40}\b\d{1,3}%",
+        r"\bexit code\b\s*[:=]?\s*\d+",
+        r"\bran\s+\d+\s+tests?\b",
+        r"===+\s*test session starts",
+        r"===+\s*failures",
+        r"\bpassed in\s+\d",
+    )
+    lowered = text.lower()
+    return any(re.search(pattern, lowered, flags=re.IGNORECASE) for pattern in patterns)
+
+
+def _find_repo_paths_in_text(text: str) -> List[str]:
+    if not text:
+        return []
+    return re.findall(r"(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+\.[A-Za-z0-9_.-]+", text)
+
+
+def _has_review_evidence(result: Any, text: str) -> bool:
+    if isinstance(result, dict):
+        for key in ("findings", "review_findings", "files_reviewed", "diff_summary", "review_summary"):
+            if result.get(key) not in (None, "", [], {}):
+                return True
+    file_paths = _find_repo_paths_in_text(text)
+    lowered = text.lower()
+    finding_markers = (
+        "ordered by severity",
+        "finding",
+        "findings",
+        "severity",
+        "no findings",
+        "merge ready",
+        "files reviewed",
+        "diff",
+    )
+    return bool(file_paths) and any(marker in lowered for marker in finding_markers)
+
+
+def _has_release_evidence(result: Any, text: str) -> bool:
+    if isinstance(result, dict):
+        for key in ("pull_request_url", "merged_pull_request_url", "release_tag", "commit_sha", "merge_commit", "branch"):
+            if result.get(key) not in (None, "", [], {}):
+                return True
+    lowered = text.lower()
+    checks = 0
+    if "pull request" in lowered or re.search(r"https?://[^\s]+/pull/\d+", text):
+        checks += 1
+    if re.search(r"\bv\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?\b", text):
+        checks += 1
+    if re.search(r"\b[0-9a-f]{7,40}\b", lowered):
+        checks += 1
+    if "merged" in lowered or "released" in lowered or "tagged" in lowered:
+        checks += 1
+    return checks >= 2
+
+
 def _assignment_validation_error(task: Task, result: Any) -> str:
     metadata = task.metadata
     if metadata is None:
@@ -588,7 +773,13 @@ def _assignment_validation_error(task: Task, result: Any) -> str:
         return ""
     payload = task.payload if isinstance(task.payload, dict) else {}
     role_hint = str(payload.get("role_hint") or "").strip().lower()
-    text = _extract_result_output_text(result).strip().lower()
+    step_kind = _assignment_step_kind(payload)
+    evidence_requirements = (
+        _normalize_string_list(payload.get("evidence_requirements"))
+        or _normalize_string_list(payload.get("quality_gates"))
+    )
+    text = _extract_result_output_text(result).strip()
+    lowered = text.lower()
     if not text:
         return ""
 
@@ -607,13 +798,45 @@ def _assignment_validation_error(task: Task, result: Any) -> str:
         "validation environment does not have the actual source code",
         "because the actual repository is not available",
         "adapt the items to the concrete code",
+        "simulated issue url",
+        "simulated pull request",
+        "example pull request",
+        "placeholder pull request",
     ]
     for marker in invalid_markers:
-        if marker in text:
+        if marker in lowered:
             return (
                 "Assignment task output is unverified and cannot be marked completed: "
                 f"detected '{marker}'."
             )
+
+    if step_kind == "repo_change" and not _has_repo_change_evidence(payload, result):
+        required = ", ".join(evidence_requirements[:2]) or "repo file artifacts"
+        return (
+            "Assignment repo-change step is missing concrete changed-file evidence; "
+            f"required evidence: {required}."
+        )
+
+    if step_kind == "test_execution" and not _has_test_execution_evidence(result, text):
+        required = ", ".join(evidence_requirements[:2]) or "executed test evidence"
+        return (
+            "Assignment test step is missing execution-backed evidence; "
+            f"required evidence: {required}."
+        )
+
+    if step_kind == "review" and not _has_review_evidence(result, text):
+        required = ", ".join(evidence_requirements[:2]) or "review findings tied to changed files"
+        return (
+            "Assignment review step is missing concrete review evidence; "
+            f"required evidence: {required}."
+        )
+
+    if step_kind == "release" and not _has_release_evidence(result, text):
+        required = ", ".join(evidence_requirements[:2]) or "release artifacts"
+        return (
+            "Assignment release step is missing release-backed evidence; "
+            f"required evidence: {required}."
+        )
 
     if role_hint in {"tester", "qa", "reviewer", "security", "security-reviewer"}:
         soft_markers = [
@@ -625,7 +848,7 @@ def _assignment_validation_error(task: Task, result: Any) -> str:
             "feel free to reach out",
             "good luck with the final merge",
         ]
-        matched = [marker for marker in soft_markers if marker in text]
+        matched = [marker for marker in soft_markers if marker in lowered]
         if matched:
             return (
                 "Assignment task output reads like guidance or a checklist rather than executed review/test evidence: "

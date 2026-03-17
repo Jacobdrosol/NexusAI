@@ -3235,6 +3235,115 @@ async def test_chat_assign_tester_output_fails_when_it_admits_not_executed(tmp_p
 
 
 @pytest.mark.anyio
+async def test_chat_assign_repo_change_fails_without_file_evidence(tmp_path, monkeypatch):
+    import asyncio
+
+    from control_plane.task_manager import task_manager as task_manager_module
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import TaskMetadata
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {
+                "output": (
+                    "Implementation plan\n"
+                    "1. Create src/lesson_blocks/math_block.py\n"
+                    "2. Add tests/lesson_blocks/test_math_block.py\n"
+                    "Run the following commands to create the files.\n"
+                )
+            }
+
+    monkeypatch.setattr(
+        task_manager_module,
+        "_settings_int",
+        lambda name, default: 0 if name == "max_task_retries" else default,
+    )
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "chat-assign-repo-no-files.db"))
+    task = await tm.create_task(
+        bot_id="bot1",
+        payload={
+            "instruction": "implement lesson blocks",
+            "role_hint": "coder",
+            "step_kind": "repo_change",
+            "deliverables": [
+                "src/lesson_blocks/math_block.py",
+                "tests/lesson_blocks/test_math_block.py",
+            ],
+            "evidence_requirements": ["Proposed repo file artifacts"],
+        },
+        metadata=TaskMetadata(
+            source="chat_assign",
+            project_id="proj-1",
+            orchestration_id="orch-1",
+        ),
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.1)
+
+    assert updated.status == "failed"
+    assert updated.error is not None
+    assert "changed-file evidence" in updated.error.message.lower()
+
+
+@pytest.mark.anyio
+async def test_chat_assign_repo_change_succeeds_with_extracted_file_candidates(tmp_path, monkeypatch):
+    import asyncio
+
+    from control_plane.task_manager import task_manager as task_manager_module
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import TaskMetadata
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {
+                "output": (
+                    "Deliverable: src/lesson_blocks/math_block.py\n"
+                    "```python\n"
+                    "def add(a, b):\n"
+                    "    return a + b\n"
+                    "```\n"
+                )
+            }
+
+    monkeypatch.setattr(
+        task_manager_module,
+        "_settings_int",
+        lambda name, default: 0 if name == "max_task_retries" else default,
+    )
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "chat-assign-repo-files.db"))
+    task = await tm.create_task(
+        bot_id="bot1",
+        payload={
+            "instruction": "implement lesson blocks",
+            "role_hint": "coder",
+            "step_kind": "repo_change",
+            "deliverables": ["src/lesson_blocks/math_block.py"],
+            "evidence_requirements": ["Proposed repo file artifacts"],
+        },
+        metadata=TaskMetadata(
+            source="chat_assign",
+            project_id="proj-1",
+            orchestration_id="orch-1",
+        ),
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.1)
+
+    assert updated.status == "completed"
+    assert updated.result is not None
+
+
+@pytest.mark.anyio
 async def test_chat_assign_reviewer_guidance_output_fails_without_evidence(tmp_path, monkeypatch):
     import asyncio
 
@@ -3278,7 +3387,7 @@ async def test_chat_assign_reviewer_guidance_output_fails_without_evidence(tmp_p
 
     assert updated.status == "failed"
     assert updated.error is not None
-    assert "guidance or a checklist" in updated.error.message.lower()
+    assert "review evidence" in updated.error.message.lower()
 
 
 @pytest.mark.anyio

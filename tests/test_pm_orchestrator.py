@@ -62,6 +62,45 @@ def test_truncation_hint_detects_high_completion_tokens_without_finish_reason() 
     assert "4096" in hint
 
 
+def test_normalize_step_kind_infers_repo_change_from_deliverable_paths() -> None:
+    orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
+
+    step_kind = orchestrator._normalize_step_kind(
+        "",
+        title="Build lesson blocks",
+        instruction="Implement the feature",
+        role_hint="coder",
+        deliverables=["src/lesson_blocks/math_block.py", "tests/lesson_blocks/test_math_block.py"],
+    )
+
+    assert step_kind == "repo_change"
+
+
+def test_parse_plan_json_backfills_step_kind_and_evidence_requirements() -> None:
+    orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
+
+    parsed = orchestrator._parse_plan_json(
+        """
+        {
+          "steps": [
+            {
+              "id": "step_1",
+              "title": "Run tests",
+              "instruction": "Execute pytest and report coverage",
+              "role_hint": "tester",
+              "deliverables": ["coverage.xml"]
+            }
+          ]
+        }
+        """
+    )
+
+    assert parsed is not None
+    assert parsed["steps"][0]["step_kind"] == "test_execution"
+    assert parsed["steps"][0]["evidence_requirements"]
+    assert "Executed test command output" in parsed["steps"][0]["evidence_requirements"][0]
+
+
 async def test_wait_for_completion_labels_chat_preview_truncation() -> None:
     long_output = "A" * 260
     completed_task = Task(
