@@ -3189,6 +3189,99 @@ async def test_chat_assign_task_retries_when_result_is_truncated(tmp_path, monke
 
 
 @pytest.mark.anyio
+async def test_chat_assign_tester_output_fails_when_it_admits_not_executed(tmp_path, monkeypatch):
+    import asyncio
+
+    from control_plane.task_manager import task_manager as task_manager_module
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import TaskMetadata
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {
+                "output": (
+                    "Acceptance Criteria Checklist\n"
+                    "Pending - not executed\n"
+                    "The validation environment does not have the actual source code.\n"
+                )
+            }
+
+    monkeypatch.setattr(
+        task_manager_module,
+        "_settings_int",
+        lambda name, default: 0 if name == "max_task_retries" else default,
+    )
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "chat-assign-unverified.db"))
+    task = await tm.create_task(
+        bot_id="bot1",
+        payload={"instruction": "run tests", "role_hint": "tester"},
+        metadata=TaskMetadata(
+            source="chat_assign",
+            project_id="proj-1",
+            orchestration_id="orch-1",
+        ),
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.1)
+
+    assert updated.status == "failed"
+    assert updated.error is not None
+    assert "unverified" in updated.error.message.lower()
+
+
+@pytest.mark.anyio
+async def test_chat_assign_reviewer_guidance_output_fails_without_evidence(tmp_path, monkeypatch):
+    import asyncio
+
+    from control_plane.task_manager import task_manager as task_manager_module
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import TaskMetadata
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {
+                "output": (
+                    "Security & Quality Review\n"
+                    "Suggested review commands:\n"
+                    "npm audit --production\n"
+                    "Please proceed with the execution steps and report back any failures.\n"
+                )
+            }
+
+    monkeypatch.setattr(
+        task_manager_module,
+        "_settings_int",
+        lambda name, default: 0 if name == "max_task_retries" else default,
+    )
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "chat-assign-review-guidance.db"))
+    task = await tm.create_task(
+        bot_id="bot1",
+        payload={"instruction": "review and merge", "role_hint": "security-reviewer"},
+        metadata=TaskMetadata(
+            source="chat_assign",
+            project_id="proj-1",
+            orchestration_id="orch-1",
+        ),
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.1)
+
+    assert updated.status == "failed"
+    assert updated.error is not None
+    assert "guidance or a checklist" in updated.error.message.lower()
+
+
+@pytest.mark.anyio
 async def test_payload_transform_supports_coalesce_paths_for_retry_loops(tmp_path):
     import asyncio
 

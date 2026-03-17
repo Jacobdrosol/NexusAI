@@ -579,6 +579,62 @@ def _prefers_truncation_retry(task: Task) -> bool:
     return bool(metadata.orchestration_id)
 
 
+def _assignment_validation_error(task: Task, result: Any) -> str:
+    metadata = task.metadata
+    if metadata is None:
+        return ""
+    source = str(metadata.source or "").strip().lower()
+    if source not in {"chat_assign", "auto_retry"} and not metadata.orchestration_id:
+        return ""
+    payload = task.payload if isinstance(task.payload, dict) else {}
+    role_hint = str(payload.get("role_hint") or "").strip().lower()
+    text = _extract_result_output_text(result).strip().lower()
+    if not text:
+        return ""
+
+    invalid_markers = [
+        "pending - not executed",
+        "pending – not executed",
+        "not executed",
+        "simulated issue urls",
+        "pending creation",
+        "dry-run checklist",
+        "projected compliance",
+        "actual repository is not available",
+        "repository is not available",
+        "actual source files were not supplied",
+        "source files were not supplied",
+        "validation environment does not have the actual source code",
+        "because the actual repository is not available",
+        "adapt the items to the concrete code",
+    ]
+    for marker in invalid_markers:
+        if marker in text:
+            return (
+                "Assignment task output is unverified and cannot be marked completed: "
+                f"detected '{marker}'."
+            )
+
+    if role_hint in {"tester", "qa", "reviewer", "security", "security-reviewer"}:
+        soft_markers = [
+            "execute the following",
+            "verification method",
+            "where to inspect",
+            "suggested review commands",
+            "please proceed with the execution steps",
+            "feel free to reach out",
+            "good luck with the final merge",
+        ]
+        matched = [marker for marker in soft_markers if marker in text]
+        if matched:
+            return (
+                "Assignment task output reads like guidance or a checklist rather than executed review/test evidence: "
+                + ", ".join(matched[:3])
+                + "."
+            )
+    return ""
+
+
 def _task_report_markdown(task: Task) -> str:
     execution = _execution_summary(task)
     usage = execution.get("usage") or {}
@@ -1608,6 +1664,9 @@ class TaskManager:
                     "Model output remained truncated after available retries; increase backend "
                     "max_tokens/num_predict or num_width/num_ctx."
                 )
+            validation_error = _assignment_validation_error(task, result)
+            if validation_error:
+                raise ValueError(validation_error)
             await self.update_status(task_id, "completed", result=result)
         except asyncio.CancelledError:
             logger.info("Task %s cancelled", task_id)
