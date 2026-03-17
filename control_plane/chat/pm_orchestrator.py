@@ -591,14 +591,14 @@ class PMOrchestrator:
         ).lower()
         role = str(role_hint or "").lower()
 
+        if any(token in haystack for token in ("issue", "issues", "milestone", "project board", "roadmap", "planning artifact")):
+            return "planning"
         if role in {"tester", "qa"}:
             return "test_execution"
         if role in {"reviewer", "security", "security-reviewer"}:
             return "review"
         if role in {"researcher", "analyst"}:
             return "specification"
-        if any(token in haystack for token in ("issue", "issues", "milestone", "project board", "roadmap", "planning artifact")):
-            return "planning"
         if role in {"coder", "developer", "engineer"} and any("/" in item or "." in item for item in deliverables):
             return "repo_change"
         if any(token in haystack for token in ("release", "merge", "deploy", "ship", "tag", "cutover")):
@@ -854,6 +854,10 @@ class PMOrchestrator:
         evidence_text = " ".join(normalized).lower()
         has_repo_files = any(self._looks_like_repo_file(item) for item in deliverables)
         mentions_links = any(token in f"{deliverable_text} {evidence_text}" for token in ("github issue", "milestone", "project board", "url", "link"))
+        mentions_planning_links = any(
+            token in f"{deliverable_text} {evidence_text}"
+            for token in ("github issue", "issue definitions", "milestone", "project board", "tracking issue", "roadmap")
+        )
         mentions_git_side_effects = any(token in evidence_text for token in ("commit sha", "pull request", "pr ", "approved", "ci", "merged"))
         mentions_ci_links = any(token in f"{deliverable_text} {evidence_text}" for token in ("github actions", "ci run", "workflow run", "run logs"))
 
@@ -862,7 +866,7 @@ class PMOrchestrator:
                 "Proposed repo file artifacts for each listed deliverable",
                 "Use `Deliverable: path` plus fenced content for each file output",
             ]
-        if step_kind == "planning" and mentions_links:
+        if step_kind in {"specification", "planning"} and mentions_planning_links:
             return [
                 "Proposed issue, milestone, or board definitions",
                 "Only include live non-placeholder links if they actually exist",

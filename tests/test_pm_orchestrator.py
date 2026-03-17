@@ -133,6 +133,22 @@ def test_normalize_evidence_requirements_downgrades_planning_link_claims() -> No
     assert "non-placeholder links" in requirements[1]
 
 
+def test_normalize_evidence_requirements_downgrades_spec_issue_link_claims() -> None:
+    orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
+
+    requirements = orchestrator._normalize_evidence_requirements(
+        step_kind="specification",
+        deliverables=["Issue definitions (markdown or JSON)"],
+        evidence_requirements=[
+            "URL of the created GitHub issue",
+            "Attached specification document (Markdown) in the issue",
+        ],
+    )
+
+    assert requirements[0] == "Proposed issue, milestone, or board definitions"
+    assert "non-placeholder links" in requirements[1]
+
+
 def test_normalize_deliverables_for_spec_step_rewrites_placeholders_and_binary_assets() -> None:
     orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
 
@@ -176,6 +192,20 @@ def test_infer_step_kind_prefers_planning_for_issue_tracker_steps() -> None:
         instruction="Create issue tracker entries and roadmap updates.",
         role_hint="coder",
         deliverables=["docs/issue_tracker_geometry.md"],
+    )
+
+    assert step_kind == "planning"
+
+
+def test_infer_step_kind_prefers_planning_for_research_issue_steps() -> None:
+    orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
+
+    step_kind = orchestrator._normalize_step_kind(
+        "",
+        title="Define requirements and create tracking issue",
+        instruction="Write the requirements summary and create a tracking issue proposal.",
+        role_hint="researcher",
+        deliverables=["Issue definitions (markdown or JSON)"],
     )
 
     assert step_kind == "planning"

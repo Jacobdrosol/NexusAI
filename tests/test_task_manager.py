@@ -3451,6 +3451,61 @@ async def test_chat_assign_planning_succeeds_with_issue_definitions_without_link
 
 
 @pytest.mark.anyio
+async def test_chat_assign_specification_issue_definitions_do_not_require_live_issue_links(tmp_path, monkeypatch):
+    import asyncio
+
+    from control_plane.task_manager import task_manager as task_manager_module
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import TaskMetadata
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {
+                "output": (
+                    "## Issue Definitions\n"
+                    "- Title: Geometry lesson block tracking issue\n"
+                    "- Description: implement geometry block work\n"
+                    "- Labels: enhancement, geometry\n"
+                )
+            }
+
+    monkeypatch.setattr(
+        task_manager_module,
+        "_settings_int",
+        lambda name, default: 0 if name == "max_task_retries" else default,
+    )
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "chat-assign-spec-issue-defs.db"))
+    task = await tm.create_task(
+        bot_id="bot1",
+        payload={
+            "instruction": "define requirements and create tracking issue",
+            "role_hint": "researcher",
+            "step_kind": "specification",
+            "deliverables": ["Issue definitions (markdown or JSON)"],
+            "evidence_requirements": [
+                "URL of the created GitHub issue",
+                "Attached specification document (Markdown) in the issue",
+            ],
+        },
+        metadata=TaskMetadata(
+            source="chat_assign",
+            project_id="proj-1",
+            orchestration_id="orch-1",
+        ),
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.1)
+
+    assert updated.status == "completed"
+    assert updated.result is not None
+
+
+@pytest.mark.anyio
 async def test_chat_assign_specification_fails_without_committed_file_evidence(tmp_path, monkeypatch):
     import asyncio
 
