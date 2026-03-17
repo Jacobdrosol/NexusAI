@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import sys
 import tempfile
 from typing import Any, Dict, List, Optional, Literal, Tuple
 from urllib.parse import urlsplit, urlunsplit
@@ -690,6 +691,12 @@ def _allowed_workspace_commands() -> set[str]:
         )
     )
     values = {part.strip().lower() for part in raw.split(",") if part.strip()}
+    python_name = Path(sys.executable).name.lower()
+    python_stem = Path(sys.executable).stem.lower()
+    if python_name:
+        values.add(python_name)
+    if python_stem:
+        values.add(python_stem)
     return values
 
 
@@ -838,9 +845,10 @@ def _bootstrap_command_specs(workspace: Path, languages: List[str]) -> List[Dict
     if "python" in wanted:
         venv_dir = workspace / ".nexusai_venv"
         py_bin = _python_venv_executable(venv_dir)
+        python_launcher = str(Path(sys.executable))
         specs.append({
             "label": "python_venv_create",
-            "command": ["py", "-m", "venv", str(venv_dir)],
+            "command": [python_launcher, "-m", "venv", str(venv_dir)],
             "timeout_seconds": 300,
         })
         if (workspace / "requirements.txt").exists():
