@@ -808,6 +808,18 @@ function _escapeRepoStatusHtml(value) {
     .replaceAll("'", '&#39;');
 }
 
+function _decodeRepoPorcelainPath(value) {
+  const text = String(value || '').trim();
+  if (text.length >= 2 && text.startsWith('"') && text.endsWith('"')) {
+    try {
+      return JSON.parse(text);
+    } catch (_err) {
+      return text.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+    }
+  }
+  return text;
+}
+
 function _describeRepoPorcelainCode(code) {
   const normalized = String(code || '  ').padEnd(2, ' ').slice(0, 2);
   const indexCode = normalized[0];
@@ -849,7 +861,7 @@ function _renderRepoWorkspaceFileStatus(status) {
         ${rows.map((line) => {
           const raw = String(line || '');
           const code = raw.slice(0, 2);
-          const path = raw.slice(3).trim();
+          const path = _decodeRepoPorcelainPath(raw.slice(3).trim());
           return `<tr>
             <td>${_escapeRepoStatusHtml(_describeRepoPorcelainCode(code))}</td>
             <td><code>${_escapeRepoStatusHtml(code)}</code></td>
@@ -924,7 +936,7 @@ async function discardProjectRepoWorkspaceUntracked() {
   const porcelain = Array.isArray(PROJECT_REPO_WORKSPACE_STATUS?.porcelain) ? PROJECT_REPO_WORKSPACE_STATUS.porcelain : [];
   const paths = porcelain
     .filter((line) => String(line || '').startsWith('?? '))
-    .map((line) => String(line || '').slice(3).trim())
+    .map((line) => _decodeRepoPorcelainPath(String(line || '').slice(3).trim()))
     .filter((path) => !!path);
   if (!paths.length) {
     alert('No untracked files are currently listed.');

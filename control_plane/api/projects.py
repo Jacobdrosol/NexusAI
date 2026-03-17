@@ -1,4 +1,5 @@
 import asyncio
+import ast
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 import base64
@@ -692,10 +693,26 @@ def _porcelain_untracked_paths(porcelain_lines: List[str]) -> List[str]:
         raw = str(line or "")
         if not raw.startswith("?? "):
             continue
-        path = raw[3:].strip()
+        path = _decode_git_porcelain_path(raw[3:].strip())
         if path:
             paths.append(path)
     return paths
+
+
+def _decode_git_porcelain_path(raw: str) -> str:
+    text = str(raw or "").strip()
+    if len(text) >= 2 and text.startswith('"') and text.endswith('"'):
+        try:
+            parsed = ast.literal_eval(text)
+            if isinstance(parsed, str):
+                return parsed
+        except Exception:
+            inner = text[1:-1]
+            try:
+                return bytes(inner, "utf-8").decode("unicode_escape")
+            except Exception:
+                return inner.replace('\\"', '"').replace("\\\\", "\\")
+    return text
 
 
 def _prune_empty_parent_dirs(*, start: Path, root: Path) -> None:

@@ -1085,6 +1085,58 @@ async def test_project_repo_workspace_discard_untracked_removes_generated_files(
 
 
 @pytest.mark.anyio
+async def test_project_repo_workspace_discard_untracked_decodes_quoted_git_paths(cp_client, tmp_path, monkeypatch):
+    await cp_client.post(
+        "/v1/projects",
+        json={"id": "p-repo-discard-quoted", "name": "Repo Discard Quoted", "mode": "isolated"},
+    )
+    root = tmp_path / "repo-discard-quoted"
+    generated = root / "All coordinates are normalized to a 0-1000 viewBox space for scalability."
+    generated.parent.mkdir(parents=True, exist_ok=True)
+    generated.write_text("junk\n", encoding="utf-8")
+
+    update = await cp_client.put(
+        "/v1/projects/p-repo-discard-quoted/repo/workspace",
+        json={
+            "enabled": True,
+            "managed_path_mode": False,
+            "root_path": str(root),
+        },
+    )
+    assert update.status_code == 200
+
+    calls = {"count": 0}
+
+    async def _fake_snapshot(*, root, cfg):
+        calls["count"] += 1
+        return {
+            "enabled": True,
+            "managed_path_mode": False,
+            "workspace_binding": "custom",
+            "root_path": None,
+            "clone_url": None,
+            "default_branch": "main",
+            "allow_push": False,
+            "allow_command_execution": False,
+            "workspace_exists": True,
+            "is_repo": True,
+            "branch": "main",
+            "clean": calls["count"] > 1,
+            "porcelain": [] if calls["count"] > 1 else ['## main', '?? "All coordinates are normalized to a 0-1000 viewBox space for scalability."'],
+            "remotes": [],
+            "last_commit": {},
+        }
+
+    monkeypatch.setattr("control_plane.api.projects._repo_status_snapshot", _fake_snapshot)
+
+    resp = await cp_client.post("/v1/projects/p-repo-discard-quoted/repo/workspace/discard-untracked", json={})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["removed_paths"] == ["All coordinates are normalized to a 0-1000 viewBox space for scalability."]
+    assert generated.exists() is False
+
+
+@pytest.mark.anyio
 async def test_project_repo_workspace_run_command_creates_missing_managed_workspace(cp_client, tmp_path, monkeypatch):
     await cp_client.post(
         "/v1/projects",
