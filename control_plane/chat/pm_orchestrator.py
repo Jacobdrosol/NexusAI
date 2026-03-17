@@ -21,7 +21,8 @@ class PMOrchestrator:
         "Keep 3-6 steps. Include stories/specification first, implementation next, and testing/review gates before completion. "
         "Do not classify a step as test_execution, review, or release unless it can produce execution-backed evidence rather than generic advice. "
         "Do not claim committed files, created issues, merged pull requests, CI passes, approvals, or releases unless those side effects are actually available with live evidence. "
-        "When a step deliverable is a repo file, prefer proposed file artifacts that can be applied later rather than claiming the file is already committed."
+        "When a step deliverable is a repo file, prefer proposed file artifacts that can be applied later rather than claiming the file is already committed. "
+        "Use repo context as the source of truth for language, framework, and file extension choices. Match nearby existing files such as `.razor`, `.cs`, `.ts`, `.py`, or `.cpp` instead of defaulting to Python."
     )
 
     def __init__(
@@ -896,6 +897,10 @@ class PMOrchestrator:
             lines.append(
                 "For each repo file deliverable, return the full file content in this exact format: "
                 "`Deliverable: path` on its own line followed by a fenced code block."
+            )
+            lines.append(
+                "Choose languages, frameworks, and file extensions to match the repo context and nearby existing files. "
+                "Do not default to Python when the repo points to Razor, C#, TypeScript, C++, or another established stack."
             )
         if any(item.lower().endswith(".mermaid.md") for item in deliverables):
             lines.append(

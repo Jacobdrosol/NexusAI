@@ -1,4 +1,5 @@
 import asyncio
+from collections import Counter
 import json
 import os
 from pathlib import Path
@@ -577,6 +578,169 @@ def _project_repo_workspace_root(project: Any) -> str | None:
     return str(root) if root is not None else None
 
 
+_REPO_PROFILE_SKIP_DIRS = {
+    ".git",
+    ".hg",
+    ".svn",
+    ".venv",
+    "venv",
+    "__pycache__",
+    "node_modules",
+    "bin",
+    "obj",
+    "dist",
+    "build",
+    "out",
+    ".idea",
+    ".vs",
+}
+_REPO_PROFILE_MARKER_FILES = {
+    ".sln",
+    ".csproj",
+    ".fsproj",
+    ".vbproj",
+    "package.json",
+    "tsconfig.json",
+    "vite.config.ts",
+    "vite.config.js",
+    "next.config.js",
+    "next.config.mjs",
+    "pyproject.toml",
+    "requirements.txt",
+    "poetry.lock",
+    "Pipfile",
+    "Cargo.toml",
+    "go.mod",
+    "CMakeLists.txt",
+    "meson.build",
+    "Makefile",
+}
+_REPO_PROFILE_MARKER_FILES_LOWER = {name.lower() for name in _REPO_PROFILE_MARKER_FILES}
+
+
+def _scan_repo_profile(root: Path, *, max_files: int = 2000) -> Dict[str, Any]:
+    ext_counts: Counter[str] = Counter()
+    sample_paths: Dict[str, List[str]] = {}
+    marker_paths: List[str] = []
+    scanned_files = 0
+
+    for current_root, dirnames, filenames in os.walk(root):
+        dirnames[:] = [name for name in dirnames if name not in _REPO_PROFILE_SKIP_DIRS]
+        for filename in filenames:
+            scanned_files += 1
+            if scanned_files > max_files:
+                break
+            full_path = Path(current_root) / filename
+            try:
+                rel_path = full_path.relative_to(root).as_posix()
+            except Exception:
+                continue
+            lowered_name = filename.lower()
+            suffix = full_path.suffix.lower()
+            if lowered_name in _REPO_PROFILE_MARKER_FILES_LOWER or suffix in {
+                ".sln",
+                ".csproj",
+                ".fsproj",
+                ".vbproj",
+                ".razor",
+            }:
+                marker_paths.append(rel_path)
+            ext_key = suffix if suffix else f"[{lowered_name}]"
+            ext_counts[ext_key] += 1
+            if suffix and len(sample_paths.get(suffix, [])) < 3:
+                sample_paths.setdefault(suffix, []).append(rel_path)
+        if scanned_files > max_files:
+            break
+
+    top_exts = ext_counts.most_common(6)
+    lower_markers = {path.lower() for path in marker_paths}
+
+    has_dotnet = any(path.endswith((".sln", ".csproj", ".fsproj", ".vbproj")) for path in lower_markers)
+    has_razor = any(path.endswith(".razor") for path in lower_markers) or ext_counts.get(".razor", 0) > 0
+    has_typescript = "package.json" in lower_markers or "tsconfig.json" in lower_markers or ext_counts.get(".ts", 0) > 0 or ext_counts.get(".tsx", 0) > 0
+    has_javascript = "package.json" in lower_markers or ext_counts.get(".js", 0) > 0 or ext_counts.get(".jsx", 0) > 0
+    has_python = (
+        "pyproject.toml" in lower_markers
+        or "requirements.txt" in lower_markers
+        or "poetry.lock" in lower_markers
+        or ext_counts.get(".py", 0) > 0
+    )
+    has_cpp = "cmakelists.txt" in lower_markers or ext_counts.get(".cpp", 0) > 0 or ext_counts.get(".hpp", 0) > 0 or ext_counts.get(".h", 0) > 0
+
+    stack_signals: List[str] = []
+    guidance: List[str] = ["Match nearby existing files and project structure before introducing a new language."]
+    if has_dotnet and has_razor:
+        stack_signals.append(".NET / ASP.NET Razor")
+        guidance.append("Pages and UI components should prefer `.razor` files alongside existing Razor files.")
+        guidance.append("Backend and service changes should prefer `.cs` files inside the existing project/solution structure.")
+    elif has_dotnet:
+        stack_signals.append(".NET")
+        guidance.append("Prefer `.cs` files inside the existing `.csproj` / solution structure for implementation work.")
+    if has_typescript:
+        stack_signals.append("TypeScript / Node")
+        guidance.append("Web UI and frontend logic should prefer `.ts` / `.tsx` and existing package-managed conventions.")
+    elif has_javascript:
+        stack_signals.append("JavaScript / Node")
+        guidance.append("Use the existing JavaScript project structure instead of introducing a new runtime unless required.")
+    if has_python:
+        stack_signals.append("Python")
+        guidance.append("Only choose Python for modules that already live in Python or when the repo context clearly points there.")
+    if has_cpp:
+        stack_signals.append("C/C++")
+        guidance.append("Native or desktop/runtime components should stay in the existing C/C++ build system and file layout.")
+    if not stack_signals and top_exts:
+        stack_signals.append("Mixed or unclear stack")
+        guidance.append("Infer file type from adjacent files in the touched area instead of defaulting to Python.")
+
+    return {
+        "marker_paths": marker_paths[:8],
+        "top_exts": top_exts,
+        "sample_paths": sample_paths,
+        "stack_signals": stack_signals,
+        "guidance": guidance,
+        "scanned_files": scanned_files,
+    }
+
+
+def _format_repo_profile_context_item(root: Path) -> str:
+    if not root.exists() or not root.is_dir():
+        return ""
+    try:
+        profile = _scan_repo_profile(root)
+    except Exception:
+        return ""
+    lines = ["[repo-profile] Workspace stack summary"]
+    stack_signals = profile.get("stack_signals") or []
+    if stack_signals:
+        lines.append("Likely primary stack: " + ", ".join(str(item) for item in stack_signals))
+    marker_paths = profile.get("marker_paths") or []
+    if marker_paths:
+        lines.append("Key repo markers: " + "; ".join(str(item) for item in marker_paths))
+    top_exts = profile.get("top_exts") or []
+    if top_exts:
+        ext_text = ", ".join(f"{ext} ({count})" for ext, count in top_exts)
+        lines.append("Dominant file types: " + ext_text)
+    sample_paths = profile.get("sample_paths") or {}
+    for ext in (".razor", ".cs", ".ts", ".tsx", ".py", ".cpp"):
+        samples = sample_paths.get(ext) or []
+        if samples:
+            lines.append(f"Example {ext} files: " + "; ".join(samples[:3]))
+    guidance = profile.get("guidance") or []
+    if guidance:
+        lines.append("Implementation guidance:")
+        lines.extend(f"- {item}" for item in guidance[:5])
+    lines.append("Use this repo profile as the source of truth for language, framework, and file extension choices.")
+    return "\n".join(lines)
+
+
+async def _resolve_repo_profile_context_item(*, workspace_root: str | None) -> List[str]:
+    root = normalize_workspace_root(workspace_root)
+    if root is None:
+        return []
+    item = await asyncio.to_thread(_format_repo_profile_context_item, root)
+    return [item] if item else []
+
+
 async def _effective_tool_access(
     request: Request,
     *,
@@ -884,6 +1048,10 @@ async def _resolve_context_items(
             workspace_root=workspace_root,
         )
 
+    repo_profile_context: List[str] = []
+    if filesystem_allowed and workspace_root:
+        repo_profile_context = await _resolve_repo_profile_context_item(workspace_root=workspace_root)
+
     repo_context: List[str] = []
     if (body.include_project_context or body.use_workspace_tools or force_project_context) and repo_search_allowed and conversation is not None:
         repo_context = await _resolve_project_repo_context_items(
@@ -893,6 +1061,7 @@ async def _resolve_context_items(
         )
 
     # Source-of-truth ordering: workspace -> ingested repo -> explicitly-selected vault -> manual context
+    resolved.extend(repo_profile_context)
     resolved.extend(workspace_context)
     resolved.extend(repo_context)
     resolved.extend(vault_items)

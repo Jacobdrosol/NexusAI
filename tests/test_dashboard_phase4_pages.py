@@ -1250,6 +1250,7 @@ def test_project_repo_workspace_api_proxies_control_plane(dashboard_client):
             self.updated = None
             self.clone_called = None
             self.run_called = None
+            self.discard_called = None
 
         def get_project_repo_workspace(self, project_id):
             return {
@@ -1276,6 +1277,10 @@ def test_project_repo_workspace_api_proxies_control_plane(dashboard_client):
                 "is_repo": True,
                 "branch": "main",
             }
+
+        def discard_project_repo_workspace_untracked(self, **kwargs):
+            self.discard_called = kwargs
+            return {"status": "ok", "removed_paths": kwargs.get("paths") or []}
 
         def clone_project_repo_workspace(self, **kwargs):
             self.clone_called = kwargs
@@ -1324,6 +1329,10 @@ def test_project_repo_workspace_api_proxies_control_plane(dashboard_client):
             },
         )
         status_resp = dashboard_client.get("/api/projects/proj-1/repo/workspace/status")
+        discard_resp = dashboard_client.post(
+            "/api/projects/proj-1/repo/workspace/discard-untracked",
+            json={"paths": ["src/demo.py", "tests/test_demo.py"]},
+        )
         clone_resp = dashboard_client.post(
             "/api/projects/proj-1/repo/workspace/clone",
             json={"clone_url": "https://github.com/org/demo.git", "branch": "main", "depth": 1},
@@ -1352,6 +1361,9 @@ def test_project_repo_workspace_api_proxies_control_plane(dashboard_client):
     assert fake_cp.updated["allow_push"] is True
     assert status_resp.status_code == 200
     assert status_resp.get_json()["is_repo"] is True
+    assert discard_resp.status_code == 200
+    assert fake_cp.discard_called is not None
+    assert fake_cp.discard_called["paths"] == ["src/demo.py", "tests/test_demo.py"]
     assert clone_resp.status_code == 200
     assert fake_cp.clone_called is not None
     assert fake_cp.clone_called["depth"] == 1

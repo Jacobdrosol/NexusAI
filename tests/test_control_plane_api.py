@@ -1028,6 +1028,63 @@ async def test_project_repo_workspace_status_lists_untracked_files_individually(
 
 
 @pytest.mark.anyio
+async def test_project_repo_workspace_discard_untracked_removes_generated_files(cp_client, tmp_path, monkeypatch):
+    await cp_client.post(
+        "/v1/projects",
+        json={"id": "p-repo-discard", "name": "Repo Discard", "mode": "isolated"},
+    )
+    root = tmp_path / "repo-discard"
+    generated_src = root / "src" / "demo.py"
+    generated_test = root / "tests" / "test_demo.py"
+    generated_src.parent.mkdir(parents=True, exist_ok=True)
+    generated_test.parent.mkdir(parents=True, exist_ok=True)
+    generated_src.write_text("print('demo')\n", encoding="utf-8")
+    generated_test.write_text("def test_demo():\n    assert True\n", encoding="utf-8")
+
+    update = await cp_client.put(
+        "/v1/projects/p-repo-discard/repo/workspace",
+        json={
+            "enabled": True,
+            "managed_path_mode": False,
+            "root_path": str(root),
+        },
+    )
+    assert update.status_code == 200
+
+    calls = {"count": 0}
+
+    async def _fake_snapshot(*, root, cfg):
+        calls["count"] += 1
+        return {
+            "enabled": True,
+            "managed_path_mode": False,
+            "workspace_binding": "custom",
+            "root_path": None,
+            "clone_url": None,
+            "default_branch": "main",
+            "allow_push": False,
+            "allow_command_execution": False,
+            "workspace_exists": True,
+            "is_repo": True,
+            "branch": "main",
+            "clean": calls["count"] > 1,
+            "porcelain": [] if calls["count"] > 1 else ["## main", "?? src/demo.py", "?? tests/test_demo.py"],
+            "remotes": [],
+            "last_commit": {},
+        }
+
+    monkeypatch.setattr("control_plane.api.projects._repo_status_snapshot", _fake_snapshot)
+
+    resp = await cp_client.post("/v1/projects/p-repo-discard/repo/workspace/discard-untracked", json={})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["removed_paths"] == ["src/demo.py", "tests/test_demo.py"]
+    assert generated_src.exists() is False
+    assert generated_test.exists() is False
+    assert body["workspace"]["clean"] is True
+
+
+@pytest.mark.anyio
 async def test_project_repo_workspace_run_command_creates_missing_managed_workspace(cp_client, tmp_path, monkeypatch):
     await cp_client.post(
         "/v1/projects",

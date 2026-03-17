@@ -576,6 +576,24 @@ def api_get_project_repo_workspace_status(project_id: str):
     return jsonify(result)
 
 
+@bp.post("/api/projects/<project_id>/repo/workspace/discard-untracked")
+@login_required
+def api_discard_project_repo_workspace_untracked(project_id: str):
+    data: dict[str, Any] = request.get_json(force=True) or {}
+    raw_paths = data.get("paths")
+    if raw_paths is None:
+        paths: list[str] = []
+    elif isinstance(raw_paths, list):
+        paths = [str(path).strip() for path in raw_paths if str(path).strip()]
+    else:
+        return jsonify({"error": "paths must be an array of strings"}), 400
+    cp = get_cp_client()
+    result = cp.discard_project_repo_workspace_untracked(project_id=project_id, paths=paths)
+    if result is None:
+        return _cp_error_response(cp, "failed to discard untracked repo workspace files")
+    return jsonify(result)
+
+
 @bp.post("/api/projects/<project_id>/repo/workspace/clone")
 @login_required
 def api_clone_project_repo_workspace(project_id: str):

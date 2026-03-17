@@ -415,6 +415,15 @@ class CPClient:
     def get_project_repo_workspace_status(self, project_id: str) -> Optional[Dict[str, Any]]:
         return self._get(f"/v1/projects/{project_id}/repo/workspace/status")
 
+    def discard_project_repo_workspace_untracked(
+        self,
+        project_id: str,
+        *,
+        paths: Optional[List[str]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        body: Dict[str, Any] = {"paths": list(paths or [])}
+        return self._post(f"/v1/projects/{project_id}/repo/workspace/discard-untracked", body)
+
     def clone_project_repo_workspace(
         self,
         project_id: str,

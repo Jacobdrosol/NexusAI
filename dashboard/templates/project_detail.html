@@ -211,6 +211,7 @@
         <button class="btn" type="button" onclick="pullProjectRepoWorkspace()">Pull</button>
         <button class="btn" type="button" onclick="pushProjectRepoWorkspace()">Push</button>
         <button class="btn" type="button" onclick="refreshProjectRepoWorkspaceStatus()">Show File Status</button>
+        <button class="btn btn-danger" type="button" onclick="discardProjectRepoWorkspaceUntracked()">Discard Untracked Files</button>
       </div>
       <div class="form-group" style="margin-top:0.6rem;">
         <label>Commit Message</label>
@@ -655,6 +656,7 @@ let CLOUD_POLICY = {provider_policies: {}, bot_overrides: {}};
 let PROJECT_CHAT_TOOL_ACCESS = {{ (chat_tool_access if chat_tool_access else {"enabled": false, "filesystem": false, "repo_search": false, "workspace_root": none}) | tojson }};
 let PROJECT_REPO_WORKSPACE = {{ (repo_workspace if repo_workspace else {"enabled": false, "managed_path_mode": true, "workspace_binding": "managed", "root_path": none, "clone_url": none, "default_branch": none, "allow_push": false, "allow_command_execution": false}) | tojson }};
 let PROJECT_REPO_WORKSPACE_USAGE_SUMMARY = {};
+let PROJECT_REPO_WORKSPACE_STATUS = {};
 let GITHUB_SYNC_POLL = null;
 let PROJECT_DATA_INGEST_POLL = null;
 let PROJECT_DATA_EDIT_MODE = false;
@@ -911,10 +913,44 @@ async function refreshProjectRepoWorkspaceStatus() {
     _setRepoWorkspaceState('state-error', data.error || 'Failed to load repo workspace status.');
     return;
   }
+  PROJECT_REPO_WORKSPACE_STATUS = data || {};
   const statusPre = document.getElementById('repo-workspace-status-pre');
   if (statusPre) statusPre.textContent = JSON.stringify(_redactRepoDisplayValue(data), null, 2);
   _renderRepoWorkspaceFileStatus(data);
   _setRepoWorkspaceState('state-info', 'Repo status loaded.');
+}
+
+async function discardProjectRepoWorkspaceUntracked() {
+  const porcelain = Array.isArray(PROJECT_REPO_WORKSPACE_STATUS?.porcelain) ? PROJECT_REPO_WORKSPACE_STATUS.porcelain : [];
+  const paths = porcelain
+    .filter((line) => String(line || '').startsWith('?? '))
+    .map((line) => String(line || '').slice(3).trim())
+    .filter((path) => !!path);
+  if (!paths.length) {
+    alert('No untracked files are currently listed.');
+    return;
+  }
+  const preview = paths.slice(0, 8).join('\n');
+  const suffix = paths.length > 8 ? `\n...and ${paths.length - 8} more.` : '';
+  if (!confirm(`Discard ${paths.length} untracked file(s)?\n\n${preview}${suffix}`)) return;
+  _setRepoWorkspaceState('state-loading', 'Discarding untracked files...');
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/repo/workspace/discard-untracked', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify({paths}),
+  });
+  const data = await res.json().catch(() => ({}));
+  _setRepoWorkspaceOutput(data);
+  if (!res.ok) {
+    _setRepoWorkspaceState('state-error', data.error || 'Failed to discard untracked files.');
+    return;
+  }
+  PROJECT_REPO_WORKSPACE_STATUS = data.workspace || {};
+  const statusPre = document.getElementById('repo-workspace-status-pre');
+  if (statusPre) statusPre.textContent = JSON.stringify(_redactRepoDisplayValue(PROJECT_REPO_WORKSPACE_STATUS), null, 2);
+  _renderRepoWorkspaceFileStatus(PROJECT_REPO_WORKSPACE_STATUS);
+  _setRepoWorkspaceState('state-info', `Discarded ${Array.isArray(data.removed_paths) ? data.removed_paths.length : 0} untracked file(s).`);
+  await refreshProjectRepoWorkspaceUsage();
 }
 
 async function refreshProjectRepoWorkspaceUsage() {

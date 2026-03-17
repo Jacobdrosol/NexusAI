@@ -114,6 +114,10 @@ class RepoWorkspaceApplyAssignmentRequest(BaseModel):
     overwrite: bool = True
 
 
+class RepoWorkspaceDiscardUntrackedRequest(BaseModel):
+    paths: List[str] = Field(default_factory=list)
+
+
 _CLOUD_POLICY_VALUES = {"allow", "redact", "block"}
 _SUPPORTED_CLOUD_PROVIDERS = {"openai", "claude", "gemini"}
 _URL_WITH_AUTH_RE = re.compile(r"((?:https?|ssh)://)([^@\s/]+)@", re.IGNORECASE)
@@ -680,6 +684,68 @@ def _write_assignment_files(
             }
         )
     return applied
+
+
+def _porcelain_untracked_paths(porcelain_lines: List[str]) -> List[str]:
+    paths: List[str] = []
+    for line in porcelain_lines:
+        raw = str(line or "")
+        if not raw.startswith("?? "):
+            continue
+        path = raw[3:].strip()
+        if path:
+            paths.append(path)
+    return paths
+
+
+def _prune_empty_parent_dirs(*, start: Path, root: Path) -> None:
+    current = start
+    while True:
+        if current == root or current == current.parent:
+            return
+        try:
+            current.rmdir()
+        except OSError:
+            return
+        current = current.parent
+
+
+def _discard_untracked_workspace_paths(
+    *,
+    root: Path,
+    untracked_paths: List[str],
+    requested_paths: List[str],
+) -> List[str]:
+    allowed = {str(path).strip().replace("\\", "/") for path in untracked_paths if str(path).strip()}
+    if requested_paths:
+        selected = [str(path).strip().replace("\\", "/") for path in requested_paths if str(path).strip()]
+    else:
+        selected = sorted(allowed)
+    if not selected:
+        return []
+
+    invalid = [path for path in selected if path not in allowed]
+    if invalid:
+        raise HTTPException(
+            status_code=400,
+            detail=f"requested discard paths are not currently untracked: {', '.join(invalid[:5])}",
+        )
+
+    removed: List[str] = []
+    for relative_path in selected:
+        target = (root / relative_path).resolve(strict=False)
+        if not is_within_workspace(root, target):
+            raise HTTPException(status_code=400, detail=f"refusing to delete outside workspace: {relative_path}")
+        if target.is_dir():
+            shutil.rmtree(target)
+            removed.append(relative_path)
+            _prune_empty_parent_dirs(start=target.parent, root=root)
+            continue
+        if target.exists():
+            target.unlink()
+            removed.append(relative_path)
+            _prune_empty_parent_dirs(start=target.parent, root=root)
+    return removed
 
 
 def _allowed_workspace_commands() -> set[str]:
@@ -2447,6 +2513,52 @@ async def get_project_repo_workspace_status(project_id: str, request: Request) -
     root = _resolve_repo_workspace_root(project_id, cfg, require_enabled=False)
     snapshot = await _repo_status_snapshot(root=root, cfg=cfg)
     return {"project_id": project_id, **snapshot}
+
+
+@router.post("/{project_id}/repo/workspace/discard-untracked")
+async def discard_project_repo_workspace_untracked(
+    project_id: str,
+    request: Request,
+    body: RepoWorkspaceDiscardUntrackedRequest,
+) -> dict:
+    project_registry = request.app.state.project_registry
+    try:
+        project = await project_registry.get(project_id)
+    except ProjectNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    cfg = _extract_project_repo_workspace(project)
+    root = _resolve_repo_workspace_root(project_id, cfg, require_enabled=True)
+    snapshot = await _repo_status_snapshot(root=root, cfg=cfg)
+    if not bool(snapshot.get("is_repo")):
+        raise HTTPException(status_code=400, detail="repo workspace is not a git repository")
+
+    untracked_paths = _porcelain_untracked_paths(snapshot.get("porcelain") or [])
+    removed_paths = _discard_untracked_workspace_paths(
+        root=root,
+        untracked_paths=untracked_paths,
+        requested_paths=list(body.paths or []),
+    )
+    updated_snapshot = await _repo_status_snapshot(root=root, cfg=cfg)
+    await record_audit_event(
+        request,
+        action="projects.repo_workspace.discard_untracked",
+        resource=f"project:{project_id}",
+        details={"removed_paths": removed_paths, "removed_count": len(removed_paths)},
+    )
+    await _record_repo_workspace_usage(
+        request,
+        project_id=project_id,
+        action="discard_untracked",
+        status="ok",
+        details={"removed_paths": removed_paths, "removed_count": len(removed_paths)},
+    )
+    return {
+        "status": "ok",
+        "project_id": project_id,
+        "removed_paths": removed_paths,
+        "workspace": updated_snapshot,
+    }
 
 
 @router.post("/{project_id}/repo/workspace/apply-assignment")
