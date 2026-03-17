@@ -811,6 +811,20 @@ def _assignment_execution_language(*, applied_paths: List[str], test_files: List
     return "python"
 
 
+def _assignment_execution_languages(*, applied_paths: List[str], test_files: List[str], root: Path) -> List[str]:
+    prioritized = [str(path or "").strip().lower() for path in (test_files + applied_paths) if str(path or "").strip()]
+    languages: List[str] = []
+    if any(path.endswith(".py") for path in prioritized):
+        languages.append("python")
+    if any(path.endswith((".ts", ".tsx", ".js", ".jsx")) for path in prioritized):
+        languages.append("node")
+    if any(path.endswith(".cs") for path in prioritized):
+        languages.append("dotnet")
+    if languages:
+        return languages
+    return [_assignment_execution_language(applied_paths=applied_paths, test_files=test_files, root=root)]
+
+
 def _find_repo_paths_in_text(text: str) -> List[str]:
     if not text:
         return []
@@ -2360,13 +2374,16 @@ class TaskManager:
 
         usage_parts: List[Dict[str, Any]] = []
         command_results: List[Dict[str, Any]] = []
-        language = _assignment_execution_language(
+        languages = _assignment_execution_languages(
             applied_paths=applied_paths,
             test_files=test_files,
             root=root,
         )
+        artifacts: List[Dict[str, Any]] = []
+        missing_reports: List[str] = []
+        executed_any_tests = False
 
-        if language == "python":
+        if "python" in languages:
             for spec in _bootstrap_command_specs(root, ["python"]):
                 step_result = await _run_repo_command(
                     [str(part) for part in spec.get("command") or []],
@@ -2382,6 +2399,7 @@ class TaskManager:
                         "ok": bool(step_result.get("ok")),
                         "stdout": str(step_result.get("stdout") or ""),
                         "stderr": str(step_result.get("stderr") or ""),
+                        "error": str(step_result.get("error") or ""),
                     }
                 )
                 if not step_result.get("ok"):
@@ -2405,7 +2423,20 @@ class TaskManager:
                 if coverage_path:
                     test_cmd.append(f"--cov-report=xml:{coverage_path}")
             test_result = await _run_repo_command(test_cmd, cwd=root, timeout_seconds=1800)
-        elif language == "node":
+            usage_parts.append(test_result.get("resource_usage") or {})
+            command_results.append(
+                {
+                    "label": "test_execution_python",
+                    "command": test_result.get("command") or test_cmd,
+                    "exit_code": test_result.get("exit_code"),
+                    "ok": bool(test_result.get("ok")),
+                    "stdout": str(test_result.get("stdout") or ""),
+                    "stderr": str(test_result.get("stderr") or ""),
+                    "error": str(test_result.get("error") or ""),
+                }
+            )
+            executed_any_tests = True
+        if "node" in languages:
             allowed = _allowed_workspace_commands()
             for spec in _bootstrap_command_specs(root, ["node"]):
                 bootstrap_cmd = [str(part) for part in spec.get("command") or []]
@@ -2426,6 +2457,7 @@ class TaskManager:
                         "ok": bool(step_result.get("ok")),
                         "stdout": str(step_result.get("stdout") or ""),
                         "stderr": str(step_result.get("stderr") or ""),
+                        "error": str(step_result.get("error") or ""),
                     }
                 )
                 if not step_result.get("ok"):
@@ -2440,7 +2472,20 @@ class TaskManager:
                     raise _TaskExecutionFailure("assignment test bootstrap failed", result=result)
             test_cmd = ["npm", "test", "--", "--runInBand", "--coverage"]
             test_result = await _run_repo_command(test_cmd, cwd=root, timeout_seconds=1800)
-        else:
+            usage_parts.append(test_result.get("resource_usage") or {})
+            command_results.append(
+                {
+                    "label": "test_execution_node",
+                    "command": test_result.get("command") or test_cmd,
+                    "exit_code": test_result.get("exit_code"),
+                    "ok": bool(test_result.get("ok")),
+                    "stdout": str(test_result.get("stdout") or ""),
+                    "stderr": str(test_result.get("stderr") or ""),
+                    "error": str(test_result.get("error") or ""),
+                }
+            )
+            executed_any_tests = True
+        if "dotnet" in languages:
             results_dir = root / ".nexusai_test_results"
             test_cmd = ["dotnet", "test", "--nologo", "--verbosity", "minimal"]
             coverage_path = next((path for path in report_paths if path.lower().endswith(".xml")), None)
@@ -2455,21 +2500,23 @@ class TaskManager:
                     target = (root / coverage_path).resolve(strict=False)
                     target.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copyfile(candidates[0], target)
+            usage_parts.append(test_result.get("resource_usage") or {})
+            command_results.append(
+                {
+                    "label": "test_execution_dotnet",
+                    "command": test_result.get("command") or test_cmd,
+                    "exit_code": test_result.get("exit_code"),
+                    "ok": bool(test_result.get("ok")),
+                    "stdout": str(test_result.get("stdout") or ""),
+                    "stderr": str(test_result.get("stderr") or ""),
+                    "error": str(test_result.get("error") or ""),
+                }
+            )
+            executed_any_tests = True
 
-        usage_parts.append(test_result.get("resource_usage") or {})
-        command_results.append(
-            {
-                "label": "test_execution",
-                "command": test_result.get("command") or test_cmd,
-                "exit_code": test_result.get("exit_code"),
-                "ok": bool(test_result.get("ok")),
-                "stdout": str(test_result.get("stdout") or ""),
-                "stderr": str(test_result.get("stderr") or ""),
-            }
-        )
+        if not executed_any_tests:
+            raise _TaskExecutionFailure("assignment test execution did not select any runnable test command")
 
-        artifacts: List[Dict[str, Any]] = []
-        missing_reports: List[str] = []
         for relative_path in report_paths:
             artifact_path = (root / relative_path).resolve(strict=False)
             if artifact_path.exists() and artifact_path.is_file():
@@ -2498,7 +2545,7 @@ class TaskManager:
                 "assignment test execution did not produce required report files: " + ", ".join(missing_reports),
                 result=result,
             )
-        if not test_result.get("ok"):
+        if not all(bool(item.get("ok")) for item in command_results if str(item.get("label") or "").startswith("test_execution")):
             raise _TaskExecutionFailure("assignment test execution failed", result=result)
         return result
 
@@ -2519,6 +2566,7 @@ class TaskManager:
             exit_code = item.get("exit_code")
             stdout = str(item.get("stdout") or "")
             stderr = str(item.get("stderr") or "")
+            error = str(item.get("error") or "")
             stdout_excerpt = "\n".join(stdout.splitlines()[:12]).strip()
             stderr_excerpt = "\n".join(stderr.splitlines()[:12]).strip()
             executed_commands.append(
@@ -2528,11 +2576,14 @@ class TaskManager:
                     "exit_code": exit_code,
                     "stdout_excerpt": stdout_excerpt,
                     "stderr_excerpt": stderr_excerpt,
+                    "error": error,
                     "ok": bool(item.get("ok")),
                 }
             )
             lines.append(f"- Command: `{' '.join(command)}`")
             lines.append(f"  Exit Code: {exit_code}")
+            if error:
+                lines.append(f"  Error: {error}")
             if stdout_excerpt:
                 lines.append("  Stdout:")
                 lines.append("")
