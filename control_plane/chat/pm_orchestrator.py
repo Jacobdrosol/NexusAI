@@ -165,7 +165,11 @@ class PMOrchestrator:
             if task.status == "completed":
                 output = self._extract_task_output(task.result)
                 if output:
-                    lines.append(f"  Output: {output[:220]}")
+                    preview = output[:220]
+                    suffix = "..." if len(output) > 220 else ""
+                    lines.append(f"  Output Preview: {preview}{suffix}")
+                    if len(output) > 220:
+                        lines.append("  Note: Chat summary preview truncated; open View DAG or Tasks for the full task result.")
                 truncation = self._truncation_hint(task.result)
                 if truncation:
                     lines.append(f"  Note: {truncation}")

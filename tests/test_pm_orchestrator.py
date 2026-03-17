@@ -62,6 +62,35 @@ def test_truncation_hint_detects_high_completion_tokens_without_finish_reason() 
     assert "4096" in hint
 
 
+async def test_wait_for_completion_labels_chat_preview_truncation() -> None:
+    long_output = "A" * 260
+    completed_task = Task(
+        id="task-1",
+        bot_id="pm-coder",
+        payload={"title": "Implement code"},
+        status="completed",
+        result={"output": long_output},
+        created_at="2026-03-16T18:22:49+00:00",
+        updated_at="2026-03-16T18:23:49+00:00",
+    )
+    task_manager = type("TaskManager", (), {"get_task": AsyncMock(return_value=completed_task)})()
+    orchestrator = PMOrchestrator(
+        bot_registry=None,
+        scheduler=None,
+        task_manager=task_manager,
+        chat_manager=None,
+    )
+
+    completion = await orchestrator.wait_for_completion(
+        {"tasks": [{"id": "task-1"}]},
+        poll_interval_seconds=0.0,
+        max_wait_seconds=0.0,
+    )
+
+    assert "Output Preview:" in completion["summary_text"]
+    assert "preview truncated" in completion["summary_text"].lower()
+
+
 async def test_wait_for_completion_marks_snapshot_when_timeout_reached() -> None:
     running_task = Task(
         id="task-1",
