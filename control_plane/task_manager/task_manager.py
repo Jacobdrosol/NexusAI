@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -753,7 +754,7 @@ def _assignment_test_source_files(paths: List[str]) -> List[str]:
         lowered = normalized.lower()
         if any(
             lowered.endswith(ext)
-            for ext in (".py", ".js", ".jsx", ".ts", ".tsx")
+            for ext in (".py", ".js", ".jsx", ".ts", ".tsx", ".cs")
         ) and (
             "/test" in lowered
             or lowered.startswith("test")
@@ -765,6 +766,7 @@ def _assignment_test_source_files(paths: List[str]) -> List[str]:
             or lowered.endswith(".spec.tsx")
             or lowered.endswith(".test.js")
             or lowered.endswith(".spec.js")
+            or lowered.endswith("tests.cs")
         ):
             seen.setdefault(normalized, None)
     return list(seen.keys())
@@ -2345,7 +2347,9 @@ class TaskManager:
         command_results: List[Dict[str, Any]] = []
         language = "python"
         lowered_paths = [path.lower() for path in applied_paths]
-        if any(path.endswith((".ts", ".tsx", ".js", ".jsx")) for path in lowered_paths) or (root / "package.json").exists():
+        if any(path.endswith(".cs") for path in lowered_paths) or any(root.glob("*.sln")) or any(root.rglob("*.csproj")):
+            language = "dotnet"
+        elif any(path.endswith((".ts", ".tsx", ".js", ".jsx")) for path in lowered_paths) or (root / "package.json").exists():
             language = "node"
 
         if language == "python":
@@ -2387,7 +2391,7 @@ class TaskManager:
                 if coverage_path:
                     test_cmd.append(f"--cov-report=xml:{coverage_path}")
             test_result = await _run_repo_command(test_cmd, cwd=root, timeout_seconds=1800)
-        else:
+        elif language == "node":
             allowed = _allowed_workspace_commands()
             for spec in _bootstrap_command_specs(root, ["node"]):
                 bootstrap_cmd = [str(part) for part in spec.get("command") or []]
@@ -2422,6 +2426,21 @@ class TaskManager:
                     raise _TaskExecutionFailure("assignment test bootstrap failed", result=result)
             test_cmd = ["npm", "test", "--", "--runInBand", "--coverage"]
             test_result = await _run_repo_command(test_cmd, cwd=root, timeout_seconds=1800)
+        else:
+            results_dir = root / ".nexusai_test_results"
+            test_cmd = ["dotnet", "test", "--nologo", "--verbosity", "minimal"]
+            coverage_path = next((path for path in report_paths if path.lower().endswith(".xml")), None)
+            if coverage_path:
+                test_cmd.extend(["--collect:XPlat Code Coverage", "--results-directory", str(results_dir)])
+            test_result = await _run_repo_command(test_cmd, cwd=root, timeout_seconds=1800)
+            if test_result.get("ok") and coverage_path:
+                candidates = list(results_dir.rglob("coverage.cobertura.xml")) if results_dir.exists() else []
+                if not candidates and results_dir.exists():
+                    candidates = list(results_dir.rglob("*.xml"))
+                if candidates:
+                    target = (root / coverage_path).resolve(strict=False)
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(candidates[0], target)
 
         usage_parts.append(test_result.get("resource_usage") or {})
         command_results.append(

@@ -3886,6 +3886,120 @@ async def test_chat_assign_test_execution_runs_in_repo_workspace_without_schedul
 
 
 @pytest.mark.anyio
+async def test_chat_assign_test_execution_detects_and_runs_generated_dotnet_tests(tmp_path, monkeypatch):
+    import asyncio
+
+    from control_plane.api import projects as projects_module
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Project, TaskMetadata
+
+    class StubProjectRegistry:
+        async def get(self, project_id):
+            return Project(
+                id=project_id,
+                name="Proj",
+                settings_overrides={
+                    "repo_workspace": {
+                        "enabled": True,
+                        "managed_path_mode": False,
+                        "root_path": str(tmp_path / "repo"),
+                        "allow_command_execution": True,
+                    }
+                },
+            )
+
+    class StubScheduler:
+        def __init__(self):
+            self.project_registry = StubProjectRegistry()
+
+        async def schedule(self, task):
+            raise AssertionError("scheduler should not be used for internal test execution")
+
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    (repo_root / "GlobeIQ.sln").write_text("Microsoft Visual Studio Solution File\n", encoding="utf-8")
+    (repo_root / "GlobeIQ.Tests.csproj").write_text("<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n", encoding="utf-8")
+
+    monkeypatch.setattr(projects_module, "_extract_project_repo_workspace", lambda project: project.settings_overrides["repo_workspace"])
+    monkeypatch.setattr(projects_module, "_resolve_repo_workspace_root", lambda project_id, cfg, require_enabled=True: repo_root)
+
+    async def _snapshot(*, root, cfg):
+        return {"is_repo": True, "branch": "main", "clean": False, "porcelain": [" M src/lessons/MathLesson.cs"]}
+
+    monkeypatch.setattr(projects_module, "_repo_status_snapshot", _snapshot)
+    monkeypatch.setattr(
+        projects_module,
+        "_assignment_file_candidates",
+        lambda tasks: [
+            {"path": "src/lessons/MathLesson.cs", "content": "namespace GlobeIQ.Lessons { public class MathLesson {} }\n"},
+            {"path": "tests/MathLessonTests.cs", "content": "public class MathLessonTests {}\n"},
+        ],
+    )
+
+    def _write_assignment_files(*, root, candidates, overwrite):
+        applied = []
+        for item in candidates:
+            target = root / item["path"]
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(item["content"], encoding="utf-8")
+            applied.append({"path": item["path"], "status": "created"})
+        return applied
+
+    monkeypatch.setattr(projects_module, "_write_assignment_files", _write_assignment_files)
+    monkeypatch.setattr(projects_module, "_bootstrap_command_specs", lambda root, languages: [])
+
+    async def _run_repo_command(args, *, cwd, timeout_seconds=None, env_overrides=None):
+        if args[:2] == ["dotnet", "test"]:
+            coverage_file = repo_root / ".nexusai_test_results" / "run" / "coverage.cobertura.xml"
+            coverage_file.parent.mkdir(parents=True, exist_ok=True)
+            coverage_file.write_text("<coverage />\n", encoding="utf-8")
+        return {
+            "ok": True,
+            "command": args,
+            "exit_code": 0,
+            "stdout": "Passed!  Total tests: 1\n",
+            "stderr": "",
+            "resource_usage": {},
+        }
+
+    monkeypatch.setattr(projects_module, "_run_repo_command", _run_repo_command)
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "chat-assign-test-execution-dotnet.db"))
+    task = await tm.create_task(
+        bot_id="pm-tester",
+        payload={
+            "instruction": "run generated tests",
+            "role_hint": "tester",
+            "step_kind": "test_execution",
+            "deliverables": ["coverage/report.xml"],
+            "evidence_requirements": [
+                "Executed test command output",
+                "Pass/fail or coverage evidence from the test run",
+            ],
+        },
+        metadata=TaskMetadata(
+            source="chat_assign",
+            project_id="proj-1",
+            orchestration_id="orch-1",
+        ),
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.1)
+
+    assert updated.status == "completed"
+    assert updated.result is not None
+    executed = updated.result.get("executed_commands") or []
+    assert executed
+    assert executed[-1]["command"][:2] == ["dotnet", "test"]
+    artifacts = updated.result.get("artifacts") or []
+    assert any(str(item.get("path") or "") == "coverage/report.xml" for item in artifacts)
+
+
+@pytest.mark.anyio
 async def test_chat_assign_release_fails_when_output_is_only_checklist_guidance(tmp_path, monkeypatch):
     import asyncio
 
