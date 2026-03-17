@@ -3448,6 +3448,168 @@ async def test_chat_assign_specification_fails_without_committed_file_evidence(t
 
 
 @pytest.mark.anyio
+async def test_chat_assign_repo_change_fails_with_placeholder_commit_and_pr_evidence(tmp_path, monkeypatch):
+    import asyncio
+
+    from control_plane.task_manager import task_manager as task_manager_module
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import TaskMetadata
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {
+                "output": (
+                    "Deliverable: src/lessons/math_geometry/types.ts\n"
+                    "```typescript\n"
+                    "export interface GeometryProblem { id: string }\n"
+                    "```\n"
+                    "Evidence Placeholders (User to fill):\n"
+                    "Commit Hash: $(git rev-parse HEAD)\n"
+                    "PR URL: https://repo.globeiq/pulls/<number>\n"
+                )
+            }
+
+    monkeypatch.setattr(
+        task_manager_module,
+        "_settings_int",
+        lambda name, default: 0 if name == "max_task_retries" else default,
+    )
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "chat-assign-repo-placeholders.db"))
+    task = await tm.create_task(
+        bot_id="bot1",
+        payload={
+            "instruction": "implement lesson blocks",
+            "role_hint": "coder",
+            "step_kind": "repo_change",
+            "deliverables": ["src/lessons/math_geometry/types.ts", "Pull request #<number>"],
+            "evidence_requirements": ["Commit SHA that includes all code changes", "Diff showing modified/added files"],
+        },
+        metadata=TaskMetadata(
+            source="chat_assign",
+            project_id="proj-1",
+            orchestration_id="orch-1",
+        ),
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.1)
+
+    assert updated.status == "failed"
+    assert updated.error is not None
+    assert "placeholders" in updated.error.message.lower() or "placeholder" in updated.error.message.lower()
+
+
+@pytest.mark.anyio
+async def test_chat_assign_test_execution_fails_when_reports_are_mocked(tmp_path, monkeypatch):
+    import asyncio
+
+    from control_plane.task_manager import task_manager as task_manager_module
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import TaskMetadata
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {
+                "output": (
+                    "QA Report\n"
+                    "The content of the reports is reproduced below (mocked but representative).\n"
+                    "All 54 test cases passed.\n"
+                    "Coverage report: coverage/report.html\n"
+                )
+            }
+
+    monkeypatch.setattr(
+        task_manager_module,
+        "_settings_int",
+        lambda name, default: 0 if name == "max_task_retries" else default,
+    )
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "chat-assign-test-mocked.db"))
+    task = await tm.create_task(
+        bot_id="bot1",
+        payload={
+            "instruction": "run tests",
+            "role_hint": "tester",
+            "step_kind": "test_execution",
+            "deliverables": ["tests/lesson_blocks/math_geometry.test.ts", "coverage/report.html"],
+            "evidence_requirements": ["Executed test command output", "Coverage report artifact"],
+        },
+        metadata=TaskMetadata(
+            source="chat_assign",
+            project_id="proj-1",
+            orchestration_id="orch-1",
+        ),
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.1)
+
+    assert updated.status == "failed"
+    assert updated.error is not None
+    assert "mocked" in updated.error.message.lower()
+
+
+@pytest.mark.anyio
+async def test_chat_assign_release_fails_when_output_is_only_checklist_guidance(tmp_path, monkeypatch):
+    import asyncio
+
+    from control_plane.task_manager import task_manager as task_manager_module
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import TaskMetadata
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {
+                "output": (
+                    "Final Merge & Release Step\n"
+                    "These findings should be verified before the PR is merged.\n"
+                    "Use this as a checklist when completing step 6.\n"
+                    "Tag URL: https://github.com/globeiq/globeiq/releases/tag/v1.4.0\n"
+                )
+            }
+
+    monkeypatch.setattr(
+        task_manager_module,
+        "_settings_int",
+        lambda name, default: 0 if name == "max_task_retries" else default,
+    )
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "chat-assign-release-guidance.db"))
+    task = await tm.create_task(
+        bot_id="bot1",
+        payload={
+            "instruction": "merge and release",
+            "role_hint": "security-reviewer",
+            "step_kind": "release",
+            "deliverables": ["Merged PR #<number>", "Git tag vX.Y.Z", "RELEASE_NOTES.md entry"],
+            "evidence_requirements": ["Merged pull request URL", "Merge commit SHA", "Release tag URL"],
+        },
+        metadata=TaskMetadata(
+            source="chat_assign",
+            project_id="proj-1",
+            orchestration_id="orch-1",
+        ),
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.1)
+
+    assert updated.status == "failed"
+    assert updated.error is not None
+    assert "commit sha evidence" in updated.error.message.lower() or "checklist" in updated.error.message.lower()
+
+
+@pytest.mark.anyio
 async def test_chat_assign_reviewer_guidance_output_fails_without_evidence(tmp_path, monkeypatch):
     import asyncio
 

@@ -789,6 +789,29 @@ def _has_non_placeholder_url_evidence(text: str) -> bool:
     return False
 
 
+def _extract_commit_shas(text: str) -> List[str]:
+    return re.findall(r"\b[0-9a-f]{7,40}\b", str(text or "").lower())
+
+
+def _has_non_placeholder_commit_sha(text: str) -> bool:
+    for sha in _extract_commit_shas(text):
+        if sha in {"a1b2c3d4", "deadbeef", "abcdef12", "1234567"}:
+            continue
+        return True
+    return False
+
+
+def _has_non_placeholder_pull_request_url(text: str) -> bool:
+    urls = _extract_urls(text)
+    for url in urls:
+        lowered = url.lower()
+        if any(marker in lowered for marker in ("[org]", "[repo]", "<number>", "placeholder")):
+            continue
+        if re.search(r"/pulls?/\d+\b", lowered):
+            return True
+    return False
+
+
 def _requires_repo_artifact_evidence(payload: Dict[str, Any]) -> bool:
     deliverables = _assignment_expected_repo_files(payload)
     evidence = " ".join(_normalize_string_list(payload.get("evidence_requirements"))).lower()
@@ -823,6 +846,30 @@ def _requires_link_evidence(payload: Dict[str, Any]) -> bool:
         "project board",
     )
     return any(marker in combined for marker in link_markers)
+
+
+def _requires_commit_sha_evidence(payload: Dict[str, Any]) -> bool:
+    combined = " ".join(
+        _normalize_string_list(payload.get("evidence_requirements"))
+        + _normalize_string_list(payload.get("deliverables"))
+    ).lower()
+    return "commit sha" in combined or "commit hash" in combined or "merge commit sha" in combined
+
+
+def _requires_pull_request_evidence(payload: Dict[str, Any]) -> bool:
+    combined = " ".join(
+        _normalize_string_list(payload.get("evidence_requirements"))
+        + _normalize_string_list(payload.get("deliverables"))
+    ).lower()
+    return "pull request" in combined or "pr url" in combined or "merged pr" in combined or "merged pull request" in combined
+
+
+def _requires_release_tag_evidence(payload: Dict[str, Any]) -> bool:
+    combined = " ".join(
+        _normalize_string_list(payload.get("evidence_requirements"))
+        + _normalize_string_list(payload.get("deliverables"))
+    ).lower()
+    return "git tag" in combined or "release tag" in combined or "tag url" in combined
 
 
 def _assignment_validation_error(task: Task, result: Any) -> str:
@@ -867,6 +914,12 @@ def _assignment_validation_error(task: Task, result: Any) -> str:
         "copy-paste ready",
         "placeholder)",
         "(placeholder",
+        "simulated ids",
+        "simulated build log",
+        "mocked but representative",
+        "mocked but realistic",
+        "evidence placeholders",
+        "user to fill",
     ]
     for marker in invalid_markers:
         if marker in lowered:
@@ -897,6 +950,14 @@ def _assignment_validation_error(task: Task, result: Any) -> str:
             f"required evidence: {required}."
         )
 
+    if step_kind == "test_execution" and _requires_repo_artifact_evidence(payload):
+        if not _has_repo_change_evidence(payload, result):
+            required = ", ".join(evidence_requirements[:2]) or "test artifacts"
+            return (
+                "Assignment test step is missing concrete test artifact evidence; "
+                f"required evidence: {required}."
+            )
+
     if step_kind == "test_execution" and not _has_test_execution_evidence(result, text):
         required = ", ".join(evidence_requirements[:2]) or "executed test evidence"
         return (
@@ -918,6 +979,28 @@ def _assignment_validation_error(task: Task, result: Any) -> str:
             f"required evidence: {required}."
         )
 
+    if step_kind in {"repo_change", "release"} and _requires_commit_sha_evidence(payload) and not _has_non_placeholder_commit_sha(text):
+        required = ", ".join(evidence_requirements[:2]) or "commit SHA evidence"
+        return (
+            "Assignment step is missing non-placeholder commit SHA evidence; "
+            f"required evidence: {required}."
+        )
+
+    if step_kind in {"repo_change", "release"} and _requires_pull_request_evidence(payload) and not _has_non_placeholder_pull_request_url(text):
+        required = ", ".join(evidence_requirements[:2]) or "pull request evidence"
+        return (
+            "Assignment step is missing non-placeholder pull request evidence; "
+            f"required evidence: {required}."
+        )
+
+    if step_kind == "release" and _requires_release_tag_evidence(payload):
+        if not re.search(r"\bv\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?\b", text):
+            required = ", ".join(evidence_requirements[:2]) or "release tag evidence"
+            return (
+                "Assignment release step is missing release-tag evidence; "
+                f"required evidence: {required}."
+            )
+
     if role_hint in {"tester", "qa", "reviewer", "security", "security-reviewer"}:
         soft_markers = [
             "execute the following",
@@ -927,6 +1010,10 @@ def _assignment_validation_error(task: Task, result: Any) -> str:
             "please proceed with the execution steps",
             "feel free to reach out",
             "good luck with the final merge",
+            "should be verified before",
+            "use as a checklist",
+            "evidence to check",
+            "proceed with the merge only after",
         ]
         matched = [marker for marker in soft_markers if marker in lowered]
         if matched:
