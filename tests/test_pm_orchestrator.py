@@ -167,6 +167,20 @@ def test_normalize_deliverables_for_planning_step_rewrites_readme_placeholder() 
     assert "README.md update proposal" in deliverables
 
 
+def test_infer_step_kind_prefers_planning_for_issue_tracker_steps() -> None:
+    orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
+
+    step_kind = orchestrator._normalize_step_kind(
+        "",
+        title="Create Tracking Issues in the Repository",
+        instruction="Create issue tracker entries and roadmap updates.",
+        role_hint="coder",
+        deliverables=["docs/issue_tracker_geometry.md"],
+    )
+
+    assert step_kind == "planning"
+
+
 def test_normalize_deliverables_for_test_step_removes_release_side_effects() -> None:
     orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
 

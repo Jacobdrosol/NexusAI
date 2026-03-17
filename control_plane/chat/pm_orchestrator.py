@@ -596,6 +596,8 @@ class PMOrchestrator:
             return "review"
         if role in {"researcher", "analyst"}:
             return "specification"
+        if any(token in haystack for token in ("issue", "issues", "milestone", "project board", "roadmap", "planning artifact")):
+            return "planning"
         if role in {"coder", "developer", "engineer"} and any("/" in item or "." in item for item in deliverables):
             return "repo_change"
         if any(token in haystack for token in ("release", "merge", "deploy", "ship", "tag", "cutover")):
