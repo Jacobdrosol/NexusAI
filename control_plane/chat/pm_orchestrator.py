@@ -564,6 +564,13 @@ class PMOrchestrator:
         }
         normalized = aliases.get(normalized, normalized)
         valid = {"specification", "planning", "repo_change", "test_execution", "review", "release"}
+        if self._looks_like_issue_planning_step(
+            title=title,
+            instruction=instruction,
+            role_hint=role_hint,
+            deliverables=deliverables,
+        ):
+            return "planning"
         if normalized in valid:
             return normalized
         return self._infer_step_kind(
@@ -581,17 +588,20 @@ class PMOrchestrator:
         role_hint: str,
         deliverables: List[str],
     ) -> str:
-        haystack = " ".join(
-            [
-                str(title or ""),
-                str(instruction or ""),
-                str(role_hint or ""),
-                " ".join(deliverables),
-            ]
-        ).lower()
+        haystack = self._step_kind_haystack(
+            title=title,
+            instruction=instruction,
+            role_hint=role_hint,
+            deliverables=deliverables,
+        )
         role = str(role_hint or "").lower()
 
-        if any(token in haystack for token in ("issue", "issues", "milestone", "project board", "roadmap", "planning artifact")):
+        if self._looks_like_issue_planning_step(
+            title=title,
+            instruction=instruction,
+            role_hint=role_hint,
+            deliverables=deliverables,
+        ):
             return "planning"
         if role in {"tester", "qa"}:
             return "test_execution"
@@ -617,6 +627,53 @@ class PMOrchestrator:
         if any(token in haystack for token in ("plan", "design", "architecture", "migration", "rollback")):
             return "planning"
         return "planning"
+
+    def _step_kind_haystack(
+        self,
+        *,
+        title: str,
+        instruction: str,
+        role_hint: str,
+        deliverables: List[str],
+    ) -> str:
+        return " ".join(
+            [
+                str(title or ""),
+                str(instruction or ""),
+                str(role_hint or ""),
+                " ".join(deliverables),
+            ]
+        ).lower()
+
+    def _looks_like_issue_planning_step(
+        self,
+        *,
+        title: str,
+        instruction: str,
+        role_hint: str,
+        deliverables: List[str],
+    ) -> bool:
+        haystack = self._step_kind_haystack(
+            title=title,
+            instruction=instruction,
+            role_hint=role_hint,
+            deliverables=deliverables,
+        )
+        return any(
+            token in haystack
+            for token in (
+                "issue",
+                "issues",
+                "milestone",
+                "project board",
+                "issue tracker",
+                "tracked git issues",
+                "tracking issue",
+                "tracking issues",
+                "roadmap",
+                "planning artifact",
+            )
+        )
 
     def _default_evidence_requirements(self, step_kind: str) -> List[str]:
         defaults = {

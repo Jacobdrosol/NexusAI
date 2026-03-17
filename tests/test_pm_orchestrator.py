@@ -211,6 +211,20 @@ def test_infer_step_kind_prefers_planning_for_research_issue_steps() -> None:
     assert step_kind == "planning"
 
 
+def test_normalize_step_kind_overrides_explicit_repo_change_for_issue_tracker_step() -> None:
+    orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
+
+    step_kind = orchestrator._normalize_step_kind(
+        "repo_change",
+        title="Create tracked Git issues for each lesson block",
+        instruction="Create tracked Git issues for each lesson block and link them to the spec.",
+        role_hint="coder",
+        deliverables=["List of created issue IDs and URLs"],
+    )
+
+    assert step_kind == "planning"
+
+
 def test_normalize_deliverables_for_test_step_removes_release_side_effects() -> None:
     orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
 
