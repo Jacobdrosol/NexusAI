@@ -287,6 +287,21 @@ def test_build_step_instruction_mentions_diagram_source_and_concise_spec() -> No
     assert "Keep the artifact concise" in instruction
 
 
+def test_build_step_instruction_for_test_execution_demands_command_and_report_artifacts() -> None:
+    orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
+
+    instruction = orchestrator._build_step_instruction(
+        base_instruction="Execute the tests.",
+        step_kind="test_execution",
+        deliverables=["coverage/report.txt"],
+        evidence_requirements=["Executed test command output", "Coverage report file or test run log artifact"],
+    )
+
+    assert "Executed Commands" in instruction
+    assert "Deliverable: path" in instruction
+    assert "mocked, representative, or checklist-only" in instruction
+
+
 def test_expand_test_execution_steps_splits_test_file_creation_from_execution() -> None:
     orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
 

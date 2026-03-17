@@ -913,6 +913,10 @@ class PMOrchestrator:
             lines.append(
                 "Return only real executed command output and concrete artifact paths. Do not provide mocked, representative, or checklist-only test reports."
             )
+            lines.append(
+                "Include an `Executed Commands` section with the commands run, exit codes, and short stdout/stderr excerpts. "
+                "If a report file deliverable exists, return it as `Deliverable: path` followed by a fenced code block containing the artifact content."
+            )
         if step_kind in {"review", "release"}:
             lines.append(
                 "Do not provide a generic checklist. Return only concrete findings or release evidence backed by actual files, diffs, links, SHAs, or command output."
