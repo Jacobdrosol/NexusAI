@@ -3732,6 +3732,105 @@ async def test_chat_assign_test_execution_fails_when_reports_are_mocked(tmp_path
 
 
 @pytest.mark.anyio
+async def test_chat_assign_test_execution_runs_in_repo_workspace_without_scheduler(tmp_path, monkeypatch):
+    import asyncio
+
+    from control_plane.api import projects as projects_module
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Project, TaskMetadata
+
+    class StubProjectRegistry:
+        async def get(self, project_id):
+            return Project(
+                id=project_id,
+                name="Proj",
+                settings_overrides={
+                    "repo_workspace": {
+                        "enabled": True,
+                        "managed_path_mode": False,
+                        "root_path": str(tmp_path / "repo"),
+                        "allow_command_execution": True,
+                    }
+                },
+            )
+
+    class StubScheduler:
+        def __init__(self):
+            self.project_registry = StubProjectRegistry()
+
+        async def schedule(self, task):
+            raise AssertionError("scheduler should not be used for internal test execution")
+
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(projects_module, "_extract_project_repo_workspace", lambda project: project.settings_overrides["repo_workspace"])
+    monkeypatch.setattr(projects_module, "_resolve_repo_workspace_root", lambda project_id, cfg, require_enabled=True: repo_root)
+
+    async def _snapshot(*, root, cfg):
+        return {"is_repo": True, "branch": "main", "clean": False, "porcelain": [" M lesson_blocks/geometry.py"]}
+
+    monkeypatch.setattr(projects_module, "_repo_status_snapshot", _snapshot)
+    monkeypatch.setattr(
+        projects_module,
+        "_assignment_file_candidates",
+        lambda tasks: [
+            {"path": "lesson_blocks/geometry.py", "content": "def calculate_rectangle_area(a, b):\n    return a * b\n"},
+            {"path": "tests/test_geometry.py", "content": "def test_stub():\n    assert True\n"},
+        ],
+    )
+    monkeypatch.setattr(
+        projects_module,
+        "_write_assignment_files",
+        lambda *, root, candidates, overwrite: [{"path": item["path"], "status": "created"} for item in candidates],
+    )
+    monkeypatch.setattr(projects_module, "_bootstrap_command_specs", lambda root, languages: [])
+
+    async def _run_repo_command(args, *, cwd, timeout_seconds=None, env_overrides=None):
+        return {
+            "ok": True,
+            "command": args,
+            "exit_code": 0,
+            "stdout": "collected 1 items\n1 passed in 0.02s\nTOTAL 90%\n",
+            "stderr": "",
+            "resource_usage": {},
+        }
+
+    monkeypatch.setattr(projects_module, "_run_repo_command", _run_repo_command)
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "chat-assign-test-execution.db"))
+    task = await tm.create_task(
+        bot_id="pm-tester",
+        payload={
+            "instruction": "run generated tests",
+            "role_hint": "tester",
+            "step_kind": "test_execution",
+            "deliverables": ["coverage report artifact"],
+            "evidence_requirements": [
+                "Executed test command output",
+                "Pass/fail or coverage evidence from the test run",
+            ],
+        },
+        metadata=TaskMetadata(
+            source="chat_assign",
+            project_id="proj-1",
+            orchestration_id="orch-1",
+        ),
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.1)
+
+    assert updated.status == "completed"
+    assert updated.result is not None
+    assert updated.result.get("executed_commands")
+    assert updated.result.get("exit_code") == 0
+
+
+@pytest.mark.anyio
 async def test_chat_assign_release_fails_when_output_is_only_checklist_guidance(tmp_path, monkeypatch):
     import asyncio
 

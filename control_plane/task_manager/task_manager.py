@@ -83,6 +83,12 @@ CREATE TABLE IF NOT EXISTS {_BOT_RUN_ARTIFACTS_TABLE} (
 """
 
 
+class _TaskExecutionFailure(Exception):
+    def __init__(self, message: str, *, result: Any = None) -> None:
+        super().__init__(message)
+        self.result = result
+
+
 def _summarize_payload(payload: Any) -> str:
     if isinstance(payload, dict):
         keys = sorted(str(key) for key in payload.keys())
@@ -729,6 +735,65 @@ def _has_test_execution_evidence(result: Any, text: str) -> bool:
     return any(re.search(pattern, lowered, flags=re.IGNORECASE) for pattern in patterns)
 
 
+def _assignment_test_report_paths(payload: Dict[str, Any]) -> List[str]:
+    paths: List[str] = []
+    for item in _assignment_expected_repo_files(payload):
+        normalized = str(item or "").strip().replace("\\", "/")
+        if normalized.lower().endswith((".xml", ".json", ".txt", ".html", ".log")):
+            paths.append(normalized)
+    return paths
+
+
+def _assignment_test_source_files(paths: List[str]) -> List[str]:
+    seen: Dict[str, None] = {}
+    for raw in paths:
+        normalized = str(raw or "").strip().replace("\\", "/")
+        if not normalized:
+            continue
+        lowered = normalized.lower()
+        if any(
+            lowered.endswith(ext)
+            for ext in (".py", ".js", ".jsx", ".ts", ".tsx")
+        ) and (
+            "/test" in lowered
+            or lowered.startswith("test")
+            or lowered.startswith("tests/")
+            or lowered.endswith("_test.py")
+            or lowered.endswith(".test.ts")
+            or lowered.endswith(".test.tsx")
+            or lowered.endswith(".spec.ts")
+            or lowered.endswith(".spec.tsx")
+            or lowered.endswith(".test.js")
+            or lowered.endswith(".spec.js")
+        ):
+            seen.setdefault(normalized, None)
+    return list(seen.keys())
+
+
+def _assignment_python_coverage_target(paths: List[str]) -> Optional[str]:
+    candidates: List[str] = []
+    for raw in paths:
+        normalized = str(raw or "").strip().replace("\\", "/")
+        lowered = normalized.lower()
+        if not lowered.endswith(".py"):
+            continue
+        if lowered.startswith("tests/") or "/tests/" in lowered:
+            continue
+        if lowered.startswith("docs/") or lowered.startswith("issues/") or lowered.startswith("specification/"):
+            continue
+        parts = [part for part in normalized.split("/") if part]
+        if not parts:
+            continue
+        if parts[0] == "src" and len(parts) >= 2:
+            candidates.append("/".join(parts[:2]))
+        else:
+            candidates.append(parts[0])
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (item.count("/"), len(item)))
+    return candidates[0]
+
+
 def _find_repo_paths_in_text(text: str) -> List[str]:
     if not text:
         return []
@@ -1108,6 +1173,7 @@ class TaskManager:
         self._init_lock = asyncio.Lock()
         self._scheduler = scheduler
         self._bot_registry = bot_registry
+        self._project_registry = getattr(scheduler, "project_registry", None)
         self._db_ready = False
         self._running_task_ids: set[str] = set()
         self._runner_tasks: Dict[str, asyncio.Task[Any]] = {}
@@ -2045,7 +2111,10 @@ class TaskManager:
             await self.update_status(task_id, "running")
             task = await self.get_task(task_id)
             mode = await self._bot_output_contract_mode(task.bot_id)
-            if mode == "payload_transform":
+            internal_result = await self._maybe_run_internal_assignment_step(task)
+            if internal_result is not None:
+                raw_result = internal_result
+            elif mode == "payload_transform":
                 raw_result = {"deterministic_transform": True}
             else:
                 raw_result = await self._scheduler.schedule(task)
@@ -2084,7 +2153,8 @@ class TaskManager:
             if await self._requeue_for_retry(task, task_error):
                 logger.info("Task %s queued for automatic retry", task_id)
             else:
-                await self.update_status(task_id, "failed", error=task_error)
+                failure_result = getattr(e, "result", None)
+                await self.update_status(task_id, "failed", result=failure_result, error=task_error)
         finally:
             async with self._lock:
                 self._running_task_ids.discard(task_id)
@@ -2195,6 +2265,262 @@ class TaskManager:
             runner = asyncio.create_task(self._run_task(task.id))
             async with self._lock:
                 self._runner_tasks[task.id] = runner
+
+    async def _maybe_run_internal_assignment_step(self, task: Task) -> Optional[Any]:
+        payload = task.payload if isinstance(task.payload, dict) else {}
+        metadata = task.metadata or TaskMetadata()
+        if _assignment_step_kind(payload) != "test_execution":
+            return None
+        if self._project_registry is None:
+            return None
+        if str(metadata.source or "").strip().lower() not in {"chat_assign", "auto_retry"}:
+            return None
+        if not metadata.project_id or not metadata.orchestration_id:
+            return None
+        return await self._run_assignment_test_execution(task)
+
+    async def _run_assignment_test_execution(self, task: Task) -> Dict[str, Any]:
+        if self._project_registry is None:
+            raise _TaskExecutionFailure("project registry is unavailable for assignment test execution")
+
+        from control_plane.api.projects import (
+            _aggregate_usage,
+            _allowed_workspace_commands,
+            _assignment_file_candidates,
+            _bootstrap_command_specs,
+            _extract_project_repo_workspace,
+            _repo_status_snapshot,
+            _resolve_repo_workspace_root,
+            _run_repo_command,
+            _write_assignment_files,
+        )
+
+        payload = task.payload if isinstance(task.payload, dict) else {}
+        metadata = task.metadata or TaskMetadata()
+        project_id = str(metadata.project_id or "").strip()
+        orchestration_id = str(metadata.orchestration_id or "").strip()
+        project = await self._project_registry.get(project_id)
+        cfg = _extract_project_repo_workspace(project)
+        if not bool(cfg.get("enabled", False)):
+            raise _TaskExecutionFailure("repo workspace is disabled for this project")
+        if not bool(cfg.get("allow_command_execution", False)):
+            raise _TaskExecutionFailure("repo workspace command execution is disabled for this project")
+
+        root = _resolve_repo_workspace_root(project_id, cfg, require_enabled=True)
+        snapshot = await _repo_status_snapshot(root=root, cfg=cfg)
+        if not bool(snapshot.get("is_repo")):
+            raise _TaskExecutionFailure("repo workspace is not a git repository; clone it before running assignment tests")
+
+        scoped_tasks = [
+            candidate
+            for candidate in self._tasks.values()
+            if candidate.id != task.id
+            and candidate.status == "completed"
+            and candidate.metadata
+            and candidate.metadata.project_id == project_id
+            and candidate.metadata.orchestration_id == orchestration_id
+            and str(candidate.metadata.source or "").strip().lower() in {"chat_assign", "auto_retry"}
+        ]
+        file_candidates = _assignment_file_candidates(scoped_tasks)
+        if not file_candidates:
+            raise _TaskExecutionFailure("no assignment file outputs were detected to run tests against")
+
+        applied_files = _write_assignment_files(root=root, candidates=file_candidates, overwrite=True)
+        applied_paths = [str(item.get("path") or "").strip().replace("\\", "/") for item in applied_files]
+        test_files = _assignment_test_source_files(applied_paths)
+        report_paths = _assignment_test_report_paths(payload)
+        source_paths = [
+            path for path in applied_paths
+            if path and path not in test_files and not path.lower().startswith(("docs/", "issues/", "specification/"))
+        ]
+        if not test_files:
+            raise _TaskExecutionFailure("no generated test files were detected for assignment test execution")
+
+        usage_parts: List[Dict[str, Any]] = []
+        command_results: List[Dict[str, Any]] = []
+        language = "python"
+        lowered_paths = [path.lower() for path in applied_paths]
+        if any(path.endswith((".ts", ".tsx", ".js", ".jsx")) for path in lowered_paths) or (root / "package.json").exists():
+            language = "node"
+
+        if language == "python":
+            for spec in _bootstrap_command_specs(root, ["python"]):
+                step_result = await _run_repo_command(
+                    [str(part) for part in spec.get("command") or []],
+                    cwd=root,
+                    timeout_seconds=int(spec.get("timeout_seconds") or 1200),
+                )
+                usage_parts.append(step_result.get("resource_usage") or {})
+                command_results.append(
+                    {
+                        "label": str(spec.get("label") or "bootstrap"),
+                        "command": step_result.get("command") or spec.get("command") or [],
+                        "exit_code": step_result.get("exit_code"),
+                        "ok": bool(step_result.get("ok")),
+                        "stdout": str(step_result.get("stdout") or ""),
+                        "stderr": str(step_result.get("stderr") or ""),
+                    }
+                )
+                if not step_result.get("ok"):
+                    result = self._format_assignment_test_execution_result(
+                        task=task,
+                        applied_files=applied_files,
+                        command_results=command_results,
+                        artifacts=[],
+                        workspace=await _repo_status_snapshot(root=root, cfg=cfg),
+                        usage=_aggregate_usage(usage_parts),
+                    )
+                    raise _TaskExecutionFailure("assignment test bootstrap failed", result=result)
+
+            venv_python = root / ".nexusai_venv" / ("Scripts" if os.name == "nt" else "bin") / ("python.exe" if os.name == "nt" else "python")
+            python_cmd = [str(venv_python)] if venv_python.exists() else ["py"]
+            test_cmd = [*python_cmd, "-m", "pytest", *test_files, "-q"]
+            coverage_path = next((path for path in report_paths if path.lower().endswith(".xml")), None)
+            coverage_target = _assignment_python_coverage_target(source_paths)
+            if coverage_target:
+                test_cmd.extend(["--cov", coverage_target, "--cov-report=term-missing"])
+                if coverage_path:
+                    test_cmd.append(f"--cov-report=xml:{coverage_path}")
+            test_result = await _run_repo_command(test_cmd, cwd=root, timeout_seconds=1800)
+        else:
+            allowed = _allowed_workspace_commands()
+            for spec in _bootstrap_command_specs(root, ["node"]):
+                bootstrap_cmd = [str(part) for part in spec.get("command") or []]
+                executable = Path(str(bootstrap_cmd[0])).name.lower()
+                if executable not in allowed:
+                    continue
+                step_result = await _run_repo_command(
+                    bootstrap_cmd,
+                    cwd=root,
+                    timeout_seconds=int(spec.get("timeout_seconds") or 1200),
+                )
+                usage_parts.append(step_result.get("resource_usage") or {})
+                command_results.append(
+                    {
+                        "label": str(spec.get("label") or "bootstrap"),
+                        "command": step_result.get("command") or bootstrap_cmd,
+                        "exit_code": step_result.get("exit_code"),
+                        "ok": bool(step_result.get("ok")),
+                        "stdout": str(step_result.get("stdout") or ""),
+                        "stderr": str(step_result.get("stderr") or ""),
+                    }
+                )
+                if not step_result.get("ok"):
+                    result = self._format_assignment_test_execution_result(
+                        task=task,
+                        applied_files=applied_files,
+                        command_results=command_results,
+                        artifacts=[],
+                        workspace=await _repo_status_snapshot(root=root, cfg=cfg),
+                        usage=_aggregate_usage(usage_parts),
+                    )
+                    raise _TaskExecutionFailure("assignment test bootstrap failed", result=result)
+            test_cmd = ["npm", "test", "--", "--runInBand", "--coverage"]
+            test_result = await _run_repo_command(test_cmd, cwd=root, timeout_seconds=1800)
+
+        usage_parts.append(test_result.get("resource_usage") or {})
+        command_results.append(
+            {
+                "label": "test_execution",
+                "command": test_result.get("command") or test_cmd,
+                "exit_code": test_result.get("exit_code"),
+                "ok": bool(test_result.get("ok")),
+                "stdout": str(test_result.get("stdout") or ""),
+                "stderr": str(test_result.get("stderr") or ""),
+            }
+        )
+
+        artifacts: List[Dict[str, Any]] = []
+        missing_reports: List[str] = []
+        for relative_path in report_paths:
+            artifact_path = (root / relative_path).resolve(strict=False)
+            if artifact_path.exists() and artifact_path.is_file():
+                artifacts.append(
+                    {
+                        "kind": "file",
+                        "label": relative_path,
+                        "path": relative_path,
+                        "content": artifact_path.read_text(encoding="utf-8", errors="replace"),
+                    }
+                )
+            else:
+                missing_reports.append(relative_path)
+
+        workspace = await _repo_status_snapshot(root=root, cfg=cfg)
+        result = self._format_assignment_test_execution_result(
+            task=task,
+            applied_files=applied_files,
+            command_results=command_results,
+            artifacts=artifacts,
+            workspace=workspace,
+            usage=_aggregate_usage(usage_parts),
+        )
+        if missing_reports:
+            raise _TaskExecutionFailure(
+                "assignment test execution did not produce required report files: " + ", ".join(missing_reports),
+                result=result,
+            )
+        if not test_result.get("ok"):
+            raise _TaskExecutionFailure("assignment test execution failed", result=result)
+        return result
+
+    def _format_assignment_test_execution_result(
+        self,
+        *,
+        task: Task,
+        applied_files: List[Dict[str, Any]],
+        command_results: List[Dict[str, Any]],
+        artifacts: List[Dict[str, Any]],
+        workspace: Dict[str, Any],
+        usage: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        lines = ["## Executed Commands", ""]
+        executed_commands: List[Dict[str, Any]] = []
+        for item in command_results:
+            command = [str(part) for part in (item.get("command") or [])]
+            exit_code = item.get("exit_code")
+            stdout = str(item.get("stdout") or "")
+            stderr = str(item.get("stderr") or "")
+            stdout_excerpt = "\n".join(stdout.splitlines()[:12]).strip()
+            stderr_excerpt = "\n".join(stderr.splitlines()[:12]).strip()
+            executed_commands.append(
+                {
+                    "label": item.get("label"),
+                    "command": command,
+                    "exit_code": exit_code,
+                    "stdout_excerpt": stdout_excerpt,
+                    "stderr_excerpt": stderr_excerpt,
+                    "ok": bool(item.get("ok")),
+                }
+            )
+            lines.append(f"- Command: `{' '.join(command)}`")
+            lines.append(f"  Exit Code: {exit_code}")
+            if stdout_excerpt:
+                lines.append("  Stdout:")
+                lines.append("")
+                lines.append("  ```text")
+                lines.extend(f"  {line}" for line in stdout_excerpt.splitlines())
+                lines.append("  ```")
+            if stderr_excerpt:
+                lines.append("  Stderr:")
+                lines.append("")
+                lines.append("  ```text")
+                lines.extend(f"  {line}" for line in stderr_excerpt.splitlines())
+                lines.append("  ```")
+
+        return {
+            "report": "\n".join(lines).strip(),
+            "executed_commands": executed_commands,
+            "command_results": command_results,
+            "artifacts": artifacts,
+            "applied_files": applied_files,
+            "workspace": workspace,
+            "usage": usage,
+            "exit_code": next(
+                (item.get("exit_code") for item in reversed(command_results) if item.get("exit_code") is not None),
+                None,
+            ),
+        }
 
     async def _dispatch_triggers(self, task: Task) -> None:
         if self._bot_registry is None:
