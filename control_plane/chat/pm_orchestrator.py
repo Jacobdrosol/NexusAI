@@ -792,13 +792,31 @@ class PMOrchestrator:
                     text = "README.md update proposal"
                     lowered = text.lower()
 
-            if step_kind == "repo_change" and any(token in lowered for token in ("pull request", "feature branch", "commit sha", "commit hash")):
+            if step_kind == "repo_change" and any(token in lowered for token in ("feature branch", "commit sha", "commit hash")):
+                continue
+            if step_kind == "repo_change" and "pull request" in lowered and ("<" in lowered or "placeholder" in lowered):
                 continue
 
             if step_kind == "test_execution" and any(
                 token in lowered for token in ("merged pull request", "git tag", "release notes", "changelog", "merge")
             ):
                 continue
+
+            if step_kind == "review":
+                if "pull request" in lowered and ("<" in lowered or "placeholder" in lowered):
+                    text = "Review findings (markdown or JSON)"
+                    lowered = text.lower()
+                elif "release_notes" in lowered or "release notes" in lowered:
+                    text = "Documentation update proposal"
+                    lowered = text.lower()
+
+            if step_kind == "release":
+                if "git tag" in lowered and ("vx.y.z" in lowered or "<" in lowered):
+                    text = "Release tag proposal"
+                    lowered = text.lower()
+                elif "pull request" in lowered and ("<" in lowered or "placeholder" in lowered):
+                    text = "Release readiness summary"
+                    lowered = text.lower()
 
             if step_kind in {"specification", "planning", "repo_change"} and re.search(
                 r"\.(png|jpg|jpeg|gif|webp|svg)\b",

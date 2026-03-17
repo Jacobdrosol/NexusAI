@@ -3559,6 +3559,61 @@ async def test_chat_assign_repo_change_fails_with_placeholder_commit_and_pr_evid
 
 
 @pytest.mark.anyio
+async def test_chat_assign_repo_change_succeeds_when_commit_and_pr_evidence_are_optional(tmp_path, monkeypatch):
+    import asyncio
+
+    from control_plane.task_manager import task_manager as task_manager_module
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import TaskMetadata
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {
+                "output": (
+                    "Deliverable: src/lessons/math_geometry/__init__.py\n"
+                    "```python\n"
+                    "__all__ = ['geometry_lesson', 'algebra_lesson']\n"
+                    "```\n"
+                )
+            }
+
+    monkeypatch.setattr(
+        task_manager_module,
+        "_settings_int",
+        lambda name, default: 0 if name == "max_task_retries" else default,
+    )
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "chat-assign-repo-optional-pr.db"))
+    task = await tm.create_task(
+        bot_id="bot1",
+        payload={
+            "instruction": "implement lesson blocks",
+            "role_hint": "coder",
+            "step_kind": "repo_change",
+            "deliverables": ["src/lessons/math_geometry/__init__.py"],
+            "evidence_requirements": [
+                "Proposed repo file artifacts or patches for changed files",
+                "Only include non-placeholder commit or pull request evidence if it actually exists",
+            ],
+        },
+        metadata=TaskMetadata(
+            source="chat_assign",
+            project_id="proj-1",
+            orchestration_id="orch-1",
+        ),
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.1)
+
+    assert updated.status == "completed"
+    assert updated.result is not None
+
+
+@pytest.mark.anyio
 async def test_chat_assign_test_execution_fails_when_reports_are_mocked(tmp_path, monkeypatch):
     import asyncio
 

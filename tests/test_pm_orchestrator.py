@@ -186,6 +186,32 @@ def test_normalize_deliverables_for_test_step_removes_release_side_effects() -> 
     assert all("changelog" not in item.lower() for item in deliverables)
 
 
+def test_normalize_deliverables_for_repo_change_and_release_steps_drop_placeholders() -> None:
+    orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
+
+    repo_deliverables = orchestrator._normalize_deliverables_for_step(
+        step_kind="repo_change",
+        deliverables=[
+            "src/lessons/math_geometry/__init__.py",
+            "Pull request #<number>",
+        ],
+    )
+    release_deliverables = orchestrator._normalize_deliverables_for_step(
+        step_kind="release",
+        deliverables=[
+            "Git tag vX.Y.Z",
+            "Pull request #<number> (merged after approval)",
+            "Updated CHANGELOG.md",
+        ],
+    )
+
+    assert "src/lessons/math_geometry/__init__.py" in repo_deliverables
+    assert all("pull request" not in item.lower() for item in repo_deliverables)
+    assert "Release tag proposal" in release_deliverables
+    assert "Release readiness summary" in release_deliverables
+    assert "Updated CHANGELOG.md" in release_deliverables
+
+
 def test_build_step_instruction_requires_deliverable_file_format() -> None:
     orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
 

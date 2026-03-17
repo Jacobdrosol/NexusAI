@@ -855,6 +855,8 @@ def _requires_commit_sha_evidence(payload: Dict[str, Any]) -> bool:
         _normalize_string_list(payload.get("evidence_requirements"))
         + _normalize_string_list(payload.get("deliverables"))
     ).lower()
+    if "only include non-placeholder commit or pull request evidence if it actually exists" in combined:
+        return False
     return "commit sha" in combined or "commit hash" in combined or "merge commit sha" in combined
 
 
@@ -863,6 +865,8 @@ def _requires_pull_request_evidence(payload: Dict[str, Any]) -> bool:
         _normalize_string_list(payload.get("evidence_requirements"))
         + _normalize_string_list(payload.get("deliverables"))
     ).lower()
+    if "only include non-placeholder commit or pull request evidence if it actually exists" in combined:
+        return False
     return "pull request" in combined or "pr url" in combined or "merged pr" in combined or "merged pull request" in combined
 
 
