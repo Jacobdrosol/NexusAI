@@ -173,6 +173,9 @@
           <button class="btn btn-sm" onclick="copyMessage(this)">Copy</button>
           <button class="btn btn-sm" onclick="rerunMessage(this)">Re-run</button>
           <button class="btn btn-sm" onclick="sendMessageToVault(this)">Send to Vault</button>
+          {% if m.metadata and m.metadata.get('orchestration_id') %}
+          <button class="btn btn-sm" onclick="openAssignmentRecap('{{ m.metadata.get('orchestration_id') }}')">Full Recap</button>
+          {% endif %}
           {% if selected_conversation and selected_conversation.project_id and m.metadata and m.metadata.get('orchestration_id') and m.metadata.get('mode') in ['assign_summary', 'assign_error'] %}
           <button class="btn btn-sm" onclick="applyAssignmentFiles('{{ m.metadata.get('orchestration_id') }}', this)">Apply Files to Repo</button>
           {% endif %}
@@ -328,6 +331,17 @@
     </div>
   </div>
 </div>
+
+<div id="modal-assign-recap" class="modal" style="display:none;">
+  <div class="modal-content" style="max-width:960px;">
+    <h2>Assignment Full Recap</h2>
+    <div id="assign-recap-state" class="state-info" style="margin-bottom:0.75rem;">No recap loaded yet.</div>
+    <pre id="assign-recap-pre" style="max-height:65vh;overflow:auto;white-space:pre-wrap;"></pre>
+    <div class="modal-actions">
+      <button class="btn" type="button" onclick="hideModal('modal-assign-recap')">Close</button>
+    </div>
+  </div>
+</div>
 {% endblock %}
 {% block scripts %}
 <script>
@@ -436,6 +450,9 @@ function renderMessageActions(meta) {
   const dagBtn = orchestrationId
     ? `<button class="btn btn-sm" onclick="openDagViewer('${orchestrationId}')">View DAG</button>`
     : '';
+  const recapBtn = orchestrationId
+    ? `<button class="btn btn-sm" onclick="openAssignmentRecap('${orchestrationId}')">Full Recap</button>`
+    : '';
   const applyBtn = orchestrationId && selectedConversationProjectId && ['assign_summary', 'assign_error'].includes(mode)
     ? `<button class="btn btn-sm" onclick="applyAssignmentFiles('${orchestrationId}', this)">Apply Files to Repo</button>`
     : '';
@@ -443,6 +460,7 @@ function renderMessageActions(meta) {
     <button class="btn btn-sm" onclick="copyMessage(this)">Copy</button>
     <button class="btn btn-sm" onclick="rerunMessage(this)">Re-run</button>
     <button class="btn btn-sm" onclick="sendMessageToVault(this)">Send to Vault</button>
+    ${recapBtn}
     ${applyBtn}
     ${dagBtn}
   `;
@@ -1277,6 +1295,39 @@ async function applyAssignmentFiles(orchestrationId, buttonEl) {
     if (buttonEl) {
       buttonEl.disabled = false;
       buttonEl.textContent = originalLabel;
+    }
+  }
+}
+
+async function openAssignmentRecap(orchestrationId) {
+  if (!orchestrationId) {
+    alert('Missing orchestration ID.');
+    return;
+  }
+  const state = document.getElementById('assign-recap-state');
+  const pre = document.getElementById('assign-recap-pre');
+  const modal = document.getElementById('modal-assign-recap');
+  if (state) {
+    state.className = 'state-loading';
+    state.textContent = 'Loading full recap...';
+  }
+  if (pre) pre.textContent = '';
+  if (modal) modal.style.display = 'flex';
+  try {
+    const res = await fetch('/api/chat/orchestrations/' + encodeURIComponent(orchestrationId) + '/recap');
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data.error || 'Failed to load assignment recap');
+    }
+    if (state) {
+      state.className = 'state-info';
+      state.textContent = 'Full assignment recap loaded.';
+    }
+    if (pre) pre.textContent = String(data.recap || '');
+  } catch (error) {
+    if (state) {
+      state.className = 'state-error';
+      state.textContent = error.message || 'Failed to load assignment recap';
     }
   }
 }

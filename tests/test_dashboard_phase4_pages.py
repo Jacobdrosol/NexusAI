@@ -967,6 +967,43 @@ def test_chat_apply_assignment_api_proxies_control_plane(dashboard_client):
     assert body["applied_files"][0]["path"] == "src/demo.ts"
 
 
+def test_chat_orchestration_recap_api_builds_full_recap(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_tasks(self, orchestration_id=None, statuses=None, bot_id=None, limit=200, include_content=True):
+            rows = [
+                {
+                    "id": "task-1",
+                    "bot_id": "pm-coder",
+                    "status": "completed",
+                    "payload": {
+                        "title": "Implement Geometry Lesson Block Code",
+                        "step_number": 3,
+                        "step_count": 5,
+                        "deliverables": ["src/lessons/geometry/theorem_block.py"],
+                    },
+                    "result": {"output": "full implementation output"},
+                    "error": None,
+                    "created_at": "2026-03-17T00:00:00+00:00",
+                    "updated_at": "2026-03-17T00:05:00+00:00",
+                    "metadata": {"orchestration_id": "orch-1"},
+                }
+            ]
+            if orchestration_id:
+                return [row for row in rows if (row.get("metadata") or {}).get("orchestration_id") == orchestration_id]
+            return rows
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/api/chat/orchestrations/orch-1/recap")
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["orchestration_id"] == "orch-1"
+    assert "Assignment Full Recap" in body["recap"]
+    assert "full implementation output" in body["recap"]
+
+
 def test_chat_delete_conversation_api_surfaces_success(dashboard_client):
     _login_admin(dashboard_client)
 

@@ -13,6 +13,87 @@ from flask_login import login_required
 from dashboard.cp_client import get_cp_client
 
 bp = Blueprint("chat", __name__)
+
+
+def _task_sort_key(task: dict[str, Any]) -> tuple[int, str, str]:
+    payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
+    try:
+        step_number = int(payload.get("step_number") or 0)
+    except Exception:
+        step_number = 0
+    return (step_number, str(task.get("created_at") or ""), str(task.get("updated_at") or ""))
+
+
+def _task_output_text(result: Any) -> str:
+    if isinstance(result, dict):
+        for key in ("output", "content", "text", "result"):
+            value = result.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+        try:
+            return json.dumps(result, indent=2, sort_keys=True, default=str)
+        except Exception:
+            return str(result)
+    if result is None:
+        return ""
+    return str(result)
+
+
+def _task_truncation_note(result: Any) -> str:
+    if not isinstance(result, dict):
+        return ""
+    finish_reason = str(result.get("finish_reason") or "").strip().lower()
+    if finish_reason in {"length", "max_tokens", "max_output_tokens", "token_limit", "max_new_tokens"}:
+        return "Model output likely hit token limit and may be incomplete."
+    usage = result.get("usage")
+    if isinstance(usage, dict):
+        try:
+            if int(usage.get("completion_tokens") or 0) >= 4096:
+                return "Model output may be truncated (completion_tokens reached 4096)."
+        except Exception:
+            return ""
+    return ""
+
+
+def _assignment_full_recap(orchestration_id: str, tasks: list[dict[str, Any]]) -> str:
+    ordered = sorted([task for task in tasks if isinstance(task, dict)], key=_task_sort_key)
+    lines: list[str] = [
+        f"Assignment Full Recap ({len(ordered)} tasks):",
+        f"Orchestration ID: {orchestration_id}",
+        "",
+    ]
+    for task in ordered:
+        payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
+        title = str(payload.get("title") or task.get("id") or "Task")
+        step_number = payload.get("step_number")
+        step_count = payload.get("step_count")
+        status = str(task.get("status") or "unknown")
+        bot_id = str(task.get("bot_id") or "unknown")
+        step_label = f"Step {step_number}/{step_count}" if step_number and step_count else "Step"
+        lines.extend(
+            [
+                f"{step_label}: {title}",
+                f"- Status: {status}",
+                f"- Bot: {bot_id}",
+            ]
+        )
+        deliverables = payload.get("deliverables") if isinstance(payload.get("deliverables"), list) else []
+        if deliverables:
+            lines.append("- Deliverables:")
+            for item in deliverables:
+                lines.append(f"  - {item}")
+        output = _task_output_text(task.get("result"))
+        if output:
+            lines.append("- Full Output:")
+            lines.append(output)
+        error = task.get("error")
+        if isinstance(error, dict) and error.get("message"):
+            lines.append(f"- Error: {error.get('message')}")
+        note = _task_truncation_note(task.get("result"))
+        if note:
+            lines.append(f"- Note: {note}")
+        lines.append("")
+    return "\n".join(lines).strip() + "\n"
 logger = logging.getLogger(__name__)
 
 
@@ -643,3 +724,14 @@ def api_orchestration_graph(orchestration_id: str):
             edges.append({"from": str(dep), "to": task_id})
 
     return jsonify({"orchestration_id": orchestration_id, "nodes": nodes, "edges": edges})
+
+
+@bp.get("/api/chat/orchestrations/<orchestration_id>/recap")
+@login_required
+def api_orchestration_recap(orchestration_id: str):
+    cp = get_cp_client()
+    tasks = _cp_list_tasks_safe(cp, orchestration_id=orchestration_id, include_content=True)
+    if tasks is None:
+        return jsonify({"error": "control plane unavailable"}), 502
+    recap = _assignment_full_recap(orchestration_id, tasks)
+    return jsonify({"orchestration_id": orchestration_id, "task_count": len(tasks), "recap": recap})
