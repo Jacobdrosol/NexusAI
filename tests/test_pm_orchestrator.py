@@ -133,6 +133,43 @@ def test_normalize_evidence_requirements_downgrades_planning_link_claims() -> No
     assert "non-placeholder links" in requirements[1]
 
 
+def test_normalize_deliverables_for_spec_step_rewrites_placeholders_and_binary_assets() -> None:
+    orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
+
+    deliverables = orchestrator._normalize_deliverables_for_step(
+        step_kind="specification",
+        deliverables=[
+            "docs/lesson_blocks_math_geometry_spec.md",
+            "docs/lesson_blocks_flow.png",
+            "GitHub issue #<generated> with spec summary",
+        ],
+    )
+
+    assert "docs/lesson_blocks_math_geometry_spec.md" in deliverables
+    assert "docs/lesson_blocks_flow.mermaid.md" in deliverables
+    assert "Issue definitions (markdown or JSON)" in deliverables
+    assert all("png" not in item.lower() for item in deliverables)
+
+
+def test_normalize_deliverables_for_test_step_removes_release_side_effects() -> None:
+    orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
+
+    deliverables = orchestrator._normalize_deliverables_for_step(
+        step_kind="test_execution",
+        deliverables=[
+            "tests/ directory updates",
+            "Merged pull request",
+            "Git tag vX.Y.Z",
+            "Release notes in CHANGELOG.md",
+        ],
+    )
+
+    assert "tests/ directory updates" in deliverables
+    assert all("pull request" not in item.lower() for item in deliverables)
+    assert all("git tag" not in item.lower() for item in deliverables)
+    assert all("changelog" not in item.lower() for item in deliverables)
+
+
 def test_build_step_instruction_requires_deliverable_file_format() -> None:
     orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
 
@@ -146,6 +183,20 @@ def test_build_step_instruction_requires_deliverable_file_format() -> None:
     assert "Deliverables: docs/lesson_blocks_design.md" in instruction
     assert "Deliverable: path" in instruction
     assert "Never invent placeholders" in instruction
+
+
+def test_build_step_instruction_mentions_diagram_source_and_concise_spec() -> None:
+    orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
+
+    instruction = orchestrator._build_step_instruction(
+        base_instruction="Write the design document.",
+        step_kind="specification",
+        deliverables=["docs/lesson_blocks_flow.mermaid.md"],
+        evidence_requirements=["Proposed repo file artifacts for each listed deliverable"],
+    )
+
+    assert "Mermaid or markdown diagram source" in instruction
+    assert "Keep the artifact concise" in instruction
 
 
 async def test_wait_for_completion_labels_chat_preview_truncation() -> None:

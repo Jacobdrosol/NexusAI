@@ -67,15 +67,16 @@ class PMOrchestrator:
             step_id = str(step.get("id") or f"step_{idx + 1}")
             role_hint = str(step.get("role_hint") or "").strip().lower()
             acceptance_criteria = self._normalize_string_list(step.get("acceptance_criteria"))
-            deliverables = self._normalize_string_list(step.get("deliverables"))
+            raw_deliverables = self._normalize_string_list(step.get("deliverables"))
             quality_gates = self._normalize_string_list(step.get("quality_gates"))
             step_kind = self._normalize_step_kind(
                 step.get("step_kind"),
                 title=str(step.get("title") or ""),
                 instruction=str(step.get("instruction") or ""),
                 role_hint=role_hint,
-                deliverables=deliverables,
+                deliverables=raw_deliverables,
             )
+            deliverables = self._normalize_deliverables_for_step(step_kind=step_kind, deliverables=raw_deliverables)
             evidence_requirements = self._normalize_evidence_requirements(
                 step_kind=step_kind,
                 deliverables=deliverables,
@@ -285,15 +286,16 @@ class PMOrchestrator:
                 if not isinstance(s, dict):
                     continue
                 step_id = str(s.get("id") or f"step_{idx + 1}")
-                deliverables = self._normalize_string_list(s.get("deliverables"))
+                raw_deliverables = self._normalize_string_list(s.get("deliverables"))
                 role_hint = str(s.get("role_hint") or "assistant").lower()
                 step_kind = self._normalize_step_kind(
                     s.get("step_kind"),
                     title=str(s.get("title") or f"Step {idx + 1}"),
                     instruction=str(s.get("instruction") or ""),
                     role_hint=role_hint,
-                    deliverables=deliverables,
+                    deliverables=raw_deliverables,
                 )
+                deliverables = self._normalize_deliverables_for_step(step_kind=step_kind, deliverables=raw_deliverables)
                 steps.append(
                     {
                         "id": step_id,
@@ -650,6 +652,52 @@ class PMOrchestrator:
             return "." in leaf
         return "." in text and not text.lower().startswith("http")
 
+    def _normalize_deliverables_for_step(self, *, step_kind: str, deliverables: List[str]) -> List[str]:
+        normalized: List[str] = []
+        seen: set[str] = set()
+        for item in deliverables:
+            text = str(item or "").strip()
+            if not text:
+                continue
+            lowered = text.lower()
+
+            if step_kind in {"specification", "planning"}:
+                if "issue" in lowered and ("#<" in lowered or "<generated>" in lowered or "<ids>" in lowered):
+                    text = "Issue definitions (markdown or JSON)"
+                    lowered = text.lower()
+                elif "project board" in lowered:
+                    text = "Project board proposal (markdown)"
+                    lowered = text.lower()
+                elif "milestone" in lowered:
+                    text = "Milestone definition (markdown)"
+                    lowered = text.lower()
+                elif "pull request" in lowered:
+                    continue
+
+            if step_kind == "repo_change" and any(token in lowered for token in ("pull request", "feature branch", "commit sha", "commit hash")):
+                continue
+
+            if step_kind == "test_execution" and any(
+                token in lowered for token in ("merged pull request", "git tag", "release notes", "changelog", "merge")
+            ):
+                continue
+
+            if step_kind in {"specification", "planning", "repo_change"} and re.search(
+                r"\.(png|jpg|jpeg|gif|webp|svg)\b",
+                lowered,
+            ):
+                text = re.sub(
+                    r"\.(png|jpg|jpeg|gif|webp|svg)\b",
+                    ".mermaid.md",
+                    text,
+                    flags=re.IGNORECASE,
+                )
+
+            if text not in seen:
+                seen.add(text)
+                normalized.append(text)
+        return normalized or deliverables
+
     def _normalize_evidence_requirements(
         self,
         *,
@@ -700,9 +748,17 @@ class PMOrchestrator:
                 "For each repo file deliverable, return the full file content in this exact format: "
                 "`Deliverable: path` on its own line followed by a fenced code block."
             )
+        if any(item.lower().endswith(".mermaid.md") for item in deliverables):
+            lines.append(
+                "For diagram deliverables, return Mermaid or markdown diagram source as text. Do not attempt to return binary image data."
+            )
         if step_kind == "planning":
             lines.append(
                 "If live GitHub or project-board access is unavailable, return proposed issue/milestone/board definitions only and do not claim creation."
+            )
+        if step_kind == "specification":
+            lines.append(
+                "Keep the artifact concise and implementation-ready. Prefer structured sections, compact examples, and no unnecessary narrative so the response fits within token limits."
             )
         if step_kind == "test_execution":
             lines.append(
