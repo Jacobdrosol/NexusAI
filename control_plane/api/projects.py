@@ -551,7 +551,7 @@ async def _repo_status_snapshot(
         branch = await _repo_branch_name(root)
 
         status_res = await _run_repo_command(
-            ["git", "status", "--porcelain", "-b"],
+            ["git", "status", "--porcelain", "-b", "--untracked-files=all"],
             cwd=root,
             timeout_seconds=20,
         )

@@ -982,6 +982,52 @@ async def test_project_repo_workspace_run_command_executes_allowed_command(cp_cl
 
 
 @pytest.mark.anyio
+async def test_project_repo_workspace_status_lists_untracked_files_individually(cp_client, tmp_path, monkeypatch):
+    await cp_client.post(
+        "/v1/projects",
+        json={"id": "p-repo-status-all", "name": "Repo Status All", "mode": "isolated"},
+    )
+    root = tmp_path / "repo-workspaces" / "p-repo-status-all" / "repo"
+    root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("NEXUSAI_REPO_WORKSPACE_ROOT", str(tmp_path / "repo-workspaces"))
+    update = await cp_client.put(
+        "/v1/projects/p-repo-status-all/repo/workspace",
+        json={
+            "enabled": True,
+            "managed_path_mode": True,
+            "default_branch": "main",
+        },
+    )
+    assert update.status_code == 200
+
+    async def _fake_run(args, *, cwd, timeout_seconds=None, env_overrides=None):
+        if args == ["git", "rev-parse", "--is-inside-work-tree"]:
+            return {"ok": True, "stdout": "true\n", "stderr": "", "command": args}
+        if args == ["git", "rev-parse", "--abbrev-ref", "HEAD"]:
+            return {"ok": True, "stdout": "main\n", "stderr": "", "command": args}
+        if args == ["git", "status", "--porcelain", "-b", "--untracked-files=all"]:
+            return {
+                "ok": True,
+                "stdout": "## main...origin/main\n?? src/demo.py\n?? tests/test_demo.py\n",
+                "stderr": "",
+                "command": args,
+            }
+        if args == ["git", "remote", "-v"]:
+            return {"ok": True, "stdout": "", "stderr": "", "command": args}
+        if args == ["git", "log", "-1", "--pretty=format:%H%n%an%n%ad%n%s"]:
+            return {"ok": True, "stdout": "", "stderr": "", "command": args}
+        raise AssertionError(f"Unexpected git command: {args}")
+
+    monkeypatch.setattr("control_plane.api.projects._run_repo_command", _fake_run)
+
+    resp = await cp_client.get("/v1/projects/p-repo-status-all/repo/workspace/status")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["is_repo"] is True
+    assert body["porcelain"] == ["## main...origin/main", "?? src/demo.py", "?? tests/test_demo.py"]
+
+
+@pytest.mark.anyio
 async def test_project_repo_workspace_run_command_creates_missing_managed_workspace(cp_client, tmp_path, monkeypatch):
     await cp_client.post(
         "/v1/projects",
