@@ -141,7 +141,7 @@ def test_normalize_deliverables_for_spec_step_rewrites_placeholders_and_binary_a
         deliverables=[
             "docs/lesson_blocks_math_geometry_spec.md",
             "docs/lesson_blocks_flow.png",
-            "GitHub issue #<generated> with spec summary",
+            "GitHub issues: #101 (Triangle), #102 (Circle), #103 (Polygon)",
         ],
     )
 
@@ -149,6 +149,22 @@ def test_normalize_deliverables_for_spec_step_rewrites_placeholders_and_binary_a
     assert "docs/lesson_blocks_flow.mermaid.md" in deliverables
     assert "Issue definitions (markdown or JSON)" in deliverables
     assert all("png" not in item.lower() for item in deliverables)
+    assert all("github issue" not in item.lower() for item in deliverables)
+
+
+def test_normalize_deliverables_for_planning_step_rewrites_readme_placeholder() -> None:
+    orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
+
+    deliverables = orchestrator._normalize_deliverables_for_step(
+        step_kind="planning",
+        deliverables=[
+            "docs/roadmap/geometry_lessons_roadmap.md",
+            "README.md section placeholder",
+        ],
+    )
+
+    assert "docs/roadmap/geometry_lessons_roadmap.md" in deliverables
+    assert "README.md update proposal" in deliverables
 
 
 def test_normalize_deliverables_for_test_step_removes_release_side_effects() -> None:

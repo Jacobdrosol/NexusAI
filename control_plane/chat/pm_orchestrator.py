@@ -662,7 +662,7 @@ class PMOrchestrator:
             lowered = text.lower()
 
             if step_kind in {"specification", "planning"}:
-                if "issue" in lowered and ("#<" in lowered or "<generated>" in lowered or "<ids>" in lowered):
+                if "issue" in lowered:
                     text = "Issue definitions (markdown or JSON)"
                     lowered = text.lower()
                 elif "project board" in lowered:
@@ -673,6 +673,9 @@ class PMOrchestrator:
                     lowered = text.lower()
                 elif "pull request" in lowered:
                     continue
+                elif "readme.md" in lowered and "placeholder" in lowered:
+                    text = "README.md update proposal"
+                    lowered = text.lower()
 
             if step_kind == "repo_change" and any(token in lowered for token in ("pull request", "feature branch", "commit sha", "commit hash")):
                 continue
