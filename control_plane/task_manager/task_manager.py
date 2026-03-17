@@ -835,6 +835,8 @@ def _requires_repo_artifact_evidence(payload: Dict[str, Any]) -> bool:
 def _requires_link_evidence(payload: Dict[str, Any]) -> bool:
     evidence = " ".join(_normalize_string_list(payload.get("evidence_requirements"))).lower()
     deliverables = " ".join(_normalize_string_list(payload.get("deliverables"))).lower()
+    if "only include live non-placeholder links if they actually exist" in evidence:
+        return False
     combined = f"{evidence} {deliverables}"
     link_markers = (
         "url",
