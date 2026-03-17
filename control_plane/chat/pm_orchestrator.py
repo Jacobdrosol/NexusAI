@@ -19,7 +19,9 @@ class PMOrchestrator:
         '"evidence_requirements":["..."],"depends_on":[],"acceptance_criteria":["..."],'
         '"deliverables":["..."],"quality_gates":["..."]}]}. '
         "Keep 3-6 steps. Include stories/specification first, implementation next, and testing/review gates before completion. "
-        "Do not classify a step as test_execution, review, or release unless it can produce execution-backed evidence rather than generic advice."
+        "Do not classify a step as test_execution, review, or release unless it can produce execution-backed evidence rather than generic advice. "
+        "Do not claim committed files, created issues, merged pull requests, CI passes, approvals, or releases unless those side effects are actually available with live evidence. "
+        "When a step deliverable is a repo file, prefer proposed file artifacts that can be applied later rather than claiming the file is already committed."
     )
 
     def __init__(
@@ -74,7 +76,11 @@ class PMOrchestrator:
                 role_hint=role_hint,
                 deliverables=deliverables,
             )
-            evidence_requirements = self._normalize_string_list(step.get("evidence_requirements")) or self._default_evidence_requirements(step_kind)
+            evidence_requirements = self._normalize_evidence_requirements(
+                step_kind=step_kind,
+                deliverables=deliverables,
+                evidence_requirements=self._normalize_string_list(step.get("evidence_requirements")),
+            )
             target_bot = self._pick_target_bot(bots, role_hint=role_hint, pm_bot_id=pm_bot.id)
             depends_ids = [
                 task_ids_by_step[d]
@@ -85,7 +91,12 @@ class PMOrchestrator:
                 bot_id=target_bot.id,
                 payload={
                     "title": str(step.get("title") or step_id),
-                    "instruction": str(step.get("instruction") or instruction),
+                    "instruction": self._build_step_instruction(
+                        base_instruction=str(step.get("instruction") or instruction),
+                        step_kind=step_kind,
+                        deliverables=deliverables,
+                        evidence_requirements=evidence_requirements,
+                    ),
                     "role_hint": role_hint or "assistant",
                     "step_kind": step_kind,
                     "evidence_requirements": evidence_requirements,
@@ -291,9 +302,10 @@ class PMOrchestrator:
                         "role_hint": role_hint,
                         "depends_on": [str(x) for x in (s.get("depends_on") or []) if x],
                         "step_kind": step_kind,
-                        "evidence_requirements": (
-                            self._normalize_string_list(s.get("evidence_requirements"))
-                            or self._default_evidence_requirements(step_kind)
+                        "evidence_requirements": self._normalize_evidence_requirements(
+                            step_kind=step_kind,
+                            deliverables=deliverables,
+                            evidence_requirements=self._normalize_string_list(s.get("evidence_requirements")),
                         ),
                         "acceptance_criteria": self._normalize_string_list(s.get("acceptance_criteria")),
                         "deliverables": deliverables,
@@ -628,6 +640,82 @@ class PMOrchestrator:
             ],
         }
         return list(defaults.get(step_kind, defaults["planning"]))
+
+    def _looks_like_repo_file(self, value: str) -> bool:
+        text = str(value or "").strip().replace("\\", "/").strip("`")
+        if not text or " " in text:
+            return False
+        if "/" in text:
+            leaf = text.rsplit("/", 1)[-1]
+            return "." in leaf
+        return "." in text and not text.lower().startswith("http")
+
+    def _normalize_evidence_requirements(
+        self,
+        *,
+        step_kind: str,
+        deliverables: List[str],
+        evidence_requirements: List[str],
+    ) -> List[str]:
+        normalized = list(evidence_requirements or self._default_evidence_requirements(step_kind))
+        deliverable_text = " ".join(deliverables).lower()
+        evidence_text = " ".join(normalized).lower()
+        has_repo_files = any(self._looks_like_repo_file(item) for item in deliverables)
+        mentions_links = any(token in f"{deliverable_text} {evidence_text}" for token in ("github issue", "milestone", "project board", "url", "link"))
+        mentions_git_side_effects = any(token in evidence_text for token in ("commit sha", "pull request", "pr ", "approved", "ci", "merged"))
+
+        if step_kind in {"specification", "planning"} and has_repo_files:
+            return [
+                "Proposed repo file artifacts for each listed deliverable",
+                "Use `Deliverable: path` plus fenced content for each file output",
+            ]
+        if step_kind == "planning" and mentions_links:
+            return [
+                "Proposed issue, milestone, or board definitions",
+                "Only include live non-placeholder links if they actually exist",
+            ]
+        if step_kind == "repo_change" and mentions_git_side_effects:
+            return [
+                "Proposed repo file artifacts or patches for changed files",
+                "Only include non-placeholder commit or pull request evidence if it actually exists",
+            ]
+        return normalized
+
+    def _build_step_instruction(
+        self,
+        *,
+        base_instruction: str,
+        step_kind: str,
+        deliverables: List[str],
+        evidence_requirements: List[str],
+    ) -> str:
+        lines = [str(base_instruction or "").strip()]
+        if deliverables:
+            lines.append("Deliverables: " + "; ".join(deliverables))
+        if evidence_requirements:
+            lines.append("Evidence requirements: " + "; ".join(evidence_requirements))
+
+        if any(self._looks_like_repo_file(item) for item in deliverables):
+            lines.append(
+                "For each repo file deliverable, return the full file content in this exact format: "
+                "`Deliverable: path` on its own line followed by a fenced code block."
+            )
+        if step_kind == "planning":
+            lines.append(
+                "If live GitHub or project-board access is unavailable, return proposed issue/milestone/board definitions only and do not claim creation."
+            )
+        if step_kind == "test_execution":
+            lines.append(
+                "Return only real executed command output and concrete artifact paths. Do not provide mocked, representative, or checklist-only test reports."
+            )
+        if step_kind in {"review", "release"}:
+            lines.append(
+                "Do not provide a generic checklist. Return only concrete findings or release evidence backed by actual files, diffs, links, SHAs, or command output."
+            )
+        lines.append(
+            "Never invent placeholders, fake SHAs, fake URLs, fake approvals, or simulated CI/release status."
+        )
+        return "\n\n".join(line for line in lines if line)
 
     def _instruction_mentions_database(self, instruction: str) -> bool:
         text = str(instruction or "").lower()

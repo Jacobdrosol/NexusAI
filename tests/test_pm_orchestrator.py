@@ -101,6 +101,53 @@ def test_parse_plan_json_backfills_step_kind_and_evidence_requirements() -> None
     assert "Executed test command output" in parsed["steps"][0]["evidence_requirements"][0]
 
 
+def test_normalize_evidence_requirements_downgrades_spec_file_commit_claims() -> None:
+    orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
+
+    requirements = orchestrator._normalize_evidence_requirements(
+        step_kind="specification",
+        deliverables=["docs/lesson_blocks_design.md", "docs/lesson_blocks_flow.png"],
+        evidence_requirements=[
+            "Design document stored at docs/lesson_blocks_design.md",
+            "Diagram attached to the document",
+        ],
+    )
+
+    assert requirements[0] == "Proposed repo file artifacts for each listed deliverable"
+    assert "Deliverable: path" in requirements[1]
+
+
+def test_normalize_evidence_requirements_downgrades_planning_link_claims() -> None:
+    orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
+
+    requirements = orchestrator._normalize_evidence_requirements(
+        step_kind="planning",
+        deliverables=["GitHub issue tracker entries"],
+        evidence_requirements=[
+            "URLs of created GitHub issues",
+            "Milestone and project board links",
+        ],
+    )
+
+    assert requirements[0] == "Proposed issue, milestone, or board definitions"
+    assert "non-placeholder links" in requirements[1]
+
+
+def test_build_step_instruction_requires_deliverable_file_format() -> None:
+    orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
+
+    instruction = orchestrator._build_step_instruction(
+        base_instruction="Write the design document.",
+        step_kind="specification",
+        deliverables=["docs/lesson_blocks_design.md"],
+        evidence_requirements=["Proposed repo file artifacts for each listed deliverable"],
+    )
+
+    assert "Deliverables: docs/lesson_blocks_design.md" in instruction
+    assert "Deliverable: path" in instruction
+    assert "Never invent placeholders" in instruction
+
+
 async def test_wait_for_completion_labels_chat_preview_truncation() -> None:
     long_output = "A" * 260
     completed_task = Task(

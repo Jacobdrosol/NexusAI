@@ -212,8 +212,29 @@ async def test_assign_message_creates_task_graph_and_summary(cp_app):
     async def _schedule(task):
         payload = task.payload if isinstance(task.payload, dict) else {}
         if str(task.id).startswith("pm-plan-"):
-            return {"output": "ok"}
+            return {
+                "output": (
+                    '{"steps":['
+                    '{"id":"step_1","title":"Spec","instruction":"Write spec","role_hint":"researcher","step_kind":"specification","deliverables":["docs/auth_spec.md"],"evidence_requirements":["Proposed repo file artifacts for each listed deliverable"]},'
+                    '{"id":"step_2","title":"Implement","instruction":"Build API","role_hint":"coder","step_kind":"repo_change","deliverables":["src/auth/api.py"],"depends_on":["step_1"],"evidence_requirements":["Proposed repo file artifacts or patches for changed files"]},'
+                    '{"id":"step_3","title":"Test","instruction":"Run tests","role_hint":"tester","step_kind":"test_execution","depends_on":["step_2"],"evidence_requirements":["Executed test command output"]},'
+                    '{"id":"step_4","title":"Review","instruction":"Review diff","role_hint":"reviewer","step_kind":"review","depends_on":["step_3"],"evidence_requirements":["Concrete findings tied to changed files or executed evidence"]}'
+                    "]} "
+                )
+            }
         step_kind = str(payload.get("step_kind") or "").strip().lower()
+        if step_kind == "specification":
+            return {
+                "output": (
+                    "Deliverable: docs/auth_spec.md\n"
+                    "```markdown\n"
+                    "# Auth API Spec\n"
+                    "\n"
+                    "- Token issuance\n"
+                    "- Validation rules\n"
+                    "```\n"
+                )
+            }
         if step_kind == "repo_change":
             return {
                 "output": (
