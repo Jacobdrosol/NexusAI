@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 import aiosqlite
 
+from control_plane.task_result_files import extract_file_candidates
 from shared.exceptions import TaskNotFoundError
 from shared.models import BotRun, BotRunArtifact, Task, TaskError, TaskMetadata
 from shared.settings_manager import SettingsManager
@@ -987,12 +988,48 @@ class TaskManager:
                         bot_id=task.bot_id,
                         kind="file" if item.get("path") else "note",
                         label=str(item.get("label") or item.get("name") or f"Artifact {idx + 1}"),
-                        content=(item.get("content") if isinstance(item.get("content"), str) else json.dumps(item.get("content"), indent=2, sort_keys=True) if item.get("content") is not None else None),
+                        content=(
+                            item.get("content")
+                            if isinstance(item.get("content"), str)
+                            else json.dumps(item.get("content"), indent=2, sort_keys=True)
+                            if item.get("content") is not None
+                            else None
+                        ),
                         path=item.get("path"),
                         metadata={k: v for k, v in item.items() if k not in {"label", "name", "content", "path"}},
                         created_at=now,
                     )
                 )
+
+        explicit_paths = {
+            str(getattr(artifact, "path", "") or "").strip()
+            for artifact in artifacts
+            if getattr(artifact, "kind", "") == "file" and getattr(artifact, "path", None)
+        }
+        extracted_candidates = extract_file_candidates(task.result)
+        extracted_idx = 0
+        for candidate in extracted_candidates:
+            path = str(candidate.get("path") or "").strip()
+            if not path or path in explicit_paths:
+                continue
+            artifacts.append(
+                BotRunArtifact(
+                    id=f"{task.id}:extracted-file:{extracted_idx}",
+                    run_id=task.id,
+                    task_id=task.id,
+                    bot_id=task.bot_id,
+                    kind="file",
+                    label=str(candidate.get("label") or path),
+                    content=str(candidate.get("content") or ""),
+                    path=path,
+                    metadata={
+                        "source": str(candidate.get("source") or "extracted_markdown"),
+                        "language": candidate.get("language"),
+                    },
+                    created_at=now,
+                )
+            )
+            extracted_idx += 1
 
         for artifact in artifacts:
             await self._upsert_artifact(artifact)

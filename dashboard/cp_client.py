@@ -487,6 +487,23 @@ class CPClient:
             body["timeout_seconds"] = int(timeout_seconds)
         return self._post(f"/v1/projects/{project_id}/repo/workspace/run", body, timeout=_INGEST_TIMEOUT)
 
+    def apply_project_assignment_to_repo_workspace(
+        self,
+        project_id: str,
+        *,
+        orchestration_id: str,
+        overwrite: bool = True,
+    ) -> Optional[Dict[str, Any]]:
+        body: Dict[str, Any] = {
+            "orchestration_id": orchestration_id,
+            "overwrite": bool(overwrite),
+        }
+        return self._post(
+            f"/v1/projects/{project_id}/repo/workspace/apply-assignment",
+            body,
+            timeout=_INGEST_TIMEOUT,
+        )
+
     def list_project_repo_workspace_runs(
         self,
         project_id: str,

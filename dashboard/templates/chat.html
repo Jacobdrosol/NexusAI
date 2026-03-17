@@ -173,6 +173,9 @@
           <button class="btn btn-sm" onclick="copyMessage(this)">Copy</button>
           <button class="btn btn-sm" onclick="rerunMessage(this)">Re-run</button>
           <button class="btn btn-sm" onclick="sendMessageToVault(this)">Send to Vault</button>
+          {% if selected_conversation and selected_conversation.project_id and m.metadata and m.metadata.get('orchestration_id') and m.metadata.get('mode') in ['assign_summary', 'assign_error'] %}
+          <button class="btn btn-sm" onclick="applyAssignmentFiles('{{ m.metadata.get('orchestration_id') }}', this)">Apply Files to Repo</button>
+          {% endif %}
           {% if m.metadata and m.metadata.get('orchestration_id') %}
           <button class="btn btn-sm" onclick="openDagViewer('{{ m.metadata.get('orchestration_id') }}')">View DAG</button>
           {% endif %}
@@ -311,10 +314,25 @@
     </div>
   </div>
 </div>
+
+<div id="modal-assign-apply" class="modal" style="display:none;">
+  <div class="modal-content" style="max-width:840px;">
+    <h2>Applied Files</h2>
+    <div id="assign-apply-state" class="state-info" style="margin-bottom:0.75rem;">No assignment apply result yet.</div>
+    <pre id="assign-apply-pre" style="max-height:60vh;overflow:auto;white-space:pre-wrap;"></pre>
+    <div class="modal-actions">
+      {% if selected_conversation and selected_conversation.project_id %}
+      <button class="btn" type="button" onclick="window.location='/projects/{{ selected_conversation.project_id }}'">Open Project</button>
+      {% endif %}
+      <button class="btn" type="button" onclick="hideModal('modal-assign-apply')">Close</button>
+    </div>
+  </div>
+</div>
 {% endblock %}
 {% block scripts %}
 <script>
 const selectedConversationId = {{ (selected_conversation.id if selected_conversation else "")|tojson }};
+const selectedConversationProjectId = {{ (selected_conversation.project_id if selected_conversation and selected_conversation.project_id else "")|tojson }};
 const initialMessages = {{ messages|tojson }};
 const taskEventMap = new Map();
 const messageMap = new Map((initialMessages || []).map((m) => [String(m.id), m]));
@@ -414,13 +432,18 @@ function selectedContextItems() {
 
 function renderMessageActions(meta) {
   const orchestrationId = meta?.orchestration_id;
+  const mode = String(meta?.mode || '').trim();
   const dagBtn = orchestrationId
     ? `<button class="btn btn-sm" onclick="openDagViewer('${orchestrationId}')">View DAG</button>`
+    : '';
+  const applyBtn = orchestrationId && selectedConversationProjectId && ['assign_summary', 'assign_error'].includes(mode)
+    ? `<button class="btn btn-sm" onclick="applyAssignmentFiles('${orchestrationId}', this)">Apply Files to Repo</button>`
     : '';
   return `
     <button class="btn btn-sm" onclick="copyMessage(this)">Copy</button>
     <button class="btn btn-sm" onclick="rerunMessage(this)">Re-run</button>
     <button class="btn btn-sm" onclick="sendMessageToVault(this)">Send to Vault</button>
+    ${applyBtn}
     ${dagBtn}
   `;
 }
@@ -1175,6 +1198,86 @@ async function ingestConversation(conversationId) {
   else {
     const data = await res.json().catch(() => ({}));
     alert(data.error || 'Ingest failed');
+  }
+}
+
+function renderAssignmentApplySummary(result) {
+  const applied = Array.isArray(result?.applied_files) ? result.applied_files : [];
+  const workspace = result?.workspace && typeof result.workspace === 'object' ? result.workspace : {};
+  const lines = [
+    `Orchestration: ${result?.orchestration_id || 'unknown'}`,
+    `Applied files: ${applied.length}`,
+    '',
+  ];
+  if (applied.length) {
+    lines.push('Files:');
+    applied.forEach((item) => {
+      const path = item?.path || 'unknown';
+      const status = item?.status || 'updated';
+      const botId = item?.bot_id ? ` (${item.bot_id})` : '';
+      lines.push(`- [${status}] ${path}${botId}`);
+    });
+    lines.push('');
+  }
+  const branch = workspace?.branch || 'unknown';
+  const porcelain = Array.isArray(workspace?.porcelain) ? workspace.porcelain : [];
+  const rows = porcelain.filter((line) => !String(line || '').startsWith('##'));
+  lines.push(`Git branch: ${branch}`);
+  lines.push(`Changed files after apply: ${rows.length}`);
+  if (rows.length) {
+    lines.push('');
+    lines.push('Git status:');
+    rows.forEach((line) => lines.push(`- ${line}`));
+  }
+  return lines.join('\n');
+}
+
+function showAssignmentApplyResult(result) {
+  const state = document.getElementById('assign-apply-state');
+  const pre = document.getElementById('assign-apply-pre');
+  if (state) state.textContent = 'Assignment files applied to the project repo workspace.';
+  if (pre) pre.textContent = renderAssignmentApplySummary(result);
+  const modal = document.getElementById('modal-assign-apply');
+  if (modal) modal.style.display = 'flex';
+}
+
+async function applyAssignmentFiles(orchestrationId, buttonEl) {
+  if (!selectedConversationProjectId) {
+    alert('This conversation is not attached to a project repo workspace.');
+    return;
+  }
+  if (!orchestrationId) {
+    alert('Missing orchestration ID.');
+    return;
+  }
+  const originalLabel = buttonEl ? buttonEl.textContent : 'Apply Files to Repo';
+  if (buttonEl) {
+    buttonEl.disabled = true;
+    buttonEl.textContent = 'Applying...';
+  }
+  try {
+    const res = await fetch('/api/chat/assignments/apply', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
+      body: JSON.stringify({
+        project_id: selectedConversationProjectId,
+        orchestration_id: orchestrationId,
+        overwrite: true,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data.error || 'Assignment apply failed');
+    }
+    showAssignmentApplyResult(data);
+    refreshMessages().catch(() => {});
+  } catch (error) {
+    alert(error.message || 'Assignment apply failed');
+  } finally {
+    if (buttonEl) {
+      buttonEl.disabled = false;
+      buttonEl.textContent = originalLabel;
+    }
   }
 }
 

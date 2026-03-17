@@ -20,12 +20,14 @@ from pydantic import BaseModel, ConfigDict, Field
 from control_plane.audit.utils import record_audit_event
 from control_plane.repo_workspace import (
     build_github_http_auth_header,
+    is_within_workspace,
     normalize_workspace_root,
     run_command as run_repo_command,
 )
 from control_plane.security.guards import enforce_body_size, enforce_rate_limit
+from control_plane.task_result_files import extract_file_candidates
 from shared.exceptions import APIKeyNotFoundError, ProjectNotFoundError
-from shared.models import Project, TaskMetadata
+from shared.models import Project, Task, TaskMetadata
 
 router = APIRouter(prefix="/v1/projects", tags=["projects"])
 
@@ -104,6 +106,11 @@ class RepoWorkspaceRunRequest(BaseModel):
     bootstrap: bool = False
     bootstrap_languages: List[str] = Field(default_factory=list)
     keep_temp_workspace: bool = False
+
+
+class RepoWorkspaceApplyAssignmentRequest(BaseModel):
+    orchestration_id: str
+    overwrite: bool = True
 
 
 _CLOUD_POLICY_VALUES = {"allow", "redact", "block"}
@@ -599,6 +606,79 @@ async def _repo_status_snapshot(
         "remotes": [_redact_url_credentials_in_text(line) for line in remotes],
         "last_commit": last_commit,
     }
+
+
+def _assignment_task_sort_key(task: Task) -> tuple[int, str, str]:
+    payload = task.payload if isinstance(task.payload, dict) else {}
+    try:
+        step_number = int(payload.get("step_number") or 0)
+    except Exception:
+        step_number = 0
+    return (step_number, str(task.created_at or ""), str(task.updated_at or ""))
+
+
+def _assignment_file_candidates(tasks: List[Task]) -> List[Dict[str, Any]]:
+    merged: Dict[str, Dict[str, Any]] = {}
+    ordered_tasks = sorted(tasks, key=_assignment_task_sort_key)
+    for task in ordered_tasks:
+        if task.status != "completed":
+            continue
+        for candidate in extract_file_candidates(task.result):
+            path = str(candidate.get("path") or "").strip()
+            content = str(candidate.get("content") or "")
+            if not path or not content:
+                continue
+            payload = task.payload if isinstance(task.payload, dict) else {}
+            merged[path] = {
+                "path": path,
+                "content": content,
+                "source": str(candidate.get("source") or "task_result"),
+                "language": candidate.get("language"),
+                "task_id": task.id,
+                "bot_id": task.bot_id,
+                "task_title": str(payload.get("title") or ""),
+                "step_number": payload.get("step_number"),
+            }
+    return list(merged.values())
+
+
+def _write_assignment_files(
+    *,
+    root: Path,
+    candidates: List[Dict[str, Any]],
+    overwrite: bool,
+) -> List[Dict[str, Any]]:
+    applied: List[Dict[str, Any]] = []
+    for item in candidates:
+        relative_path = str(item.get("path") or "").strip()
+        if not relative_path:
+            continue
+        target = (root / relative_path).resolve(strict=False)
+        if not is_within_workspace(root, target):
+            raise HTTPException(status_code=400, detail=f"refusing to write outside workspace: {relative_path}")
+        if target.exists() and not overwrite:
+            raise HTTPException(status_code=409, detail=f"file already exists and overwrite is disabled: {relative_path}")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        content = str(item.get("content") or "")
+        existed = target.exists()
+        previous = target.read_text(encoding="utf-8") if existed else None
+        target.write_text(content, encoding="utf-8")
+        status = "created"
+        if existed:
+            status = "unchanged" if previous == content else "updated"
+        applied.append(
+            {
+                "path": relative_path,
+                "status": status,
+                "task_id": item.get("task_id"),
+                "bot_id": item.get("bot_id"),
+                "task_title": item.get("task_title"),
+                "step_number": item.get("step_number"),
+                "source": item.get("source"),
+                "language": item.get("language"),
+            }
+        )
+    return applied
 
 
 def _allowed_workspace_commands() -> set[str]:
@@ -2359,6 +2439,87 @@ async def get_project_repo_workspace_status(project_id: str, request: Request) -
     root = _resolve_repo_workspace_root(project_id, cfg, require_enabled=False)
     snapshot = await _repo_status_snapshot(root=root, cfg=cfg)
     return {"project_id": project_id, **snapshot}
+
+
+@router.post("/{project_id}/repo/workspace/apply-assignment")
+async def apply_assignment_to_project_repo_workspace(
+    project_id: str,
+    request: Request,
+    body: RepoWorkspaceApplyAssignmentRequest,
+) -> dict:
+    project_registry = request.app.state.project_registry
+    task_manager = request.app.state.task_manager
+    try:
+        project = await project_registry.get(project_id)
+    except ProjectNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    cfg = _extract_project_repo_workspace(project)
+    root = _resolve_repo_workspace_root(project_id, cfg, require_enabled=True)
+    snapshot = await _repo_status_snapshot(root=root, cfg=cfg)
+    if not bool(snapshot.get("is_repo")):
+        raise HTTPException(status_code=400, detail="repo workspace is not a git repository; clone it before applying files")
+
+    orchestration_id = str(body.orchestration_id or "").strip()
+    if not orchestration_id:
+        raise HTTPException(status_code=400, detail="orchestration_id is required")
+
+    tasks = await task_manager.list_tasks(orchestration_id=orchestration_id, limit=500)
+    scoped_tasks = [
+        task
+        for task in tasks
+        if task.metadata
+        and task.metadata.project_id == project_id
+        and str(task.metadata.source or "").strip().lower() == "chat_assign"
+    ]
+    if not scoped_tasks:
+        raise HTTPException(status_code=404, detail="no assignment tasks found for this project and orchestration")
+
+    in_progress = [task.id for task in scoped_tasks if task.status in {"queued", "blocked", "running"}]
+    if in_progress:
+        raise HTTPException(
+            status_code=409,
+            detail="assignment is still in progress; wait for all tasks to finish before applying files",
+        )
+
+    candidates = _assignment_file_candidates(scoped_tasks)
+    if not candidates:
+        raise HTTPException(
+            status_code=400,
+            detail="no file outputs were detected in the completed assignment results",
+        )
+
+    applied = _write_assignment_files(root=root, candidates=candidates, overwrite=bool(body.overwrite))
+    updated_snapshot = await _repo_status_snapshot(root=root, cfg=cfg)
+    await record_audit_event(
+        request,
+        action="projects.repo_workspace.apply_assignment",
+        resource=f"project:{project_id}",
+        details={
+            "orchestration_id": orchestration_id,
+            "file_count": len(applied),
+            "overwrite": bool(body.overwrite),
+        },
+    )
+    await _record_repo_workspace_usage(
+        request,
+        project_id=project_id,
+        action="apply_assignment",
+        status="ok",
+        details={
+            "orchestration_id": orchestration_id,
+            "file_count": len(applied),
+            "overwrite": bool(body.overwrite),
+            "files": [item.get("path") for item in applied],
+        },
+    )
+    return {
+        "status": "ok",
+        "project_id": project_id,
+        "orchestration_id": orchestration_id,
+        "applied_files": applied,
+        "workspace": updated_snapshot,
+    }
 
 
 @router.post("/{project_id}/repo/workspace/clone")

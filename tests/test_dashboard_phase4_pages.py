@@ -260,6 +260,7 @@ def test_chat_page_loads_when_logged_in(dashboard_client):
     assert b"create-convo-scope" in resp.data
     assert b"create-convo-project-id" in resp.data
     assert b"create-convo-bridge-project-ids" in resp.data
+    assert b"Apply Files to Repo" in resp.data
 
 
 def test_chat_page_handles_legacy_selected_conversation_shapes(dashboard_client):
@@ -939,6 +940,31 @@ def test_chat_messages_api_surfaces_control_plane_error(dashboard_client):
 
     assert resp.status_code == 404
     assert b"conversation missing" in resp.data
+
+
+def test_chat_apply_assignment_api_proxies_control_plane(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def apply_project_assignment_to_repo_workspace(self, project_id, orchestration_id, overwrite=True):
+            return {
+                "status": "ok",
+                "project_id": project_id,
+                "orchestration_id": orchestration_id,
+                "applied_files": [{"path": "src/demo.ts", "status": "created"}],
+                "workspace": {"branch": "main", "porcelain": ["?? src/demo.ts"]},
+            }
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/chat/assignments/apply",
+            json={"project_id": "proj-1", "orchestration_id": "orch-1", "overwrite": True},
+        )
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["status"] == "ok"
+    assert body["applied_files"][0]["path"] == "src/demo.ts"
 
 
 def test_chat_delete_conversation_api_surfaces_success(dashboard_client):

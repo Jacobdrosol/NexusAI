@@ -446,6 +446,28 @@ def api_send_message():
     return jsonify(resp)
 
 
+@bp.post("/api/chat/assignments/apply")
+@login_required
+def api_apply_assignment_files():
+    data: dict[str, Any] = request.get_json(force=True) or {}
+    orchestration_id = (data.get("orchestration_id") or "").strip()
+    project_id = (data.get("project_id") or "").strip()
+    if not orchestration_id:
+        return jsonify({"error": "orchestration_id is required"}), 400
+    if not project_id:
+        return jsonify({"error": "project_id is required"}), 400
+
+    cp = get_cp_client()
+    result = cp.apply_project_assignment_to_repo_workspace(
+        project_id=project_id,
+        orchestration_id=orchestration_id,
+        overwrite=bool(data.get("overwrite", True)),
+    )
+    if result is None:
+        return _cp_error_response(cp, "assignment apply failed")
+    return jsonify(result)
+
+
 @bp.get("/api/chat/conversations/<conversation_id>/messages")
 @login_required
 def api_list_messages(conversation_id: str):
