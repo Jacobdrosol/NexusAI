@@ -622,6 +622,15 @@ def _looks_like_repo_path(value: str) -> bool:
     return "." in leaf and " " not in leaf
 
 
+def _looks_like_repo_file(value: str) -> bool:
+    text = str(value or "").strip().replace("\\", "/").strip("`")
+    if not text or " " in text:
+        return False
+    if "/" in text:
+        return _looks_like_repo_path(text)
+    return "." in text and not text.lower().startswith("http")
+
+
 def _infer_assignment_step_kind(payload: Dict[str, Any]) -> str:
     role_hint = str(payload.get("role_hint") or "").strip().lower()
     deliverables = _normalize_string_list(payload.get("deliverables"))
@@ -669,7 +678,7 @@ def _assignment_expected_repo_files(payload: Dict[str, Any]) -> List[str]:
     files: List[str] = []
     for item in _normalize_string_list(payload.get("deliverables")):
         normalized = str(item).strip().replace("\\", "/").strip("`")
-        if _looks_like_repo_path(normalized):
+        if _looks_like_repo_file(normalized):
             files.append(normalized)
     return files
 
@@ -764,6 +773,58 @@ def _has_release_evidence(result: Any, text: str) -> bool:
     return checks >= 2
 
 
+def _extract_urls(text: str) -> List[str]:
+    return re.findall(r"https?://[^\s)>\]`]+", str(text or ""))
+
+
+def _has_non_placeholder_url_evidence(text: str) -> bool:
+    urls = _extract_urls(text)
+    if not urls:
+        return False
+    for url in urls:
+        lowered = url.lower()
+        if any(marker in lowered for marker in ("[org]", "[repo]", "placeholder", "example.com")):
+            continue
+        return True
+    return False
+
+
+def _requires_repo_artifact_evidence(payload: Dict[str, Any]) -> bool:
+    deliverables = _assignment_expected_repo_files(payload)
+    evidence = " ".join(_normalize_string_list(payload.get("evidence_requirements"))).lower()
+    quality = " ".join(_normalize_string_list(payload.get("quality_gates"))).lower()
+    combined = f"{evidence} {quality}"
+    if deliverables:
+        return True
+    repo_markers = (
+        "file committed",
+        "committed to the repo",
+        "diff",
+        "commit sha",
+        "pull request",
+        "pr ",
+        "review comments",
+        "feature branch",
+    )
+    return any(marker in combined for marker in repo_markers)
+
+
+def _requires_link_evidence(payload: Dict[str, Any]) -> bool:
+    evidence = " ".join(_normalize_string_list(payload.get("evidence_requirements"))).lower()
+    deliverables = " ".join(_normalize_string_list(payload.get("deliverables"))).lower()
+    combined = f"{evidence} {deliverables}"
+    link_markers = (
+        "url",
+        "urls",
+        "link",
+        "links",
+        "github issue",
+        "milestone",
+        "project board",
+    )
+    return any(marker in combined for marker in link_markers)
+
+
 def _assignment_validation_error(task: Task, result: Any) -> str:
     metadata = task.metadata
     if metadata is None:
@@ -802,6 +863,10 @@ def _assignment_validation_error(task: Task, result: Any) -> str:
         "simulated pull request",
         "example pull request",
         "placeholder pull request",
+        "cannot directly authenticate",
+        "copy-paste ready",
+        "placeholder)",
+        "(placeholder",
     ]
     for marker in invalid_markers:
         if marker in lowered:
@@ -814,6 +879,21 @@ def _assignment_validation_error(task: Task, result: Any) -> str:
         required = ", ".join(evidence_requirements[:2]) or "repo file artifacts"
         return (
             "Assignment repo-change step is missing concrete changed-file evidence; "
+            f"required evidence: {required}."
+        )
+
+    if step_kind in {"specification", "planning"} and _requires_repo_artifact_evidence(payload):
+        if not _has_repo_change_evidence(payload, result):
+            required = ", ".join(evidence_requirements[:2]) or "committed file or diff evidence"
+            return (
+                "Assignment planning/specification step is missing repo-backed evidence; "
+                f"required evidence: {required}."
+            )
+
+    if _requires_link_evidence(payload) and not _has_non_placeholder_url_evidence(text):
+        required = ", ".join(evidence_requirements[:2]) or "link-backed evidence"
+        return (
+            "Assignment step is missing non-placeholder link evidence; "
             f"required evidence: {required}."
         )
 
