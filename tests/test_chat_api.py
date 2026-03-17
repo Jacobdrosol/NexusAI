@@ -246,7 +246,7 @@ async def test_assign_message_creates_task_graph_and_summary(cp_app):
         assert "acceptance_criteria" in first_payload
         assert "quality_gates" in first_payload
 
-        for _ in range(20):
+        for _ in range(60):
             messages_resp = await client.get(f"/v1/chat/conversations/{conversation_id}/messages")
             messages = messages_resp.json()
             if any("Assignment summary" in str(message.get("content") or "") for message in messages):

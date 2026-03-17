@@ -75,8 +75,8 @@ def _backend_with_retry_params(backend: BackendConfig, task: Task | None = None)
     if not params_dict:
         return backend
 
-    max_tokens_increment = _settings_int("task_retry_max_tokens_increment", 512)
-    num_width_increment = _settings_int("task_retry_num_width_increment", 256)
+    max_tokens_increment = _settings_int("task_retry_max_tokens_increment", 2048)
+    num_width_increment = _settings_int("task_retry_num_width_increment", 2048)
     updates: dict[str, Any] = {}
 
     if "max_tokens" in params_dict and max_tokens_increment > 0:

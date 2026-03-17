@@ -3126,6 +3126,69 @@ async def test_output_contract_disabled_fallback_mode_does_not_mask_parse_failur
 
 
 @pytest.mark.anyio
+async def test_chat_assign_task_retries_when_result_is_truncated(tmp_path, monkeypatch):
+    import asyncio
+
+    from control_plane.task_manager import task_manager as task_manager_module
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import TaskMetadata
+
+    class StubScheduler:
+        def __init__(self):
+            self.calls = 0
+
+        async def schedule(self, task):
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "output": "partial file body",
+                    "usage": {"completion_tokens": 4096},
+                    "finish_reason": "length",
+                }
+            return {
+                "output": "complete file body.",
+                "usage": {"completion_tokens": 512},
+                "finish_reason": "stop",
+            }
+
+    monkeypatch.setattr(
+        task_manager_module,
+        "_settings_int",
+        lambda name, default: 1 if name == "max_task_retries" else default,
+    )
+    monkeypatch.setattr(
+        task_manager_module,
+        "_settings_float",
+        lambda name, default: 0.0 if name == "task_retry_delay" else default,
+    )
+
+    scheduler = StubScheduler()
+    tm = TaskManager(scheduler, db_path=str(tmp_path / "chat-assign-retry.db"))
+    task = await tm.create_task(
+        bot_id="bot1",
+        payload={"instruction": "generate files"},
+        metadata=TaskMetadata(
+            source="chat_assign",
+            project_id="proj-1",
+            orchestration_id="orch-1",
+        ),
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.1)
+
+    assert updated.status == "completed"
+    assert scheduler.calls == 2
+    assert updated.metadata is not None
+    assert updated.metadata.retry_attempt == 1
+    assert updated.result is not None
+    assert updated.result["output"] == "complete file body."
+
+
+@pytest.mark.anyio
 async def test_payload_transform_supports_coalesce_paths_for_retry_loops(tmp_path):
     import asyncio
 

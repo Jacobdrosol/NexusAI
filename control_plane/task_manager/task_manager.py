@@ -557,6 +557,8 @@ def _is_retryable_error_message(message: str) -> bool:
         "gateway timeout",
         "too many requests",
         "rate limit",
+        "truncated at token limit",
+        "model output likely truncated",
         "connection reset",
         "temporarily unavailable",
         "http 500",
@@ -565,6 +567,16 @@ def _is_retryable_error_message(message: str) -> bool:
         "http 504",
     ]
     return any(marker in normalized for marker in retryable_markers)
+
+
+def _prefers_truncation_retry(task: Task) -> bool:
+    metadata = task.metadata
+    if metadata is None:
+        return False
+    source = str(metadata.source or "").strip().lower()
+    if source in {"chat_assign", "auto_retry"}:
+        return True
+    return bool(metadata.orchestration_id)
 
 
 def _task_report_markdown(task: Task) -> str:
@@ -1582,6 +1594,20 @@ class TaskManager:
             else:
                 raw_result = await self._scheduler.schedule(task)
             result = await self._normalize_task_result(task, raw_result)
+            if _prefers_truncation_retry(task) and _looks_like_truncated_result(raw_result):
+                task_error = TaskError(
+                    message=(
+                        "Model output likely truncated at token limit; retrying with increased "
+                        "max_tokens/num_predict and num_width/num_ctx."
+                    )
+                )
+                if await self._requeue_for_retry(task, task_error):
+                    logger.info("Task %s queued for automatic truncation retry", task_id)
+                    return
+                raise ValueError(
+                    "Model output remained truncated after available retries; increase backend "
+                    "max_tokens/num_predict or num_width/num_ctx."
+                )
             await self.update_status(task_id, "completed", result=result)
         except asyncio.CancelledError:
             logger.info("Task %s cancelled", task_id)
