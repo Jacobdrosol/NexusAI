@@ -480,6 +480,44 @@ def test_sanitize_plan_for_operator_scope_converts_release_step_to_review_summar
     assert step["deliverables"] == ["Review findings", "Final verification summary"]
 
 
+def test_build_step_instruction_injects_context_items_at_top() -> None:
+    orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
+
+    instruction = orchestrator._build_step_instruction(
+        base_instruction="Implement the math geometry blocks",
+        step_kind="repo_change",
+        deliverables=["src/lesson_blocks/math_block.py"],
+        evidence_requirements=["Proposed file contents"],
+        context_items=[
+            "[repo-profile] Workspace stack summary\nLikely primary stack: .NET / ASP.NET Razor",
+            "[vault] Some vault context",
+        ],
+    )
+
+    # Context should be at the top
+    assert instruction.startswith("Context:")
+    assert "[repo-profile]" in instruction
+    assert ".NET" in instruction
+    assert "Deliverables:" in instruction
+    assert "src/lesson_blocks/math_block.py" in instruction
+
+
+def test_build_step_instruction_without_context_items_works_normally() -> None:
+    orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
+
+    instruction = orchestrator._build_step_instruction(
+        base_instruction="Implement the feature",
+        step_kind="repo_change",
+        deliverables=["src/file.py"],
+        evidence_requirements=None,
+        context_items=None,
+    )
+
+    assert "Context:" not in instruction
+    assert "Implement the feature" in instruction
+    assert "Deliverables:" in instruction
+
+
 async def test_wait_for_completion_labels_chat_preview_truncation() -> None:
     long_output = "A" * 260
     completed_task = Task(
