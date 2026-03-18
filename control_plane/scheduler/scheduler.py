@@ -72,31 +72,45 @@ def _backend_with_retry_params(backend: BackendConfig, task: Task | None = None)
 
     params_model = backend.params
     params_dict = params_model.model_dump(exclude_none=True) if params_model else {}
-    if not params_dict:
-        return backend
 
     max_tokens_increment = _settings_int("task_retry_max_tokens_increment", 2048)
     num_width_increment = _settings_int("task_retry_num_width_increment", 2048)
     updates: dict[str, Any] = {}
+    fallback_max_tokens = 1024
+    fallback_num_ctx = 8192
 
-    if "max_tokens" in params_dict and max_tokens_increment > 0:
-        updates["max_tokens"] = _retry_incremented_value(
-            params_dict["max_tokens"],
-            max_tokens_increment,
-            retry_attempt,
-        )
+    if max_tokens_increment > 0:
+        if "max_tokens" in params_dict:
+            updates["max_tokens"] = _retry_incremented_value(
+                params_dict["max_tokens"],
+                max_tokens_increment,
+                retry_attempt,
+            )
+        else:
+            updates["max_tokens"] = _retry_incremented_value(
+                fallback_max_tokens,
+                max_tokens_increment,
+                retry_attempt,
+            )
 
     width_key = None
     if "num_width" in params_dict:
         width_key = "num_width"
     elif "num_ctx" in params_dict:
         width_key = "num_ctx"
-    if width_key and num_width_increment > 0:
-        updates[width_key] = _retry_incremented_value(
-            params_dict[width_key],
-            num_width_increment,
-            retry_attempt,
-        )
+    if num_width_increment > 0:
+        if width_key:
+            updates[width_key] = _retry_incremented_value(
+                params_dict[width_key],
+                num_width_increment,
+                retry_attempt,
+            )
+        elif backend.type == "local_llm":
+            updates["num_ctx"] = _retry_incremented_value(
+                fallback_num_ctx,
+                num_width_increment,
+                retry_attempt,
+            )
 
     if not updates:
         return backend

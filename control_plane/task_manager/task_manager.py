@@ -681,6 +681,59 @@ def _assignment_step_kind(payload: Dict[str, Any]) -> str:
     return _infer_assignment_step_kind(payload)
 
 
+def _is_probable_test_file(value: str) -> bool:
+    normalized = str(value or "").strip().replace("\\", "/")
+    if not normalized:
+        return False
+    lowered = normalized.lower()
+    return any(
+        lowered.endswith(ext)
+        for ext in (".py", ".js", ".jsx", ".ts", ".tsx", ".cs", ".go", ".rs", ".cpp", ".cc", ".cxx")
+    ) and (
+        "/test" in lowered
+        or lowered.startswith("test")
+        or lowered.startswith("tests/")
+        or lowered.endswith("_test.py")
+        or lowered.endswith("_test.go")
+        or lowered.endswith(".test.ts")
+        or lowered.endswith(".test.tsx")
+        or lowered.endswith(".spec.ts")
+        or lowered.endswith(".spec.tsx")
+        or lowered.endswith(".test.js")
+        or lowered.endswith(".spec.js")
+        or lowered.endswith("tests.cs")
+        or lowered.endswith("tests.rs")
+        or lowered.endswith("test.cpp")
+        or lowered.endswith("test.cc")
+        or lowered.endswith("test.cxx")
+    )
+
+
+def _looks_like_assignment_test_execution_payload(payload: Dict[str, Any]) -> bool:
+    step_kind = _assignment_step_kind(payload)
+    if step_kind == "test_execution":
+        return True
+    role_hint = str(payload.get("role_hint") or "").strip().lower()
+    if role_hint in {"tester", "qa"}:
+        return True
+    deliverables = _normalize_string_list(payload.get("deliverables"))
+    evidence = _normalize_string_list(payload.get("evidence_requirements"))
+    combined = " ".join(
+        [
+            str(payload.get("title") or ""),
+            str(payload.get("instruction") or ""),
+            " ".join(deliverables),
+            " ".join(evidence),
+        ]
+    ).lower()
+    if any(_is_probable_test_file(item) for item in deliverables):
+        return True
+    if any(item.lower().endswith((".xml", ".json", ".txt", ".html", ".log", ".out", ".cov")) for item in deliverables):
+        if any(token in combined for token in ("test", "coverage", "qa", "verification")):
+            return True
+    return any(token in combined for token in ("executed test command output", "coverage report", "pass/fail"))
+
+
 def _assignment_expected_repo_files(payload: Dict[str, Any]) -> List[str]:
     files: List[str] = []
     for item in _normalize_string_list(payload.get("deliverables")):
@@ -751,28 +804,7 @@ def _assignment_test_source_files(paths: List[str]) -> List[str]:
         normalized = str(raw or "").strip().replace("\\", "/")
         if not normalized:
             continue
-        lowered = normalized.lower()
-        if any(
-            lowered.endswith(ext)
-            for ext in (".py", ".js", ".jsx", ".ts", ".tsx", ".cs", ".go", ".rs", ".cpp", ".cc", ".cxx")
-        ) and (
-            "/test" in lowered
-            or lowered.startswith("test")
-            or lowered.startswith("tests/")
-            or lowered.endswith("_test.py")
-            or lowered.endswith("_test.go")
-            or lowered.endswith(".test.ts")
-            or lowered.endswith(".test.tsx")
-            or lowered.endswith(".spec.ts")
-            or lowered.endswith(".spec.tsx")
-            or lowered.endswith(".test.js")
-            or lowered.endswith(".spec.js")
-            or lowered.endswith("tests.cs")
-            or lowered.endswith("tests.rs")
-            or lowered.endswith("test.cpp")
-            or lowered.endswith("test.cc")
-            or lowered.endswith("test.cxx")
-        ):
+        if _is_probable_test_file(normalized):
             seen.setdefault(normalized, None)
     return list(seen.keys())
 
@@ -2363,7 +2395,7 @@ class TaskManager:
     async def _maybe_run_internal_assignment_step(self, task: Task) -> Optional[Any]:
         payload = task.payload if isinstance(task.payload, dict) else {}
         metadata = task.metadata or TaskMetadata()
-        if _assignment_step_kind(payload) != "test_execution":
+        if not _looks_like_assignment_test_execution_payload(payload):
             return None
         if self._project_registry is None:
             return None

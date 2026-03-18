@@ -304,6 +304,72 @@ def test_scheduler_retry_attempt_falls_back_to_num_ctx_when_num_width_missing(mo
     assert effective.params.num_ctx == 9216
 
 
+def test_scheduler_retry_attempt_adds_default_max_tokens_when_backend_has_no_params(monkeypatch):
+    from control_plane.scheduler import scheduler as scheduler_module
+    from control_plane.scheduler.scheduler import _backend_with_retry_params
+    from shared.models import Task, TaskMetadata
+
+    monkeypatch.setattr(
+        scheduler_module,
+        "_settings_int",
+        lambda name, default: 512 if name == "task_retry_max_tokens_increment" else 1024 if name == "task_retry_num_width_increment" else default,
+    )
+
+    backend = BackendConfig(
+        type="cloud_api",
+        model="gpt-test",
+        provider="openai",
+    )
+    task = Task(
+        id="task-3",
+        bot_id="bot-1",
+        payload={"instruction": "retry"},
+        metadata=TaskMetadata(retry_attempt=1),
+        status="queued",
+        created_at="2026-03-16T00:00:00+00:00",
+        updated_at="2026-03-16T00:00:00+00:00",
+    )
+
+    effective = _backend_with_retry_params(backend, task)
+
+    assert effective.params is not None
+    assert effective.params.max_tokens == 1536
+    assert effective.params.num_ctx is None
+
+
+def test_scheduler_retry_attempt_adds_default_num_ctx_for_local_llm_when_missing(monkeypatch):
+    from control_plane.scheduler import scheduler as scheduler_module
+    from control_plane.scheduler.scheduler import _backend_with_retry_params
+    from shared.models import Task, TaskMetadata
+
+    monkeypatch.setattr(
+        scheduler_module,
+        "_settings_int",
+        lambda name, default: 512 if name == "task_retry_max_tokens_increment" else 1024 if name == "task_retry_num_width_increment" else default,
+    )
+
+    backend = BackendConfig(
+        type="local_llm",
+        model="llama3.2",
+        provider="ollama",
+    )
+    task = Task(
+        id="task-4",
+        bot_id="bot-1",
+        payload={"instruction": "retry"},
+        metadata=TaskMetadata(retry_attempt=1),
+        status="queued",
+        created_at="2026-03-16T00:00:00+00:00",
+        updated_at="2026-03-16T00:00:00+00:00",
+    )
+
+    effective = _backend_with_retry_params(backend, task)
+
+    assert effective.params is not None
+    assert effective.params.max_tokens == 1536
+    assert effective.params.num_ctx == 9216
+
+
 @pytest.mark.anyio
 async def test_scheduler_worker_timeout_disables_read_deadline():
     from control_plane.scheduler.scheduler import _worker_timeout

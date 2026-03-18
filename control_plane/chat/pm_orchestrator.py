@@ -496,7 +496,7 @@ class PMOrchestrator:
             return is_media and is_planner
 
         def _skip_for_generic_step(bot: Bot) -> bool:
-            if role_hint in {"coder", "tester", "reviewer", "researcher", "security", "dba", "qa", "assistant"}:
+            if role_hint in {"coder", "tester", "reviewer", "researcher", "security", "dba", "qa", "assistant", "planner", "planning"}:
                 return _is_media_planner(bot)
             return False
 
