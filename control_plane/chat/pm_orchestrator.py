@@ -1280,6 +1280,18 @@ class PMOrchestrator:
             lines.append(
                 "Keep the artifact concise and implementation-ready. Prefer structured sections, compact examples, and no unnecessary narrative so the response fits within token limits."
             )
+            if any(self._looks_like_repo_file(item) for item in deliverables):
+                lines.append(
+                    "CRITICAL: You MUST begin EACH file deliverable with 'Deliverable: path' on its own line, "
+                    "followed by a fenced code block containing the full file content. "
+                    "Example:\n"
+                    "Deliverable: docs/SPEC.md\n"
+                    "```markdown\n"
+                    "# Specification Title\n"
+                    "Content here...\n"
+                    "```\n"
+                    "Do NOT skip this format. Do NOT just describe what you would write."
+                )
         if step_kind == "test_execution":
             lines.append(
                 "Return only real executed command output and concrete artifact paths. Do not provide mocked, representative, or checklist-only test reports."
