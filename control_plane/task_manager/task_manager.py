@@ -710,19 +710,27 @@ def _is_probable_test_file(value: str) -> bool:
 
 
 def _looks_like_assignment_test_execution_payload(payload: Dict[str, Any]) -> bool:
+    # Role hint takes precedence - if explicitly tester/qa, treat as test execution
+    role_hint = str(payload.get("role_hint") or "").strip().lower()
+    if role_hint in {"tester", "qa"}:
+        return True
+    if role_hint in {"researcher", "analyst"}:
+        return False
+    
+    # Then check explicit step_kind
     explicit_step_kind = _normalize_assignment_step_kind(payload.get("step_kind"))
     if explicit_step_kind == "test_execution":
         return True
-    if explicit_step_kind == "repo_change":
+    if explicit_step_kind in {"specification", "planning", "repo_change", "review", "release"}:
         return False
+    
+    # Finally, infer from payload content
     step_kind = _assignment_step_kind(payload)
     if step_kind == "repo_change":
         return False
     if step_kind == "test_execution":
         return True
-    role_hint = str(payload.get("role_hint") or "").strip().lower()
-    if role_hint in {"tester", "qa"}:
-        return True
+    
     deliverables = _normalize_string_list(payload.get("deliverables"))
     evidence = _normalize_string_list(payload.get("evidence_requirements"))
     combined = " ".join(
