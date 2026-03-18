@@ -2530,6 +2530,10 @@ class TaskManager:
             python_cmd = [str(venv_python)] if venv_python.exists() else ["py"]
             test_cmd = [*python_cmd, "-m", "pytest", *test_files, "-q"]
             coverage_path = next((path for path in report_paths if path.lower().endswith(".xml")), None)
+            text_report_paths = [
+                path for path in report_paths
+                if path.lower().endswith((".txt", ".log"))
+            ]
             coverage_target = _assignment_python_coverage_target(source_paths)
             if coverage_target:
                 test_cmd.extend(["--cov", coverage_target, "--cov-report=term-missing"])
@@ -2548,6 +2552,17 @@ class TaskManager:
                     "error": str(test_result.get("error") or ""),
                 }
             )
+            if text_report_paths:
+                text_report_content = str(test_result.get("stdout") or "")
+                stderr_text = str(test_result.get("stderr") or "")
+                if stderr_text:
+                    if text_report_content:
+                        text_report_content += "\n"
+                    text_report_content += stderr_text
+                for relative_path in text_report_paths:
+                    report_file = (root / relative_path).resolve(strict=False)
+                    report_file.parent.mkdir(parents=True, exist_ok=True)
+                    report_file.write_text(text_report_content, encoding="utf-8")
             executed_any_tests = True
         if "node" in languages:
             await _run_bootstrap_languages(["node"])

@@ -962,6 +962,11 @@ def _bootstrap_command_specs(workspace: Path, languages: List[str]) -> List[Dict
                 "command": [str(py_bin), "-m", "pip", "install", "-e", "."],
                 "timeout_seconds": 1200,
             })
+        specs.append({
+            "label": "python_install_test_tools",
+            "command": [str(py_bin), "-m", "pip", "install", "pytest", "pytest-cov"],
+            "timeout_seconds": 1200,
+        })
 
     if "node" in wanted and (workspace / "package.json").exists():
         if (workspace / "pnpm-lock.yaml").exists():

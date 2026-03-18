@@ -3944,6 +3944,112 @@ async def test_chat_assign_test_execution_runs_in_repo_workspace_without_schedul
 
 
 @pytest.mark.anyio
+async def test_chat_assign_python_test_execution_writes_requested_text_report(tmp_path, monkeypatch):
+    import asyncio
+
+    from control_plane.api import projects as projects_module
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Project, TaskMetadata
+
+    class StubProjectRegistry:
+        async def get(self, project_id):
+            return Project(
+                id=project_id,
+                name="Proj",
+                settings_overrides={
+                    "repo_workspace": {
+                        "enabled": True,
+                        "managed_path_mode": False,
+                        "root_path": str(tmp_path / "repo"),
+                        "allow_command_execution": True,
+                    }
+                },
+            )
+
+    class StubScheduler:
+        def __init__(self):
+            self.project_registry = StubProjectRegistry()
+
+        async def schedule(self, task):
+            raise AssertionError("scheduler should not be used for internal test execution")
+
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(projects_module, "_extract_project_repo_workspace", lambda project: project.settings_overrides["repo_workspace"])
+    monkeypatch.setattr(projects_module, "_resolve_repo_workspace_root", lambda project_id, cfg, require_enabled=True: repo_root)
+
+    async def _snapshot(*, root, cfg):
+        return {"is_repo": True, "branch": "main", "clean": False, "porcelain": [" M src/lessons/math_lesson.py"]}
+
+    monkeypatch.setattr(projects_module, "_repo_status_snapshot", _snapshot)
+    monkeypatch.setattr(
+        projects_module,
+        "_assignment_file_candidates",
+        lambda tasks: [
+            {"path": "src/lessons/math_lesson.py", "content": "def add(a, b):\n    return a + b\n"},
+            {"path": "tests/lessons/test_math_lesson.py", "content": "def test_stub():\n    assert True\n"},
+        ],
+    )
+
+    def _write_assignment_files(*, root, candidates, overwrite):
+        written = []
+        for item in candidates:
+            path = root / item["path"]
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(item["content"], encoding="utf-8")
+            written.append({"path": item["path"], "status": "created"})
+        return written
+
+    monkeypatch.setattr(projects_module, "_write_assignment_files", _write_assignment_files)
+    monkeypatch.setattr(projects_module, "_bootstrap_command_specs", lambda root, languages: [])
+
+    async def _run_repo_command(args, *, cwd, timeout_seconds=None, env_overrides=None):
+        return {
+            "ok": True,
+            "command": args,
+            "exit_code": 0,
+            "stdout": "collected 1 items\n1 passed in 0.02s\nTOTAL 90%\n",
+            "stderr": "",
+            "resource_usage": {},
+        }
+
+    monkeypatch.setattr(projects_module, "_run_repo_command", _run_repo_command)
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "chat-assign-python-text-report.db"))
+    task = await tm.create_task(
+        bot_id="pm-tester",
+        payload={
+            "instruction": "run generated tests",
+            "role_hint": "tester",
+            "step_kind": "test_execution",
+            "deliverables": ["coverage_report.txt"],
+            "evidence_requirements": [
+                "Executed test command output",
+                "Coverage report artifact",
+            ],
+        },
+        metadata=TaskMetadata(
+            source="chat_assign",
+            project_id="proj-1",
+            orchestration_id="orch-1",
+        ),
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.1)
+
+    assert updated.status == "completed"
+    assert updated.result is not None
+    artifacts = updated.result.get("artifacts") or []
+    report = next(item for item in artifacts if item.get("path") == "coverage_report.txt")
+    assert "TOTAL 90%" in str(report.get("content") or "")
+
+
+@pytest.mark.anyio
 async def test_chat_assign_tester_step_uses_internal_execution_even_when_step_kind_is_mislabeled(tmp_path, monkeypatch):
     import asyncio
 
