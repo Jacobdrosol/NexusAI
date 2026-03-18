@@ -92,7 +92,7 @@ Then import those `*.bot.json` files in `Bots -> Import`.
 
 ## 5. Confirm Bot-Level Tool Access
 
-For each PM bot (`pm-orchestrator`, `pm-coder`, `pm-research-analyst`, `pm-tester`, `pm-security-reviewer`, `pm-database-engineer`):
+For each PM bot (`pm-orchestrator`, `pm-research-analyst`, `pm-engineer`, `pm-coder`, `pm-tester`, `pm-security-reviewer`, `pm-database-engineer`, `pm-ui-tester`):
 
 1. Open `Bots -> <bot> -> Chat Tool Access`.
 2. Enable workspace tools.

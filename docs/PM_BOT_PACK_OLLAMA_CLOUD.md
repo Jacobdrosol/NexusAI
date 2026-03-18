@@ -8,19 +8,25 @@ Use these role-aligned bots:
 
 1. `pm-orchestrator` (`role: pm`)
 2. `pm-research-analyst` (`role: researcher`)
-3. `pm-coder` (`role: coder`)
-4. `pm-tester` (`role: tester`)
-5. `pm-security-reviewer` (`role: security-reviewer`)
-6. `pm-database-engineer` (`role: dba-sql`)
+3. `pm-engineer` (`role: engineer`)
+4. `pm-coder` (`role: coder`)
+5. `pm-tester` (`role: tester`)
+6. `pm-security-reviewer` (`role: security-reviewer`)
+7. `pm-database-engineer` (`role: dba-sql`)
+8. `pm-ui-tester` (`role: ui-tester`)
 
 ### How they connect
 
 - The user sends `@assign <instruction>` in chat.
-- `pm-orchestrator` builds a dependency plan with `role_hint` values.
-- `PMOrchestrator` creates dependent tasks and maps each task to the best bot by role.
+- `pm-orchestrator` builds a dependency plan with explicit `bot_id` values.
+- `PMOrchestrator` preserves those explicit bot IDs and only falls back to role-based routing when a plan step omits `bot_id`.
 - The workers execute in dependency order and return a summarized assignment result.
 
-No explicit workflow triggers are required between these bots; the dependency graph is managed by chat orchestration logic.
+The generated PM pack also includes explicit workflow triggers on the worker bots:
+
+- Linear forward routing: `pm-research-analyst -> pm-engineer -> pm-coder -> pm-tester -> pm-security-reviewer -> pm-database-engineer -> pm-ui-tester`
+- Deterministic backward routing: QA/review bots route only to explicitly configured earlier bots based on structured `failure_type` values.
+- Terminal stage: `pm-ui-tester` ends the loop on pass; it only routes backward to allowed fix owners on failure.
 
 ## Model Policy
 
@@ -28,7 +34,7 @@ All bots use `backends[].type = cloud_api` and `provider = ollama_cloud`.
 
 Recommended model split:
 
-1. Planning/review: `gpt-oss:120b-cloud`
+1. Planning/review/UI validation: `gpt-oss:120b-cloud`
 2. Coding/research/database: `qwen3.5:397b-cloud`
 3. (Optional alternative for targeted creative generation) `glm-5:cloud`
 
@@ -82,7 +88,8 @@ For DB schema/query/migration tasks:
 ## Notes
 
 - If a PM bot returns invalid plan JSON, orchestration falls back to a deterministic heuristic plan.
-- Keep roles explicit (`pm`, `coder`, `tester`, `reviewer`, `security`, `dba`) so routing stays predictable.
+- Keep roles explicit (`pm`, `researcher`, `engineer`, `coder`, `tester`, `security-reviewer`, `dba-sql`, `ui-tester`) so routing stays predictable.
+- The PM pack intentionally uses structured output contracts so worker triggers can route by explicit `failure_type` values instead of heuristics.
 - Workspace tools use strict three-switch gating:
   1. bot routing rules (`chat_tool_access`)
   2. project chat workspace tool policy

@@ -1,6 +1,9 @@
 from unittest.mock import AsyncMock
 
+import pytest
+
 from control_plane.chat.pm_orchestrator import PMOrchestrator
+from shared.exceptions import BotNotFoundError
 from shared.models import Bot, Task
 
 
@@ -183,6 +186,48 @@ def test_parse_plan_json_backfills_step_kind_and_evidence_requirements() -> None
     assert parsed["steps"][0]["step_kind"] == "test_execution"
     assert parsed["steps"][0]["evidence_requirements"]
     assert "Executed test command output" in parsed["steps"][0]["evidence_requirements"][0]
+
+
+def test_parse_plan_json_preserves_explicit_bot_id() -> None:
+    orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
+
+    parsed = orchestrator._parse_plan_json(
+        """
+        {
+          "steps": [
+            {
+              "id": "step_1",
+              "title": "Implement feature",
+              "instruction": "Update the code path",
+              "bot_id": "pm-coder",
+              "role_hint": "coder",
+              "deliverables": ["src/app.py"]
+            }
+          ]
+        }
+        """
+    )
+
+    assert parsed is not None
+    assert parsed["steps"][0]["bot_id"] == "pm-coder"
+
+
+def test_heuristic_plan_prefers_standard_pm_bot_ids_when_present() -> None:
+    orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
+    bots = [
+        _bot(bot_id="pm-orchestrator", name="PM Orchestrator", role="pm", priority=100),
+        _bot(bot_id="pm-research-analyst", name="PM Research Analyst", role="researcher", priority=70),
+        _bot(bot_id="pm-coder", name="PM Coder", role="coder", priority=85),
+        _bot(bot_id="pm-tester", name="PM Tester", role="tester", priority=80),
+        _bot(bot_id="pm-security-reviewer", name="PM Security Reviewer", role="security-reviewer", priority=78),
+    ]
+
+    plan = orchestrator._heuristic_plan("Implement a feature", bots)
+
+    assert plan["steps"][0]["bot_id"] == "pm-research-analyst"
+    assert plan["steps"][1]["bot_id"] == "pm-coder"
+    assert plan["steps"][2]["bot_id"] == "pm-tester"
+    assert plan["steps"][3]["bot_id"] == "pm-security-reviewer"
 
 
 def test_normalize_evidence_requirements_downgrades_spec_file_commit_claims() -> None:
@@ -617,6 +662,49 @@ async def test_wait_for_completion_labels_chat_preview_truncation() -> None:
 
     assert "Output Preview:" in completion["summary_text"]
     assert "preview truncated" in completion["summary_text"].lower()
+
+
+@pytest.mark.anyio
+async def test_orchestrate_assignment_fails_closed_for_unknown_explicit_bot_id() -> None:
+    bots = [
+        _bot(bot_id="pm-orchestrator", name="PM Orchestrator", role="pm", priority=100),
+        _bot(bot_id="pm-coder", name="PM Coder", role="coder", priority=85),
+    ]
+    bot_registry = type("BotRegistry", (), {"list": AsyncMock(return_value=bots)})()
+    task_manager = type("TaskManager", (), {"create_task": AsyncMock()})()
+    orchestrator = PMOrchestrator(
+        bot_registry=bot_registry,
+        scheduler=None,
+        task_manager=task_manager,
+        chat_manager=None,
+    )
+    orchestrator._build_plan = AsyncMock(
+        return_value={
+            "steps": [
+                {
+                    "id": "step_1",
+                    "title": "Implement feature",
+                    "instruction": "Do the work",
+                    "bot_id": "missing-bot",
+                    "role_hint": "coder",
+                    "depends_on": [],
+                    "acceptance_criteria": [],
+                    "deliverables": [],
+                    "quality_gates": [],
+                    "evidence_requirements": [],
+                }
+            ],
+            "global_acceptance_criteria": [],
+            "global_quality_gates": [],
+            "risks": [],
+        }
+    )
+
+    with pytest.raises(BotNotFoundError, match="missing-bot"):
+        await orchestrator.orchestrate_assignment(
+            conversation_id="conv-1",
+            instruction="Implement feature",
+        )
 
 
 async def test_wait_for_completion_marks_snapshot_when_timeout_reached() -> None:

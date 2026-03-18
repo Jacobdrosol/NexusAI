@@ -1,10 +1,13 @@
 import json
+import logging
 import re
 import uuid
 from typing import Any, Dict, List, Optional
 
 from shared.exceptions import BotNotFoundError
 from shared.models import Bot, Task, TaskMetadata
+
+logger = logging.getLogger(__name__)
 
 
 class PMOrchestrator:
@@ -92,16 +95,12 @@ class PMOrchestrator:
                 deliverables=deliverables,
                 evidence_requirements=self._normalize_string_list(step.get("evidence_requirements")),
             )
-            # Use explicit bot_id if provided, otherwise fall back to role_hint matching
             if explicit_bot_id:
                 target_bot = self._get_bot_by_id(bots, explicit_bot_id)
                 if target_bot is None:
-                    logger.warning(
-                        "Explicit bot_id '%s' not found for step '%s', falling back to role_hint matching",
-                        explicit_bot_id,
-                        step_id,
+                    raise BotNotFoundError(
+                        f"Explicit bot_id '{explicit_bot_id}' not found for step '{step_id}'"
                     )
-                    target_bot = self._pick_target_bot(bots, role_hint=role_hint, pm_bot_id=pm_bot.id)
             else:
                 target_bot = self._pick_target_bot(bots, role_hint=role_hint, pm_bot_id=pm_bot.id)
             depends_ids = [
@@ -324,6 +323,7 @@ class PMOrchestrator:
                         "id": step_id,
                         "title": str(s.get("title") or f"Step {idx + 1}"),
                         "instruction": str(s.get("instruction") or ""),
+                        "bot_id": str(s.get("bot_id") or "").strip(),
                         "role_hint": role_hint,
                         "depends_on": [str(x) for x in (s.get("depends_on") or []) if x],
                         "step_kind": step_kind,
@@ -355,6 +355,8 @@ class PMOrchestrator:
         has_research = any("research" in r for r in role_set)
         has_dba = any("dba" in r or "database" in r or "data" in r for r in role_set)
         needs_database = self._instruction_mentions_database(instruction)
+        pm_bot = self._select_pm_bot(bots, requested_pm_bot_id=None)
+        pm_bot_id = pm_bot.id if pm_bot is not None else ""
 
         base_steps: List[Dict[str, Any]] = [
             {
@@ -363,6 +365,11 @@ class PMOrchestrator:
                 "instruction": (
                     "Produce user stories, acceptance criteria, failure cases, and scope boundaries for: "
                     f"{instruction}"
+                ),
+                "bot_id": self._preferred_bot_id_for_role(
+                    bots,
+                    role_hint="researcher" if has_research else "assistant",
+                    pm_bot_id=pm_bot_id,
                 ),
                 "role_hint": "researcher" if has_research else "assistant",
                 "step_kind": "specification",
@@ -387,6 +394,11 @@ class PMOrchestrator:
                         "Design required schema/query/data updates for this request, including rollback strategy and "
                         "data-safety checks."
                     ),
+                    "bot_id": self._preferred_bot_id_for_role(
+                        bots,
+                        role_hint="dba" if has_dba else "coder",
+                        pm_bot_id=pm_bot_id,
+                    ),
                     "role_hint": "dba" if has_dba else "coder",
                     "step_kind": "planning",
                     "depends_on": ["step_1"],
@@ -406,6 +418,7 @@ class PMOrchestrator:
                 "id": "step_3",
                 "title": "Implement core changes",
                 "instruction": f"Implement the approved solution for: {instruction}",
+                "bot_id": self._preferred_bot_id_for_role(bots, role_hint="coder", pm_bot_id=pm_bot_id),
                 "role_hint": "coder",
                 "step_kind": "repo_change",
                 "depends_on": [implementation_dep],
@@ -424,6 +437,11 @@ class PMOrchestrator:
                 "id": "step_4",
                 "title": "Add and run tests",
                 "instruction": "Create and run tests for happy path, edge cases, regressions, and failure handling.",
+                "bot_id": self._preferred_bot_id_for_role(
+                    bots,
+                    role_hint="tester" if has_tester else "coder",
+                    pm_bot_id=pm_bot_id,
+                ),
                 "role_hint": "tester" if has_tester else "coder",
                 "step_kind": "test_execution",
                 "depends_on": ["step_3"],
@@ -443,6 +461,11 @@ class PMOrchestrator:
                 "title": "Security and quality review",
                 "instruction": (
                     "Review for security risks, data exposure, algorithm or logic defects, and performance regressions."
+                ),
+                "bot_id": self._preferred_bot_id_for_role(
+                    bots,
+                    role_hint="reviewer" if has_reviewer else "security",
+                    pm_bot_id=pm_bot_id,
                 ),
                 "role_hint": "reviewer" if has_reviewer else "security",
                 "step_kind": "review",
@@ -494,6 +517,32 @@ class PMOrchestrator:
             if bot.id == bot_id:
                 return bot
         return None
+
+    def _preferred_bot_id_for_role(self, bots: List[Bot], role_hint: str, pm_bot_id: str) -> str:
+        preferred_ids = {
+            "researcher": "pm-research-analyst",
+            "assistant": "pm-research-analyst",
+            "planner": "pm-engineer",
+            "planning": "pm-engineer",
+            "engineer": "pm-engineer",
+            "coder": "pm-coder",
+            "tester": "pm-tester",
+            "qa": "pm-tester",
+            "reviewer": "pm-security-reviewer",
+            "security": "pm-security-reviewer",
+            "security-reviewer": "pm-security-reviewer",
+            "dba": "pm-database-engineer",
+            "database": "pm-database-engineer",
+            "dba-sql": "pm-database-engineer",
+            "ui": "pm-ui-tester",
+            "ui-tester": "pm-ui-tester",
+        }
+        preferred_id = preferred_ids.get(str(role_hint or "").strip().lower())
+        if preferred_id:
+            preferred_bot = self._get_bot_by_id(bots, preferred_id)
+            if preferred_bot is not None and preferred_bot.enabled and preferred_bot.id != pm_bot_id:
+                return preferred_bot.id
+        return self._pick_target_bot(bots, role_hint=role_hint, pm_bot_id=pm_bot_id).id
 
     def _pick_target_bot(self, bots: List[Bot], role_hint: str, pm_bot_id: str) -> Bot:
         enabled = [b for b in bots if b.enabled]
