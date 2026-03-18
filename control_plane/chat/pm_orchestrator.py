@@ -481,8 +481,22 @@ class PMOrchestrator:
             raise BotNotFoundError("No enabled bots available for assignment tasks")
 
         role_hint = role_hint.lower()
+        
+        # Map role_hint to canonical bot role values for exact matching
+        role_exact_matches = {
+            "coder": ["coder", "developer", "engineer"],
+            "tester": ["tester", "qa"],
+            "reviewer": ["reviewer"],
+            "researcher": ["researcher", "analyst"],
+            "security": ["security", "security-reviewer"],
+            "dba": ["dba", "dba-sql", "database"],
+            "qa": ["qa", "tester"],
+            "assistant": ["assistant"],
+            "planner": ["planner"],
+        }
+        
         role_patterns = {
-            "coder": [r"code", r"dev", r"engineer", r"implement"],
+            "coder": [r"code", r"dev", r"implement"],
             "tester": [r"test", r"qa"],
             "reviewer": [r"review", r"audit"],
             "researcher": [r"research", r"analyst", r"requirements?", r"spec"],
@@ -506,10 +520,29 @@ class PMOrchestrator:
                 return _is_media_planner(bot)
             return False
 
+        def _bot_role_matches_exact(bot: Bot, hint: str) -> bool:
+            """Check if bot's role field exactly matches the role_hint."""
+            bot_role = str(bot.role or "").lower().strip()
+            exact_roles = role_exact_matches.get(hint, [])
+            return bot_role in exact_roles
+
+        # Priority 1: Exact role match
+        for bot in candidates:
+            if _skip_for_generic_step(bot):
+                continue
+            if _bot_role_matches_exact(bot, role_hint):
+                return bot
+
+        # Priority 2: Pattern match on id/name/role (but exclude database bots for coder role)
         patterns = role_patterns.get(role_hint, [re.escape(role_hint)] if role_hint else [])
         for bot in candidates:
             if _skip_for_generic_step(bot):
                 continue
+            # Skip database engineer bots for non-DBA roles
+            if role_hint in {"coder", "tester", "reviewer", "researcher", "security", "qa"}:
+                bot_role = str(bot.role or "").lower()
+                if "dba" in bot_role or "database" in bot_role:
+                    continue
             signature = _bot_signature(bot)
             if any(re.search(p, signature) for p in patterns):
                 return bot
