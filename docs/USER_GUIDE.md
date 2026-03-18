@@ -276,6 +276,7 @@ Recommended pattern:
 
 - Use `@assign` to route a request through PM orchestration.
 - PM bot decomposes work into dependency-ordered tasks.
+- The default PM workflow is limited to specification, implementation, test execution, verification, and final reporting. It does not create CI/CD workflow files, create GitHub issues/project-board items, merge PRs, tag releases, deploy, or finalize changelogs unless that behavior is explicitly added later.
 - Task graph updates stream back into chat.
 
 ### 6.4 Workspace Tool Access (Repo Search + Filesystem)

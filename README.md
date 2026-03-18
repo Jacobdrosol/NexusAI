@@ -146,6 +146,7 @@ Chat and orchestration:
 - Message-level workspace tool usage can be toggled on/off (`use_workspace_tools`) so operators can keep a chat configured for tools but disable tool use for specific prompts.
 - Inline `@assign` orchestration with PM task decomposition.
 - PM orchestration task payloads now include step-level acceptance criteria, deliverables, and quality gates for stronger implementation/test/review handoffs.
+- PM orchestration is operator-safe by default: it stops at specification, implementation, test execution, verification, and final reporting. It does not create CI/CD workflows, open GitHub issues/boards, merge PRs, tag releases, deploy, or finalize changelogs unless that behavior is explicitly added later.
 - Task status streaming and DAG viewer actions in chat.
 
 Vault and context:

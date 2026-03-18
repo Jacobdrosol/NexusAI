@@ -111,6 +111,12 @@ In `Chat`:
 5. In the composer, keep `Use workspace tools for this message` enabled for messages that need repo/filesystem context.
 6. Use `@assign <instruction>` to run PM orchestration.
 
+Default PM scope:
+
+- PM runs are scoped to specification, code changes, test creation/execution, security or quality review, and final reporting.
+- They do not create or edit CI/CD workflows, create GitHub issues or project-board items, merge pull requests, tag releases, deploy, or finalize changelogs by default.
+- Repo-workspace test execution is for local workspace verification only. Operators still own commit, push, CI/CD, and deployment flows unless you intentionally customize that behavior later.
+
 ## 7. Three-Switch Policy (Required)
 
 Workspace tools run only when all are true:

@@ -21,6 +21,9 @@ class PMOrchestrator:
         "Keep 3-6 steps. Include stories/specification first, implementation next, and testing/review gates before completion. "
         "Do not classify a step as test_execution, review, or release unless it can produce execution-backed evidence rather than generic advice. "
         "Do not claim committed files, created issues, merged pull requests, CI passes, approvals, or releases unless those side effects are actually available with live evidence. "
+        "By default, keep operator-owned actions out of the plan: no CI/CD workflow edits, GitHub issue or project-board work, commits, pushes, pull requests, approvals, merges, tags, releases, deployments, or changelog finalization unless the user explicitly asks for them. "
+        "Tester steps are limited to creating tests, running tests, validating behavior, and returning real execution evidence. "
+        "Reviewer steps are limited to concrete findings and final verification summaries; they do not merge, tag, deploy, or edit CI/CD by default. "
         "When a step deliverable is a repo file, prefer proposed file artifacts that can be applied later rather than claiming the file is already committed. "
         "Use repo context as the source of truth for language, framework, and file extension choices. Match nearby existing files such as `.razor`, `.cs`, `.ts`, `.py`, or `.cpp` instead of defaulting to Python."
     )
@@ -57,6 +60,7 @@ class PMOrchestrator:
             context_items=context_items or [],
         )
         plan = self._expand_test_execution_steps(plan)
+        plan = self._sanitize_plan_for_operator_scope(plan, instruction=instruction)
 
         orchestration_id = str(uuid.uuid4())
         task_ids_by_step: Dict[str, str] = {}
@@ -421,7 +425,7 @@ class PMOrchestrator:
                 "id": "step_5",
                 "title": "Security and quality review",
                 "instruction": (
-                    "Review for security risks, data exposure, performance regressions, and deployment readiness."
+                    "Review for security risks, data exposure, algorithm or logic defects, and performance regressions."
                 ),
                 "role_hint": "reviewer" if has_reviewer else "security",
                 "step_kind": "review",
@@ -430,7 +434,7 @@ class PMOrchestrator:
                     "No known security leak paths or obvious privilege bypasses",
                     "No unresolved high-severity quality issues",
                 ],
-                "deliverables": ["Review findings", "Final release recommendation"],
+                "deliverables": ["Review findings", "Final verification summary"],
                 "evidence_requirements": ["Concrete findings tied to changed files or executed evidence"],
                 "quality_gates": ["Zero unresolved high-severity findings"],
             }
@@ -898,6 +902,258 @@ class PMOrchestrator:
                 seen.add(text)
                 normalized.append(text)
         return normalized or deliverables
+
+    def _instruction_explicitly_requests_operator_actions(self, instruction: str) -> bool:
+        text = str(instruction or "").lower()
+        explicit_tokens = (
+            "ci/cd",
+            "ci cd",
+            "github actions",
+            "workflow",
+            ".github/workflows",
+            "project board",
+            "milestone",
+            "issue tracker",
+            "issue definitions",
+            "create github issues",
+            "pull request",
+            "merge",
+            "deploy",
+            "release",
+            "git tag",
+            "changelog",
+            "commit and push",
+            "push to github",
+        )
+        return any(token in text for token in explicit_tokens)
+
+    def _step_mentions_operator_actions(self, step: Dict[str, Any]) -> bool:
+        haystack = " ".join(
+            [
+                str(step.get("title") or ""),
+                str(step.get("instruction") or ""),
+                " ".join(self._normalize_string_list(step.get("deliverables"))),
+                " ".join(self._normalize_string_list(step.get("acceptance_criteria"))),
+                " ".join(self._normalize_string_list(step.get("quality_gates"))),
+                " ".join(self._normalize_string_list(step.get("evidence_requirements"))),
+            ]
+        ).lower()
+        tokens = (
+            "github issue",
+            "issue definitions",
+            "project board",
+            "milestone",
+            "github actions",
+            "workflow",
+            ".github/workflows",
+            "ci run",
+            "ci pipeline",
+            "pull request",
+            "merged",
+            "merge",
+            "deploy",
+            "release",
+            "git tag",
+            "changelog",
+            "approval",
+        )
+        return any(token in haystack for token in tokens)
+
+    def _sanitize_list_for_operator_scope(self, values: List[str], *, step_kind: str) -> List[str]:
+        blocked_tokens = (
+            "github issue",
+            "issue definitions",
+            "project board",
+            "milestone",
+            "github actions",
+            "workflow run",
+            "ci run",
+            "ci pipeline",
+            ".github/workflows",
+            "pull request",
+            "merged",
+            "merge",
+            "deploy",
+            "release",
+            "git tag",
+            "changelog",
+            "approval",
+        )
+        normalized: List[str] = []
+        for item in values:
+            text = str(item or "").strip()
+            if not text:
+                continue
+            lowered = text.lower()
+            if any(token in lowered for token in blocked_tokens):
+                continue
+            if step_kind == "test_execution" and re.search(r"\bci\b", lowered):
+                continue
+            if step_kind == "test_execution" and lowered.endswith(("ci.yml", "ci.yaml")):
+                continue
+            normalized.append(text)
+        return normalized
+
+    def _sanitize_text_for_operator_scope(self, text: str, *, step_kind: str, fallback: str) -> str:
+        value = str(text or "").strip()
+        lowered = value.lower()
+        replacements = {
+            "deployment readiness": "final verification",
+            "ci/cd": "",
+            "ci cd": "",
+            "github actions": "",
+            "workflow": "",
+            "pull request": "",
+            "merge": "",
+            "deploy": "",
+            "release": "",
+            "git tag": "",
+            "changelog": "",
+        }
+        for source, target in replacements.items():
+            value = re.sub(source, target, value, flags=re.IGNORECASE)
+        value = re.sub(r"\s*&\s*", " and ", value)
+        value = re.sub(r"\s{2,}", " ", value)
+        value = re.sub(r"\(\s*\)", "", value)
+        value = value.strip(" -,:;")
+        if step_kind == "test_execution" and any(token in lowered for token in ("ci", "workflow", "pipeline")):
+            return fallback
+        if step_kind in {"review", "release"} and any(
+            token in lowered for token in ("release", "deploy", "merge", "tag", "changelog")
+        ):
+            return fallback
+        return value or fallback
+
+    def _sanitize_plan_for_operator_scope(self, plan: Dict[str, Any], *, instruction: str) -> Dict[str, Any]:
+        if self._instruction_explicitly_requests_operator_actions(instruction):
+            return plan
+
+        raw_steps = plan.get("steps")
+        if not isinstance(raw_steps, list):
+            return plan
+
+        original_steps: Dict[str, Dict[str, Any]] = {
+            str(step.get("id") or f"step_{idx + 1}"): step
+            for idx, step in enumerate(raw_steps)
+            if isinstance(step, dict)
+        }
+        sanitized_steps: List[Dict[str, Any]] = []
+
+        for idx, step in enumerate(raw_steps):
+            if not isinstance(step, dict):
+                continue
+            step_id = str(step.get("id") or f"step_{idx + 1}")
+            role_hint = str(step.get("role_hint") or "").strip().lower()
+            step_kind = self._normalize_step_kind(
+                step.get("step_kind"),
+                title=str(step.get("title") or ""),
+                instruction=str(step.get("instruction") or ""),
+                role_hint=role_hint,
+                deliverables=self._normalize_string_list(step.get("deliverables")),
+            )
+
+            if step_kind == "planning" and self._looks_like_issue_planning_step(
+                title=str(step.get("title") or ""),
+                instruction=str(step.get("instruction") or ""),
+                role_hint=role_hint,
+                deliverables=self._normalize_string_list(step.get("deliverables")),
+            ):
+                continue
+
+            sanitized = dict(step)
+            if step_kind == "release":
+                sanitized["step_kind"] = "review"
+                sanitized["role_hint"] = "reviewer" if role_hint not in {"security", "security-reviewer"} else role_hint
+                sanitized["title"] = "Finalize verification summary"
+                sanitized["instruction"] = (
+                    "Summarize concrete review findings, residual risks, and handoff notes for the operator. "
+                    "Return a final verification summary only."
+                )
+                sanitized["deliverables"] = ["Review findings", "Final verification summary"]
+                sanitized["evidence_requirements"] = ["Concrete findings tied to changed files or executed evidence"]
+                sanitized["quality_gates"] = ["Zero unresolved high-severity findings"]
+                sanitized_steps.append(sanitized)
+                continue
+
+            sanitized["title"] = self._sanitize_text_for_operator_scope(
+                str(step.get("title") or ""),
+                step_kind=step_kind,
+                fallback="Add and run tests" if step_kind == "test_execution" else "Final verification review",
+            )
+            sanitized["instruction"] = self._sanitize_text_for_operator_scope(
+                str(step.get("instruction") or ""),
+                step_kind=step_kind,
+                fallback=(
+                    "Create automated tests, run them in the repo workspace, and return real results."
+                    if step_kind == "test_execution"
+                    else "Review the implementation for concrete code, security, and data-handling risks."
+                ),
+            )
+            sanitized["deliverables"] = self._sanitize_list_for_operator_scope(
+                self._normalize_string_list(step.get("deliverables")),
+                step_kind=step_kind,
+            )
+            sanitized["acceptance_criteria"] = self._sanitize_list_for_operator_scope(
+                self._normalize_string_list(step.get("acceptance_criteria")),
+                step_kind=step_kind,
+            )
+            sanitized["quality_gates"] = self._sanitize_list_for_operator_scope(
+                self._normalize_string_list(step.get("quality_gates")),
+                step_kind=step_kind,
+            )
+            sanitized["evidence_requirements"] = self._sanitize_list_for_operator_scope(
+                self._normalize_string_list(step.get("evidence_requirements")),
+                step_kind=step_kind,
+            )
+
+            if step_kind == "review":
+                sanitized["deliverables"] = sanitized["deliverables"] or ["Review findings", "Final verification summary"]
+            elif step_kind == "test_execution":
+                sanitized["deliverables"] = sanitized["deliverables"] or ["Test run log artifact"]
+
+            if step_kind == "review" and self._step_mentions_operator_actions(step):
+                sanitized["instruction"] = (
+                    "Review the implementation for concrete code defects, security risks, data leakage, and regressions. "
+                    "Return findings and a final verification summary only."
+                )
+
+            sanitized_steps.append(sanitized)
+
+        surviving_ids = {str(step.get("id") or "") for step in sanitized_steps}
+
+        def _resolve_dep(dep_id: str, seen: Optional[set[str]] = None) -> List[str]:
+            dep = str(dep_id or "").strip()
+            if not dep:
+                return []
+            if dep in surviving_ids:
+                return [dep]
+            if seen is None:
+                seen = set()
+            if dep in seen:
+                return []
+            seen.add(dep)
+            original = original_steps.get(dep)
+            if not isinstance(original, dict):
+                return []
+            resolved: List[str] = []
+            for parent in original.get("depends_on") or []:
+                resolved.extend(_resolve_dep(str(parent), seen))
+            return resolved
+
+        for step in sanitized_steps:
+            depends: List[str] = []
+            for dep in step.get("depends_on") or []:
+                depends.extend(_resolve_dep(str(dep)))
+            deduped: List[str] = []
+            for dep in depends:
+                if dep and dep not in deduped:
+                    deduped.append(dep)
+            step["depends_on"] = deduped
+
+        return {
+            **plan,
+            "steps": sanitized_steps,
+        }
 
     def _normalize_evidence_requirements(
         self,

@@ -394,6 +394,91 @@ def test_expand_test_execution_steps_splits_test_file_creation_from_execution() 
     assert execute_step["depends_on"] == ["step_1_create_tests"]
 
 
+def test_sanitize_plan_for_operator_scope_removes_issue_planning_and_ci_workflow_steps() -> None:
+    orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
+
+    sanitized = orchestrator._sanitize_plan_for_operator_scope(
+        {
+            "steps": [
+                {
+                    "id": "step_1",
+                    "title": "Create GitHub Issues and Project Board Items",
+                    "instruction": "Create GitHub issues and add them to the project board.",
+                    "role_hint": "researcher",
+                    "step_kind": "planning",
+                    "depends_on": [],
+                    "deliverables": ["Issue definitions (markdown or JSON)", "Project board proposal (markdown)"],
+                    "acceptance_criteria": ["Issue tracker entries are ready"],
+                    "quality_gates": [],
+                    "evidence_requirements": ["Proposed issue, milestone, or board definitions"],
+                },
+                {
+                    "id": "step_2",
+                    "title": "Write Unit Tests & Integrate with CI",
+                    "instruction": "Create tests and update the CI workflow to run them.",
+                    "role_hint": "tester",
+                    "step_kind": "test_execution",
+                    "depends_on": ["step_1"],
+                    "deliverables": [
+                        "tests/LessonBlocks/GeometryLessonTests.cs",
+                        "tests/LessonBlocks/MathematicsLessonTests.cs",
+                        ".github/workflows/ci.yml",
+                    ],
+                    "acceptance_criteria": ["CI pipeline completes without errors", "Tests pass locally"],
+                    "quality_gates": ["CI is green"],
+                    "evidence_requirements": ["Executed test command output", "Coverage report artifact"],
+                },
+            ]
+        },
+        instruction="Implement mathematics and geometry lesson blocks.",
+    )
+
+    assert len(sanitized["steps"]) == 1
+    step = sanitized["steps"][0]
+    assert step["id"] == "step_2"
+    assert step["depends_on"] == []
+    assert step["step_kind"] == "test_execution"
+    assert ".github/workflows/ci.yml" not in step["deliverables"]
+    assert "tests/LessonBlocks/GeometryLessonTests.cs" in step["deliverables"]
+    assert "tests/LessonBlocks/MathematicsLessonTests.cs" in step["deliverables"]
+    assert "ci" not in step["title"].lower()
+    assert "workflow" not in step["instruction"].lower()
+    assert all("ci" not in item.lower() for item in step["acceptance_criteria"])
+    assert all("ci" not in item.lower() for item in step["quality_gates"])
+
+
+def test_sanitize_plan_for_operator_scope_converts_release_step_to_review_summary() -> None:
+    orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
+
+    sanitized = orchestrator._sanitize_plan_for_operator_scope(
+        {
+            "steps": [
+                {
+                    "id": "step_5",
+                    "title": "Code Review, Merge, and Release",
+                    "instruction": "Review the changes, merge the pull request, tag the release, and update the changelog.",
+                    "role_hint": "security-reviewer",
+                    "step_kind": "release",
+                    "depends_on": ["step_4"],
+                    "deliverables": ["Review findings", "CHANGELOG.md entry", "Git tag vX.Y.Z"],
+                    "acceptance_criteria": ["Pull request approved and merged"],
+                    "quality_gates": ["Release complete"],
+                    "evidence_requirements": ["Pull request, merge, or release artifact"],
+                }
+            ]
+        },
+        instruction="Implement mathematics and geometry lesson blocks.",
+    )
+
+    assert len(sanitized["steps"]) == 1
+    step = sanitized["steps"][0]
+    assert step["step_kind"] == "review"
+    assert step["title"] == "Finalize verification summary"
+    assert "merge" not in step["instruction"].lower()
+    assert "deploy" not in step["instruction"].lower()
+    assert step["deliverables"] == ["Review findings", "Final verification summary"]
+
+
 async def test_wait_for_completion_labels_chat_preview_truncation() -> None:
     long_output = "A" * 260
     completed_task = Task(
