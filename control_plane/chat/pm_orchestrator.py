@@ -14,10 +14,13 @@ class PMOrchestrator:
         "You are the NexusAI Project Manager bot. Break the user's request into a deterministic "
         "implementation workflow with explicit quality controls. Return JSON only with this shape: "
         '{"global_acceptance_criteria":["..."],"global_quality_gates":["..."],"risks":["..."],'
-        '"steps":[{"id":"step_1","title":"...","instruction":"...","role_hint":"coder",'
+        '"steps":[{"id":"step_1","title":"...","instruction":"...","bot_id":"pm-coder","role_hint":"coder",'
         '"step_kind":"specification|planning|repo_change|test_execution|review|release",'
         '"evidence_requirements":["..."],"depends_on":[],"acceptance_criteria":["..."],'
-        '"deliverables":["..."],"quality_gates":["..."]}]}. '
+        '"deliverables":["..."],"quality_gates":["..."]}]}'
+        "IMPORTANT: Each step MUST include 'bot_id' field with the EXACT bot ID to use. "
+        "Available bot IDs: pm-research-analyst, pm-engineer, pm-coder, pm-tester, pm-security-reviewer, pm-database-engineer, pm-ui-tester. "
+        "Do NOT omit bot_id. Do NOT infer from role_hint. bot_id is REQUIRED. "
         "Keep 3-6 steps. Include stories/specification first, implementation next, and testing/review gates before completion. "
         "Do not classify a step as test_execution, review, or release unless it can produce execution-backed evidence rather than generic advice. "
         "Do not claim committed files, created issues, merged pull requests, CI passes, approvals, or releases unless those side effects are actually available with live evidence. "
@@ -72,6 +75,7 @@ class PMOrchestrator:
         for idx, step in enumerate(plan["steps"]):
             step_id = str(step.get("id") or f"step_{idx + 1}")
             role_hint = str(step.get("role_hint") or "").strip().lower()
+            explicit_bot_id = str(step.get("bot_id") or "").strip()
             acceptance_criteria = self._normalize_string_list(step.get("acceptance_criteria"))
             raw_deliverables = self._normalize_string_list(step.get("deliverables"))
             quality_gates = self._normalize_string_list(step.get("quality_gates"))
@@ -88,7 +92,18 @@ class PMOrchestrator:
                 deliverables=deliverables,
                 evidence_requirements=self._normalize_string_list(step.get("evidence_requirements")),
             )
-            target_bot = self._pick_target_bot(bots, role_hint=role_hint, pm_bot_id=pm_bot.id)
+            # Use explicit bot_id if provided, otherwise fall back to role_hint matching
+            if explicit_bot_id:
+                target_bot = self._get_bot_by_id(bots, explicit_bot_id)
+                if target_bot is None:
+                    logger.warning(
+                        "Explicit bot_id '%s' not found for step '%s', falling back to role_hint matching",
+                        explicit_bot_id,
+                        step_id,
+                    )
+                    target_bot = self._pick_target_bot(bots, role_hint=role_hint, pm_bot_id=pm_bot.id)
+            else:
+                target_bot = self._pick_target_bot(bots, role_hint=role_hint, pm_bot_id=pm_bot.id)
             depends_ids = [
                 task_ids_by_step[d]
                 for d in (step.get("depends_on") or [])
@@ -470,6 +485,13 @@ class PMOrchestrator:
             role = str(bot.role or "").lower()
             name = str(bot.name or "").lower()
             if bot.enabled and any(re.search(pattern, role) or re.search(pattern, name) for pattern in pm_patterns):
+                return bot
+        return None
+
+    def _get_bot_by_id(self, bots: List[Bot], bot_id: str) -> Optional[Bot]:
+        """Get a bot by its exact ID. Returns None if not found."""
+        for bot in bots:
+            if bot.id == bot_id:
                 return bot
         return None
 

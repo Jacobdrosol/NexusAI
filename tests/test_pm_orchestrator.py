@@ -66,6 +66,35 @@ def test_pick_target_bot_prefers_exact_role_match_over_pattern_match() -> None:
     assert picked.role == "coder"
 
 
+def test_get_bot_by_id_returns_exact_bot() -> None:
+    """Ensure _get_bot_by_id returns the exact bot when ID matches."""
+    orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
+    bots = [
+        _bot(bot_id="pm-main", name="PM Main", role="project-manager", priority=50),
+        _bot(bot_id="pm-coder", name="PM Coder", role="coder", priority=85),
+        _bot(bot_id="pm-tester", name="PM Tester", role="tester", priority=80),
+    ]
+
+    # Should return exact bot by ID
+    picked = orchestrator._get_bot_by_id(bots, "pm-tester")
+    assert picked is not None
+    assert picked.id == "pm-tester"
+    assert picked.name == "PM Tester"
+
+
+def test_get_bot_by_id_returns_none_when_not_found() -> None:
+    """Ensure _get_bot_by_id returns None when bot ID doesn't exist."""
+    orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
+    bots = [
+        _bot(bot_id="pm-main", name="PM Main", role="project-manager", priority=50),
+        _bot(bot_id="pm-coder", name="PM Coder", role="coder", priority=85),
+    ]
+
+    # Should return None for non-existent bot
+    picked = orchestrator._get_bot_by_id(bots, "nonexistent-bot")
+    assert picked is None
+
+
 def test_pick_target_bot_excludes_database_bots_for_coder_role() -> None:
     """Even without exact role match, database bots should not be selected for coder role."""
     orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
