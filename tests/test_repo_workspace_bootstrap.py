@@ -17,6 +17,15 @@ def test_python_bootstrap_installs_pytest_and_cov_tools() -> None:
     assert install_spec["command"][-2:] == ["pytest", "pytest-cov"]
 
 
+def test_python_bootstrap_venv_lives_outside_repo_workspace(tmp_path) -> None:
+    specs = projects_module._bootstrap_command_specs(tmp_path, ["python"])
+    create_spec = next(spec for spec in specs if spec.get("label") == "python_venv_create")
+    venv_path = Path(create_spec["command"][-1])
+
+    assert ".nexusai_venv" not in str(venv_path).replace("\\", "/")
+    assert tmp_path not in venv_path.parents
+
+
 def test_allowed_workspace_commands_include_current_interpreter_name() -> None:
     allowed = projects_module._allowed_workspace_commands()
     assert Path(sys.executable).name.lower() in allowed or Path(sys.executable).stem.lower() in allowed

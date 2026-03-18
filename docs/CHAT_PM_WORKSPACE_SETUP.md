@@ -116,6 +116,8 @@ Default PM scope:
 - PM runs are scoped to specification, code changes, test creation/execution, security or quality review, and final reporting.
 - They do not create or edit CI/CD workflows, create GitHub issues or project-board items, merge pull requests, tag releases, deploy, or finalize changelogs by default.
 - Repo-workspace test execution is for local workspace verification only. Operators still own commit, push, CI/CD, and deployment flows unless you intentionally customize that behavior later.
+- Python test environments used during PM runs are created outside the repository workspace, so the runner does not leave `.nexusai_venv/` or similar untracked files in the repo.
+- Assignment test execution inherits runtime choices from repo markers such as `package.json`, `.sln`/`.csproj`, `pyproject.toml`, `go.mod`, or `Cargo.toml`. If generated tests do not match a runtime the repo already declares, the run stops instead of introducing a new runtime.
 
 ## 7. Three-Switch Policy (Required)
 

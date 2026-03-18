@@ -4050,6 +4050,99 @@ async def test_chat_assign_python_test_execution_writes_requested_text_report(tm
 
 
 @pytest.mark.anyio
+async def test_chat_assign_test_execution_fails_when_generated_tests_do_not_match_repo_runtime(tmp_path, monkeypatch):
+    import asyncio
+
+    from control_plane.api import projects as projects_module
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Project, TaskMetadata
+
+    class StubProjectRegistry:
+        async def get(self, project_id):
+            return Project(
+                id=project_id,
+                name="Proj",
+                settings_overrides={
+                    "repo_workspace": {
+                        "enabled": True,
+                        "managed_path_mode": False,
+                        "root_path": str(tmp_path / "repo"),
+                        "allow_command_execution": True,
+                    }
+                },
+            )
+
+    class StubScheduler:
+        def __init__(self):
+            self.project_registry = StubProjectRegistry()
+
+        async def schedule(self, task):
+            raise AssertionError("scheduler should not be used for internal test execution")
+
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    (repo_root / "GlobeIQ.sln").write_text("Microsoft Visual Studio Solution File\n", encoding="utf-8")
+    (repo_root / "GlobeIQ.Tests.csproj").write_text("<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n", encoding="utf-8")
+
+    monkeypatch.setattr(projects_module, "_extract_project_repo_workspace", lambda project: project.settings_overrides["repo_workspace"])
+    monkeypatch.setattr(projects_module, "_resolve_repo_workspace_root", lambda project_id, cfg, require_enabled=True: repo_root)
+
+    async def _snapshot(*, root, cfg):
+        return {"is_repo": True, "branch": "main", "clean": False, "porcelain": [" M GlobeIQ.Tests.csproj"]}
+
+    monkeypatch.setattr(projects_module, "_repo_status_snapshot", _snapshot)
+    monkeypatch.setattr(
+        projects_module,
+        "_assignment_file_candidates",
+        lambda tasks: [
+            {"path": "src/lessons/math_lesson.py", "content": "def add(a, b):\n    return a + b\n"},
+            {"path": "tests/lessons/test_math_lesson.py", "content": "def test_stub():\n    assert True\n"},
+        ],
+    )
+
+    def _write_assignment_files(*, root, candidates, overwrite):
+        applied = []
+        for item in candidates:
+            target = root / item["path"]
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(item["content"], encoding="utf-8")
+            applied.append({"path": item["path"], "status": "created"})
+        return applied
+
+    monkeypatch.setattr(projects_module, "_write_assignment_files", _write_assignment_files)
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "chat-assign-runtime-mismatch.db"))
+    task = await tm.create_task(
+        bot_id="pm-tester",
+        payload={
+            "instruction": "run generated tests",
+            "role_hint": "tester",
+            "step_kind": "test_execution",
+            "deliverables": ["coverage_report.txt"],
+            "evidence_requirements": [
+                "Executed test command output",
+                "Coverage report artifact",
+            ],
+        },
+        metadata=TaskMetadata(
+            source="chat_assign",
+            project_id="proj-1",
+            orchestration_id="orch-1",
+        ),
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.1)
+
+    assert updated.status == "failed"
+    assert updated.error is not None
+    assert "do not introduce a new runtime for this repo" in updated.error.message.lower()
+
+
+@pytest.mark.anyio
 async def test_chat_assign_tester_step_uses_internal_execution_even_when_step_kind_is_mislabeled(tmp_path, monkeypatch):
     import asyncio
 
@@ -4591,21 +4684,27 @@ async def test_chat_assign_test_execution_runs_mixed_node_and_dotnet_tests(tmp_p
     assert "test_execution_dotnet" in labels
 
 
-def test_assignment_execution_language_prefers_generated_python_tests_over_repo_dotnet_markers(tmp_path):
-    from control_plane.task_manager.task_manager import _assignment_execution_language
+def test_assignment_execution_language_inherits_repo_runtime_over_generated_python_tests(tmp_path):
+    from control_plane.task_manager.task_manager import _assignment_execution_language, _assignment_execution_languages
 
     root = tmp_path / "repo"
     root.mkdir(parents=True, exist_ok=True)
     (root / "GlobeIQ.sln").write_text("Microsoft Visual Studio Solution File\n", encoding="utf-8")
     (root / "GlobeIQ.Tests.csproj").write_text("<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n", encoding="utf-8")
 
+    languages = _assignment_execution_languages(
+        applied_paths=["src/lessons/geometry.py", "tests/test_geometry.py"],
+        test_files=["tests/test_geometry.py"],
+        root=root,
+    )
     language = _assignment_execution_language(
         applied_paths=["src/lessons/geometry.py", "tests/test_geometry.py"],
         test_files=["tests/test_geometry.py"],
         root=root,
     )
 
-    assert language == "python"
+    assert languages == []
+    assert language == "dotnet"
 
 
 def test_assignment_execution_languages_support_mixed_node_and_dotnet(tmp_path):

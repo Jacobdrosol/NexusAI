@@ -840,30 +840,44 @@ def _assignment_python_coverage_target(paths: List[str]) -> Optional[str]:
     return candidates[0]
 
 
-def _assignment_execution_language(*, applied_paths: List[str], test_files: List[str], root: Path) -> str:
-    prioritized = [str(path or "").strip().lower() for path in (test_files + applied_paths) if str(path or "").strip()]
-    if any(path.endswith(".py") for path in prioritized):
-        return "python"
-    if any(path.endswith((".ts", ".tsx", ".js", ".jsx")) for path in prioritized):
-        return "node"
-    if any(path.endswith(".cs") for path in prioritized):
-        return "dotnet"
-    if any(path.endswith(".go") for path in prioritized):
-        return "go"
-    if any(path.endswith(".rs") for path in prioritized):
-        return "rust"
-    if any(path.endswith((".cpp", ".cc", ".cxx", ".hpp", ".h")) for path in prioritized):
-        return "cpp"
+def _assignment_repo_runtime_languages(root: Path) -> List[str]:
+    detected: List[str] = []
+    if (root / "requirements.txt").exists() or (root / "pyproject.toml").exists() or (root / "setup.py").exists():
+        detected.append("python")
     if (root / "package.json").exists():
-        return "node"
-    if any(root.glob("*.sln")) or any(root.rglob("*.csproj")):
-        return "dotnet"
+        detected.append("node")
+    try:
+        if any(root.glob("*.sln")) or any(root.rglob("*.csproj")) or any(root.rglob("*.fsproj")) or any(root.rglob("*.vbproj")):
+            detected.append("dotnet")
+    except Exception:
+        pass
     if (root / "go.mod").exists():
-        return "go"
+        detected.append("go")
     if (root / "Cargo.toml").exists():
-        return "rust"
-    if (root / "CMakeLists.txt").exists() or (root / "Makefile").exists() or any(root.rglob("*.vcxproj")):
-        return "cpp"
+        detected.append("rust")
+    try:
+        if (root / "CMakeLists.txt").exists() or (root / "Makefile").exists() or any(root.rglob("*.vcxproj")):
+            detected.append("cpp")
+    except Exception:
+        if (root / "CMakeLists.txt").exists() or (root / "Makefile").exists():
+            detected.append("cpp")
+    return detected
+
+
+def _filter_assignment_languages_to_repo_runtime(languages: List[str], root: Path) -> List[str]:
+    repo_languages = _assignment_repo_runtime_languages(root)
+    if not repo_languages:
+        return languages
+    return [language for language in languages if language in repo_languages]
+
+
+def _assignment_execution_language(*, applied_paths: List[str], test_files: List[str], root: Path) -> str:
+    languages = _assignment_execution_languages(applied_paths=applied_paths, test_files=test_files, root=root)
+    if languages:
+        return languages[0]
+    repo_languages = _assignment_repo_runtime_languages(root)
+    if repo_languages:
+        return repo_languages[0]
     return "python"
 
 
@@ -883,8 +897,11 @@ def _assignment_execution_languages(*, applied_paths: List[str], test_files: Lis
     if any(path.endswith((".cpp", ".cc", ".cxx", ".hpp", ".h")) for path in prioritized):
         languages.append("cpp")
     if languages:
-        return languages
-    return [_assignment_execution_language(applied_paths=applied_paths, test_files=test_files, root=root)]
+        return _filter_assignment_languages_to_repo_runtime(languages, root=root)
+    repo_languages = _assignment_repo_runtime_languages(root)
+    if repo_languages:
+        return repo_languages
+    return ["python"]
 
 
 def _assignment_node_test_command(root: Path) -> List[str]:
@@ -2476,6 +2493,10 @@ class TaskManager:
             test_files=test_files,
             root=root,
         )
+        if not languages:
+            raise _TaskExecutionFailure(
+                "generated test files do not match the repo runtime profile; do not introduce a new runtime for this repo"
+            )
         artifacts: List[Dict[str, Any]] = []
         missing_reports: List[str] = []
         executed_any_tests = False
@@ -2526,7 +2547,9 @@ class TaskManager:
         if "python" in languages:
             await _run_bootstrap_languages(["python"])
 
-            venv_python = root / ".nexusai_venv" / ("Scripts" if os.name == "nt" else "bin") / ("python.exe" if os.name == "nt" else "python")
+            from control_plane.api.projects import _python_runtime_venv_dir
+
+            venv_python = _python_runtime_venv_dir(root) / ("Scripts" if os.name == "nt" else "bin") / ("python.exe" if os.name == "nt" else "python")
             python_cmd = [str(venv_python)] if venv_python.exists() else ["py"]
             test_cmd = [*python_cmd, "-m", "pytest", *test_files, "-q"]
             coverage_path = next((path for path in report_paths if path.lower().endswith(".xml")), None)

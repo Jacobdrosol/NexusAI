@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import ast
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
@@ -935,6 +936,13 @@ def _python_venv_executable(venv_dir: Path) -> Path:
     return venv_dir / "bin" / "python"
 
 
+def _python_runtime_venv_dir(workspace: Path) -> Path:
+    base = str(os.environ.get("NEXUSAI_REPO_RUNTIME_PYTHON_ROOT", "") or "").strip()
+    root = Path(base) if base else Path(tempfile.gettempdir()) / "nexusai_repo_runtime" / "python"
+    workspace_key = hashlib.sha256(str(workspace.resolve(strict=False)).encode("utf-8")).hexdigest()[:16]
+    return root / workspace_key
+
+
 def _bootstrap_command_specs(workspace: Path, languages: List[str]) -> List[Dict[str, Any]]:
     specs: List[Dict[str, Any]] = []
     wanted = [str(lang or "").strip().lower() for lang in languages if str(lang or "").strip()]
@@ -942,7 +950,7 @@ def _bootstrap_command_specs(workspace: Path, languages: List[str]) -> List[Dict
         wanted = _detect_bootstrap_languages(workspace)
 
     if "python" in wanted:
-        venv_dir = workspace / ".nexusai_venv"
+        venv_dir = _python_runtime_venv_dir(workspace)
         py_bin = _python_venv_executable(venv_dir)
         python_launcher = str(Path(sys.executable))
         specs.append({

@@ -182,6 +182,8 @@ Repository workspace runtime notes:
   - `NEXUSAI_REPO_RUNTIME_TOOLCHAINS=node,dotnet,go,rust,cpp`
   - `NEXUSAI_REPO_RUNTIME_DOTNET_CHANNEL=8.0`
 - After changing those values, rebuild the stack with `docker compose up --build`.
+- Python test environments created by PM assignment runs are now stored outside the repository workspace, so NexusAI does not leave `.venv`-style directories as untracked repo files.
+- Assignment execution now inherits runtime choices from the repo's declared stack markers. It will not introduce a new runtime for a repo just because a bot emitted files in a different language.
 - The runtime must have the toolchains you expect to use installed there. Current built-in assignment execution supports:
   - Python: `venv`, `pip`, `pytest`
   - Node/JavaScript/TypeScript: `npm`, `pnpm`, or `yarn`
