@@ -1219,6 +1219,10 @@ class PMOrchestrator:
                 "Choose languages, frameworks, and file extensions to match the repo context and nearby existing files. "
                 "Do not default to Python when the repo points to Razor, C#, TypeScript, C++, or another established stack."
             )
+            lines.append(
+                "The repo profile is authoritative. Do not let spec assumptions or requested examples introduce a new runtime "
+                "that the repo does not already declare. Runtime-mismatched repo files will fail validation."
+            )
         if any(item.lower().endswith(".mermaid.md") for item in deliverables):
             lines.append(
                 "For diagram deliverables, return Mermaid or markdown diagram source as text. Do not attempt to return binary image data."

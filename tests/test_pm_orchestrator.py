@@ -326,6 +326,7 @@ def test_build_step_instruction_requires_deliverable_file_format() -> None:
 
     assert "Deliverables: docs/lesson_blocks_design.md" in instruction
     assert "Deliverable: path" in instruction
+    assert "The repo profile is authoritative" in instruction
     assert "Never invent placeholders" in instruction
 
 
