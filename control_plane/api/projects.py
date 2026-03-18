@@ -750,10 +750,19 @@ def _discard_untracked_workspace_paths(
         )
 
     removed: List[str] = []
+    root_resolved = root.resolve(strict=False)
     for relative_path in selected:
-        target = (root / relative_path).resolve(strict=False)
-        if not is_within_workspace(root, target):
+        target = root / relative_path
+        target_absolute = Path(os.path.abspath(str(target)))
+        try:
+            target_absolute.relative_to(root_resolved)
+        except Exception:
             raise HTTPException(status_code=400, detail=f"refusing to delete outside workspace: {relative_path}")
+        if target.is_symlink():
+            target.unlink()
+            removed.append(relative_path)
+            _prune_empty_parent_dirs(start=target.parent, root=root)
+            continue
         if target.is_dir():
             shutil.rmtree(target)
             removed.append(relative_path)

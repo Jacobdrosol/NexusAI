@@ -1137,6 +1137,65 @@ async def test_project_repo_workspace_discard_untracked_decodes_quoted_git_paths
 
 
 @pytest.mark.anyio
+async def test_project_repo_workspace_discard_untracked_removes_symlink_path(cp_client, tmp_path, monkeypatch):
+    await cp_client.post(
+        "/v1/projects",
+        json={"id": "p-repo-discard-symlink", "name": "Repo Discard Symlink", "mode": "isolated"},
+    )
+    root = tmp_path / "repo-discard-symlink"
+    venv_dir = root / ".nexusai_venv"
+    venv_dir.mkdir(parents=True, exist_ok=True)
+    external = tmp_path / "external-lib"
+    external.mkdir(parents=True, exist_ok=True)
+    symlink_path = venv_dir / "lib64"
+    try:
+        symlink_path.symlink_to(external, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks are not available in this test environment")
+
+    update = await cp_client.put(
+        "/v1/projects/p-repo-discard-symlink/repo/workspace",
+        json={
+            "enabled": True,
+            "managed_path_mode": False,
+            "root_path": str(root),
+        },
+    )
+    assert update.status_code == 200
+
+    calls = {"count": 0}
+
+    async def _fake_snapshot(*, root, cfg):
+        calls["count"] += 1
+        return {
+            "enabled": True,
+            "managed_path_mode": False,
+            "workspace_binding": "custom",
+            "root_path": None,
+            "clone_url": None,
+            "default_branch": "main",
+            "allow_push": False,
+            "allow_command_execution": False,
+            "workspace_exists": True,
+            "is_repo": True,
+            "branch": "main",
+            "clean": calls["count"] > 1,
+            "porcelain": [] if calls["count"] > 1 else ["## main", "?? .nexusai_venv/lib64"],
+            "remotes": [],
+            "last_commit": {},
+        }
+
+    monkeypatch.setattr("control_plane.api.projects._repo_status_snapshot", _fake_snapshot)
+
+    resp = await cp_client.post("/v1/projects/p-repo-discard-symlink/repo/workspace/discard-untracked", json={})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["removed_paths"] == [".nexusai_venv/lib64"]
+    assert symlink_path.exists() is False
+    assert external.exists() is True
+
+
+@pytest.mark.anyio
 async def test_project_repo_workspace_run_command_creates_missing_managed_workspace(cp_client, tmp_path, monkeypatch):
     await cp_client.post(
         "/v1/projects",
