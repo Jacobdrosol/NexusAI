@@ -4042,6 +4042,109 @@ async def test_chat_assign_tester_step_uses_internal_execution_even_when_step_ki
 
 
 @pytest.mark.anyio
+async def test_chat_assign_repo_change_for_test_file_generation_does_not_use_internal_execution(tmp_path, monkeypatch):
+    import asyncio
+
+    from control_plane.api import projects as projects_module
+    from control_plane.task_manager import task_manager as task_manager_module
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Project, TaskMetadata
+
+    class StubProjectRegistry:
+        async def get(self, project_id):
+            return Project(
+                id=project_id,
+                name="Proj",
+                settings_overrides={
+                    "repo_workspace": {
+                        "enabled": True,
+                        "managed_path_mode": False,
+                        "root_path": str(tmp_path / "repo"),
+                        "allow_command_execution": True,
+                    }
+                },
+            )
+
+    class StubScheduler:
+        def __init__(self):
+            self.project_registry = StubProjectRegistry()
+
+        async def schedule(self, task):
+            return {
+                "output": (
+                    "Deliverable: tests/lesson_blocks/math_geometry_tests.cs\n"
+                    "```csharp\n"
+                    "using Xunit;\n"
+                    "\n"
+                    "public class MathGeometryTests\n"
+                    "{\n"
+                    "    [Fact]\n"
+                    "    public void Placeholder()\n"
+                    "    {\n"
+                    "        Assert.True(true);\n"
+                    "    }\n"
+                    "}\n"
+                    "```\n"
+                )
+            }
+
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(
+        task_manager_module,
+        "_settings_int",
+        lambda name, default: 0 if name == "max_task_retries" else default,
+    )
+    monkeypatch.setattr(projects_module, "_extract_project_repo_workspace", lambda project: project.settings_overrides["repo_workspace"])
+    monkeypatch.setattr(projects_module, "_resolve_repo_workspace_root", lambda project_id, cfg, require_enabled=True: repo_root)
+
+    async def _snapshot(*, root, cfg):
+        return {"is_repo": True, "branch": "main", "clean": False, "porcelain": [" M src/ui/components/MathGeometryBlock.razor"]}
+
+    monkeypatch.setattr(projects_module, "_repo_status_snapshot", _snapshot)
+    monkeypatch.setattr(
+        projects_module,
+        "_assignment_file_candidates",
+        lambda tasks: [
+            {"path": "src/ui/components/MathGeometryBlock.razor", "content": "<div>existing block</div>\n"},
+        ],
+    )
+    monkeypatch.setattr(
+        projects_module,
+        "_write_assignment_files",
+        lambda *, root, candidates, overwrite: [{"path": item["path"], "status": "created"} for item in candidates],
+    )
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "chat-assign-create-test-files.db"))
+    task = await tm.create_task(
+        bot_id="pm-coder",
+        payload={
+            "instruction": "create test files for math geometry blocks",
+            "role_hint": "coder",
+            "step_kind": "repo_change",
+            "deliverables": ["tests/lesson_blocks/math_geometry_tests.cs"],
+            "evidence_requirements": ["Proposed repo file artifacts"],
+        },
+        metadata=TaskMetadata(
+            source="chat_assign",
+            project_id="proj-1",
+            orchestration_id="orch-1",
+        ),
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.1)
+
+    assert updated.status == "completed"
+    assert updated.result is not None
+    assert "tests/lesson_blocks/math_geometry_tests.cs" in str(updated.result)
+
+
+@pytest.mark.anyio
 async def test_chat_assign_test_execution_detects_and_runs_generated_dotnet_tests(tmp_path, monkeypatch):
     import asyncio
 

@@ -710,7 +710,14 @@ def _is_probable_test_file(value: str) -> bool:
 
 
 def _looks_like_assignment_test_execution_payload(payload: Dict[str, Any]) -> bool:
+    explicit_step_kind = _normalize_assignment_step_kind(payload.get("step_kind"))
+    if explicit_step_kind == "test_execution":
+        return True
+    if explicit_step_kind == "repo_change":
+        return False
     step_kind = _assignment_step_kind(payload)
+    if step_kind == "repo_change":
+        return False
     if step_kind == "test_execution":
         return True
     role_hint = str(payload.get("role_hint") or "").strip().lower()
