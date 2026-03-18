@@ -103,6 +103,7 @@ class PMOrchestrator:
                         step_kind=step_kind,
                         deliverables=deliverables,
                         evidence_requirements=evidence_requirements,
+                        context_items=context_items,
                     ),
                     "role_hint": role_hint or "assistant",
                     "step_kind": step_kind,
@@ -120,6 +121,7 @@ class PMOrchestrator:
                     "project_id": project_id,
                     "conversation_id": conversation_id,
                     "orchestration_id": orchestration_id,
+                    "context_items": context_items,
                 },
                 metadata=TaskMetadata(
                     source="chat_assign",
@@ -1203,8 +1205,18 @@ class PMOrchestrator:
         step_kind: str,
         deliverables: List[str],
         evidence_requirements: List[str],
+        context_items: Optional[List[str]] = None,
     ) -> str:
         lines = [str(base_instruction or "").strip()]
+        
+        # Inject context items (repo profile, vault items, etc.) at the top
+        if context_items:
+            context_blob = "\n".join(str(item) for item in context_items if item).strip()
+            if context_blob:
+                lines.insert(0, "")
+                lines.insert(0, context_blob)
+                lines.insert(0, "Context:")
+        
         if deliverables:
             lines.append("Deliverables: " + "; ".join(deliverables))
         if evidence_requirements:
