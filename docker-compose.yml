@@ -10,6 +10,9 @@ services:
     build:
       context: .
       dockerfile: control_plane/Dockerfile
+      args:
+        NEXUSAI_REPO_RUNTIME_TOOLCHAINS: ${NEXUSAI_REPO_RUNTIME_TOOLCHAINS:-node,dotnet,go,rust,cpp}
+        NEXUSAI_REPO_RUNTIME_DOTNET_CHANNEL: ${NEXUSAI_REPO_RUNTIME_DOTNET_CHANNEL:-8.0}
     ports:
       - "8000:8000"
     env_file: .env

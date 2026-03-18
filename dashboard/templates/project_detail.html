@@ -231,7 +231,7 @@
       <hr style="margin:0.8rem 0;">
       <div><strong>Command Runner</strong></div>
       <div class="mini-note" style="margin:0.35rem 0;">
-        Use JSON array format. Example: <code>["py","-m","pytest","-q"]</code>
+        Commands run inside the configured repo workspace runtime for this project. Use JSON array format. Example: <code>["py","-m","pytest","-q"]</code>
       </div>
       <div class="form-group">
         <label>Command (JSON array)</label>
@@ -253,7 +253,7 @@
       </label>
       <div class="form-group">
         <label>Bootstrap Languages (comma-separated, optional)</label>
-        <input class="form-control" id="repo-command-bootstrap-languages" placeholder="python,node,dotnet,cpp">
+        <input class="form-control" id="repo-command-bootstrap-languages" placeholder="python,node,dotnet,go,rust,cpp">
       </div>
       <label style="display:block; margin-bottom:0.55rem;">
         <input type="checkbox" id="repo-command-keep-temp-workspace"> Keep temporary workspace after run

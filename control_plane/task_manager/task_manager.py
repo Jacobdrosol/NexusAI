@@ -740,7 +740,7 @@ def _assignment_test_report_paths(payload: Dict[str, Any]) -> List[str]:
     paths: List[str] = []
     for item in _assignment_expected_repo_files(payload):
         normalized = str(item or "").strip().replace("\\", "/")
-        if normalized.lower().endswith((".xml", ".json", ".txt", ".html", ".log")):
+        if normalized.lower().endswith((".xml", ".json", ".txt", ".html", ".log", ".out", ".cov")):
             paths.append(normalized)
     return paths
 
@@ -754,12 +754,13 @@ def _assignment_test_source_files(paths: List[str]) -> List[str]:
         lowered = normalized.lower()
         if any(
             lowered.endswith(ext)
-            for ext in (".py", ".js", ".jsx", ".ts", ".tsx", ".cs")
+            for ext in (".py", ".js", ".jsx", ".ts", ".tsx", ".cs", ".go", ".rs", ".cpp", ".cc", ".cxx")
         ) and (
             "/test" in lowered
             or lowered.startswith("test")
             or lowered.startswith("tests/")
             or lowered.endswith("_test.py")
+            or lowered.endswith("_test.go")
             or lowered.endswith(".test.ts")
             or lowered.endswith(".test.tsx")
             or lowered.endswith(".spec.ts")
@@ -767,6 +768,10 @@ def _assignment_test_source_files(paths: List[str]) -> List[str]:
             or lowered.endswith(".test.js")
             or lowered.endswith(".spec.js")
             or lowered.endswith("tests.cs")
+            or lowered.endswith("tests.rs")
+            or lowered.endswith("test.cpp")
+            or lowered.endswith("test.cc")
+            or lowered.endswith("test.cxx")
         ):
             seen.setdefault(normalized, None)
     return list(seen.keys())
@@ -804,10 +809,22 @@ def _assignment_execution_language(*, applied_paths: List[str], test_files: List
         return "node"
     if any(path.endswith(".cs") for path in prioritized):
         return "dotnet"
+    if any(path.endswith(".go") for path in prioritized):
+        return "go"
+    if any(path.endswith(".rs") for path in prioritized):
+        return "rust"
+    if any(path.endswith((".cpp", ".cc", ".cxx", ".hpp", ".h")) for path in prioritized):
+        return "cpp"
     if (root / "package.json").exists():
         return "node"
     if any(root.glob("*.sln")) or any(root.rglob("*.csproj")):
         return "dotnet"
+    if (root / "go.mod").exists():
+        return "go"
+    if (root / "Cargo.toml").exists():
+        return "rust"
+    if (root / "CMakeLists.txt").exists() or (root / "Makefile").exists() or any(root.rglob("*.vcxproj")):
+        return "cpp"
     return "python"
 
 
@@ -820,9 +837,48 @@ def _assignment_execution_languages(*, applied_paths: List[str], test_files: Lis
         languages.append("node")
     if any(path.endswith(".cs") for path in prioritized):
         languages.append("dotnet")
+    if any(path.endswith(".go") for path in prioritized):
+        languages.append("go")
+    if any(path.endswith(".rs") for path in prioritized):
+        languages.append("rust")
+    if any(path.endswith((".cpp", ".cc", ".cxx", ".hpp", ".h")) for path in prioritized):
+        languages.append("cpp")
     if languages:
         return languages
     return [_assignment_execution_language(applied_paths=applied_paths, test_files=test_files, root=root)]
+
+
+def _assignment_node_test_command(root: Path) -> List[str]:
+    if (root / "pnpm-lock.yaml").exists():
+        return ["pnpm", "test", "--", "--runInBand", "--coverage"]
+    if (root / "yarn.lock").exists():
+        return ["yarn", "test", "--runInBand", "--coverage"]
+    return ["npm", "test", "--", "--runInBand", "--coverage"]
+
+
+def _assignment_cpp_test_command(root: Path) -> List[str]:
+    if (root / "CMakeLists.txt").exists():
+        return ["ctest", "--test-dir", "build", "--output-on-failure"]
+    if (root / "Makefile").exists():
+        return ["make", "test"]
+    return ["ctest", "--output-on-failure"]
+
+
+def _missing_assignment_runtime_tools(command_results: List[Dict[str, Any]]) -> List[str]:
+    tools: List[str] = []
+    for item in command_results:
+        error = str(item.get("error") or "").strip().lower()
+        if not error.startswith("command not found"):
+            continue
+        command = [str(part) for part in (item.get("command") or []) if str(part).strip()]
+        tool = ""
+        if command:
+            tool = Path(command[0]).stem.strip().lower()
+        if not tool and ":" in error:
+            tool = error.split(":", 1)[1].strip().lower()
+        if tool and tool not in tools:
+            tools.append(tool)
+    return tools
 
 
 def _find_repo_paths_in_text(text: str) -> List[str]:
@@ -933,6 +989,8 @@ def _requires_link_evidence(payload: Dict[str, Any]) -> bool:
     evidence = " ".join(_normalize_string_list(payload.get("evidence_requirements"))).lower()
     deliverables = " ".join(_normalize_string_list(payload.get("deliverables"))).lower()
     if "only include live non-placeholder links if they actually exist" in evidence:
+        return False
+    if "only include non-placeholder commit or pull request evidence if it actually exists" in evidence:
         return False
     if step_kind in {"specification", "planning"} and any(
         token in deliverables for token in ("issue definitions", "milestone definition", "project board proposal")
@@ -2382,19 +2440,31 @@ class TaskManager:
         artifacts: List[Dict[str, Any]] = []
         missing_reports: List[str] = []
         executed_any_tests = False
+        executed_bootstrap_labels: Set[str] = set()
+        allowed_commands = _allowed_workspace_commands()
 
-        if "python" in languages:
-            for spec in _bootstrap_command_specs(root, ["python"]):
+        async def _run_bootstrap_languages(spec_languages: List[str]) -> None:
+            for spec in _bootstrap_command_specs(root, spec_languages):
+                label = str(spec.get("label") or "bootstrap")
+                if label in executed_bootstrap_labels:
+                    continue
+                bootstrap_cmd = [str(part) for part in spec.get("command") or []]
+                if not bootstrap_cmd:
+                    continue
+                executable = Path(str(bootstrap_cmd[0])).name.lower()
+                executable_stem = Path(str(bootstrap_cmd[0])).stem.lower()
+                if executable not in allowed_commands and executable_stem not in allowed_commands:
+                    continue
                 step_result = await _run_repo_command(
-                    [str(part) for part in spec.get("command") or []],
+                    bootstrap_cmd,
                     cwd=root,
                     timeout_seconds=int(spec.get("timeout_seconds") or 1200),
                 )
                 usage_parts.append(step_result.get("resource_usage") or {})
                 command_results.append(
                     {
-                        "label": str(spec.get("label") or "bootstrap"),
-                        "command": step_result.get("command") or spec.get("command") or [],
+                        "label": label,
+                        "command": step_result.get("command") or bootstrap_cmd,
                         "exit_code": step_result.get("exit_code"),
                         "ok": bool(step_result.get("ok")),
                         "stdout": str(step_result.get("stdout") or ""),
@@ -2402,6 +2472,7 @@ class TaskManager:
                         "error": str(step_result.get("error") or ""),
                     }
                 )
+                executed_bootstrap_labels.add(label)
                 if not step_result.get("ok"):
                     result = self._format_assignment_test_execution_result(
                         task=task,
@@ -2412,6 +2483,9 @@ class TaskManager:
                         usage=_aggregate_usage(usage_parts),
                     )
                     raise _TaskExecutionFailure("assignment test bootstrap failed", result=result)
+
+        if "python" in languages:
+            await _run_bootstrap_languages(["python"])
 
             venv_python = root / ".nexusai_venv" / ("Scripts" if os.name == "nt" else "bin") / ("python.exe" if os.name == "nt" else "python")
             python_cmd = [str(venv_python)] if venv_python.exists() else ["py"]
@@ -2437,40 +2511,8 @@ class TaskManager:
             )
             executed_any_tests = True
         if "node" in languages:
-            allowed = _allowed_workspace_commands()
-            for spec in _bootstrap_command_specs(root, ["node"]):
-                bootstrap_cmd = [str(part) for part in spec.get("command") or []]
-                executable = Path(str(bootstrap_cmd[0])).name.lower()
-                if executable not in allowed:
-                    continue
-                step_result = await _run_repo_command(
-                    bootstrap_cmd,
-                    cwd=root,
-                    timeout_seconds=int(spec.get("timeout_seconds") or 1200),
-                )
-                usage_parts.append(step_result.get("resource_usage") or {})
-                command_results.append(
-                    {
-                        "label": str(spec.get("label") or "bootstrap"),
-                        "command": step_result.get("command") or bootstrap_cmd,
-                        "exit_code": step_result.get("exit_code"),
-                        "ok": bool(step_result.get("ok")),
-                        "stdout": str(step_result.get("stdout") or ""),
-                        "stderr": str(step_result.get("stderr") or ""),
-                        "error": str(step_result.get("error") or ""),
-                    }
-                )
-                if not step_result.get("ok"):
-                    result = self._format_assignment_test_execution_result(
-                        task=task,
-                        applied_files=applied_files,
-                        command_results=command_results,
-                        artifacts=[],
-                        workspace=await _repo_status_snapshot(root=root, cfg=cfg),
-                        usage=_aggregate_usage(usage_parts),
-                    )
-                    raise _TaskExecutionFailure("assignment test bootstrap failed", result=result)
-            test_cmd = ["npm", "test", "--", "--runInBand", "--coverage"]
+            await _run_bootstrap_languages(["node"])
+            test_cmd = _assignment_node_test_command(root)
             test_result = await _run_repo_command(test_cmd, cwd=root, timeout_seconds=1800)
             usage_parts.append(test_result.get("resource_usage") or {})
             command_results.append(
@@ -2486,6 +2528,7 @@ class TaskManager:
             )
             executed_any_tests = True
         if "dotnet" in languages:
+            await _run_bootstrap_languages(["dotnet"])
             results_dir = root / ".nexusai_test_results"
             test_cmd = ["dotnet", "test", "--nologo", "--verbosity", "minimal"]
             coverage_path = next((path for path in report_paths if path.lower().endswith(".xml")), None)
@@ -2504,6 +2547,66 @@ class TaskManager:
             command_results.append(
                 {
                     "label": "test_execution_dotnet",
+                    "command": test_result.get("command") or test_cmd,
+                    "exit_code": test_result.get("exit_code"),
+                    "ok": bool(test_result.get("ok")),
+                    "stdout": str(test_result.get("stdout") or ""),
+                    "stderr": str(test_result.get("stderr") or ""),
+                    "error": str(test_result.get("error") or ""),
+                }
+            )
+            executed_any_tests = True
+        if "go" in languages:
+            await _run_bootstrap_languages(["go"])
+            test_cmd = ["go", "test", "./...", "-count=1"]
+            coverage_path = next(
+                (
+                    path for path in report_paths
+                    if path.lower().endswith((".out", ".txt", ".cov"))
+                ),
+                None,
+            )
+            if coverage_path:
+                test_cmd.append(f"-coverprofile={coverage_path}")
+            test_result = await _run_repo_command(test_cmd, cwd=root, timeout_seconds=1800)
+            usage_parts.append(test_result.get("resource_usage") or {})
+            command_results.append(
+                {
+                    "label": "test_execution_go",
+                    "command": test_result.get("command") or test_cmd,
+                    "exit_code": test_result.get("exit_code"),
+                    "ok": bool(test_result.get("ok")),
+                    "stdout": str(test_result.get("stdout") or ""),
+                    "stderr": str(test_result.get("stderr") or ""),
+                    "error": str(test_result.get("error") or ""),
+                }
+            )
+            executed_any_tests = True
+        if "rust" in languages:
+            await _run_bootstrap_languages(["rust"])
+            test_cmd = ["cargo", "test", "--all-targets"]
+            test_result = await _run_repo_command(test_cmd, cwd=root, timeout_seconds=1800)
+            usage_parts.append(test_result.get("resource_usage") or {})
+            command_results.append(
+                {
+                    "label": "test_execution_rust",
+                    "command": test_result.get("command") or test_cmd,
+                    "exit_code": test_result.get("exit_code"),
+                    "ok": bool(test_result.get("ok")),
+                    "stdout": str(test_result.get("stdout") or ""),
+                    "stderr": str(test_result.get("stderr") or ""),
+                    "error": str(test_result.get("error") or ""),
+                }
+            )
+            executed_any_tests = True
+        if "cpp" in languages:
+            await _run_bootstrap_languages(["cpp"])
+            test_cmd = _assignment_cpp_test_command(root)
+            test_result = await _run_repo_command(test_cmd, cwd=root, timeout_seconds=1800)
+            usage_parts.append(test_result.get("resource_usage") or {})
+            command_results.append(
+                {
+                    "label": "test_execution_cpp",
                     "command": test_result.get("command") or test_cmd,
                     "exit_code": test_result.get("exit_code"),
                     "ok": bool(test_result.get("ok")),
@@ -2540,6 +2643,12 @@ class TaskManager:
             workspace=workspace,
             usage=_aggregate_usage(usage_parts),
         )
+        missing_tools = _missing_assignment_runtime_tools(command_results)
+        if missing_tools:
+            raise _TaskExecutionFailure(
+                "repo workspace runtime is missing required tools: " + ", ".join(missing_tools),
+                result=result,
+            )
         if missing_reports:
             raise _TaskExecutionFailure(
                 "assignment test execution did not produce required report files: " + ", ".join(missing_reports),
@@ -2561,6 +2670,7 @@ class TaskManager:
     ) -> Dict[str, Any]:
         lines = ["## Executed Commands", ""]
         executed_commands: List[Dict[str, Any]] = []
+        missing_tools = _missing_assignment_runtime_tools(command_results)
         for item in command_results:
             command = [str(part) for part in (item.get("command") or [])]
             exit_code = item.get("exit_code")
@@ -2601,6 +2711,7 @@ class TaskManager:
             "report": "\n".join(lines).strip(),
             "executed_commands": executed_commands,
             "command_results": command_results,
+            "missing_tools": missing_tools,
             "artifacts": artifacts,
             "applied_files": applied_files,
             "workspace": workspace,

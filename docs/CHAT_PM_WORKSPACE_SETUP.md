@@ -10,6 +10,23 @@ This guide sets up a project so chat can use repository context, PM orchestratio
    - `http://<dashboard-host>:5000`
 3. You have a control-plane API token if your environment enforces API auth.
 4. The control plane host has write access to `NEXUSAI_REPO_WORKSPACE_ROOT` (or default `data/repo_workspaces`).
+5. The repo workspace runtime itself has the toolchains you expect PM/test execution to use. For example:
+   - Python: `python`/`py`, `pip`, `pytest`
+   - Node: `npm`, `pnpm`, or `yarn`
+   - .NET: `dotnet`
+   - Go: `go`
+   - Rust: `cargo`
+   - C/C++: `cmake`, `ctest`, or `make`
+
+Important:
+
+- Repository workspace commands run on the machine hosting the repo workspace runtime, such as your VM or container.
+- They do not run on the browser client machine opening the dashboard.
+- In the default Docker deployment, that runtime is the `control_plane` container.
+- Configure preinstalled toolchains through `.env` before build:
+  - `NEXUSAI_REPO_RUNTIME_TOOLCHAINS=node,dotnet,go,rust,cpp`
+  - `NEXUSAI_REPO_RUNTIME_DOTNET_CHANNEL=8.0`
+- Rebuild after changing those values: `docker compose up --build`
 
 ## 2. Configure Repository Workspace (Project Level)
 
@@ -28,6 +45,25 @@ Optional checks in the same panel:
 
 1. Run `git status --short`.
 2. Run language checks with `Run in temporary isolated workspace` enabled for clean execution.
+3. If a PM test step fails with `repo workspace runtime is missing required tools: ...`, install that toolchain on the repo workspace host and rerun.
+
+## 2.1 Built-In Language Support
+
+The repo workspace and PM assignment runner currently understand these stacks out of the box:
+
+| Stack | Repo/Profile Signals | Bootstrap Support | Assignment Test Command |
+|---|---|---|---|
+| Python | `requirements.txt`, `pyproject.toml`, `.py` | venv + `pip install` | `pytest` |
+| Node / JS / TS | `package.json`, `.js`, `.ts`, `.tsx` | `pnpm install`, `yarn install`, or `npm install/ci` | package-manager `test` with coverage |
+| .NET | `.sln`, `.csproj`, `.razor`, `.cs` | `dotnet restore` | `dotnet test` |
+| Go | `go.mod`, `.go` | `go mod download` | `go test ./...` |
+| Rust | `Cargo.toml`, `.rs` | `cargo fetch` | `cargo test --all-targets` |
+| C/C++ | `CMakeLists.txt`, `Makefile`, `.cpp`, `.cc`, `.cxx` | `cmake -S . -B build`, `cmake --build build` | `ctest --test-dir build` or `make test` |
+
+Coverage note:
+
+- Coverage artifact generation is built in for Python, Node, .NET, and Go assignment runs.
+- Rust and C/C++ assignment runs execute tests directly, but coverage artifacts still rely on repository-specific tooling if you need machine-readable coverage files.
 
 ## 3. Configure Chat Workspace Tools (Project Level)
 

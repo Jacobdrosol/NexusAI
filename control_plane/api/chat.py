@@ -665,6 +665,8 @@ def _scan_repo_profile(root: Path, *, max_files: int = 2000) -> Dict[str, Any]:
         or "poetry.lock" in lower_markers
         or ext_counts.get(".py", 0) > 0
     )
+    has_go = "go.mod" in lower_markers or ext_counts.get(".go", 0) > 0
+    has_rust = "cargo.toml" in lower_markers or ext_counts.get(".rs", 0) > 0
     has_cpp = "cmakelists.txt" in lower_markers or ext_counts.get(".cpp", 0) > 0 or ext_counts.get(".hpp", 0) > 0 or ext_counts.get(".h", 0) > 0
 
     stack_signals: List[str] = []
@@ -685,6 +687,12 @@ def _scan_repo_profile(root: Path, *, max_files: int = 2000) -> Dict[str, Any]:
     if has_python:
         stack_signals.append("Python")
         guidance.append("Only choose Python for modules that already live in Python or when the repo context clearly points there.")
+    if has_go:
+        stack_signals.append("Go")
+        guidance.append("Service or CLI work in Go repos should stay in the existing module and package layout.")
+    if has_rust:
+        stack_signals.append("Rust")
+        guidance.append("Rust changes should prefer the existing crate structure and Cargo-managed workflows.")
     if has_cpp:
         stack_signals.append("C/C++")
         guidance.append("Native or desktop/runtime components should stay in the existing C/C++ build system and file layout.")

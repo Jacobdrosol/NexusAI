@@ -171,7 +171,25 @@ GitHub integration:
   - repository clone/status/pull/commit/push operations from the dashboard
   - optional guarded command execution for test/build commands (`run`) with an allowlist policy
 - Repository workspace run history with per-run resource metrics (duration, CPU, peak memory, IO) and aggregate summaries for internal tracking.
-- Optional isolated temporary workspace runs for checks (`use_temp_workspace`) with dependency bootstrap helpers for Python, Node, .NET, and C++ projects.
+- Optional isolated temporary workspace runs for checks (`use_temp_workspace`) with dependency bootstrap helpers for Python, Node, .NET, Go, Rust, and C/C++ projects.
+
+Repository workspace runtime notes:
+
+- Repo workspace commands and PM-generated test runs execute in the configured workspace runtime for the project, typically your hosted VM/container, not in the operator's local browser session.
+- In the default Docker deployment, that runtime is the `control_plane` container.
+- The default `docker compose` build now preloads common repo-workspace toolchains into the `control_plane` image through `.env` build args:
+  - `NEXUSAI_REPO_RUNTIME_TOOLCHAINS=node,dotnet,go,rust,cpp`
+  - `NEXUSAI_REPO_RUNTIME_DOTNET_CHANNEL=8.0`
+- After changing those values, rebuild the stack with `docker compose up --build`.
+- The runtime must have the toolchains you expect to use installed there. Current built-in assignment execution supports:
+  - Python: `venv`, `pip`, `pytest`
+  - Node/JavaScript/TypeScript: `npm`, `pnpm`, or `yarn`
+  - .NET: `dotnet`
+  - Go: `go`
+  - Rust: `cargo`
+  - C/C++: `cmake`/`ctest` or `make test`
+- Built-in coverage artifact generation is strongest for Python, Node, .NET, and Go. Rust and C/C++ test execution are supported, but coverage file production still depends on repo-native tooling.
+- If a required tool is missing in that runtime, assignment test execution now fails with a direct blocker such as `repo workspace runtime is missing required tools: dotnet`.
 
 Security and ops:
 

@@ -3669,6 +3669,64 @@ async def test_chat_assign_repo_change_succeeds_when_commit_and_pr_evidence_are_
 
 
 @pytest.mark.anyio
+async def test_chat_assign_repo_change_succeeds_when_pr_url_deliverable_is_optional(tmp_path, monkeypatch):
+    import asyncio
+
+    from control_plane.task_manager import task_manager as task_manager_module
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import TaskMetadata
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {
+                "output": (
+                    "Deliverable: src/LessonBlocks/Geometry/PolygonBlock.cs\n"
+                    "```csharp\n"
+                    "public class PolygonBlock {}\n"
+                    "```\n"
+                )
+            }
+
+    monkeypatch.setattr(
+        task_manager_module,
+        "_settings_int",
+        lambda name, default: 0 if name == "max_task_retries" else default,
+    )
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "chat-assign-repo-optional-pr-url.db"))
+    task = await tm.create_task(
+        bot_id="bot1",
+        payload={
+            "instruction": "implement geometry lesson blocks",
+            "role_hint": "coder",
+            "step_kind": "repo_change",
+            "deliverables": [
+                "src/LessonBlocks/Geometry/PolygonBlock.cs",
+                "Pull request URL",
+            ],
+            "evidence_requirements": [
+                "Proposed repo file artifacts or patches for changed files",
+                "Only include non-placeholder commit or pull request evidence if it actually exists",
+            ],
+        },
+        metadata=TaskMetadata(
+            source="chat_assign",
+            project_id="proj-1",
+            orchestration_id="orch-1",
+        ),
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.1)
+
+    assert updated.status == "completed"
+    assert updated.result is not None
+
+
+@pytest.mark.anyio
 async def test_chat_assign_docs_repo_change_allows_internal_hyperlink_language(tmp_path, monkeypatch):
     import asyncio
 
@@ -4000,6 +4058,114 @@ async def test_chat_assign_test_execution_detects_and_runs_generated_dotnet_test
 
 
 @pytest.mark.anyio
+async def test_chat_assign_test_execution_reports_missing_dotnet_toolchain(tmp_path, monkeypatch):
+    import asyncio
+
+    from control_plane.api import projects as projects_module
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Project, TaskMetadata
+
+    class StubProjectRegistry:
+        async def get(self, project_id):
+            return Project(
+                id=project_id,
+                name="Proj",
+                settings_overrides={
+                    "repo_workspace": {
+                        "enabled": True,
+                        "managed_path_mode": False,
+                        "root_path": str(tmp_path / "repo"),
+                        "allow_command_execution": True,
+                    }
+                },
+            )
+
+    class StubScheduler:
+        def __init__(self):
+            self.project_registry = StubProjectRegistry()
+
+        async def schedule(self, task):
+            raise AssertionError("scheduler should not be used for internal test execution")
+
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(projects_module, "_extract_project_repo_workspace", lambda project: project.settings_overrides["repo_workspace"])
+    monkeypatch.setattr(projects_module, "_resolve_repo_workspace_root", lambda project_id, cfg, require_enabled=True: repo_root)
+
+    async def _snapshot(*, root, cfg):
+        return {"is_repo": True, "branch": "main", "clean": False, "porcelain": ["?? tests/GeometryLessonServiceTests.cs"]}
+
+    monkeypatch.setattr(projects_module, "_repo_status_snapshot", _snapshot)
+    monkeypatch.setattr(
+        projects_module,
+        "_assignment_file_candidates",
+        lambda tasks: [
+            {"path": "src/Services/GeometryLessonService.cs", "content": "public class GeometryLessonService {}\n"},
+            {"path": "tests/GeometryLessonServiceTests.cs", "content": "public class GeometryLessonServiceTests {}\n"},
+        ],
+    )
+
+    def _write_assignment_files(*, root, candidates, overwrite):
+        applied = []
+        for item in candidates:
+            target = root / item["path"]
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(item["content"], encoding="utf-8")
+            applied.append({"path": item["path"], "status": "created"})
+        return applied
+
+    monkeypatch.setattr(projects_module, "_write_assignment_files", _write_assignment_files)
+    monkeypatch.setattr(projects_module, "_bootstrap_command_specs", lambda root, languages: [])
+
+    async def _run_repo_command(args, *, cwd, timeout_seconds=None, env_overrides=None):
+        assert args[:2] == ["dotnet", "test"]
+        return {
+            "ok": False,
+            "command": args,
+            "exit_code": None,
+            "stdout": "",
+            "stderr": "",
+            "error": "command not found: dotnet",
+            "resource_usage": {},
+        }
+
+    monkeypatch.setattr(projects_module, "_run_repo_command", _run_repo_command)
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "chat-assign-test-execution-missing-dotnet.db"))
+    task = await tm.create_task(
+        bot_id="pm-tester",
+        payload={
+            "instruction": "run generated tests",
+            "role_hint": "tester",
+            "step_kind": "test_execution",
+            "deliverables": ["coverage report"],
+            "evidence_requirements": [
+                "Executed test command output",
+                "Pass/fail or coverage evidence from the test run",
+            ],
+        },
+        metadata=TaskMetadata(
+            source="chat_assign",
+            project_id="proj-1",
+            orchestration_id="orch-1",
+        ),
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.1)
+
+    assert updated.status == "failed"
+    assert updated.error is not None
+    assert "missing required tools: dotnet" in updated.error.message.lower()
+    assert updated.result is not None
+    assert updated.result.get("missing_tools") == ["dotnet"]
+
+
+@pytest.mark.anyio
 async def test_chat_assign_test_execution_runs_mixed_node_and_dotnet_tests(tmp_path, monkeypatch):
     import asyncio
 
@@ -4156,6 +4322,153 @@ def test_assignment_execution_languages_support_mixed_node_and_dotnet(tmp_path):
     )
 
     assert languages == ["node", "dotnet"]
+
+
+def test_assignment_execution_languages_support_go_rust_and_cpp(tmp_path):
+    from control_plane.task_manager.task_manager import _assignment_execution_languages
+
+    root = tmp_path / "repo"
+    root.mkdir(parents=True, exist_ok=True)
+
+    languages = _assignment_execution_languages(
+        applied_paths=[
+            "cmd/service/main.go",
+            "tests/example_test.go",
+            "crates/core/src/lib.rs",
+            "tests/integration_tests.rs",
+            "native/tests/geometry_test.cpp",
+        ],
+        test_files=[
+            "tests/example_test.go",
+            "tests/integration_tests.rs",
+            "native/tests/geometry_test.cpp",
+        ],
+        root=root,
+    )
+
+    assert languages == ["go", "rust", "cpp"]
+
+
+@pytest.mark.anyio
+async def test_chat_assign_test_execution_runs_generated_go_tests(tmp_path, monkeypatch):
+    import asyncio
+
+    from control_plane.api import projects as projects_module
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Project, TaskMetadata
+
+    class StubProjectRegistry:
+        async def get(self, project_id):
+            return Project(
+                id=project_id,
+                name="Proj",
+                settings_overrides={
+                    "repo_workspace": {
+                        "enabled": True,
+                        "managed_path_mode": False,
+                        "root_path": str(tmp_path / "repo"),
+                        "allow_command_execution": True,
+                    }
+                },
+            )
+
+    class StubScheduler:
+        def __init__(self):
+            self.project_registry = StubProjectRegistry()
+
+        async def schedule(self, task):
+            raise AssertionError("scheduler should not be used for internal test execution")
+
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    (repo_root / "go.mod").write_text("module example.com/demo\n", encoding="utf-8")
+
+    monkeypatch.setattr(projects_module, "_extract_project_repo_workspace", lambda project: project.settings_overrides["repo_workspace"])
+    monkeypatch.setattr(projects_module, "_resolve_repo_workspace_root", lambda project_id, cfg, require_enabled=True: repo_root)
+
+    async def _snapshot(*, root, cfg):
+        return {"is_repo": True, "branch": "main", "clean": False, "porcelain": ["?? tests/example_test.go"]}
+
+    monkeypatch.setattr(projects_module, "_repo_status_snapshot", _snapshot)
+    monkeypatch.setattr(
+        projects_module,
+        "_assignment_file_candidates",
+        lambda tasks: [
+            {"path": "internal/geometry/area.go", "content": "package geometry\n"},
+            {"path": "tests/example_test.go", "content": "package tests\n"},
+        ],
+    )
+
+    def _write_assignment_files(*, root, candidates, overwrite):
+        applied = []
+        for item in candidates:
+            target = root / item["path"]
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(item["content"], encoding="utf-8")
+            applied.append({"path": item["path"], "status": "created"})
+        return applied
+
+    monkeypatch.setattr(projects_module, "_write_assignment_files", _write_assignment_files)
+
+    async def _run_repo_command(args, *, cwd, timeout_seconds=None, env_overrides=None):
+        if args[:3] == ["go", "mod", "download"]:
+            return {
+                "ok": True,
+                "command": args,
+                "exit_code": 0,
+                "stdout": "",
+                "stderr": "",
+                "resource_usage": {},
+            }
+        if args[:3] == ["go", "test", "./..."]:
+            coverage_file = repo_root / "coverage" / "report.out"
+            coverage_file.parent.mkdir(parents=True, exist_ok=True)
+            coverage_file.write_text("mode: set\n", encoding="utf-8")
+            return {
+                "ok": True,
+                "command": args,
+                "exit_code": 0,
+                "stdout": "ok\texample.com/demo/tests\t0.123s\tcoverage: 81.0% of statements\n",
+                "stderr": "",
+                "resource_usage": {},
+            }
+        raise AssertionError(f"Unexpected command: {args}")
+
+    monkeypatch.setattr(projects_module, "_run_repo_command", _run_repo_command)
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "chat-assign-test-execution-go.db"))
+    task = await tm.create_task(
+        bot_id="pm-tester",
+        payload={
+            "instruction": "run generated tests",
+            "role_hint": "tester",
+            "step_kind": "test_execution",
+            "deliverables": ["coverage/report.out"],
+            "evidence_requirements": [
+                "Executed test command output",
+                "Pass/fail or coverage evidence from the test run",
+            ],
+        },
+        metadata=TaskMetadata(
+            source="chat_assign",
+            project_id="proj-1",
+            orchestration_id="orch-1",
+        ),
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.1)
+
+    assert updated.status == "completed"
+    executed = updated.result.get("executed_commands") or []
+    labels = [str(item.get("label") or "") for item in executed]
+    assert "go_mod_download" in labels
+    assert "test_execution_go" in labels
+    artifacts = updated.result.get("artifacts") or []
+    assert any(str(item.get("path") or "") == "coverage/report.out" for item in artifacts)
 
 
 @pytest.mark.anyio

@@ -770,7 +770,7 @@ def _allowed_workspace_commands() -> set[str]:
         os.environ.get("NEXUSAI_REPO_WORKSPACE_ALLOWED_COMMANDS", "")
         or (
             "py,python,pytest,uv,pip,pip3,npm,pnpm,yarn,node,npx,dotnet,go,cargo,make,ninja,cmake,"
-            "gcc,g++,clang,clang++,cl,msbuild,git"
+            "ctest,gcc,g++,clang,clang++,cl,msbuild,git"
         )
     )
     values = {part.strip().lower() for part in raw.split(",") if part.strip()}
@@ -901,6 +901,22 @@ def _detect_bootstrap_languages(workspace: Path) -> List[str]:
         has_dotnet = False
     if has_dotnet:
         detected.append("dotnet")
+    has_go = (workspace / "go.mod").exists()
+    if not has_go:
+        try:
+            has_go = any(workspace.rglob("*.go"))
+        except Exception:
+            has_go = False
+    if has_go:
+        detected.append("go")
+    has_rust = (workspace / "Cargo.toml").exists()
+    if not has_rust:
+        try:
+            has_rust = any(workspace.rglob("*.rs"))
+        except Exception:
+            has_rust = False
+    if has_rust:
+        detected.append("rust")
     has_cpp = (workspace / "CMakeLists.txt").exists() or (workspace / "Makefile").exists()
     if not has_cpp:
         try:
@@ -980,11 +996,30 @@ def _bootstrap_command_specs(workspace: Path, languages: List[str]) -> List[Dict
             "timeout_seconds": 1200,
         })
 
+    if "go" in wanted and (workspace / "go.mod").exists():
+        specs.append({
+            "label": "go_mod_download",
+            "command": ["go", "mod", "download"],
+            "timeout_seconds": 1200,
+        })
+
+    if "rust" in wanted and (workspace / "Cargo.toml").exists():
+        specs.append({
+            "label": "cargo_fetch",
+            "command": ["cargo", "fetch"],
+            "timeout_seconds": 1200,
+        })
+
     if "cpp" in wanted and (workspace / "CMakeLists.txt").exists():
         specs.append({
             "label": "cpp_cmake_configure",
             "command": ["cmake", "-S", ".", "-B", "build"],
             "timeout_seconds": 600,
+        })
+        specs.append({
+            "label": "cpp_cmake_build",
+            "command": ["cmake", "--build", "build"],
+            "timeout_seconds": 1200,
         })
     return specs
 

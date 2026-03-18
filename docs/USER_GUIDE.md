@@ -292,6 +292,30 @@ Rules:
 - filesystem snippets require project repository workspace to be enabled for that project
 - repo semantic search requires `repo_search` enabled at all three levels
 
+### 6.5 Repository Workspace Runtime and Toolchains
+
+Repository workspace actions and PM-generated assignment test runs execute in the configured repo workspace runtime for the project. In most self-hosted setups, that means the VM or container running NexusAI, not the operator's local laptop/browser session.
+
+For the default Docker deployment, the repo workspace runtime is the `control_plane` container. Preload common toolchains at image-build time with:
+
+- `NEXUSAI_REPO_RUNTIME_TOOLCHAINS=node,dotnet,go,rust,cpp`
+- `NEXUSAI_REPO_RUNTIME_DOTNET_CHANNEL=8.0`
+
+Then rebuild with `docker compose up --build`.
+
+Supported built-in assignment execution stacks:
+
+- Python via `pytest`
+- Node / JavaScript / TypeScript via `npm`, `pnpm`, or `yarn`
+- .NET via `dotnet test`
+- Go via `go test`
+- Rust via `cargo test`
+- C/C++ via `ctest` or `make test`
+
+Coverage artifact generation is built in for Python, Node, .NET, and Go. Rust and C/C++ test execution are supported, but coverage files still depend on repository-specific tooling.
+
+If that runtime does not have a required toolchain installed, the PM test step fails with an explicit blocker such as `repo workspace runtime is missing required tools: dotnet`.
+
 ## 7. GitHub Integration
 
 Per project you can:

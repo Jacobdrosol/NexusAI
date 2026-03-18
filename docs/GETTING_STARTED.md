@@ -41,6 +41,11 @@ Minimum recommended values for safe first run:
 - `NEXUSAI_CLOUD_CONTEXT_POLICY=block`
 - `NEXUS_WORKER_CLOUD_CONTEXT_POLICY=block`
 
+Recommended values for repo-workspace PM/test execution in the default Docker deployment:
+
+- `NEXUSAI_REPO_RUNTIME_TOOLCHAINS=node,dotnet,go,rust,cpp`
+- `NEXUSAI_REPO_RUNTIME_DOTNET_CHANNEL=8.0`
+
 Generate both secrets quickly:
 
 Linux/macOS:
@@ -64,6 +69,12 @@ python -c "import secrets; print('NEXUSAI_SECRET_KEY=' + secrets.token_urlsafe(6
 ```bash
 docker compose up --build
 ```
+
+Important for repo-workspace execution:
+
+- In the default Docker setup, repo-workspace commands and PM-generated test runs execute inside the `control_plane` container.
+- The `control_plane` image now installs repo-runtime toolchains at build time from `.env` using `NEXUSAI_REPO_RUNTIME_TOOLCHAINS`.
+- If you change those toolchain values later, rebuild the image with `docker compose up --build`.
 
 Persistent runtime state now lives in `./data` by default.
 That includes:
