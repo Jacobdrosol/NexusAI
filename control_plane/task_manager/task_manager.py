@@ -864,6 +864,24 @@ def _assignment_repo_runtime_languages(root: Path) -> List[str]:
     return detected
 
 
+def _generated_assignment_languages(paths: List[str]) -> List[str]:
+    languages: List[str] = []
+    prioritized = [str(path or "").strip().lower() for path in paths if str(path or "").strip()]
+    if any(path.endswith(".py") for path in prioritized):
+        languages.append("python")
+    if any(path.endswith((".ts", ".tsx", ".js", ".jsx")) for path in prioritized):
+        languages.append("node")
+    if any(path.endswith(".cs") for path in prioritized):
+        languages.append("dotnet")
+    if any(path.endswith(".go") for path in prioritized):
+        languages.append("go")
+    if any(path.endswith(".rs") for path in prioritized):
+        languages.append("rust")
+    if any(path.endswith((".cpp", ".cc", ".cxx", ".hpp", ".h")) for path in prioritized):
+        languages.append("cpp")
+    return languages
+
+
 def _filter_assignment_languages_to_repo_runtime(languages: List[str], root: Path) -> List[str]:
     repo_languages = _assignment_repo_runtime_languages(root)
     if not repo_languages:
@@ -935,6 +953,34 @@ def _missing_assignment_runtime_tools(command_results: List[Dict[str, Any]]) -> 
         if tool and tool not in tools:
             tools.append(tool)
     return tools
+
+
+def _generated_repo_runtime_mismatch_message(*, root: Path, result: Any) -> str:
+    candidates = extract_file_candidates(result)
+    paths = [
+        str(item.get("path") or "").strip().replace("\\", "/")
+        for item in candidates
+        if str(item.get("path") or "").strip()
+    ]
+    relevant_paths = [
+        path for path in paths
+        if not path.lower().startswith(("docs/", "issues/", "specification/"))
+    ]
+    generated_languages = _generated_assignment_languages(relevant_paths)
+    if not generated_languages:
+        return ""
+    repo_languages = _assignment_repo_runtime_languages(root)
+    if not repo_languages:
+        return ""
+    unexpected = [language for language in generated_languages if language not in repo_languages]
+    if not unexpected:
+        return ""
+    return (
+        "generated repo files introduce unsupported runtime(s) for this repo: "
+        + ", ".join(unexpected)
+        + ". repo runtime profile declares: "
+        + ", ".join(repo_languages)
+    )
 
 
 def _find_repo_paths_in_text(text: str) -> List[str]:
@@ -2286,6 +2332,28 @@ class TaskManager:
             validation_error = _assignment_validation_error(task, result)
             if validation_error:
                 raise ValueError(validation_error)
+            payload = task.payload if isinstance(task.payload, dict) else {}
+            if (
+                self._project_registry is not None
+                and _assignment_step_kind(payload) == "repo_change"
+                and task.metadata is not None
+                and str(task.metadata.source or "").strip().lower() in {"chat_assign", "auto_retry"}
+                and str(task.metadata.project_id or "").strip()
+            ):
+                try:
+                    from control_plane.api.projects import _extract_project_repo_workspace, _resolve_repo_workspace_root
+
+                    project = await self._project_registry.get(str(task.metadata.project_id or "").strip())
+                    cfg = _extract_project_repo_workspace(project)
+                    if bool(cfg.get("enabled", False)):
+                        root = _resolve_repo_workspace_root(str(task.metadata.project_id or "").strip(), cfg, require_enabled=True)
+                        runtime_mismatch = _generated_repo_runtime_mismatch_message(root=root, result=result)
+                        if runtime_mismatch:
+                            raise ValueError(runtime_mismatch)
+                except ValueError:
+                    raise
+                except Exception:
+                    pass
             await self.update_status(task_id, "completed", result=result)
         except asyncio.CancelledError:
             logger.info("Task %s cancelled", task_id)

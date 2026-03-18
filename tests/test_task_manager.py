@@ -4344,6 +4344,88 @@ async def test_chat_assign_repo_change_for_test_file_generation_does_not_use_int
 
 
 @pytest.mark.anyio
+async def test_chat_assign_repo_change_fails_early_when_generated_files_mismatch_repo_runtime(tmp_path, monkeypatch):
+    import asyncio
+
+    from control_plane.api import projects as projects_module
+    from control_plane.task_manager import task_manager as task_manager_module
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Project, TaskMetadata
+
+    class StubProjectRegistry:
+        async def get(self, project_id):
+            return Project(
+                id=project_id,
+                name="Proj",
+                settings_overrides={
+                    "repo_workspace": {
+                        "enabled": True,
+                        "managed_path_mode": False,
+                        "root_path": str(tmp_path / "repo"),
+                        "allow_command_execution": True,
+                    }
+                },
+            )
+
+    class StubScheduler:
+        def __init__(self):
+            self.project_registry = StubProjectRegistry()
+
+        async def schedule(self, task):
+            return {
+                "output": (
+                    "Deliverable: src/lessons/math_lesson.py\n"
+                    "```python\n"
+                    "class MathLessonBlock:\n"
+                    "    pass\n"
+                    "```\n"
+                )
+            }
+
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    (repo_root / "GlobeIQ.sln").write_text("Microsoft Visual Studio Solution File\n", encoding="utf-8")
+    (repo_root / "GlobeIQ.Tests.csproj").write_text("<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        task_manager_module,
+        "_settings_int",
+        lambda name, default: 0 if name == "max_task_retries" else default,
+    )
+    monkeypatch.setattr(projects_module, "_extract_project_repo_workspace", lambda project: project.settings_overrides["repo_workspace"])
+    monkeypatch.setattr(projects_module, "_resolve_repo_workspace_root", lambda project_id, cfg, require_enabled=True: repo_root)
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "chat-assign-repo-runtime-mismatch.db"))
+    task = await tm.create_task(
+        bot_id="pm-coder",
+        payload={
+            "instruction": "implement geometry lesson block code",
+            "role_hint": "coder",
+            "step_kind": "repo_change",
+            "deliverables": ["src/lessons/math_lesson.py"],
+            "evidence_requirements": ["Proposed repo file artifacts"],
+        },
+        metadata=TaskMetadata(
+            source="chat_assign",
+            project_id="proj-1",
+            orchestration_id="orch-1",
+        ),
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.1)
+
+    assert updated.status == "failed"
+    assert updated.error is not None
+    assert "introduce unsupported runtime" in updated.error.message.lower()
+    assert "python" in updated.error.message.lower()
+    assert "dotnet" in updated.error.message.lower()
+
+
+@pytest.mark.anyio
 async def test_chat_assign_test_execution_detects_and_runs_generated_dotnet_tests(tmp_path, monkeypatch):
     import asyncio
 
