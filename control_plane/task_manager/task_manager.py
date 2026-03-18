@@ -840,7 +840,7 @@ def _assignment_python_coverage_target(paths: List[str]) -> Optional[str]:
     return candidates[0]
 
 
-def _assignment_repo_runtime_languages(root: Path) -> List[str]:
+def _assignment_repo_runtime_languages(root: Path, *, allowed_extra: List[str] | None = None) -> List[str]:
     detected: List[str] = []
     if (root / "requirements.txt").exists() or (root / "pyproject.toml").exists() or (root / "setup.py").exists():
         detected.append("python")
@@ -861,6 +861,12 @@ def _assignment_repo_runtime_languages(root: Path) -> List[str]:
     except Exception:
         if (root / "CMakeLists.txt").exists() or (root / "Makefile").exists():
             detected.append("cpp")
+    # Allow additional runtimes from context (e.g., TypeScript for multi-language lesson blocks)
+    if allowed_extra:
+        for lang in allowed_extra:
+            normalized = str(lang).strip().lower()
+            if normalized and normalized not in detected:
+                detected.append(normalized)
     return detected
 
 
@@ -955,7 +961,7 @@ def _missing_assignment_runtime_tools(command_results: List[Dict[str, Any]]) -> 
     return tools
 
 
-def _generated_repo_runtime_mismatch_message(*, root: Path, result: Any) -> str:
+def _generated_repo_runtime_mismatch_message(*, root: Path, result: Any, allowed_extra: List[str] | None = None) -> str:
     candidates = extract_file_candidates(result)
     paths = [
         str(item.get("path") or "").strip().replace("\\", "/")
@@ -969,7 +975,7 @@ def _generated_repo_runtime_mismatch_message(*, root: Path, result: Any) -> str:
     generated_languages = _generated_assignment_languages(relevant_paths)
     if not generated_languages:
         return ""
-    repo_languages = _assignment_repo_runtime_languages(root)
+    repo_languages = _assignment_repo_runtime_languages(root, allowed_extra=allowed_extra)
     if not repo_languages:
         return ""
     unexpected = [language for language in generated_languages if language not in repo_languages]
@@ -2347,7 +2353,23 @@ class TaskManager:
                     cfg = _extract_project_repo_workspace(project)
                     if bool(cfg.get("enabled", False)):
                         root = _resolve_repo_workspace_root(str(task.metadata.project_id or "").strip(), cfg, require_enabled=True)
-                        runtime_mismatch = _generated_repo_runtime_mismatch_message(root=root, result=result)
+                        # Allow additional runtimes from context (e.g., TypeScript for multi-language content)
+                        allowed_extra: List[str] = []
+                        context_items = payload.get("context_items") or []
+                        if isinstance(context_items, list):
+                            for item in context_items:
+                                item_text = str(item or "").lower()
+                                # Detect runtime hints from context
+                                if "typescript" in item_text or "node" in item_text:
+                                    if "node" not in allowed_extra:
+                                        allowed_extra.append("node")
+                                if "javascript" in item_text:
+                                    if "node" not in allowed_extra:
+                                        allowed_extra.append("node")
+                                if "python" in item_text:
+                                    if "python" not in allowed_extra:
+                                        allowed_extra.append("python")
+                        runtime_mismatch = _generated_repo_runtime_mismatch_message(root=root, result=result, allowed_extra=allowed_extra or None)
                         if runtime_mismatch:
                             raise ValueError(runtime_mismatch)
                 except ValueError:
