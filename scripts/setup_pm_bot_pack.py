@@ -33,9 +33,8 @@ class BotSpec:
     model: str
     priority: int
     system_prompt: str
-    max_tokens: int = 4096
+    max_tokens: int = 65000
     temperature: float = 0.1
-    output_contract_json: bool = False
 
 
 def _pm_specs() -> List[BotSpec]:
@@ -46,9 +45,8 @@ def _pm_specs() -> List[BotSpec]:
             role="pm",
             model="gpt-oss:120b-cloud",
             priority=100,
-            max_tokens=4096,
+            max_tokens=65000,
             temperature=0.05,
-            output_contract_json=True,
             system_prompt=(
                 "You are a deterministic project manager orchestrator.\n"
                 "Given an implementation request, return JSON only with:\n"
@@ -61,7 +59,10 @@ def _pm_specs() -> List[BotSpec]:
                 '      "id": "step_1",\n'
                 '      "title": "",\n'
                 '      "instruction": "",\n'
-                '      "role_hint": "researcher|coder|tester|reviewer|security|dba",\n'
+                '      "bot_id": "pm-research-analyst|pm-engineer|pm-coder|pm-tester|pm-security-reviewer|pm-database-engineer|pm-ui-tester",\n'
+                '      "role_hint": "researcher|engineer|coder|tester|reviewer|security|dba|ui",\n'
+                '      "step_kind": "specification|planning|repo_change|test_execution|review|release",\n'
+                '      "evidence_requirements": [],\n'
                 '      "depends_on": [],\n'
                 '      "acceptance_criteria": [],\n'
                 '      "deliverables": [],\n'
@@ -69,7 +70,7 @@ def _pm_specs() -> List[BotSpec]:
                 "    }\n"
                 "  ]\n"
                 "}\n"
-                "No markdown. No prose outside JSON."
+                "Use only the listed bot_id values. Every step must include bot_id. No markdown. No prose outside JSON."
             ),
         ),
         BotSpec(
@@ -79,9 +80,23 @@ def _pm_specs() -> List[BotSpec]:
             model="qwen3.5:397b-cloud",
             priority=70,
             system_prompt=(
-                "You are a research/analysis bot.\n"
-                "Turn the task payload into clear requirements, assumptions, and edge cases.\n"
-                "Prioritize implementation clarity and testability."
+                "You are a deterministic research and requirements analyst.\n"
+                "Return JSON only with keys: status, summary, requirements, assumptions, risks, handoff_notes.\n"
+                "Focus on clarifying requirements, constraints, dependencies, edge cases, and testability.\n"
+                "Do not write prose outside the JSON object."
+            ),
+        ),
+        BotSpec(
+            bot_id="pm-engineer",
+            name="PM Engineer",
+            role="engineer",
+            model="gpt-oss:120b-cloud",
+            priority=82,
+            system_prompt=(
+                "You are a deterministic implementation planner and systems engineer.\n"
+                "Return JSON only with keys: status, architecture, implementation_plan, risks, handoff_notes.\n"
+                "Translate requirements into a concrete implementation plan with sequencing and constraints.\n"
+                "Do not write prose outside the JSON object."
             ),
         ),
         BotSpec(
@@ -91,9 +106,10 @@ def _pm_specs() -> List[BotSpec]:
             model="qwen3.5:397b-cloud",
             priority=85,
             system_prompt=(
-                "You are a coding bot.\n"
+                "You are a deterministic coding bot.\n"
+                "Return JSON only with keys: status, change_summary, files_touched, risks, handoff_notes.\n"
                 "Use acceptance criteria and quality gates from payload as non-negotiable constraints.\n"
-                "Return implementation-focused output with concise risk notes."
+                "Do not write prose outside the JSON object."
             ),
         ),
         BotSpec(
@@ -103,9 +119,11 @@ def _pm_specs() -> List[BotSpec]:
             model="gpt-oss:120b-cloud",
             priority=80,
             system_prompt=(
-                "You are a QA/testing bot.\n"
-                "Design and run validation against acceptance criteria.\n"
-                "Report failing scenarios, regression risk, and required fixes."
+                "You are a deterministic QA/testing bot.\n"
+                "Return JSON only with keys: outcome, failure_type, findings, evidence, handoff_notes.\n"
+                "Allowed failure_type values: pass, implementation_issue.\n"
+                "Use failure_type=pass only when validation passes cleanly; otherwise use implementation_issue.\n"
+                "Do not write prose outside the JSON object."
             ),
         ),
         BotSpec(
@@ -115,9 +133,11 @@ def _pm_specs() -> List[BotSpec]:
             model="gpt-oss:120b-cloud",
             priority=78,
             system_prompt=(
-                "You are a security and quality reviewer.\n"
-                "Focus on security leaks, authz/authn issues, injection paths, data exposure, and runtime risks.\n"
-                "Return findings ordered by severity."
+                "You are a deterministic security reviewer.\n"
+                "Return JSON only with keys: outcome, failure_type, findings, evidence, handoff_notes.\n"
+                "Allowed failure_type values: pass, security_fix_required, architecture_issue.\n"
+                "Use architecture_issue only when the fix belongs with planning/engineering rather than coding.\n"
+                "Do not write prose outside the JSON object."
             ),
         ),
         BotSpec(
@@ -127,9 +147,25 @@ def _pm_specs() -> List[BotSpec]:
             model="qwen3.5:397b-cloud",
             priority=76,
             system_prompt=(
-                "You are a database engineer bot.\n"
-                "Design schema/query/data migration updates with rollback and data integrity safeguards.\n"
-                "Call out lock/contention and compatibility risk explicitly."
+                "You are a deterministic database engineer.\n"
+                "Return JSON only with keys: outcome, failure_type, findings, evidence, handoff_notes.\n"
+                "Allowed failure_type values: pass, schema_fix_required, data_architecture_issue.\n"
+                "Use data_architecture_issue only when the fix belongs with engineering/planning.\n"
+                "Do not write prose outside the JSON object."
+            ),
+        ),
+        BotSpec(
+            bot_id="pm-ui-tester",
+            name="PM UI Tester",
+            role="ui-tester",
+            model="gpt-oss:120b-cloud",
+            priority=77,
+            system_prompt=(
+                "You are a deterministic UI tester.\n"
+                "Return JSON only with keys: outcome, failure_type, findings, evidence, handoff_notes.\n"
+                "Allowed failure_type values: pass, ui_render_issue, ui_data_issue, ui_config_issue.\n"
+                "Use ui_data_issue or ui_config_issue when the problem should route to the database engineer.\n"
+                "Do not write prose outside the JSON object."
             ),
         ),
     ]
@@ -157,22 +193,297 @@ def _chat_tool_access_payload(mode: str) -> Dict[str, Any]:
     return {"enabled": False, "filesystem": False, "repo_search": False}
 
 
-def _routing_rules_payload(spec: BotSpec, chat_tools_mode: str) -> Dict[str, Any]:
-    output_contract: Dict[str, Any] = {
-        "enabled": bool(spec.output_contract_json),
-        "description": (
-            "Deterministic PM plan output."
-            if spec.output_contract_json
-            else "Optional free-form output."
-        ),
+def _output_contract_payload(spec: BotSpec) -> Dict[str, Any]:
+    if spec.bot_id == "pm-orchestrator":
+        return {
+            "enabled": True,
+            "description": "Deterministic PM orchestration plan with explicit bot IDs.",
+            "mode": "model_output",
+            "format": "json_object",
+            "required_fields": ["global_acceptance_criteria", "global_quality_gates", "risks", "steps"],
+            "non_empty_fields": ["steps"],
+            "template": {},
+            "defaults_template": {},
+            "fallback_mode": "disabled",
+            "example_output": {
+                "global_acceptance_criteria": ["Implementation is verifiable."],
+                "global_quality_gates": ["Evidence is attached."],
+                "risks": ["Scope ambiguity"],
+                "steps": [
+                    {
+                        "id": "step_1",
+                        "title": "Clarify scope",
+                        "instruction": "Capture implementation-ready requirements.",
+                        "bot_id": "pm-research-analyst",
+                        "role_hint": "researcher",
+                        "step_kind": "specification",
+                        "evidence_requirements": ["Requirements summary"],
+                        "depends_on": [],
+                        "acceptance_criteria": ["Requirements are testable."],
+                        "deliverables": ["Requirements summary"],
+                        "quality_gates": ["No open ambiguity"],
+                    }
+                ],
+            },
+        }
+
+    contracts: Dict[str, Dict[str, Any]] = {
+        "pm-research-analyst": {
+            "description": "Deterministic requirements handoff for engineering.",
+            "required_fields": ["status", "summary", "requirements", "assumptions", "risks", "handoff_notes"],
+            "non_empty_fields": ["status", "summary", "handoff_notes"],
+            "example_output": {
+                "status": "complete",
+                "summary": "Requirements clarified and scoped.",
+                "requirements": ["Support deterministic retry routing."],
+                "assumptions": ["Existing workflow engine remains in use."],
+                "risks": ["Missing edge-case coverage."],
+                "handoff_notes": "Proceed to engineering with explicit route constraints.",
+            },
+        },
+        "pm-engineer": {
+            "description": "Deterministic implementation plan and system design handoff.",
+            "required_fields": ["status", "architecture", "implementation_plan", "risks", "handoff_notes"],
+            "non_empty_fields": ["status", "architecture", "implementation_plan", "handoff_notes"],
+            "example_output": {
+                "status": "complete",
+                "architecture": ["Use explicit workflow triggers already supported by the platform."],
+                "implementation_plan": ["Update configs before adding new schema fields."],
+                "risks": ["Inconsistent exported bot packs."],
+                "handoff_notes": "Coder should implement within existing workflow fields.",
+            },
+        },
+        "pm-coder": {
+            "description": "Deterministic implementation handoff for downstream validation.",
+            "required_fields": ["status", "change_summary", "files_touched", "risks", "handoff_notes"],
+            "non_empty_fields": ["status", "change_summary", "handoff_notes"],
+            "example_output": {
+                "status": "complete",
+                "change_summary": ["Implemented the requested repo changes."],
+                "files_touched": ["control_plane/chat/pm_orchestrator.py"],
+                "risks": ["Follow-up validation still required."],
+                "handoff_notes": "Send to tester for execution-backed verification.",
+            },
+        },
+        "pm-tester": {
+            "description": "Deterministic QA result used to route either forward or back to coding.",
+            "required_fields": ["outcome", "failure_type", "findings", "evidence", "handoff_notes"],
+            "non_empty_fields": ["outcome", "failure_type", "handoff_notes"],
+            "example_output": {
+                "outcome": "pass",
+                "failure_type": "pass",
+                "findings": [],
+                "evidence": ["Targeted tests passed."],
+                "handoff_notes": "Proceed to security review.",
+            },
+        },
+        "pm-security-reviewer": {
+            "description": "Deterministic security review result used to route to coding or engineering.",
+            "required_fields": ["outcome", "failure_type", "findings", "evidence", "handoff_notes"],
+            "non_empty_fields": ["outcome", "failure_type", "handoff_notes"],
+            "example_output": {
+                "outcome": "pass",
+                "failure_type": "pass",
+                "findings": [],
+                "evidence": ["Reviewed changed surfaces for auth and exposure issues."],
+                "handoff_notes": "Proceed to database review.",
+            },
+        },
+        "pm-database-engineer": {
+            "description": "Deterministic database review result used to route to coding or engineering.",
+            "required_fields": ["outcome", "failure_type", "findings", "evidence", "handoff_notes"],
+            "non_empty_fields": ["outcome", "failure_type", "handoff_notes"],
+            "example_output": {
+                "outcome": "pass",
+                "failure_type": "pass",
+                "findings": [],
+                "evidence": ["Validated schema and data flow assumptions."],
+                "handoff_notes": "Proceed to UI validation.",
+            },
+        },
+        "pm-ui-tester": {
+            "description": "Deterministic UI validation result used to close the workflow or route to the correct fix owner.",
+            "required_fields": ["outcome", "failure_type", "findings", "evidence", "handoff_notes"],
+            "non_empty_fields": ["outcome", "failure_type", "handoff_notes"],
+            "example_output": {
+                "outcome": "pass",
+                "failure_type": "pass",
+                "findings": [],
+                "evidence": ["UI flow validated against current data behavior."],
+                "handoff_notes": "Workflow complete.",
+            },
+        },
+    }
+    contract = contracts[spec.bot_id]
+    return {
+        "enabled": True,
+        "description": contract["description"],
         "mode": "model_output",
-        "format": "json_object" if spec.output_contract_json else "any",
-        "required_fields": ["steps"] if spec.output_contract_json else [],
-        "non_empty_fields": ["steps"] if spec.output_contract_json else [],
+        "format": "json_object",
+        "required_fields": contract["required_fields"],
+        "non_empty_fields": contract["non_empty_fields"],
         "template": {},
         "defaults_template": {},
         "fallback_mode": "disabled",
+        "example_output": contract["example_output"],
     }
+
+
+def _workflow_payload(spec: BotSpec) -> Dict[str, Any]:
+    triggers: Dict[str, List[Dict[str, Any]]] = {
+        "pm-research-analyst": [
+            {
+                "id": "research-to-engineer",
+                "title": "Research To Engineer",
+                "event": "task_completed",
+                "target_bot_id": "pm-engineer",
+                "condition": "has_result",
+            }
+        ],
+        "pm-engineer": [
+            {
+                "id": "engineer-to-coder",
+                "title": "Engineer To Coder",
+                "event": "task_completed",
+                "target_bot_id": "pm-coder",
+                "condition": "has_result",
+            }
+        ],
+        "pm-coder": [
+            {
+                "id": "coder-to-tester",
+                "title": "Coder To Tester",
+                "event": "task_completed",
+                "target_bot_id": "pm-tester",
+                "condition": "has_result",
+            }
+        ],
+        "pm-tester": [
+            {
+                "id": "tester-pass-forward",
+                "title": "Tester Pass Forward",
+                "event": "task_completed",
+                "target_bot_id": "pm-security-reviewer",
+                "condition": "has_result",
+                "result_field": "failure_type",
+                "result_equals": "pass",
+            },
+            {
+                "id": "tester-fix-coder",
+                "title": "Tester Back To Coder",
+                "event": "task_completed",
+                "target_bot_id": "pm-coder",
+                "condition": "has_result",
+                "result_field": "failure_type",
+                "result_equals": "implementation_issue",
+            },
+        ],
+        "pm-security-reviewer": [
+            {
+                "id": "security-pass-forward",
+                "title": "Security Pass Forward",
+                "event": "task_completed",
+                "target_bot_id": "pm-database-engineer",
+                "condition": "has_result",
+                "result_field": "failure_type",
+                "result_equals": "pass",
+            },
+            {
+                "id": "security-fix-coder",
+                "title": "Security Back To Coder",
+                "event": "task_completed",
+                "target_bot_id": "pm-coder",
+                "condition": "has_result",
+                "result_field": "failure_type",
+                "result_equals": "security_fix_required",
+            },
+            {
+                "id": "security-back-engineer",
+                "title": "Security Back To Engineer",
+                "event": "task_completed",
+                "target_bot_id": "pm-engineer",
+                "condition": "has_result",
+                "result_field": "failure_type",
+                "result_equals": "architecture_issue",
+            },
+        ],
+        "pm-database-engineer": [
+            {
+                "id": "database-pass-forward",
+                "title": "Database Pass Forward",
+                "event": "task_completed",
+                "target_bot_id": "pm-ui-tester",
+                "condition": "has_result",
+                "result_field": "failure_type",
+                "result_equals": "pass",
+            },
+            {
+                "id": "database-fix-coder",
+                "title": "Database Back To Coder",
+                "event": "task_completed",
+                "target_bot_id": "pm-coder",
+                "condition": "has_result",
+                "result_field": "failure_type",
+                "result_equals": "schema_fix_required",
+            },
+            {
+                "id": "database-back-engineer",
+                "title": "Database Back To Engineer",
+                "event": "task_completed",
+                "target_bot_id": "pm-engineer",
+                "condition": "has_result",
+                "result_field": "failure_type",
+                "result_equals": "data_architecture_issue",
+            },
+        ],
+        "pm-ui-tester": [
+            {
+                "id": "ui-back-coder",
+                "title": "UI Back To Coder",
+                "event": "task_completed",
+                "target_bot_id": "pm-coder",
+                "condition": "has_result",
+                "result_field": "failure_type",
+                "result_equals": "ui_render_issue",
+            },
+            {
+                "id": "ui-back-database-data",
+                "title": "UI Back To Database",
+                "event": "task_completed",
+                "target_bot_id": "pm-database-engineer",
+                "condition": "has_result",
+                "result_field": "failure_type",
+                "result_equals": "ui_data_issue",
+            },
+            {
+                "id": "ui-back-database-config",
+                "title": "UI Config Back To Database",
+                "event": "task_completed",
+                "target_bot_id": "pm-database-engineer",
+                "condition": "has_result",
+                "result_field": "failure_type",
+                "result_equals": "ui_config_issue",
+            },
+        ],
+    }
+    notes: Dict[str, str] = {
+        "pm-orchestrator": "Assignment planning only. No downstream workflow triggers.",
+        "pm-research-analyst": "Always hands off to engineering after producing structured requirements.",
+        "pm-engineer": "Always hands off to coding after producing the implementation plan.",
+        "pm-coder": "Always hands off to testing after implementation output is produced.",
+        "pm-tester": "Routes forward only on pass; otherwise routes back to coder.",
+        "pm-security-reviewer": "Routes forward only on pass; failures go to coder or engineer.",
+        "pm-database-engineer": "Routes forward only on pass; failures go to coder or engineer.",
+        "pm-ui-tester": "Terminal validation stage on pass; routes back only to explicitly allowed fix owners.",
+    }
+    return {
+        "notes": notes.get(spec.bot_id, ""),
+        "triggers": triggers.get(spec.bot_id, []),
+    }
+
+
+def _routing_rules_payload(spec: BotSpec, chat_tools_mode: str) -> Dict[str, Any]:
+    workflow = _workflow_payload(spec)
     return {
         "input_contract": {
             "description": "",
@@ -194,16 +505,14 @@ def _routing_rules_payload(spec: BotSpec, chat_tools_mode: str) -> Dict[str, Any
             "show_on_overview": True,
             "show_on_tasks": True,
         },
-        "output_contract": output_contract,
-        "workflow": {
-            "notes": "",
-            "triggers": [],
-        },
+        "output_contract": _output_contract_payload(spec),
+        "workflow": workflow,
         "chat_tool_access": _chat_tool_access_payload(chat_tools_mode),
     }
 
 
 def _bot_payload(spec: BotSpec, api_key_ref: str, chat_tools_mode: str) -> Dict[str, Any]:
+    workflow = _workflow_payload(spec)
     return {
         "id": spec.bot_id,
         "name": spec.name,
@@ -213,10 +522,7 @@ def _bot_payload(spec: BotSpec, api_key_ref: str, chat_tools_mode: str) -> Dict[
         "enabled": True,
         "backends": [_backend_payload(spec, api_key_ref)],
         "routing_rules": _routing_rules_payload(spec, chat_tools_mode),
-        "workflow": {
-            "notes": "",
-            "triggers": [],
-        },
+        "workflow": workflow,
     }
 
 
