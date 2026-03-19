@@ -755,18 +755,22 @@ async def _effective_tool_access(
     conversation: ChatConversation,
     target_bot_id: str | None,
 ) -> Dict[str, Any]:
-    disabled = {
-        "enabled": False,
-        "filesystem": False,
-        "repo_search": False,
-        "workspace_root": None,
-    }
     if not target_bot_id:
-        return disabled
+        return {
+            "enabled": False,
+            "filesystem": False,
+            "repo_search": False,
+            "workspace_root": None,
+        }
 
     bot_registry = getattr(request.app.state, "bot_registry", None)
     if bot_registry is None:
-        return disabled
+        return {
+            "enabled": False,
+            "filesystem": False,
+            "repo_search": False,
+            "workspace_root": None,
+        }
     bot = await bot_registry.get(target_bot_id)
     bot_cfg = _bot_tool_access(bot)
     chat_cfg = _conversation_tool_access(conversation)
@@ -783,8 +787,6 @@ async def _effective_tool_access(
                 project_cfg = _parse_tool_access_config(None)
 
     all_enabled = bool(chat_cfg["enabled"] and bot_cfg["enabled"] and project_cfg["enabled"])
-    if not all_enabled:
-        return disabled
     workspace_root = project_cfg.get("workspace_root")
     if not workspace_root and project_id:
         project_registry = getattr(request.app.state, "project_registry", None)
@@ -794,6 +796,13 @@ async def _effective_tool_access(
                 workspace_root = _project_repo_workspace_root(project)
             except Exception:
                 workspace_root = None
+    if not all_enabled:
+        return {
+            "enabled": False,
+            "filesystem": False,
+            "repo_search": False,
+            "workspace_root": workspace_root,
+        }
     return {
         "enabled": True,
         "filesystem": bool(chat_cfg["filesystem"] and bot_cfg["filesystem"] and project_cfg["filesystem"]),
@@ -1057,7 +1066,7 @@ async def _resolve_context_items(
         )
 
     repo_profile_context: List[str] = []
-    if workspace_root:
+    if workspace_root and (filesystem_allowed or force_workspace_context or force_project_context):
         repo_profile_context = await _resolve_repo_profile_context_item(workspace_root=workspace_root)
 
     repo_context: List[str] = []
@@ -1234,6 +1243,8 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                 body,
                 conversation=conversation,
                 tool_access=tool_access,
+                force_project_context=True,
+                force_workspace_context=_repo_intent_requested(assign_instruction),
             )
             assignment = await pm_orchestrator.orchestrate_assignment(
                 conversation_id=conversation_id,
@@ -1402,6 +1413,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                     body,
                     conversation=conversation,
                     tool_access=tool_access,
+                    force_project_context=True,
                     force_workspace_context=_repo_intent_requested(assign_instruction),
                 )
                 context_sources = _context_source_labels(resolved_context, limit=8)

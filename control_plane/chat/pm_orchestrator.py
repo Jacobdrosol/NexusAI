@@ -1628,6 +1628,23 @@ class PMOrchestrator:
                 "The repo profile is authoritative. Do not let spec assumptions or requested examples introduce a new runtime "
                 "that the repo does not already declare. Runtime-mismatched repo files will fail validation."
             )
+        elif step_kind == "repo_change":
+            lines.append(
+                "This is a repo-change step. You MUST determine the exact changed file paths from the repo context and return "
+                "the full file content for every created or modified repo file."
+            )
+            lines.append(
+                "If the bot returns JSON, include every created or modified repo file in a non-empty `artifacts` array using "
+                "objects shaped like `{path, content}`."
+            )
+            lines.append(
+                "Do not return only summaries, plans, issue lists, CI workflow proposals, or generic implementation notes. "
+                "Return the actual repo file artifacts needed to apply the change."
+            )
+            lines.append(
+                "Choose languages, frameworks, and file extensions to match the repo context and nearby existing files. "
+                "Do not introduce a new runtime unless the user explicitly authorized it."
+            )
         if any(item.lower().endswith(".mermaid.md") for item in deliverables):
             lines.append(
                 "For diagram deliverables, return Mermaid or markdown diagram source as text. Do not attempt to return binary image data."

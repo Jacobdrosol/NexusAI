@@ -607,6 +607,22 @@ def test_build_step_instruction_treats_repo_profile_context_as_authoritative() -
     assert "Do not say the stack is unknown" in instruction
 
 
+def test_build_step_instruction_for_repo_change_without_explicit_paths_still_requires_artifacts() -> None:
+    orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
+
+    instruction = orchestrator._build_step_instruction(
+        base_instruction="Implement the approved solution.",
+        step_kind="repo_change",
+        deliverables=["Repo file artifacts for implementation", "Implementation notes"],
+        evidence_requirements=["Proposed repo file artifacts or code patches"],
+        context_items=["[repo-profile] Workspace stack summary\nLikely primary stack: .NET"],
+    )
+
+    assert "This is a repo-change step" in instruction
+    assert "non-empty `artifacts` array" in instruction
+    assert "Do not return only summaries" in instruction
+
+
 def test_expand_test_execution_steps_splits_test_file_creation_from_execution() -> None:
     orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
 

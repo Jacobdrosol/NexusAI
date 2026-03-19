@@ -563,6 +563,95 @@ async def test_assign_message_includes_repo_profile_context_without_filesystem_t
 
 
 @pytest.mark.anyio
+async def test_assign_message_includes_repo_profile_context_even_when_tool_access_disabled(cp_app, tmp_path):
+    workspace_root = tmp_path / "repo-profile-disabled"
+    (workspace_root / "App").mkdir(parents=True, exist_ok=True)
+    (workspace_root / "GlobeIQ.sln").write_text("Microsoft Visual Studio Solution File\n", encoding="utf-8")
+    (workspace_root / "App" / "App.csproj").write_text("<Project Sdk=\"Microsoft.NET.Sdk.Web\"></Project>\n", encoding="utf-8")
+
+    captured_prompt = {}
+
+    async def _schedule(task):
+        if str(task.id).startswith("pm-plan-"):
+            captured_prompt["prompt"] = task.payload
+            return {
+                "output": (
+                    '{"steps":['
+                    '{"id":"step_1","title":"Implement page","instruction":"Build the lesson page","role_hint":"coder","step_kind":"repo_change","deliverables":["App/Pages/Lesson.razor"]}'
+                    "]}"
+                )
+            }
+        return {"output": "ok"}
+
+    cp_app.state.scheduler.schedule = AsyncMock(side_effect=_schedule)
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        create_project = await client.post(
+            "/v1/projects",
+            json={
+                "id": "proj-repo-profile-disabled",
+                "name": "Repo Profile Disabled",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": False,
+                        "filesystem": False,
+                        "repo_search": False,
+                    },
+                    "repo_workspace": {
+                        "enabled": True,
+                        "managed_path_mode": False,
+                        "root_path": str(workspace_root),
+                        "allow_push": False,
+                        "allow_command_execution": False,
+                    },
+                },
+            },
+        )
+        assert create_project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Assign Repo Profile Disabled",
+                "project_id": "proj-repo-profile-disabled",
+                "tool_access_enabled": False,
+                "tool_access_filesystem": False,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-pm-profile-disabled",
+                "name": "PM Profile Bot Disabled",
+                "role": "pm",
+                "backends": [],
+                "enabled": True,
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": False,
+                        "filesystem": False,
+                        "repo_search": False,
+                    }
+                },
+            },
+        )
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={"content": "@assign Make a new lesson page", "bot_id": "bot-pm-profile-disabled"},
+        )
+        assert resp.status_code == 200
+
+    prompt = captured_prompt.get("prompt")
+    assert isinstance(prompt, list)
+    user_prompt = str(prompt[1]["content"])
+    assert "[repo-profile] Workspace stack summary" in user_prompt
+    assert "Likely primary stack: .NET" in user_prompt
+
+
+@pytest.mark.anyio
 async def test_chat_context_item_ids_are_resolved_from_vault(cp_app):
     cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "ok"})
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
