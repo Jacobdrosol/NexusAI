@@ -752,7 +752,66 @@ def _is_probable_test_file(value: str) -> bool:
     )
 
 
+def _is_documentation_like_repo_file(value: str) -> bool:
+    normalized = str(value or "").strip().replace("\\", "/").strip("`")
+    if not _looks_like_repo_file(normalized):
+        return False
+    lowered = normalized.lower()
+    leaf = lowered.rsplit("/", 1)[-1]
+    if lowered.startswith("docs/"):
+        return True
+    if leaf in {
+        "readme.md",
+        "changelog.md",
+        "release_notes.md",
+        "release-notes.md",
+        "qa_checklist.md",
+        "implementation_plan.md",
+        "risk_log.md",
+        "research_handoff.md",
+        "ui_changes.md",
+        "db_schema_changes.md",
+    }:
+        return True
+    return lowered.endswith((".md", ".mdx", ".rst", ".adoc", ".txt"))
+
+
+def _workstream_deliverables(payload: Dict[str, Any]) -> List[str]:
+    deliverables: List[str] = []
+    candidates: List[Any] = [payload.get("workstream"), payload.get("source_payload")]
+    source_payload = payload.get("source_payload")
+    if isinstance(source_payload, dict):
+        candidates.append(source_payload.get("workstream"))
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        deliverables.extend(_normalize_string_list(candidate.get("deliverables")))
+    seen: Dict[str, None] = {}
+    normalized_items: List[str] = []
+    for item in deliverables:
+        normalized = str(item or "").strip().replace("\\", "/").strip("`")
+        if not normalized or normalized in seen:
+            continue
+        seen[normalized] = None
+        normalized_items.append(normalized)
+    return normalized_items
+
+
+def _is_docs_only_workstream_validation(payload: Dict[str, Any]) -> bool:
+    workstream_items = _workstream_deliverables(payload)
+    if not workstream_items:
+        return False
+    repo_files = [item for item in workstream_items if _looks_like_repo_file(item)]
+    if not repo_files:
+        return False
+    if any(_is_probable_test_file(item) for item in repo_files):
+        return False
+    return all(_is_documentation_like_repo_file(item) for item in repo_files)
+
+
 def _looks_like_assignment_test_execution_payload(payload: Dict[str, Any]) -> bool:
+    if _is_docs_only_workstream_validation(payload):
+        return False
     # Role hint takes precedence - if explicitly tester/qa, treat as test execution
     role_hint = str(payload.get("role_hint") or "").strip().lower()
     if role_hint in {"tester", "qa"}:
@@ -2612,6 +2671,7 @@ class TaskManager:
             and candidate.metadata.orchestration_id == orchestration_id
             and str(candidate.metadata.source or "").strip().lower() in {"chat_assign", "auto_retry", "bot_trigger"}
         ]
+        scoped_tasks = self._filter_assignment_tasks_to_branch_scope(scoped_tasks, payload)
         file_candidates = _assignment_file_candidates(scoped_tasks)
         if not file_candidates:
             raise _TaskExecutionFailure("no assignment file outputs were detected to run tests against")
@@ -2944,6 +3004,25 @@ class TaskManager:
             }
         )
         return result
+
+    def _filter_assignment_tasks_to_branch_scope(self, tasks: List[Task], payload: Dict[str, Any]) -> List[Task]:
+        fanout_id = self._resolve_fanout_id(payload)
+        branch_key = self._resolve_join_branch_key(payload)
+        if not fanout_id and not branch_key:
+            return tasks
+        filtered: List[Task] = []
+        for candidate in tasks:
+            candidate_payload = candidate.payload if isinstance(candidate.payload, dict) else {}
+            if fanout_id:
+                candidate_fanout_id = self._resolve_fanout_id(candidate_payload)
+                if candidate_fanout_id != fanout_id:
+                    continue
+            if branch_key:
+                candidate_branch_key = self._resolve_join_branch_key(candidate_payload)
+                if candidate_branch_key != branch_key:
+                    continue
+            filtered.append(candidate)
+        return filtered
 
     def _format_assignment_test_execution_result(
         self,
