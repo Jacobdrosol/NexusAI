@@ -349,33 +349,78 @@ class PMOrchestrator:
         enabled_ids = {str(bot.id).strip().lower() for bot in bots if getattr(bot, "enabled", False)}
         steps: List[Dict[str, Any]] = [
             {
-                "id": "step_1",
-                "title": "Research requirements, repo context, and external references when needed",
+                "id": "step_1_code",
+                "title": "Research repo implementation patterns and code constraints",
                 "instruction": (
-                    "Use the user request, prior project context, available vault knowledge, repository inspection, "
-                    "and external references only when required to produce a single implementation-ready research handoff. "
-                    "Capture requirements, acceptance criteria, repo/runtime constraints, reusable patterns, prior decisions, "
-                    "and an explicit no-external-research note when online research is not needed."
+                    "Inspect the repository directly for stack, runtime constraints, nearby implementations, existing "
+                    "components, file-structure expectations, and coding/test patterns relevant to the request."
                 ),
                 "bot_id": "pm-research-analyst",
                 "role_hint": "researcher",
                 "step_kind": "specification",
                 "depends_on": [],
                 "acceptance_criteria": [
-                    "Requirements, repo constraints, and relevant prior context are captured in one research pass",
-                    "External references are used only when necessary and called out explicitly when not needed",
-                    "The research handoff is implementation-ready for engineering",
+                    "Repo implementation patterns and runtime constraints are identified from concrete files",
+                    "Code and test conventions are grounded in the actual repository",
                 ],
                 "deliverables": [
-                    "Requirements summary artifact",
                     "Repo/runtime constraints summary",
-                    "External research summary or explicit no-external-research note",
+                    "Existing implementation inventory",
                 ],
                 "evidence_requirements": [
                     "Concrete repo-profile or existing-file evidence",
-                    "Relevant project, vault, or external-reference evidence tied to the requested work",
+                    "Relevant file/path inventory tied to the requested work",
                 ],
-                "quality_gates": ["No unsupported stack, runtime, or scope assumptions are introduced"],
+                "quality_gates": ["No unsupported stack or runtime assumptions are introduced"],
+            },
+            {
+                "id": "step_1_data",
+                "title": "Research requirements, prior decisions, and data context",
+                "instruction": (
+                    "Use the user request, prior project context, and available vault knowledge to extract requirements, "
+                    "acceptance criteria, dependencies, prior decisions, and data or database considerations relevant to implementation."
+                ),
+                "bot_id": "pm-research-analyst",
+                "role_hint": "researcher",
+                "step_kind": "specification",
+                "depends_on": [],
+                "acceptance_criteria": [
+                    "Requirements and prior project constraints are captured clearly",
+                    "Relevant data, schema, or state-management concerns are identified when applicable",
+                ],
+                "deliverables": [
+                    "Requirements summary artifact",
+                    "Project and data-context summary",
+                ],
+                "evidence_requirements": [
+                    "Requirements artifact with acceptance criteria",
+                    "Concrete project, vault, or data-context evidence",
+                ],
+                "quality_gates": ["No prior project or data constraints are ignored or contradicted"],
+            },
+            {
+                "id": "step_1_online",
+                "title": "Research external references when required",
+                "instruction": (
+                    "Research external documentation, standards, or online references only when the request requires it. "
+                    "If no external research is needed, state that explicitly instead of inventing it."
+                ),
+                "bot_id": "pm-research-analyst",
+                "role_hint": "researcher",
+                "step_kind": "specification",
+                "depends_on": [],
+                "acceptance_criteria": [
+                    "External references are used only when necessary",
+                    "Any online research is relevant, current, and tied back to the requested work",
+                ],
+                "deliverables": [
+                    "External research summary or explicit no-external-research note",
+                ],
+                "evidence_requirements": [
+                    "Current external reference evidence when used",
+                    "Explicit statement when external research is not required",
+                ],
+                "quality_gates": ["No unnecessary or unsupported external assumptions are introduced"],
             },
             {
                 "id": "step_2",
@@ -389,7 +434,7 @@ class PMOrchestrator:
                 "bot_id": "pm-engineer",
                 "role_hint": "engineer",
                 "step_kind": "planning",
-                "depends_on": ["step_1"],
+                "depends_on": ["step_1_code", "step_1_data", "step_1_online"],
                 "acceptance_criteria": [
                     "The implementation plan matches the repo stack and existing architecture",
                     "Impacted files, test strategy, and validation stages are clear",
