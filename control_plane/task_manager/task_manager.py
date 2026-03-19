@@ -681,6 +681,36 @@ def _assignment_step_kind(payload: Dict[str, Any]) -> str:
     return _infer_assignment_step_kind(payload)
 
 
+def _trigger_target_role_hint(bot_id: str) -> str:
+    normalized = str(bot_id or "").strip().lower()
+    mapping = {
+        "pm-research-analyst": "researcher",
+        "pm-engineer": "engineer",
+        "pm-coder": "coder",
+        "pm-tester": "tester",
+        "pm-security-reviewer": "reviewer",
+        "pm-database-engineer": "dba",
+        "pm-ui-tester": "ui",
+        "pm-final-qc": "final-qc",
+    }
+    return mapping.get(normalized, "")
+
+
+def _trigger_target_step_kind(bot_id: str) -> str:
+    normalized = str(bot_id or "").strip().lower()
+    mapping = {
+        "pm-research-analyst": "specification",
+        "pm-engineer": "planning",
+        "pm-coder": "repo_change",
+        "pm-tester": "test_execution",
+        "pm-security-reviewer": "review",
+        "pm-database-engineer": "review",
+        "pm-ui-tester": "review",
+        "pm-final-qc": "review",
+    }
+    return mapping.get(normalized, "")
+
+
 def _is_probable_test_file(value: str) -> bool:
     normalized = str(value or "").strip().replace("\\", "/")
     if not normalized:
@@ -3227,6 +3257,9 @@ class TaskManager:
 
     def _build_trigger_payload(self, task: Task, trigger: Any) -> Any:
         payload_template = trigger.payload_template
+        target_bot_id = str(getattr(trigger, "target_bot_id", "") or "").strip()
+        target_role_hint = _trigger_target_role_hint(target_bot_id)
+        target_step_kind = _trigger_target_step_kind(target_bot_id)
         base_payload: Dict[str, Any] = {
             "source_bot_id": task.bot_id,
             "source_task_id": task.id,
@@ -3236,6 +3269,10 @@ class TaskManager:
             "source_error": task.error.model_dump() if task.error else None,
             "instruction": f"Triggered by bot {task.bot_id} task {task.id}",
         }
+        if target_role_hint:
+            base_payload["role_hint"] = target_role_hint
+        if target_step_kind:
+            base_payload["step_kind"] = target_step_kind
         if isinstance(payload_template, dict):
             notes: list[str] = []
             transformed = _transform_template_value(payload_template, base_payload, notes)

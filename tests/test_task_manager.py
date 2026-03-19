@@ -4232,12 +4232,98 @@ async def test_chat_assign_tester_step_uses_internal_execution_even_when_step_ki
             break
         await asyncio.sleep(0.1)
 
-    assert updated.status == "failed"
+    assert updated.status == "completed"
     assert updated.result is not None
     executed = updated.result.get("executed_commands") or []
     assert executed
     assert executed[-1]["command"][:3] == ["py", "-m", "pytest"]
-    assert "required report files" in (updated.error.message.lower() if updated.error else "")
+    assert updated.result.get("failure_type") == "implementation_issue"
+    assert "missing report files" in " ".join(updated.result.get("evidence") or []).lower()
+
+
+@pytest.mark.anyio
+async def test_bot_trigger_final_qc_payload_from_tester_is_not_misclassified_as_test_execution(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot, Project, TaskMetadata
+
+    class StubProjectRegistry:
+        async def get(self, project_id):
+            return Project(
+                id=project_id,
+                name="Proj",
+                settings_overrides={
+                    "repo_workspace": {
+                        "enabled": True,
+                        "managed_path_mode": False,
+                        "root_path": str(tmp_path / "repo"),
+                        "allow_command_execution": True,
+                    }
+                },
+            )
+
+    class StubScheduler:
+        def __init__(self):
+            self.project_registry = StubProjectRegistry()
+
+        async def schedule(self, task):
+            if task.bot_id == "pm-tester":
+                return {"outcome": "fail", "failure_type": "environment_blocker", "findings": ["missing dotnet"], "evidence": [], "artifacts": [], "handoff_notes": "infra"}
+            if task.bot_id == "pm-final-qc":
+                return {"outcome": "fail", "failure_type": "test_failure", "findings": ["awaiting real execution"], "evidence": [], "artifacts": [], "handoff_notes": "needs real tests", "commit_message": ""}
+            return {"ok": True}
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "final-qc-trigger-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="pm-tester",
+            name="PM Tester",
+            role="tester",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "tester-env-blocker-final-qc",
+                        "event": "task_completed",
+                        "target_bot_id": "pm-final-qc",
+                        "condition": "has_result",
+                        "result_field": "failure_type",
+                        "result_equals": "environment_blocker",
+                    }
+                ]
+            },
+        )
+    )
+    await bot_registry.register(Bot(id="pm-final-qc", name="PM Final QC", role="final-qc", backends=[]))
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "final-qc-trigger-tasks.db"), bot_registry=bot_registry)
+    root = await tm.create_task(
+        bot_id="pm-tester",
+        payload={
+            "instruction": "Run tests for generated files",
+            "role_hint": "tester",
+            "step_kind": "test_execution",
+            "deliverables": ["GlobeIQ.Server.Tests/BlockCatalogSeederTests.cs", "artifacts/test_results.json"],
+            "evidence_requirements": ["Executed test command output"],
+        },
+        metadata=TaskMetadata(source="bot_trigger", project_id="proj-1", orchestration_id="orch-1"),
+    )
+
+    for _ in range(40):
+        tasks = await tm.list_tasks()
+        if len(tasks) >= 2 and all(task.status == "completed" for task in tasks):
+            break
+        await asyncio.sleep(0.1)
+
+    tasks = await tm.list_tasks()
+    final_qc = next(task for task in tasks if task.id != root.id and task.bot_id == "pm-final-qc")
+    assert final_qc.status == "completed"
+    assert final_qc.error is None
+    assert final_qc.payload["role_hint"] == "final-qc"
+    assert final_qc.payload["step_kind"] == "review"
+    assert final_qc.result["failure_type"] == "test_failure"
 
 
 @pytest.mark.anyio
