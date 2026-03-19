@@ -3386,6 +3386,29 @@ class TaskManager:
             if isinstance(upstream_payload, dict):
                 self._promote_trigger_context_fields(base_payload, upstream_payload)
             self._promote_trigger_context_fields(base_payload, task.payload)
+            # The current task's branch metadata must override inherited source_payload
+            # context so nested fan-out/join stages stay scoped to the active branch.
+            current_context_fields = (
+                "workstream",
+                "workstream_index",
+                "fanout_count",
+                "fanout_id",
+                "fanout_branch_key",
+                "fanout_expected_branch_keys",
+                "depends_on_steps",
+                "context_items",
+                "global_acceptance_criteria",
+                "global_quality_gates",
+                "global_risks",
+                "project_id",
+                "conversation_id",
+                "orchestration_id",
+            )
+            for field in current_context_fields:
+                value = task.payload.get(field)
+                if _is_empty_contract_value(value):
+                    continue
+                base_payload[field] = value
         if isinstance(task.result, dict):
             self._promote_trigger_result_fields(base_payload, task.result)
         return base_payload
