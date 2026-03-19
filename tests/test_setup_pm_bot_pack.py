@@ -70,7 +70,7 @@ def test_setup_pm_bot_pack_exports_expected_models_and_triggers() -> None:
         for trigger in tester_triggers
     )
     assert any(
-        trigger["target_bot_id"] == "pm-final-qc" and trigger["result_equals"] == "environment_blocker"
+        trigger["target_bot_id"] == "pm-engineer" and trigger["result_equals"] == "environment_blocker"
         for trigger in tester_triggers
     )
     assert any(
