@@ -30,7 +30,8 @@ Use these role-aligned bots:
 The imported PM bot configs should include explicit workflow triggers on the worker bots:
 
 - Forward routing:
-  - `pm-orchestrator -> pm-research-analyst -> pm-engineer`
+  - `pm-orchestrator ->` three parallel `pm-research-analyst` branches for repo/code research, requirements/data context, and external/online research when needed
+  - the three research branches converge into one `pm-engineer`
   - `pm-engineer -> pm-coder` with fan-out when implementation workstreams require it
   - `pm-coder -> pm-tester -> pm-security-reviewer`
   - all approved security branches join into `pm-database-engineer`
@@ -38,8 +39,9 @@ The imported PM bot configs should include explicit workflow triggers on the wor
 - Allowed backward routing only:
   - `pm-tester -> pm-coder`
   - `pm-security-reviewer -> pm-coder`
-  - `pm-ui-tester -> pm-engineer`
-  - `pm-final-qc -> pm-orchestrator`
+  - `pm-ui-tester -> pm-database-engineer` for `ui_data_issue` and `ui_config_issue`
+  - `pm-ui-tester -> pm-engineer` for `ui_render_issue`, `environment_blocker`, and hard UI execution failures
+  - `pm-final-qc -> pm-engineer`
 - UI scope guard: `pm-ui-tester` can return `skip` when no UI deliverables are present, then continue to final QC.
 - Terminal stage: `pm-final-qc` is the end-of-workflow quality gate and should not be used as a branch-local retry step.
 
