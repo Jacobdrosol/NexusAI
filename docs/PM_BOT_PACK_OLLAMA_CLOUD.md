@@ -14,6 +14,7 @@ Use these role-aligned bots:
 6. `pm-security-reviewer` (`role: security-reviewer`)
 7. `pm-database-engineer` (`role: dba-sql`)
 8. `pm-ui-tester` (`role: ui-tester`)
+9. `pm-final-qc` (`role: final-qc`)
 
 ### How they connect
 
@@ -24,9 +25,10 @@ Use these role-aligned bots:
 
 The generated PM pack also includes explicit workflow triggers on the worker bots:
 
-- Linear forward routing: `pm-research-analyst -> pm-engineer -> pm-coder -> pm-tester -> pm-security-reviewer -> pm-database-engineer -> pm-ui-tester`
+- Linear forward routing: `pm-research-analyst -> pm-engineer -> pm-coder -> pm-tester -> pm-security-reviewer -> pm-database-engineer -> pm-ui-tester -> pm-final-qc`
 - Deterministic backward routing: QA/review bots route only to explicitly configured earlier bots based on structured `failure_type` values.
-- Terminal stage: `pm-ui-tester` ends the loop on pass; it only routes backward to allowed fix owners on failure.
+- UI scope guard: `pm-ui-tester` can return `skip` when no UI deliverables are present, then hand off to final QC.
+- Terminal stage: `pm-final-qc` ends the loop on pass and routes failures back to the specific earlier owner.
 
 ## Model Policy
 
@@ -88,8 +90,9 @@ For DB schema/query/migration tasks:
 ## Notes
 
 - If a PM bot returns invalid plan JSON, orchestration falls back to a deterministic heuristic plan.
-- Keep roles explicit (`pm`, `researcher`, `engineer`, `coder`, `tester`, `security-reviewer`, `dba-sql`, `ui-tester`) so routing stays predictable.
+- Keep roles explicit (`pm`, `researcher`, `engineer`, `coder`, `tester`, `security-reviewer`, `dba-sql`, `ui-tester`, `final-qc`) so routing stays predictable.
 - The PM pack intentionally uses structured output contracts so worker triggers can route by explicit `failure_type` values instead of heuristics.
+- When a worker is expected to produce repo files or reports, it should return full file contents in an `artifacts` array of `{path, content}` objects so downstream validation can inspect concrete outputs.
 - Workspace tools use strict three-switch gating:
   1. bot routing rules (`chat_tool_access`)
   2. project chat workspace tool policy

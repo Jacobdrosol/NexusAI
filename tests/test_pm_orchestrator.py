@@ -443,6 +443,7 @@ def test_build_step_instruction_requires_deliverable_file_format() -> None:
 
     assert "Deliverables: docs/lesson_blocks_design.md" in instruction
     assert "Deliverable: path" in instruction
+    assert "`artifacts` array" in instruction
     assert "The repo profile is authoritative" in instruction
     assert "Never invent placeholders" in instruction
 
@@ -473,6 +474,7 @@ def test_build_step_instruction_for_test_execution_demands_command_and_report_ar
 
     assert "Executed Commands" in instruction
     assert "Deliverable: path" in instruction
+    assert "`artifacts` array" in instruction
     assert "mocked, representative, or checklist-only" in instruction
 
 

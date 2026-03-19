@@ -22,9 +22,11 @@ class PMOrchestrator:
         '"evidence_requirements":["..."],"depends_on":[],"acceptance_criteria":["..."],'
         '"deliverables":["..."],"quality_gates":["..."]}]}'
         "IMPORTANT: Each step MUST include 'bot_id' field with the EXACT bot ID to use. "
-        "Available bot IDs: pm-research-analyst, pm-engineer, pm-coder, pm-tester, pm-security-reviewer, pm-database-engineer, pm-ui-tester. "
+        "Available bot IDs: pm-research-analyst, pm-engineer, pm-coder, pm-tester, pm-security-reviewer, pm-database-engineer, pm-ui-tester, pm-final-qc. "
         "Do NOT omit bot_id. Do NOT infer from role_hint. bot_id is REQUIRED. "
         "Keep 3-6 steps. Include stories/specification first, implementation next, and testing/review gates before completion. "
+        "Use pm-ui-tester only when the request includes real UI deliverables or user-facing behavior changes. "
+        "Use pm-final-qc only as the terminal evidence-backed delivery gate after implementation, testing, and review are complete. "
         "Do not classify a step as test_execution, review, or release unless it can produce execution-backed evidence rather than generic advice. "
         "Do not claim committed files, created issues, merged pull requests, CI passes, approvals, or releases unless those side effects are actually available with live evidence. "
         "By default, keep operator-owned actions out of the plan: no CI/CD workflow edits, GitHub issue or project-board work, commits, pushes, pull requests, approvals, merges, tags, releases, deployments, or changelog finalization unless the user explicitly asks for them. "
@@ -354,6 +356,7 @@ class PMOrchestrator:
         has_reviewer = any("review" in r or "audit" in r or "security" in r for r in role_set)
         has_research = any("research" in r for r in role_set)
         has_dba = any("dba" in r or "database" in r or "data" in r for r in role_set)
+        has_final_qc = any(("final" in r and "qc" in r) or "final-qc" in r for r in role_set)
         needs_database = self._instruction_mentions_database(instruction)
         pm_bot = self._select_pm_bot(bots, requested_pm_bot_id=None)
         pm_bot_id = pm_bot.id if pm_bot is not None else ""
@@ -479,6 +482,28 @@ class PMOrchestrator:
                 "quality_gates": ["Zero unresolved high-severity findings"],
             }
         )
+        if has_final_qc:
+            base_steps.append(
+                {
+                    "id": "step_6",
+                    "title": "Final delivery verification",
+                    "instruction": (
+                        "Perform the final evidence-backed QC pass. Confirm deliverables are present, tests or review gates "
+                        "are satisfied, and the implementation is ready for operator review."
+                    ),
+                    "bot_id": self._preferred_bot_id_for_role(bots, role_hint="final-qc", pm_bot_id=pm_bot_id),
+                    "role_hint": "final-qc",
+                    "step_kind": "review",
+                    "depends_on": ["step_5"],
+                    "acceptance_criteria": [
+                        "All required deliverables are present with evidence-backed validation",
+                        "The final summary identifies any remaining operator-owned actions without claiming completion of them",
+                    ],
+                    "deliverables": ["Final verification summary", "Suggested commit message"],
+                    "evidence_requirements": ["Concrete findings tied to changed files or execution evidence"],
+                    "quality_gates": ["No unresolved blocking issues remain"],
+                }
+            )
         return {
             "steps": base_steps,
             "global_acceptance_criteria": [
@@ -536,6 +561,8 @@ class PMOrchestrator:
             "dba-sql": "pm-database-engineer",
             "ui": "pm-ui-tester",
             "ui-tester": "pm-ui-tester",
+            "final-qc": "pm-final-qc",
+            "final_qc": "pm-final-qc",
         }
         preferred_id = preferred_ids.get(str(role_hint or "").strip().lower())
         if preferred_id:
@@ -564,6 +591,7 @@ class PMOrchestrator:
             "qa": ["qa", "tester"],
             "assistant": ["assistant"],
             "planner": ["planner"],
+            "final-qc": ["final-qc", "final_qc"],
         }
         
         role_patterns = {
@@ -575,6 +603,7 @@ class PMOrchestrator:
             "dba": [r"\bdba\b", r"database", r"data", r"sql", r"migration"],
             "qa": [r"\bqa\b", r"test", r"quality"],
             "assistant": [r"assist", r"general"],
+            "final-qc": [r"final[_\s-]*qc", r"final[_\s-]*review", r"delivery[_\s-]*gate"],
         }
 
         def _bot_signature(bot: Bot) -> str:
@@ -587,7 +616,7 @@ class PMOrchestrator:
             return is_media and is_planner
 
         def _skip_for_generic_step(bot: Bot) -> bool:
-            if role_hint in {"coder", "tester", "reviewer", "researcher", "security", "dba", "qa", "assistant", "planner", "planning"}:
+            if role_hint in {"coder", "tester", "reviewer", "researcher", "security", "dba", "qa", "assistant", "planner", "planning", "final-qc"}:
                 return _is_media_planner(bot)
             return False
 
@@ -1332,6 +1361,10 @@ class PMOrchestrator:
                 "`Deliverable: path` on its own line followed by a fenced code block."
             )
             lines.append(
+                "If the bot is constrained to JSON output, include the same full file contents in an `artifacts` array "
+                "using objects shaped like `{path, content}` for every created or modified deliverable."
+            )
+            lines.append(
                 "Choose languages, frameworks, and file extensions to match the repo context and nearby existing files. "
                 "Do not default to Python when the repo points to Razor, C#, TypeScript, C++, or another established stack."
             )
@@ -1370,6 +1403,9 @@ class PMOrchestrator:
             lines.append(
                 "Include an `Executed Commands` section with the commands run, exit codes, and short stdout/stderr excerpts. "
                 "If a report file deliverable exists, return it as `Deliverable: path` followed by a fenced code block containing the artifact content."
+            )
+            lines.append(
+                "If the bot returns JSON, include any generated reports or logs in an `artifacts` array with `{path, content}` objects."
             )
         if step_kind in {"review", "release"}:
             lines.append(
