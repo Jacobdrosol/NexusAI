@@ -690,6 +690,7 @@ def _assignment_step_kind(payload: Dict[str, Any]) -> str:
 def _trigger_target_role_hint(bot_id: str) -> str:
     normalized = str(bot_id or "").strip().lower()
     mapping = {
+        "pm-orchestrator": "pm",
         "pm-research-analyst": "researcher",
         "pm-engineer": "engineer",
         "pm-coder": "coder",
@@ -705,6 +706,7 @@ def _trigger_target_role_hint(bot_id: str) -> str:
 def _trigger_target_step_kind(bot_id: str) -> str:
     normalized = str(bot_id or "").strip().lower()
     mapping = {
+        "pm-orchestrator": "planning",
         "pm-research-analyst": "specification",
         "pm-engineer": "planning",
         "pm-coder": "repo_change",

@@ -70,7 +70,7 @@ def test_setup_pm_bot_pack_exports_expected_models_and_triggers() -> None:
         for trigger in tester_triggers
     )
     assert any(
-        trigger["target_bot_id"] == "pm-engineer" and trigger["result_equals"] == "environment_blocker"
+        trigger["target_bot_id"] == "pm-coder" and trigger["result_equals"] == "environment_blocker"
         for trigger in tester_triggers
     )
     assert any(
@@ -86,6 +86,10 @@ def test_setup_pm_bot_pack_exports_expected_models_and_triggers() -> None:
         and trigger.get("join_items_alias") == "secured_workstreams"
         for trigger in security_triggers
     )
+    assert any(
+        trigger["target_bot_id"] == "pm-coder" and trigger["result_equals"] == "architecture_issue"
+        for trigger in security_triggers
+    )
 
     ui_triggers = bundles["pm-ui-tester"]["bot"]["workflow"]["triggers"]
     assert any(
@@ -97,7 +101,7 @@ def test_setup_pm_bot_pack_exports_expected_models_and_triggers() -> None:
         for trigger in ui_triggers
     )
     assert any(
-        trigger["target_bot_id"] == "pm-final-qc" and trigger["result_equals"] == "environment_blocker"
+        trigger["target_bot_id"] == "pm-engineer" and trigger["result_equals"] == "environment_blocker"
         for trigger in ui_triggers
     )
     assert any(
@@ -105,11 +109,11 @@ def test_setup_pm_bot_pack_exports_expected_models_and_triggers() -> None:
         for trigger in ui_triggers
     )
     assert any(
-        trigger["target_bot_id"] == "pm-database-engineer" and trigger["result_equals"] == "ui_data_issue"
+        trigger["target_bot_id"] == "pm-engineer" and trigger["result_equals"] == "ui_data_issue"
         for trigger in ui_triggers
     )
     assert any(
-        trigger["target_bot_id"] == "pm-database-engineer" and trigger["result_equals"] == "ui_config_issue"
+        trigger["target_bot_id"] == "pm-engineer" and trigger["result_equals"] == "ui_config_issue"
         for trigger in ui_triggers
     )
     assert any(
@@ -119,14 +123,14 @@ def test_setup_pm_bot_pack_exports_expected_models_and_triggers() -> None:
 
     final_qc_triggers = bundles["pm-final-qc"]["bot"]["workflow"]["triggers"]
     assert any(
-        trigger["target_bot_id"] == "pm-coder" and trigger["result_equals"] == "incomplete"
+        trigger["target_bot_id"] == "pm-orchestrator" and trigger["result_equals"] == "incomplete"
         for trigger in final_qc_triggers
     )
     assert any(
-        trigger["target_bot_id"] == "pm-security-reviewer" and trigger["result_equals"] == "security_issue"
+        trigger["target_bot_id"] == "pm-orchestrator" and trigger["result_equals"] == "security_issue"
         for trigger in final_qc_triggers
     )
     assert any(
-        trigger["event"] == "task_failed" and trigger["target_bot_id"] == "pm-coder"
+        trigger["event"] == "task_failed" and trigger["target_bot_id"] == "pm-orchestrator"
         for trigger in final_qc_triggers
     )
