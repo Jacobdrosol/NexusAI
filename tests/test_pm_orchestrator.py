@@ -285,6 +285,65 @@ async def test_build_plan_falls_back_when_llm_starts_with_engineer_and_research_
     assert plan["steps"][0]["bot_id"] == "pm-research-analyst"
 
 
+@pytest.mark.anyio
+async def test_build_plan_uses_fixed_standard_pm_sequence_when_pack_is_present() -> None:
+    scheduler = type(
+        "Scheduler",
+        (),
+        {
+            "schedule": AsyncMock(
+                return_value={
+                    "output": json.dumps(
+                        {
+                            "steps": [
+                                {
+                                    "id": "step_1",
+                                    "title": "Wrong start",
+                                    "instruction": "Do implementation first.",
+                                    "bot_id": "pm-coder",
+                                    "role_hint": "coder",
+                                    "step_kind": "repo_change",
+                                    "deliverables": ["src/feature.cs"],
+                                }
+                            ]
+                        }
+                    )
+                }
+            )
+        },
+    )()
+    bots = [
+        _bot(bot_id="pm-orchestrator", name="PM Orchestrator", role="pm", priority=100),
+        _bot(bot_id="pm-research-analyst", name="PM Research Analyst", role="researcher", priority=70),
+        _bot(bot_id="pm-engineer", name="PM Engineer", role="engineer", priority=82),
+        _bot(bot_id="pm-coder", name="PM Coder", role="coder", priority=85),
+        _bot(bot_id="pm-tester", name="PM Tester", role="tester", priority=80),
+        _bot(bot_id="pm-security-reviewer", name="PM Security Reviewer", role="security-reviewer", priority=78),
+        _bot(bot_id="pm-database-engineer", name="PM Database Engineer", role="dba-sql", priority=76),
+        _bot(bot_id="pm-ui-tester", name="PM UI Tester", role="ui-tester", priority=77),
+        _bot(bot_id="pm-final-qc", name="PM Final QC", role="final-qc", priority=90),
+    ]
+    orchestrator = PMOrchestrator(bot_registry=None, scheduler=scheduler, task_manager=None, chat_manager=None)
+
+    plan = await orchestrator._build_plan(
+        instruction="Build lesson blocks",
+        pm_bot_id="pm-orchestrator",
+        bots=bots,
+        context_items=[],
+    )
+
+    assert [step["bot_id"] for step in plan["steps"]] == [
+        "pm-research-analyst",
+        "pm-engineer",
+        "pm-coder",
+        "pm-tester",
+        "pm-security-reviewer",
+        "pm-database-engineer",
+        "pm-ui-tester",
+        "pm-final-qc",
+    ]
+
+
 def test_normalize_evidence_requirements_downgrades_spec_file_commit_claims() -> None:
     orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
 
@@ -531,6 +590,21 @@ def test_build_step_instruction_for_test_execution_demands_command_and_report_ar
     assert "Deliverable: path" in instruction
     assert "`artifacts` array" in instruction
     assert "mocked, representative, or checklist-only" in instruction
+
+
+def test_build_step_instruction_treats_repo_profile_context_as_authoritative() -> None:
+    orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
+
+    instruction = orchestrator._build_step_instruction(
+        base_instruction="Summarize the requirements.",
+        step_kind="specification",
+        deliverables=["Requirements summary artifact"],
+        evidence_requirements=["Requirements artifact"],
+        context_items=["[repo-profile] Workspace stack summary\nLikely primary stack: dotnet"],
+    )
+
+    assert "repo-profile context above is authoritative" in instruction
+    assert "Do not say the stack is unknown" in instruction
 
 
 def test_expand_test_execution_steps_splits_test_file_creation_from_execution() -> None:

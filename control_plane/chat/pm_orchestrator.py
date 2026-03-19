@@ -261,6 +261,9 @@ class PMOrchestrator:
         bots: List[Bot],
         context_items: List[str],
     ) -> Dict[str, Any]:
+        if self._has_standard_pm_pack(bots):
+            return self._deterministic_pm_pack_plan(instruction, bots)
+
         raw_output = ""
         try:
             prompt = self._plan_prompt(instruction, context_items)
@@ -309,6 +312,218 @@ class PMOrchestrator:
             
             return parsed
         return self._heuristic_plan(instruction, bots)
+
+    def _has_standard_pm_pack(self, bots: List[Bot]) -> bool:
+        required_bot_ids = {
+            "pm-research-analyst",
+            "pm-engineer",
+            "pm-coder",
+            "pm-tester",
+            "pm-security-reviewer",
+            "pm-database-engineer",
+        }
+        enabled_ids = {str(bot.id).strip().lower() for bot in bots if getattr(bot, "enabled", False)}
+        return required_bot_ids.issubset(enabled_ids)
+
+    def _deterministic_pm_pack_plan(self, instruction: str, bots: List[Bot]) -> Dict[str, Any]:
+        enabled_ids = {str(bot.id).strip().lower() for bot in bots if getattr(bot, "enabled", False)}
+        steps: List[Dict[str, Any]] = [
+            {
+                "id": "step_1",
+                "title": "Clarify requirements and inspect repo constraints",
+                "instruction": (
+                    "Use the user request and provided context to produce an implementation-ready requirements summary. "
+                    "Verify the existing repo stack, runtime constraints, nearby implementation patterns, and any relevant "
+                    "existing components before handing off."
+                ),
+                "bot_id": "pm-research-analyst",
+                "role_hint": "researcher",
+                "step_kind": "specification",
+                "depends_on": [],
+                "acceptance_criteria": [
+                    "Requirements are explicit, testable, and grounded in the repo context",
+                    "Existing implementation patterns and runtime constraints are identified",
+                ],
+                "deliverables": [
+                    "Requirements summary artifact",
+                    "Repo/runtime constraints summary",
+                    "Existing implementation inventory",
+                ],
+                "evidence_requirements": [
+                    "Requirements artifact with acceptance criteria",
+                    "Concrete repo-profile or existing-file evidence",
+                ],
+                "quality_gates": ["No stack or runtime assumptions conflict with the repo profile"],
+            },
+            {
+                "id": "step_2",
+                "title": "Plan architecture and implementation sequence",
+                "instruction": (
+                    "Turn the validated requirements into a concrete engineering plan. Identify affected systems, file areas, "
+                    "test strategy, database impact, and any fan-out opportunities needed for quality."
+                ),
+                "bot_id": "pm-engineer",
+                "role_hint": "engineer",
+                "step_kind": "planning",
+                "depends_on": ["step_1"],
+                "acceptance_criteria": [
+                    "The implementation plan matches the repo stack and existing architecture",
+                    "Impacted files, test strategy, and validation stages are clear",
+                ],
+                "deliverables": [
+                    "Implementation plan artifact",
+                    "Impacted areas summary",
+                    "Validation strategy summary",
+                ],
+                "evidence_requirements": [
+                    "Concrete implementation plan tied to repo structure",
+                    "Risk and dependency notes",
+                ],
+                "quality_gates": ["No plan item introduces an unsupported runtime or framework"],
+            },
+            {
+                "id": "step_3",
+                "title": "Implement repo changes and required automated tests",
+                "instruction": (
+                    f"Implement the approved solution for: {instruction}. "
+                    "Produce the necessary repo file changes, plus any new or updated automated tests needed to validate the work."
+                ),
+                "bot_id": "pm-coder",
+                "role_hint": "coder",
+                "step_kind": "repo_change",
+                "depends_on": ["step_2"],
+                "acceptance_criteria": [
+                    "Implementation matches the approved plan and requirements",
+                    "Automated tests needed for validation are included with the code changes",
+                ],
+                "deliverables": [
+                    "Repo file artifacts for implementation",
+                    "Repo file artifacts for automated tests",
+                    "Implementation notes",
+                ],
+                "evidence_requirements": [
+                    "Proposed repo file artifacts or code patches",
+                    "Concrete changed-file evidence tied to deliverables",
+                ],
+                "quality_gates": ["No generated repo files introduce an unsupported runtime"],
+            },
+            {
+                "id": "step_4",
+                "title": "Execute automated tests and validate behavior",
+                "instruction": (
+                    "Run the repo-appropriate automated tests against the generated implementation and test files. "
+                    "Return only real execution evidence and classify failures precisely."
+                ),
+                "bot_id": "pm-tester",
+                "role_hint": "tester",
+                "step_kind": "test_execution",
+                "depends_on": ["step_3"],
+                "acceptance_criteria": [
+                    "Required automated tests execute against the generated changes",
+                    "Failures are classified clearly enough for deterministic backward routing",
+                ],
+                "deliverables": ["Test run log artifact", "Coverage or test results artifact"],
+                "evidence_requirements": ["Executed test command output", "Pass/fail or coverage evidence"],
+                "quality_gates": ["All required automated tests pass before moving forward"],
+            },
+            {
+                "id": "step_5",
+                "title": "Review security and implementation quality",
+                "instruction": (
+                    "Perform a concrete security and quality review of the generated changes. "
+                    "Identify only actionable findings tied to the actual implementation and test evidence."
+                ),
+                "bot_id": "pm-security-reviewer",
+                "role_hint": "security",
+                "step_kind": "review",
+                "depends_on": ["step_4"],
+                "acceptance_criteria": [
+                    "No unresolved high-severity security or quality issues remain",
+                    "Findings are concrete and routed to the correct remediation owner",
+                ],
+                "deliverables": ["Security review findings", "Security validation summary"],
+                "evidence_requirements": ["Concrete findings tied to changed files or execution evidence"],
+                "quality_gates": ["Zero unresolved blocking security issues"],
+            },
+            {
+                "id": "step_6",
+                "title": "Validate database and data-layer impact",
+                "instruction": (
+                    "Review the implementation for schema, query, persistence, migration, and data-contract impact. "
+                    "If database changes are needed, identify them explicitly and route failures precisely."
+                ),
+                "bot_id": "pm-database-engineer",
+                "role_hint": "dba",
+                "step_kind": "review",
+                "depends_on": ["step_5"],
+                "acceptance_criteria": [
+                    "Database/data-layer impact is validated against the existing repo and schema expectations",
+                    "Any required schema or migration changes are identified explicitly",
+                ],
+                "deliverables": ["Database validation report", "Migration or schema notes if required"],
+                "evidence_requirements": ["Concrete findings tied to schema, queries, or changed files"],
+                "quality_gates": ["No unresolved data-layer issues remain"],
+            },
+        ]
+
+        if "pm-ui-tester" in enabled_ids:
+            steps.append(
+                {
+                    "id": "step_7",
+                    "title": "Validate UI and user experience when applicable",
+                    "instruction": (
+                        "Validate UI behavior, rendering, data display, forms, responsiveness, and user experience when "
+                        "the request affects user-facing behavior. If there is no UI impact, explicitly return skip."
+                    ),
+                    "bot_id": "pm-ui-tester",
+                    "role_hint": "ui",
+                    "step_kind": "review",
+                    "depends_on": ["step_6"],
+                    "acceptance_criteria": [
+                        "User-facing changes behave correctly when applicable",
+                        "Non-UI work is explicitly skipped rather than guessed at",
+                    ],
+                    "deliverables": ["UI validation report"],
+                    "evidence_requirements": ["Concrete UI findings or explicit skip rationale"],
+                    "quality_gates": ["No unresolved UI or UX blockers remain"],
+                }
+            )
+
+        if "pm-final-qc" in enabled_ids:
+            steps.append(
+                {
+                    "id": "step_8" if "pm-ui-tester" in enabled_ids else "step_7",
+                    "title": "Finalize verification and delivery summary",
+                    "instruction": (
+                        "Perform the terminal evidence-backed QC pass across requirements, implementation, tests, security, "
+                        "database validation, and UI validation. Return the final delivery summary and suggested commit message."
+                    ),
+                    "bot_id": "pm-final-qc",
+                    "role_hint": "final-qc",
+                    "step_kind": "review",
+                    "depends_on": [steps[-1]["id"]],
+                    "acceptance_criteria": [
+                        "All required quality gates have passed or been explicitly skipped when not applicable",
+                        "The final summary accurately reflects the actual evidence produced by prior steps",
+                    ],
+                    "deliverables": ["Final verification summary", "Suggested commit message"],
+                    "evidence_requirements": ["Concrete findings tied to changed files or execution evidence"],
+                    "quality_gates": ["No unresolved blocking issues remain"],
+                }
+            )
+
+        return {
+            "steps": steps,
+            "global_acceptance_criteria": [
+                "The workflow follows the fixed PM sequence with explicit bot IDs",
+                "Implementation and validation stay grounded in the repo profile and existing codebase",
+            ],
+            "global_quality_gates": [
+                "No unsupported runtime is introduced unless explicitly authorized by the user",
+                "All required validation stages complete before final QC",
+            ],
+            "risks": [],
+        }
 
     def _plan_prompt(self, instruction: str, context_items: List[str]) -> List[Dict[str, str]]:
         context_blob = "\n".join(context_items).strip()
@@ -1371,6 +1586,10 @@ class PMOrchestrator:
         context_items: Optional[List[str]] = None,
     ) -> str:
         lines = [str(base_instruction or "").strip()]
+        has_repo_profile_context = any(
+            "[repo-profile]" in str(item or "").lower()
+            for item in (context_items or [])
+        )
         
         # Inject context items (repo profile, vault items, etc.) at the top
         if context_items:
@@ -1384,6 +1603,13 @@ class PMOrchestrator:
             lines.append("Deliverables: " + "; ".join(deliverables))
         if evidence_requirements:
             lines.append("Evidence requirements: " + "; ".join(evidence_requirements))
+        if has_repo_profile_context:
+            lines.append(
+                "The repo-profile context above is authoritative. Do not say the stack is unknown, assumed, or inferred when it is already provided."
+            )
+            lines.append(
+                "Do not introduce a different language, framework, or runtime than the repo profile unless the user explicitly authorizes that additional runtime."
+            )
 
         if any(self._looks_like_repo_file(item) for item in deliverables):
             lines.append(

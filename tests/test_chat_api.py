@@ -457,9 +457,109 @@ async def test_assign_message_includes_repo_profile_context_for_language_selecti
     assert isinstance(prompt, list)
     user_prompt = str(prompt[1]["content"])
     assert "[repo-profile] Workspace stack summary" in user_prompt
-    assert "Likely primary stack: .NET / ASP.NET Razor" in user_prompt
+    assert "Likely primary stack: .NET" in user_prompt
     assert "Pages and UI components should prefer `.razor` files" in user_prompt
     assert "App/Pages/Index.razor" in user_prompt
+
+
+@pytest.mark.anyio
+async def test_assign_message_includes_repo_profile_context_without_filesystem_tool_access(cp_app, tmp_path):
+    workspace_root = tmp_path / "repo-profile-no-fs"
+    (workspace_root / "App").mkdir(parents=True, exist_ok=True)
+    (workspace_root / "GlobeIQ.sln").write_text("Microsoft Visual Studio Solution File\n", encoding="utf-8")
+    (workspace_root / "App" / "App.csproj").write_text("<Project Sdk=\"Microsoft.NET.Sdk.Web\"></Project>\n", encoding="utf-8")
+
+    captured_prompt = {}
+
+    async def _schedule(task):
+        if str(task.id).startswith("pm-plan-"):
+            captured_prompt["prompt"] = task.payload
+            return {
+                "output": (
+                    '{"steps":['
+                    '{"id":"step_1","title":"Implement page","instruction":"Build the lesson page","role_hint":"coder","step_kind":"repo_change","deliverables":["App/Pages/Lesson.razor"]}'
+                    "]}"
+                )
+            }
+        return {
+            "output": (
+                "Deliverable: App/Pages/Lesson.razor\n"
+                "```razor\n"
+                "<h1>Lesson</h1>\n"
+                "```\n"
+            )
+        }
+
+    cp_app.state.scheduler.schedule = AsyncMock(side_effect=_schedule)
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        create_project = await client.post(
+            "/v1/projects",
+            json={
+                "id": "proj-repo-profile-no-fs",
+                "name": "Repo Profile No FS",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "filesystem": False,
+                        "repo_search": False,
+                    },
+                    "repo_workspace": {
+                        "enabled": True,
+                        "managed_path_mode": False,
+                        "root_path": str(workspace_root),
+                        "allow_push": False,
+                        "allow_command_execution": False,
+                    },
+                },
+            },
+        )
+        assert create_project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Assign Repo Profile No FS",
+                "project_id": "proj-repo-profile-no-fs",
+                "tool_access_enabled": True,
+                "tool_access_filesystem": False,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-pm-profile-no-fs",
+                "name": "PM Profile Bot No FS",
+                "role": "pm",
+                "backends": [],
+                "enabled": True,
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "filesystem": False,
+                        "repo_search": False,
+                    }
+                },
+            },
+        )
+        await client.post(
+            "/v1/bots",
+            json={"id": "bot-code-profile-no-fs", "name": "Code Profile Bot No FS", "role": "coder", "backends": [], "enabled": True},
+        )
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={"content": "@assign Make a new lesson page", "bot_id": "bot-pm-profile-no-fs"},
+        )
+        assert resp.status_code == 200
+
+    prompt = captured_prompt.get("prompt")
+    assert isinstance(prompt, list)
+    user_prompt = str(prompt[1]["content"])
+    assert "[repo-profile] Workspace stack summary" in user_prompt
+    assert "Likely primary stack: .NET" in user_prompt
 
 
 @pytest.mark.anyio

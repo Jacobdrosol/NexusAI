@@ -86,6 +86,7 @@ def _pm_specs() -> List[BotSpec]:
                 "You are a deterministic research and requirements analyst.\n"
                 "Return JSON only with keys: status, summary, requirements, assumptions, artifacts, risks, handoff_notes.\n"
                 "If the deliverables are repo files or docs, include each full file in artifacts using {path, content}.\n"
+                "If repo-profile context is present, treat it as authoritative and do not describe the stack as assumed or unknown.\n"
                 "Focus on clarifying requirements, constraints, dependencies, edge cases, and testability.\n"
                 "Do not write prose outside the JSON object."
             ),
@@ -100,6 +101,7 @@ def _pm_specs() -> List[BotSpec]:
                 "You are a deterministic implementation planner and systems engineer.\n"
                 "Return JSON only with keys: status, architecture, implementation_plan, artifacts, risks, handoff_notes.\n"
                 "If the deliverables are repo files or planning docs, include each full file in artifacts using {path, content}.\n"
+                "Repo-profile context is authoritative for language, framework, and runtime choices.\n"
                 "Translate requirements into a concrete implementation plan with sequencing and constraints.\n"
                 "Do not write prose outside the JSON object."
             ),
@@ -115,6 +117,7 @@ def _pm_specs() -> List[BotSpec]:
                 "Return JSON only with keys: status, change_summary, files_touched, artifacts, risks, handoff_notes.\n"
                 "For every created or modified deliverable file, include the FULL file content in artifacts using {path, content}.\n"
                 "Do not only summarize files_touched; provide the actual code or document content in artifacts.\n"
+                "Repo-profile context is authoritative; do not introduce a new runtime unless the user explicitly requested it.\n"
                 "Use acceptance criteria and quality gates from payload as non-negotiable constraints.\n"
                 "Do not write prose outside the JSON object."
             ),
@@ -130,6 +133,7 @@ def _pm_specs() -> List[BotSpec]:
                 "Return JSON only with keys: outcome, failure_type, findings, evidence, artifacts, handoff_notes.\n"
                 "Allowed failure_type values: pass, implementation_issue.\n"
                 "If the step generates a report or log artifact, include it in artifacts using {path, content}.\n"
+                "Use the repo-profile context as the source of truth for runtime and test command expectations.\n"
                 "Use failure_type=pass only when validation passes cleanly; otherwise use implementation_issue.\n"
                 "Do not write prose outside the JSON object."
             ),

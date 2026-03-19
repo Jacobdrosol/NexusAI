@@ -786,7 +786,7 @@ async def _effective_tool_access(
     if not all_enabled:
         return disabled
     workspace_root = project_cfg.get("workspace_root")
-    if not workspace_root and bool(project_cfg.get("filesystem", False)) and project_id:
+    if not workspace_root and project_id:
         project_registry = getattr(request.app.state, "project_registry", None)
         if project_registry is not None:
             try:
@@ -1057,7 +1057,7 @@ async def _resolve_context_items(
         )
 
     repo_profile_context: List[str] = []
-    if filesystem_allowed and workspace_root:
+    if workspace_root:
         repo_profile_context = await _resolve_repo_profile_context_item(workspace_root=workspace_root)
 
     repo_context: List[str] = []
