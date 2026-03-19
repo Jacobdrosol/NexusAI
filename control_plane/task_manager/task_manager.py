@@ -3302,6 +3302,13 @@ class TaskManager:
             if notes and isinstance(transformed, dict):
                 transformed["trigger_template_notes"] = notes
             return transformed
+        if isinstance(task.payload, dict):
+            upstream_payload = task.payload.get("source_payload")
+            if isinstance(upstream_payload, dict):
+                self._promote_trigger_context_fields(base_payload, upstream_payload)
+            self._promote_trigger_context_fields(base_payload, task.payload)
+        if isinstance(task.result, dict):
+            self._promote_trigger_result_fields(base_payload, task.result)
         return base_payload
 
     def _build_trigger_payloads(self, task: Task, trigger: Any) -> List[Any]:
@@ -3358,17 +3365,67 @@ class TaskManager:
             "quality_gates",
             "evidence_requirements",
         )
+        source_payload = payload.get("source_payload") if isinstance(payload.get("source_payload"), dict) else {}
         for field in promotable_fields:
             value = item.get(field)
             if _is_empty_contract_value(value):
                 continue
             current = payload.get(field)
+            inherited = source_payload.get(field) if isinstance(source_payload, dict) else None
             if field == "instruction":
-                if _is_empty_contract_value(current) or _looks_like_trigger_wrapper_instruction(current):
+                if (
+                    _is_empty_contract_value(current)
+                    or _looks_like_trigger_wrapper_instruction(current)
+                    or current == inherited
+                ):
                     payload[field] = value
                 continue
-            if _is_empty_contract_value(current):
+            if _is_empty_contract_value(current) or current == inherited:
                 payload[field] = value
+
+    def _promote_trigger_context_fields(self, payload: Dict[str, Any], source: Dict[str, Any]) -> None:
+        self._promote_fanout_item_fields(payload, source)
+        passthrough_fields = (
+            "workstream",
+            "workstream_index",
+            "fanout_count",
+            "fanout_id",
+            "fanout_branch_key",
+            "fanout_expected_branch_keys",
+            "depends_on_steps",
+            "context_items",
+            "global_acceptance_criteria",
+            "global_quality_gates",
+            "global_risks",
+            "project_id",
+            "conversation_id",
+            "orchestration_id",
+        )
+        for field in passthrough_fields:
+            if field in payload and not _is_empty_contract_value(payload.get(field)):
+                continue
+            value = source.get(field)
+            if _is_empty_contract_value(value):
+                continue
+            payload[field] = value
+
+    def _promote_trigger_result_fields(self, payload: Dict[str, Any], result: Dict[str, Any]) -> None:
+        field_map = {
+            "failure_type": "upstream_failure_type",
+            "findings": "upstream_findings",
+            "evidence": "upstream_evidence",
+            "handoff_notes": "upstream_handoff_notes",
+            "artifacts": "upstream_artifacts",
+            "outcome": "upstream_outcome",
+            "status": "upstream_status",
+        }
+        for source_field, target_field in field_map.items():
+            if target_field in payload and not _is_empty_contract_value(payload.get(target_field)):
+                continue
+            value = result.get(source_field)
+            if _is_empty_contract_value(value):
+                continue
+            payload[target_field] = value
 
     def _resolve_fan_out_items(
         self,

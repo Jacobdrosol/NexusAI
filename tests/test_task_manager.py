@@ -5859,3 +5859,96 @@ async def test_backward_reroute_can_progress_forward_again_for_trigger_spawned_t
     assert remediation.metadata.orchestration_id == "test-orchestration-reroute"
     assert resumed.metadata.source == "bot_trigger"
     assert resumed.metadata.parent_task_id == remediation.id
+
+
+@pytest.mark.anyio
+async def test_default_failure_trigger_payload_preserves_remediation_context(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot, TaskMetadata
+
+    class StubScheduler:
+        async def schedule(self, task):
+            if task.bot_id == "bot-a":
+                return {
+                    "outcome": "fail",
+                    "failure_type": "implementation_issue",
+                    "findings": ["Null reference in controller path"],
+                    "evidence": ["dotnet test failed in IssuesControllerTests"],
+                    "handoff_notes": "Fix only the scoped backend workstream",
+                }
+            return {"status": "ok"}
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "failure-context-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="bot-a",
+            name="Bot A",
+            role="tester",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "tester-back-coder",
+                        "event": "task_completed",
+                        "target_bot_id": "bot-c",
+                        "condition": "has_result",
+                        "result_field": "failure_type",
+                        "result_equals": "implementation_issue",
+                    }
+                ]
+            },
+        )
+    )
+    await bot_registry.register(Bot(id="bot-c", name="Bot C", role="coder", backends=[]))
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "failure-context-tasks.db"), bot_registry=bot_registry)
+    root = await tm.create_task(
+        bot_id="bot-a",
+        payload={
+            "title": "Validate backend API workstream",
+            "instruction": "Run backend controller and service tests for the scoped workstream.",
+            "acceptance_criteria": ["All API tests pass for the issues workstream."],
+            "deliverables": ["GlobeIQ.Server/Controllers/IssuesController.cs", "GlobeIQ.Server.Tests/IssuesControllerTests.cs"],
+            "quality_gates": ["No failing backend API tests remain."],
+            "evidence_requirements": ["Executed dotnet test output"],
+            "workstream": {
+                "title": "Backend API & Service Layer",
+                "instruction": "Implement the issues API and tests only.",
+                "deliverables": ["GlobeIQ.Server/Controllers/IssuesController.cs"],
+            },
+            "workstream_index": 1,
+            "fanout_count": 3,
+            "fanout_id": "fanout:test",
+            "fanout_branch_key": "backend-api",
+            "source_payload": {
+                "title": "Backend API & Service Layer",
+                "instruction": "Implement the issues API and tests only.",
+                "acceptance_criteria": ["The issues API compiles and tests pass."],
+                "deliverables": ["GlobeIQ.Server/Controllers/IssuesController.cs", "GlobeIQ.Server.Tests/IssuesControllerTests.cs"],
+                "quality_gates": ["No unresolved backend API defects remain."],
+            },
+        },
+        metadata=TaskMetadata(
+            source="bot_trigger",
+            orchestration_id="orch-remediate",
+            project_id="proj-1",
+        ),
+    )
+
+    for _ in range(40):
+        tasks = await tm.list_tasks(orchestration_id="orch-remediate")
+        if len(tasks) >= 2:
+            break
+        await asyncio.sleep(0.1)
+
+    tasks = await tm.list_tasks(orchestration_id="orch-remediate")
+    remediation = next(task for task in tasks if task.id != root.id and task.bot_id == "bot-c")
+    assert remediation.payload["title"] == "Backend API & Service Layer"
+    assert remediation.payload["instruction"] == "Implement the issues API and tests only."
+    assert remediation.payload["fanout_branch_key"] == "backend-api"
+    assert remediation.payload["upstream_failure_type"] == "implementation_issue"
+    assert remediation.payload["upstream_findings"] == ["Null reference in controller path"]
+    assert remediation.payload["upstream_handoff_notes"] == "Fix only the scoped backend workstream"
