@@ -2910,20 +2910,15 @@ class TaskManager:
 
         metadata = task.metadata or TaskMetadata()
         
-        # Skip workflow triggers for orchestrated tasks - the orchestrator manages the workflow
-        # Triggers should only fire for standalone tasks (not part of an orchestrated assignment)
+        # For orchestrated tasks:
+        # - SKIP forward triggers (orchestrator manages forward progression via the plan)
+        # - ALLOW backward triggers (when task fails, route back to fix)
+        # Forward triggers have condition="has_result" (task completed successfully)
+        # Backward triggers have condition="has_error" or result_field/result_equals for failure types
         source = str(metadata.source or "").strip().lower()
         has_orchestration = bool(metadata.orchestration_id)
         is_orchestrated = source in {"chat_assign", "auto_retry"} or has_orchestration
-        if is_orchestrated:
-            logger.debug(
-                "Skipping bot triggers for orchestrated task %s (source=%s, orchestration_id=%s)",
-                task.id,
-                source,
-                metadata.orchestration_id,
-            )
-            return
-
+        
         trigger_depth = int(metadata.trigger_depth or 0)
         max_depth = max(1, _settings_int("bot_trigger_max_depth", 20))
         if trigger_depth >= max_depth:
@@ -2937,6 +2932,23 @@ class TaskManager:
                     continue
                 if trigger.condition == "has_result" and task.result is None:
                     continue
+                if trigger.condition == "has_error" and task.error is None:
+                    continue
+                
+                # For orchestrated tasks, skip forward triggers but allow backward triggers
+                if is_orchestrated:
+                    is_forward_trigger = (
+                        trigger.condition == "has_result" and
+                        not trigger.result_field and  # backward triggers have result_field for failure_type
+                        trigger.event == "task_completed"
+                    )
+                    if is_forward_trigger:
+                        logger.debug(
+                            "Skipping forward trigger %s for orchestrated task %s (orchestrator manages forward progression)",
+                            trigger.id,
+                            task.id,
+                        )
+                        continue
                 if trigger.condition == "has_error" and task.error is None:
                     continue
                 if not self._trigger_matches_result(task, trigger):

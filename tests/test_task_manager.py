@@ -5246,7 +5246,7 @@ async def test_task_manager_ignores_legacy_dashboard_tasks_table_shape(tmp_path)
 
 @pytest.mark.anyio
 async def test_trigger_skipped_for_orchestrated_tasks(tmp_path):
-    """Workflow triggers should NOT fire for orchestrated tasks - the orchestrator manages workflow."""
+    """For orchestrated tasks: forward triggers should be skipped, backward triggers should fire."""
     import asyncio
 
     from control_plane.registry.bot_registry import BotRegistry
@@ -5258,7 +5258,7 @@ async def test_trigger_skipped_for_orchestrated_tasks(tmp_path):
             return {"done": True}
 
     bot_registry = BotRegistry(db_path=str(tmp_path / "orchestrated-trigger-skip.db"))
-    # bot-a has a trigger that would fire to bot-b on completion
+    # bot-a has BOTH forward trigger (to bot-b) and backward trigger (to bot-c)
     await bot_registry.register(
         Bot(
             id="bot-a",
@@ -5267,17 +5267,26 @@ async def test_trigger_skipped_for_orchestrated_tasks(tmp_path):
             backends=[],
             workflow={
                 "triggers": [
+                    # Forward trigger - should be skipped for orchestrated tasks
                     {
-                        "id": "handoff",
+                        "id": "forward-handoff",
                         "event": "task_completed",
                         "target_bot_id": "bot-b",
                         "condition": "has_result",
-                    }
+                    },
+                    # Backward trigger - should fire for orchestrated tasks on failure
+                    {
+                        "id": "backward-error",
+                        "event": "task_failed",
+                        "target_bot_id": "bot-c",
+                        "condition": "has_error",
+                    },
                 ]
             },
         )
     )
     await bot_registry.register(Bot(id="bot-b", name="Bot B", role="assistant", backends=[]))
+    await bot_registry.register(Bot(id="bot-c", name="Bot C", role="assistant", backends=[]))
 
     tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "orchestrated-trigger-skip-tasks.db"), bot_registry=bot_registry)
     
@@ -5304,8 +5313,74 @@ async def test_trigger_skipped_for_orchestrated_tasks(tmp_path):
     await asyncio.sleep(0.3)  # Give time for any trigger dispatch attempt
 
     tasks = await tm.list_tasks()
-    # Should only have 1 task - the trigger should be skipped because orchestration_id is set
-    assert len(tasks) == 1, f"Expected 1 task (orchestrated), got {len(tasks)}"
+    # Should only have 1 task - the forward trigger should be skipped (orchestrator manages forward progression)
+    assert len(tasks) == 1, f"Expected 1 task (forward trigger skipped), got {len(tasks)}"
     assert tasks[0].bot_id == "bot-a"
     assert tasks[0].metadata.orchestration_id == "test-orchestration-123"
-    assert updated.status == "completed"
+
+
+async def test_backward_trigger_fires_for_orchestrated_failed_tasks(tmp_path):
+    """Backward triggers (failure routing) should fire for orchestrated tasks that fail."""
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot, TaskMetadata, TaskError
+
+    class FailingScheduler:
+        async def schedule(self, task):
+            # Raise an exception to actually fail the task
+            raise RuntimeError("Something went wrong")
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "orchestrated-backward-trigger.db"))
+    # bot-a has backward trigger for failure routing
+    await bot_registry.register(
+        Bot(
+            id="bot-a",
+            name="Bot A",
+            role="assistant",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "backward-error",
+                        "event": "task_failed",
+                        "target_bot_id": "bot-c",
+                        "condition": "has_error",
+                    },
+                ]
+            },
+        )
+    )
+    await bot_registry.register(Bot(id="bot-c", name="Bot C", role="assistant", backends=[]))
+
+    tm = TaskManager(FailingScheduler(), db_path=str(tmp_path / "orchestrated-backward-trigger-tasks.db"), bot_registry=bot_registry)
+    
+    # Create a task WITH orchestration_id (simulating orchestrated task)
+    root = await tm.create_task(
+        bot_id="bot-a",
+        payload={"instruction": "start"},
+        metadata=TaskMetadata(
+            source="chat_assign",
+            orchestration_id="test-orchestration-456",
+        ),
+    )
+
+    # Wait for task to fail and trigger to fire
+    for _ in range(30):
+        tasks = await tm.list_tasks()
+        if len(tasks) >= 2:
+            break
+        await asyncio.sleep(0.1)
+
+    tasks = await tm.list_tasks()
+    # Should have 2 tasks: original (failed) + triggered bot-c (backward routing)
+    assert len(tasks) == 2, f"Expected 2 tasks (backward trigger should fire), got {len(tasks)}"
+    bot_ids = {t.bot_id for t in tasks}
+    assert "bot-a" in bot_ids
+    assert "bot-c" in bot_ids, "Backward trigger should have created bot-c task"
+    
+    # Original task should be failed
+    bot_a_task = next(t for t in tasks if t.bot_id == "bot-a")
+    assert bot_a_task.status == "failed", f"bot-a task should be failed, got {bot_a_task.status}"
+    assert bot_a_task.metadata.orchestration_id == "test-orchestration-456"
