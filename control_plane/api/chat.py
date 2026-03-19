@@ -1289,6 +1289,7 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                 role="assistant",
                 content=(
                     f"Assignment queued ({len(assignment.get('tasks', []))} tasks).\n"
+                    f"Assigned Bot: {assignment.get('pm_bot_id') or assign_bot_id or ''}\n"
                     f"Orchestration ID: {assignment.get('orchestration_id')}\n"
                     "A full assignment summary will be posted when the workflow finishes."
                 ),

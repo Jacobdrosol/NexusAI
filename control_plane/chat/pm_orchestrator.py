@@ -61,6 +61,15 @@ class PMOrchestrator:
         if pm_bot is None:
             raise BotNotFoundError("No PM bot available for assignment")
 
+        if self._should_bootstrap_assignment_via_pm_workflow(pm_bot):
+            return await self._bootstrap_assignment_via_pm_workflow(
+                conversation_id=conversation_id,
+                instruction=instruction,
+                pm_bot=pm_bot,
+                context_items=context_items or [],
+                project_id=project_id,
+            )
+
         plan = await self._build_plan(
             instruction=instruction,
             pm_bot_id=pm_bot.id,
@@ -157,6 +166,78 @@ class PMOrchestrator:
             "instruction": instruction,
             "plan": plan,
             "tasks": [t.model_dump() for t in created_tasks],
+        }
+
+    def _should_bootstrap_assignment_via_pm_workflow(self, pm_bot: Bot) -> bool:
+        workflow = self._bot_workflow(pm_bot)
+        if workflow is None:
+            return False
+        triggers = getattr(workflow, "triggers", None) or []
+        return any(bool(getattr(trigger, "enabled", True)) for trigger in triggers)
+
+    async def _bootstrap_assignment_via_pm_workflow(
+        self,
+        *,
+        conversation_id: str,
+        instruction: str,
+        pm_bot: Bot,
+        context_items: List[str],
+        project_id: Optional[str],
+    ) -> Dict[str, Any]:
+        orchestration_id = str(uuid.uuid4())
+        pm_task = await self._task_manager.create_task(
+            bot_id=pm_bot.id,
+            payload={
+                "title": "PM assignment intake",
+                "instruction": str(instruction or "").strip(),
+                "role_hint": "pm",
+                "step_kind": "planning",
+                "deliverables": ["PM workflow output"],
+                "evidence_requirements": ["Structured PM output that satisfies the bot output contract"],
+                "quality_gates": ["Downstream workflow routing is driven by the selected PM bot configuration"],
+                "acceptance_criteria": ["The assignment is decomposed by the selected PM bot configuration"],
+                "global_acceptance_criteria": [],
+                "global_quality_gates": [],
+                "global_risks": [],
+                "source": "chat_assign",
+                "project_id": project_id,
+                "conversation_id": conversation_id,
+                "orchestration_id": orchestration_id,
+                "context_items": context_items,
+            },
+            metadata=TaskMetadata(
+                source="chat_assign",
+                project_id=project_id,
+                conversation_id=conversation_id,
+                orchestration_id=orchestration_id,
+                step_id="pm_assignment_entry",
+            ),
+        )
+        return {
+            "orchestration_id": orchestration_id,
+            "pm_bot_id": pm_bot.id,
+            "instruction": instruction,
+            "plan": {
+                "global_acceptance_criteria": [],
+                "global_quality_gates": [],
+                "risks": [],
+                "steps": [
+                    {
+                        "id": "pm_assignment_entry",
+                        "title": "PM assignment intake",
+                        "instruction": str(instruction or "").strip(),
+                        "bot_id": pm_bot.id,
+                        "role_hint": str(pm_bot.role or "pm"),
+                        "step_kind": "planning",
+                        "depends_on": [],
+                        "acceptance_criteria": ["The selected PM bot owns assignment decomposition and routing."],
+                        "deliverables": ["PM workflow output"],
+                        "quality_gates": ["Downstream workflow is driven by bot configuration."],
+                        "evidence_requirements": ["Structured PM output that satisfies the bot output contract"],
+                    }
+                ],
+            },
+            "tasks": [pm_task.model_dump()],
         }
 
     async def wait_for_completion(
@@ -344,6 +425,24 @@ class PMOrchestrator:
         }
         enabled_ids = {str(bot.id).strip().lower() for bot in bots if getattr(bot, "enabled", False)}
         return required_bot_ids.issubset(enabled_ids)
+
+    def _bot_workflow(self, bot: Bot) -> Any:
+        workflow = getattr(bot, "workflow", None)
+        if workflow is not None and getattr(workflow, "triggers", None):
+            return workflow
+        routing_rules = getattr(bot, "routing_rules", None)
+        if not isinstance(routing_rules, dict):
+            return workflow
+        candidate = routing_rules.get("workflow")
+        if candidate is None:
+            return workflow
+        try:
+            from shared.models import BotWorkflow
+
+            parsed = BotWorkflow.model_validate(candidate)
+            return parsed if parsed.triggers else workflow
+        except Exception:
+            return workflow
 
     def _deterministic_pm_pack_plan(self, instruction: str, bots: List[Bot]) -> Dict[str, Any]:
         enabled_ids = {str(bot.id).strip().lower() for bot in bots if getattr(bot, "enabled", False)}

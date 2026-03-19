@@ -284,6 +284,7 @@ async def test_assign_message_creates_task_graph_and_summary(cp_app):
         assert data["mode"] == "assign"
         assert len(data["assignment"]["tasks"]) >= 2
         assert "Assignment queued" in data["assistant_message"]["content"]
+        assert "Assigned Bot: bot-pm" in data["assistant_message"]["content"]
 
         tasks_resp = await client.get("/v1/tasks")
         assert tasks_resp.status_code == 200
@@ -355,6 +356,51 @@ async def test_stream_assign_emits_task_events(cp_app):
         assert "event: task_status" in text
         assert "event: assistant_message" in text
         assert "event: done" in text
+
+
+@pytest.mark.anyio
+async def test_assign_message_bootstraps_selected_pm_bot_workflow(cp_app):
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        create_resp = await client.post("/v1/chat/conversations", json={"title": "Assign Workflow Chat"})
+        conversation_id = create_resp.json()["id"]
+
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "pm-workflow",
+                "name": "PM Workflow",
+                "role": "pm",
+                "backends": [],
+                "enabled": True,
+                "workflow": {
+                    "triggers": [
+                        {
+                            "id": "pm-to-research",
+                            "event": "task_completed",
+                            "target_bot_id": "pm-research-analyst",
+                            "condition": "has_result",
+                            "fan_out_field": "source_result.steps",
+                        }
+                    ]
+                },
+            },
+        )
+        await client.post(
+            "/v1/bots",
+            json={"id": "pm-research-analyst", "name": "PM Research Analyst", "role": "researcher", "backends": [], "enabled": True},
+        )
+
+        post_resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={"content": "@assign Build the workflow", "bot_id": "pm-workflow"},
+        )
+        assert post_resp.status_code == 200
+        data = post_resp.json()
+        assert data["mode"] == "assign"
+        assert len(data["assignment"]["tasks"]) == 1
+        assert data["assignment"]["tasks"][0]["bot_id"] == "pm-workflow"
+        assert data["assignment"]["plan"]["steps"][0]["bot_id"] == "pm-workflow"
+        assert "Assigned Bot: pm-workflow" in data["assistant_message"]["content"]
 
 
 @pytest.mark.anyio

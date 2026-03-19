@@ -893,6 +893,68 @@ async def test_orchestrate_assignment_fails_closed_for_unknown_explicit_bot_id()
         )
 
 
+@pytest.mark.anyio
+async def test_orchestrate_assignment_bootstraps_via_pm_workflow_when_pm_has_triggers() -> None:
+    pm_bot = Bot(
+        id="pm-orchestrator",
+        name="PM Orchestrator",
+        role="pm",
+        backends=[],
+        enabled=True,
+        workflow={
+            "triggers": [
+                {
+                    "id": "pm-to-research",
+                    "event": "task_completed",
+                    "target_bot_id": "pm-research-analyst",
+                    "condition": "has_result",
+                    "fan_out_field": "source_result.steps",
+                }
+            ]
+        },
+    )
+    bots = [
+        pm_bot,
+        _bot(bot_id="pm-research-analyst", name="PM Research Analyst", role="researcher", priority=70),
+    ]
+    bot_registry = type("BotRegistry", (), {"list": AsyncMock(return_value=bots)})()
+    created_task = Task(
+        id="task-pm-entry",
+        bot_id="pm-orchestrator",
+        payload={"title": "PM assignment intake"},
+        metadata=TaskMetadata(source="chat_assign", step_id="pm_assignment_entry"),
+        created_at="2026-03-19T00:00:00+00:00",
+        updated_at="2026-03-19T00:00:00+00:00",
+    )
+    task_manager = type("TaskManager", (), {"create_task": AsyncMock(return_value=created_task)})()
+    orchestrator = PMOrchestrator(
+        bot_registry=bot_registry,
+        scheduler=None,
+        task_manager=task_manager,
+        chat_manager=None,
+    )
+    orchestrator._build_plan = AsyncMock()
+
+    assignment = await orchestrator.orchestrate_assignment(
+        conversation_id="conv-1",
+        instruction="Document the lesson blocks",
+        requested_pm_bot_id="pm-orchestrator",
+        context_items=["[repo-profile] Workspace stack summary"],
+        project_id="proj-1",
+    )
+
+    orchestrator._build_plan.assert_not_awaited()
+    task_manager.create_task.assert_awaited_once()
+    create_kwargs = task_manager.create_task.await_args.kwargs
+    assert create_kwargs["bot_id"] == "pm-orchestrator"
+    assert create_kwargs["payload"]["instruction"] == "Document the lesson blocks"
+    assert create_kwargs["payload"]["context_items"] == ["[repo-profile] Workspace stack summary"]
+    assert create_kwargs["metadata"].source == "chat_assign"
+    assert assignment["pm_bot_id"] == "pm-orchestrator"
+    assert assignment["tasks"][0]["bot_id"] == "pm-orchestrator"
+    assert assignment["plan"]["steps"][0]["bot_id"] == "pm-orchestrator"
+
+
 async def test_wait_for_completion_marks_snapshot_when_timeout_reached() -> None:
     running_task = Task(
         id="task-1",
