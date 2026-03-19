@@ -99,10 +99,12 @@ def _pm_specs() -> List[BotSpec]:
             priority=82,
             system_prompt=(
                 "You are a deterministic implementation planner and systems engineer.\n"
-                "Return JSON only with keys: status, architecture, implementation_plan, artifacts, risks, handoff_notes.\n"
+                "Return JSON only with keys: status, architecture, implementation_plan, implementation_workstreams, artifacts, risks, handoff_notes.\n"
                 "If the deliverables are repo files or planning docs, include each full file in artifacts using {path, content}.\n"
                 "Repo-profile context is authoritative for language, framework, and runtime choices.\n"
                 "Translate requirements into a concrete implementation plan with sequencing and constraints.\n"
+                "implementation_workstreams must be a non-empty list of coder-sized branches. Use one workstream only when the task is genuinely small; otherwise split the work into parallel coder branches.\n"
+                "Each implementation_workstream should include title, instruction, acceptance_criteria, deliverables, quality_gates, and evidence_requirements.\n"
                 "Do not write prose outside the JSON object."
             ),
         ),
@@ -182,6 +184,7 @@ def _pm_specs() -> List[BotSpec]:
                 "If there are no UI deliverables or user-facing behavior changes, return outcome=skip and failure_type=skip.\n"
                 "If the step generates a UI validation report, include it in artifacts using {path, content}.\n"
                 "Use failure_type=environment_blocker when the browser/runtime/screenshot tooling required for UI validation is unavailable.\n"
+                "Use ui_render_issue when the problem belongs with engineering/coding ownership rather than the database path.\n"
                 "Use ui_data_issue or ui_config_issue when the problem should route to the database engineer.\n"
                 "Do not write prose outside the JSON object."
             ),
@@ -280,17 +283,27 @@ def _output_contract_payload(spec: BotSpec) -> Dict[str, Any]:
         },
         "pm-engineer": {
             "description": "Deterministic implementation plan and system design handoff.",
-            "required_fields": ["status", "architecture", "implementation_plan", "artifacts", "risks", "handoff_notes"],
-            "non_empty_fields": ["status", "architecture", "implementation_plan", "handoff_notes"],
+            "required_fields": ["status", "architecture", "implementation_plan", "implementation_workstreams", "artifacts", "risks", "handoff_notes"],
+            "non_empty_fields": ["status", "architecture", "implementation_plan", "implementation_workstreams", "handoff_notes"],
             "example_output": {
                 "status": "complete",
                 "architecture": ["Use explicit workflow triggers already supported by the platform."],
                 "implementation_plan": ["Update configs before adding new schema fields."],
+                "implementation_workstreams": [
+                    {
+                        "title": "Implement trigger routing updates",
+                        "instruction": "Update the PM bot pack routing definitions and downstream back-routes.",
+                        "acceptance_criteria": ["Workflow transitions match the approved PM sequence."],
+                        "deliverables": ["scripts/setup_pm_bot_pack.py", "tests/test_setup_pm_bot_pack.py"],
+                        "quality_gates": ["No unsupported workflow fields are introduced."],
+                        "evidence_requirements": ["Changed-file artifacts for the routing definitions and tests."],
+                    }
+                ],
                 "artifacts": [
                     {"path": "docs/implementation_plan.md", "content": "# Plan\n"}
                 ],
                 "risks": ["Inconsistent exported bot packs."],
-                "handoff_notes": "Coder should implement within existing workflow fields.",
+                "handoff_notes": "Coders should implement the planned workstreams within the existing workflow fields.",
             },
         },
         "pm-coder": {
@@ -404,10 +417,13 @@ def _workflow_payload(spec: BotSpec) -> Dict[str, Any]:
         "pm-engineer": [
             {
                 "id": "engineer-to-coder",
-                "title": "Engineer To Coder",
+                "title": "Engineer Fan-Out To Coders",
                 "event": "task_completed",
                 "target_bot_id": "pm-coder",
                 "condition": "has_result",
+                "fan_out_field": "source_result.implementation_workstreams",
+                "fan_out_alias": "workstream",
+                "fan_out_index_alias": "workstream_index",
             }
         ],
         "pm-coder": [
@@ -417,6 +433,19 @@ def _workflow_payload(spec: BotSpec) -> Dict[str, Any]:
                 "event": "task_completed",
                 "target_bot_id": "pm-tester",
                 "condition": "has_result",
+                "payload_template": {
+                    "title": "{{coalesce:source_payload.title,'Validate implemented workstream'}}",
+                    "instruction": "Run the repo-appropriate automated tests for the implemented workstream and return only real execution evidence.",
+                    "workstream": "{{json:source_payload.workstream}}",
+                    "workstream_index": "{{source_payload.workstream_index}}",
+                    "fanout_count": "{{source_payload.fanout_count}}",
+                    "fanout_id": "{{source_payload.fanout_id}}",
+                    "fanout_branch_key": "{{source_payload.fanout_branch_key}}",
+                    "acceptance_criteria": "{{json:coalesce:source_payload.workstream.tester_acceptance_criteria,source_payload.acceptance_criteria}}",
+                    "deliverables": ["Test run log artifact", "Coverage or test results artifact"],
+                    "quality_gates": ["All required automated tests for this workstream pass before security review."],
+                    "evidence_requirements": ["Executed test command output", "Pass/fail or coverage evidence"],
+                },
             }
         ],
         "pm-tester": [
@@ -428,6 +457,19 @@ def _workflow_payload(spec: BotSpec) -> Dict[str, Any]:
                 "condition": "has_result",
                 "result_field": "failure_type",
                 "result_equals": "pass",
+                "payload_template": {
+                    "title": "{{coalesce:source_payload.title,'Review implementation security and quality'}}",
+                    "instruction": "Perform a concrete security and implementation-quality review for this workstream. Identify only actionable findings tied to the changed files and real test evidence.",
+                    "workstream": "{{json:source_payload.workstream}}",
+                    "workstream_index": "{{source_payload.workstream_index}}",
+                    "fanout_count": "{{source_payload.fanout_count}}",
+                    "fanout_id": "{{source_payload.fanout_id}}",
+                    "fanout_branch_key": "{{source_payload.fanout_branch_key}}",
+                    "acceptance_criteria": ["No unresolved high-severity security or quality issues remain for this workstream."],
+                    "deliverables": ["Security review findings", "Security validation summary"],
+                    "quality_gates": ["Zero unresolved blocking security issues for this workstream."],
+                    "evidence_requirements": ["Concrete findings tied to changed files or execution evidence"],
+                },
             },
             {
                 "id": "tester-fix-coder",
@@ -458,12 +500,30 @@ def _workflow_payload(spec: BotSpec) -> Dict[str, Any]:
         "pm-security-reviewer": [
             {
                 "id": "security-pass-forward",
-                "title": "Security Pass Forward",
+                "title": "Security Join To Database",
                 "event": "task_completed",
                 "target_bot_id": "pm-database-engineer",
                 "condition": "has_result",
                 "result_field": "failure_type",
                 "result_equals": "pass",
+                "payload_template": {
+                    "title": "Step 6: Validate joined database and data-layer impact",
+                    "instruction": "Review the complete approved implementation set for schema, query, persistence, migration, and data-contract impact after all coder/tester/security branches have passed.",
+                    "fanout_count": "{{fanout_count}}",
+                    "fanout_id": "{{fanout_id}}",
+                    "acceptance_criteria": [
+                        "Database and data-layer impact is validated across the full approved change set.",
+                        "Any required schema or migration changes are identified explicitly.",
+                    ],
+                    "deliverables": ["Database validation report", "Migration or schema notes if required"],
+                    "quality_gates": ["No unresolved data-layer issues remain."],
+                    "evidence_requirements": ["Concrete findings tied to schema, queries, or changed files"],
+                },
+                "join_expected_field": "fanout_count",
+                "join_items_alias": "secured_workstreams",
+                "join_result_field": "source_result",
+                "join_result_items_alias": "security_reviews",
+                "join_sort_field": "workstream_index",
             },
             {
                 "id": "security-fix-coder",
@@ -500,6 +560,17 @@ def _workflow_payload(spec: BotSpec) -> Dict[str, Any]:
                 "condition": "has_result",
                 "result_field": "failure_type",
                 "result_equals": "pass",
+                "payload_template": {
+                    "title": "Step 7: Validate UI and user experience when applicable",
+                    "instruction": "Validate UI behavior, rendering, data display, forms, responsiveness, and user experience when the request affects user-facing behavior. If there is no UI impact, explicitly return skip.",
+                    "acceptance_criteria": [
+                        "User-facing changes behave correctly when applicable.",
+                        "Non-UI work is explicitly skipped rather than guessed at.",
+                    ],
+                    "deliverables": ["UI validation report"],
+                    "quality_gates": ["No unresolved UI or UX blockers remain."],
+                    "evidence_requirements": ["Concrete UI findings or explicit skip rationale"],
+                },
             },
             {
                 "id": "database-fix-coder",
@@ -536,6 +607,13 @@ def _workflow_payload(spec: BotSpec) -> Dict[str, Any]:
                 "condition": "has_result",
                 "result_field": "outcome",
                 "result_equals": "pass",
+                "payload_template": {
+                    "title": "Step 8: Finalize verification and delivery summary",
+                    "instruction": "Perform the terminal evidence-backed QC pass across requirements, implementation, tests, security, database validation, and UI validation. Return the final delivery summary and suggested commit message.",
+                    "deliverables": ["Final verification summary", "Suggested commit message"],
+                    "quality_gates": ["No unresolved blocking issues remain."],
+                    "evidence_requirements": ["Concrete findings tied to changed files or execution evidence"],
+                },
             },
             {
                 "id": "ui-skip-final-qc",
@@ -545,6 +623,13 @@ def _workflow_payload(spec: BotSpec) -> Dict[str, Any]:
                 "condition": "has_result",
                 "result_field": "outcome",
                 "result_equals": "skip",
+                "payload_template": {
+                    "title": "Step 8: Finalize verification and delivery summary",
+                    "instruction": "Perform the terminal evidence-backed QC pass across requirements, implementation, tests, security, database validation, and UI validation. Return the final delivery summary and suggested commit message.",
+                    "deliverables": ["Final verification summary", "Suggested commit message"],
+                    "quality_gates": ["No unresolved blocking issues remain."],
+                    "evidence_requirements": ["Concrete findings tied to changed files or execution evidence"],
+                },
             },
             {
                 "id": "ui-env-blocker-final-qc",
@@ -554,12 +639,19 @@ def _workflow_payload(spec: BotSpec) -> Dict[str, Any]:
                 "condition": "has_result",
                 "result_field": "failure_type",
                 "result_equals": "environment_blocker",
+                "payload_template": {
+                    "title": "Step 8: Finalize verification and delivery summary",
+                    "instruction": "Perform the terminal evidence-backed QC pass across requirements, implementation, tests, security, database validation, and UI validation. Return the final delivery summary and suggested commit message.",
+                    "deliverables": ["Final verification summary", "Suggested commit message"],
+                    "quality_gates": ["No unresolved blocking issues remain."],
+                    "evidence_requirements": ["Concrete findings tied to changed files or execution evidence"],
+                },
             },
             {
-                "id": "ui-back-coder",
-                "title": "UI Back To Coder",
+                "id": "ui-back-engineer",
+                "title": "UI Back To Engineer",
                 "event": "task_completed",
-                "target_bot_id": "pm-coder",
+                "target_bot_id": "pm-engineer",
                 "condition": "has_result",
                 "result_field": "failure_type",
                 "result_equals": "ui_render_issue",
@@ -583,10 +675,10 @@ def _workflow_payload(spec: BotSpec) -> Dict[str, Any]:
                 "result_equals": "ui_config_issue",
             },
             {
-                "id": "ui-hard-fail-coder",
-                "title": "UI Hard Failure To Coder",
+                "id": "ui-hard-fail-engineer",
+                "title": "UI Hard Failure To Engineer",
                 "event": "task_failed",
-                "target_bot_id": "pm-coder",
+                "target_bot_id": "pm-engineer",
                 "condition": "has_error",
             },
         ],
@@ -639,12 +731,12 @@ def _workflow_payload(spec: BotSpec) -> Dict[str, Any]:
     notes: Dict[str, str] = {
         "pm-orchestrator": "Assignment planning only. No downstream workflow triggers.",
         "pm-research-analyst": "Always hands off to engineering after producing structured requirements.",
-        "pm-engineer": "Always hands off to coding after producing the implementation plan.",
-        "pm-coder": "Always hands off to testing after implementation output is produced.",
-        "pm-tester": "Routes forward only on pass; otherwise routes back to coder.",
-        "pm-security-reviewer": "Routes forward only on pass; failures go to coder or engineer.",
-        "pm-database-engineer": "Routes forward only on pass; failures go to coder or engineer.",
-        "pm-ui-tester": "UI validation routes to final QC on pass or skip, and back only to explicitly allowed fix owners on failure.",
+        "pm-engineer": "Produces implementation_workstreams and fans them out to one or more coders.",
+        "pm-coder": "Each coder branch hands off to branch testing after implementation output is produced.",
+        "pm-tester": "Each tester branch routes forward only on pass; otherwise routes back to coder or final QC for environment blockers.",
+        "pm-security-reviewer": "Each security branch routes to coder or engineer on failure; passing branches join into a single database review.",
+        "pm-database-engineer": "Validates the joined approved change set before UI testing and routes failures to coder or engineer.",
+        "pm-ui-tester": "UI validation routes to final QC on pass or skip, and routes UI/data problems back to engineer or database only.",
         "pm-final-qc": "Terminal final delivery gate on pass; routes back to the appropriate bot on fail.",
     }
     return {

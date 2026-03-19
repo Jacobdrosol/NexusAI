@@ -460,6 +460,11 @@ def _extract_result_output_text(result: Any) -> str:
     return ""
 
 
+def _looks_like_trigger_wrapper_instruction(value: Any) -> bool:
+    text = str(value or "").strip().lower()
+    return text.startswith("triggered by bot ")
+
+
 def _looks_like_truncated_result(result: Any) -> bool:
     finish_reason = _extract_result_finish_reason(result)
     if finish_reason in {"length", "max_tokens", "max_output_tokens", "token_limit", "max_new_tokens"}:
@@ -3056,7 +3061,11 @@ class TaskManager:
                         not trigger.result_field and  # backward triggers have result_field for failure_type
                         trigger.event == "task_completed"
                     )
-                    if is_forward_trigger:
+                    is_dynamic_forward_trigger = bool(
+                        str(getattr(trigger, "fan_out_field", "") or "").strip()
+                        or self._trigger_uses_join(trigger)
+                    )
+                    if is_forward_trigger and not is_dynamic_forward_trigger:
                         logger.debug(
                             "Skipping forward trigger %s for orchestrated task %s (orchestrator manages forward progression)",
                             trigger.id,
@@ -3312,6 +3321,8 @@ class TaskManager:
             next_payload = dict(payload)
             next_payload[alias] = item
             next_payload[index_alias] = idx
+            if isinstance(item, dict):
+                self._promote_fanout_item_fields(next_payload, item)
             next_payload["fanout_count"] = total
             if fanout_id:
                 next_payload["fanout_id"] = fanout_id
@@ -3334,6 +3345,27 @@ class TaskManager:
                 if isinstance(next_payload, dict):
                     next_payload["fanout_expected_branch_keys"] = list(unique_branch_keys)
         return payloads
+
+    def _promote_fanout_item_fields(self, payload: Dict[str, Any], item: Dict[str, Any]) -> None:
+        promotable_fields = (
+            "title",
+            "instruction",
+            "acceptance_criteria",
+            "deliverables",
+            "quality_gates",
+            "evidence_requirements",
+        )
+        for field in promotable_fields:
+            value = item.get(field)
+            if _is_empty_contract_value(value):
+                continue
+            current = payload.get(field)
+            if field == "instruction":
+                if _is_empty_contract_value(current) or _looks_like_trigger_wrapper_instruction(current):
+                    payload[field] = value
+                continue
+            if _is_empty_contract_value(current):
+                payload[field] = value
 
     def _resolve_fan_out_items(
         self,

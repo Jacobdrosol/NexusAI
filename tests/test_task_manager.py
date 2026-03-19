@@ -5475,6 +5475,100 @@ async def test_backward_trigger_fires_for_orchestrated_failed_tasks(tmp_path):
     assert bot_a_task.metadata.orchestration_id == "test-orchestration-456"
 
 
+@pytest.mark.anyio
+async def test_plan_managed_fanout_forward_trigger_is_allowed(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot, TaskMetadata
+
+    class FanoutScheduler:
+        async def schedule(self, task):
+            if task.bot_id == "bot-a":
+                return {
+                    "implementation_workstreams": [
+                        {
+                            "title": "Implement branch one",
+                            "instruction": "Change the first file set.",
+                            "acceptance_criteria": ["Branch one is complete."],
+                            "deliverables": ["src/branch_one.py"],
+                            "quality_gates": ["Branch one matches plan."],
+                            "evidence_requirements": ["Changed-file artifact for branch one."],
+                        },
+                        {
+                            "title": "Implement branch two",
+                            "instruction": "Change the second file set.",
+                            "acceptance_criteria": ["Branch two is complete."],
+                            "deliverables": ["src/branch_two.py"],
+                            "quality_gates": ["Branch two matches plan."],
+                            "evidence_requirements": ["Changed-file artifact for branch two."],
+                        },
+                    ]
+                }
+            return {"status": "ok"}
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "orchestrated-fanout-forward.db"))
+    await bot_registry.register(
+        Bot(
+            id="bot-a",
+            name="Bot A",
+            role="engineer",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "forward-fanout",
+                        "event": "task_completed",
+                        "target_bot_id": "bot-b",
+                        "condition": "has_result",
+                        "fan_out_field": "source_result.implementation_workstreams",
+                        "fan_out_alias": "workstream",
+                        "fan_out_index_alias": "workstream_index",
+                    }
+                ]
+            },
+        )
+    )
+    await bot_registry.register(Bot(id="bot-b", name="Bot B", role="coder", backends=[]))
+
+    tm = TaskManager(FanoutScheduler(), db_path=str(tmp_path / "orchestrated-fanout-forward-tasks.db"), bot_registry=bot_registry)
+
+    root = await tm.create_task(
+        bot_id="bot-a",
+        payload={"instruction": "plan the branches"},
+        metadata=TaskMetadata(
+            source="chat_assign",
+            orchestration_id="test-orchestration-fanout",
+            step_id="step_2",
+        ),
+    )
+
+    for _ in range(40):
+        tasks = await tm.list_tasks(orchestration_id="test-orchestration-fanout")
+        if len(tasks) == 3 and all(task.status == "completed" for task in tasks):
+            break
+        await asyncio.sleep(0.1)
+
+    tasks = await tm.list_tasks(orchestration_id="test-orchestration-fanout")
+    assert len(tasks) == 3
+
+    root_task = next(task for task in tasks if task.id == root.id)
+    child_tasks = [task for task in tasks if task.id != root.id]
+
+    assert root_task.metadata.orchestration_id == "test-orchestration-fanout"
+    assert {task.bot_id for task in child_tasks} == {"bot-b"}
+    assert sorted(str(task.payload.get("title") or "") for task in child_tasks) == [
+        "Implement branch one",
+        "Implement branch two",
+    ]
+    assert sorted(str(task.payload.get("instruction") or "") for task in child_tasks) == [
+        "Change the first file set.",
+        "Change the second file set.",
+    ]
+    assert all(task.metadata and task.metadata.source == "bot_trigger" for task in child_tasks)
+
+
 def test_assignment_test_source_files_recognize_dotnet_test_projects() -> None:
     from control_plane.task_manager.task_manager import _assignment_test_source_files
 

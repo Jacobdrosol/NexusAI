@@ -169,11 +169,31 @@ class PMOrchestrator:
         import time
 
         task_ids = [str(t.get("id")) for t in assignment.get("tasks", []) if t.get("id")]
+        orchestration_id = str(assignment.get("orchestration_id") or "").strip()
         deadline = time.monotonic() + max_wait_seconds
         snapshots: Dict[str, Task] = {}
         all_terminal = False
 
+        async def _current_task_ids() -> List[str]:
+            if orchestration_id and hasattr(self._task_manager, "list_tasks"):
+                try:
+                    tasks = await self._task_manager.list_tasks(orchestration_id=orchestration_id)
+                except Exception:
+                    tasks = []
+                if tasks:
+                    ordered = sorted(
+                        tasks,
+                        key=lambda task: (
+                            str(task.created_at or ""),
+                            str(task.metadata.step_id if task.metadata else ""),
+                            str(task.id or ""),
+                        ),
+                    )
+                    return [str(task.id) for task in ordered if str(task.id or "").strip()]
+            return list(task_ids)
+
         while time.monotonic() < deadline:
+            task_ids = await _current_task_ids()
             all_terminal = True
             for task_id in task_ids:
                 task = await self._task_manager.get_task(task_id)
@@ -407,7 +427,9 @@ class PMOrchestrator:
                 "title": "Plan architecture and implementation sequence",
                 "instruction": (
                     "Turn the validated requirements into a concrete engineering plan. Identify affected systems, file areas, "
-                    "test strategy, database impact, and any fan-out opportunities needed for quality."
+                    "test strategy, database impact, and the coder workstreams needed for downstream fan-out. "
+                    "Produce a structured implementation_workstreams list sized for parallel coders when the scope naturally splits; "
+                    "use a single workstream only when the task is genuinely small."
                 ),
                 "bot_id": "pm-engineer",
                 "role_hint": "engineer",
@@ -416,148 +438,22 @@ class PMOrchestrator:
                 "acceptance_criteria": [
                     "The implementation plan matches the repo stack and existing architecture",
                     "Impacted files, test strategy, and validation stages are clear",
+                    "Implementation workstreams are explicit and ready for coder fan-out",
                 ],
                 "deliverables": [
                     "Implementation plan artifact",
+                    "Implementation workstream list for coder fan-out",
                     "Impacted areas summary",
                     "Validation strategy summary",
                 ],
                 "evidence_requirements": [
                     "Concrete implementation plan tied to repo structure",
+                    "Structured implementation_workstreams list for downstream coder fan-out",
                     "Risk and dependency notes",
                 ],
                 "quality_gates": ["No plan item introduces an unsupported runtime or framework"],
             },
-            {
-                "id": "step_3",
-                "title": "Implement repo changes and required automated tests",
-                "instruction": (
-                    f"Implement the approved solution for: {instruction}. "
-                    "Produce the necessary repo file changes, plus any new or updated automated tests needed to validate the work."
-                ),
-                "bot_id": "pm-coder",
-                "role_hint": "coder",
-                "step_kind": "repo_change",
-                "depends_on": ["step_2"],
-                "acceptance_criteria": [
-                    "Implementation matches the approved plan and requirements",
-                    "Automated tests needed for validation are included with the code changes",
-                ],
-                "deliverables": [
-                    "Repo file artifacts for implementation",
-                    "Repo file artifacts for automated tests",
-                    "Implementation notes",
-                ],
-                "evidence_requirements": [
-                    "Proposed repo file artifacts or code patches",
-                    "Concrete changed-file evidence tied to deliverables",
-                ],
-                "quality_gates": ["No generated repo files introduce an unsupported runtime"],
-            },
-            {
-                "id": "step_4",
-                "title": "Execute automated tests and validate behavior",
-                "instruction": (
-                    "Run the repo-appropriate automated tests against the generated implementation and test files. "
-                    "Return only real execution evidence and classify failures precisely."
-                ),
-                "bot_id": "pm-tester",
-                "role_hint": "tester",
-                "step_kind": "test_execution",
-                "depends_on": ["step_3"],
-                "acceptance_criteria": [
-                    "Required automated tests execute against the generated changes",
-                    "Failures are classified clearly enough for deterministic backward routing",
-                ],
-                "deliverables": ["Test run log artifact", "Coverage or test results artifact"],
-                "evidence_requirements": ["Executed test command output", "Pass/fail or coverage evidence"],
-                "quality_gates": ["All required automated tests pass before moving forward"],
-            },
-            {
-                "id": "step_5",
-                "title": "Review security and implementation quality",
-                "instruction": (
-                    "Perform a concrete security and quality review of the generated changes. "
-                    "Identify only actionable findings tied to the actual implementation and test evidence."
-                ),
-                "bot_id": "pm-security-reviewer",
-                "role_hint": "security",
-                "step_kind": "review",
-                "depends_on": ["step_4"],
-                "acceptance_criteria": [
-                    "No unresolved high-severity security or quality issues remain",
-                    "Findings are concrete and routed to the correct remediation owner",
-                ],
-                "deliverables": ["Security review findings", "Security validation summary"],
-                "evidence_requirements": ["Concrete findings tied to changed files or execution evidence"],
-                "quality_gates": ["Zero unresolved blocking security issues"],
-            },
-            {
-                "id": "step_6",
-                "title": "Validate database and data-layer impact",
-                "instruction": (
-                    "Review the implementation for schema, query, persistence, migration, and data-contract impact. "
-                    "If database changes are needed, identify them explicitly and route failures precisely."
-                ),
-                "bot_id": "pm-database-engineer",
-                "role_hint": "dba",
-                "step_kind": "review",
-                "depends_on": ["step_5"],
-                "acceptance_criteria": [
-                    "Database/data-layer impact is validated against the existing repo and schema expectations",
-                    "Any required schema or migration changes are identified explicitly",
-                ],
-                "deliverables": ["Database validation report", "Migration or schema notes if required"],
-                "evidence_requirements": ["Concrete findings tied to schema, queries, or changed files"],
-                "quality_gates": ["No unresolved data-layer issues remain"],
-            },
         ]
-
-        if "pm-ui-tester" in enabled_ids:
-            steps.append(
-                {
-                    "id": "step_7",
-                    "title": "Validate UI and user experience when applicable",
-                    "instruction": (
-                        "Validate UI behavior, rendering, data display, forms, responsiveness, and user experience when "
-                        "the request affects user-facing behavior. If there is no UI impact, explicitly return skip."
-                    ),
-                    "bot_id": "pm-ui-tester",
-                    "role_hint": "ui",
-                    "step_kind": "review",
-                    "depends_on": ["step_6"],
-                    "acceptance_criteria": [
-                        "User-facing changes behave correctly when applicable",
-                        "Non-UI work is explicitly skipped rather than guessed at",
-                    ],
-                    "deliverables": ["UI validation report"],
-                    "evidence_requirements": ["Concrete UI findings or explicit skip rationale"],
-                    "quality_gates": ["No unresolved UI or UX blockers remain"],
-                }
-            )
-
-        if "pm-final-qc" in enabled_ids:
-            steps.append(
-                {
-                    "id": "step_8" if "pm-ui-tester" in enabled_ids else "step_7",
-                    "title": "Finalize verification and delivery summary",
-                    "instruction": (
-                        "Perform the terminal evidence-backed QC pass across requirements, implementation, tests, security, "
-                        "database validation, and UI validation. Return the final delivery summary and suggested commit message."
-                    ),
-                    "bot_id": "pm-final-qc",
-                    "role_hint": "final-qc",
-                    "step_kind": "review",
-                    "depends_on": [steps[-1]["id"]],
-                    "acceptance_criteria": [
-                        "All required quality gates have passed or been explicitly skipped when not applicable",
-                        "The final summary accurately reflects the actual evidence produced by prior steps",
-                    ],
-                    "deliverables": ["Final verification summary", "Suggested commit message"],
-                    "evidence_requirements": ["Concrete findings tied to changed files or execution evidence"],
-                    "quality_gates": ["No unresolved blocking issues remain"],
-                }
-            )
 
         return {
             "steps": steps,

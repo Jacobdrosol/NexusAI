@@ -49,6 +49,16 @@ def test_setup_pm_bot_pack_exports_expected_models_and_triggers() -> None:
         assert bot["routing_rules"]["output_contract"]["fallback_mode"] == "disabled"
         if bot["id"] != "pm-orchestrator":
             assert "artifacts" in bot["routing_rules"]["output_contract"]["required_fields"]
+    assert "implementation_workstreams" in bundles["pm-engineer"]["bot"]["routing_rules"]["output_contract"]["required_fields"]
+
+    engineer_triggers = bundles["pm-engineer"]["bot"]["workflow"]["triggers"]
+    assert any(
+        trigger["target_bot_id"] == "pm-coder"
+        and trigger.get("fan_out_field") == "source_result.implementation_workstreams"
+        and trigger.get("fan_out_alias") == "workstream"
+        and trigger.get("fan_out_index_alias") == "workstream_index"
+        for trigger in engineer_triggers
+    )
 
     tester_triggers = bundles["pm-tester"]["bot"]["workflow"]["triggers"]
     assert any(
@@ -68,6 +78,15 @@ def test_setup_pm_bot_pack_exports_expected_models_and_triggers() -> None:
         for trigger in tester_triggers
     )
 
+    security_triggers = bundles["pm-security-reviewer"]["bot"]["workflow"]["triggers"]
+    assert any(
+        trigger["target_bot_id"] == "pm-database-engineer"
+        and trigger["result_equals"] == "pass"
+        and trigger.get("join_expected_field") == "fanout_count"
+        and trigger.get("join_items_alias") == "secured_workstreams"
+        for trigger in security_triggers
+    )
+
     ui_triggers = bundles["pm-ui-tester"]["bot"]["workflow"]["triggers"]
     assert any(
         trigger["target_bot_id"] == "pm-final-qc" and trigger["result_equals"] == "pass"
@@ -82,7 +101,7 @@ def test_setup_pm_bot_pack_exports_expected_models_and_triggers() -> None:
         for trigger in ui_triggers
     )
     assert any(
-        trigger["target_bot_id"] == "pm-coder" and trigger["result_equals"] == "ui_render_issue"
+        trigger["target_bot_id"] == "pm-engineer" and trigger["result_equals"] == "ui_render_issue"
         for trigger in ui_triggers
     )
     assert any(
@@ -94,7 +113,7 @@ def test_setup_pm_bot_pack_exports_expected_models_and_triggers() -> None:
         for trigger in ui_triggers
     )
     assert any(
-        trigger["event"] == "task_failed" and trigger["target_bot_id"] == "pm-coder"
+        trigger["event"] == "task_failed" and trigger["target_bot_id"] == "pm-engineer"
         for trigger in ui_triggers
     )
 

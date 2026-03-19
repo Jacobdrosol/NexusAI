@@ -5,7 +5,7 @@ import pytest
 
 from control_plane.chat.pm_orchestrator import PMOrchestrator
 from shared.exceptions import BotNotFoundError
-from shared.models import Bot, Task
+from shared.models import Bot, Task, TaskMetadata
 
 
 def _bot(*, bot_id: str, name: str, role: str, priority: int = 0, enabled: bool = True) -> Bot:
@@ -337,14 +337,9 @@ async def test_build_plan_uses_fixed_standard_pm_sequence_when_pack_is_present()
         "pm-research-analyst",
         "pm-research-analyst",
         "pm-engineer",
-        "pm-coder",
-        "pm-tester",
-        "pm-security-reviewer",
-        "pm-database-engineer",
-        "pm-ui-tester",
-        "pm-final-qc",
     ]
     assert plan["steps"][3]["depends_on"] == ["step_1_vault", "step_1_repo", "step_1_online"]
+    assert "Implementation workstream list for coder fan-out" in plan["steps"][3]["deliverables"]
 
 
 def test_normalize_evidence_requirements_downgrades_spec_file_commit_claims() -> None:
@@ -918,3 +913,52 @@ async def test_wait_for_completion_marks_snapshot_when_timeout_reached() -> None
     assert completion["all_terminal"] is False
     assert "snapshot summary" in completion["summary_text"].lower()
     assert "check the dag or tasks page" in completion["summary_text"].lower()
+
+
+@pytest.mark.anyio
+async def test_wait_for_completion_tracks_trigger_spawned_orchestration_tasks() -> None:
+    engineer_task = Task(
+        id="task-engineer",
+        bot_id="pm-engineer",
+        payload={"title": "Plan architecture and implementation sequence"},
+        metadata=TaskMetadata(source="chat_assign", orchestration_id="orch-dynamic", step_id="step_2"),
+        status="completed",
+        created_at="2026-03-16T18:22:49+00:00",
+        updated_at="2026-03-16T18:23:49+00:00",
+        result={"status": "complete"},
+    )
+    coder_task = Task(
+        id="task-coder-1",
+        bot_id="pm-coder",
+        payload={"title": "Implement routing workstream"},
+        metadata=TaskMetadata(source="bot_trigger", orchestration_id="orch-dynamic", parent_task_id="task-engineer"),
+        status="completed",
+        created_at="2026-03-16T18:24:00+00:00",
+        updated_at="2026-03-16T18:25:00+00:00",
+        result={"status": "complete"},
+    )
+    task_manager = type(
+        "TaskManager",
+        (),
+        {
+            "list_tasks": AsyncMock(return_value=[engineer_task, coder_task]),
+            "get_task": AsyncMock(side_effect=lambda task_id: engineer_task if task_id == "task-engineer" else coder_task),
+        },
+    )()
+    orchestrator = PMOrchestrator(
+        bot_registry=None,
+        scheduler=None,
+        task_manager=task_manager,
+        chat_manager=None,
+    )
+
+    completion = await orchestrator.wait_for_completion(
+        {"orchestration_id": "orch-dynamic", "tasks": [{"id": "task-engineer"}]},
+        poll_interval_seconds=0.0,
+        max_wait_seconds=0.01,
+    )
+
+    assert completion["all_terminal"] is True
+    assert completion["task_count"] == 2
+    assert "Assignment summary (2 tasks):" in completion["summary_text"]
+    assert "Implement routing workstream" in completion["summary_text"]
