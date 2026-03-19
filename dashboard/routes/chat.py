@@ -699,22 +699,53 @@ def api_orchestration_graph(orchestration_id: str):
     if tasks is None:
         return jsonify({"error": "control plane unavailable"}), 502
 
+    scoped_tasks = [task for task in tasks if isinstance(task, dict)]
+    root_node_id = f"orchestrator::{orchestration_id}"
+    has_explicit_orchestrator = any(str(task.get("bot_id") or "").strip() == "pm-orchestrator" for task in scoped_tasks)
+    is_chat_assignment = any(
+        str((task.get("metadata") or {}).get("source") or "").strip().lower() in {"chat_assign", "auto_retry", "bot_trigger"}
+        for task in scoped_tasks
+    )
+
     nodes = []
     edges = []
-    for t in tasks:
+    if scoped_tasks and is_chat_assignment and not has_explicit_orchestrator:
+        nodes.append(
+            {
+                "id": root_node_id,
+                "title": "PM Orchestrator",
+                "step_id": "pm-orchestrator",
+                "status": "completed",
+                "bot_id": "pm-orchestrator",
+                "depends_on": [],
+                "synthetic": True,
+            }
+        )
+
+    for t in scoped_tasks:
         task_id = str(t.get("id"))
         metadata = t.get("metadata") or {}
+        payload = t.get("payload") if isinstance(t.get("payload"), dict) else {}
+        step_id = str(metadata.get("step_id") or "").strip()
         title = str(
-            metadata.get("step_id")
+            payload.get("title")
             or metadata.get("pipeline_name")
+            or step_id
             or metadata.get("source")
             or task_id
         )
-        depends_on = t.get("depends_on") or []
+        depends_on = [str(dep) for dep in (t.get("depends_on") or []) if str(dep).strip()]
+        source = str(metadata.get("source") or "").strip().lower()
+        parent_task_id = str(metadata.get("parent_task_id") or "").strip()
+        if not depends_on and source == "bot_trigger" and parent_task_id:
+            depends_on = [parent_task_id]
+        if not depends_on and source in {"chat_assign", "auto_retry"} and is_chat_assignment and not has_explicit_orchestrator:
+            depends_on = [root_node_id]
         nodes.append(
             {
                 "id": task_id,
                 "title": title,
+                "step_id": step_id,
                 "status": t.get("status"),
                 "bot_id": t.get("bot_id"),
                 "depends_on": depends_on,

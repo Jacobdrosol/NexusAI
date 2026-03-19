@@ -1108,6 +1108,66 @@ def test_chat_orchestration_graph_api_handles_unavailable_cp(dashboard_client):
     assert resp.status_code == 502
 
 
+def test_chat_orchestration_graph_api_adds_pm_root_and_trigger_parent_edges(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_tasks(self, orchestration_id=None, statuses=None, bot_id=None, limit=200, include_content=False):
+            return [
+                {
+                    "id": "task-step-1",
+                    "bot_id": "pm-research-analyst",
+                    "status": "completed",
+                    "payload": {"title": "Research repo implementation patterns"},
+                    "depends_on": [],
+                    "metadata": {
+                        "source": "chat_assign",
+                        "orchestration_id": "orch-graph-1",
+                        "step_id": "step_1_repo",
+                    },
+                },
+                {
+                    "id": "task-trigger-coder",
+                    "bot_id": "pm-coder",
+                    "status": "running",
+                    "payload": {"title": "Fix generated code"},
+                    "depends_on": [],
+                    "metadata": {
+                        "source": "bot_trigger",
+                        "orchestration_id": "orch-graph-1",
+                        "parent_task_id": "task-step-4",
+                    },
+                },
+                {
+                    "id": "task-step-4",
+                    "bot_id": "pm-tester",
+                    "status": "failed",
+                    "payload": {"title": "Execute automated tests and validate behavior"},
+                    "depends_on": ["task-step-3"],
+                    "metadata": {
+                        "source": "chat_assign",
+                        "orchestration_id": "orch-graph-1",
+                        "step_id": "step_4",
+                    },
+                },
+            ]
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/api/chat/orchestrations/orch-graph-1/graph")
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body is not None
+    nodes = body["nodes"]
+    by_id = {node["id"]: node for node in nodes}
+    assert by_id["orchestrator::orch-graph-1"]["bot_id"] == "pm-orchestrator"
+    assert by_id["task-step-1"]["depends_on"] == ["orchestrator::orch-graph-1"]
+    assert by_id["task-step-1"]["title"] == "Research repo implementation patterns"
+    assert by_id["task-step-4"]["step_id"] == "step_4"
+    assert by_id["task-trigger-coder"]["depends_on"] == ["task-step-4"]
+    assert {"from": "task-step-4", "to": "task-trigger-coder"} in body["edges"]
+
+
 def test_project_github_pat_api_validates_required_fields(dashboard_client):
     _login_admin(dashboard_client)
     resp = dashboard_client.post("/api/projects/proj-x/github/pat", json={})

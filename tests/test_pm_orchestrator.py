@@ -334,6 +334,8 @@ async def test_build_plan_uses_fixed_standard_pm_sequence_when_pack_is_present()
 
     assert [step["bot_id"] for step in plan["steps"]] == [
         "pm-research-analyst",
+        "pm-research-analyst",
+        "pm-research-analyst",
         "pm-engineer",
         "pm-coder",
         "pm-tester",
@@ -342,6 +344,7 @@ async def test_build_plan_uses_fixed_standard_pm_sequence_when_pack_is_present()
         "pm-ui-tester",
         "pm-final-qc",
     ]
+    assert plan["steps"][3]["depends_on"] == ["step_1_vault", "step_1_repo", "step_1_online"]
 
 
 def test_normalize_evidence_requirements_downgrades_spec_file_commit_claims() -> None:
