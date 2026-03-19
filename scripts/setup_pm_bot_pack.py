@@ -432,6 +432,13 @@ def _workflow_payload(spec: BotSpec) -> Dict[str, Any]:
                 "result_field": "failure_type",
                 "result_equals": "implementation_issue",
             },
+            {
+                "id": "tester-hard-fail-coder",
+                "title": "Tester Hard Failure To Coder",
+                "event": "task_failed",
+                "target_bot_id": "pm-coder",
+                "condition": "has_error",
+            },
         ],
         "pm-security-reviewer": [
             {
@@ -461,6 +468,13 @@ def _workflow_payload(spec: BotSpec) -> Dict[str, Any]:
                 "result_field": "failure_type",
                 "result_equals": "architecture_issue",
             },
+            {
+                "id": "security-hard-fail-coder",
+                "title": "Security Hard Failure To Coder",
+                "event": "task_failed",
+                "target_bot_id": "pm-coder",
+                "condition": "has_error",
+            },
         ],
         "pm-database-engineer": [
             {
@@ -489,6 +503,13 @@ def _workflow_payload(spec: BotSpec) -> Dict[str, Any]:
                 "condition": "has_result",
                 "result_field": "failure_type",
                 "result_equals": "data_architecture_issue",
+            },
+            {
+                "id": "database-hard-fail-coder",
+                "title": "Database Hard Failure To Coder",
+                "event": "task_failed",
+                "target_bot_id": "pm-coder",
+                "condition": "has_error",
             },
         ],
         "pm-ui-tester": [
@@ -537,6 +558,13 @@ def _workflow_payload(spec: BotSpec) -> Dict[str, Any]:
                 "result_field": "failure_type",
                 "result_equals": "ui_config_issue",
             },
+            {
+                "id": "ui-hard-fail-coder",
+                "title": "UI Hard Failure To Coder",
+                "event": "task_failed",
+                "target_bot_id": "pm-coder",
+                "condition": "has_error",
+            },
         ],
         "pm-final-qc": [
             {
@@ -574,6 +602,13 @@ def _workflow_payload(spec: BotSpec) -> Dict[str, Any]:
                 "condition": "has_result",
                 "result_field": "failure_type",
                 "result_equals": "missing_requirements",
+            },
+            {
+                "id": "final-qc-hard-fail-coder",
+                "title": "Final QC Hard Failure To Coder",
+                "event": "task_failed",
+                "target_bot_id": "pm-coder",
+                "condition": "has_error",
             },
         ],
     }

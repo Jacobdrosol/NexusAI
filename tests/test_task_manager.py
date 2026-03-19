@@ -5384,3 +5384,105 @@ async def test_backward_trigger_fires_for_orchestrated_failed_tasks(tmp_path):
     bot_a_task = next(t for t in tasks if t.bot_id == "bot-a")
     assert bot_a_task.status == "failed", f"bot-a task should be failed, got {bot_a_task.status}"
     assert bot_a_task.metadata.orchestration_id == "test-orchestration-456"
+
+
+def test_assignment_test_source_files_recognize_dotnet_test_projects() -> None:
+    from control_plane.task_manager.task_manager import _assignment_test_source_files
+
+    detected = _assignment_test_source_files(
+        [
+            "GlobeIQ.Server.Tests/Geometry/GeometryLessonServiceTests.cs",
+            "GlobeIQ.WebApp.Tests/Pages/GeometryLessonTests.cs",
+            "CoverageReport.xml",
+        ]
+    )
+
+    assert detected == [
+        "GlobeIQ.Server.Tests/Geometry/GeometryLessonServiceTests.cs",
+        "GlobeIQ.WebApp.Tests/Pages/GeometryLessonTests.cs",
+    ]
+
+
+@pytest.mark.anyio
+async def test_backward_reroute_can_progress_forward_again_for_trigger_spawned_tasks(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot, TaskMetadata
+
+    class MixedScheduler:
+        async def schedule(self, task):
+            if task.bot_id == "bot-a":
+                raise RuntimeError("tester failed")
+            return {"status": "ok"}
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "reroute-forward-again.db"))
+    await bot_registry.register(
+        Bot(
+            id="bot-a",
+            name="Bot A",
+            role="tester",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "tester-back-coder",
+                        "event": "task_failed",
+                        "target_bot_id": "bot-c",
+                        "condition": "has_error",
+                    },
+                ]
+            },
+        )
+    )
+    await bot_registry.register(
+        Bot(
+            id="bot-c",
+            name="Bot C",
+            role="coder",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "coder-forward-review",
+                        "event": "task_completed",
+                        "target_bot_id": "bot-d",
+                        "condition": "has_result",
+                    },
+                ]
+            },
+        )
+    )
+    await bot_registry.register(Bot(id="bot-d", name="Bot D", role="reviewer", backends=[]))
+
+    tm = TaskManager(MixedScheduler(), db_path=str(tmp_path / "reroute-forward-again-tasks.db"), bot_registry=bot_registry)
+
+    await tm.create_task(
+        bot_id="bot-a",
+        payload={"instruction": "start"},
+        metadata=TaskMetadata(
+            source="chat_assign",
+            orchestration_id="test-orchestration-reroute",
+        ),
+    )
+
+    for _ in range(40):
+        tasks = await tm.list_tasks()
+        if len(tasks) >= 3:
+            break
+        await asyncio.sleep(0.1)
+
+    tasks = await tm.list_tasks()
+    assert len(tasks) == 3, f"Expected 3 tasks (failed root, remediation, resumed forward step), got {len(tasks)}"
+    bot_ids = [task.bot_id for task in tasks]
+    assert bot_ids.count("bot-a") == 1
+    assert bot_ids.count("bot-c") == 1
+    assert bot_ids.count("bot-d") == 1
+
+    remediation = next(task for task in tasks if task.bot_id == "bot-c")
+    resumed = next(task for task in tasks if task.bot_id == "bot-d")
+    assert remediation.metadata.source == "bot_trigger"
+    assert remediation.metadata.orchestration_id == "test-orchestration-reroute"
+    assert resumed.metadata.source == "bot_trigger"
+    assert resumed.metadata.parent_task_id == remediation.id

@@ -881,6 +881,8 @@ class PMOrchestrator:
         return (
             text.startswith("tests/")
             or "/tests/" in text
+            or ".tests/" in text
+            or "/tests." in text
             or leaf.startswith("test_")
             or ".test." in leaf
             or ".spec." in leaf

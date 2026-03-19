@@ -686,13 +686,18 @@ def _is_probable_test_file(value: str) -> bool:
     if not normalized:
         return False
     lowered = normalized.lower()
+    path_markers = (
+        "/test" in lowered
+        or lowered.startswith("test")
+        or lowered.startswith("tests/")
+        or ".tests/" in lowered
+        or "/tests." in lowered
+    )
     return any(
         lowered.endswith(ext)
         for ext in (".py", ".js", ".jsx", ".ts", ".tsx", ".cs", ".go", ".rs", ".cpp", ".cc", ".cxx")
     ) and (
-        "/test" in lowered
-        or lowered.startswith("test")
-        or lowered.startswith("tests/")
+        path_markers
         or lowered.endswith("_test.py")
         or lowered.endswith("_test.go")
         or lowered.endswith(".test.ts")
@@ -2910,14 +2915,11 @@ class TaskManager:
 
         metadata = task.metadata or TaskMetadata()
         
-        # For orchestrated tasks:
-        # - SKIP forward triggers (orchestrator manages forward progression via the plan)
-        # - ALLOW backward triggers (when task fails, route back to fix)
-        # Forward triggers have condition="has_result" (task completed successfully)
-        # Backward triggers have condition="has_error" or result_field/result_equals for failure types
+        # For plan-managed orchestrated tasks, skip forward triggers because the PM plan already
+        # defines the main forward path. Backward-triggered remediation tasks are created with
+        # source="bot_trigger"; those are allowed to flow forward again so repair loops can close.
         source = str(metadata.source or "").strip().lower()
-        has_orchestration = bool(metadata.orchestration_id)
-        is_orchestrated = source in {"chat_assign", "auto_retry"} or has_orchestration
+        is_plan_managed_orchestrated = source in {"chat_assign", "auto_retry"}
         
         trigger_depth = int(metadata.trigger_depth or 0)
         max_depth = max(1, _settings_int("bot_trigger_max_depth", 20))
@@ -2935,8 +2937,10 @@ class TaskManager:
                 if trigger.condition == "has_error" and task.error is None:
                     continue
                 
-                # For orchestrated tasks, skip forward triggers but allow backward triggers
-                if is_orchestrated:
+                # Skip forward triggers only on the plan-managed tasks created directly by
+                # assignment orchestration. Trigger-spawned remediation tasks are allowed to
+                # move forward through their configured workflow.
+                if is_plan_managed_orchestrated:
                     is_forward_trigger = (
                         trigger.condition == "has_result" and
                         not trigger.result_field and  # backward triggers have result_field for failure_type

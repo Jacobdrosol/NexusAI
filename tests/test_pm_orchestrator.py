@@ -1,3 +1,4 @@
+import json
 from unittest.mock import AsyncMock
 
 import pytest
@@ -228,6 +229,60 @@ def test_heuristic_plan_prefers_standard_pm_bot_ids_when_present() -> None:
     assert plan["steps"][1]["bot_id"] == "pm-coder"
     assert plan["steps"][2]["bot_id"] == "pm-tester"
     assert plan["steps"][3]["bot_id"] == "pm-security-reviewer"
+
+
+@pytest.mark.anyio
+async def test_build_plan_falls_back_when_llm_starts_with_engineer_and_research_bot_exists() -> None:
+    scheduler = type(
+        "Scheduler",
+        (),
+        {
+            "schedule": AsyncMock(
+                return_value={
+                    "output": json.dumps(
+                        {
+                            "steps": [
+                                {
+                                    "id": "step_1",
+                                    "title": "Design architecture",
+                                    "instruction": "Plan the implementation.",
+                                    "bot_id": "pm-engineer",
+                                    "role_hint": "engineer",
+                                    "step_kind": "planning",
+                                    "deliverables": ["docs/design.md"],
+                                },
+                                {
+                                    "id": "step_2",
+                                    "title": "Implement code",
+                                    "instruction": "Write the feature.",
+                                    "bot_id": "pm-coder",
+                                    "role_hint": "coder",
+                                    "step_kind": "repo_change",
+                                    "deliverables": ["src/feature.cs"],
+                                },
+                            ]
+                        }
+                    )
+                }
+            )
+        },
+    )()
+    bots = [
+        _bot(bot_id="pm-orchestrator", name="PM Orchestrator", role="pm", priority=100),
+        _bot(bot_id="pm-research-analyst", name="PM Research Analyst", role="researcher", priority=70),
+        _bot(bot_id="pm-engineer", name="PM Engineer", role="engineer", priority=82),
+        _bot(bot_id="pm-coder", name="PM Coder", role="coder", priority=85),
+    ]
+    orchestrator = PMOrchestrator(bot_registry=None, scheduler=scheduler, task_manager=None, chat_manager=None)
+
+    plan = await orchestrator._build_plan(
+        instruction="Build lesson blocks",
+        pm_bot_id="pm-orchestrator",
+        bots=bots,
+        context_items=[],
+    )
+
+    assert plan["steps"][0]["bot_id"] == "pm-research-analyst"
 
 
 def test_normalize_evidence_requirements_downgrades_spec_file_commit_claims() -> None:
@@ -512,6 +567,41 @@ def test_expand_test_execution_steps_splits_test_file_creation_from_execution() 
     assert execute_step["step_kind"] == "test_execution"
     assert execute_step["deliverables"] == ["reports/test_report.xml", "reports/coverage_summary.txt"]
     assert execute_step["depends_on"] == ["step_1_create_tests"]
+
+
+def test_expand_test_execution_steps_recognizes_dotnet_test_project_paths() -> None:
+    orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
+
+    expanded = orchestrator._expand_test_execution_steps(
+        {
+            "steps": [
+                {
+                    "id": "step_1",
+                    "title": "Create and run .NET tests",
+                    "instruction": "Add xUnit coverage and execute it.",
+                    "role_hint": "tester",
+                    "step_kind": "test_execution",
+                    "depends_on": [],
+                    "deliverables": [
+                        "GlobeIQ.Server.Tests/Geometry/GeometryLessonServiceTests.cs",
+                        "GlobeIQ.WebApp.Tests/Pages/GeometryLessonTests.cs",
+                        "TestResults.xml",
+                        "CoverageReport.xml",
+                    ],
+                    "acceptance_criteria": ["Tests pass"],
+                    "quality_gates": ["Coverage report is produced"],
+                }
+            ]
+        }
+    )
+
+    assert len(expanded["steps"]) == 2
+    create_step, execute_step = expanded["steps"]
+    assert create_step["deliverables"] == [
+        "GlobeIQ.Server.Tests/Geometry/GeometryLessonServiceTests.cs",
+        "GlobeIQ.WebApp.Tests/Pages/GeometryLessonTests.cs",
+    ]
+    assert execute_step["deliverables"] == ["TestResults.xml", "CoverageReport.xml"]
 
 
 def test_sanitize_plan_for_operator_scope_removes_issue_planning_and_ci_workflow_steps() -> None:
