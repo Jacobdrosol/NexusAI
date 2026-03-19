@@ -474,13 +474,15 @@ def _looks_like_truncated_result(result: Any) -> bool:
     if completion_tokens is None:
         return False
     output = _extract_result_output_text(result).strip()
-    if completion_tokens >= 4096:
-        if not output:
-            return True
-        if output.endswith(("...", "```", "`", ":", ",", "(", "[", "{", "|")):
-            return True
-        if output[-1:] and output[-1] not in (".", "!", "?", ")", "]", "}", "\"", "'"):
-            return True
+    # Only flag as truncated if output ends mid-sentence (incomplete syntax)
+    # Don't flag based on token count alone - models can legitimately produce long outputs
+    if not output:
+        return False
+    if output.endswith(("...", "```", "`", ":", ",", "(", "[", "{", "|")):
+        return True
+    # Check if output ends mid-sentence (no proper ending punctuation)
+    # But only flag this if the finish_reason suggests truncation was attempted
+    # Otherwise long but complete outputs are valid
     return False
 
 

@@ -1666,13 +1666,6 @@ class PMOrchestrator:
         finish_reason = str(result.get("finish_reason") or "").strip().lower()
         if finish_reason in {"length", "max_tokens", "max_output_tokens", "token_limit", "max_new_tokens"}:
             return "Model output likely hit token limit and may be incomplete."
-        usage = result.get("usage")
-        if not isinstance(usage, dict):
-            return ""
-        completion = usage.get("completion_tokens")
-        try:
-            if int(completion) >= 4096:
-                return "Model output may be truncated (completion_tokens reached 4096)."
-        except Exception:
-            return ""
+        # Don't flag based on token count alone - models can legitimately produce long outputs
+        # Only show truncation warning if finish_reason explicitly indicates truncation
         return ""

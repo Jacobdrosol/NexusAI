@@ -139,15 +139,21 @@ def test_truncation_hint_detects_finish_reason_length() -> None:
     assert "token limit" in hint.lower()
 
 
-def test_truncation_hint_detects_high_completion_tokens_without_finish_reason() -> None:
+def test_truncation_hint_ignores_high_completion_tokens_without_finish_reason() -> None:
+    """High completion_tokens alone should NOT trigger truncation hint.
+    
+    Only explicit finish_reason (length, max_tokens, etc.) indicates truncation.
+    Models can legitimately produce long outputs within their max_tokens budget.
+    """
     orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
+    # High completion_tokens without finish_reason = valid long output, NOT truncated
     hint = orchestrator._truncation_hint(
         {
-            "output": "partial output",
-            "usage": {"completion_tokens": 4096},
+            "output": "This is a complete, long output that ended naturally.",
+            "usage": {"completion_tokens": 50000},  # Well above old 4096 threshold
         }
     )
-    assert "4096" in hint
+    assert hint == ""  # No truncation hint - output is complete
 
 
 def test_normalize_step_kind_infers_repo_change_from_deliverable_paths() -> None:
