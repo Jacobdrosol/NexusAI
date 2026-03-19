@@ -279,6 +279,34 @@ class PMOrchestrator:
 
         parsed = self._parse_plan_json(raw_output)
         if parsed:
+            # Validate that implementation plans start with research/specification
+            steps = parsed.get("steps", [])
+            if steps:
+                first_step = steps[0]
+                first_bot_id = str(first_step.get("bot_id", "")).lower()
+                first_step_kind = str(first_step.get("step_kind", "")).lower()
+                first_title = str(first_step.get("title", "")).lower()
+                
+                # For implementation tasks, first step should be research/specification
+                # Acceptable first bots: pm-research-analyst (spec), pm-engineer (planning/architecture)
+                # Unacceptable: pm-coder, pm-tester, pm-security-reviewer, etc.
+                implementation_bots = {"pm-coder", "pm-tester", "pm-security-reviewer", "pm-database-engineer", "pm-ui-tester", "pm-final-qc"}
+                if first_bot_id in implementation_bots:
+                    logger.warning(
+                        "LLM plan starts with implementation bot %s, falling back to heuristic plan",
+                        first_bot_id,
+                    )
+                    return self._heuristic_plan(instruction, bots)
+                
+                # If starting with pm-engineer, check if pm-research-analyst should be first
+                if first_bot_id == "pm-engineer":
+                    has_research_bot = any(str(b.id).lower() == "pm-research-analyst" for b in bots)
+                    if has_research_bot:
+                        logger.warning(
+                            "LLM plan starts with pm-engineer but pm-research-analyst is available, falling back to heuristic plan",
+                        )
+                        return self._heuristic_plan(instruction, bots)
+            
             return parsed
         return self._heuristic_plan(instruction, bots)
 
