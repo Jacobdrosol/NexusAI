@@ -566,7 +566,7 @@ def test_build_step_instruction_requires_deliverable_file_format() -> None:
     assert "Never invent placeholders" in instruction
 
 
-def test_build_step_instruction_mentions_diagram_source_and_concise_spec() -> None:
+def test_build_step_instruction_mentions_diagram_source_and_complete_spec() -> None:
     orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
 
     instruction = orchestrator._build_step_instruction(
@@ -577,7 +577,7 @@ def test_build_step_instruction_mentions_diagram_source_and_concise_spec() -> No
     )
 
     assert "Mermaid or markdown diagram source" in instruction
-    assert "Keep the artifact concise" in instruction
+    assert "complete, implementation-ready" in instruction or "completeness is more important" in instruction
 
 
 def test_build_step_instruction_for_test_execution_demands_command_and_report_artifacts() -> None:

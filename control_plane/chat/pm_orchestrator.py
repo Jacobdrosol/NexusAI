@@ -1598,7 +1598,8 @@ class PMOrchestrator:
             )
         if step_kind == "specification":
             lines.append(
-                "Keep the artifact concise and implementation-ready. Prefer structured sections, compact examples, and no unnecessary narrative so the response fits within token limits."
+                "Produce a complete, implementation-ready artifact. Use structured sections and clear examples. "
+                "Include all necessary detail - completeness is more important than brevity."
             )
             if any(self._looks_like_repo_file(item) for item in deliverables):
                 lines.append(
