@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 
 import aiosqlite
 
+from control_plane.sqlite_helpers import open_sqlite
 from control_plane.vault.chunker import chunk_text
 from shared.exceptions import VaultItemNotFoundError
 from shared.models import VaultChunk, VaultItem
@@ -68,8 +69,7 @@ class VaultManager:
             if self._db_ready:
                 return
             Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
-            async with aiosqlite.connect(self._db_path) as db:
-                await db.execute("PRAGMA foreign_keys = ON")
+            async with open_sqlite(self._db_path, foreign_keys=True) as db:
                 await db.execute(_CREATE_VAULT_ITEMS)
                 await db.execute(_CREATE_VAULT_CHUNKS)
                 await db.commit()
@@ -204,8 +204,7 @@ class VaultManager:
             )
 
         async with self._lock:
-            async with aiosqlite.connect(self._db_path) as db:
-                await db.execute("PRAGMA foreign_keys = ON")
+            async with open_sqlite(self._db_path, foreign_keys=True) as db:
                 if replace_existing:
                     await db.execute("DELETE FROM vault_chunks WHERE item_id = ?", (item.id,))
                     await db.execute(
@@ -292,7 +291,7 @@ class VaultManager:
             ORDER BY updated_at DESC
             LIMIT 1
         """
-        async with aiosqlite.connect(self._db_path) as db:
+        async with open_sqlite(self._db_path) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(query, tuple(params)) as cursor:
                 row = await cursor.fetchone()
@@ -305,7 +304,7 @@ class VaultManager:
 
     async def get_item(self, item_id: str) -> VaultItem:
         await self._ensure_db()
-        async with aiosqlite.connect(self._db_path) as db:
+        async with open_sqlite(self._db_path) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute("SELECT * FROM vault_items WHERE id = ?", (item_id,)) as cursor:
                 row = await cursor.fetchone()
@@ -349,7 +348,7 @@ class VaultManager:
         """
         params.append(limit)
 
-        async with aiosqlite.connect(self._db_path) as db:
+        async with open_sqlite(self._db_path) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(query, tuple(params)) as cursor:
                 rows = await cursor.fetchall()
@@ -363,7 +362,7 @@ class VaultManager:
 
     async def list_chunks(self, item_id: str) -> List[VaultChunk]:
         await self.get_item(item_id)
-        async with aiosqlite.connect(self._db_path) as db:
+        async with open_sqlite(self._db_path) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
                 """
@@ -386,8 +385,7 @@ class VaultManager:
     async def delete_item(self, item_id: str) -> None:
         await self._ensure_db()
         async with self._lock:
-            async with aiosqlite.connect(self._db_path) as db:
-                await db.execute("PRAGMA foreign_keys = ON")
+            async with open_sqlite(self._db_path, foreign_keys=True) as db:
                 cur = await db.execute("DELETE FROM vault_items WHERE id = ?", (item_id,))
                 await db.commit()
                 if cur.rowcount == 0:
@@ -395,7 +393,7 @@ class VaultManager:
 
     async def list_namespaces(self) -> List[str]:
         await self._ensure_db()
-        async with aiosqlite.connect(self._db_path) as db:
+        async with open_sqlite(self._db_path) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
                 "SELECT DISTINCT namespace FROM vault_items ORDER BY namespace ASC"
@@ -436,7 +434,7 @@ class VaultManager:
             JOIN vault_items i ON i.id = c.item_id
             {where_clause}
         """
-        async with aiosqlite.connect(self._db_path) as db:
+        async with open_sqlite(self._db_path) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(query_sql, tuple(params)) as cursor:
                 rows = await cursor.fetchall()

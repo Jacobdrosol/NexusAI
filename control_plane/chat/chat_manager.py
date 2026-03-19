@@ -8,6 +8,7 @@ from typing import Any, List, Optional
 
 import aiosqlite
 
+from control_plane.sqlite_helpers import open_sqlite
 from shared.exceptions import ConversationNotFoundError
 from shared.models import ChatConversation, ChatMessage
 
@@ -79,8 +80,7 @@ class ChatManager:
             if self._db_ready:
                 return
             Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
-            async with aiosqlite.connect(self._db_path) as db:
-                await db.execute("PRAGMA foreign_keys = ON")
+            async with open_sqlite(self._db_path, foreign_keys=True) as db:
                 await db.execute(_CREATE_CONVERSATIONS)
                 await db.execute(_CREATE_MESSAGES)
                 await db.execute(_CREATE_MESSAGES_CONVERSATION_CREATED_INDEX)
@@ -133,7 +133,7 @@ class ChatManager:
             updated_at=now,
         )
         async with self._lock:
-            async with aiosqlite.connect(self._db_path) as db:
+            async with open_sqlite(self._db_path) as db:
                 await db.execute(
                     """
                     INSERT INTO conversations (
@@ -166,7 +166,7 @@ class ChatManager:
         archived: str = "active",
     ) -> List[ChatConversation]:
         await self._ensure_db()
-        async with aiosqlite.connect(self._db_path) as db:
+        async with open_sqlite(self._db_path) as db:
             db.row_factory = aiosqlite.Row
             clauses: list[str] = []
             params: list[Any] = []
@@ -200,7 +200,7 @@ class ChatManager:
 
     async def get_conversation(self, conversation_id: str) -> ChatConversation:
         await self._ensure_db()
-        async with aiosqlite.connect(self._db_path) as db:
+        async with open_sqlite(self._db_path) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
                 "SELECT * FROM conversations WHERE id = ?",
@@ -228,8 +228,7 @@ class ChatManager:
         if not conversation.archived_at:
             raise ValueError("conversation must be archived before deletion")
         async with self._lock:
-            async with aiosqlite.connect(self._db_path) as db:
-                await db.execute("PRAGMA foreign_keys = ON")
+            async with open_sqlite(self._db_path, foreign_keys=True) as db:
                 await db.execute("DELETE FROM conversations WHERE id = ?", (conversation_id,))
                 await db.commit()
 
@@ -239,7 +238,7 @@ class ChatManager:
             return conversation
         now = datetime.now(timezone.utc).isoformat()
         async with self._lock:
-            async with aiosqlite.connect(self._db_path) as db:
+            async with open_sqlite(self._db_path) as db:
                 await db.execute(
                     "UPDATE conversations SET archived_at = ?, updated_at = ? WHERE id = ?",
                     (now, now, conversation_id),
@@ -253,7 +252,7 @@ class ChatManager:
             return conversation
         now = datetime.now(timezone.utc).isoformat()
         async with self._lock:
-            async with aiosqlite.connect(self._db_path) as db:
+            async with open_sqlite(self._db_path) as db:
                 await db.execute(
                     "UPDATE conversations SET archived_at = NULL, updated_at = ? WHERE id = ?",
                     (now, conversation_id),
@@ -272,7 +271,7 @@ class ChatManager:
         await self.get_conversation(conversation_id)
         now = datetime.now(timezone.utc).isoformat()
         async with self._lock:
-            async with aiosqlite.connect(self._db_path) as db:
+            async with open_sqlite(self._db_path) as db:
                 await db.execute(
                     """
                     UPDATE conversations
@@ -314,8 +313,7 @@ class ChatManager:
             created_at=now,
         )
         async with self._lock:
-            async with aiosqlite.connect(self._db_path) as db:
-                await db.execute("PRAGMA foreign_keys = ON")
+            async with open_sqlite(self._db_path, foreign_keys=True) as db:
                 await db.execute(
                     """
                     INSERT INTO messages (
@@ -347,7 +345,7 @@ class ChatManager:
         safe_limit = None
         if isinstance(limit, int) and limit > 0:
             safe_limit = min(limit, 2000)
-        async with aiosqlite.connect(self._db_path) as db:
+        async with open_sqlite(self._db_path) as db:
             db.row_factory = aiosqlite.Row
             if safe_limit is None:
                 query = """
@@ -389,7 +387,7 @@ class ChatManager:
     ) -> ChatMessage:
         await self._ensure_db()
         async with self._lock:
-            async with aiosqlite.connect(self._db_path) as db:
+            async with open_sqlite(self._db_path) as db:
                 db.row_factory = aiosqlite.Row
                 async with db.execute(
                     "SELECT * FROM messages WHERE id = ?",

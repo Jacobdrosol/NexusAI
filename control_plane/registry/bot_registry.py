@@ -7,6 +7,7 @@ from typing import Dict, List, Optional
 
 import aiosqlite
 
+from control_plane.sqlite_helpers import open_sqlite
 from shared.exceptions import BotNotFoundError
 from shared.models import Bot
 
@@ -45,7 +46,7 @@ class BotRegistry:
             if self._db_ready:
                 return
             Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
-            async with aiosqlite.connect(self._db_path) as db:
+            async with open_sqlite(self._db_path) as db:
                 db.row_factory = aiosqlite.Row
                 await db.execute(_CREATE_BOTS)
                 await db.commit()
@@ -56,7 +57,7 @@ class BotRegistry:
             self._db_ready = True
 
     async def _persist_bot(self, bot: Bot) -> None:
-        async with aiosqlite.connect(self._db_path) as db:
+        async with open_sqlite(self._db_path) as db:
             await db.execute(
                 """
                 INSERT INTO cp_bots (id, data)
@@ -69,7 +70,7 @@ class BotRegistry:
             await db.commit()
 
     async def _delete_bot(self, bot_id: str) -> None:
-        async with aiosqlite.connect(self._db_path) as db:
+        async with open_sqlite(self._db_path) as db:
             await db.execute("DELETE FROM cp_bots WHERE id = ?", (bot_id,))
             await db.commit()
 

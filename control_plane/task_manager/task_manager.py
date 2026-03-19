@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 import aiosqlite
 
+from control_plane.sqlite_helpers import open_sqlite
 from control_plane.task_result_files import extract_file_candidates
 from shared.exceptions import TaskNotFoundError
 from shared.models import BotRun, BotRunArtifact, Task, TaskError, TaskMetadata
@@ -1480,7 +1481,7 @@ class TaskManager:
             if self._db_ready:
                 return
             Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
-            async with aiosqlite.connect(self._db_path) as db:
+            async with open_sqlite(self._db_path) as db:
                 db.row_factory = aiosqlite.Row
                 await db.execute(_CREATE_TASKS)
                 await db.execute(_CREATE_TASK_DEPENDENCIES)
@@ -1570,7 +1571,7 @@ class TaskManager:
 
     async def _persist_task(self, task: Task) -> None:
         """Upsert *task* into the SQLite tasks table."""
-        async with aiosqlite.connect(self._db_path) as db:
+        async with open_sqlite(self._db_path) as db:
             await db.execute(
                 """
                 INSERT INTO cp_tasks
@@ -1603,7 +1604,7 @@ class TaskManager:
         metadata = task.metadata.model_dump() if task.metadata else None
         started_at = task.updated_at if task.status == "running" else None
         completed_at = task.updated_at if task.status in {"completed", "failed", "cancelled", "retried"} else None
-        async with aiosqlite.connect(self._db_path) as db:
+        async with open_sqlite(self._db_path) as db:
             await db.execute(
                 """
                 INSERT INTO cp_bot_runs
@@ -1643,7 +1644,7 @@ class TaskManager:
             await db.commit()
 
     async def _upsert_artifact(self, artifact: BotRunArtifact) -> None:
-        async with aiosqlite.connect(self._db_path) as db:
+        async with open_sqlite(self._db_path) as db:
             await db.execute(
                 """
                 INSERT INTO cp_bot_run_artifacts
@@ -1819,7 +1820,7 @@ class TaskManager:
             await self._upsert_artifact(artifact)
 
     async def _persist_dependencies(self, task: Task) -> None:
-        async with aiosqlite.connect(self._db_path) as db:
+        async with open_sqlite(self._db_path) as db:
             await db.execute(f"DELETE FROM {_TASK_DEPENDENCIES_TABLE} WHERE task_id = ?", (task.id,))
             for dep_id in task.depends_on:
                 await db.execute(
@@ -1989,7 +1990,7 @@ class TaskManager:
 
     async def list_bot_runs(self, bot_id: str, limit: int = 50) -> List[BotRun]:
         await self._ensure_db()
-        async with aiosqlite.connect(self._db_path) as db:
+        async with open_sqlite(self._db_path) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
                 """
@@ -2039,7 +2040,7 @@ class TaskManager:
             params.append(task_id)
         sql += " ORDER BY created_at DESC LIMIT ?"
         params.append(max(1, int(limit)))
-        async with aiosqlite.connect(self._db_path) as db:
+        async with open_sqlite(self._db_path) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(sql, tuple(params)) as cursor:
                 rows = await cursor.fetchall()
@@ -2061,7 +2062,7 @@ class TaskManager:
 
     async def get_bot_run_artifact(self, bot_id: str, artifact_id: str) -> BotRunArtifact:
         await self._ensure_db()
-        async with aiosqlite.connect(self._db_path) as db:
+        async with open_sqlite(self._db_path) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
                 f"""
