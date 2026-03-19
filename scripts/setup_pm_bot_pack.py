@@ -131,10 +131,11 @@ def _pm_specs() -> List[BotSpec]:
             system_prompt=(
                 "You are a deterministic QA/testing bot.\n"
                 "Return JSON only with keys: outcome, failure_type, findings, evidence, artifacts, handoff_notes.\n"
-                "Allowed failure_type values: pass, implementation_issue.\n"
+                "Allowed failure_type values: pass, implementation_issue, environment_blocker.\n"
                 "If the step generates a report or log artifact, include it in artifacts using {path, content}.\n"
                 "Use the repo-profile context as the source of truth for runtime and test command expectations.\n"
-                "Use failure_type=pass only when validation passes cleanly; otherwise use implementation_issue.\n"
+                "Use failure_type=environment_blocker when the required SDK, package manager, browser runtime, CI dependency, or execution toolchain is unavailable.\n"
+                "Use failure_type=pass only when validation passes cleanly; otherwise classify the problem as implementation_issue or environment_blocker.\n"
                 "Do not write prose outside the JSON object."
             ),
         ),
@@ -177,9 +178,10 @@ def _pm_specs() -> List[BotSpec]:
             system_prompt=(
                 "You are a deterministic UI tester.\n"
                 "Return JSON only with keys: outcome, failure_type, findings, evidence, artifacts, handoff_notes.\n"
-                "Allowed failure_type values: pass, skip, ui_render_issue, ui_data_issue, ui_config_issue.\n"
+                "Allowed failure_type values: pass, skip, ui_render_issue, ui_data_issue, ui_config_issue, environment_blocker.\n"
                 "If there are no UI deliverables or user-facing behavior changes, return outcome=skip and failure_type=skip.\n"
                 "If the step generates a UI validation report, include it in artifacts using {path, content}.\n"
+                "Use failure_type=environment_blocker when the browser/runtime/screenshot tooling required for UI validation is unavailable.\n"
                 "Use ui_data_issue or ui_config_issue when the problem should route to the database engineer.\n"
                 "Do not write prose outside the JSON object."
             ),
@@ -437,6 +439,15 @@ def _workflow_payload(spec: BotSpec) -> Dict[str, Any]:
                 "result_equals": "implementation_issue",
             },
             {
+                "id": "tester-env-blocker-final-qc",
+                "title": "Tester Environment Blocker To Final QC",
+                "event": "task_completed",
+                "target_bot_id": "pm-final-qc",
+                "condition": "has_result",
+                "result_field": "failure_type",
+                "result_equals": "environment_blocker",
+            },
+            {
                 "id": "tester-hard-fail-coder",
                 "title": "Tester Hard Failure To Coder",
                 "event": "task_failed",
@@ -534,6 +545,15 @@ def _workflow_payload(spec: BotSpec) -> Dict[str, Any]:
                 "condition": "has_result",
                 "result_field": "outcome",
                 "result_equals": "skip",
+            },
+            {
+                "id": "ui-env-blocker-final-qc",
+                "title": "UI Environment Blocker To Final QC",
+                "event": "task_completed",
+                "target_bot_id": "pm-final-qc",
+                "condition": "has_result",
+                "result_field": "failure_type",
+                "result_equals": "environment_blocker",
             },
             {
                 "id": "ui-back-coder",

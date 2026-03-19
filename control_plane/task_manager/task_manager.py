@@ -2825,17 +2825,86 @@ class TaskManager:
         )
         missing_tools = _missing_assignment_runtime_tools(command_results)
         if missing_tools:
-            raise _TaskExecutionFailure(
-                "repo workspace runtime is missing required tools: " + ", ".join(missing_tools),
-                result=result,
+            findings = [
+                "The repo workspace runtime is missing required tools: " + ", ".join(missing_tools) + ".",
+                "This is an environment/runtime blocker, not a code implementation defect.",
+            ]
+            evidence = [
+                "Missing tools: " + ", ".join(missing_tools),
+            ]
+            for item in command_results:
+                label = str(item.get("label") or "").strip()
+                command = " ".join(str(part) for part in (item.get("command") or []) if str(part).strip())
+                error = str(item.get("error") or "").strip()
+                if command:
+                    evidence.append(f"{label or 'command'}: {command}")
+                if error:
+                    evidence.append(f"{label or 'command'} error: {error}")
+            result.update(
+                {
+                    "outcome": "fail",
+                    "failure_type": "environment_blocker",
+                    "findings": findings,
+                    "evidence": evidence,
+                    "handoff_notes": (
+                        "Install the missing repo workspace runtime tools on the execution host/container, "
+                        "rebuild/redeploy if needed, then rerun this test step."
+                    ),
+                }
             )
+            return result
         if missing_reports:
-            raise _TaskExecutionFailure(
-                "assignment test execution did not produce required report files: " + ", ".join(missing_reports),
-                result=result,
+            result.update(
+                {
+                    "outcome": "fail",
+                    "failure_type": "implementation_issue",
+                    "findings": [
+                        "Assignment test execution did not produce all required report files.",
+                    ],
+                    "evidence": ["Missing report files: " + ", ".join(missing_reports)],
+                    "handoff_notes": (
+                        "Update the implementation or test setup so the required report artifacts are generated, "
+                        "then rerun this test step."
+                    ),
+                }
             )
+            return result
         if not all(bool(item.get("ok")) for item in command_results if str(item.get("label") or "").startswith("test_execution")):
-            raise _TaskExecutionFailure("assignment test execution failed", result=result)
+            failed_commands = [
+                " ".join(str(part) for part in (item.get("command") or []) if str(part).strip())
+                for item in command_results
+                if str(item.get("label") or "").startswith("test_execution") and not bool(item.get("ok"))
+            ]
+            result.update(
+                {
+                    "outcome": "fail",
+                    "failure_type": "implementation_issue",
+                    "findings": [
+                        "One or more generated test commands failed.",
+                    ],
+                    "evidence": failed_commands,
+                    "handoff_notes": (
+                        "Fix the implementation or generated tests based on the execution output, then rerun this test step."
+                    ),
+                }
+            )
+            return result
+        result.update(
+            {
+                "outcome": "pass",
+                "failure_type": "pass",
+                "findings": ["All generated automated tests executed successfully."],
+                "evidence": [
+                    "Executed test commands: "
+                    + ", ".join(
+                        " ".join(str(part) for part in (item.get("command") or []) if str(part).strip())
+                        for item in command_results
+                        if str(item.get("label") or "").startswith("test_execution")
+                    )
+                ],
+                "handoff_notes": "Automated test execution passed. Continue to the next validation stage.",
+            }
+        )
         return result
 
     def _format_assignment_test_execution_result(
@@ -2887,12 +2956,23 @@ class TaskManager:
                 lines.extend(f"  {line}" for line in stderr_excerpt.splitlines())
                 lines.append("  ```")
 
+        report_text = "\n".join(lines).strip()
+        artifact_items = list(artifacts)
+        if not any(str(item.get("path") or "").strip().replace("\\", "/") == "test_logs/assignment_test_execution.log" for item in artifact_items):
+            artifact_items.append(
+                {
+                    "kind": "file",
+                    "label": "test_logs/assignment_test_execution.log",
+                    "path": "test_logs/assignment_test_execution.log",
+                    "content": report_text,
+                }
+            )
         return {
             "report": "\n".join(lines).strip(),
             "executed_commands": executed_commands,
             "command_results": command_results,
             "missing_tools": missing_tools,
-            "artifacts": artifacts,
+            "artifacts": artifact_items,
             "applied_files": applied_files,
             "workspace": workspace,
             "usage": usage,

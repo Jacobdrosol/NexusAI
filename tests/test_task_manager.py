@@ -4640,11 +4640,14 @@ async def test_chat_assign_test_execution_reports_missing_dotnet_toolchain(tmp_p
             break
         await asyncio.sleep(0.1)
 
-    assert updated.status == "failed"
-    assert updated.error is not None
-    assert "missing required tools: dotnet" in updated.error.message.lower()
+    assert updated.status == "completed"
+    assert updated.error is None
     assert updated.result is not None
     assert updated.result.get("missing_tools") == ["dotnet"]
+    assert updated.result.get("outcome") == "fail"
+    assert updated.result.get("failure_type") == "environment_blocker"
+    artifacts = updated.result.get("artifacts") or []
+    assert any(str(item.get("path") or "") == "test_logs/assignment_test_execution.log" for item in artifacts)
 
 
 @pytest.mark.anyio
