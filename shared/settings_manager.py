@@ -115,6 +115,28 @@ _DEFAULTS: List[tuple] = [
     ("external_trigger_rate_limit_window_seconds", "60", "int", "advanced",
      "External Trigger Rate Limit Window (s)",
      "Sliding window size for external trigger request rate limiting."),
+    # Context and Coding
+    ("context_item_limit_default", "30", "int", "context",
+     "Default Context Item Limit",
+     "Maximum number of context items to include in prompts for models without explicit limits."),
+    ("context_source_limit_default", "12", "int", "context",
+     "Default Context Source Limit",
+     "Maximum number of source labels to display in evidence policy for models without explicit limits."),
+    ("context_item_limit_large", "100", "int", "context",
+     "Large Context Item Limit",
+     "Context item limit for models with 100k+ token context windows."),
+    ("context_source_limit_large", "50", "int", "context",
+     "Large Context Source Limit",
+     "Source label limit for models with 100k+ token context windows."),
+    ("large_context_model_patterns", "gpt-oss,qwen3.5,claude-3,gpt-4,o1,o3", "string", "context",
+     "Large Context Model Patterns",
+     "Comma-separated model name patterns that indicate 100k+ context windows."),
+    ("coding_enhancement_enabled", "true", "bool", "coding",
+     "Coding Enhancement Enabled",
+     "Enable coding-specific system prompt enhancements for bots with role='coder'."),
+    ("agent_session_ttl_minutes", "60", "int", "coding",
+     "Agent Session TTL (minutes)",
+     "Time-to-live for persistent agent sessions that can work across multiple messages."),
 ]
 
 
@@ -393,3 +415,38 @@ class SettingsManager:
                 (limit,),
             )
             return [dict(row) for row in cur.fetchall()]
+
+
+# ---------------------------------------------------------------------------
+# Context limit helpers (module-level for easy import)
+# ---------------------------------------------------------------------------
+
+def get_context_limits_for_model(model: str, settings: Optional[SettingsManager] = None) -> tuple[int, int]:
+    """Return (item_limit, source_limit) based on model's context window.
+    
+    Models matching large_context_model_patterns get higher limits.
+    
+    Args:
+        model: Model name (e.g., "gpt-oss:120b-cloud", "qwen3.5:397b-cloud")
+        settings: Optional SettingsManager instance (creates one if None)
+    
+    Returns:
+        Tuple of (context_item_limit, context_source_limit)
+    """
+    if settings is None:
+        settings = SettingsManager()
+    
+    patterns = settings.get("large_context_model_patterns", "gpt-oss,qwen3.5,claude-3,gpt-4,o1,o3")
+    pattern_list = [p.strip().lower() for p in patterns.split(",") if p.strip()]
+    
+    model_lower = model.lower()
+    is_large_context = any(pattern in model_lower for pattern in pattern_list)
+    
+    if is_large_context:
+        item_limit = settings.get("context_item_limit_large", 100)
+        source_limit = settings.get("context_source_limit_large", 50)
+    else:
+        item_limit = settings.get("context_item_limit_default", 30)
+        source_limit = settings.get("context_source_limit_default", 12)
+    
+    return int(item_limit), int(source_limit)

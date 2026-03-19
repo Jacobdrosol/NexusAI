@@ -20,6 +20,26 @@ from control_plane.chat.workspace_tools import (
 from control_plane.security.guards import enforce_body_size, enforce_rate_limit
 from shared.exceptions import BotNotFoundError, ConversationNotFoundError
 from shared.models import ChatConversation, ChatMessage, Task, TaskMetadata
+from shared.settings_manager import get_context_limits_for_model
+
+
+def _get_bot_model(bot) -> str:
+    """Extract model name from bot's first backend config.
+    
+    Returns empty string if no backends or model not found.
+    """
+    if not bot or not bot.backends:
+        return ""
+    backend = bot.backends[0]
+    return str(backend.model or "")
+
+
+def _get_context_limits_for_bot(bot) -> tuple[int, int]:
+    """Return (item_limit, source_limit) based on bot's model context window."""
+    model = _get_bot_model(bot)
+    if not model:
+        return 30, 12  # Default limits
+    return get_context_limits_for_model(model)
 
 router = APIRouter(prefix="/v1/chat", tags=["chat"])
 
@@ -1034,6 +1054,7 @@ async def _resolve_context_items(
     tool_access: Optional[Dict[str, Any]] = None,
     force_project_context: bool = False,
     force_workspace_context: bool = False,
+    item_limit: int = 30,
 ) -> List[str]:
     # Backward compatible direct context usage.
     manual_context: List[str] = list(body.context_items or [])
@@ -1083,7 +1104,7 @@ async def _resolve_context_items(
     resolved.extend(repo_context)
     resolved.extend(vault_items)
     resolved.extend(manual_context)
-    return _order_context_items(resolved, limit=30)
+    return _order_context_items(resolved, limit=item_limit)
 
 
 def _extract_assign_instruction(content: str) -> Optional[str]:
@@ -1238,6 +1259,15 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                 conversation=conversation,
                 target_bot_id=assign_bot_id,
             )
+            # Get model-aware context limits for assign
+            assign_bot_registry = getattr(request.app.state, "bot_registry", None)
+            assign_item_limit, _ = 30, 12  # defaults
+            if assign_bot_registry:
+                try:
+                    assign_bot = await assign_bot_registry.get(assign_bot_id)
+                    assign_item_limit, _ = _get_context_limits_for_bot(assign_bot)
+                except Exception:
+                    pass
             resolved_context = await _resolve_context_items(
                 request,
                 body,
@@ -1245,6 +1275,7 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                 tool_access=tool_access,
                 force_project_context=True,
                 force_workspace_context=_repo_intent_requested(assign_instruction),
+                item_limit=assign_item_limit,
             )
             assignment = await pm_orchestrator.orchestrate_assignment(
                 conversation_id=conversation_id,
@@ -1306,6 +1337,16 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
         if not target_bot_id:
             return {"user_message": user_message, "assistant_message": None}
 
+        # Get bot to determine model-aware context limits
+        ns_bot_registry = getattr(request.app.state, "bot_registry", None)
+        ns_item_limit, ns_source_limit = 30, 12  # defaults
+        if ns_bot_registry:
+            try:
+                ns_bot = await ns_bot_registry.get(target_bot_id)
+                ns_item_limit, ns_source_limit = _get_context_limits_for_bot(ns_bot)
+            except Exception:
+                pass
+
         require_repo_evidence = _context_resolution_requested(body)
         repo_intent = _repo_intent_requested(body.content)
         force_project_context = repo_intent
@@ -1322,8 +1363,9 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
             tool_access=tool_access,
             force_project_context=force_project_context,
             force_workspace_context=force_workspace_context,
+            item_limit=ns_item_limit,
         )
-        context_sources = _context_source_labels(resolved_context, limit=12)
+        context_sources = _context_source_labels(resolved_context, limit=ns_source_limit)
         if not context_sources and resolved_context:
             context_sources = ["context snippets (unlabeled)"]
         if require_repo_evidence and not resolved_context:
@@ -1406,6 +1448,15 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                     conversation=conversation,
                     target_bot_id=assign_bot_id,
                 )
+                # Get model-aware context limits for PM assign
+                pm_bot_registry = getattr(request.app.state, "bot_registry", None)
+                pm_item_limit, pm_source_limit = 30, 8  # defaults
+                if pm_bot_registry:
+                    try:
+                        pm_bot = await pm_bot_registry.get(assign_bot_id)
+                        pm_item_limit, pm_source_limit = _get_context_limits_for_bot(pm_bot)
+                    except Exception:
+                        pass
                 if _context_resolution_requested(body):
                     yield 'event: status\ndata: {"phase":"context","label":"Collecting repository context..."}\n\n'
                 resolved_context = await _resolve_context_items(
@@ -1415,8 +1466,9 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                     tool_access=tool_access,
                     force_project_context=True,
                     force_workspace_context=_repo_intent_requested(assign_instruction),
+                    item_limit=pm_item_limit,
                 )
-                context_sources = _context_source_labels(resolved_context, limit=8)
+                context_sources = _context_source_labels(resolved_context, limit=pm_source_limit)
                 if context_sources:
                     context_payload = {
                         "snippet_count": len(resolved_context),
@@ -1500,6 +1552,16 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                 yield "event: done\ndata: {}\n\n"
                 return
 
+            # Get bot to determine model-aware context limits
+            bot_registry = getattr(request.app.state, "bot_registry", None)
+            item_limit, source_limit = 30, 12  # defaults
+            if bot_registry:
+                try:
+                    bot = await bot_registry.get(target_bot_id)
+                    item_limit, source_limit = _get_context_limits_for_bot(bot)
+                except Exception:
+                    pass  # Keep defaults on error
+
             require_repo_evidence = _context_resolution_requested(body)
             repo_intent = _repo_intent_requested(body.content)
             force_project_context = repo_intent
@@ -1518,8 +1580,9 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                 tool_access=tool_access,
                 force_project_context=force_project_context,
                 force_workspace_context=force_workspace_context,
+                item_limit=item_limit,
             )
-            context_sources = _context_source_labels(resolved_context, limit=8)
+            context_sources = _context_source_labels(resolved_context, limit=source_limit)
             if not context_sources and resolved_context:
                 context_sources = ["context snippets (unlabeled)"]
             if context_sources:
