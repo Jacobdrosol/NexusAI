@@ -2909,6 +2909,21 @@ class TaskManager:
             return
 
         metadata = task.metadata or TaskMetadata()
+        
+        # Skip workflow triggers for orchestrated tasks - the orchestrator manages the workflow
+        # Triggers should only fire for standalone tasks (not part of an orchestrated assignment)
+        source = str(metadata.source or "").strip().lower()
+        has_orchestration = bool(metadata.orchestration_id)
+        is_orchestrated = source in {"chat_assign", "auto_retry"} or has_orchestration
+        if is_orchestrated:
+            logger.debug(
+                "Skipping bot triggers for orchestrated task %s (source=%s, orchestration_id=%s)",
+                task.id,
+                source,
+                metadata.orchestration_id,
+            )
+            return
+
         trigger_depth = int(metadata.trigger_depth or 0)
         max_depth = max(1, _settings_int("bot_trigger_max_depth", 20))
         if trigger_depth >= max_depth:

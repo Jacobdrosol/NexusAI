@@ -5242,4 +5242,70 @@ async def test_task_manager_ignores_legacy_dashboard_tasks_table_shape(tmp_path)
         await asyncio.sleep(0.1)
 
     updated = await tm.get_task(task.id)
+
+
+@pytest.mark.anyio
+async def test_trigger_skipped_for_orchestrated_tasks(tmp_path):
+    """Workflow triggers should NOT fire for orchestrated tasks - the orchestrator manages workflow."""
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot, TaskMetadata
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {"done": True}
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "orchestrated-trigger-skip.db"))
+    # bot-a has a trigger that would fire to bot-b on completion
+    await bot_registry.register(
+        Bot(
+            id="bot-a",
+            name="Bot A",
+            role="assistant",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "handoff",
+                        "event": "task_completed",
+                        "target_bot_id": "bot-b",
+                        "condition": "has_result",
+                    }
+                ]
+            },
+        )
+    )
+    await bot_registry.register(Bot(id="bot-b", name="Bot B", role="assistant", backends=[]))
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "orchestrated-trigger-skip-tasks.db"), bot_registry=bot_registry)
+    
+    # Create a task WITH orchestration_id (simulating orchestrated task)
+    root = await tm.create_task(
+        bot_id="bot-a",
+        payload={"instruction": "start"},
+        metadata=TaskMetadata(
+            source="chat_assign",
+            orchestration_id="test-orchestration-123",
+        ),
+    )
+
+    # Wait for task to complete
+    for _ in range(30):
+        updated = await tm.get_task(root.id)
+        if updated.status == "completed":
+            break
+        await asyncio.sleep(0.1)
+
+    updated = await tm.get_task(root.id)
+    assert updated.status == "completed"
+
+    await asyncio.sleep(0.3)  # Give time for any trigger dispatch attempt
+
+    tasks = await tm.list_tasks()
+    # Should only have 1 task - the trigger should be skipped because orchestration_id is set
+    assert len(tasks) == 1, f"Expected 1 task (orchestrated), got {len(tasks)}"
+    assert tasks[0].bot_id == "bot-a"
+    assert tasks[0].metadata.orchestration_id == "test-orchestration-123"
     assert updated.status == "completed"
