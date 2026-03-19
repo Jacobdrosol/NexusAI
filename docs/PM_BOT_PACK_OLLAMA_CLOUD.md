@@ -1,6 +1,10 @@
-# PM Bot Pack (Ollama Cloud)
+# PM Bot Workflow Reference (Ollama Cloud)
 
-This guide defines a reusable Project Manager workflow bot pack for `@assign` orchestration in NexusAI.
+This guide defines the required Project Manager workflow for `@assign` orchestration in NexusAI.
+
+PM bot configs are managed as manually imported `*.bot.json` files outside this repository.
+
+This repository does not include or support a setup/apply/export pack generator for PM bots.
 
 ## Topology
 
@@ -23,12 +27,21 @@ Use these role-aligned bots:
 - `PMOrchestrator` preserves those explicit bot IDs and only falls back to role-based routing when a plan step omits `bot_id`.
 - The workers execute in dependency order and return a summarized assignment result.
 
-The generated PM pack also includes explicit workflow triggers on the worker bots:
+The imported PM bot configs should include explicit workflow triggers on the worker bots:
 
-- Linear forward routing: `pm-research-analyst -> pm-engineer -> pm-coder -> pm-tester -> pm-security-reviewer -> pm-database-engineer -> pm-ui-tester -> pm-final-qc`
-- Deterministic backward routing: QA/review bots route only to explicitly configured earlier bots based on structured `failure_type` values.
-- UI scope guard: `pm-ui-tester` can return `skip` when no UI deliverables are present, then hand off to final QC.
-- Terminal stage: `pm-final-qc` ends the loop on pass and routes failures back to the specific earlier owner.
+- Forward routing:
+  - `pm-orchestrator -> pm-research-analyst -> pm-engineer`
+  - `pm-engineer -> pm-coder` with fan-out when implementation workstreams require it
+  - `pm-coder -> pm-tester -> pm-security-reviewer`
+  - all approved security branches join into `pm-database-engineer`
+  - `pm-database-engineer -> pm-ui-tester -> pm-final-qc`
+- Allowed backward routing only:
+  - `pm-tester -> pm-coder`
+  - `pm-security-reviewer -> pm-coder`
+  - `pm-ui-tester -> pm-engineer`
+  - `pm-final-qc -> pm-orchestrator`
+- UI scope guard: `pm-ui-tester` can return `skip` when no UI deliverables are present, then continue to final QC.
+- Terminal stage: `pm-final-qc` is the end-of-workflow quality gate and should not be used as a branch-local retry step.
 
 ## Model Policy
 
@@ -40,43 +53,16 @@ Recommended model split:
 2. Coding/research/database: `qwen3.5:397b-cloud`
 3. (Optional alternative for targeted creative generation) `glm-5:cloud`
 
-## Install / Export
+## Import Policy
 
-Use the setup script to generate import bundles and/or apply directly to control plane.
+Import PM bots manually from your operator-managed `*.bot.json` files.
 
-Generate import bundles:
+Recommended operator practice:
 
-```bash
-py scripts/setup_pm_bot_pack.py --export-dir "<path-to-export-bundles>"
-```
-
-Generate bundles with bot-level chat workspace tools pre-enabled:
-
-```bash
-py scripts/setup_pm_bot_pack.py --export-dir "<path-to-export-bundles>" --chat-tools-mode repo_and_filesystem
-```
-
-Apply directly to control plane:
-
-```bash
-py scripts/setup_pm_bot_pack.py --apply --base-url http://127.0.0.1:8000 --api-token <token>
-```
-
-Generate and apply in one command:
-
-```bash
-py scripts/setup_pm_bot_pack.py --export-dir "<path-to-export-bundles>" --apply --base-url http://127.0.0.1:8000 --api-token <token>
-```
-
-### Chat Tool Access Modes
-
-`setup_pm_bot_pack.py` supports bot-level chat workspace tool defaults:
-
-1. `--chat-tools-mode off` (default)
-2. `--chat-tools-mode repo_search`
-3. `--chat-tools-mode repo_and_filesystem`
-
-These flags only set the bot-level gate. Runtime access is still denied unless project-level and chat-level tool access are also enabled.
+1. Keep the PM bot JSON files in a separate import folder outside this repository.
+2. Import them through `Bots -> Import`.
+3. Re-import updated JSON files when workflow routing changes.
+4. Validate the workflow in chat with a small `@assign` run before using it on larger tasks.
 
 ## Database Workflows
 
@@ -91,7 +77,7 @@ For DB schema/query/migration tasks:
 
 - If a PM bot returns invalid plan JSON, orchestration falls back to a deterministic heuristic plan.
 - Keep roles explicit (`pm`, `researcher`, `engineer`, `coder`, `tester`, `security-reviewer`, `dba-sql`, `ui-tester`, `final-qc`) so routing stays predictable.
-- The PM pack intentionally uses structured output contracts so worker triggers can route by explicit `failure_type` values instead of heuristics.
+- The PM workflow intentionally uses structured output contracts so worker triggers can route by explicit `failure_type` values instead of heuristics.
 - When a worker is expected to produce repo files or reports, it should return full file contents in an `artifacts` array of `{path, content}` objects so downstream validation can inspect concrete outputs.
 - Workspace tools use strict three-switch gating:
   1. bot routing rules (`chat_tool_access`)

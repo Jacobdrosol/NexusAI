@@ -2564,7 +2564,7 @@ class TaskManager:
             return None
         if self._project_registry is None:
             return None
-        if str(metadata.source or "").strip().lower() not in {"chat_assign", "auto_retry"}:
+        if str(metadata.source or "").strip().lower() not in {"chat_assign", "auto_retry", "bot_trigger"}:
             return None
         if not metadata.project_id or not metadata.orchestration_id:
             return None
@@ -2610,7 +2610,7 @@ class TaskManager:
             and candidate.metadata
             and candidate.metadata.project_id == project_id
             and candidate.metadata.orchestration_id == orchestration_id
-            and str(candidate.metadata.source or "").strip().lower() in {"chat_assign", "auto_retry"}
+            and str(candidate.metadata.source or "").strip().lower() in {"chat_assign", "auto_retry", "bot_trigger"}
         ]
         file_candidates = _assignment_file_candidates(scoped_tasks)
         if not file_candidates:

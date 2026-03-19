@@ -140,9 +140,10 @@ After login:
    - A green `/health` alone is not enough; the dashboard also validates authenticated `/v1/projects`, `/v1/bots`, and `/v1/workers` access.
    - Use the `Control Plane Checks` table on `Overview` to see which endpoint is failing and whether the issue is auth (`401`), routing (`404`), or network reachability.
 3. Open `Workers` and confirm at least one worker is online.
-4. Open `Bots` and create or verify a bot with a valid backend.
+4. Open `Bots` and create, import, or verify a bot with a valid backend.
    - For cloud providers, add keys in `Settings -> API Keys` and reference by nickname (`api_key_ref`).
    - The control plane now persists workers and bots in SQLite; shipped example YAML files are not auto-seeded unless you explicitly enable `control_plane.seed_workers_from_config: true` and/or `control_plane.seed_bots_from_config: true`.
+   - If you use the PM workflow, import the PM bot `*.bot.json` files manually from your operator-managed import folder. This repo does not provide a PM bot pack setup script.
    - Use the bot detail page to add workflow triggers, queue a manual test run, and inspect run history/artifacts.
 5. Open `Projects` and create one project.
 6. Open `Vault` and ingest a small test document.

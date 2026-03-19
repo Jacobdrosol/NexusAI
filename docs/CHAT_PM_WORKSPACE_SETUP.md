@@ -74,21 +74,25 @@ In `Projects -> <project> -> Chat Workspace Tools`:
 3. Enable `Allow filesystem read/search` if needed.
 4. Save workspace tool policy.
 
-## 4. Install PM Bot Pack (Ollama Cloud)
+## 4. Import PM Bot Configs (Manual Only)
 
-Use the setup script from repo root:
+PM bots are managed through manually imported `*.bot.json` files.
 
-```powershell
-py scripts/setup_pm_bot_pack.py --apply --base-url http://127.0.0.1:8000 --api-token <token> --api-key-ref Ollama_Cloud1 --chat-tools-mode repo_and_filesystem
-```
+Do not use a repo-side setup or pack-generation script. This repository does not ship one.
 
-If you prefer export/import flow:
+Import the PM bot config JSON files from your operator-managed import folder in `Bots -> Import`.
 
-```powershell
-py scripts/setup_pm_bot_pack.py --export-dir "C:\temp\pm-pack" --chat-tools-mode repo_and_filesystem
-```
+After import, verify the expected bot IDs exist:
 
-Then import those `*.bot.json` files in `Bots -> Import`.
+- `pm-orchestrator`
+- `pm-research-analyst`
+- `pm-engineer`
+- `pm-coder`
+- `pm-tester`
+- `pm-security-reviewer`
+- `pm-database-engineer`
+- `pm-ui-tester`
+- `pm-final-qc`
 
 ## 5. Confirm Bot-Level Tool Access
 

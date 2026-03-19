@@ -4242,9 +4242,10 @@ async def test_chat_assign_tester_step_uses_internal_execution_even_when_step_ki
 
 
 @pytest.mark.anyio
-async def test_bot_trigger_final_qc_payload_from_tester_is_not_misclassified_as_test_execution(tmp_path):
+async def test_bot_trigger_final_qc_payload_from_tester_is_not_misclassified_as_test_execution(tmp_path, monkeypatch):
     import asyncio
 
+    from control_plane.api import projects as projects_module
     from control_plane.registry.bot_registry import BotRegistry
     from control_plane.task_manager.task_manager import TaskManager
     from shared.models import Bot, Project, TaskMetadata
@@ -4269,11 +4270,58 @@ async def test_bot_trigger_final_qc_payload_from_tester_is_not_misclassified_as_
             self.project_registry = StubProjectRegistry()
 
         async def schedule(self, task):
-            if task.bot_id == "pm-tester":
-                return {"outcome": "fail", "failure_type": "environment_blocker", "findings": ["missing dotnet"], "evidence": [], "artifacts": [], "handoff_notes": "infra"}
             if task.bot_id == "pm-final-qc":
                 return {"outcome": "fail", "failure_type": "test_failure", "findings": ["awaiting real execution"], "evidence": [], "artifacts": [], "handoff_notes": "needs real tests", "commit_message": ""}
             return {"ok": True}
+
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    (repo_root / "GlobeIQ.sln").write_text("Microsoft Visual Studio Solution File\n", encoding="utf-8")
+    tests_project = repo_root / "GlobeIQ.Server.Tests" / "GlobeIQ.Server.Tests.csproj"
+    tests_project.parent.mkdir(parents=True, exist_ok=True)
+    tests_project.write_text("<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n", encoding="utf-8")
+
+    monkeypatch.setattr(projects_module, "_extract_project_repo_workspace", lambda project: project.settings_overrides["repo_workspace"])
+    monkeypatch.setattr(projects_module, "_resolve_repo_workspace_root", lambda project_id, cfg, require_enabled=True: repo_root)
+
+    async def _snapshot(*, root, cfg):
+        return {"is_repo": True, "branch": "main", "clean": False, "porcelain": ["?? GlobeIQ.Server.Tests/BlockCatalogSeederTests.cs"]}
+
+    monkeypatch.setattr(projects_module, "_repo_status_snapshot", _snapshot)
+    monkeypatch.setattr(
+        projects_module,
+        "_assignment_file_candidates",
+        lambda tasks: [
+            {"path": "GlobeIQ.Server/Services/BlockCatalogSeeder.cs", "content": "public class BlockCatalogSeeder {}\n"},
+            {"path": "GlobeIQ.Server.Tests/BlockCatalogSeederTests.cs", "content": "public class BlockCatalogSeederTests {}\n"},
+        ],
+    )
+
+    def _write_assignment_files(*, root, candidates, overwrite):
+        applied = []
+        for item in candidates:
+            target = root / item["path"]
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(item["content"], encoding="utf-8")
+            applied.append({"path": item["path"], "status": "created"})
+        return applied
+
+    monkeypatch.setattr(projects_module, "_write_assignment_files", _write_assignment_files)
+    monkeypatch.setattr(projects_module, "_bootstrap_command_specs", lambda root, languages: [])
+
+    async def _run_repo_command(args, *, cwd, timeout_seconds=None, env_overrides=None):
+        assert args[:2] == ["dotnet", "test"]
+        return {
+            "ok": False,
+            "command": args,
+            "exit_code": None,
+            "stdout": "",
+            "stderr": "",
+            "error": "command not found: dotnet",
+            "resource_usage": {},
+        }
+
+    monkeypatch.setattr(projects_module, "_run_repo_command", _run_repo_command)
 
     bot_registry = BotRegistry(db_path=str(tmp_path / "final-qc-trigger-bots.db"))
     await bot_registry.register(
@@ -4853,6 +4901,148 @@ async def test_chat_assign_test_execution_runs_mixed_node_and_dotnet_tests(tmp_p
     labels = [str(item.get("label") or "") for item in executed]
     assert "test_execution_node" in labels
     assert "test_execution_dotnet" in labels
+
+
+@pytest.mark.anyio
+async def test_bot_trigger_tester_step_uses_internal_execution_and_sees_triggered_coder_outputs(tmp_path, monkeypatch):
+    import asyncio
+
+    from control_plane.api import projects as projects_module
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Project, TaskMetadata
+
+    class StubProjectRegistry:
+        async def get(self, project_id):
+            return Project(
+                id=project_id,
+                name="Proj",
+                settings_overrides={
+                    "repo_workspace": {
+                        "enabled": True,
+                        "managed_path_mode": False,
+                        "root_path": str(tmp_path / "repo"),
+                        "allow_command_execution": True,
+                    }
+                },
+            )
+
+    class StubScheduler:
+        def __init__(self):
+            self.project_registry = StubProjectRegistry()
+
+        async def schedule(self, task):
+            if task.bot_id == "pm-tester":
+                raise AssertionError("scheduler should not be used for trigger-spawned internal test execution")
+            return {"status": "complete", "artifacts": []}
+
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    (repo_root / "GlobeIQ.sln").write_text("Microsoft Visual Studio Solution File\n", encoding="utf-8")
+    tests_project = repo_root / "GlobeIQ.Server.Tests" / "GlobeIQ.Server.Tests.csproj"
+    tests_project.parent.mkdir(parents=True, exist_ok=True)
+    tests_project.write_text("<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n", encoding="utf-8")
+
+    monkeypatch.setattr(projects_module, "_extract_project_repo_workspace", lambda project: project.settings_overrides["repo_workspace"])
+    monkeypatch.setattr(projects_module, "_resolve_repo_workspace_root", lambda project_id, cfg, require_enabled=True: repo_root)
+
+    async def _snapshot(*, root, cfg):
+        return {"is_repo": True, "branch": "main", "clean": False, "porcelain": [" M GlobeIQ.Server.Tests/GeometryLessonServiceTests.cs"]}
+
+    monkeypatch.setattr(projects_module, "_repo_status_snapshot", _snapshot)
+
+    seen_task_ids: List[str] = []
+
+    def _assignment_file_candidates(tasks):
+        seen_task_ids.extend(str(task.id) for task in tasks)
+        assert any(
+            task.bot_id == "pm-coder"
+            and task.metadata
+            and task.metadata.source == "bot_trigger"
+            for task in tasks
+        )
+        return [
+            {"path": "GlobeIQ.Server/Services/GeometryLessonService.cs", "content": "public class GeometryLessonService {}\n"},
+            {"path": "GlobeIQ.Server.Tests/GeometryLessonServiceTests.cs", "content": "public class GeometryLessonServiceTests {}\n"},
+        ]
+
+    monkeypatch.setattr(projects_module, "_assignment_file_candidates", _assignment_file_candidates)
+
+    def _write_assignment_files(*, root, candidates, overwrite):
+        applied = []
+        for item in candidates:
+            target = root / item["path"]
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(item["content"], encoding="utf-8")
+            applied.append({"path": item["path"], "status": "created"})
+        return applied
+
+    monkeypatch.setattr(projects_module, "_write_assignment_files", _write_assignment_files)
+    monkeypatch.setattr(projects_module, "_bootstrap_command_specs", lambda root, languages: [])
+
+    async def _run_repo_command(args, *, cwd, timeout_seconds=None, env_overrides=None):
+        assert args[:2] == ["dotnet", "test"]
+        return {
+            "ok": True,
+            "command": args,
+            "exit_code": 0,
+            "stdout": "Passed!  Total tests: 1\n",
+            "stderr": "",
+            "resource_usage": {},
+        }
+
+    monkeypatch.setattr(projects_module, "_run_repo_command", _run_repo_command)
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "bot-trigger-test-execution.db"))
+    coder_task = await tm.create_task(
+        bot_id="pm-coder",
+        payload={"instruction": "implement the workstream", "role_hint": "coder", "step_kind": "repo_change"},
+        metadata=TaskMetadata(
+            source="bot_trigger",
+            project_id="proj-1",
+            orchestration_id="orch-1",
+            parent_task_id="task-engineer",
+        ),
+    )
+
+    for _ in range(40):
+        updated_coder = await tm.get_task(coder_task.id)
+        if updated_coder.status == "completed":
+            break
+        await asyncio.sleep(0.05)
+
+    tester_task = await tm.create_task(
+        bot_id="pm-tester",
+        payload={
+            "instruction": "run generated tests",
+            "role_hint": "tester",
+            "step_kind": "test_execution",
+            "deliverables": ["coverage report"],
+            "evidence_requirements": [
+                "Executed test command output",
+                "Pass/fail or coverage evidence from the test run",
+            ],
+        },
+        metadata=TaskMetadata(
+            source="bot_trigger",
+            project_id="proj-1",
+            orchestration_id="orch-1",
+            parent_task_id=coder_task.id,
+        ),
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(tester_task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.1)
+
+    assert updated.status == "completed"
+    assert updated.error is None
+    assert coder_task.id in seen_task_ids
+    executed = updated.result.get("executed_commands") or []
+    assert executed
+    assert executed[-1]["command"][:2] == ["dotnet", "test"]
+    assert updated.result.get("failure_type") == "pass"
 
 
 def test_assignment_execution_language_inherits_repo_runtime_over_generated_python_tests(tmp_path):
