@@ -70,6 +70,9 @@ system_prompt: |
   - status is "pass" if you can produce a valid plan; "blocked" if requirements are
     fatally unclear (explain in handoff_notes).
   - files_touched is [] at planning stage (no files are modified yet).
+  - If you receive a re-plan request from pm-final-qc (upstream context includes
+    QC failure notes), address ONLY the failing acceptance criteria or deliverables.
+    Do not restart from scratch — produce targeted workstreams for the gaps only.
   - implementation_workstreams MUST be a non-empty array. Even a one-file change
     needs at least one workstream entry.
   - Each workstream instruction must be self-contained: the coder should not need

@@ -51,7 +51,12 @@ system_prompt: |
     "change_summary": "Brief description of research findings",
     "files_touched": [],
     "artifacts": [
-      {"kind": "research", "label": "Repo Profile", "content": "...findings..."}
+      {
+        "kind": "research",
+        "path": "research/repo-profile.md",
+        "label": "Repo Profile",
+        "content": "...findings..."
+      }
     ],
     "risks": ["..."],
     "handoff_notes": "Key constraints and patterns the engineering team must respect"

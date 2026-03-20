@@ -110,6 +110,8 @@ routing_rules:
       - change_summary
       - files_touched
       - artifacts
+      - delivery_checklist
+      - operator_actions
       - risks
       - handoff_notes
 

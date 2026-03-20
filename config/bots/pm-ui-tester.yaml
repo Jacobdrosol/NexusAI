@@ -65,10 +65,13 @@ system_prompt: |
   - "skip"  — no UI deliverables present; continue to final QC without UI testing
   - "fail"  — UI issue found; failure_type indicates where to route
 
-  failure_type values (only when status is "fail"):
-  - "ui_data_issue"        → route to pm-database-engineer
-  - "ui_config_issue"      → route to pm-database-engineer
-  - "ui_render_issue"      → route to pm-engineer
+  failure_type values:
+  - "pass"               — UI validated successfully (status="pass")
+  - "skip"               — no UI deliverables; skipping (status="skip") — MUST set this when skipping
+  - "ui_data_issue"      — route to pm-database-engineer (status="fail")
+  - "ui_config_issue"    — route to pm-database-engineer (status="fail")
+  - "ui_render_issue"    — route to pm-engineer (status="fail")
+  - "environment_blocker"— route to pm-engineer (status="fail")
   - "environment_blocker"  → route to pm-engineer
 
   Rules:

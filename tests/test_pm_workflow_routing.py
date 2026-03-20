@@ -1,0 +1,935 @@
+"""
+Integration tests for PM workflow trigger routing.
+
+Covers the full PM bot topology:
+  pm-engineer → [fan-out N] → pm-coder → pm-tester → pm-security-reviewer
+                                                             ↓ join (fanout_id)
+                                               pm-database-engineer → pm-ui-tester → pm-final-qc
+
+Backward routes:
+  pm-tester      (fail)              → pm-coder
+  pm-security    (fail)              → pm-coder
+  pm-ui-tester   (ui_data_issue)     → pm-database-engineer
+  pm-ui-tester   (ui_config_issue)   → pm-database-engineer
+  pm-ui-tester   (ui_render_issue)   → pm-engineer
+  pm-ui-tester   (environment_blocker)→ pm-engineer
+  pm-final-qc    (fail)              → pm-engineer
+
+Each test uses a StubScheduler that returns controlled results per bot,
+then waits for the terminal task to complete and asserts task cardinality.
+"""
+
+import asyncio
+import pytest
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Shared fixtures
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _workstream(title: str) -> dict:
+    return {
+        "title": title,
+        "instruction": f"Implement {title}",
+        "scope": [],
+        "acceptance_criteria": [],
+        "test_strategy": "unit tests",
+    }
+
+
+def _engineer_result(*titles: str) -> dict:
+    return {
+        "status": "pass",
+        "change_summary": "plan ready",
+        "files_touched": [],
+        "artifacts": [],
+        "risks": [],
+        "handoff_notes": "proceed",
+        "implementation_workstreams": [_workstream(t) for t in titles],
+    }
+
+
+_CODER_PASS = {
+    "status": "pass",
+    "change_summary": "implemented",
+    "files_touched": [],
+    "artifacts": [],
+    "risks": [],
+    "handoff_notes": "ready for testing",
+}
+
+_CODER_FAIL = {
+    "status": "fail",
+    "change_summary": "failed",
+    "files_touched": [],
+    "artifacts": [],
+    "risks": [],
+    "handoff_notes": "could not implement",
+}
+
+_TESTER_PASS = {
+    "status": "pass",
+    "failure_type": "pass",
+    "change_summary": "all tests pass",
+    "files_touched": [],
+    "artifacts": [],
+    "risks": [],
+    "handoff_notes": "ready for security",
+}
+
+_TESTER_FAIL = {
+    "status": "fail",
+    "failure_type": "test_failure",
+    "change_summary": "tests failed",
+    "files_touched": [],
+    "artifacts": [],
+    "risks": [],
+    "handoff_notes": "fix the test failures",
+}
+
+_SECURITY_PASS = {
+    "status": "pass",
+    "failure_type": "pass",
+    "change_summary": "no issues found",
+    "files_touched": [],
+    "artifacts": [],
+    "risks": [],
+    "handoff_notes": "ready for db",
+}
+
+_SECURITY_FAIL = {
+    "status": "fail",
+    "failure_type": "security_issue",
+    "change_summary": "security issue found",
+    "files_touched": [],
+    "artifacts": [],
+    "risks": [],
+    "handoff_notes": "fix the security vulnerability",
+}
+
+_DB_PASS = {
+    "status": "pass",
+    "change_summary": "db schema ok",
+    "files_touched": [],
+    "artifacts": [],
+    "risks": [],
+    "handoff_notes": "ready for ui test",
+}
+
+_UI_SKIP = {
+    "status": "skip",
+    "failure_type": "skip",
+    "change_summary": "no UI deliverables",
+    "files_touched": [],
+    "findings": [],
+    "evidence": [],
+    "artifacts": [],
+    "risks": [],
+    "handoff_notes": "skipping UI test",
+}
+
+_UI_PASS = {
+    "status": "pass",
+    "failure_type": "pass",
+    "change_summary": "UI looks good",
+    "files_touched": [],
+    "findings": [],
+    "evidence": [],
+    "artifacts": [],
+    "risks": [],
+    "handoff_notes": "ready for final qc",
+}
+
+_QC_PASS = {
+    "status": "pass",
+    "change_summary": "all clear",
+    "files_touched": [],
+    "artifacts": [],
+    "delivery_checklist": [],
+    "operator_actions": [],
+    "risks": [],
+    "handoff_notes": "done",
+}
+
+_QC_FAIL = {
+    "status": "fail",
+    "change_summary": "missing deliverables",
+    "files_touched": [],
+    "artifacts": [],
+    "delivery_checklist": [],
+    "operator_actions": [],
+    "risks": [],
+    "handoff_notes": "re-plan needed",
+}
+
+
+async def _make_bot_registry(tmp_path, suffix: str = ""):
+    """Create and register all 7 PM bots (matching their YAML trigger configs)."""
+    from control_plane.registry.bot_registry import BotRegistry
+    from shared.models import Bot
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / f"pm-bots{suffix}.db"))
+
+    await bot_registry.register(Bot(
+        id="pm-engineer",
+        name="PM Code Engineer",
+        role="engineer",
+        backends=[],
+        workflow={
+            "triggers": [
+                {
+                    "id": "fanout-to-coders",
+                    "event": "task_completed",
+                    "target_bot_id": "pm-coder",
+                    "condition": "has_result",
+                    "fan_out_field": "implementation_workstreams",
+                    "fan_out_alias": "workstream",
+                },
+                {
+                    "id": "blocked-halt",
+                    "event": "task_completed",
+                    "target_bot_id": "pm-orchestrator",
+                    "condition": "has_result",
+                    "result_field": "status",
+                    "result_equals": "blocked",
+                },
+            ]
+        },
+    ))
+
+    await bot_registry.register(Bot(
+        id="pm-coder",
+        name="PM Coder",
+        role="coder",
+        backends=[],
+        workflow={
+            "triggers": [
+                {
+                    "id": "pass-to-tester",
+                    "event": "task_completed",
+                    "target_bot_id": "pm-tester",
+                    "condition": "has_result",
+                    "result_field": "status",
+                    "result_equals": "pass",
+                },
+                {
+                    "id": "blocked-to-engineer",
+                    "event": "task_completed",
+                    "target_bot_id": "pm-engineer",
+                    "condition": "has_result",
+                    "result_field": "status",
+                    "result_equals": "blocked",
+                },
+            ]
+        },
+    ))
+
+    await bot_registry.register(Bot(
+        id="pm-tester",
+        name="PM Tester",
+        role="tester",
+        backends=[],
+        workflow={
+            "triggers": [
+                {
+                    "id": "pass-to-security",
+                    "event": "task_completed",
+                    "target_bot_id": "pm-security-reviewer",
+                    "condition": "has_result",
+                    "result_field": "status",
+                    "result_equals": "pass",
+                },
+                {
+                    "id": "fail-back-to-coder",
+                    "event": "task_completed",
+                    "target_bot_id": "pm-coder",
+                    "condition": "has_result",
+                    "result_field": "status",
+                    "result_equals": "fail",
+                },
+            ]
+        },
+    ))
+
+    await bot_registry.register(Bot(
+        id="pm-security-reviewer",
+        name="PM Security Reviewer",
+        role="security-reviewer",
+        backends=[],
+        workflow={
+            "triggers": [
+                {
+                    "id": "join-pass-to-db",
+                    "event": "task_completed",
+                    "target_bot_id": "pm-database-engineer",
+                    "condition": "has_result",
+                    "result_field": "status",
+                    "result_equals": "pass",
+                    "join_group_field": "fanout_id",
+                },
+                {
+                    "id": "fail-back-to-coder",
+                    "event": "task_completed",
+                    "target_bot_id": "pm-coder",
+                    "condition": "has_result",
+                    "result_field": "status",
+                    "result_equals": "fail",
+                },
+            ]
+        },
+    ))
+
+    await bot_registry.register(Bot(
+        id="pm-database-engineer",
+        name="PM Database Engineer",
+        role="dba-sql",
+        backends=[],
+        workflow={
+            "triggers": [
+                {
+                    "id": "pass-to-ui",
+                    "event": "task_completed",
+                    "target_bot_id": "pm-ui-tester",
+                    "condition": "has_result",
+                    "result_field": "status",
+                    "result_equals": "pass",
+                },
+            ]
+        },
+    ))
+
+    await bot_registry.register(Bot(
+        id="pm-ui-tester",
+        name="PM UI Tester",
+        role="ui-tester",
+        backends=[],
+        workflow={
+            "triggers": [
+                {
+                    "id": "pass-to-final-qc",
+                    "event": "task_completed",
+                    "target_bot_id": "pm-final-qc",
+                    "condition": "has_result",
+                    "result_field": "status",
+                    "result_equals": "pass",
+                },
+                {
+                    "id": "skip-to-final-qc",
+                    "event": "task_completed",
+                    "target_bot_id": "pm-final-qc",
+                    "condition": "has_result",
+                    "result_field": "status",
+                    "result_equals": "skip",
+                },
+                {
+                    "id": "fail-data-back-to-db",
+                    "event": "task_completed",
+                    "target_bot_id": "pm-database-engineer",
+                    "condition": "has_result",
+                    "result_field": "failure_type",
+                    "result_equals": "ui_data_issue",
+                },
+                {
+                    "id": "fail-config-back-to-db",
+                    "event": "task_completed",
+                    "target_bot_id": "pm-database-engineer",
+                    "condition": "has_result",
+                    "result_field": "failure_type",
+                    "result_equals": "ui_config_issue",
+                },
+                {
+                    "id": "fail-render-back-to-engineer",
+                    "event": "task_completed",
+                    "target_bot_id": "pm-engineer",
+                    "condition": "has_result",
+                    "result_field": "failure_type",
+                    "result_equals": "ui_render_issue",
+                },
+                {
+                    "id": "fail-env-back-to-engineer",
+                    "event": "task_completed",
+                    "target_bot_id": "pm-engineer",
+                    "condition": "has_result",
+                    "result_field": "failure_type",
+                    "result_equals": "environment_blocker",
+                },
+            ]
+        },
+    ))
+
+    await bot_registry.register(Bot(
+        id="pm-final-qc",
+        name="PM Final QC",
+        role="final-qc",
+        backends=[],
+        workflow={
+            "triggers": [
+                {
+                    "id": "fail-back-to-engineer",
+                    "event": "task_completed",
+                    "target_bot_id": "pm-engineer",
+                    "condition": "has_result",
+                    "result_field": "status",
+                    "result_equals": "fail",
+                },
+            ]
+        },
+    ))
+
+    return bot_registry
+
+
+async def _wait_for_terminal(tm, terminal_bot_id: str, expected_total: int, *, timeout: int = 240) -> list:
+    """
+    Wait until the terminal bot has a completed task, then wait for the full
+    expected task count with all tasks completed.  Returns the task list.
+    """
+    for _ in range(timeout):
+        tasks = await tm.list_tasks()
+        if any(t.bot_id == terminal_bot_id and t.status == "completed" for t in tasks):
+            break
+        await asyncio.sleep(0.1)
+
+    for _ in range(timeout):
+        tasks = await tm.list_tasks()
+        if len(tasks) == expected_total and all(t.status == "completed" for t in tasks):
+            break
+        await asyncio.sleep(0.1)
+
+    return await tm.list_tasks()
+
+
+def _counts(tasks) -> dict:
+    c: dict = {}
+    for t in tasks:
+        c[t.bot_id] = c.get(t.bot_id, 0) + 1
+    return c
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Test 1 — single workstream, all pass, UI skip → 7 tasks
+# ──────────────────────────────────────────────────────────────────────────────
+
+@pytest.mark.anyio
+async def test_pm_workflow_single_workstream_all_pass_ui_skip(tmp_path):
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import TaskMetadata
+
+    class StubScheduler:
+        async def schedule(self, task):
+            if task.bot_id == "pm-engineer":
+                return _engineer_result("WS1: core feature")
+            if task.bot_id == "pm-coder":
+                return _CODER_PASS
+            if task.bot_id == "pm-tester":
+                return _TESTER_PASS
+            if task.bot_id == "pm-security-reviewer":
+                return _SECURITY_PASS
+            if task.bot_id == "pm-database-engineer":
+                return _DB_PASS
+            if task.bot_id == "pm-ui-tester":
+                return _UI_SKIP
+            if task.bot_id == "pm-final-qc":
+                return _QC_PASS
+            return {"status": "pass"}
+
+    bot_registry = await _make_bot_registry(tmp_path, "-test1")
+    tm = TaskManager(
+        StubScheduler(),
+        db_path=str(tmp_path / "pm-routing-test1.db"),
+        bot_registry=bot_registry,
+    )
+
+    await tm.create_task(
+        bot_id="pm-engineer",
+        payload={"instruction": "add feature X"},
+        metadata=TaskMetadata(source="chat_assign"),
+    )
+
+    expected_total = 7
+    tasks = await _wait_for_terminal(tm, "pm-final-qc", expected_total)
+
+    assert len(tasks) == expected_total, f"Expected {expected_total} tasks, got {len(tasks)}: {_counts(tasks)}"
+    assert all(t.status == "completed" for t in tasks), f"Not all completed: {[(t.bot_id, t.status) for t in tasks]}"
+
+    c = _counts(tasks)
+    assert c.get("pm-engineer", 0) == 1
+    assert c.get("pm-coder", 0) == 1
+    assert c.get("pm-tester", 0) == 1
+    assert c.get("pm-security-reviewer", 0) == 1
+    assert c.get("pm-database-engineer", 0) == 1
+    assert c.get("pm-ui-tester", 0) == 1
+    assert c.get("pm-final-qc", 0) == 1
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Test 2 — two workstreams fan-out, all pass, UI skip → 10 tasks
+# ──────────────────────────────────────────────────────────────────────────────
+
+@pytest.mark.anyio
+async def test_pm_workflow_two_workstream_fan_out_and_join(tmp_path):
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import TaskMetadata
+
+    class StubScheduler:
+        async def schedule(self, task):
+            if task.bot_id == "pm-engineer":
+                return _engineer_result("WS1: frontend", "WS2: backend")
+            if task.bot_id == "pm-coder":
+                return _CODER_PASS
+            if task.bot_id == "pm-tester":
+                return _TESTER_PASS
+            if task.bot_id == "pm-security-reviewer":
+                return _SECURITY_PASS
+            if task.bot_id == "pm-database-engineer":
+                return _DB_PASS
+            if task.bot_id == "pm-ui-tester":
+                return _UI_SKIP
+            if task.bot_id == "pm-final-qc":
+                return _QC_PASS
+            return {"status": "pass"}
+
+    bot_registry = await _make_bot_registry(tmp_path, "-test2")
+    tm = TaskManager(
+        StubScheduler(),
+        db_path=str(tmp_path / "pm-routing-test2.db"),
+        bot_registry=bot_registry,
+    )
+
+    await tm.create_task(
+        bot_id="pm-engineer",
+        payload={"instruction": "add feature X with two parts"},
+        metadata=TaskMetadata(source="chat_assign"),
+    )
+
+    # 1 engineer + 2 coders + 2 testers + 2 security reviewers + 1 db + 1 ui + 1 qc = 10
+    expected_total = 10
+    tasks = await _wait_for_terminal(tm, "pm-final-qc", expected_total)
+
+    assert len(tasks) == expected_total, f"Expected {expected_total} tasks, got {len(tasks)}: {_counts(tasks)}"
+    assert all(t.status == "completed" for t in tasks)
+
+    c = _counts(tasks)
+    assert c.get("pm-engineer", 0) == 1
+    assert c.get("pm-coder", 0) == 2
+    assert c.get("pm-tester", 0) == 2
+    assert c.get("pm-security-reviewer", 0) == 2
+    assert c.get("pm-database-engineer", 0) == 1
+    assert c.get("pm-ui-tester", 0) == 1
+    assert c.get("pm-final-qc", 0) == 1
+
+    # Verify the join fired with the right counts
+    db_tasks = [t for t in tasks if t.bot_id == "pm-database-engineer"]
+    assert len(db_tasks) == 1
+    db_payload = db_tasks[0].payload
+    assert isinstance(db_payload, dict)
+    assert db_payload.get("join_expected_count") == 2
+    assert db_payload.get("join_count") == 2
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Test 3 — tester fails once then passes (backward loop) → 9 tasks
+# ──────────────────────────────────────────────────────────────────────────────
+
+@pytest.mark.anyio
+async def test_pm_workflow_tester_fails_once_then_passes(tmp_path):
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import TaskMetadata
+
+    tester_call_count = {"n": 0}
+
+    class StubScheduler:
+        async def schedule(self, task):
+            if task.bot_id == "pm-engineer":
+                return _engineer_result("WS1: core")
+            if task.bot_id == "pm-coder":
+                return _CODER_PASS
+            if task.bot_id == "pm-tester":
+                tester_call_count["n"] += 1
+                # First tester call fails, second passes
+                return _TESTER_FAIL if tester_call_count["n"] == 1 else _TESTER_PASS
+            if task.bot_id == "pm-security-reviewer":
+                return _SECURITY_PASS
+            if task.bot_id == "pm-database-engineer":
+                return _DB_PASS
+            if task.bot_id == "pm-ui-tester":
+                return _UI_SKIP
+            if task.bot_id == "pm-final-qc":
+                return _QC_PASS
+            return {"status": "pass"}
+
+    bot_registry = await _make_bot_registry(tmp_path, "-test3")
+    tm = TaskManager(
+        StubScheduler(),
+        db_path=str(tmp_path / "pm-routing-test3.db"),
+        bot_registry=bot_registry,
+    )
+
+    await tm.create_task(
+        bot_id="pm-engineer",
+        payload={"instruction": "add feature with test retry"},
+        metadata=TaskMetadata(source="chat_assign"),
+    )
+
+    # 1 engineer + 2 coders + 2 testers + 1 security + 1 db + 1 ui + 1 qc = 9
+    expected_total = 9
+    tasks = await _wait_for_terminal(tm, "pm-final-qc", expected_total)
+
+    assert len(tasks) == expected_total, f"Expected {expected_total} tasks, got {len(tasks)}: {_counts(tasks)}"
+    assert all(t.status == "completed" for t in tasks)
+
+    c = _counts(tasks)
+    assert c.get("pm-engineer", 0) == 1
+    assert c.get("pm-coder", 0) == 2       # original + retry after tester fail
+    assert c.get("pm-tester", 0) == 2       # first fails, second passes
+    assert c.get("pm-security-reviewer", 0) == 1
+    assert c.get("pm-database-engineer", 0) == 1
+    assert c.get("pm-ui-tester", 0) == 1
+    assert c.get("pm-final-qc", 0) == 1
+
+    # Verify the backward loop: the failed tester task exists
+    tester_tasks = [t for t in tasks if t.bot_id == "pm-tester"]
+    statuses = sorted(t.result.get("status") for t in tester_tasks if isinstance(t.result, dict))
+    assert "fail" in statuses
+    assert "pass" in statuses
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Test 4 — security reviewer fails once then passes (backward loop) → 10 tasks
+# ──────────────────────────────────────────────────────────────────────────────
+
+@pytest.mark.anyio
+async def test_pm_workflow_security_fails_once_then_passes(tmp_path):
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import TaskMetadata
+
+    security_call_count = {"n": 0}
+
+    class StubScheduler:
+        async def schedule(self, task):
+            if task.bot_id == "pm-engineer":
+                return _engineer_result("WS1: core")
+            if task.bot_id == "pm-coder":
+                return _CODER_PASS
+            if task.bot_id == "pm-tester":
+                return _TESTER_PASS
+            if task.bot_id == "pm-security-reviewer":
+                security_call_count["n"] += 1
+                # First security review fails, second passes
+                return _SECURITY_FAIL if security_call_count["n"] == 1 else _SECURITY_PASS
+            if task.bot_id == "pm-database-engineer":
+                return _DB_PASS
+            if task.bot_id == "pm-ui-tester":
+                return _UI_SKIP
+            if task.bot_id == "pm-final-qc":
+                return _QC_PASS
+            return {"status": "pass"}
+
+    bot_registry = await _make_bot_registry(tmp_path, "-test4")
+    tm = TaskManager(
+        StubScheduler(),
+        db_path=str(tmp_path / "pm-routing-test4.db"),
+        bot_registry=bot_registry,
+    )
+
+    await tm.create_task(
+        bot_id="pm-engineer",
+        payload={"instruction": "add feature with security retry"},
+        metadata=TaskMetadata(source="chat_assign"),
+    )
+
+    # 1 engineer + 2 coders + 2 testers + 2 security + 1 db + 1 ui + 1 qc = 10
+    expected_total = 10
+    tasks = await _wait_for_terminal(tm, "pm-final-qc", expected_total)
+
+    assert len(tasks) == expected_total, f"Expected {expected_total} tasks, got {len(tasks)}: {_counts(tasks)}"
+    assert all(t.status == "completed" for t in tasks)
+
+    c = _counts(tasks)
+    assert c.get("pm-engineer", 0) == 1
+    assert c.get("pm-coder", 0) == 2       # original + retry after security fail
+    assert c.get("pm-tester", 0) == 2       # original + second pass after coder retry
+    assert c.get("pm-security-reviewer", 0) == 2  # first fails, second passes
+    assert c.get("pm-database-engineer", 0) == 1  # join fires once second security passes
+    assert c.get("pm-ui-tester", 0) == 1
+    assert c.get("pm-final-qc", 0) == 1
+
+    # Verify security reviewer results: one fail, one pass
+    sec_tasks = [t for t in tasks if t.bot_id == "pm-security-reviewer"]
+    statuses = sorted(t.result.get("status") for t in sec_tasks if isinstance(t.result, dict))
+    assert statuses == ["fail", "pass"]
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Test 5 — UI tester reports ui_data_issue, routes back to DB engineer → 9 tasks
+# ──────────────────────────────────────────────────────────────────────────────
+
+@pytest.mark.anyio
+async def test_pm_workflow_ui_tester_data_issue_routes_back_to_db(tmp_path):
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import TaskMetadata
+
+    ui_call_count = {"n": 0}
+
+    class StubScheduler:
+        async def schedule(self, task):
+            if task.bot_id == "pm-engineer":
+                return _engineer_result("WS1: data pipeline")
+            if task.bot_id == "pm-coder":
+                return _CODER_PASS
+            if task.bot_id == "pm-tester":
+                return _TESTER_PASS
+            if task.bot_id == "pm-security-reviewer":
+                return _SECURITY_PASS
+            if task.bot_id == "pm-database-engineer":
+                return _DB_PASS
+            if task.bot_id == "pm-ui-tester":
+                ui_call_count["n"] += 1
+                if ui_call_count["n"] == 1:
+                    return {
+                        "status": "fail",
+                        "failure_type": "ui_data_issue",
+                        "change_summary": "data binding mismatch",
+                        "files_touched": [],
+                        "findings": ["API response format mismatch"],
+                        "evidence": [],
+                        "artifacts": [],
+                        "risks": [],
+                        "handoff_notes": "fix db layer",
+                    }
+                return _UI_SKIP
+            if task.bot_id == "pm-final-qc":
+                return _QC_PASS
+            return {"status": "pass"}
+
+    bot_registry = await _make_bot_registry(tmp_path, "-test5")
+    tm = TaskManager(
+        StubScheduler(),
+        db_path=str(tmp_path / "pm-routing-test5.db"),
+        bot_registry=bot_registry,
+    )
+
+    await tm.create_task(
+        bot_id="pm-engineer",
+        payload={"instruction": "add data pipeline feature"},
+        metadata=TaskMetadata(source="chat_assign"),
+    )
+
+    # 1 engineer + 1 coder + 1 tester + 1 security + 2 db + 2 ui + 1 qc = 9
+    expected_total = 9
+    tasks = await _wait_for_terminal(tm, "pm-final-qc", expected_total)
+
+    assert len(tasks) == expected_total, f"Expected {expected_total} tasks, got {len(tasks)}: {_counts(tasks)}"
+    assert all(t.status == "completed" for t in tasks)
+
+    c = _counts(tasks)
+    assert c.get("pm-engineer", 0) == 1
+    assert c.get("pm-coder", 0) == 1
+    assert c.get("pm-tester", 0) == 1
+    assert c.get("pm-security-reviewer", 0) == 1
+    assert c.get("pm-database-engineer", 0) == 2  # original + re-run after ui_data_issue
+    assert c.get("pm-ui-tester", 0) == 2           # first fails, second skips
+    assert c.get("pm-final-qc", 0) == 1
+
+    # Confirm first UI tester reported the data issue
+    ui_tasks = [t for t in tasks if t.bot_id == "pm-ui-tester"]
+    failure_types = [t.result.get("failure_type") for t in ui_tasks if isinstance(t.result, dict)]
+    assert "ui_data_issue" in failure_types
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Test 6 — UI tester reports ui_render_issue, routes back to engineer → 14 tasks
+# ──────────────────────────────────────────────────────────────────────────────
+
+@pytest.mark.anyio
+async def test_pm_workflow_ui_tester_render_issue_routes_back_to_engineer(tmp_path):
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import TaskMetadata
+
+    ui_call_count = {"n": 0}
+
+    class StubScheduler:
+        async def schedule(self, task):
+            if task.bot_id == "pm-engineer":
+                return _engineer_result("WS1: render fix")
+            if task.bot_id == "pm-coder":
+                return _CODER_PASS
+            if task.bot_id == "pm-tester":
+                return _TESTER_PASS
+            if task.bot_id == "pm-security-reviewer":
+                return _SECURITY_PASS
+            if task.bot_id == "pm-database-engineer":
+                return _DB_PASS
+            if task.bot_id == "pm-ui-tester":
+                ui_call_count["n"] += 1
+                if ui_call_count["n"] == 1:
+                    return {
+                        "status": "fail",
+                        "failure_type": "ui_render_issue",
+                        "change_summary": "component rendering broken",
+                        "files_touched": [],
+                        "findings": ["Header component crashes"],
+                        "evidence": [],
+                        "artifacts": [],
+                        "risks": [],
+                        "handoff_notes": "re-plan UI layer",
+                    }
+                return _UI_SKIP
+            if task.bot_id == "pm-final-qc":
+                return _QC_PASS
+            return {"status": "pass"}
+
+    bot_registry = await _make_bot_registry(tmp_path, "-test6")
+    tm = TaskManager(
+        StubScheduler(),
+        db_path=str(tmp_path / "pm-routing-test6.db"),
+        bot_registry=bot_registry,
+    )
+
+    await tm.create_task(
+        bot_id="pm-engineer",
+        payload={"instruction": "fix render issue"},
+        metadata=TaskMetadata(source="chat_assign"),
+    )
+
+    # Full pipeline runs twice (engineer re-plans after ui_render_issue):
+    # Pass 1: eng1, coder1, tester1, security1, db1, ui1(fail→render) → triggers eng2 — 6 tasks, no QC
+    # Pass 2: eng2, coder2, tester2, security2, db2, ui2(skip) → qc1 — 7 tasks
+    # Total: 6 + 7 = 13
+    expected_total = 13
+    tasks = await _wait_for_terminal(tm, "pm-final-qc", expected_total)
+
+    assert len(tasks) == expected_total, f"Expected {expected_total} tasks, got {len(tasks)}: {_counts(tasks)}"
+    assert all(t.status == "completed" for t in tasks)
+
+    c = _counts(tasks)
+    assert c.get("pm-engineer", 0) == 2
+    assert c.get("pm-coder", 0) == 2
+    assert c.get("pm-tester", 0) == 2
+    assert c.get("pm-security-reviewer", 0) == 2
+    assert c.get("pm-database-engineer", 0) == 2
+    assert c.get("pm-ui-tester", 0) == 2
+    assert c.get("pm-final-qc", 0) == 1  # only the second pass reaches QC
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Test 7 — final QC fails once, triggers engineer re-plan → 14 tasks
+# ──────────────────────────────────────────────────────────────────────────────
+
+@pytest.mark.anyio
+async def test_pm_workflow_final_qc_fails_triggers_engineer_replan(tmp_path):
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import TaskMetadata
+
+    qc_call_count = {"n": 0}
+
+    class StubScheduler:
+        async def schedule(self, task):
+            if task.bot_id == "pm-engineer":
+                return _engineer_result("WS1: feature")
+            if task.bot_id == "pm-coder":
+                return _CODER_PASS
+            if task.bot_id == "pm-tester":
+                return _TESTER_PASS
+            if task.bot_id == "pm-security-reviewer":
+                return _SECURITY_PASS
+            if task.bot_id == "pm-database-engineer":
+                return _DB_PASS
+            if task.bot_id == "pm-ui-tester":
+                return _UI_SKIP
+            if task.bot_id == "pm-final-qc":
+                qc_call_count["n"] += 1
+                # First QC fails (triggers re-plan), second passes
+                return _QC_FAIL if qc_call_count["n"] == 1 else _QC_PASS
+            return {"status": "pass"}
+
+    bot_registry = await _make_bot_registry(tmp_path, "-test7")
+    tm = TaskManager(
+        StubScheduler(),
+        db_path=str(tmp_path / "pm-routing-test7.db"),
+        bot_registry=bot_registry,
+    )
+
+    await tm.create_task(
+        bot_id="pm-engineer",
+        payload={"instruction": "add feature with qc retry"},
+        metadata=TaskMetadata(source="chat_assign"),
+    )
+
+    # Full pipeline runs twice:
+    # Pass 1: eng1, coder1, tester1, security1, db1, ui1, qc1(fail) → re-plan eng2
+    # Pass 2: eng2, coder2, tester2, security2, db2, ui2, qc2(pass)
+    # Total: 7 + 7 = 14
+    expected_total = 14
+    tasks = await _wait_for_terminal(tm, "pm-final-qc", expected_total)
+
+    assert len(tasks) == expected_total, f"Expected {expected_total} tasks, got {len(tasks)}: {_counts(tasks)}"
+    assert all(t.status == "completed" for t in tasks)
+
+    c = _counts(tasks)
+    assert c.get("pm-engineer", 0) == 2
+    assert c.get("pm-coder", 0) == 2
+    assert c.get("pm-tester", 0) == 2
+    assert c.get("pm-security-reviewer", 0) == 2
+    assert c.get("pm-database-engineer", 0) == 2
+    assert c.get("pm-ui-tester", 0) == 2
+    assert c.get("pm-final-qc", 0) == 2
+
+    # Verify QC results: one fail, one pass
+    qc_tasks = [t for t in tasks if t.bot_id == "pm-final-qc"]
+    statuses = sorted(t.result.get("status") for t in qc_tasks if isinstance(t.result, dict))
+    assert statuses == ["fail", "pass"]
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Test 8 — UI tester passes (no skip), full pass path → 7 tasks
+# ──────────────────────────────────────────────────────────────────────────────
+
+@pytest.mark.anyio
+async def test_pm_workflow_ui_tester_pass_routes_to_final_qc(tmp_path):
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import TaskMetadata
+
+    class StubScheduler:
+        async def schedule(self, task):
+            if task.bot_id == "pm-engineer":
+                return _engineer_result("WS1: UI feature")
+            if task.bot_id == "pm-coder":
+                return _CODER_PASS
+            if task.bot_id == "pm-tester":
+                return _TESTER_PASS
+            if task.bot_id == "pm-security-reviewer":
+                return _SECURITY_PASS
+            if task.bot_id == "pm-database-engineer":
+                return _DB_PASS
+            if task.bot_id == "pm-ui-tester":
+                return _UI_PASS   # pass, not skip
+            if task.bot_id == "pm-final-qc":
+                return _QC_PASS
+            return {"status": "pass"}
+
+    bot_registry = await _make_bot_registry(tmp_path, "-test8")
+    tm = TaskManager(
+        StubScheduler(),
+        db_path=str(tmp_path / "pm-routing-test8.db"),
+        bot_registry=bot_registry,
+    )
+
+    await tm.create_task(
+        bot_id="pm-engineer",
+        payload={"instruction": "add UI feature"},
+        metadata=TaskMetadata(source="chat_assign"),
+    )
+
+    expected_total = 7
+    tasks = await _wait_for_terminal(tm, "pm-final-qc", expected_total)
+
+    assert len(tasks) == expected_total
+    assert all(t.status == "completed" for t in tasks)
+
+    c = _counts(tasks)
+    assert c.get("pm-final-qc", 0) == 1
+    # UI tester should have status=pass in result
+    ui_tasks = [t for t in tasks if t.bot_id == "pm-ui-tester"]
+    assert len(ui_tasks) == 1
+    assert ui_tasks[0].result.get("status") == "pass"
