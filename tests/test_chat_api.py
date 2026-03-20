@@ -461,12 +461,24 @@ async def test_mark_pm_run_failed_reclassifies_run_report(cp_app):
             f"/v1/chat/conversations/{conversation_id}/orchestrations/{orchestration_id}/mark-failed"
         )
 
-    assert reclassify_resp.status_code == 200
-    body = reclassify_resp.json()
-    assert body["metadata"]["run_status"] == "failed"
-    assert body["metadata"]["ingest_allowed"] is False
-    assert body["metadata"]["operator_marked_failed"] is True
-    assert body["content"].startswith("PM run failed")
+        assert reclassify_resp.status_code == 200
+        body = reclassify_resp.json()
+        assert body["metadata"]["run_status"] == "failed"
+        assert body["metadata"]["ingest_allowed"] is False
+        assert body["metadata"]["operator_marked_failed"] is True
+        assert body["content"].startswith("PM run failed")
+
+        messages_resp = await client.get(f"/v1/chat/conversations/{conversation_id}/messages")
+        assert messages_resp.status_code == 200
+        messages = messages_resp.json()
+        pending = next(
+            message
+            for message in messages
+            if str((message.get("metadata") or {}).get("mode") or "") == "assign_pending"
+        )
+        assert pending["metadata"]["run_status"] == "failed"
+        assert pending["metadata"]["ingest_allowed"] is False
+        assert pending["metadata"]["operator_marked_failed"] is True
 
 
 @pytest.mark.anyio

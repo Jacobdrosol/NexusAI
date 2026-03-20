@@ -1159,6 +1159,17 @@ def _render_pm_run_report_content(
     )
 
 
+def _is_failed_pm_message_metadata(metadata: Any) -> bool:
+    if not isinstance(metadata, dict):
+        return False
+    mode = str(metadata.get("mode") or "").strip()
+    if mode not in {"pm_run_report", "assign_summary", "assign_pending"}:
+        return False
+    run_status = str(metadata.get("run_status") or "").strip().lower()
+    ingest_allowed = metadata.get("ingest_allowed")
+    return run_status == "failed" or ingest_allowed is False
+
+
 @router.post("/conversations", response_model=ChatConversation)
 async def create_conversation(request: Request, body: CreateConversationRequest) -> ChatConversation:
     chat_manager = request.app.state.chat_manager
@@ -1274,14 +1285,18 @@ async def mark_pm_run_failed(conversation_id: str, orchestration_id: str, reques
         raise HTTPException(status_code=404, detail=str(e))
 
     target: Optional[ChatMessage] = None
+    related_messages: list[ChatMessage] = []
     for message in reversed(messages):
         metadata = message.metadata if isinstance(message.metadata, dict) else {}
         if str(metadata.get("orchestration_id") or "").strip() != str(orchestration_id or "").strip():
             continue
-        if str(metadata.get("mode") or "").strip() not in {"pm_run_report", "assign_summary"}:
+        if str(metadata.get("mode") or "").strip() not in {"pm_run_report", "assign_summary", "assign_pending"}:
             continue
-        target = message
-        break
+        related_messages.append(message)
+        if target is None and str(metadata.get("mode") or "").strip() in {"pm_run_report", "assign_summary"}:
+            target = message
+    if target is None and related_messages:
+        target = related_messages[0]
     if target is None:
         raise HTTPException(status_code=404, detail="PM run report message not found for this orchestration")
 
@@ -1308,11 +1323,30 @@ async def mark_pm_run_failed(conversation_id: str, orchestration_id: str, reques
         run_status="failed",
         operator_marked_failed=True,
     )
-    return await chat_manager.update_message(
-        target.id,
-        content=content,
-        metadata=updated_metadata,
-    )
+    updated_target: Optional[ChatMessage] = None
+    for message in related_messages:
+        metadata = message.metadata if isinstance(message.metadata, dict) else {}
+        mode = str(metadata.get("mode") or "").strip()
+        next_metadata = dict(metadata)
+        next_metadata.update(
+            {
+                "run_status": "failed",
+                "ingest_allowed": False,
+                "operator_marked_failed": True,
+            }
+        )
+        next_content = None
+        if mode in {"pm_run_report", "assign_summary"} or message.id == target.id:
+            next_metadata["mode"] = "pm_run_report"
+            next_content = content
+        updated = await chat_manager.update_message(
+            message.id,
+            content=next_content,
+            metadata=next_metadata,
+        )
+        if message.id == target.id:
+            updated_target = updated
+    return updated_target or target
 
 
 @router.post("/conversations/{conversation_id}/messages")

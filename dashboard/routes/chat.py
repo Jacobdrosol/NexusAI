@@ -126,7 +126,7 @@ def _humanize_bot_id(bot_id: str) -> str:
 
 def _is_failed_pm_run_message(message: dict[str, Any]) -> bool:
     metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
-    if str(metadata.get("mode") or "").strip() not in {"pm_run_report", "assign_summary"}:
+    if str(metadata.get("mode") or "").strip() not in {"pm_run_report", "assign_summary", "assign_pending"}:
         return False
     run_status = str(metadata.get("run_status") or "").strip().lower()
     ingest_allowed = metadata.get("ingest_allowed")

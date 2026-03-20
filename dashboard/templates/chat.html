@@ -166,9 +166,9 @@
     </div>
     <div id="messages" class="messages chat-messages">
       {% for m in messages %}
-      <div class="message {{ m.role }}{% if m.metadata and ((m.metadata.get('mode') == 'pm_run_report' and m.metadata.get('run_status') == 'failed') or m.metadata.get('mode') == 'assign_error') %} message-pm-failed{% endif %}" data-message-id="{{ m.id }}">
+      <div class="message {{ m.role }}{% if m.metadata and (((m.metadata.get('mode') in ['pm_run_report', 'assign_summary', 'assign_pending']) and (m.metadata.get('run_status') == 'failed' or m.metadata.get('ingest_allowed') == false)) or m.metadata.get('mode') == 'assign_error') %} message-pm-failed{% endif %}" data-message-id="{{ m.id }}">
         <div class="message-role">{{ m.role }}</div>
-        {% if m.metadata and m.metadata.get('mode') == 'pm_run_report' and m.metadata.get('run_status') == 'failed' %}
+        {% if m.metadata and (m.metadata.get('mode') in ['pm_run_report', 'assign_summary', 'assign_pending']) and (m.metadata.get('run_status') == 'failed' or m.metadata.get('ingest_allowed') == false) %}
         <div class="message-indicator message-indicator-failed">
           {% if m.metadata.get('operator_marked_failed') %}Operator marked PM run failed{% else %}PM pipeline failed{% endif %}
         </div>
@@ -179,7 +179,7 @@
         <div class="message-actions">
           <button class="btn btn-sm" onclick="copyMessage(this)">Copy</button>
           <button class="btn btn-sm" onclick="rerunMessage(this)">Re-run</button>
-          {% if not (m.metadata and m.metadata.get('mode') == 'pm_run_report' and m.metadata.get('run_status') == 'failed') %}
+          {% if not (m.metadata and (m.metadata.get('mode') in ['pm_run_report', 'assign_summary', 'assign_pending']) and (m.metadata.get('run_status') == 'failed' or m.metadata.get('ingest_allowed') == false)) %}
           <button class="btn btn-sm" onclick="sendMessageToVault(this)">Send to Vault</button>
           {% endif %}
           {% if m.metadata and m.metadata.get('orchestration_id') %}
@@ -402,6 +402,14 @@ function isPassedPmRunReport(metadata) {
     && String(metadata.run_status || '').trim().toLowerCase() === 'passed';
 }
 
+function isFailedPmLikeMessage(metadata) {
+  if (!metadata || typeof metadata !== 'object') return false;
+  const mode = String(metadata.mode || '').trim();
+  if (!['pm_run_report', 'assign_summary', 'assign_pending'].includes(mode)) return false;
+  const runStatus = String(metadata.run_status || '').trim().toLowerCase();
+  return runStatus === 'failed' || metadata.ingest_allowed === false;
+}
+
 function canMarkPmRunFailed(metadata) {
   if (!isPassedPmRunReport(metadata)) return false;
   return metadata.operator_marked_failed !== true;
@@ -410,9 +418,8 @@ function canMarkPmRunFailed(metadata) {
 function canIngestMessageToVault(metadata) {
   if (!metadata || typeof metadata !== 'object') return true;
   const mode = String(metadata.mode || '').trim();
-  const runStatus = String(metadata.run_status || '').trim().toLowerCase();
-  if (mode === 'pm_run_report' && runStatus === 'failed') return false;
-  return metadata.ingest_allowed !== false || mode !== 'pm_run_report';
+  if (isFailedPmLikeMessage(metadata)) return false;
+  return metadata.ingest_allowed !== false || !['pm_run_report', 'assign_summary', 'assign_pending'].includes(mode);
 }
 
 async function pollForAssignmentSummary(orchestrationId, maxAttempts = 20, delayMs = 1500) {
@@ -519,8 +526,7 @@ function renderMessageActions(meta) {
 
 function renderMessageIndicators(meta) {
   const mode = String(meta?.mode || '').trim();
-  const runStatus = String(meta?.run_status || '').trim().toLowerCase();
-  if (mode === 'pm_run_report' && runStatus === 'failed') {
+  if (isFailedPmLikeMessage(meta)) {
     const label = meta?.operator_marked_failed === true
       ? 'Operator marked PM run failed'
       : 'PM pipeline failed';
@@ -695,7 +701,7 @@ function appendMessage(role, content, id='temp-' + Date.now(), meta=null) {
   const empty = container.querySelector('.empty');
   if (empty) empty.remove();
   const div = document.createElement('div');
-  const failedPm = String(meta?.mode || '').trim() === 'pm_run_report' && String(meta?.run_status || '').trim().toLowerCase() === 'failed';
+  const failedPm = isFailedPmLikeMessage(meta);
   const assignError = String(meta?.mode || '').trim() === 'assign_error';
   div.className = 'message ' + role + ((failedPm || assignError) ? ' message-pm-failed' : '');
   div.dataset.messageId = id;
@@ -772,7 +778,7 @@ function hydrateMessageElement(el, message) {
   const existingIndicator = el.querySelector('.message-indicator');
   const bodyEl = el.querySelector('.message-body');
   const actionsEl = el.querySelector('.message-actions');
-  const failedPm = String(message?.metadata?.mode || '').trim() === 'pm_run_report' && String(message?.metadata?.run_status || '').trim().toLowerCase() === 'failed';
+  const failedPm = isFailedPmLikeMessage(message?.metadata || null);
   const assignError = String(message?.metadata?.mode || '').trim() === 'assign_error';
   el.classList.toggle('message-pm-failed', failedPm || assignError);
   if (roleEl) roleEl.textContent = message.role || 'assistant';
