@@ -108,20 +108,32 @@ routing_rules:
       - risks
       - handoff_notes
       - implementation_workstreams
+    non_empty_fields:
+      - implementation_workstreams
 
 # ── Workflow ───────────────────────────────────────────────────────────────────
 # The engineer fans out to N parallel coders based on implementation_workstreams.
-# Fan-out fires even for chat_assign tasks (fan_out_field bypasses the forward
-# trigger skip logic for plan-managed tasks).
+# Fan-out only fires when status=pass — an empty/failed engineer result does not
+# create ghost coder tasks that would silently stall the security-reviewer join.
 workflow:
   triggers:
-    # Fan-out: one pm-coder task per workstream in the engineer's output.
+    # Fan-out: one pm-coder task per workstream in the engineer's pass result.
     - id: fanout-to-coders
       event: task_completed
       target_bot_id: pm-coder
       condition: has_result
+      result_field: status
+      result_equals: pass
       fan_out_field: implementation_workstreams
       fan_out_alias: workstream
+
+    # Engineer returns status=fail (no viable workstreams) → halt to orchestrator.
+    - id: fail-halt
+      event: task_completed
+      target_bot_id: pm-orchestrator
+      condition: has_result
+      result_field: status
+      result_equals: fail
 
     # If engineer is blocked (e.g. re-routed from final-qc), it does not fan out.
     # Blocked status means the engineer needs operator input — stop the pipeline.
@@ -134,7 +146,8 @@ workflow:
 
   notes: >
     The engineer is the convergence point for the three parallel research tracks.
-    Its fan-out trigger creates N coder tasks, one per implementation_workstream.
+    Its fan-out trigger creates N coder tasks, one per implementation_workstream,
+    but only when status=pass (result_field guard prevents ghost tasks on failure).
     The coder→tester→security chain is then driven entirely by bot triggers.
     The engineer also receives backward routes from pm-final-qc and pm-ui-tester
     (ui_render_issue) when a global re-plan is needed.

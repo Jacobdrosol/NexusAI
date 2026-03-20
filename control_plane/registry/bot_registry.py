@@ -127,13 +127,13 @@ class BotRegistry:
             self._bots[bot_id] = updated
         await self._persist_bot(updated)
 
-    async def seed_from_configs(self, configs: list, worker_ids: set[str]) -> None:
+    async def seed_from_configs(self, configs: list, worker_ids: set[str], *, force: bool = False) -> None:
         await self._ensure_db()
         async with self._lock:
             for cfg in configs:
                 try:
                     bot = Bot.model_validate(cfg)
-                    if bot.id in self._bots:
+                    if bot.id in self._bots and not force:
                         continue
                     for backend in bot.backends:
                         if backend.worker_id and backend.worker_id not in worker_ids:
@@ -142,8 +142,11 @@ class BotRegistry:
                                 bot.id,
                                 backend.worker_id,
                             )
+                    if bot.id in self._bots:
+                        logger.info("Force-reseeded bot from config: %s", bot.id)
+                    else:
+                        logger.info("Seeded bot from config: %s", bot.id)
                     self._bots[bot.id] = bot
-                    logger.info("Seeded bot from config: %s", bot.id)
                 except Exception as e:
                     logger.warning("Failed to load bot config: %s", e)
             bots_to_persist = list(self._bots.values())

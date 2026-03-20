@@ -127,6 +127,14 @@ workflow:
       condition: has_result
       result_field: status
       result_equals: fail
+      payload_template:
+        upstream_failure_type: "{{source_result.failure_type}}"
+        upstream_findings: "{{source_result.findings}}"
+        upstream_handoff_notes: "{{source_result.handoff_notes}}"
+        fanout_id: "{{source_payload.fanout_id}}"
+        fanout_count: "{{source_payload.fanout_count}}"
+        workstream: "{{source_payload.workstream}}"
+        instruction: "{{source_payload.instruction}}"
 
   notes: >
     The tester is the first quality gate in each parallel coder branch.

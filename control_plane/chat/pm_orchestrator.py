@@ -670,7 +670,9 @@ class PMOrchestrator:
         has_research = any("research" in r for r in role_set)
         has_dba = any("dba" in r or "database" in r or "data" in r for r in role_set)
         has_final_qc = any(("final" in r and "qc" in r) or "final-qc" in r for r in role_set)
+        has_ui_tester = any("ui" in r for r in role_set)
         needs_database = self._instruction_mentions_database(instruction)
+        needs_ui = self._instruction_mentions_ui(instruction)
         pm_bot = self._select_pm_bot(bots, requested_pm_bot_id=None)
         pm_bot_id = pm_bot.id if pm_bot is not None else ""
 
@@ -796,6 +798,34 @@ class PMOrchestrator:
             }
         )
         if has_final_qc:
+            final_qc_dep = "step_5"
+            if has_ui_tester and needs_ui:
+                base_steps.append(
+                    {
+                        "id": "step_5b",
+                        "title": "UI / frontend testing",
+                        "instruction": (
+                            "Verify all user-facing deliverables render correctly. Test component behaviour, "
+                            "visual layout, accessibility, and interaction flows as applicable."
+                        ),
+                        "bot_id": self._preferred_bot_id_for_role(
+                            bots,
+                            role_hint="ui-tester",
+                            pm_bot_id=pm_bot_id,
+                        ),
+                        "role_hint": "ui-tester",
+                        "step_kind": "test_execution",
+                        "depends_on": ["step_5"],
+                        "acceptance_criteria": [
+                            "All UI deliverables render without errors",
+                            "Interaction and layout tests pass",
+                        ],
+                        "deliverables": ["UI test results", "Screenshot or render evidence"],
+                        "evidence_requirements": ["UI test run output or render screenshots"],
+                        "quality_gates": ["No blocking UI rendering or interaction failures"],
+                    }
+                )
+                final_qc_dep = "step_5b"
             base_steps.append(
                 {
                     "id": "step_6",
@@ -807,7 +837,7 @@ class PMOrchestrator:
                     "bot_id": self._preferred_bot_id_for_role(bots, role_hint="final-qc", pm_bot_id=pm_bot_id),
                     "role_hint": "final-qc",
                     "step_kind": "review",
-                    "depends_on": ["step_5"],
+                    "depends_on": [final_qc_dep],
                     "acceptance_criteria": [
                         "All required deliverables are present with evidence-backed validation",
                         "The final summary identifies any remaining operator-owned actions without claiming completion of them",
@@ -1807,6 +1837,32 @@ class PMOrchestrator:
             "postgres",
             "sqlite",
             "mysql",
+        )
+        return any(keyword in text for keyword in keywords)
+
+    def _instruction_mentions_ui(self, instruction: str) -> bool:
+        text = str(instruction or "").lower()
+        keywords = (
+            "frontend",
+            "front-end",
+            "ui ",
+            " ui",
+            "component",
+            "template",
+            "render",
+            " css",
+            "html",
+            "react",
+            "vue",
+            "angular",
+            " page",
+            " view",
+            "interface",
+            "layout",
+            "widget",
+            "screen",
+            "modal",
+            "form",
         )
         return any(keyword in text for keyword in keywords)
 
