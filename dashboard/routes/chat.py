@@ -15,13 +15,18 @@ from dashboard.cp_client import get_cp_client
 bp = Blueprint("chat", __name__)
 
 
-def _task_sort_key(task: dict[str, Any]) -> tuple[int, str, str]:
+def _task_sort_key(task: dict[str, Any]) -> tuple[int, int, str, str]:
     payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
     try:
         step_number = int(payload.get("step_number") or 0)
     except Exception:
         step_number = 0
-    return (step_number, str(task.get("created_at") or ""), str(task.get("updated_at") or ""))
+    try:
+        trigger_depth = int(metadata.get("trigger_depth") or 0)
+    except Exception:
+        trigger_depth = 0
+    return (step_number, trigger_depth, str(task.get("created_at") or ""), str(task.get("updated_at") or ""))
 
 
 def _task_output_text(result: Any) -> str:
@@ -64,12 +69,21 @@ def _assignment_full_recap(orchestration_id: str, tasks: list[dict[str, Any]]) -
     ]
     for task in ordered:
         payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
-        title = str(payload.get("title") or task.get("id") or "Task")
+        metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+        bot_id = str(task.get("bot_id") or "unknown")
+        workstream = str(payload.get("workstream") or payload.get("title") or "").strip()
+        title = workstream or bot_id
         step_number = payload.get("step_number")
         step_count = payload.get("step_count")
         status = str(task.get("status") or "unknown")
-        bot_id = str(task.get("bot_id") or "unknown")
-        step_label = f"Step {step_number}/{step_count}" if step_number and step_count else "Step"
+        source = str(metadata.get("source") or "").strip()
+        trigger_depth = metadata.get("trigger_depth")
+        if step_number and step_count:
+            step_label = f"Step {step_number}/{step_count}"
+        elif trigger_depth is not None:
+            step_label = f"Trigger depth {trigger_depth}"
+        else:
+            step_label = "Task"
         lines.extend(
             [
                 f"{step_label}: {title}",
@@ -77,6 +91,8 @@ def _assignment_full_recap(orchestration_id: str, tasks: list[dict[str, Any]]) -
                 f"- Bot: {bot_id}",
             ]
         )
+        if source:
+            lines.append(f"- Source: {source}")
         deliverables = payload.get("deliverables") if isinstance(payload.get("deliverables"), list) else []
         if deliverables:
             lines.append("- Deliverables:")
@@ -727,27 +743,39 @@ def api_orchestration_graph(orchestration_id: str):
         metadata = t.get("metadata") or {}
         payload = t.get("payload") if isinstance(t.get("payload"), dict) else {}
         step_id = str(metadata.get("step_id") or "").strip()
+        bot_id_label = str(t.get("bot_id") or "").strip()
         title = str(
             payload.get("title")
+            or payload.get("workstream")
             or metadata.get("pipeline_name")
             or step_id
-            or metadata.get("source")
+            or bot_id_label
             or task_id
         )
         depends_on = [str(dep) for dep in (t.get("depends_on") or []) if str(dep).strip()]
         source = str(metadata.get("source") or "").strip().lower()
         parent_task_id = str(metadata.get("parent_task_id") or "").strip()
-        if not depends_on and source == "bot_trigger" and parent_task_id:
-            depends_on = [parent_task_id]
-        if not depends_on and source in {"chat_assign", "auto_retry"} and is_chat_assignment and not has_explicit_orchestrator:
-            depends_on = [root_node_id]
+
+        # For join-triggered tasks, the payload carries all sibling task IDs so the
+        # DAG can show the true fan-in instead of a single-parent edge.
+        join_task_ids = [str(jid) for jid in (payload.get("join_task_ids") or []) if str(jid).strip()]
+
+        if not depends_on:
+            if join_task_ids:
+                # Show all joined sibling tasks as dependencies (fan-in)
+                depends_on = join_task_ids
+            elif source == "bot_trigger" and parent_task_id:
+                depends_on = [parent_task_id]
+            elif source in {"chat_assign", "auto_retry"} and is_chat_assignment and not has_explicit_orchestrator:
+                depends_on = [root_node_id]
+
         nodes.append(
             {
                 "id": task_id,
                 "title": title,
                 "step_id": step_id,
                 "status": t.get("status"),
-                "bot_id": t.get("bot_id"),
+                "bot_id": bot_id_label,
                 "depends_on": depends_on,
             }
         )

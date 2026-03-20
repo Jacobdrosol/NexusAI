@@ -30,6 +30,14 @@ def _ollama_options(params: dict[str, Any]) -> dict[str, Any]:
     max_tokens = options.pop("max_tokens", None)
     if max_tokens is not None and "num_predict" not in options:
         options["num_predict"] = max_tokens
+    # When no num_predict is set, apply a platform default so Ollama's low built-in
+    # cap (128 tokens in older versions) does not silently truncate responses.
+    # Setting -1 means "unlimited" in Ollama; override via settings key
+    # default_ollama_num_predict if you need a hard cap.
+    if "num_predict" not in options:
+        default_predict = _settings_int("default_ollama_num_predict", -1)
+        if default_predict != 0:
+            options["num_predict"] = default_predict
     return options
 
 
@@ -1082,6 +1090,9 @@ class Scheduler:
     ) -> Any:
         url = f"http://{worker.host}:{worker.port}/infer"
         params_dict = backend.params.model_dump(exclude_none=True) if backend.params else {}
+        # Apply provider-specific param normalization (e.g., Ollama num_predict default)
+        if str(backend.provider or "").strip().lower() == "ollama":
+            params_dict = _ollama_options(params_dict)
         body = {
             "model": backend.model,
             "provider": backend.provider,
@@ -1111,6 +1122,9 @@ class Scheduler:
     ) -> AsyncGenerator[dict[str, Any], None]:
         url = f"http://{worker.host}:{worker.port}/infer/stream"
         params_dict = backend.params.model_dump(exclude_none=True) if backend.params else {}
+        # Apply provider-specific param normalization (e.g., Ollama num_predict default)
+        if str(backend.provider or "").strip().lower() == "ollama":
+            params_dict = _ollama_options(params_dict)
         body = {
             "model": backend.model,
             "provider": backend.provider,

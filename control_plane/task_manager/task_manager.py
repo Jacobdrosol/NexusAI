@@ -925,8 +925,6 @@ def _result_non_document_repo_paths(result: Any) -> List[str]:
 
 
 def _looks_like_assignment_test_execution_payload(payload: Dict[str, Any]) -> bool:
-    if _is_docs_only_workstream_validation(payload):
-        return False
     # Role hint takes precedence - if explicitly tester/qa, treat as test execution
     role_hint = str(payload.get("role_hint") or "").strip().lower()
     if role_hint in {"tester", "qa"}:

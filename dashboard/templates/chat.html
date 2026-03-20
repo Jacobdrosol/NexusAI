@@ -1420,11 +1420,16 @@ function renderDagGraph(graph) {
 
   const nodesHtml = nodes.map((n) => {
     const p = positions.get(n.id) || {x: 0, y: 0};
-    const title = esc(n.bot_id || n.title || n.id);
+    const botLabel = esc(n.bot_id || '');
+    const titleLabel = esc(n.title || n.id);
+    // Show title (workstream/step name) on top, bot_id beneath
+    const displayTitle = (titleLabel && botLabel && titleLabel !== botLabel)
+      ? `${titleLabel}<div class="dag-subtitle">${botLabel}</div>`
+      : botLabel || titleLabel;
     const status = esc(n.status || 'queued');
     return `
       <div class="dag-node" style="left:${p.x}px;top:${p.y}px;width:${nodeW}px;height:${nodeH}px;">
-        <div class="dag-title">${title}</div>
+        <div class="dag-title">${displayTitle}</div>
         <span class="badge badge-${status}">${status}</span>
       </div>
     `;
