@@ -507,6 +507,16 @@ select.form-control {
   box-shadow: inset 0 0 0 1px rgba(220, 38, 38, 0.18);
 }
 
+.message.message-pm-queued {
+  border-color: #d97706;
+  box-shadow: inset 0 0 0 1px rgba(217, 119, 6, 0.16);
+}
+
+.message.message-pm-passed {
+  border-color: #059669;
+  box-shadow: inset 0 0 0 1px rgba(5, 150, 105, 0.16);
+}
+
 .message-role {
   font-size: 0.75rem;
   color: var(--muted);
@@ -532,6 +542,18 @@ select.form-control {
   background: rgba(220, 38, 38, 0.14);
   color: #fca5a5;
   border: 1px solid rgba(220, 38, 38, 0.45);
+}
+
+.message-indicator-queued {
+  background: rgba(217, 119, 6, 0.14);
+  color: #fdba74;
+  border: 1px solid rgba(217, 119, 6, 0.42);
+}
+
+.message-indicator-passed {
+  background: rgba(5, 150, 105, 0.14);
+  color: #86efac;
+  border: 1px solid rgba(5, 150, 105, 0.42);
 }
 
 .message-body {
@@ -1575,9 +1597,11 @@ select.form-control {
 
 .dag-wrap {
   overflow: auto;
-  border: 1px solid #cfd8e3;
+  border: 1px solid #24364e;
   border-radius: 10px;
-  background: #f8fafc;
+  background:
+    radial-gradient(circle at 20% 10%, rgba(45, 212, 191, 0.06), transparent 28%),
+    linear-gradient(180deg, #0d1724, #111f31);
   min-height: 320px;
   max-height: 68vh;
   padding: 0.75rem;
@@ -1626,7 +1650,7 @@ select.form-control {
   font-weight: 700;
   letter-spacing: 0.03em;
   text-transform: uppercase;
-  color: #5b6675;
+  color: #94a3b8;
 }
 
 .dag-canvas {
@@ -1640,56 +1664,93 @@ select.form-control {
 }
 
 .dag-edge-forward {
-  stroke: #111827;
+  stroke: #90b4e5;
 }
 
 .dag-edge-backward {
-  stroke: #c0392b;
+  stroke: #f87171;
 }
 
 .dag-node {
   position: absolute;
   appearance: none;
   -webkit-appearance: none;
-  border: 2px solid #0f172a;
-  border-radius: 6px;
-  background: #ffffff;
+  border: 1px solid #355070;
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(15, 26, 40, 0.98), rgba(20, 34, 52, 0.98));
   padding: 0.65rem 0.55rem;
-  box-shadow: 0 3px 10px rgba(15, 23, 42, 0.08);
-  color: #111827;
+  box-shadow: 0 8px 20px rgba(3, 10, 18, 0.28);
+  color: #e5eefb;
   cursor: pointer;
   text-align: left;
   font: inherit;
+  transition: transform 0.12s ease, box-shadow 0.12s ease, border-color 0.12s ease;
 }
 
 .dag-node:hover {
   transform: translateY(-1px);
-  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.14);
+  box-shadow: 0 12px 24px rgba(3, 10, 18, 0.38);
 }
 
 .dag-node.selected {
-  border-color: #2563eb;
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.14);
+  border-color: #60a5fa;
+  box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.22), 0 12px 24px rgba(3, 10, 18, 0.42);
 }
 
-.dag-node.completed {
-  border-left: 8px solid #059669;
+.dag-node::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 8px;
+  border-radius: 10px 0 0 10px;
+  background: #64748b;
 }
 
-.dag-node.failed {
-  border-left: 8px solid #c0392b;
+.dag-node.state-queued::before {
+  background: #f59e0b;
 }
 
-.dag-node.running,
-.dag-node.queued,
-.dag-node.retried {
-  border-left: 8px solid #d97706;
+.dag-node.state-running::before {
+  background: #60a5fa;
+}
+
+.dag-node.state-completed::before {
+  background: #22c55e;
+}
+
+.dag-node.state-failed::before,
+.dag-node.state-cancelled::before {
+  background: #f87171;
+}
+
+.dag-node.state-retried::before {
+  background: #fb923c;
+}
+
+.dag-node.route-rerouted {
+  border-color: #c084fc;
+  box-shadow: inset 0 0 0 1px rgba(192, 132, 252, 0.24), 0 8px 20px rgba(3, 10, 18, 0.28);
+}
+
+.dag-node.route-rerouted::after {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 4px;
+  border-radius: 10px 10px 0 0;
+  background: linear-gradient(90deg, #c084fc, #f472b6);
+}
+
+.dag-node.route-retried:not(.route-rerouted) {
+  border-color: #fb923c;
+  box-shadow: inset 0 0 0 1px rgba(251, 146, 60, 0.22), 0 8px 20px rgba(3, 10, 18, 0.28);
 }
 
 .dag-title {
   font-size: 0.88rem;
   font-weight: 700;
   line-height: 1.25;
+  padding-left: 0.2rem;
 }
 
 @media (max-width: 900px) {

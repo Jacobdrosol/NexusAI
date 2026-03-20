@@ -166,12 +166,16 @@
     </div>
     <div id="messages" class="messages chat-messages">
       {% for m in messages %}
-      <div class="message {{ m.role }}{% if m.metadata and (((m.metadata.get('mode') in ['pm_run_report', 'assign_summary', 'assign_pending']) and (m.metadata.get('run_status') == 'failed' or m.metadata.get('ingest_allowed') == false)) or m.metadata.get('mode') == 'assign_error') %} message-pm-failed{% endif %}" data-message-id="{{ m.id }}">
+      <div class="message {{ m.role }}{% if m.metadata and (((m.metadata.get('mode') in ['pm_run_report', 'assign_summary', 'assign_pending']) and (m.metadata.get('run_status') == 'failed' or m.metadata.get('ingest_allowed') == false)) or m.metadata.get('mode') == 'assign_error') %} message-pm-failed{% elif m.metadata and m.metadata.get('mode') == 'assign_pending' %} message-pm-queued{% elif m.metadata and m.metadata.get('mode') == 'pm_run_report' and m.metadata.get('run_status') == 'passed' %} message-pm-passed{% endif %}" data-message-id="{{ m.id }}">
         <div class="message-role">{{ m.role }}</div>
         {% if m.metadata and (m.metadata.get('mode') in ['pm_run_report', 'assign_summary', 'assign_pending']) and (m.metadata.get('run_status') == 'failed' or m.metadata.get('ingest_allowed') == false) %}
         <div class="message-indicator message-indicator-failed">
           {% if m.metadata.get('operator_marked_failed') %}Operator marked PM run failed{% else %}PM pipeline failed{% endif %}
         </div>
+        {% elif m.metadata and m.metadata.get('mode') == 'assign_pending' %}
+        <div class="message-indicator message-indicator-queued">PM pipeline queued</div>
+        {% elif m.metadata and m.metadata.get('mode') == 'pm_run_report' and m.metadata.get('run_status') == 'passed' %}
+        <div class="message-indicator message-indicator-passed">PM pipeline passed</div>
         {% elif m.metadata and m.metadata.get('mode') == 'assign_error' %}
         <div class="message-indicator message-indicator-failed">PM assignment failed</div>
         {% endif %}
@@ -535,6 +539,12 @@ function renderMessageIndicators(meta) {
   if (mode === 'assign_error') {
     return '<div class="message-indicator message-indicator-failed">PM assignment failed</div>';
   }
+  if (mode === 'assign_pending') {
+    return '<div class="message-indicator message-indicator-queued">PM pipeline queued</div>';
+  }
+  if (mode === 'pm_run_report' && String(meta?.run_status || '').trim().toLowerCase() === 'passed') {
+    return '<div class="message-indicator message-indicator-passed">PM pipeline passed</div>';
+  }
   return '';
 }
 
@@ -703,7 +713,13 @@ function appendMessage(role, content, id='temp-' + Date.now(), meta=null) {
   const div = document.createElement('div');
   const failedPm = isFailedPmLikeMessage(meta);
   const assignError = String(meta?.mode || '').trim() === 'assign_error';
-  div.className = 'message ' + role + ((failedPm || assignError) ? ' message-pm-failed' : '');
+  const queuedPm = String(meta?.mode || '').trim() === 'assign_pending';
+  const passedPm = isPassedPmRunReport(meta);
+  div.className =
+    'message ' + role
+    + ((failedPm || assignError) ? ' message-pm-failed' : '')
+    + ((!failedPm && !assignError && queuedPm) ? ' message-pm-queued' : '')
+    + ((!failedPm && !assignError && !queuedPm && passedPm) ? ' message-pm-passed' : '');
   div.dataset.messageId = id;
   div.dataset.role = role;
   div.dataset.content = content;
@@ -780,7 +796,11 @@ function hydrateMessageElement(el, message) {
   const actionsEl = el.querySelector('.message-actions');
   const failedPm = isFailedPmLikeMessage(message?.metadata || null);
   const assignError = String(message?.metadata?.mode || '').trim() === 'assign_error';
+  const queuedPm = String(message?.metadata?.mode || '').trim() === 'assign_pending';
+  const passedPm = isPassedPmRunReport(message?.metadata || null);
   el.classList.toggle('message-pm-failed', failedPm || assignError);
+  el.classList.toggle('message-pm-queued', !failedPm && !assignError && queuedPm);
+  el.classList.toggle('message-pm-passed', !failedPm && !assignError && !queuedPm && passedPm);
   if (roleEl) roleEl.textContent = message.role || 'assistant';
   const indicatorHtml = renderMessageIndicators(message.metadata || null);
   if (indicatorHtml) {
@@ -1474,6 +1494,19 @@ function formatDagField(label, value) {
   return `<div class="dag-detail-row"><strong>${esc(label)}:</strong> <span>${esc(text)}</span></div>`;
 }
 
+function humanizeDagStatus(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  switch (normalized) {
+    case 'queued': return 'queued';
+    case 'running': return 'running';
+    case 'completed': return 'completed';
+    case 'failed': return 'failed';
+    case 'retried': return 'retried';
+    case 'rerouted': return 'sent back and reran';
+    default: return normalized || 'unknown';
+  }
+}
+
 function stageLabelForBot(stageKey, graph) {
   const refNodes = Array.isArray(graph?.reference_graph?.nodes) ? graph.reference_graph.nodes : [];
   const refNode = refNodes.find((node) => String(node?.bot_id || '') === String(stageKey || ''));
@@ -1524,7 +1557,8 @@ function renderDagDetail(node, graph) {
   detail.innerHTML = `
     <div class="dag-detail-card">
       <h3>${esc(node.display_name || node.bot_id || node.title || node.id)}</h3>
-      ${formatDagField('Status', node.status || details.status || 'unknown')}
+      ${formatDagField('Status', humanizeDagStatus(node.status || details.status || 'unknown'))}
+      ${formatDagField('Route state', humanizeDagStatus(node.status_variant || details.route_state || ''))}
       ${formatDagField('Bot ID', node.bot_id || details.bot_id || '')}
       ${formatDagField('Task title', details.title || node.title || '')}
       ${formatDagField('Run ID', details.run_id || node.id || '')}
@@ -1533,8 +1567,11 @@ function renderDagDetail(node, graph) {
       ${formatDagField('Trigger rule', details.trigger_rule_id || '')}
       ${formatDagField('Trigger depth', details.trigger_depth)}
       ${formatDagField('Parent task', details.parent_task_id || '')}
+      ${formatDagField('Parent bot', details.parent_bot_id || '')}
       ${formatDagField('Fanout ID', details.fanout_id || '')}
       ${formatDagField('Fanout branch', details.fanout_branch_key || '')}
+      ${formatDagField('Retry of task', details.retry_of_task_id || '')}
+      ${formatDagField('Retried by task', details.retried_by_task_id || '')}
       ${formatDagField('Join inputs', joinIds)}
       ${formatDagField('Depends on', node.depends_on || [])}
       ${formatDagField('Orchestration ID', graph?.orchestration_id || '')}
@@ -1630,10 +1667,10 @@ function renderDagGraph(graph) {
     <svg width="${totalW}" height="${totalH}" viewBox="0 0 ${totalW} ${totalH}" class="dag-canvas">
       <defs>
         <marker id="dag-arrow-forward" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
-          <path d="M0,0 L10,5 L0,10 z" fill="#111827"></path>
+          <path d="M0,0 L10,5 L0,10 z" fill="#90b4e5"></path>
         </marker>
         <marker id="dag-arrow-backward" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
-          <path d="M0,0 L10,5 L0,10 z" fill="#c0392b"></path>
+          <path d="M0,0 L10,5 L0,10 z" fill="#f87171"></path>
         </marker>
       </defs>
       ${edges.map((edge) => `<path d="${edge.path}" class="${edge.cls}" marker-end="url(#${edge.cls.includes('backward') ? 'dag-arrow-backward' : 'dag-arrow-forward'})"></path>`).join('')}
@@ -1642,9 +1679,15 @@ function renderDagGraph(graph) {
 
   const nodesHtml = nodes.map((node) => {
     const position = positions.get(node.id) || {x: padding, y: padding + stageHeaderH};
-    const statusClass = esc(String(node.status || 'queued').toLowerCase());
+    const statusVariant = esc(String(node.status_variant || node.status || 'queued').toLowerCase());
+    const stateClass = 'state-' + esc(String(node.status || 'queued').toLowerCase());
+    const routeClass = [
+      node.is_rerouted ? 'route-rerouted' : '',
+      node.is_retried ? 'route-retried' : '',
+      statusVariant ? 'variant-' + statusVariant : '',
+    ].filter(Boolean).join(' ');
     return `
-      <button type="button" class="dag-node ${statusClass}" data-node-id="${esc(node.id)}" style="left:${position.x}px;top:${position.y}px;width:${nodeW}px;height:${nodeH}px;">
+      <button type="button" class="dag-node ${stateClass} ${routeClass}" data-node-id="${esc(node.id)}" style="left:${position.x}px;top:${position.y}px;width:${nodeW}px;height:${nodeH}px;">
         <div class="dag-title">${esc(node.display_name || node.bot_id || node.title || node.id)}</div>
       </button>
     `;

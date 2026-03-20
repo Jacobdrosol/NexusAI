@@ -754,6 +754,11 @@ def api_orchestration_graph(orchestration_id: str):
         return jsonify({"error": "control plane unavailable"}), 502
 
     scoped_tasks = [task for task in tasks if isinstance(task, dict)]
+    task_by_id = {
+        str(task.get("id") or "").strip(): task
+        for task in scoped_tasks
+        if str(task.get("id") or "").strip()
+    }
     bot_cache: Dict[str, Dict[str, Any]] = {}
     bot_name_map: Dict[str, str] = {}
     reference_graph: Dict[str, Any] | None = None
@@ -882,6 +887,8 @@ def api_orchestration_graph(orchestration_id: str):
         fanout_id = str(metadata.get("fanout_id") or payload.get("fanout_id") or "").strip()
         fanout_branch_key = str(metadata.get("fanout_branch_key") or payload.get("fanout_branch_key") or "").strip()
         join_task_ids = [str(jid) for jid in (payload.get("join_task_ids") or []) if str(jid).strip()]
+        retry_of_task_id = str(metadata.get("retry_of_task_id") or "").strip()
+        retried_by_task_id = str(metadata.get("retried_by_task_id") or "").strip()
         branch_index = None
         for raw_value in (
             payload.get("workstream_index"),
@@ -918,6 +925,14 @@ def api_orchestration_graph(orchestration_id: str):
                 "stage_kind": str((reference_node_by_bot.get(bot_id_label) or {}).get("stage_kind") or ""),
                 "branch_index": branch_index,
                 "depends_on": depends_on,
+                "status_variant": str(t.get("status") or "queued").strip().lower() or "queued",
+                "is_rerouted": False,
+                "is_retried": bool(
+                    str(source) in {"auto_retry", "manual_retry"}
+                    or retry_of_task_id
+                    or retried_by_task_id
+                    or str(t.get("status") or "").strip().lower() == "retried"
+                ),
                 "details": {
                     "task_id": task_id,
                     "run_id": task_id,
@@ -935,12 +950,38 @@ def api_orchestration_graph(orchestration_id: str):
                     "fanout_branch_key": fanout_branch_key,
                     "workstream_index": payload.get("workstream_index"),
                     "research_step_index": payload.get("research_step_index"),
+                    "retry_of_task_id": retry_of_task_id,
+                    "retried_by_task_id": retried_by_task_id,
                     "synthetic": False,
                 },
             }
         )
         for dep in depends_on:
             edges.append({"from": str(dep), "to": task_id})
+
+    stage_index = {stage_id: index for index, stage_id in enumerate(stage_order)}
+    node_by_id = {str(node.get("id") or ""): node for node in nodes if str(node.get("id") or "")}
+    for node in nodes:
+        if bool(node.get("synthetic")):
+            continue
+        details = node.get("details") if isinstance(node.get("details"), dict) else {}
+        parent_task_id = str(details.get("parent_task_id") or "").strip()
+        source = str(details.get("source") or "").strip().lower()
+        parent_task = task_by_id.get(parent_task_id)
+        parent_bot_id = str((parent_task or {}).get("bot_id") or "").strip()
+        current_stage = stage_index.get(str(node.get("stage_key") or node.get("bot_id") or "").strip(), -1)
+        parent_stage = stage_index.get(parent_bot_id, -1)
+        is_rerouted = source == "bot_trigger" and parent_stage >= 0 and current_stage >= 0 and current_stage < parent_stage
+        node["is_rerouted"] = is_rerouted
+        if is_rerouted:
+            node["status_variant"] = "rerouted"
+        elif bool(node.get("is_retried")):
+            node["status_variant"] = "retried"
+        else:
+            node["status_variant"] = str(node.get("status") or "queued").strip().lower() or "queued"
+        details["route_state"] = "sent_back_and_reran" if is_rerouted else ("retried" if bool(node.get("is_retried")) else "")
+        details["parent_bot_id"] = parent_bot_id
+        node["details"] = details
 
     return jsonify(
         {

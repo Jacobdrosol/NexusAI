@@ -67,6 +67,19 @@ class PMOrchestrator:
         self._task_manager = task_manager
         self._chat_manager = chat_manager
 
+    _TERMINAL_TASK_STATUSES = {"completed", "failed", "retried", "cancelled"}
+    _DEFAULT_PM_STAGE_ORDER = [
+        "pm-orchestrator",
+        "pm-research-analyst",
+        "pm-engineer",
+        "pm-coder",
+        "pm-tester",
+        "pm-security-reviewer",
+        "pm-database-engineer",
+        "pm-ui-tester",
+        "pm-final-qc",
+    ]
+
     async def orchestrate_assignment(
         self,
         conversation_id: str,
@@ -195,6 +208,11 @@ class PMOrchestrator:
         deadline = time.monotonic() + max_wait_seconds
         snapshots: Dict[str, Task] = {}
         all_terminal = False
+        last_signature: Optional[tuple[Any, ...]] = None
+        last_change_at = time.monotonic()
+        settle_window_seconds = max(1.6, poll_interval_seconds * 4.0)
+        stage_order = await self._workflow_stage_order_for_assignment(assignment)
+        final_qc_required = "pm-final-qc" in stage_order
 
         async def _current_task_ids() -> List[str]:
             if orchestration_id and hasattr(self._task_manager, "list_tasks"):
@@ -217,17 +235,34 @@ class PMOrchestrator:
         while time.monotonic() < deadline:
             task_ids = await _current_task_ids()
             all_terminal = True
+            signature_items: List[tuple[Any, ...]] = []
             for task_id in task_ids:
                 task = await self._task_manager.get_task(task_id)
                 snapshots[task_id] = task
-                if task.status not in {"completed", "failed", "retried"}:
+                signature_items.append(
+                    (
+                        str(task.id or ""),
+                        str(task.bot_id or ""),
+                        str(task.status or ""),
+                        str(task.updated_at or ""),
+                        str(task.metadata.parent_task_id if task.metadata else ""),
+                        str(task.metadata.trigger_rule_id if task.metadata else ""),
+                    )
+                )
+                if task.status not in self._TERMINAL_TASK_STATUSES:
                     all_terminal = False
-            if all_terminal:
+            signature = tuple(sorted(signature_items))
+            now = time.monotonic()
+            if signature != last_signature:
+                last_signature = signature
+                last_change_at = now
+            if all_terminal and (not task_ids or (now - last_change_at) >= settle_window_seconds):
                 break
             await asyncio.sleep(poll_interval_seconds)
 
         completed = 0
         failed = 0
+        observed_bot_ids: List[str] = []
         lines: List[str] = [
             f"Assignment summary ({len(task_ids)} tasks):",
             "",
@@ -243,11 +278,16 @@ class PMOrchestrator:
                     "",
                 ]
             )
+        final_tasks: List[Task] = []
         for task_id in task_ids:
             task = snapshots.get(task_id) or await self._task_manager.get_task(task_id)
+            final_tasks.append(task)
+            bot_id = str(task.bot_id or "").strip()
+            if bot_id and bot_id not in observed_bot_ids:
+                observed_bot_ids.append(bot_id)
             if task.status == "completed":
                 completed += 1
-            if task.status in {"failed", "retried"}:
+            if task.status in {"failed", "retried", "cancelled"}:
                 failed += 1
             title = ""
             if isinstance(task.payload, dict):
@@ -267,13 +307,46 @@ class PMOrchestrator:
             elif task.error and task.error.message:
                 lines.append(f"  Error: {task.error.message[:220]}")
 
+        final_qc_terminal = any(
+            str(task.bot_id or "").strip() == "pm-final-qc"
+            and str(task.status or "").strip().lower() in self._TERMINAL_TASK_STATUSES
+            for task in final_tasks
+        )
+        final_qc_completed = any(
+            str(task.bot_id or "").strip() == "pm-final-qc"
+            and str(task.status or "").strip().lower() == "completed"
+            for task in final_tasks
+        )
+        workflow_complete = (not final_qc_required) or final_qc_terminal
+        missing_stages = [
+            stage_id
+            for stage_id in stage_order
+            if stage_id and stage_id not in observed_bot_ids
+        ]
+        if all_terminal and not workflow_complete:
+            lines.extend(
+                [
+                    "",
+                    "Workflow stopped before reaching the configured terminal PM stage.",
+                    "Expected terminal stage: pm-final-qc.",
+                ]
+            )
+        if missing_stages:
+            lines.append(f"Observed stages: {', '.join(observed_bot_ids) if observed_bot_ids else 'none'}")
+            lines.append(f"Missing stages: {', '.join(missing_stages)}")
+
         return {
             "summary_text": "\n".join(lines),
             "completed": completed,
             "failed": failed,
             "task_count": len(task_ids),
             "all_terminal": all_terminal,
-            "tasks": [snapshots[t].model_dump() if t in snapshots else None for t in task_ids],
+            "workflow_complete": workflow_complete,
+            "final_qc_required": final_qc_required,
+            "final_qc_completed": final_qc_completed,
+            "observed_bot_ids": observed_bot_ids,
+            "missing_stages": missing_stages,
+            "tasks": [task.model_dump() for task in final_tasks],
         }
 
     async def persist_summary_message(
@@ -284,7 +357,14 @@ class PMOrchestrator:
     ) -> Any:
         failed = int(completion.get("failed") or 0)
         all_terminal = bool(completion.get("all_terminal"))
-        run_status = "passed" if failed == 0 and all_terminal else "failed"
+        workflow_complete = bool(completion.get("workflow_complete", True))
+        final_qc_required = bool(completion.get("final_qc_required"))
+        final_qc_completed = bool(completion.get("final_qc_completed"))
+        run_status = (
+            "passed"
+            if failed == 0 and all_terminal and workflow_complete and (not final_qc_required or final_qc_completed)
+            else "failed"
+        )
         task_count = int(completion.get("task_count") or 0)
         completed = int(completion.get("completed") or 0)
         pm_bot_id = str(assignment.get("pm_bot_id") or "")
@@ -298,6 +378,8 @@ class PMOrchestrator:
         ]
         if not all_terminal:
             lines.append("Run summary captured before all tasks reached a terminal state.")
+        elif final_qc_required and not final_qc_completed:
+            lines.append("Run did not reach a completed Final QC stage, so it cannot be marked as passed.")
         if run_status == "failed":
             try:
                 existing_messages = await self._chat_manager.list_messages(conversation_id, limit=500)
@@ -333,9 +415,64 @@ class PMOrchestrator:
                 "failed": failed,
                 "run_status": run_status,
                 "ingest_allowed": run_status == "passed",
+                "workflow_complete": workflow_complete,
+                "final_qc_required": final_qc_required,
+                "final_qc_completed": final_qc_completed,
                 "full_summary_text": str(completion.get("summary_text") or ""),
             },
         )
+
+    async def _workflow_stage_order_for_assignment(self, assignment: Dict[str, Any]) -> List[str]:
+        pm_bot_id = str(
+            assignment.get("pm_bot_id")
+            or assignment.get("root_pm_bot_id")
+            or ""
+        ).strip()
+        if not pm_bot_id:
+            return []
+        if self._bot_registry is None:
+            return []
+
+        bot_doc = None
+        if hasattr(self._bot_registry, "get"):
+            try:
+                bot_doc = await self._bot_registry.get(pm_bot_id)
+            except Exception:
+                bot_doc = None
+        if bot_doc is None and hasattr(self._bot_registry, "list"):
+            try:
+                bots = await self._bot_registry.list()
+            except Exception:
+                bots = []
+            bot_doc = next((bot for bot in bots if str(getattr(bot, "id", "")).strip() == pm_bot_id), None)
+
+        workflow = None
+        if isinstance(bot_doc, dict):
+            workflow = bot_doc.get("workflow")
+        elif bot_doc is not None:
+            workflow = getattr(bot_doc, "workflow", None)
+        reference_graph = None
+        if isinstance(workflow, dict):
+            reference_graph = workflow.get("reference_graph")
+        elif workflow is not None:
+            reference_graph = getattr(workflow, "reference_graph", None)
+        nodes = None
+        if isinstance(reference_graph, dict):
+            nodes = reference_graph.get("nodes")
+        elif reference_graph is not None:
+            nodes = getattr(reference_graph, "nodes", None)
+        stage_order = []
+        for node in (nodes or []):
+            bot_id = ""
+            if isinstance(node, dict):
+                bot_id = str(node.get("bot_id") or "").strip()
+            else:
+                bot_id = str(getattr(node, "bot_id", "") or "").strip()
+            if bot_id:
+                stage_order.append(bot_id)
+        if not stage_order:
+            return list(self._DEFAULT_PM_STAGE_ORDER)
+        return stage_order
 
     async def _build_plan(
         self,
