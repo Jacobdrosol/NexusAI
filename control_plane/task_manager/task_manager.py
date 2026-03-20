@@ -1001,6 +1001,14 @@ def _has_test_execution_evidence(result: Any, text: str) -> bool:
     return any(re.search(pattern, lowered, flags=re.IGNORECASE) for pattern in patterns)
 
 
+def _assignment_result_is_skip(result: Any) -> bool:
+    if not isinstance(result, dict):
+        return False
+    outcome = str(result.get("outcome") or "").strip().lower()
+    failure_type = str(result.get("failure_type") or "").strip().lower()
+    return outcome == "skip" or failure_type in {"skip", "not_applicable", "not-applicable", "n/a"}
+
+
 def _assignment_test_report_paths(payload: Dict[str, Any]) -> List[str]:
     paths: List[str] = []
     for item in _assignment_expected_repo_files(payload):
@@ -1419,6 +1427,9 @@ def _assignment_validation_error(task: Task, result: Any) -> str:
                 "Assignment task output is unverified and cannot be marked completed: "
                 f"detected '{marker}'."
             )
+
+    if step_kind in {"test_execution", "review"} and _assignment_result_is_skip(result):
+        return ""
 
     if step_kind == "repo_change" and not _has_repo_change_evidence(payload, result):
         required = ", ".join(evidence_requirements[:2]) or "repo file artifacts"

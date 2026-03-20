@@ -5363,6 +5363,66 @@ def test_assignment_validation_allows_markdown_repo_artifacts_for_docs_only_requ
     assert _assignment_validation_error(task, result) == ""
 
 
+def test_assignment_validation_allows_skip_for_test_execution_steps():
+    from control_plane.task_manager.task_manager import _assignment_validation_error
+    from shared.models import Task, TaskMetadata
+
+    task = Task(
+        id="task-skip-test",
+        bot_id="pm-tester",
+        payload={
+            "title": "Validate documentation updates",
+            "instruction": "Validate the workstream when applicable, otherwise skip.",
+            "step_kind": "test_execution",
+            "deliverables": ["Test run log artifact"],
+        },
+        metadata=TaskMetadata(source="bot_trigger", orchestration_id="orch-1"),
+        created_at="2026-03-19T00:00:00+00:00",
+        updated_at="2026-03-19T00:00:00+00:00",
+    )
+
+    result = {
+        "outcome": "skip",
+        "failure_type": "not_applicable",
+        "findings": [],
+        "evidence": ["No executable code, tests, or runtime behavior changed in this branch."],
+        "artifacts": [],
+        "handoff_notes": "Testing not applicable. Continue forward.",
+    }
+
+    assert _assignment_validation_error(task, result) == ""
+
+
+def test_assignment_validation_allows_skip_for_review_steps():
+    from control_plane.task_manager.task_manager import _assignment_validation_error
+    from shared.models import Task, TaskMetadata
+
+    task = Task(
+        id="task-skip-review",
+        bot_id="pm-security-reviewer",
+        payload={
+            "title": "Review docs-only branch",
+            "instruction": "Perform review when applicable, otherwise skip.",
+            "step_kind": "review",
+            "deliverables": ["Security review findings"],
+        },
+        metadata=TaskMetadata(source="bot_trigger", orchestration_id="orch-1"),
+        created_at="2026-03-19T00:00:00+00:00",
+        updated_at="2026-03-19T00:00:00+00:00",
+    )
+
+    result = {
+        "outcome": "skip",
+        "failure_type": "not_applicable",
+        "findings": [],
+        "evidence": ["No security-sensitive code, data-path, or schema change was part of this branch."],
+        "artifacts": [],
+        "handoff_notes": "Review not applicable. Continue forward.",
+    }
+
+    assert _assignment_validation_error(task, result) == ""
+
+
 @pytest.mark.anyio
 async def test_chat_assign_test_execution_runs_generated_go_tests(tmp_path, monkeypatch):
     import asyncio
