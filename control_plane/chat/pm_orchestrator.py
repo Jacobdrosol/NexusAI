@@ -1265,6 +1265,30 @@ class PMOrchestrator:
             return "." in leaf
         return "." in text and not text.lower().startswith("http")
 
+    def _non_repo_artifact_label(self, *, step_kind: str, value: str) -> str:
+        lowered = str(value or "").strip().lower()
+        if step_kind == "specification":
+            if "report" in lowered or "summary" in lowered or "guide" in lowered:
+                return "Research report artifact"
+            if "checklist" in lowered:
+                return "Research checklist artifact"
+            return "Research artifact"
+        if step_kind == "planning":
+            if "plan" in lowered:
+                return "Implementation plan artifact"
+            if "risk" in lowered:
+                return "Risk summary artifact"
+            return "Planning artifact"
+        if step_kind == "test_execution":
+            if "coverage" in lowered or "test" in lowered or "validation" in lowered:
+                return "Validation results artifact"
+            return "Execution artifact"
+        if step_kind == "review":
+            if "final" in lowered or "summary" in lowered:
+                return "Review summary artifact"
+            return "Review findings artifact"
+        return "Artifact"
+
     def _normalize_deliverables_for_step(self, *, step_kind: str, deliverables: List[str]) -> List[str]:
         normalized: List[str] = []
         seen: set[str] = set()
@@ -1320,6 +1344,10 @@ class PMOrchestrator:
                 elif "pull request" in lowered and ("<" in lowered or "placeholder" in lowered):
                     text = "Release readiness summary"
                     lowered = text.lower()
+
+            if step_kind in {"specification", "planning", "test_execution", "review"} and self._looks_like_repo_file(text):
+                text = self._non_repo_artifact_label(step_kind=step_kind, value=text)
+                lowered = text.lower()
 
             if step_kind in {"specification", "planning", "repo_change"} and re.search(
                 r"\.(png|jpg|jpeg|gif|webp|svg)\b",
@@ -1682,6 +1710,15 @@ class PMOrchestrator:
             lines.append(
                 "The repo profile is authoritative. Do not let spec assumptions or requested examples introduce a new runtime "
                 "that the repo does not already declare. Runtime-mismatched repo files will fail validation."
+            )
+        elif step_kind in {"specification", "planning", "test_execution", "review"}:
+            lines.append(
+                "This is a non-repo step. Do not return repo file deliverables, committed file contents, or any artifact entries "
+                "with repo-style `path` values such as `docs/...`, `src/...`, or other workspace paths."
+            )
+            lines.append(
+                "Keep the output in the structured JSON fields for this bot. If you include `artifacts`, they must be report-style "
+                "records without repo file paths and must not represent files to commit."
             )
         elif step_kind == "repo_change":
             lines.append(

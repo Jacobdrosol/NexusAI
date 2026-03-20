@@ -1083,6 +1083,22 @@ def test_build_step_instruction_no_namespace_hint_for_reviewer_role() -> None:
     assert "NAMESPACE / PACKAGE INTEGRITY" not in instruction
 
 
+def test_build_step_instruction_blocks_repo_paths_for_non_repo_steps() -> None:
+    orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
+
+    instruction = orchestrator._build_step_instruction(
+        base_instruction="Research the existing documentation conventions.",
+        step_kind="specification",
+        deliverables=["Research report artifact"],
+        evidence_requirements=["Repo excerpts and conventions summary"],
+        role_hint="researcher",
+    )
+
+    assert "Do not return repo file deliverables" in instruction
+    assert "docs/..." in instruction
+    assert "src/..." in instruction
+
+
 def test_build_step_instruction_repo_change_step_kind_triggers_namespace_hint() -> None:
     """repo_change step_kind should produce namespace hint even without coder role_hint."""
     orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
@@ -1096,6 +1112,22 @@ def test_build_step_instruction_repo_change_step_kind_triggers_namespace_hint() 
     )
 
     assert "NAMESPACE" in instruction
+
+
+def test_normalize_deliverables_rewrites_repo_paths_for_non_repo_steps() -> None:
+    orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
+
+    specification = orchestrator._normalize_deliverables_for_step(
+        step_kind="specification",
+        deliverables=["docs/research/blocks-math-research.md", "docs/standards/math_blocks_guide.md"],
+    )
+    review = orchestrator._normalize_deliverables_for_step(
+        step_kind="review",
+        deliverables=["reports/final_qc.md", "docs/qa/review_notes.md"],
+    )
+
+    assert specification == ["Research artifact", "Research report artifact"]
+    assert review == ["Review summary artifact", "Review findings artifact"]
 
 
 # ---------------------------------------------------------------------------
