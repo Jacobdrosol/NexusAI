@@ -913,6 +913,94 @@ async def test_chat_project_repo_context_is_not_attached_by_default(cp_app):
 
 
 @pytest.mark.anyio
+async def test_workspace_tools_do_not_force_repo_evidence_or_truncate_response(cp_app, tmp_path):
+    long_output = "\n".join(
+        f"Math block idea {idx}: detailed planning note for client-side rendering and authoring workflows."
+        for idx in range(1, 60)
+    )
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": long_output})
+    workspace_root = tmp_path / "workspace-full-response"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    (workspace_root / "README.md").write_text(
+        "WORKSPACE_CONTEXT_TOKEN mathematics block roadmap",
+        encoding="utf-8",
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-workspace-full-response"
+        project = await client.post(
+            "/v1/projects",
+            json={
+                "id": project_id,
+                "name": "Workspace Full Response",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "filesystem": True,
+                        "repo_search": False,
+                        "workspace_root": str(workspace_root),
+                    }
+                },
+            },
+        )
+        assert project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Workspace Full Response Chat",
+                "project_id": project_id,
+                "tool_access_enabled": True,
+                "tool_access_filesystem": True,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        bot = await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-workspace-full-response",
+                "name": "Workspace Full Response Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "filesystem": True,
+                        "repo_search": False,
+                    }
+                },
+            },
+        )
+        assert bot.status_code == 200
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": "Summarize the workspace note in detail.",
+                "bot_id": "bot-workspace-full-response",
+                "use_workspace_tools": True,
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["assistant_message"]["content"] == long_output
+        assert not body["assistant_message"]["content"].startswith("Files inspected (verified context)")
+
+        task_arg = cp_app.state.scheduler.schedule.await_args[0][0]
+        payload = task_arg.payload
+        assert isinstance(payload, list)
+        assert payload[0]["role"] == "system"
+        assert "WORKSPACE_CONTEXT_TOKEN" in payload[0]["content"]
+        assert not any(
+            m.get("role") == "system" and "Repository Evidence Policy:" in str(m.get("content", ""))
+            for m in payload
+        )
+
+
+@pytest.mark.anyio
 async def test_chat_repo_intent_auto_attaches_project_context(cp_app):
     cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "ok"})
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
@@ -1396,8 +1484,16 @@ async def test_chat_workspace_tools_blocked_when_chat_switch_off(cp_app, tmp_pat
         )
         assert resp.status_code == 200
         body = resp.json()
-        assert body["assistant_message"]["content"].startswith("I could not retrieve repository context")
-        assert cp_app.state.scheduler.schedule.await_count == 0
+        assert body["assistant_message"]["content"] == "ok"
+        assert cp_app.state.scheduler.schedule.await_count == 1
+        task_arg = cp_app.state.scheduler.schedule.await_args[0][0]
+        payload = task_arg.payload
+        assert isinstance(payload, list)
+        assert "WORKSPACE_BLOCKED_TOKEN" not in str(payload)
+        assert not any(
+            m.get("role") == "system" and "Repository Evidence Policy:" in str(m.get("content", ""))
+            for m in payload
+        )
 
 
 @pytest.mark.anyio
@@ -1479,6 +1575,86 @@ async def test_stream_message_emits_context_summary_event_when_repo_context_load
         assert "Files inspected (verified context)" in stream_resp.text
         assert "STREAM_CONTEXT_TOKEN" not in stream_resp.text
         assert "event: token" not in stream_resp.text
+
+
+@pytest.mark.anyio
+async def test_stream_workspace_tools_keep_token_streaming_without_repo_evidence(cp_app, tmp_path):
+    async def _stream(_task):
+        yield {"event": "backend_selected", "provider": "ollama", "model": "llama3.1:8b", "worker_id": "w1"}
+        yield {"event": "token", "text": "Part one. "}
+        yield {"event": "token", "text": "Part two. "}
+        yield {"event": "final", "output": "Part one. Part two.", "usage": {}}
+
+    cp_app.state.scheduler.stream = _stream
+    workspace_root = tmp_path / "workspace-stream-full"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    (workspace_root / "README.md").write_text(
+        "STREAM_WORKSPACE_CONTEXT_TOKEN",
+        encoding="utf-8",
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-workspace-stream-full"
+        project = await client.post(
+            "/v1/projects",
+            json={
+                "id": project_id,
+                "name": "Workspace Stream Full",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "filesystem": True,
+                        "repo_search": False,
+                        "workspace_root": str(workspace_root),
+                    }
+                },
+            },
+        )
+        assert project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Workspace Stream Full Chat",
+                "project_id": project_id,
+                "tool_access_enabled": True,
+                "tool_access_filesystem": True,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        bot = await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-workspace-stream-full",
+                "name": "Workspace Stream Full Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "filesystem": True,
+                        "repo_search": False,
+                    }
+                },
+            },
+        )
+        assert bot.status_code == 200
+
+        stream_resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/stream",
+            json={
+                "content": "Summarize the workspace note in detail.",
+                "bot_id": "bot-workspace-stream-full",
+                "use_workspace_tools": True,
+            },
+        )
+        assert stream_resp.status_code == 200
+        assert "event: token" in stream_resp.text
+        assert "Part one." in stream_resp.text
+        assert "Files inspected (verified context)" not in stream_resp.text
 
 
 @pytest.mark.anyio

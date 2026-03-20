@@ -201,6 +201,15 @@ def _context_resolution_requested(body: PostMessageRequest) -> bool:
     )
 
 
+def _repo_evidence_requested(body: PostMessageRequest) -> bool:
+    return bool(
+        body.context_items
+        or body.context_item_ids
+        or body.include_project_context
+        or _repo_intent_requested(body.content)
+    )
+
+
 def _context_source_labels(context_items: Optional[List[str]], *, limit: int = 12) -> List[str]:
     labels: List[str] = []
     seen: set[str] = set()
@@ -1424,7 +1433,7 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
             except Exception:
                 pass
 
-        require_repo_evidence = _context_resolution_requested(body)
+        require_repo_evidence = _repo_evidence_requested(body)
         repo_intent = _repo_intent_requested(body.content)
         force_project_context = repo_intent
         force_workspace_context = repo_intent
@@ -1643,7 +1652,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                 except Exception:
                     pass  # Keep defaults on error
 
-            require_repo_evidence = _context_resolution_requested(body)
+            require_repo_evidence = _repo_evidence_requested(body)
             repo_intent = _repo_intent_requested(body.content)
             force_project_context = repo_intent
             force_workspace_context = repo_intent
