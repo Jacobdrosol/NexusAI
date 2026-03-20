@@ -928,6 +928,9 @@ def _looks_like_assignment_test_execution_payload(payload: Dict[str, Any]) -> bo
     # Role hint takes precedence - if explicitly tester/qa, treat as test execution
     role_hint = str(payload.get("role_hint") or "").strip().lower()
     if role_hint in {"tester", "qa"}:
+        # Docs-only workstreams don't require test execution even for tester roles.
+        if _is_docs_only_workstream_validation(payload):
+            return False
         return True
     if role_hint in {"researcher", "analyst"}:
         return False
@@ -3626,11 +3629,24 @@ class TaskManager:
         if isinstance(payload_template, dict):
             notes: list[str] = []
             transformed = _transform_template_value(payload_template, base_payload, notes)
-            merged = dict(base_payload)
             if isinstance(transformed, dict):
-                merged.update(transformed)
-            else:
-                merged["payload_template_error"] = "Trigger payload template did not resolve to a JSON object."
+                # Return only what the template explicitly asked for.  Do NOT merge in the
+                # raw base_payload (which contains source_payload / source_result and their
+                # full upstream chains).  Those objects grow exponentially with trigger depth
+                # and will overflow context windows by depth 5-6 in deep pipelines.
+                # Template variables ({{source_payload.x}}, {{source_result.y}}) are already
+                # resolved into concrete values inside `transformed`.
+                final: Dict[str, Any] = dict(transformed)
+                # Preserve bot-routing hints that the template never sets explicitly.
+                for _key in ("role_hint", "step_kind"):
+                    if _key in base_payload and _key not in final:
+                        final[_key] = base_payload[_key]
+                if notes:
+                    final["trigger_template_notes"] = notes
+                return final
+            # Template resolved to a non-dict scalar — fall through to legacy merge.
+            merged = dict(base_payload)
+            merged["payload_template_error"] = "Trigger payload template did not resolve to a JSON object."
             if notes:
                 merged["trigger_template_notes"] = notes
             return merged

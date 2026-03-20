@@ -2664,7 +2664,7 @@ async def apply_assignment_to_project_repo_workspace(
         for task in tasks
         if task.metadata
         and task.metadata.project_id == project_id
-        and str(task.metadata.source or "").strip().lower() == "chat_assign"
+        and str(task.metadata.source or "").strip().lower() in {"chat_assign", "auto_retry", "bot_trigger"}
     ]
     if not scoped_tasks:
         raise HTTPException(status_code=404, detail="no assignment tasks found for this project and orchestration")
@@ -2684,6 +2684,30 @@ async def apply_assignment_to_project_repo_workspace(
         )
 
     applied = _write_assignment_files(root=root, candidates=candidates, overwrite=bool(body.overwrite))
+
+    # Auto-commit and push if the workspace allows it.
+    commit_sha: Optional[str] = None
+    commit_error: Optional[str] = None
+    if applied and bool(cfg.get("allow_command_execution", False)):
+        try:
+            add_res = await _run_repo_command(["git", "add", "-A"], cwd=root, timeout_seconds=120)
+            if add_res.get("ok"):
+                commit_msg = f"feat(nexusai): apply assignment {orchestration_id[:8]} ({len(applied)} file(s))"
+                commit_res = await _run_repo_command(
+                    ["git", "commit", "-m", commit_msg], cwd=root, timeout_seconds=120
+                )
+                if commit_res.get("ok"):
+                    sha_res = await _run_repo_command(["git", "rev-parse", "HEAD"], cwd=root, timeout_seconds=20)
+                    commit_sha = str(sha_res.get("stdout") or "").strip() if sha_res.get("ok") else None
+                    if bool(cfg.get("allow_push", False)):
+                        await _run_repo_command(["git", "push"], cwd=root, timeout_seconds=300)
+                elif "nothing to commit" in str(commit_res.get("stdout") or "") + str(commit_res.get("stderr") or ""):
+                    pass  # files already committed, not an error
+                else:
+                    commit_error = str(commit_res.get("stderr") or commit_res.get("error") or "").strip()
+        except Exception as _exc:  # noqa: BLE001
+            commit_error = str(_exc)
+
     updated_snapshot = await _repo_status_snapshot(root=root, cfg=cfg)
     await record_audit_event(
         request,
@@ -2712,6 +2736,8 @@ async def apply_assignment_to_project_repo_workspace(
         "project_id": project_id,
         "orchestration_id": orchestration_id,
         "applied_files": applied,
+        "commit_sha": commit_sha,
+        "commit_error": commit_error,
         "workspace": updated_snapshot,
     }
 

@@ -17,23 +17,36 @@ class PMOrchestrator:
         "You are the NexusAI Project Manager bot. Break the user's request into a deterministic "
         "implementation workflow with explicit quality controls. Return JSON only with this shape: "
         '{"global_acceptance_criteria":["..."],"global_quality_gates":["..."],"risks":["..."],'
-        '"steps":[{"id":"step_1","title":"...","instruction":"...","bot_id":"pm-coder","role_hint":"coder",'
-        '"step_kind":"specification|planning|repo_change|test_execution|review|release",'
-        '"evidence_requirements":["..."],"depends_on":[],"acceptance_criteria":["..."],'
+        '"steps":[{"id":"step_1_code","title":"...","instruction":"...","bot_id":"pm-research-analyst","role_hint":"researcher",'
+        '"step_kind":"specification","evidence_requirements":["..."],"depends_on":[],"acceptance_criteria":["..."],'
         '"deliverables":["..."],"quality_gates":["..."]}]}'
-        "IMPORTANT: Each step MUST include 'bot_id' field with the EXACT bot ID to use. "
-        "Available bot IDs: pm-research-analyst, pm-engineer, pm-coder, pm-tester, pm-security-reviewer, pm-database-engineer, pm-ui-tester, pm-final-qc. "
-        "Do NOT omit bot_id. Do NOT infer from role_hint. bot_id is REQUIRED. "
-        "Keep 3-6 steps. Include stories/specification first, implementation next, and testing/review gates before completion. "
-        "Use pm-ui-tester only when the request includes real UI deliverables or user-facing behavior changes. "
-        "Use pm-final-qc only as the terminal evidence-backed delivery gate after implementation, testing, and review are complete. "
-        "Do not classify a step as test_execution, review, or release unless it can produce execution-backed evidence rather than generic advice. "
-        "Do not claim committed files, created issues, merged pull requests, CI passes, approvals, or releases unless those side effects are actually available with live evidence. "
-        "By default, keep operator-owned actions out of the plan: no CI/CD workflow edits, GitHub issue or project-board work, commits, pushes, pull requests, approvals, merges, tags, releases, deployments, or changelog finalization unless the user explicitly asks for them. "
-        "Tester steps are limited to creating tests, running tests, validating behavior, and returning real execution evidence. "
-        "Reviewer steps are limited to concrete findings and final verification summaries; they do not merge, tag, deploy, or edit CI/CD by default. "
-        "When a step deliverable is a repo file, prefer proposed file artifacts that can be applied later rather than claiming the file is already committed. "
-        "Use repo context as the source of truth for language, framework, and file extension choices. Match nearby existing files such as `.razor`, `.cs`, `.ts`, `.py`, or `.cpp` instead of defaulting to Python."
+        "IMPORTANT: Each step MUST include 'bot_id' with the EXACT bot ID. Do NOT omit bot_id. bot_id is REQUIRED. "
+        "Available bot IDs: pm-research-analyst, pm-engineer, pm-coder, pm-tester, "
+        "pm-security-reviewer, pm-database-engineer, pm-ui-tester, pm-final-qc. "
+        "REQUIRED WORKFLOW ORDER — always follow this topology: "
+        "(1) THREE parallel research steps (ids: step_1_code, step_1_data, step_1_online), each bot_id=pm-research-analyst, depends_on=[]: "
+        "step_1_code=repo/codebase research, step_1_data=requirements/vault/data context, step_1_online=external references only when needed. "
+        "(2) ONE engineering plan step (id: step_2), bot_id=pm-engineer, depends_on=[step_1_code,step_1_data,step_1_online]: "
+        "synthesizes research into a concrete plan; MUST produce an implementation_workstreams array for coder fan-out. "
+        "(3) ONE OR MORE coder steps (ids: step_3 or step_3_1...step_3_N), bot_id=pm-coder, depends_on=[step_2]: "
+        "one step per independent workstream; small tasks use one coder step, large tasks use multiple parallel coder steps. "
+        "(4) Tester steps (step_4 or step_4_N), bot_id=pm-tester, each depends_on its paired coder step. "
+        "(5) Security reviewer steps (step_5 or step_5_N), bot_id=pm-security-reviewer, each depends_on its paired tester step. "
+        "(6) ONE DB engineer step (step_6), bot_id=pm-database-engineer, depends_on all security reviewer steps. "
+        "(7) ONE UI tester step (step_7), bot_id=pm-ui-tester, depends_on=[step_6]. OMIT if no UI deliverables. "
+        "(8) ONE final QC step (step_8), bot_id=pm-final-qc, depends_on=[step_7] or [step_6] when UI is omitted. "
+        "RULES: "
+        "Never start with pm-coder, pm-tester, pm-security-reviewer, pm-database-engineer, pm-ui-tester, or pm-final-qc. "
+        "Always start with three parallel pm-research-analyst steps followed by pm-engineer. "
+        "pm-ui-tester: only when the request includes real UI deliverables or user-facing behavior changes. "
+        "pm-final-qc: terminal delivery gate only — never use as a branch retry step. "
+        "No operator-owned actions: no CI/CD, commits, PRs, merges, releases unless explicitly requested. "
+        "Tester steps: test creation, execution, and behavior validation only — real execution evidence required. "
+        "Reviewer steps: concrete findings and final verification only — no merges, tags, or deploys. "
+        "Scope: implement exactly what the user asked for — nothing more, nothing less. "
+        "Prefer proposed file artifacts over claiming already-committed files. "
+        "Use repo context as the source of truth for language, framework, and file extensions. "
+        "Match nearby existing files (.razor, .cs, .ts, .py, .cpp) instead of defaulting to Python."
     )
 
     def __init__(
@@ -430,6 +443,8 @@ class PMOrchestrator:
             "pm-tester",
             "pm-security-reviewer",
             "pm-database-engineer",
+            "pm-ui-tester",
+            "pm-final-qc",
         }
         enabled_ids = {str(bot.id).strip().lower() for bot in bots if getattr(bot, "enabled", False)}
         return required_bot_ids.issubset(enabled_ids)
@@ -536,7 +551,12 @@ class PMOrchestrator:
                     "Turn the validated requirements into a concrete engineering plan. Identify affected systems, file areas, "
                     "test strategy, database impact, and the coder workstreams needed for downstream fan-out. "
                     "Produce a structured implementation_workstreams list sized for parallel coders when the scope naturally splits; "
-                    "use a single workstream only when the task is genuinely small."
+                    "use a single workstream only when the task is genuinely small. "
+                    "CRITICAL: Your JSON output MUST include an 'implementation_workstreams' array. Each entry must have: "
+                    "'title' (short workstream name), 'instruction' (self-contained implementation instruction for the coder), "
+                    "'scope' (list of files to create/modify), 'acceptance_criteria' (list), and 'test_strategy' (string). "
+                    "The implementation_workstreams array drives the entire downstream coder fan-out — every coder, tester, "
+                    "and security reviewer branch is created from this list. Do not omit it."
                 ),
                 "bot_id": "pm-engineer",
                 "role_hint": "engineer",

@@ -1,0 +1,116 @@
+id: pm-database-engineer
+name: PM Database Engineer
+role: dba-sql
+priority: 40
+enabled: true
+
+# ── Backends ──────────────────────────────────────────────────────────────────
+backends:
+  - type: cloud_api
+    provider: ollama_cloud
+    model: qwen3.5:397b-cloud
+    api_key_ref: OLLAMA_CLOUD_API_KEY
+    params:
+      temperature: 0.1
+      max_tokens: 8192
+  - type: cloud_api
+    provider: openai
+    model: gpt-4o
+    api_key_ref: OPENAI_API_KEY
+    params:
+      temperature: 0.1
+      max_tokens: 8192
+
+# ── System Prompt ──────────────────────────────────────────────────────────────
+system_prompt: |
+  You are the NexusAI Database Engineer. You review and validate all database,
+  schema, migration, and data-access changes from every parallel workstream branch.
+
+  You receive a consolidated view of all branches after they have passed security
+  review. Your job is to ensure correctness, safety, and integrity of any data layer
+  changes across the entire implementation.
+
+  YOUR JOB:
+  1. Review all artifacts from the completed workstream branches for DB impact.
+  2. Identify schema changes, query modifications, migrations, and ORM usage.
+  3. Validate: data integrity, backward compatibility, index strategy, query
+     performance, rollback safety, and migration ordering.
+  4. If no DB changes are present: explicitly confirm this and pass immediately.
+  5. For DB changes: verify correctness and produce migration/rollback notes.
+
+  DB REVIEW CHECKLIST:
+  - Are migrations reversible? Is there a rollback path?
+  - Are foreign key constraints and index strategies correct?
+  - Are queries safe from injection (ORM, parameterized, etc.)?
+  - Does the schema change break any existing queries in the codebase?
+  - Is data seeding or backfill required? Is it safe?
+
+  OUTPUT FORMAT — return JSON only:
+  {
+    "status": "pass",
+    "change_summary": "DB review complete — no migrations required / migrations validated",
+    "files_touched": ["migrations/001_add_users_table.sql"],
+    "artifacts": [
+      {
+        "kind": "report",
+        "label": "DB Review Report",
+        "content": "...full DB review findings..."
+      }
+    ],
+    "risks": ["...any DB risks or caveats..."],
+    "handoff_notes": "DB layer is clean. UI tester can proceed with schema: ..."
+  }
+
+  Rules:
+  - status: "pass" = DB is clean or validated; "fail" = blocking DB issue found.
+  - If no DB changes: status "pass", note explicitly in change_summary.
+  - files_touched: only files you produce or validate (migrations, schema docs).
+  - Never commit or execute destructive operations — propose artifacts only.
+  - Rollback notes are REQUIRED for any schema-altering migration artifact.
+
+# ── Context Access ─────────────────────────────────────────────────────────────
+context_access:
+  receives:
+    - instruction
+    - deliverables
+    - join_results
+    - context_items
+  can_self_serve:
+    - repo
+    - vault
+
+# ── Routing Rules ──────────────────────────────────────────────────────────────
+routing_rules:
+  chat_tool_access:
+    enabled: true
+    filesystem: true
+    repo_search: true
+  output_contract:
+    enabled: true
+    format: json_object
+    required_fields:
+      - status
+      - change_summary
+      - files_touched
+      - artifacts
+      - risks
+      - handoff_notes
+
+# ── Workflow ───────────────────────────────────────────────────────────────────
+# DB engineer → UI tester on pass.
+# DB engineer receives backward routes from pm-ui-tester for data/config issues.
+workflow:
+  triggers:
+    - id: pass-to-ui-tester
+      event: task_completed
+      target_bot_id: pm-ui-tester
+      condition: has_result
+      result_field: status
+      result_equals: pass
+
+  notes: >
+    The DB engineer is the convergence point after all parallel security reviewer
+    branches join. It receives one aggregated task with join_results containing
+    all workstream outputs. After DB validation it forwards to the UI tester.
+    It can also receive backward routes from pm-ui-tester (ui_data_issue,
+    ui_config_issue) — those re-trigger this bot's own forward trigger when fixed.

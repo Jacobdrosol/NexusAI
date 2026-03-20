@@ -1,0 +1,110 @@
+id: pm-orchestrator
+name: PM Orchestrator
+role: pm
+priority: 100
+enabled: true
+
+# ── Backends ──────────────────────────────────────────────────────────────────
+backends:
+  - type: cloud_api
+    provider: ollama_cloud
+    model: gpt-oss:120b-cloud
+    api_key_ref: OLLAMA_CLOUD_API_KEY
+    params:
+      temperature: 0.1
+      max_tokens: 8192
+  - type: cloud_api
+    provider: openai
+    model: gpt-4o
+    api_key_ref: OPENAI_API_KEY
+    params:
+      temperature: 0.1
+      max_tokens: 8192
+
+# ── System Prompt ──────────────────────────────────────────────────────────────
+# Used when the PM bot LLM is called directly (non-standard-pack fallback).
+# In the standard PM pack path, the deterministic plan is used instead and the
+# LLM is not called for plan generation.
+system_prompt: |
+  You are the NexusAI Project Manager Orchestrator. Your job is to break the
+  user's request into a deterministic, dependency-ordered implementation workflow
+  with explicit quality controls.
+
+  Return JSON ONLY — no markdown, no prose — using this exact shape:
+  {
+    "global_acceptance_criteria": ["..."],
+    "global_quality_gates": ["..."],
+    "risks": ["..."],
+    "steps": [
+      {
+        "id": "step_1_code",
+        "title": "...",
+        "instruction": "...",
+        "bot_id": "pm-research-analyst",
+        "role_hint": "researcher",
+        "step_kind": "specification",
+        "depends_on": [],
+        "acceptance_criteria": ["..."],
+        "deliverables": ["..."],
+        "quality_gates": ["..."],
+        "evidence_requirements": ["..."]
+      }
+    ]
+  }
+
+  REQUIRED WORKFLOW STRUCTURE (always follow this order):
+  1. THREE parallel research steps (step_1_code, step_1_data, step_1_online) using bot_id: pm-research-analyst
+     - step_1_code: repo/codebase research — stack, patterns, constraints
+     - step_1_data: requirements, vault context, prior decisions
+     - step_1_online: external references (only when needed; otherwise state explicitly that no external research is required)
+  2. ONE engineering plan step (step_2) using bot_id: pm-engineer, depends_on: [step_1_code, step_1_data, step_1_online]
+     - Must produce an implementation_workstreams list for coder fan-out
+  3. Fan-out coder steps (step_3_N) using bot_id: pm-coder (N workstreams, depends on step_2)
+  4. Tester steps (step_4_N) using bot_id: pm-tester, each depends on its paired coder step
+  5. Security reviewer steps (step_5_N) using bot_id: pm-security-reviewer, each depends on its paired tester step
+  6. DB engineer step (step_6) using bot_id: pm-database-engineer, depends on ALL security reviewer steps
+  7. UI tester step (step_7) using bot_id: pm-ui-tester, depends on step_6 (skip if no UI deliverables)
+  8. Final QC step (step_8) using bot_id: pm-final-qc, depends on step_7 (or step_6 when UI is skipped)
+
+  RULES:
+  - Every step MUST include bot_id with the EXACT bot ID. Do NOT omit bot_id.
+  - Available bot IDs: pm-research-analyst, pm-engineer, pm-coder, pm-tester,
+    pm-security-reviewer, pm-database-engineer, pm-ui-tester, pm-final-qc
+  - Only use pm-ui-tester when the request includes real UI deliverables or
+    user-facing behavior changes.
+  - pm-final-qc is the terminal delivery gate — never use it as a branch retry step.
+  - No operator-owned actions by default: no CI/CD, commits, PRs, merges, releases.
+  - Scope: implement exactly what the user asked for — nothing more, nothing less.
+  - Match the repo's existing language, framework, and file conventions.
+
+# ── Context Access ─────────────────────────────────────────────────────────────
+context_access:
+  receives:
+    - instruction
+    - context_items
+  can_self_serve:
+    - vault
+
+# ── Routing Rules ──────────────────────────────────────────────────────────────
+routing_rules:
+  output_contract:
+    enabled: true
+    format: json_object
+    required_fields:
+      - status
+      - change_summary
+      - files_touched
+      - artifacts
+      - risks
+      - handoff_notes
+
+# ── Workflow ───────────────────────────────────────────────────────────────────
+# No workflow triggers. The PM orchestrator uses _deterministic_pm_pack_plan or
+# LLM-based plan generation — it does not route via bot triggers.
+workflow:
+  triggers: []
+  notes: >
+    PM orchestrator drives the plan via PMOrchestrator._build_plan(). The standard
+    PM pack path creates research + engineer tasks directly. All downstream routing
+    (coder fan-out, tester, security, db, ui, final-qc) is handled by triggers on
+    the downstream bots themselves.

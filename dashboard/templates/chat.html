@@ -1237,6 +1237,12 @@ function renderAssignmentApplySummary(result) {
     });
     lines.push('');
   }
+  if (result?.commit_sha) {
+    lines.push(`Committed: ${result.commit_sha.slice(0, 12)}`);
+  }
+  if (result?.commit_error) {
+    lines.push(`Commit warning: ${result.commit_error}`);
+  }
   const branch = workspace?.branch || 'unknown';
   const porcelain = Array.isArray(workspace?.porcelain) ? workspace.porcelain : [];
   const rows = porcelain.filter((line) => !String(line || '').startsWith('##'));
@@ -1253,7 +1259,8 @@ function renderAssignmentApplySummary(result) {
 function showAssignmentApplyResult(result) {
   const state = document.getElementById('assign-apply-state');
   const pre = document.getElementById('assign-apply-pre');
-  if (state) state.textContent = 'Assignment files applied to the project repo workspace.';
+  const committed = result?.commit_sha ? ` Committed: ${String(result.commit_sha).slice(0, 12)}.` : '';
+  if (state) state.textContent = `Assignment files applied to the project repo workspace.${committed}`;
   if (pre) pre.textContent = renderAssignmentApplySummary(result);
   const modal = document.getElementById('modal-assign-apply');
   if (modal) modal.style.display = 'flex';

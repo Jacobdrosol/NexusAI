@@ -4,7 +4,7 @@ control_plane:
   workers_config_dir: config/workers
   bots_config_dir: config/bots
   seed_workers_from_config: false
-  seed_bots_from_config: false
+  seed_bots_from_config: true
   heartbeat_timeout_seconds: 30
 
 dashboard:

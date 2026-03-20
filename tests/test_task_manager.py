@@ -1807,7 +1807,7 @@ async def test_course_pipeline_cardinality_matches_expected_branch_counts(tmp_pa
                     }
                 }
             if task.bot_id == "lesson-writer-bot":
-                unit_number = task.payload["source_result"]["unit_blueprint"]["unit_number"]
+                unit_number = task.payload["unit_blueprint"]["unit_number"]
                 lesson = task.payload["lesson"]
                 return {
                     "lesson_output": {
@@ -1819,23 +1819,23 @@ async def test_course_pipeline_cardinality_matches_expected_branch_counts(tmp_pa
             if task.bot_id == "lesson-qc-bot":
                 return {
                     "qc_status": "pass",
-                    "approved_lesson": task.payload["source_result"]["lesson_output"],
+                    "approved_lesson": task.payload["lesson_output"],
                 }
             if task.bot_id == "unit-aggregator-bot":
                 return {"approved_unit": {"unit_number": task.payload["join_group"]}}
             if task.bot_id == "image-planner-bot":
-                return {"unit_image_plan": {"unit_number": task.payload["source_result"]["approved_unit"]["unit_number"]}}
+                return {"unit_image_plan": {"unit_number": task.payload["approved_unit"]["unit_number"]}}
             if task.bot_id == "unit-question-bank-bot":
                 return {
                     "unit_question_bank": {
-                        "unit_number": task.payload["source_result"]["approved_unit"]["unit_number"],
+                        "unit_number": task.payload["approved_unit"]["unit_number"],
                     }
                 }
             if task.bot_id == "unit-question-bank-qc-bot":
                 return {
                     "qc_status": "pass",
                     "approved_unit_package": {
-                        "unit_number": task.payload["source_result"]["unit_question_bank"]["unit_number"],
+                        "unit_number": task.payload["unit_question_bank"]["unit_number"],
                     },
                 }
             if task.bot_id == "course-aggregator-bot":
@@ -1942,6 +1942,8 @@ async def test_course_pipeline_cardinality_matches_expected_branch_counts(tmp_pa
                         "condition": "has_result",
                         "payload_template": {
                             "course_unit_count": "{{source_payload.course_unit_count}}",
+                            "fanout_count": "{{source_payload.fanout_count}}",
+                            "fanout_id": "{{source_payload.fanout_id}}",
                             "unit_blueprint": "{{source_payload.unit_blueprint}}",
                             "lesson_output": "{{source_result.lesson_output}}",
                         },
@@ -1965,15 +1967,18 @@ async def test_course_pipeline_cardinality_matches_expected_branch_counts(tmp_pa
                         "condition": "has_result",
                         "result_field": "qc_status",
                         "result_equals": "pass",
-                        "join_group_field": "source_payload.unit_blueprint.unit_number",
-                        "join_expected_field": "source_payload.fanout_count",
+                        "join_group_field": "unit_blueprint.unit_number",
+                        "join_expected_field": "fanout_count",
                         "join_items_alias": "lesson_bundles",
                         "join_result_field": "source_result.approved_lesson",
                         "join_result_items_alias": "approved_lessons",
                         "join_sort_field": "source_result.approved_lesson.lesson_number",
                         "payload_template": {
                             "course_unit_count": "{{source_payload.course_unit_count}}",
+                            "fanout_count": "{{source_payload.fanout_count}}",
+                            "fanout_id": "{{source_payload.fanout_id}}",
                             "unit_blueprint": "{{source_payload.unit_blueprint}}",
+                            "source_result": "{{source_result}}",
                         },
                     }
                 ]

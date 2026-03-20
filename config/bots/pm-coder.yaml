@@ -1,0 +1,123 @@
+id: pm-coder
+name: PM Coder
+role: coder
+priority: 60
+enabled: true
+
+# ── Backends ──────────────────────────────────────────────────────────────────
+backends:
+  - type: cloud_api
+    provider: ollama_cloud
+    model: qwen3.5:397b-cloud
+    api_key_ref: OLLAMA_CLOUD_API_KEY
+    params:
+      temperature: 0.1
+      max_tokens: 16384
+  - type: cloud_api
+    provider: openai
+    model: gpt-4o
+    api_key_ref: OPENAI_API_KEY
+    params:
+      temperature: 0.1
+      max_tokens: 16384
+
+# ── System Prompt ──────────────────────────────────────────────────────────────
+system_prompt: |
+  You are the NexusAI Coder. You implement exactly the workstream you were assigned.
+
+  YOUR JOB:
+  1. Implement the code changes described in your workstream instruction.
+  2. Follow the repo's existing language, framework, file structure, and conventions.
+  3. Handle edge cases, error conditions, and input validation.
+  4. Produce complete, working file contents — not partial snippets.
+  5. If you receive upstream_failure_type (from a tester or security reviewer
+     sending you back), fix ONLY the reported issues. Do not refactor unrelated code.
+
+  SCOPE DISCIPLINE:
+  - Implement ONLY what your workstream instruction specifies.
+  - Do NOT add unrequested features, refactors, or dependency upgrades.
+  - Do NOT modify files outside your workstream scope.
+  - If a blocker prevents implementation (missing dependency, conflicting requirement),
+    set status to "blocked" and explain clearly in handoff_notes.
+
+  OUTPUT FORMAT — return JSON only:
+  {
+    "status": "pass",
+    "change_summary": "What was implemented and why",
+    "files_touched": ["path/to/file1.py", "path/to/file2.py"],
+    "artifacts": [
+      {
+        "kind": "file",
+        "label": "path/to/file1.py",
+        "path": "path/to/file1.py",
+        "content": "...full file content..."
+      }
+    ],
+    "risks": ["...any risks or caveats..."],
+    "handoff_notes": "What the tester needs to know: entry points, test scenarios, edge cases"
+  }
+
+  Rules:
+  - status: "pass" = implementation complete; "fail" = implementation failed with
+    specific reasons in handoff_notes; "blocked" = cannot proceed without external input.
+  - artifacts MUST contain the full content of every file you created or modified.
+    Never return partial files or diffs — always return the complete file content.
+  - files_touched must list every file path in artifacts.
+  - handoff_notes must give the tester enough context to write and run meaningful tests.
+
+# ── Context Access ─────────────────────────────────────────────────────────────
+context_access:
+  receives:
+    - instruction
+    - workstream
+    - deliverables
+    - requirements
+    - upstream_failure_type
+    - upstream_findings
+    - context_items
+  can_self_serve:
+    - repo
+    - vault
+
+# ── Routing Rules ──────────────────────────────────────────────────────────────
+routing_rules:
+  chat_tool_access:
+    enabled: true
+    filesystem: true
+    repo_search: true
+  output_contract:
+    enabled: true
+    format: json_object
+    required_fields:
+      - status
+      - change_summary
+      - files_touched
+      - artifacts
+      - risks
+      - handoff_notes
+
+# ── Workflow ───────────────────────────────────────────────────────────────────
+# Coder → Tester on pass.
+# Blocked → PM engineer re-plans.
+# Fail is not forwarded — the tester or security reviewer sends coders back via
+# their own backward triggers when execution evidence shows failures.
+workflow:
+  triggers:
+    - id: pass-to-tester
+      event: task_completed
+      target_bot_id: pm-tester
+      condition: has_result
+      result_field: status
+      result_equals: pass
+
+    - id: blocked-to-engineer
+      event: task_completed
+      target_bot_id: pm-engineer
+      condition: has_result
+      result_field: status
+      result_equals: blocked
+
+  notes: >
+    Each coder task is one branch in the engineer's fan-out. Coder passes to
+    tester on success. Blocked goes back to engineer for re-planning. Tester
+    sends back with failure_type when tests fail, creating a new coder task.
