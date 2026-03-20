@@ -778,6 +778,18 @@ def _is_documentation_like_repo_file(value: str) -> bool:
     return lowered.endswith((".md", ".mdx", ".rst", ".adoc", ".txt"))
 
 
+def _is_assignment_execution_artifact_file(value: str) -> bool:
+    normalized = str(value or "").strip().replace("\\", "/").lower()
+    if not _looks_like_repo_file(normalized):
+        return False
+    return (
+        normalized.startswith("reports/")
+        or normalized.startswith("coverage/")
+        or normalized.startswith("test_logs/")
+        or normalized.endswith((".xml", ".html", ".txt", ".json", ".log"))
+    )
+
+
 def _workstream_deliverables(payload: Dict[str, Any]) -> List[str]:
     deliverables: List[str] = []
     candidates: List[Any] = [payload.get("workstream"), payload.get("source_payload")]
@@ -809,6 +821,87 @@ def _is_docs_only_workstream_validation(payload: Dict[str, Any]) -> bool:
     if any(_is_probable_test_file(item) for item in repo_files):
         return False
     return all(_is_documentation_like_repo_file(item) for item in repo_files)
+
+
+def _iter_payload_chain(payload: Dict[str, Any], *, max_depth: int = 8):
+    current: Any = payload
+    seen: Set[int] = set()
+    for _ in range(max_depth):
+        if not isinstance(current, dict):
+            return
+        current_id = id(current)
+        if current_id in seen:
+            return
+        seen.add(current_id)
+        yield current
+        current = current.get("source_payload")
+
+
+def _payload_requests_docs_only_outputs(payload: Dict[str, Any]) -> bool:
+    texts: List[str] = []
+    for current in _iter_payload_chain(payload):
+        for field in ("title", "instruction"):
+            value = str(current.get(field) or "").strip().lower()
+            if value:
+                texts.append(value)
+        workstream = current.get("workstream")
+        if isinstance(workstream, dict):
+            for field in ("title", "instruction"):
+                value = str(workstream.get(field) or "").strip().lower()
+                if value:
+                    texts.append(value)
+            deliverables = " ".join(_normalize_string_list(workstream.get("deliverables"))).lower()
+            if deliverables:
+                texts.append(deliverables)
+    combined = " ".join(texts)
+    if not combined:
+        return False
+    has_docs_signal = any(
+        marker in combined
+        for marker in (
+            "documentation",
+            "markdown",
+            ".md",
+            "docs/",
+            "docs\\",
+        )
+    )
+    has_docs_only_signal = any(
+        marker in combined
+        for marker in (
+            "only .md",
+            "only md",
+            "only markdown",
+            "markdown only",
+            "docs only",
+            "documentation only",
+            "only .md documents",
+            "only markdown documents",
+            "no code edited",
+            "no other code edited",
+            "shouldn't see any other code edited",
+            "shouldnt see any other code edited",
+        )
+    )
+    return has_docs_signal and has_docs_only_signal
+
+
+def _result_non_document_repo_paths(result: Any) -> List[str]:
+    paths: List[str] = []
+    seen: Set[str] = set()
+    for candidate in extract_file_candidates(result):
+        path = str(candidate.get("path") or "").strip().replace("\\", "/").strip("`")
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        if not _looks_like_repo_file(path):
+            continue
+        if _is_assignment_execution_artifact_file(path) or _is_probable_test_file(path):
+            continue
+        if _is_documentation_like_repo_file(path):
+            continue
+        paths.append(path)
+    return paths
 
 
 def _looks_like_assignment_test_execution_payload(payload: Dict[str, Any]) -> bool:
@@ -1277,6 +1370,16 @@ def _assignment_validation_error(task: Task, result: Any) -> str:
     )
     text = _extract_result_output_text(result).strip()
     lowered = text.lower()
+
+    if _payload_requests_docs_only_outputs(payload):
+        unexpected_paths = _result_non_document_repo_paths(result)
+        if unexpected_paths:
+            preview = ", ".join(unexpected_paths[:5])
+            return (
+                "Assignment explicitly requested documentation-only markdown outputs, "
+                f"but generated non-document repo files: {preview}."
+            )
+
     if not text:
         return ""
 

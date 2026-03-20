@@ -1420,15 +1420,11 @@ function renderDagGraph(graph) {
 
   const nodesHtml = nodes.map((n) => {
     const p = positions.get(n.id) || {x: 0, y: 0};
-    const title = esc(n.title || n.id);
-    const stepId = esc(n.step_id || '');
-    const bot = esc(n.bot_id || '');
+    const title = esc(n.bot_id || n.title || n.id);
     const status = esc(n.status || 'queued');
     return `
       <div class="dag-node" style="left:${p.x}px;top:${p.y}px;width:${nodeW}px;height:${nodeH}px;">
         <div class="dag-title">${title}</div>
-        ${stepId ? `<div class="mini-note">${stepId}</div>` : ''}
-        <div class="mini-note">Bot ${bot || 'unknown'}</div>
         <span class="badge badge-${status}">${status}</span>
       </div>
     `;

@@ -5298,6 +5298,71 @@ def test_docs_only_tester_payload_does_not_use_internal_assignment_execution():
     assert _looks_like_assignment_test_execution_payload(payload) is False
 
 
+def test_assignment_validation_rejects_non_doc_repo_artifacts_for_docs_only_requests():
+    from control_plane.task_manager.task_manager import _assignment_validation_error
+    from shared.models import Task, TaskMetadata
+
+    task = Task(
+        id="task-docs-only",
+        bot_id="pm-coder",
+        payload={
+            "title": "Build lesson-block documentation",
+            "instruction": (
+                "Build documentation for the lesson blocks in docs/blocks. "
+                "I am expecting only .md documents and no other code edited."
+            ),
+            "step_kind": "repo_change",
+            "deliverables": ["docs/blocks/lesson-blocks.md"],
+        },
+        metadata=TaskMetadata(source="chat_assign"),
+        created_at="2026-03-19T00:00:00+00:00",
+        updated_at="2026-03-19T00:00:00+00:00",
+    )
+
+    result = {
+        "artifacts": [
+            {"path": "docs/blocks/lesson-blocks.md", "content": "# Lesson Blocks"},
+            {"path": "GlobeIQ.Server/Controllers/UserLessonBlocksController.cs", "content": "// code"},
+        ]
+    }
+
+    error = _assignment_validation_error(task, result)
+
+    assert "documentation-only markdown outputs" in error
+    assert "GlobeIQ.Server/Controllers/UserLessonBlocksController.cs" in error
+
+
+def test_assignment_validation_allows_markdown_repo_artifacts_for_docs_only_requests():
+    from control_plane.task_manager.task_manager import _assignment_validation_error
+    from shared.models import Task, TaskMetadata
+
+    task = Task(
+        id="task-docs-only",
+        bot_id="pm-coder",
+        payload={
+            "title": "Build lesson-block documentation",
+            "instruction": (
+                "Build documentation for the lesson blocks in docs/blocks. "
+                "I am expecting only .md documents and no other code edited."
+            ),
+            "step_kind": "repo_change",
+            "deliverables": ["docs/blocks/lesson-blocks.md"],
+        },
+        metadata=TaskMetadata(source="chat_assign"),
+        created_at="2026-03-19T00:00:00+00:00",
+        updated_at="2026-03-19T00:00:00+00:00",
+    )
+
+    result = {
+        "artifacts": [
+            {"path": "docs/blocks/lesson-blocks.md", "content": "# Lesson Blocks"},
+            {"path": "docs/blocks/graphing.md", "content": "# Graphing"},
+        ]
+    }
+
+    assert _assignment_validation_error(task, result) == ""
+
+
 @pytest.mark.anyio
 async def test_chat_assign_test_execution_runs_generated_go_tests(tmp_path, monkeypatch):
     import asyncio
