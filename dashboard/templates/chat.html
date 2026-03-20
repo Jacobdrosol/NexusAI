@@ -1649,15 +1649,25 @@ function renderDagGraph(graph) {
 
   const stageOrder = buildDagStageOrder(graph, nodes);
   const stageIndex = new Map(stageOrder.map((stageKey, index) => [String(stageKey), index]));
-  const grouped = new Map(stageOrder.map((stageKey) => [stageKey, []]));
+  const grouped = new Map(stageOrder.map((stageKey) => [stageKey, {unscoped: [], lanes: new Map()}]));
   const laneOrder = Array.from(new Set(nodes.map((node) => dagLaneValue(node)).filter(Boolean))).sort(compareDagLaneValue);
   const laneRank = new Map(laneOrder.map((laneValue, index) => [laneValue, index]));
   nodes.forEach((node) => {
     const stageKey = String(node?.stage_key || node?.bot_id || '');
-    if (!grouped.has(stageKey)) grouped.set(stageKey, []);
-    grouped.get(stageKey).push(node);
+    if (!grouped.has(stageKey)) grouped.set(stageKey, {unscoped: [], lanes: new Map()});
+    const bucket = grouped.get(stageKey);
+    const laneValue = dagLaneValue(node);
+    if (!laneValue) {
+      bucket.unscoped.push(node);
+      return;
+    }
+    if (!bucket.lanes.has(laneValue)) bucket.lanes.set(laneValue, []);
+    bucket.lanes.get(laneValue).push(node);
   });
-  grouped.forEach((bucket) => bucket.sort((a, b) => compareDagNodeOrder(a, b, laneRank)));
+  grouped.forEach((bucket) => {
+    bucket.unscoped.sort((a, b) => compareDagNodeOrder(a, b, laneRank));
+    bucket.lanes.forEach((laneNodes) => laneNodes.sort((a, b) => compareDagNodeOrder(a, b, laneRank)));
+  });
 
   const nodeW = 180;
   const nodeH = 68;
@@ -1666,15 +1676,37 @@ function renderDagGraph(graph) {
   const stageHeaderH = 34;
   const padding = 20;
   const positions = new Map();
-  let totalH = stageHeaderH + padding;
+  const maxUnscopedRows = Math.max(0, ...Array.from(grouped.values()).map((bucket) => bucket.unscoped.length));
+  const unscopedHeight = maxUnscopedRows ? (maxUnscopedRows * (nodeH + yGap)) : 0;
+  const laneBaseY = new Map();
+  let laneCursorY = padding + stageHeaderH + unscopedHeight + (maxUnscopedRows ? yGap : 0);
+  laneOrder.forEach((laneValue) => {
+    let maxLaneRows = 1;
+    grouped.forEach((bucket) => {
+      maxLaneRows = Math.max(maxLaneRows, (bucket.lanes.get(laneValue) || []).length);
+    });
+    laneBaseY.set(laneValue, laneCursorY);
+    laneCursorY += maxLaneRows * (nodeH + yGap);
+  });
+  let totalH = Math.max(stageHeaderH + padding, laneCursorY + padding);
 
   stageOrder.forEach((stageKey, columnIndex) => {
-    const columnNodes = grouped.get(stageKey) || [];
+    const bucket = grouped.get(stageKey) || {unscoped: [], lanes: new Map()};
     const x = padding + columnIndex * (nodeW + xGap);
-    columnNodes.forEach((node, rowIndex) => {
+    bucket.unscoped.forEach((node, rowIndex) => {
       const y = padding + stageHeaderH + rowIndex * (nodeH + yGap);
       positions.set(node.id, {x, y});
       totalH = Math.max(totalH, y + nodeH + padding);
+    });
+    laneOrder.forEach((laneValue) => {
+      const laneNodes = bucket.lanes.get(laneValue) || [];
+      const laneY = laneBaseY.get(laneValue);
+      if (laneY === undefined) return;
+      laneNodes.forEach((node, laneIndex) => {
+        const y = laneY + laneIndex * (nodeH + yGap);
+        positions.set(node.id, {x, y});
+        totalH = Math.max(totalH, y + nodeH + padding);
+      });
     });
   });
   const totalW = padding * 2 + Math.max(0, stageOrder.length - 1) * (nodeW + xGap) + nodeW;
