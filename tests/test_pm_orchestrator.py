@@ -901,6 +901,7 @@ async def test_orchestrate_assignment_bootstraps_via_pm_workflow_when_pm_has_tri
         role="pm",
         backends=[],
         enabled=True,
+        assignment_capabilities={"is_project_manager": True},
         workflow={
             "triggers": [
                 {
@@ -949,8 +950,13 @@ async def test_orchestrate_assignment_bootstraps_via_pm_workflow_when_pm_has_tri
     assert create_kwargs["bot_id"] == "pm-orchestrator"
     assert create_kwargs["payload"]["instruction"] == "Document the lesson blocks"
     assert create_kwargs["payload"]["context_items"] == ["[repo-profile] Workspace stack summary"]
+    assert create_kwargs["payload"]["pipeline_name"] == "PM Workflow: PM Orchestrator"
+    assert create_kwargs["payload"]["pipeline_entry_bot_id"] == "pm-orchestrator"
     assert create_kwargs["metadata"].source == "chat_assign"
+    assert create_kwargs["metadata"].pipeline_name == "PM Workflow: PM Orchestrator"
+    assert create_kwargs["metadata"].pipeline_entry_bot_id == "pm-orchestrator"
     assert assignment["pm_bot_id"] == "pm-orchestrator"
+    assert assignment["pipeline_name"] == "PM Workflow: PM Orchestrator"
     assert assignment["tasks"][0]["bot_id"] == "pm-orchestrator"
     assert assignment["plan"]["steps"][0]["bot_id"] == "pm-orchestrator"
 

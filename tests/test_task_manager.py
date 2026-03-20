@@ -1301,6 +1301,66 @@ async def test_trigger_payload_template_can_reference_source_fields(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_trigger_payload_template_preserves_fanout_context_fields(tmp_path):
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Task
+
+    class StubScheduler:
+        async def schedule(self, _task):
+            return {"ok": True}
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "templated-trigger-context.db"))
+    trigger = type(
+        "Trigger",
+        (),
+        {
+            "payload_template": {
+                "title": "Engineer join",
+                "instruction": "Synthesize the joined research outputs.",
+            },
+            "target_bot_id": "pm-engineer",
+        },
+    )()
+    task = Task(
+        id="research-task-1",
+        bot_id="pm-research-analyst",
+        payload={
+            "title": "Research branch",
+            "instruction": "Research the repo branch.",
+            "fanout_id": "fanout:pm-orchestrator:pm-to-research-fanout:root:pm_assignment_entry",
+            "fanout_count": 3,
+            "fanout_branch_key": "0",
+            "fanout_expected_branch_keys": ["0", "1", "2"],
+            "project_id": "proj-1",
+            "conversation_id": "conv-1",
+            "orchestration_id": "orch-1",
+        },
+        metadata=TaskMetadata(
+            source="bot_trigger",
+            project_id="proj-1",
+            conversation_id="conv-1",
+            orchestration_id="orch-1",
+        ),
+        status="completed",
+        result={"status": "complete"},
+        created_at="2026-03-20T00:00:00+00:00",
+        updated_at="2026-03-20T00:00:01+00:00",
+    )
+
+    payload = tm._build_trigger_payload(task, trigger)
+
+    assert payload["title"] == "Engineer join"
+    assert payload["instruction"] == "Synthesize the joined research outputs."
+    assert payload["fanout_id"] == "fanout:pm-orchestrator:pm-to-research-fanout:root:pm_assignment_entry"
+    assert payload["fanout_count"] == 3
+    assert payload["fanout_branch_key"] == "0"
+    assert payload["fanout_expected_branch_keys"] == ["0", "1", "2"]
+    assert payload["project_id"] == "proj-1"
+    assert payload["conversation_id"] == "conv-1"
+    assert payload["orchestration_id"] == "orch-1"
+
+
+@pytest.mark.anyio
 async def test_qc_bot_can_route_failures_back_to_source_bot(tmp_path):
     import asyncio
 

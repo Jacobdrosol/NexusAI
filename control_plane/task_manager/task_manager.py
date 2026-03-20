@@ -3851,6 +3851,11 @@ class TaskManager:
                 # Template variables ({{source_payload.x}}, {{source_result.y}}) are already
                 # resolved into concrete values inside `transformed`.
                 final: Dict[str, Any] = dict(transformed)
+                if isinstance(task.payload, dict):
+                    upstream_payload = task.payload.get("source_payload")
+                    if isinstance(upstream_payload, dict):
+                        self._promote_trigger_context_fields(final, upstream_payload)
+                    self._promote_trigger_context_fields(final, task.payload)
                 # Preserve bot-routing hints that the template never sets explicitly.
                 for _key in ("role_hint", "step_kind"):
                     if _key in base_payload and _key not in final:

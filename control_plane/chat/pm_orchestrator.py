@@ -129,6 +129,7 @@ class PMOrchestrator:
         orchestration_id = str(uuid.uuid4())
         allowed_bot_ids = derive_allowed_bot_ids(pm_bot.id, bots)
         workflow_graph_id = bot_workflow_graph_id(pm_bot)
+        pipeline_name = f"PM Workflow: {str(pm_bot.name or pm_bot.id)}".strip()
         pm_task = await self._task_manager.create_task(
             bot_id=pm_bot.id,
             payload={
@@ -152,6 +153,8 @@ class PMOrchestrator:
                 "allowed_bot_ids": allowed_bot_ids,
                 "workflow_graph_id": workflow_graph_id,
                 "run_class": "pm_assignment",
+                "pipeline_name": pipeline_name,
+                "pipeline_entry_bot_id": pm_bot.id,
             },
             metadata=TaskMetadata(
                 source="chat_assign",
@@ -159,6 +162,8 @@ class PMOrchestrator:
                 conversation_id=conversation_id,
                 orchestration_id=orchestration_id,
                 step_id="pm_assignment_entry",
+                pipeline_name=pipeline_name,
+                pipeline_entry_bot_id=pm_bot.id,
                 root_pm_bot_id=pm_bot.id,
                 allowed_bot_ids=allowed_bot_ids,
                 workflow_graph_id=workflow_graph_id,
@@ -192,6 +197,7 @@ class PMOrchestrator:
             "tasks": [pm_task.model_dump()],
             "allowed_bot_ids": allowed_bot_ids,
             "workflow_graph_id": workflow_graph_id,
+            "pipeline_name": pipeline_name,
         }
 
     async def wait_for_completion(
