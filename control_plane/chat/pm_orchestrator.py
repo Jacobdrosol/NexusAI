@@ -136,6 +136,7 @@ class PMOrchestrator:
                         deliverables=deliverables,
                         evidence_requirements=evidence_requirements,
                         context_items=context_items,
+                        role_hint=role_hint,
                     ),
                     "role_hint": role_hint or "assistant",
                     "step_kind": step_kind,
@@ -1651,6 +1652,7 @@ class PMOrchestrator:
         deliverables: List[str],
         evidence_requirements: List[str],
         context_items: Optional[List[str]] = None,
+        role_hint: str = "",
     ) -> str:
         lines = [str(base_instruction or "").strip()]
         has_repo_profile_context = any(
@@ -1711,6 +1713,19 @@ class PMOrchestrator:
             lines.append(
                 "Choose languages, frameworks, and file extensions to match the repo context and nearby existing files. "
                 "Do not introduce a new runtime unless the user explicitly authorized it."
+            )
+        # Namespace / package injection hint for coder steps.
+        # Prevents the bot from hallucinating namespace names that don't exist in the repo.
+        _is_coder_step = str(role_hint or "").strip().lower() in {
+            "coder", "developer", "coding", "engineer", "implementation",
+        } or step_kind in {"repo_change", "coding", "implementation"}
+        if _is_coder_step:
+            lines.append(
+                "NAMESPACE / PACKAGE INTEGRITY: Before declaring any namespace, package, module, "
+                "or import path in generated code, use repo_search to find an existing file in the "
+                "same directory or adjacent directories and copy its exact namespace/package declaration. "
+                "Never invent or guess a namespace. If you cannot confirm the namespace from an existing "
+                "file, leave a TODO comment and state what you searched for."
             )
         if any(item.lower().endswith(".mermaid.md") for item in deliverables):
             lines.append(

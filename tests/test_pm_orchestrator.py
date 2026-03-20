@@ -1030,3 +1030,247 @@ async def test_wait_for_completion_tracks_trigger_spawned_orchestration_tasks() 
     assert completion["task_count"] == 2
     assert "Assignment summary (2 tasks):" in completion["summary_text"]
     assert "Implement routing workstream" in completion["summary_text"]
+
+
+# ---------------------------------------------------------------------------
+# Namespace injection hint tests
+# ---------------------------------------------------------------------------
+
+def test_build_step_instruction_injects_namespace_hint_for_coder_role() -> None:
+    """Coder role_hint should produce a NAMESPACE/PACKAGE INTEGRITY instruction."""
+    orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
+
+    instruction = orchestrator._build_step_instruction(
+        base_instruction="Implement the authentication controller",
+        step_kind="repo_change",
+        deliverables=["src/Controllers/AuthController.cs"],
+        evidence_requirements=["Proposed file contents"],
+        role_hint="coder",
+    )
+
+    assert "NAMESPACE" in instruction
+    assert "namespace" in instruction.lower()
+    assert "repo_search" in instruction
+
+
+def test_build_step_instruction_injects_namespace_hint_for_developer_role() -> None:
+    """developer role_hint should also produce the namespace integrity hint."""
+    orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
+
+    instruction = orchestrator._build_step_instruction(
+        base_instruction="Create a new service class",
+        step_kind="coding",
+        deliverables=["src/Services/DataService.cs"],
+        evidence_requirements=[],
+        role_hint="developer",
+    )
+
+    assert "NAMESPACE" in instruction
+
+
+def test_build_step_instruction_no_namespace_hint_for_reviewer_role() -> None:
+    """Non-coder roles should NOT receive the namespace hint."""
+    orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
+
+    instruction = orchestrator._build_step_instruction(
+        base_instruction="Review the security of the authentication controller",
+        step_kind="review",
+        deliverables=["Security review findings"],
+        evidence_requirements=[],
+        role_hint="reviewer",
+    )
+
+    assert "NAMESPACE / PACKAGE INTEGRITY" not in instruction
+
+
+def test_build_step_instruction_repo_change_step_kind_triggers_namespace_hint() -> None:
+    """repo_change step_kind should produce namespace hint even without coder role_hint."""
+    orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
+
+    instruction = orchestrator._build_step_instruction(
+        base_instruction="Add a new endpoint",
+        step_kind="repo_change",
+        deliverables=["src/api/endpoint.py"],
+        evidence_requirements=[],
+        role_hint="",
+    )
+
+    assert "NAMESPACE" in instruction
+
+
+# ---------------------------------------------------------------------------
+# _should_bootstrap_assignment_via_pm_workflow tests
+# ---------------------------------------------------------------------------
+
+def test_should_bootstrap_via_pm_workflow_true_when_bot_has_triggers() -> None:
+    """Returns True when the PM bot has at least one enabled workflow trigger."""
+    orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
+
+    bot = Bot(
+        id="pm-orchestrator",
+        name="PM Orchestrator",
+        role="project_manager",
+        backends=[],
+        routing_rules={
+            "workflow": {
+                "triggers": [
+                    {
+                        "id": "pm-fanout-to-research",
+                        "event": "task_completed",
+                        "target_bot_id": "pm-research-analyst",
+                        "condition": "has_result",
+                        "fan_out_field": "source_result.steps",
+                        "fan_out_alias": "step",
+                        "enabled": True,
+                    }
+                ]
+            }
+        },
+    )
+
+    assert orchestrator._should_bootstrap_assignment_via_pm_workflow(bot) is True
+
+
+def test_should_bootstrap_via_pm_workflow_false_when_no_triggers() -> None:
+    """Returns False when the PM bot has no workflow triggers."""
+    orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
+
+    bot = Bot(
+        id="pm-orchestrator",
+        name="PM Orchestrator",
+        role="project_manager",
+        backends=[],
+    )
+
+    assert orchestrator._should_bootstrap_assignment_via_pm_workflow(bot) is False
+
+
+def test_should_bootstrap_via_pm_workflow_false_when_all_triggers_disabled() -> None:
+    """Returns False when all workflow triggers are disabled."""
+    orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
+
+    bot = Bot(
+        id="pm-orchestrator",
+        name="PM Orchestrator",
+        role="project_manager",
+        backends=[],
+        routing_rules={
+            "workflow": {
+                "triggers": [
+                    {
+                        "id": "pm-disabled-trigger",
+                        "event": "task_completed",
+                        "target_bot_id": "pm-research-analyst",
+                        "condition": "has_result",
+                        "enabled": False,
+                    }
+                ]
+            }
+        },
+    )
+
+    assert orchestrator._should_bootstrap_assignment_via_pm_workflow(bot) is False
+
+
+# ---------------------------------------------------------------------------
+# context_access model on Bot
+# ---------------------------------------------------------------------------
+
+def test_bot_context_access_field_is_readable() -> None:
+    """Bot.context_access should deserialize correctly from a dict."""
+    from shared.models import BotContextAccess
+
+    bot = Bot(
+        id="pm-coder",
+        name="PM Coder",
+        role="coder",
+        backends=[],
+        context_access={
+            "receives": ["instruction", "deliverables", "requirements"],
+            "can_self_serve": ["repo", "vault"],
+        },
+    )
+
+    assert bot.context_access is not None
+    assert isinstance(bot.context_access, BotContextAccess)
+    assert "instruction" in bot.context_access.receives
+    assert "repo" in bot.context_access.can_self_serve
+
+
+def test_bot_context_access_defaults_to_none() -> None:
+    """Bot.context_access should be None when not set."""
+    bot = Bot(
+        id="pm-coder",
+        name="PM Coder",
+        role="coder",
+        backends=[],
+    )
+
+    assert bot.context_access is None
+
+
+# ---------------------------------------------------------------------------
+# Pipeline smoke: _bootstrap_assignment_via_pm_workflow creates single task
+# ---------------------------------------------------------------------------
+
+@pytest.mark.anyio
+async def test_bootstrap_via_pm_workflow_creates_single_pm_task() -> None:
+    """When a PM bot has workflow triggers, only ONE task is created upfront (the PM entry task).
+    All downstream tasks are driven by bot workflow triggers, not created upfront."""
+    orchestrator = PMOrchestrator(
+        bot_registry=None,
+        scheduler=None,
+        task_manager=type(
+            "TaskManager",
+            (),
+            {"create_task": AsyncMock(return_value=Task(
+                id="pm-entry-task",
+                bot_id="pm-orchestrator",
+                payload={"instruction": "Build the auth feature"},
+                status="queued",
+                created_at="2026-01-01T00:00:00+00:00",
+                updated_at="2026-01-01T00:00:00+00:00",
+            ))},
+        )(),
+        chat_manager=None,
+    )
+
+    pm_bot = Bot(
+        id="pm-orchestrator",
+        name="PM Orchestrator",
+        role="project_manager",
+        backends=[],
+        routing_rules={
+            "workflow": {
+                "triggers": [
+                    {
+                        "id": "pm-fanout",
+                        "event": "task_completed",
+                        "target_bot_id": "pm-research-analyst",
+                        "condition": "has_result",
+                        "fan_out_field": "source_result.steps",
+                        "fan_out_alias": "step",
+                    }
+                ]
+            }
+        },
+    )
+
+    result = await orchestrator._bootstrap_assignment_via_pm_workflow(
+        conversation_id="conv-1",
+        instruction="Build the auth feature",
+        pm_bot=pm_bot,
+        context_items=[],
+        project_id="proj-1",
+    )
+
+    # Only ONE task created — downstream tasks driven by triggers
+    assert len(result["tasks"]) == 1
+    assert result["tasks"][0]["bot_id"] == "pm-orchestrator"
+    assert result["tasks"][0]["id"] == "pm-entry-task"
+
+    # Plan has one step pointing at the PM bot
+    assert len(result["plan"]["steps"]) == 1
+    assert result["plan"]["steps"][0]["bot_id"] == "pm-orchestrator"
+    assert result["orchestration_id"]  # non-empty UUID
+
