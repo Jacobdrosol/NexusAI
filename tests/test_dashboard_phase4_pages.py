@@ -1238,6 +1238,62 @@ def test_chat_orchestration_graph_api_includes_reference_graph_stage_order(dashb
     assert nodes["research-1"]["stage_key"] == "pm-research-analyst"
 
 
+def test_chat_orchestration_graph_api_includes_branch_lane_keys(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_tasks(self, orchestration_id=None, statuses=None, bot_id=None, limit=200, include_content=False):
+            return [
+                {
+                    "id": "coder-1",
+                    "bot_id": "pm-coder",
+                    "status": "completed",
+                    "payload": {
+                        "title": "Geometry Block Documentation",
+                        "workstream_index": 2,
+                        "fanout_branch_key": "2",
+                    },
+                    "depends_on": ["engineer-1"],
+                    "metadata": {
+                        "source": "bot_trigger",
+                        "orchestration_id": "orch-lanes",
+                        "parent_task_id": "engineer-1",
+                    },
+                    "created_at": "2026-03-20T00:00:03+00:00",
+                },
+                {
+                    "id": "tester-1",
+                    "bot_id": "pm-tester",
+                    "status": "running",
+                    "payload": {
+                        "title": "Geometry Block Documentation",
+                        "workstream_index": 2,
+                        "fanout_branch_key": "2",
+                    },
+                    "depends_on": ["coder-1"],
+                    "metadata": {
+                        "source": "bot_trigger",
+                        "orchestration_id": "orch-lanes",
+                        "parent_task_id": "coder-1",
+                    },
+                    "created_at": "2026-03-20T00:00:04+00:00",
+                },
+            ]
+
+        def get_bot(self, bot_id):
+            return {"id": bot_id, "name": bot_id}
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/api/chat/orchestrations/orch-lanes/graph")
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    nodes = {node["id"]: node for node in body["nodes"]}
+    assert nodes["coder-1"]["lane_key"] == "2"
+    assert nodes["tester-1"]["lane_key"] == "2"
+    assert nodes["tester-1"]["details"]["created_at"] == "2026-03-20T00:00:04+00:00"
+
+
 def test_project_github_pat_api_validates_required_fields(dashboard_client):
     _login_admin(dashboard_client)
     resp = dashboard_client.post("/api/projects/proj-x/github/pat", json={})

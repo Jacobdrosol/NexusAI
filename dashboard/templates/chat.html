@@ -1548,16 +1548,39 @@ function buildDagStageOrder(graph, nodes) {
   return order;
 }
 
-function dagNodeSortKey(node) {
-  const branchIndex = Number.isFinite(Number(node?.branch_index)) ? Number(node.branch_index) : Number.MAX_SAFE_INTEGER;
-  const title = String(node?.title || '');
-  const id = String(node?.id || '');
-  return [branchIndex, title, id];
+function dagLaneValue(node) {
+  return String(node?.lane_key || node?.details?.lane_key || '').trim();
 }
 
-function compareDagNodeOrder(a, b) {
-  const left = dagNodeSortKey(a);
-  const right = dagNodeSortKey(b);
+function compareDagLaneValue(a, b) {
+  const left = String(a || '').trim();
+  const right = String(b || '').trim();
+  if (!left && !right) return 0;
+  if (!left) return 1;
+  if (!right) return -1;
+  const leftNumber = Number(left);
+  const rightNumber = Number(right);
+  const leftIsNumber = Number.isFinite(leftNumber);
+  const rightIsNumber = Number.isFinite(rightNumber);
+  if (leftIsNumber && rightIsNumber) return leftNumber - rightNumber;
+  return left.localeCompare(right, undefined, {numeric: true, sensitivity: 'base'});
+}
+
+function dagNodeSortKey(node, laneRank) {
+  const laneValue = dagLaneValue(node);
+  const laneIndex = laneValue && laneRank instanceof Map && laneRank.has(laneValue)
+    ? Number(laneRank.get(laneValue))
+    : Number.MAX_SAFE_INTEGER;
+  const branchIndex = Number.isFinite(Number(node?.branch_index)) ? Number(node.branch_index) : Number.MAX_SAFE_INTEGER;
+  const createdAt = Date.parse(String(node?.details?.created_at || ''));
+  const createdOrder = Number.isFinite(createdAt) ? createdAt : Number.MAX_SAFE_INTEGER;
+  const id = String(node?.id || '');
+  return [laneIndex, branchIndex, createdOrder, id];
+}
+
+function compareDagNodeOrder(a, b, laneRank) {
+  const left = dagNodeSortKey(a, laneRank);
+  const right = dagNodeSortKey(b, laneRank);
   for (let index = 0; index < left.length; index += 1) {
     if (left[index] < right[index]) return -1;
     if (left[index] > right[index]) return 1;
@@ -1627,12 +1650,14 @@ function renderDagGraph(graph) {
   const stageOrder = buildDagStageOrder(graph, nodes);
   const stageIndex = new Map(stageOrder.map((stageKey, index) => [String(stageKey), index]));
   const grouped = new Map(stageOrder.map((stageKey) => [stageKey, []]));
+  const laneOrder = Array.from(new Set(nodes.map((node) => dagLaneValue(node)).filter(Boolean))).sort(compareDagLaneValue);
+  const laneRank = new Map(laneOrder.map((laneValue, index) => [laneValue, index]));
   nodes.forEach((node) => {
     const stageKey = String(node?.stage_key || node?.bot_id || '');
     if (!grouped.has(stageKey)) grouped.set(stageKey, []);
     grouped.get(stageKey).push(node);
   });
-  grouped.forEach((bucket) => bucket.sort(compareDagNodeOrder));
+  grouped.forEach((bucket) => bucket.sort((a, b) => compareDagNodeOrder(a, b, laneRank)));
 
   const nodeW = 180;
   const nodeH = 68;

@@ -903,6 +903,7 @@ def api_orchestration_graph(orchestration_id: str):
                 break
             except Exception:
                 continue
+        lane_key = fanout_branch_key or (str(branch_index) if branch_index is not None else "")
 
         if not depends_on:
             if join_task_ids:
@@ -924,6 +925,7 @@ def api_orchestration_graph(orchestration_id: str):
                 "stage_key": bot_id_label,
                 "stage_kind": str((reference_node_by_bot.get(bot_id_label) or {}).get("stage_kind") or ""),
                 "branch_index": branch_index,
+                "lane_key": lane_key,
                 "depends_on": depends_on,
                 "status_variant": str(t.get("status") or "queued").strip().lower() or "queued",
                 "is_rerouted": False,
@@ -950,8 +952,10 @@ def api_orchestration_graph(orchestration_id: str):
                     "fanout_branch_key": fanout_branch_key,
                     "workstream_index": payload.get("workstream_index"),
                     "research_step_index": payload.get("research_step_index"),
+                    "lane_key": lane_key,
                     "retry_of_task_id": retry_of_task_id,
                     "retried_by_task_id": retried_by_task_id,
+                    "created_at": t.get("created_at"),
                     "synthetic": False,
                 },
             }
