@@ -66,6 +66,13 @@
                  background:#1a1d27;color:#e0e0e0;cursor:pointer;font-size:0.85rem;transition:background 0.2s;">
     Deploy
   </button>
+  <button class="tab-btn"
+          data-target="section-tools"
+          onclick="switchTab(this); loadToolCatalog();"
+          style="padding:0.4rem 1rem;border-radius:20px;border:1px solid #2d3045;
+                 background:#1a1d27;color:#e0e0e0;cursor:pointer;font-size:0.85rem;transition:background 0.2s;">
+    Tools
+  </button>
 </div>
 
 <!-- Hidden CSRF token for JS use -->
@@ -631,6 +638,180 @@ setInterval(function() {
       .catch(function(){});
   }
 }, 5000);
+
+// ---------------------------------------------------------------------------
+// Tools tab
+// ---------------------------------------------------------------------------
+
+var _toolsLoaded = false;
+var _toolData = { tools: [], categories: [], presets: [] };
+
+function loadToolCatalog() {
+  if (_toolsLoaded) return;
+  fetch('/api/settings/tools', {headers: {'X-CSRFToken': _csrfToken}})
+    .then(function(r){ return r.json(); })
+    .then(function(data){
+      _toolData = data;
+      renderToolCatalog(data);
+      _toolsLoaded = true;
+    })
+    .catch(function(e){ showToast('Failed to load tool catalog: ' + e, false); });
+}
+
+function renderToolCatalog(data) {
+  var container = document.getElementById('tool-catalog-body');
+  if (!container) return;
+  container.innerHTML = '';
+
+  var byCategory = {};
+  data.tools.forEach(function(t){
+    if (!byCategory[t.category]) byCategory[t.category] = [];
+    byCategory[t.category].push(t);
+  });
+
+  data.categories.forEach(function(cat){
+    var tools = byCategory[cat.id] || [];
+    if (!tools.length) return;
+
+    var catHeader = document.createElement('tr');
+    catHeader.innerHTML = '<td colspan="3" style="padding:0.6rem 0.75rem;background:#12151f;' +
+      'color:#a78bfa;font-weight:700;font-size:0.8rem;letter-spacing:0.05em;' +
+      'text-transform:uppercase;border-top:1px solid #2d3045;">' + cat.label + '</td>';
+    container.appendChild(catHeader);
+
+    tools.forEach(function(t){
+      var row = document.createElement('tr');
+      row.style.borderBottom = '1px solid #2d3045';
+      row.innerHTML =
+        '<td style="padding:0.55rem 0.75rem;color:#e0e0e0;font-size:0.88rem;">' +
+          '<strong>' + escHtml(t.name) + '</strong>' +
+          (t.install_hint && !t.enabled ? '<br><span style="color:#f59e0b;font-size:0.75rem;">' + escHtml(t.install_hint) + '</span>' : '') +
+        '</td>' +
+        '<td style="padding:0.55rem 0.75rem;color:#a0aec0;font-size:0.82rem;">' + escHtml(t.description) + '</td>' +
+        '<td style="padding:0.55rem 0.75rem;text-align:center;">' +
+          '<label class="tool-toggle" style="position:relative;display:inline-block;width:40px;height:22px;">' +
+            '<input type="checkbox" data-tool-id="' + escHtml(t.id) + '"' + (t.enabled ? ' checked' : '') + ' ' +
+              'onchange="toggleTool(\'' + escHtml(t.id) + '\', this.checked)" ' +
+              'style="opacity:0;width:0;height:0;">' +
+            '<span style="position:absolute;cursor:pointer;top:0;left:0;right:0;bottom:0;' +
+              'background:' + (t.enabled ? '#7c3aed' : '#2d3045') + ';border-radius:22px;transition:.3s;" ' +
+              'id="toggle-span-' + escHtml(t.id) + '">' +
+              '<span style="position:absolute;height:16px;width:16px;left:3px;bottom:3px;' +
+                'background:white;border-radius:50%;transition:.3s;' +
+                'transform:' + (t.enabled ? 'translateX(18px)' : 'translateX(0)') + '"></span>' +
+            '</span>' +
+          '</label>' +
+        '</td>';
+      container.appendChild(row);
+    });
+  });
+}
+
+function escHtml(str) {
+  return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function toggleTool(toolId, enabled) {
+  fetch('/api/settings/tools/' + encodeURIComponent(toolId), {
+    method: 'PUT',
+    headers: {'X-CSRFToken': _csrfToken, 'Content-Type': 'application/json'},
+    body: JSON.stringify({enabled: enabled})
+  })
+  .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, data:d}; }); })
+  .then(function(res){
+    if (!res.ok) { showToast('Failed to update tool', false); return; }
+    var span = document.getElementById('toggle-span-' + toolId);
+    if (span) {
+      span.style.background = enabled ? '#7c3aed' : '#2d3045';
+      var dot = span.querySelector('span');
+      if (dot) dot.style.transform = enabled ? 'translateX(18px)' : 'translateX(0)';
+    }
+    showToast((enabled ? 'Enabled ' : 'Disabled ') + toolId, true);
+    _toolsLoaded = false; // invalidate cache so counts refresh
+  })
+  .catch(function(e){ showToast('Network error: ' + e, false); });
+}
+
+function applyToolPreset(presetId) {
+  if (!confirm('Apply preset "' + presetId + '"? This will replace your current tool selection.')) return;
+  fetch('/api/settings/tools/preset/' + encodeURIComponent(presetId), {
+    method: 'POST',
+    headers: {'X-CSRFToken': _csrfToken}
+  })
+  .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, data:d}; }); })
+  .then(function(res){
+    if (!res.ok) { showToast('Failed to apply preset', false); return; }
+    showToast('Preset applied', true);
+    _toolsLoaded = false;
+    loadToolCatalog();
+  })
+  .catch(function(e){ showToast('Network error: ' + e, false); });
+}
 </script>
+
+<!-- Tools Section (rendered before endblock so it's part of the page) -->
+<section id="section-tools"
+         style="display:none;background:#1a1d27;border-radius:8px;padding:1.5rem;
+                margin-bottom:1.5rem;border:1px solid #2d3045;">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:1rem;gap:1rem;flex-wrap:wrap;">
+    <div>
+      <h2 style="font-size:1.1rem;margin:0 0 0.25rem;color:#f0f0f0;">Tools &amp; Runtimes</h2>
+      <p style="color:#a0aec0;font-size:0.85rem;margin:0;">
+        Enable the tools your bots need. Disabled tools are not passed to any bot regardless of bot configuration.
+        Changes take effect on the next task run — no restart required.
+      </p>
+    </div>
+    <div id="tool-preset-buttons" style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;">
+      <span style="color:#a0aec0;font-size:0.8rem;">Presets:</span>
+    </div>
+  </div>
+
+  <div id="tool-catalog-loading" style="color:#a0aec0;font-size:0.9rem;padding:1rem 0;">Loading tool catalog…</div>
+
+  <div id="tool-catalog-container" style="display:none;">
+    <table style="width:100%;border-collapse:collapse;font-size:0.88rem;">
+      <thead>
+        <tr style="border-bottom:2px solid #2d3045;">
+          <th style="text-align:left;padding:0.5rem 0.75rem;color:#a0aec0;font-weight:600;width:25%;">Tool</th>
+          <th style="text-align:left;padding:0.5rem 0.75rem;color:#a0aec0;font-weight:600;">Description</th>
+          <th style="text-align:center;padding:0.5rem 0.75rem;color:#a0aec0;font-weight:600;width:70px;">Enabled</th>
+        </tr>
+      </thead>
+      <tbody id="tool-catalog-body"></tbody>
+    </table>
+  </div>
+</section>
+
+<script>
+// Wire up preset buttons and show container once catalog loads
+(function(){
+  var origLoad = loadToolCatalog;
+  loadToolCatalog = function(){
+    origLoad();
+  };
+  // Patch renderToolCatalog to also wire up presets and show container
+  var origRender = renderToolCatalog;
+  renderToolCatalog = function(data){
+    origRender(data);
+    document.getElementById('tool-catalog-loading').style.display = 'none';
+    document.getElementById('tool-catalog-container').style.display = 'block';
+    var presetDiv = document.getElementById('tool-preset-buttons');
+    if (presetDiv && data.presets) {
+      // Clear old buttons except the label span
+      while (presetDiv.children.length > 1) presetDiv.removeChild(presetDiv.lastChild);
+      data.presets.forEach(function(p){
+        var btn = document.createElement('button');
+        btn.textContent = p.label;
+        btn.title = p.description;
+        btn.onclick = function(){ applyToolPreset(p.id); };
+        btn.style.cssText = 'padding:0.3rem 0.75rem;border-radius:16px;border:1px solid #4c1d95;' +
+          'background:#2d1b69;color:#c4b5fd;cursor:pointer;font-size:0.78rem;transition:background 0.2s;';
+        presetDiv.appendChild(btn);
+      });
+    }
+  };
+})();
+</script>
+
 {% endblock %}
 

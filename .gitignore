@@ -23,3 +23,12 @@ build/
 .ruff_cache/
 .uat-logs/
 worker_node/
+
+# Personal bot configurations — import via UI, never commit
+*.bot.json
+*.bot.yaml
+# Exclude bot packs in config/bots/ except the committed examples
+config/bots/*.json
+!config/bots/example_bot.yaml
+!config/bots/assistant_bot.yaml
+!config/bots/README.md

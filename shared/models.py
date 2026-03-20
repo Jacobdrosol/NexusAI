@@ -77,6 +77,22 @@ class BotWorkflowTrigger(BaseModel):
     title: Optional[str] = None
 
 
+class BotContextAccess(BaseModel):
+    """Declares what context a bot needs injected into its task payload.
+
+    ``receives`` lists the payload keys the orchestrator should populate from upstream
+    context (e.g. ``"chat_message"``, ``"requirements"``, ``"previous_step_output"``).
+    ``can_self_serve`` lists the data sources the bot is allowed to query autonomously
+    (e.g. ``"repo"``, ``"vault"``, ``"web"``).  Both fields are advisory — the scheduler
+    uses them to decide what to include in the task payload and which tool permissions
+    to enable, but they never hard-block execution.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+    receives: List[str] = Field(default_factory=list)
+    can_self_serve: List[str] = Field(default_factory=list)
+
+
 class BotWorkflow(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     triggers: List[BotWorkflowTrigger] = Field(default_factory=list)
@@ -94,6 +110,7 @@ class Bot(BaseModel):
     backends: List[BackendConfig]
     routing_rules: Optional[Any] = None
     workflow: Optional[BotWorkflow] = None
+    context_access: Optional[BotContextAccess] = None
 
 
 class TaskMetadata(BaseModel):

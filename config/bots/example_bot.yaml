@@ -1,8 +1,12 @@
 id: bot-coder-14b
 name: Coder 14B
-role: coding
+role: coder
 priority: 10
 enabled: true
+
+# ── Backends ──────────────────────────────────────────────────────────────────
+# The scheduler tries backends in order and picks the first one whose worker is
+# online and has capacity.  Multiple backends = automatic failover.
 backends:
   - type: local_llm
     worker_id: worker-main-4070
@@ -11,11 +15,67 @@ backends:
     gpu_id: GPU-0
     params:
       temperature: 0.1
-      max_tokens: 1024
+      max_tokens: 8192
   - type: cloud_api
     provider: claude
     model: claude-3-5-sonnet
-    api_key_ref: ANTHROPIC_API_KEY
+    api_key_ref: ANTHROPIC_API_KEY   # set this secret in Settings → API Keys
     params:
       temperature: 0.1
-      max_tokens: 2048
+      max_tokens: 8192
+
+# ── Context Access ─────────────────────────────────────────────────────────────
+# Advisory: tells the orchestrator what context to inject into this bot's payload
+# and what data sources the bot may query autonomously.
+context_access:
+  receives:
+    - instruction
+    - deliverables
+    - requirements        # research output from upstream analyst bots
+  can_self_serve:
+    - repo                # semantic search over the project repository
+    - vault               # project data vault documents
+
+# ── Routing Rules ─────────────────────────────────────────────────────────────
+routing_rules:
+  chat_tool_access:
+    enabled: true
+    filesystem: true      # read/write workspace files
+    repo_search: true     # semantic repo search
+
+  # Structured output expected from this bot on every task.
+  output_contract:
+    enabled: true
+    format: json_object
+    required_fields:
+      - status            # pass | fail | skip | blocked
+      - change_summary    # plain-english description of changes made
+      - files_touched     # list of file paths created or modified
+      - artifacts         # list of deliverable descriptions
+      - risks             # list of identified risks or caveats
+      - handoff_notes     # context the next bot needs to continue
+
+# ── Workflow Triggers ──────────────────────────────────────────────────────────
+# Triggers control what happens AFTER this bot completes or fails a task.
+#
+# Linear forward: route to the next bot on success.
+# Dynamic backward: route to a specific earlier bot based on failure_type.
+#
+# IMPORTANT: target_bot_id must be an exact bot ID — never inferred.
+workflow:
+  triggers:
+    # On success, route to the tester bot.
+    - id: pass-to-tester
+      event: task_completed
+      target_bot_id: pm-tester
+      condition: has_result
+      result_field: status
+      result_equals: pass
+
+    # If the coder itself reports "blocked", route back to the PM orchestrator.
+    - id: blocked-to-pm
+      event: task_completed
+      target_bot_id: pm-orchestrator
+      condition: has_result
+      result_field: status
+      result_equals: blocked

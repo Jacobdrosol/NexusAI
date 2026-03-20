@@ -791,15 +791,29 @@ def _is_assignment_execution_artifact_file(value: str) -> bool:
 
 
 def _workstream_deliverables(payload: Dict[str, Any]) -> List[str]:
+    """Extract deliverable file paths from a task payload, walking the full source_payload chain.
+
+    Checks both top-level ``deliverables`` fields and nested ``workstream.deliverables`` at
+    every depth so trigger-spawned tasks with multi-level payloads are handled correctly.
+    PM plan step tasks store deliverables at the top level; trigger-spawned workstream tasks
+    nest them inside a ``workstream`` sub-dict.  Both structures are handled here.
+    """
     deliverables: List[str] = []
-    candidates: List[Any] = [payload.get("workstream"), payload.get("source_payload")]
-    source_payload = payload.get("source_payload")
-    if isinstance(source_payload, dict):
-        candidates.append(source_payload.get("workstream"))
-    for candidate in candidates:
-        if not isinstance(candidate, dict):
+    seen_ids: Set[int] = set()
+    for current in _iter_payload_chain(payload):
+        current_id = id(current)
+        if current_id in seen_ids:
             continue
-        deliverables.extend(_normalize_string_list(candidate.get("deliverables")))
+        seen_ids.add(current_id)
+        # Top-level deliverables (PM plan step tasks store deliverables directly here)
+        deliverables.extend(_normalize_string_list(current.get("deliverables")))
+        # Workstream sub-dict (trigger-spawned workstream tasks use this structure)
+        workstream = current.get("workstream")
+        if isinstance(workstream, dict):
+            ws_id = id(workstream)
+            if ws_id not in seen_ids:
+                seen_ids.add(ws_id)
+                deliverables.extend(_normalize_string_list(workstream.get("deliverables")))
     seen: Dict[str, None] = {}
     normalized_items: List[str] = []
     for item in deliverables:
@@ -815,7 +829,13 @@ def _is_docs_only_workstream_validation(payload: Dict[str, Any]) -> bool:
     workstream_items = _workstream_deliverables(payload)
     if not workstream_items:
         return False
-    repo_files = [item for item in workstream_items if _looks_like_repo_file(item)]
+    # Execution artifacts (test reports, coverage files, .xml/.json results) are NOT
+    # documentation files even though they may have .txt or other doc-like extensions.
+    # Exclude them before checking whether all remaining files are documentation.
+    repo_files = [
+        item for item in workstream_items
+        if _looks_like_repo_file(item) and not _is_assignment_execution_artifact_file(item)
+    ]
     if not repo_files:
         return False
     if any(_is_probable_test_file(item) for item in repo_files):
@@ -1119,19 +1139,29 @@ def _assignment_execution_language(*, applied_paths: List[str], test_files: List
 
 
 def _assignment_execution_languages(*, applied_paths: List[str], test_files: List[str], root: Path) -> List[str]:
-    prioritized = [str(path or "").strip().lower() for path in (test_files + applied_paths) if str(path or "").strip()]
+    # Language detection prioritises test files so that a single-language test suite is not
+    # overridden by source files written in a different language from the same workspace
+    # (e.g. .cs source files should not push Python test files onto dotnet test).
+    # Applied source files are used as a secondary signal when there are no test files.
+    # Repo-runtime filtering is always applied so that introducing a completely foreign
+    # runtime (e.g. Python tests in a pure .NET repo) is caught and raised as an error.
+    test_lower = [str(p or "").strip().lower() for p in test_files if str(p or "").strip()]
+    source_lower = [str(p or "").strip().lower() for p in applied_paths if str(p or "").strip()]
+    # Build candidate languages from test files alone first; fall back to source files only
+    # when no test-file signal exists.  This prevents cross-language source pollution.
+    primary = test_lower if test_lower else source_lower
     languages: List[str] = []
-    if any(path.endswith(".py") for path in prioritized):
+    if any(p.endswith(".py") for p in primary):
         languages.append("python")
-    if any(path.endswith((".ts", ".tsx", ".js", ".jsx")) for path in prioritized):
+    if any(p.endswith((".ts", ".tsx", ".js", ".jsx")) for p in primary):
         languages.append("node")
-    if any(path.endswith(".cs") for path in prioritized):
+    if any(p.endswith(".cs") for p in primary):
         languages.append("dotnet")
-    if any(path.endswith(".go") for path in prioritized):
+    if any(p.endswith(".go") for p in primary):
         languages.append("go")
-    if any(path.endswith(".rs") for path in prioritized):
+    if any(p.endswith(".rs") for p in primary):
         languages.append("rust")
-    if any(path.endswith((".cpp", ".cc", ".cxx", ".hpp", ".h")) for path in prioritized):
+    if any(p.endswith((".cpp", ".cc", ".cxx", ".hpp", ".h")) for p in primary):
         languages.append("cpp")
     if languages:
         return _filter_assignment_languages_to_repo_runtime(languages, root=root)
@@ -1703,6 +1733,50 @@ class TaskManager:
                             updated_at=row["updated_at"],
                         )
                         self._tasks[task.id] = task
+
+                # Recover orphaned tasks that were left in "running" state from a previous session.
+                # Their asyncio runner no longer exists so they would block the queue forever.
+                # Re-queue them so they are retried, or mark them failed if retries are exhausted.
+                orphaned = [t for t in self._tasks.values() if t.status == "running"]
+                if orphaned:
+                    max_retries = _settings_int("task_max_retries", 10)
+                    now = datetime.now(timezone.utc).isoformat()
+                    requeued, failed = [], []
+                    for orphan in orphaned:
+                        attempt_count = int(
+                            (orphan.metadata and getattr(orphan.metadata, "attempt_count", 0)) or 0
+                        )
+                        if attempt_count >= max_retries:
+                            orphan.status = "failed"
+                            orphan.error = TaskError(
+                                code="ORPHANED",
+                                message=(
+                                    f"Task was in running state on startup (attempt {attempt_count}); "
+                                    f"exceeded max_retries {max_retries}, marked failed."
+                                ),
+                            )
+                            failed.append(orphan.id)
+                        else:
+                            orphan.status = "queued"
+                            orphan.error = None
+                            requeued.append(orphan.id)
+                        orphan.updated_at = now
+                        await db.execute(
+                            f"UPDATE {_TASKS_TABLE} SET status = ?, updated_at = ?, error = ? WHERE id = ?",
+                            (
+                                orphan.status,
+                                orphan.updated_at,
+                                json.dumps(orphan.error.model_dump()) if orphan.error else None,
+                                orphan.id,
+                            ),
+                        )
+                    await db.commit()
+                    logger.warning(
+                        "Recovered %d orphaned running task(s) on startup — re-queued: %s, failed: %s",
+                        len(orphaned),
+                        requeued,
+                        failed,
+                    )
             self._db_ready = True
 
     async def _migrate_tasks_table(self, db: aiosqlite.Connection) -> None:
@@ -2801,7 +2875,35 @@ class TaskManager:
             if path and path not in test_files and not path.lower().startswith(("docs/", "issues/", "specification/"))
         ]
         if not test_files:
-            raise _TaskExecutionFailure("no generated test files were detected for assignment test execution")
+            # No test files means this is a non-testable workstream (e.g. documentation-only).
+            # Return a structured skip result so downstream triggers can route correctly
+            # (result_field="outcome", result_equals="skip" or "pass") rather than failing and
+            # sending the coder into an infinite fabrication loop.
+            workspace_snap = await _repo_status_snapshot(root=root, cfg=cfg)
+            return {
+                "outcome": "skip",
+                "failure_type": "not_applicable",
+                "findings": [
+                    "No automated test files were found for this workstream.",
+                    "The workstream appears to be documentation-only or does not require automated test execution.",
+                ],
+                "evidence": [
+                    "Applied files: " + (", ".join(applied_paths) if applied_paths else "none"),
+                ],
+                "handoff_notes": (
+                    "This workstream does not require automated test execution. "
+                    "Continue to the next validation stage."
+                ),
+                "artifacts": [],
+                "applied_files": applied_files,
+                "workspace": workspace_snap,
+                "usage": {},
+                "executed_commands": [],
+                "command_results": [],
+                "missing_tools": [],
+                "exit_code": None,
+                "report": "No test files detected. Workstream skipped for automated test execution.",
+            }
 
         usage_parts: List[Dict[str, Any]] = []
         command_results: List[Dict[str, Any]] = []
@@ -3241,6 +3343,13 @@ class TaskManager:
             return
 
         event = "task_completed" if task.status == "completed" else "task_failed"
+        logger.info(
+            "[TRIGGER] Evaluating triggers for task=%s bot=%s event=%s depth=%d",
+            task.id,
+            task.bot_id,
+            event,
+            trigger_depth,
+        )
         for trigger in workflow.triggers:
             try:
                 if not trigger.enabled or trigger.event != event:
@@ -3265,22 +3374,34 @@ class TaskManager:
                     )
                     if is_forward_trigger and not is_dynamic_forward_trigger:
                         logger.debug(
-                            "Skipping forward trigger %s for orchestrated task %s (orchestrator manages forward progression)",
+                            "[TRIGGER] SKIP trigger=%s task=%s reason=plan_managed_orchestrated_forward",
                             trigger.id,
                             task.id,
                         )
                         continue
                 if trigger.condition == "has_error" and task.error is None:
                     continue
+                result_field_value = None
+                if trigger.result_field and isinstance(task.result, dict):
+                    result_field_value = self._lookup_result_field(task.result, trigger.result_field)
                 if not self._trigger_matches_result(task, trigger):
+                    logger.debug(
+                        "[TRIGGER] SKIP trigger=%s task=%s reason=result_mismatch "
+                        "result_field=%s expected=%s actual=%s",
+                        trigger.id,
+                        task.id,
+                        trigger.result_field,
+                        trigger.result_equals,
+                        result_field_value,
+                    )
                     continue
                 target_bot_id = self._resolve_trigger_target_bot_id(task, trigger.target_bot_id)
                 if not target_bot_id:
-                    logger.warning("Skipping trigger %s for task %s because target bot could not be resolved", trigger.id, task.id)
+                    logger.warning("[TRIGGER] SKIP trigger=%s task=%s reason=target_bot_unresolved configured_target=%s", trigger.id, task.id, trigger.target_bot_id)
                     continue
                 payloads = self._build_trigger_payloads(task, trigger)
                 if not payloads:
-                    logger.warning("Skipping trigger %s for task %s because no payloads were produced", trigger.id, task.id)
+                    logger.warning("[TRIGGER] SKIP trigger=%s task=%s reason=no_payloads target=%s", trigger.id, task.id, target_bot_id)
                     await self._record_trigger_dispatch_skip(
                         source_task=task,
                         trigger_id=str(getattr(trigger, "id", "") or ""),
@@ -3302,7 +3423,19 @@ class TaskManager:
                     trigger_depth=trigger_depth + 1,
                     workflow_root_task_id=metadata.workflow_root_task_id or task.id,
                 )
-                if self._trigger_uses_join(trigger):
+                is_fanout = bool(str(getattr(trigger, "fan_out_field", "") or "").strip())
+                is_join = self._trigger_uses_join(trigger)
+                dispatch_type = "join" if is_join else ("fanout" if is_fanout else "direct")
+                logger.info(
+                    "[TRIGGER] FIRE trigger=%s task=%s bot=%s dispatch=%s target=%s payloads=%d",
+                    trigger.id,
+                    task.id,
+                    task.bot_id,
+                    dispatch_type,
+                    target_bot_id,
+                    len(payloads),
+                )
+                if is_join:
                     await self._dispatch_join_trigger(task, trigger, target_bot_id, payloads, next_metadata)
                     continue
                 for payload in payloads:
@@ -3312,8 +3445,20 @@ class TaskManager:
                         if branch_step_id:
                             existing = await self._find_task_by_step_id(branch_step_id, target_bot_id)
                             if existing is not None and existing.status in {"queued", "running", "blocked", "completed"}:
+                                logger.debug("[TRIGGER] SKIP trigger=%s branch_step_id=%s reason=already_exists status=%s", trigger.id, branch_step_id, existing.status)
                                 continue
                             branch_metadata = next_metadata.model_copy(update={"step_id": branch_step_id})
+                        fanout_id = payload.get("fanout_id") if isinstance(payload, dict) else None
+                        fanout_idx = payload.get("fanout_index") if isinstance(payload, dict) else None
+                        if fanout_id is not None:
+                            logger.info(
+                                "[FANOUT] trigger=%s source_task=%s fanout_id=%s branch=%s target=%s",
+                                trigger.id,
+                                task.id,
+                                fanout_id,
+                                fanout_idx,
+                                target_bot_id,
+                            )
                     await self.create_task(
                         bot_id=target_bot_id,
                         payload=payload,
@@ -3764,7 +3909,15 @@ class TaskManager:
                 continue
             existing = await self._find_task_by_step_id(join_step_id, target_bot_id)
             if existing is not None:
+                logger.debug("[JOIN] SKIP trigger=%s join_step_id=%s reason=already_fired", trigger.id, join_step_id)
                 continue
+            logger.info(
+                "[JOIN] FIRE trigger=%s source_task=%s fanout_id=%s target=%s",
+                trigger.id,
+                task.id,
+                aggregate_payload.get("fanout_id") or payload.get("fanout_id"),
+                target_bot_id,
+            )
             aggregate_metadata = next_metadata.model_copy(update={"step_id": join_step_id})
             await self.create_task(
                 bot_id=target_bot_id,
@@ -3846,9 +3999,11 @@ class TaskManager:
                 reason="missing_branch_keys",
             )
             logger.info(
-                "Join trigger %s waiting for missing branch keys for group %r: %s",
+                "[JOIN] WAIT trigger=%s fanout_id=%s completed=%d expected=%d missing=%s",
                 trigger.id,
-                group_value,
+                fanout_id or group_value,
+                len(selected_payloads),
+                expected_count,
                 ",".join(missing_branch_keys),
             )
             return None
@@ -3867,9 +4022,9 @@ class TaskManager:
                 reason="waiting_for_siblings",
             )
             logger.info(
-                "Join trigger %s waiting for sibling outputs for group %r (%s/%s)",
+                "[JOIN] WAIT trigger=%s fanout_id=%s completed=%d expected=%d",
                 trigger.id,
-                group_value,
+                fanout_id or group_value,
                 len(selected_payloads),
                 expected_count,
             )

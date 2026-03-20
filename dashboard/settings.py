@@ -323,6 +323,129 @@ def deploy_log_clear():
     return jsonify({"status": "ok"})
 
 
+# ---------------------------------------------------------------------------
+# Tool Catalog endpoints
+# ---------------------------------------------------------------------------
+
+@bp.get("/api/settings/tools")
+@login_required
+def list_tools():
+    """Return the full tool catalog with per-tool enabled status."""
+    _require_admin()
+    from shared.tool_catalog import (
+        CATEGORY_LABELS,
+        TOOL_CATALOG,
+        TOOL_CATEGORIES,
+        TOOL_PRESETS,
+        default_enabled_tools,
+    )
+
+    mgr = _get_mgr()
+    raw = mgr.get("enabled_tools")
+    if raw is None:
+        enabled_ids = set(default_enabled_tools())
+    else:
+        try:
+            enabled_ids = set(json.loads(raw) if isinstance(raw, str) else raw)
+        except Exception:
+            enabled_ids = set(default_enabled_tools())
+
+    tools_out = [
+        {
+            "id": t.id,
+            "name": t.name,
+            "category": t.category,
+            "category_label": CATEGORY_LABELS.get(t.category, t.category.title()),
+            "description": t.description,
+            "check_command": t.check_command,
+            "install_hint": t.install_hint,
+            "default_enabled": t.default_enabled,
+            "enabled": t.id in enabled_ids,
+            "presets": t.presets,
+        }
+        for t in TOOL_CATALOG
+    ]
+    return jsonify(
+        {
+            "tools": tools_out,
+            "categories": [
+                {"id": c, "label": CATEGORY_LABELS.get(c, c.title())}
+                for c in TOOL_CATEGORIES
+            ],
+            "presets": [
+                {"id": k, "label": v["label"], "description": v["description"]}
+                for k, v in TOOL_PRESETS.items()
+            ],
+            "enabled_count": sum(1 for t in tools_out if t["enabled"]),
+            "total_count": len(tools_out),
+        }
+    )
+
+
+@bp.put("/api/settings/tools")
+@login_required
+def update_tools_bulk():
+    """Bulk-update enabled tools: body ``{\"enabled_tools\": [\"id1\", \"id2\", ...]}``."""
+    _require_admin()
+    from shared.tool_catalog import TOOL_CATALOG_BY_ID
+
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict) or "enabled_tools" not in body:
+        return jsonify({"error": "Body must contain an 'enabled_tools' list."}), 400
+    raw_ids = body["enabled_tools"]
+    if not isinstance(raw_ids, list):
+        return jsonify({"error": "'enabled_tools' must be a list of tool ID strings."}), 400
+    valid_ids = [i for i in raw_ids if isinstance(i, str) and i in TOOL_CATALOG_BY_ID]
+    mgr = _get_mgr()
+    changed_by = getattr(current_user, "email", "api")
+    mgr.set("enabled_tools", json.dumps(valid_ids), changed_by)
+    return jsonify({"status": "ok", "enabled_tools": valid_ids})
+
+
+@bp.put("/api/settings/tools/<tool_id>")
+@login_required
+def update_tool(tool_id: str):
+    """Toggle a single tool on or off: body ``{\"enabled\": true|false}``."""
+    _require_admin()
+    from shared.tool_catalog import TOOL_CATALOG_BY_ID, default_enabled_tools
+
+    if tool_id not in TOOL_CATALOG_BY_ID:
+        return jsonify({"error": f"Unknown tool ID '{tool_id}'."}), 404
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict) or "enabled" not in body:
+        return jsonify({"error": "Body must contain an 'enabled' boolean."}), 400
+    mgr = _get_mgr()
+    raw = mgr.get("enabled_tools")
+    try:
+        enabled_ids: list[str] = json.loads(raw) if isinstance(raw, str) and raw else default_enabled_tools()
+    except Exception:
+        enabled_ids = default_enabled_tools()
+    if body["enabled"]:
+        if tool_id not in enabled_ids:
+            enabled_ids.append(tool_id)
+    else:
+        enabled_ids = [i for i in enabled_ids if i != tool_id]
+    changed_by = getattr(current_user, "email", "api")
+    mgr.set("enabled_tools", json.dumps(enabled_ids), changed_by)
+    return jsonify({"status": "ok", "tool_id": tool_id, "enabled": bool(body["enabled"])})
+
+
+@bp.post("/api/settings/tools/preset/<preset_id>")
+@login_required
+def apply_tool_preset(preset_id: str):
+    """Apply a tool preset: replaces enabled_tools with the preset's tool list."""
+    _require_admin()
+    from shared.tool_catalog import TOOL_PRESETS, tools_for_preset
+
+    if preset_id not in TOOL_PRESETS:
+        return jsonify({"error": f"Unknown preset '{preset_id}'."}), 404
+    tool_ids = tools_for_preset(preset_id)
+    mgr = _get_mgr()
+    changed_by = getattr(current_user, "email", "api")
+    mgr.set("enabled_tools", json.dumps(tool_ids), changed_by)
+    return jsonify({"status": "ok", "preset": preset_id, "enabled_tools": tool_ids})
+
+
 @bp.get("/api/settings/<key>")
 @login_required
 def get_setting(key: str):

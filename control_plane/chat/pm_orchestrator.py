@@ -114,6 +114,13 @@ class PMOrchestrator:
                     )
             else:
                 target_bot = self._pick_target_bot(bots, role_hint=role_hint, pm_bot_id=pm_bot.id)
+                if role_hint:
+                    logger.warning(
+                        "Step '%s' has no explicit bot_id; using heuristic fallback for role_hint='%s' → selected bot '%s'",
+                        step_id,
+                        role_hint,
+                        target_bot.id,
+                    )
             depends_ids = [
                 task_ids_by_step[d]
                 for d in (step.get("depends_on") or [])
@@ -1181,8 +1188,26 @@ class PMOrchestrator:
                 item for item in deliverables if item not in test_source_files and item not in execution_artifacts
             ]
 
+            # Detect whether all repo-like deliverables are documentation files.
+            # If so, this step should never trigger the internal test runner — convert it
+            # to a "review" step so it is treated as a validation/QC task instead.
+            repo_like_deliverables = [item for item in deliverables if self._looks_like_repo_file(item)]
+            all_deliverables_are_docs = bool(repo_like_deliverables) and all(
+                str(item).lower().endswith((".md", ".mdx", ".rst", ".adoc", ".txt"))
+                or str(item).lower().startswith("docs/")
+                for item in repo_like_deliverables
+            )
+
             if step_kind != "test_execution" or not test_source_files:
-                expanded.append(step)
+                if step_kind == "test_execution" and all_deliverables_are_docs:
+                    # Convert to review so the internal test runner never fires for docs workstreams
+                    converted_step = dict(step)
+                    converted_step["step_kind"] = "review"
+                    if str(converted_step.get("role_hint") or "").strip().lower() in {"tester", "qa"}:
+                        converted_step["role_hint"] = "reviewer"
+                    expanded.append(converted_step)
+                else:
+                    expanded.append(step)
                 step_id_map[original_step_id] = [original_step_id]
                 continue
 
