@@ -1047,3 +1047,5 @@ async def test_scheduler_appends_docs_only_assignment_scope_to_system_prompt():
     assert "Assignment scope:" in system_message
     assert "documentation-only run" in system_message.lower()
     assert "docs/blocks" in system_message
+    assert "Do not interpret documentation-only as an empty plan." in system_message
+    assert "implementation_workstreams" in system_message

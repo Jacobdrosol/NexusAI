@@ -196,6 +196,13 @@ def _assignment_scope_prompt_suffix(payload: Any) -> str:
             "This is a documentation-only run. Allowed committed outputs are documentation files only, preferably markdown. "
             "Do not propose or produce source-code changes, tests, migrations, database work, UI implementation, configuration updates, or repo files outside the requested documentation scope."
         )
+        parts.append(
+            "Do not interpret documentation-only as an empty plan. Planning bots must still return a complete documentation architecture, "
+            "implementation_plan, and implementation_workstreams for the requested docs deliverables. Those workstreams must stay documentation-only."
+        )
+        parts.append(
+            "For this kind of run, coder branches should create only the requested documentation files, while tester/security/database/ui stages may return pass/skip/not_applicable based on branch applicability rather than inventing code or tests."
+        )
     if isinstance(requested_output_paths, list) and requested_output_paths:
         normalized = [str(item).strip() for item in requested_output_paths if str(item).strip()]
         if normalized:
