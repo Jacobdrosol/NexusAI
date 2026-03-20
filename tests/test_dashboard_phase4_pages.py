@@ -1166,6 +1166,76 @@ def test_chat_orchestration_graph_api_adds_pm_root_and_trigger_parent_edges(dash
     assert by_id["task-step-4"]["step_id"] == "step_4"
     assert by_id["task-trigger-coder"]["depends_on"] == ["task-step-4"]
     assert {"from": "task-step-4", "to": "task-trigger-coder"} in body["edges"]
+    assert by_id["task-step-1"]["display_name"] == "PM Research Analyst"
+
+
+def test_chat_orchestration_graph_api_includes_reference_graph_stage_order(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_tasks(self, orchestration_id=None, statuses=None, bot_id=None, limit=200, include_content=False):
+            return [
+                {
+                    "id": "pm_assignment_entry",
+                    "bot_id": "pm-orchestrator",
+                    "status": "completed",
+                    "payload": {"title": "PM assignment intake"},
+                    "depends_on": [],
+                    "metadata": {
+                        "source": "chat_assign",
+                        "orchestration_id": "orch-stage-order",
+                    },
+                },
+                {
+                    "id": "research-1",
+                    "bot_id": "pm-research-analyst",
+                    "status": "completed",
+                    "payload": {"title": "Repo research", "research_step_index": 0},
+                    "depends_on": ["pm_assignment_entry"],
+                    "metadata": {
+                        "source": "bot_trigger",
+                        "orchestration_id": "orch-stage-order",
+                        "parent_task_id": "pm_assignment_entry",
+                    },
+                },
+            ]
+
+        def get_bot(self, bot_id):
+            if bot_id == "pm-orchestrator":
+                return {
+                    "id": "pm-orchestrator",
+                    "name": "PM Orchestrator",
+                    "workflow": {
+                        "reference_graph": {
+                            "graph_id": "pm-pipeline",
+                            "entry_bot_id": "pm-orchestrator",
+                            "current_bot_id": "pm-orchestrator",
+                            "nodes": [
+                                {"bot_id": "pm-orchestrator", "title": "PM Orchestrator", "stage_kind": "entry"},
+                                {"bot_id": "pm-research-analyst", "title": "PM Research Analyst", "stage_kind": "research"},
+                                {"bot_id": "pm-engineer", "title": "PM Engineer", "stage_kind": "engineering"},
+                            ],
+                            "edges": [
+                                {"source_bot_id": "pm-orchestrator", "target_bot_id": "pm-research-analyst", "route_kind": "forward"},
+                                {"source_bot_id": "pm-research-analyst", "target_bot_id": "pm-engineer", "route_kind": "forward"},
+                            ],
+                        }
+                    },
+                }
+            if bot_id == "pm-research-analyst":
+                return {"id": "pm-research-analyst", "name": "PM Research Analyst"}
+            return {"id": bot_id, "name": bot_id}
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/api/chat/orchestrations/orch-stage-order/graph")
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["stage_order"][:3] == ["pm-orchestrator", "pm-research-analyst", "pm-engineer"]
+    assert body["reference_graph"]["graph_id"] == "pm-pipeline"
+    nodes = {node["id"]: node for node in body["nodes"]}
+    assert nodes["pm_assignment_entry"]["display_name"] == "PM Orchestrator"
+    assert nodes["research-1"]["stage_key"] == "pm-research-analyst"
 
 
 def test_project_github_pat_api_validates_required_fields(dashboard_client):

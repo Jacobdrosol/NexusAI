@@ -113,6 +113,17 @@ def _assignment_full_recap(orchestration_id: str, tasks: list[dict[str, Any]]) -
 logger = logging.getLogger(__name__)
 
 
+def _humanize_bot_id(bot_id: str) -> str:
+    raw = str(bot_id or "").strip()
+    if not raw:
+        return "Unknown Bot"
+    cleaned = raw.replace("_", " ").replace("-", " ").strip()
+    parts = [part for part in cleaned.split() if part]
+    if not parts:
+        return raw
+    return " ".join(part.upper() if part.lower() in {"pm", "ui", "qc", "db"} else part.capitalize() for part in parts)
+
+
 def _is_failed_pm_run_message(message: dict[str, Any]) -> bool:
     metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
     if str(metadata.get("mode") or "").strip() not in {"pm_run_report", "assign_summary"}:
@@ -743,6 +754,71 @@ def api_orchestration_graph(orchestration_id: str):
         return jsonify({"error": "control plane unavailable"}), 502
 
     scoped_tasks = [task for task in tasks if isinstance(task, dict)]
+    bot_cache: Dict[str, Dict[str, Any]] = {}
+    bot_name_map: Dict[str, str] = {}
+    reference_graph: Dict[str, Any] | None = None
+
+    def _bot_doc(bot_id: str) -> Dict[str, Any] | None:
+        normalized = str(bot_id or "").strip()
+        if not normalized:
+            return None
+        if normalized in bot_cache:
+            return bot_cache[normalized]
+        try:
+            bot_doc = cp.get_bot(normalized)
+        except Exception:
+            bot_doc = None
+        bot_cache[normalized] = bot_doc if isinstance(bot_doc, dict) else {}
+        return bot_cache[normalized] or None
+
+    distinct_bot_ids = {
+        str(task.get("bot_id") or "").strip()
+        for task in scoped_tasks
+        if str(task.get("bot_id") or "").strip()
+    }
+    distinct_bot_ids.add("pm-orchestrator")
+    for bot_id in distinct_bot_ids:
+        bot_doc = _bot_doc(bot_id)
+        if bot_doc is None:
+            bot_name_map[bot_id] = _humanize_bot_id(bot_id)
+            continue
+        bot_name_map[bot_id] = str(bot_doc.get("name") or _humanize_bot_id(bot_id))
+        workflow = bot_doc.get("workflow") if isinstance(bot_doc.get("workflow"), dict) else {}
+        candidate_graph = workflow.get("reference_graph") if isinstance(workflow, dict) else None
+        if reference_graph is None and isinstance(candidate_graph, dict) and candidate_graph.get("nodes"):
+            reference_graph = candidate_graph
+
+    reference_nodes = (
+        reference_graph.get("nodes")
+        if isinstance(reference_graph, dict) and isinstance(reference_graph.get("nodes"), list)
+        else []
+    )
+    reference_node_by_bot = {
+        str(node.get("bot_id") or "").strip(): node
+        for node in reference_nodes
+        if isinstance(node, dict) and str(node.get("bot_id") or "").strip()
+    }
+    stage_order = [
+        str(node.get("bot_id") or "").strip()
+        for node in reference_nodes
+        if isinstance(node, dict) and str(node.get("bot_id") or "").strip()
+    ]
+    if not stage_order:
+        stage_order = [
+            "pm-orchestrator",
+            "pm-research-analyst",
+            "pm-engineer",
+            "pm-coder",
+            "pm-tester",
+            "pm-security-reviewer",
+            "pm-database-engineer",
+            "pm-ui-tester",
+            "pm-final-qc",
+        ]
+    for bot_id in sorted(distinct_bot_ids):
+        if bot_id and bot_id not in stage_order:
+            stage_order.append(bot_id)
+
     root_node_id = f"orchestrator::{orchestration_id}"
     has_explicit_orchestrator = any(str(task.get("bot_id") or "").strip() == "pm-orchestrator" for task in scoped_tasks)
     is_chat_assignment = any(
@@ -760,8 +836,27 @@ def api_orchestration_graph(orchestration_id: str):
                 "step_id": "pm-orchestrator",
                 "status": "completed",
                 "bot_id": "pm-orchestrator",
+                "display_name": bot_name_map.get("pm-orchestrator", "PM Orchestrator"),
+                "stage_key": "pm-orchestrator",
+                "stage_kind": str((reference_node_by_bot.get("pm-orchestrator") or {}).get("stage_kind") or "entry"),
                 "depends_on": [],
                 "synthetic": True,
+                "details": {
+                    "task_id": root_node_id,
+                    "run_id": root_node_id,
+                    "title": "PM Orchestrator",
+                    "bot_id": "pm-orchestrator",
+                    "bot_name": bot_name_map.get("pm-orchestrator", "PM Orchestrator"),
+                    "status": "completed",
+                    "source": "synthetic_root",
+                    "step_id": "pm-orchestrator",
+                    "trigger_rule_id": "",
+                    "trigger_depth": 0,
+                    "parent_task_id": "",
+                    "join_task_ids": [],
+                    "fanout_id": "",
+                    "fanout_branch_key": "",
+                },
             }
         )
 
@@ -771,6 +866,7 @@ def api_orchestration_graph(orchestration_id: str):
         payload = t.get("payload") if isinstance(t.get("payload"), dict) else {}
         step_id = str(metadata.get("step_id") or "").strip()
         bot_id_label = str(t.get("bot_id") or "").strip()
+        bot_name = bot_name_map.get(bot_id_label, _humanize_bot_id(bot_id_label))
         title = str(
             payload.get("title")
             or payload.get("workstream")
@@ -782,10 +878,24 @@ def api_orchestration_graph(orchestration_id: str):
         depends_on = [str(dep) for dep in (t.get("depends_on") or []) if str(dep).strip()]
         source = str(metadata.get("source") or "").strip().lower()
         parent_task_id = str(metadata.get("parent_task_id") or "").strip()
-
-        # For join-triggered tasks, the payload carries all sibling task IDs so the
-        # DAG can show the true fan-in instead of a single-parent edge.
+        trigger_rule_id = str(metadata.get("trigger_rule_id") or "").strip()
+        fanout_id = str(metadata.get("fanout_id") or payload.get("fanout_id") or "").strip()
+        fanout_branch_key = str(metadata.get("fanout_branch_key") or payload.get("fanout_branch_key") or "").strip()
         join_task_ids = [str(jid) for jid in (payload.get("join_task_ids") or []) if str(jid).strip()]
+        branch_index = None
+        for raw_value in (
+            payload.get("workstream_index"),
+            payload.get("research_step_index"),
+            metadata.get("workstream_index"),
+            metadata.get("research_step_index"),
+        ):
+            try:
+                if raw_value is None or str(raw_value).strip() == "":
+                    continue
+                branch_index = int(raw_value)
+                break
+            except Exception:
+                continue
 
         if not depends_on:
             if join_task_ids:
@@ -803,13 +913,44 @@ def api_orchestration_graph(orchestration_id: str):
                 "step_id": step_id,
                 "status": t.get("status"),
                 "bot_id": bot_id_label,
+                "display_name": bot_name,
+                "stage_key": bot_id_label,
+                "stage_kind": str((reference_node_by_bot.get(bot_id_label) or {}).get("stage_kind") or ""),
+                "branch_index": branch_index,
                 "depends_on": depends_on,
+                "details": {
+                    "task_id": task_id,
+                    "run_id": task_id,
+                    "title": title,
+                    "bot_id": bot_id_label,
+                    "bot_name": bot_name,
+                    "status": t.get("status"),
+                    "source": source,
+                    "step_id": step_id,
+                    "trigger_rule_id": trigger_rule_id,
+                    "trigger_depth": metadata.get("trigger_depth"),
+                    "parent_task_id": parent_task_id,
+                    "join_task_ids": join_task_ids,
+                    "fanout_id": fanout_id,
+                    "fanout_branch_key": fanout_branch_key,
+                    "workstream_index": payload.get("workstream_index"),
+                    "research_step_index": payload.get("research_step_index"),
+                    "synthetic": False,
+                },
             }
         )
         for dep in depends_on:
             edges.append({"from": str(dep), "to": task_id})
 
-    return jsonify({"orchestration_id": orchestration_id, "nodes": nodes, "edges": edges})
+    return jsonify(
+        {
+            "orchestration_id": orchestration_id,
+            "nodes": nodes,
+            "edges": edges,
+            "stage_order": stage_order,
+            "reference_graph": reference_graph or {},
+        }
+    )
 
 
 @bp.get("/api/chat/orchestrations/<orchestration_id>/recap")

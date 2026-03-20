@@ -166,8 +166,15 @@
     </div>
     <div id="messages" class="messages chat-messages">
       {% for m in messages %}
-      <div class="message {{ m.role }}" data-message-id="{{ m.id }}">
+      <div class="message {{ m.role }}{% if m.metadata and ((m.metadata.get('mode') == 'pm_run_report' and m.metadata.get('run_status') == 'failed') or m.metadata.get('mode') == 'assign_error') %} message-pm-failed{% endif %}" data-message-id="{{ m.id }}">
         <div class="message-role">{{ m.role }}</div>
+        {% if m.metadata and m.metadata.get('mode') == 'pm_run_report' and m.metadata.get('run_status') == 'failed' %}
+        <div class="message-indicator message-indicator-failed">
+          {% if m.metadata.get('operator_marked_failed') %}Operator marked PM run failed{% else %}PM pipeline failed{% endif %}
+        </div>
+        {% elif m.metadata and m.metadata.get('mode') == 'assign_error' %}
+        <div class="message-indicator message-indicator-failed">PM assignment failed</div>
+        {% endif %}
         <div class="message-body">{{ m.content }}</div>
         <div class="message-actions">
           <button class="btn btn-sm" onclick="copyMessage(this)">Copy</button>
@@ -313,10 +320,15 @@
 </div>
 
 <div id="modal-dag" class="modal" style="display:none;">
-  <div class="modal-content" style="max-width:960px;">
+  <div class="modal-content" style="max-width:1280px;">
     <h2>DAG Viewer</h2>
     <div id="dag-state" class="state-loading" style="margin-bottom:0.75rem;">Loading graph...</div>
-    <div id="dag-wrap" class="dag-wrap"></div>
+    <div class="dag-shell">
+      <div id="dag-wrap" class="dag-wrap"></div>
+      <aside id="dag-detail" class="dag-detail">
+        <div class="dag-detail-empty">Select a node to inspect run details.</div>
+      </aside>
+    </div>
     <div class="modal-actions">
       <button class="btn" onclick="hideModal('modal-dag')">Close</button>
     </div>
@@ -356,6 +368,8 @@ const initialMessages = {{ messages|tojson }};
 const taskEventMap = new Map();
 const messageMap = new Map((initialMessages || []).map((m) => [String(m.id), m]));
 let refreshTimer = null;
+let activeDagGraph = null;
+let activeDagSelectedNodeId = '';
 
 async function refreshMessagesUntilSettled(maxAttempts = 6, delayMs = 600) {
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
@@ -501,6 +515,21 @@ function renderMessageActions(meta) {
     ${markFailedBtn}
     ${dagBtn}
   `;
+}
+
+function renderMessageIndicators(meta) {
+  const mode = String(meta?.mode || '').trim();
+  const runStatus = String(meta?.run_status || '').trim().toLowerCase();
+  if (mode === 'pm_run_report' && runStatus === 'failed') {
+    const label = meta?.operator_marked_failed === true
+      ? 'Operator marked PM run failed'
+      : 'PM pipeline failed';
+    return `<div class="message-indicator message-indicator-failed">${esc(label)}</div>`;
+  }
+  if (mode === 'assign_error') {
+    return '<div class="message-indicator message-indicator-failed">PM assignment failed</div>';
+  }
+  return '';
 }
 
 function escapeHtml(text) {
@@ -666,13 +695,16 @@ function appendMessage(role, content, id='temp-' + Date.now(), meta=null) {
   const empty = container.querySelector('.empty');
   if (empty) empty.remove();
   const div = document.createElement('div');
-  div.className = 'message ' + role;
+  const failedPm = String(meta?.mode || '').trim() === 'pm_run_report' && String(meta?.run_status || '').trim().toLowerCase() === 'failed';
+  const assignError = String(meta?.mode || '').trim() === 'assign_error';
+  div.className = 'message ' + role + ((failedPm || assignError) ? ' message-pm-failed' : '');
   div.dataset.messageId = id;
   div.dataset.role = role;
   div.dataset.content = content;
   if (meta) div.dataset.meta = JSON.stringify(meta);
   div.innerHTML = `
     <div class="message-role">${role}</div>
+    ${renderMessageIndicators(meta)}
     <div class="message-body"></div>
     <div class="message-actions">
       ${renderMessageActions(meta)}
@@ -737,9 +769,23 @@ function hydrateMessageElement(el, message) {
   }
 
   const roleEl = el.querySelector('.message-role');
+  const existingIndicator = el.querySelector('.message-indicator');
   const bodyEl = el.querySelector('.message-body');
   const actionsEl = el.querySelector('.message-actions');
+  const failedPm = String(message?.metadata?.mode || '').trim() === 'pm_run_report' && String(message?.metadata?.run_status || '').trim().toLowerCase() === 'failed';
+  const assignError = String(message?.metadata?.mode || '').trim() === 'assign_error';
+  el.classList.toggle('message-pm-failed', failedPm || assignError);
   if (roleEl) roleEl.textContent = message.role || 'assistant';
+  const indicatorHtml = renderMessageIndicators(message.metadata || null);
+  if (indicatorHtml) {
+    if (existingIndicator) {
+      existingIndicator.outerHTML = indicatorHtml;
+    } else if (bodyEl) {
+      bodyEl.insertAdjacentHTML('beforebegin', indicatorHtml);
+    }
+  } else if (existingIndicator) {
+    existingIndicator.remove();
+  }
   if (bodyEl) renderMessageBody(bodyEl, message.content || '');
   if (actionsEl) actionsEl.innerHTML = renderMessageActions(message.metadata || null);
   return el;
@@ -1414,24 +1460,90 @@ async function openAssignmentRecap(orchestrationId) {
   }
 }
 
-function computeLevels(nodes) {
-  const byId = new Map(nodes.map(n => [n.id, n]));
-  const memo = new Map();
-  function level(id) {
-    if (memo.has(id)) return memo.get(id);
-    const node = byId.get(id);
-    if (!node) return 0;
-    const deps = Array.isArray(node.depends_on) ? node.depends_on : [];
-    if (!deps.length) {
-      memo.set(id, 0);
-      return 0;
-    }
-    const lv = 1 + Math.max(...deps.map(d => level(d)));
-    memo.set(id, lv);
-    return lv;
+function formatDagField(label, value) {
+  const text = Array.isArray(value)
+    ? value.filter(Boolean).join(', ')
+    : (value === null || value === undefined ? '' : String(value).trim());
+  if (!text) return '';
+  return `<div class="dag-detail-row"><strong>${esc(label)}:</strong> <span>${esc(text)}</span></div>`;
+}
+
+function stageLabelForBot(stageKey, graph) {
+  const refNodes = Array.isArray(graph?.reference_graph?.nodes) ? graph.reference_graph.nodes : [];
+  const refNode = refNodes.find((node) => String(node?.bot_id || '') === String(stageKey || ''));
+  if (refNode && refNode.title) return String(refNode.title);
+  const stageNode = (Array.isArray(graph?.nodes) ? graph.nodes : []).find((node) => String(node?.stage_key || node?.bot_id || '') === String(stageKey || ''));
+  return String(stageNode?.display_name || stageNode?.bot_id || stageKey || 'Stage');
+}
+
+function buildDagStageOrder(graph, nodes) {
+  const explicit = Array.isArray(graph?.stage_order) ? graph.stage_order.filter(Boolean).map((value) => String(value)) : [];
+  const discovered = Array.from(new Set(nodes.map((node) => String(node?.stage_key || node?.bot_id || '')).filter(Boolean)));
+  const order = [];
+  explicit.forEach((value) => {
+    if (!order.includes(value)) order.push(value);
+  });
+  discovered.forEach((value) => {
+    if (!order.includes(value)) order.push(value);
+  });
+  return order;
+}
+
+function dagNodeSortKey(node) {
+  const branchIndex = Number.isFinite(Number(node?.branch_index)) ? Number(node.branch_index) : Number.MAX_SAFE_INTEGER;
+  const title = String(node?.title || '');
+  const id = String(node?.id || '');
+  return [branchIndex, title, id];
+}
+
+function compareDagNodeOrder(a, b) {
+  const left = dagNodeSortKey(a);
+  const right = dagNodeSortKey(b);
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] < right[index]) return -1;
+    if (left[index] > right[index]) return 1;
   }
-  nodes.forEach(n => level(n.id));
-  return memo;
+  return 0;
+}
+
+function renderDagDetail(node, graph) {
+  const detail = document.getElementById('dag-detail');
+  if (!detail) return;
+  if (!node) {
+    detail.innerHTML = '<div class="dag-detail-empty">Select a node to inspect run details.</div>';
+    return;
+  }
+  const details = node.details && typeof node.details === 'object' ? node.details : {};
+  const joinIds = Array.isArray(details.join_task_ids) ? details.join_task_ids : [];
+  detail.innerHTML = `
+    <div class="dag-detail-card">
+      <h3>${esc(node.display_name || node.bot_id || node.title || node.id)}</h3>
+      ${formatDagField('Status', node.status || details.status || 'unknown')}
+      ${formatDagField('Bot ID', node.bot_id || details.bot_id || '')}
+      ${formatDagField('Task title', details.title || node.title || '')}
+      ${formatDagField('Run ID', details.run_id || node.id || '')}
+      ${formatDagField('Step ID', details.step_id || node.step_id || '')}
+      ${formatDagField('Source', details.source || '')}
+      ${formatDagField('Trigger rule', details.trigger_rule_id || '')}
+      ${formatDagField('Trigger depth', details.trigger_depth)}
+      ${formatDagField('Parent task', details.parent_task_id || '')}
+      ${formatDagField('Fanout ID', details.fanout_id || '')}
+      ${formatDagField('Fanout branch', details.fanout_branch_key || '')}
+      ${formatDagField('Join inputs', joinIds)}
+      ${formatDagField('Depends on', node.depends_on || [])}
+      ${formatDagField('Orchestration ID', graph?.orchestration_id || '')}
+    </div>
+  `;
+}
+
+function selectDagNode(nodeId) {
+  activeDagSelectedNodeId = String(nodeId || '');
+  if (!activeDagGraph) return;
+  const node = (Array.isArray(activeDagGraph.nodes) ? activeDagGraph.nodes : []).find((item) => String(item.id) === activeDagSelectedNodeId) || null;
+  document.querySelectorAll('#dag-wrap .dag-node').forEach((element) => {
+    element.classList.toggle('selected', element.dataset.nodeId === activeDagSelectedNodeId);
+  });
+  renderDagDetail(node, activeDagGraph);
 }
 
 function renderDagGraph(graph) {
@@ -1439,6 +1551,9 @@ function renderDagGraph(graph) {
   const state = document.getElementById('dag-state');
   if (!wrap || !state) return;
   const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
+  activeDagGraph = graph;
+  activeDagSelectedNodeId = '';
+  renderDagDetail(null, graph);
   if (!nodes.length) {
     state.className = 'state-empty';
     state.textContent = 'No DAG data available.';
@@ -1446,78 +1561,97 @@ function renderDagGraph(graph) {
     return;
   }
 
-  const levels = computeLevels(nodes);
-  const groups = new Map();
-  nodes.forEach((n) => {
-    const lv = levels.get(n.id) || 0;
-    if (!groups.has(lv)) groups.set(lv, []);
-    groups.get(lv).push(n);
+  const stageOrder = buildDagStageOrder(graph, nodes);
+  const stageIndex = new Map(stageOrder.map((stageKey, index) => [String(stageKey), index]));
+  const grouped = new Map(stageOrder.map((stageKey) => [stageKey, []]));
+  nodes.forEach((node) => {
+    const stageKey = String(node?.stage_key || node?.bot_id || '');
+    if (!grouped.has(stageKey)) grouped.set(stageKey, []);
+    grouped.get(stageKey).push(node);
   });
-  const sortedLevels = Array.from(groups.keys()).sort((a, b) => a - b);
+  grouped.forEach((bucket) => bucket.sort(compareDagNodeOrder));
 
-  const nodeW = 220;
-  const nodeH = 86;
-  const xGap = 70;
-  const yGap = 28;
-
+  const nodeW = 180;
+  const nodeH = 68;
+  const xGap = 64;
+  const yGap = 26;
+  const stageHeaderH = 34;
+  const padding = 20;
   const positions = new Map();
-  let totalW = 0;
-  let totalH = 0;
-  sortedLevels.forEach((lv, col) => {
-    const colNodes = groups.get(lv) || [];
-    const x = col * (nodeW + xGap);
-    colNodes.forEach((n, idx) => {
-      const y = idx * (nodeH + yGap);
-      positions.set(n.id, {x, y});
-      totalH = Math.max(totalH, y + nodeH);
+  let totalH = stageHeaderH + padding;
+
+  stageOrder.forEach((stageKey, columnIndex) => {
+    const columnNodes = grouped.get(stageKey) || [];
+    const x = padding + columnIndex * (nodeW + xGap);
+    columnNodes.forEach((node, rowIndex) => {
+      const y = padding + stageHeaderH + rowIndex * (nodeH + yGap);
+      positions.set(node.id, {x, y});
+      totalH = Math.max(totalH, y + nodeH + padding);
     });
-    totalW = Math.max(totalW, x + nodeW);
   });
+  const totalW = padding * 2 + Math.max(0, stageOrder.length - 1) * (nodeW + xGap) + nodeW;
 
   const edges = [];
-  nodes.forEach((n) => {
-    (n.depends_on || []).forEach((dep) => {
-      const a = positions.get(dep);
-      const b = positions.get(n.id);
-      if (!a || !b) return;
-      const x1 = a.x + nodeW;
-      const y1 = a.y + nodeH / 2;
-      const x2 = b.x;
-      const y2 = b.y + nodeH / 2;
-      const cx = (x1 + x2) / 2;
-      edges.push(`M ${x1} ${y1} C ${cx} ${y1}, ${cx} ${y2}, ${x2} ${y2}`);
+  nodes.forEach((node) => {
+    (node.depends_on || []).forEach((depId) => {
+      const from = positions.get(depId);
+      const to = positions.get(node.id);
+      if (!from || !to) return;
+      const fromNode = nodes.find((item) => String(item.id) === String(depId));
+      const fromStage = stageIndex.get(String(fromNode?.stage_key || fromNode?.bot_id || '')) ?? 0;
+      const toStage = stageIndex.get(String(node?.stage_key || node?.bot_id || '')) ?? 0;
+      const isBackward = toStage < fromStage;
+      const x1 = from.x + nodeW;
+      const y1 = from.y + nodeH / 2;
+      const x2 = to.x;
+      const y2 = to.y + nodeH / 2;
+      const curveOffset = Math.max(38, Math.abs(x2 - x1) / 2);
+      const c1x = isBackward ? x1 + 28 : x1 + curveOffset;
+      const c2x = isBackward ? x2 - 28 : x2 - curveOffset;
+      edges.push({
+        path: `M ${x1} ${y1} C ${c1x} ${y1}, ${c2x} ${y2}, ${x2} ${y2}`,
+        cls: isBackward ? 'dag-edge dag-edge-backward' : 'dag-edge dag-edge-forward',
+      });
     });
   });
 
+  const stageHeaders = stageOrder.map((stageKey, columnIndex) => {
+    const x = padding + columnIndex * (nodeW + xGap);
+    return `<div class="dag-stage-label" style="left:${x}px;top:${padding - 2}px;width:${nodeW}px;">${esc(stageLabelForBot(stageKey, graph))}</div>`;
+  }).join('');
+
   const edgeSvg = `
-    <svg width="${totalW + 20}" height="${totalH + 20}" viewBox="0 0 ${totalW + 20} ${totalH + 20}" class="dag-canvas">
+    <svg width="${totalW}" height="${totalH}" viewBox="0 0 ${totalW} ${totalH}" class="dag-canvas">
       <defs>
-        <marker id="dag-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
-          <path d="M0,0 L8,4 L0,8 z" fill="#5b789b"></path>
+        <marker id="dag-arrow-forward" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+          <path d="M0,0 L10,5 L0,10 z" fill="#111827"></path>
+        </marker>
+        <marker id="dag-arrow-backward" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+          <path d="M0,0 L10,5 L0,10 z" fill="#c0392b"></path>
         </marker>
       </defs>
-      ${edges.map((d) => `<path d="${d}" class="dag-edge" marker-end="url(#dag-arrow)"></path>`).join('')}
+      ${edges.map((edge) => `<path d="${edge.path}" class="${edge.cls}" marker-end="url(#${edge.cls.includes('backward') ? 'dag-arrow-backward' : 'dag-arrow-forward'})"></path>`).join('')}
     </svg>
   `;
 
-  const nodesHtml = nodes.map((n) => {
-    const p = positions.get(n.id) || {x: 0, y: 0};
-    const botLabel = esc(n.bot_id || '');
-    const titleLabel = esc(n.title || n.id);
-    // Show title (workstream/step name) on top, bot_id beneath
-    const displayTitle = (titleLabel && botLabel && titleLabel !== botLabel)
-      ? `${titleLabel}<div class="dag-subtitle">${botLabel}</div>`
-      : botLabel || titleLabel;
-    const status = esc(n.status || 'queued');
+  const nodesHtml = nodes.map((node) => {
+    const position = positions.get(node.id) || {x: padding, y: padding + stageHeaderH};
+    const statusClass = esc(String(node.status || 'queued').toLowerCase());
     return `
-      <div class="dag-node" style="left:${p.x}px;top:${p.y}px;width:${nodeW}px;height:${nodeH}px;">
-        <div class="dag-title">${displayTitle}</div>
-        <span class="badge badge-${status}">${status}</span>
-      </div>
+      <button type="button" class="dag-node ${statusClass}" data-node-id="${esc(node.id)}" style="left:${position.x}px;top:${position.y}px;width:${nodeW}px;height:${nodeH}px;">
+        <div class="dag-title">${esc(node.display_name || node.bot_id || node.title || node.id)}</div>
+      </button>
     `;
   }).join('');
 
-  wrap.innerHTML = `<div class="dag-stage" style="width:${totalW + 20}px;height:${totalH + 20}px;">${edgeSvg}${nodesHtml}</div>`;
+  wrap.innerHTML = `<div class="dag-stage" style="width:${totalW}px;height:${totalH}px;">${edgeSvg}${stageHeaders}${nodesHtml}</div>`;
+  wrap.querySelectorAll('.dag-node').forEach((element) => {
+    element.addEventListener('click', () => selectDagNode(element.dataset.nodeId || ''));
+  });
+
+  const defaultNode = nodes.find((node) => String(node.bot_id || '') === 'pm-orchestrator') || nodes[0];
+  if (defaultNode) selectDagNode(defaultNode.id);
+
   state.className = 'state-info';
   state.textContent = `Graph loaded: ${nodes.length} node(s).`;
 }
@@ -1529,6 +1663,9 @@ async function openDagViewer(orchestrationId) {
   if (!modal || !state || !wrap) return;
   modal.style.display = 'flex';
   wrap.innerHTML = '';
+  activeDagGraph = null;
+  activeDagSelectedNodeId = '';
+  renderDagDetail(null, null);
   state.className = 'state-loading';
   state.textContent = 'Loading graph...';
   const res = await fetch('/api/chat/orchestrations/' + encodeURIComponent(orchestrationId) + '/graph');

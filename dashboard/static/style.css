@@ -502,12 +502,36 @@ select.form-control {
   border-color: #b45309;
 }
 
+.message.message-pm-failed {
+  border-color: #dc2626;
+  box-shadow: inset 0 0 0 1px rgba(220, 38, 38, 0.18);
+}
+
 .message-role {
   font-size: 0.75rem;
   color: var(--muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   margin-bottom: 0.25rem;
+}
+
+.message-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-bottom: 0.5rem;
+  padding: 0.22rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.message-indicator-failed {
+  background: rgba(220, 38, 38, 0.14);
+  color: #fca5a5;
+  border: 1px solid rgba(220, 38, 38, 0.45);
 }
 
 .message-body {
@@ -1542,18 +1566,67 @@ select.form-control {
   color: var(--muted);
 }
 
+.dag-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 0.9rem;
+  align-items: stretch;
+}
+
 .dag-wrap {
   overflow: auto;
+  border: 1px solid #cfd8e3;
+  border-radius: 10px;
+  background: #f8fafc;
+  min-height: 320px;
+  max-height: 68vh;
+  padding: 0.75rem;
+}
+
+.dag-detail {
   border: 1px solid var(--line);
   border-radius: 10px;
-  background: var(--surface-3);
-  min-height: 280px;
-  max-height: 62vh;
-  padding: 0.6rem;
+  background: var(--surface-2);
+  min-height: 320px;
+  max-height: 68vh;
+  overflow: auto;
+  padding: 0.85rem;
+}
+
+.dag-detail-empty {
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.dag-detail-card h3 {
+  margin: 0 0 0.85rem;
+  font-size: 1rem;
+}
+
+.dag-detail-row {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 0.45rem;
+  margin-bottom: 0.45rem;
+  font-size: 0.84rem;
+}
+
+.dag-detail-row strong {
+  color: var(--muted);
 }
 
 .dag-stage {
   position: relative;
+}
+
+.dag-stage-label {
+  position: absolute;
+  text-align: center;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: #5b6675;
 }
 
 .dag-canvas {
@@ -1563,33 +1636,67 @@ select.form-control {
 
 .dag-edge {
   fill: none;
-  stroke: #5b789b;
-  stroke-width: 2;
+  stroke-width: 2.4;
+}
+
+.dag-edge-forward {
+  stroke: #111827;
+}
+
+.dag-edge-backward {
+  stroke: #c0392b;
 }
 
 .dag-node {
   position: absolute;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--surface);
-  padding: 0.5rem;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22);
+  appearance: none;
+  -webkit-appearance: none;
+  border: 2px solid #0f172a;
+  border-radius: 6px;
+  background: #ffffff;
+  padding: 0.65rem 0.55rem;
+  box-shadow: 0 3px 10px rgba(15, 23, 42, 0.08);
+  color: #111827;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+
+.dag-node:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.14);
+}
+
+.dag-node.selected {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.14);
+}
+
+.dag-node.completed {
+  border-left: 8px solid #059669;
+}
+
+.dag-node.failed {
+  border-left: 8px solid #c0392b;
+}
+
+.dag-node.running,
+.dag-node.queued,
+.dag-node.retried {
+  border-left: 8px solid #d97706;
 }
 
 .dag-title {
-  font-size: 0.86rem;
-  font-weight: 600;
-  margin-bottom: 0.2rem;
-}
-
-.dag-subtitle {
-  font-size: 0.75rem;
-  font-weight: 400;
-  opacity: 0.65;
-  margin-top: 0.1rem;
+  font-size: 0.88rem;
+  font-weight: 700;
+  line-height: 1.25;
 }
 
 @media (max-width: 900px) {
+  .dag-shell {
+    grid-template-columns: 1fr;
+  }
+
   nav {
     gap: 0.75rem;
     padding: 0.75rem 1rem;
