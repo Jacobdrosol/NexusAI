@@ -517,6 +517,11 @@ select.form-control {
   box-shadow: inset 0 0 0 1px rgba(5, 150, 105, 0.16);
 }
 
+.message.message-assign-request {
+  border-color: #38bdf8;
+  box-shadow: inset 0 0 0 1px rgba(56, 189, 248, 0.16);
+}
+
 .message-role {
   font-size: 0.75rem;
   color: var(--muted);
@@ -554,6 +559,12 @@ select.form-control {
   background: rgba(5, 150, 105, 0.14);
   color: #86efac;
   border: 1px solid rgba(5, 150, 105, 0.42);
+}
+
+.message-indicator-assign {
+  background: rgba(56, 189, 248, 0.14);
+  color: #bae6fd;
+  border: 1px solid rgba(56, 189, 248, 0.42);
 }
 
 .message-body {

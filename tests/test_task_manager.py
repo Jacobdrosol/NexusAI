@@ -1327,6 +1327,11 @@ async def test_trigger_payload_template_preserves_fanout_context_fields(tmp_path
         payload={
             "title": "Research branch",
             "instruction": "Research the repo branch.",
+            "assignment_request": "Build documentation only in docs/blocks for mathematics blocks.",
+            "assignment_scope": {
+                "docs_only": True,
+                "requested_output_paths": ["docs/blocks"],
+            },
             "fanout_id": "fanout:pm-orchestrator:pm-to-research-fanout:root:pm_assignment_entry",
             "fanout_count": 3,
             "fanout_branch_key": "0",
@@ -1355,6 +1360,8 @@ async def test_trigger_payload_template_preserves_fanout_context_fields(tmp_path
     assert payload["fanout_count"] == 3
     assert payload["fanout_branch_key"] == "0"
     assert payload["fanout_expected_branch_keys"] == ["0", "1", "2"]
+    assert payload["assignment_request"] == "Build documentation only in docs/blocks for mathematics blocks."
+    assert payload["assignment_scope"]["docs_only"] is True
     assert payload["project_id"] == "proj-1"
     assert payload["conversation_id"] == "conv-1"
     assert payload["orchestration_id"] == "orch-1"
@@ -5503,6 +5510,50 @@ def test_assignment_validation_rejects_non_doc_repo_artifacts_for_docs_only_requ
 
     assert "documentation-only markdown outputs" in error
     assert "GlobeIQ.Server/Controllers/UserLessonBlocksController.cs" in error
+
+
+def test_assignment_validation_rejects_non_doc_engineering_workstreams_for_docs_only_requests():
+    from control_plane.task_manager.task_manager import _assignment_validation_error
+    from shared.models import Task, TaskMetadata
+
+    task = Task(
+        id="task-docs-plan",
+        bot_id="pm-engineer",
+        payload={
+            "title": "Create documentation-only plan",
+            "instruction": (
+                "Create documentation only in docs/blocks. "
+                "Only markdown documents are allowed and no other code edited."
+            ),
+            "step_kind": "planning",
+            "deliverables": ["Implementation plan", "Coder workstreams"],
+            "assignment_scope": {
+                "docs_only": True,
+                "requested_output_paths": ["docs/blocks"],
+            },
+        },
+        metadata=TaskMetadata(source="bot_trigger", orchestration_id="orch-docs-only"),
+        created_at="2026-03-20T00:00:00+00:00",
+        updated_at="2026-03-20T00:00:00+00:00",
+    )
+
+    result = {
+        "implementation_workstreams": [
+            {
+                "title": "Backend configuration update",
+                "instruction": "Modify Program.cs and add integration tests.",
+                "deliverables": [
+                    "src/GlobeIQ.Server/Program.cs",
+                    "tests/GlobeIQ.Server.Tests/Integration/CloudflareR2ConfigurationTests.cs",
+                ],
+            }
+        ]
+    }
+
+    error = _assignment_validation_error(task, result)
+
+    assert "documentation-only markdown outputs" in error
+    assert "src/GlobeIQ.Server/Program.cs" in error
 
 
 def test_assignment_validation_allows_markdown_repo_artifacts_for_docs_only_requests():

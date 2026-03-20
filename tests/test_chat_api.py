@@ -250,8 +250,14 @@ async def test_assign_message_creates_task_graph_and_summary(cp_app):
         data = post_resp.json()
         assert data["mode"] == "assign"
         assert len(data["assignment"]["tasks"]) == 1
+        assert data["user_message"]["metadata"]["mode"] == "assign_request"
+        assert data["user_message"]["metadata"]["requested_pm_bot_id"] == "bot-pm"
+        assert data["user_message"]["metadata"]["assigned_pm_bot_id"] == "bot-pm"
+        assert data["user_message"]["metadata"]["orchestration_id"] == data["assignment"]["orchestration_id"]
         assert "Assignment queued" in data["assistant_message"]["content"]
         assert "Assigned Bot: bot-pm" in data["assistant_message"]["content"]
+        assert data["assistant_message"]["metadata"]["mode"] == "assign_pending"
+        assert data["assistant_message"]["metadata"]["assigned_pm_bot_id"] == "bot-pm"
         assert data["assignment"]["allowed_bot_ids"] == ["bot-pm", "pm-research-analyst"]
         assert data["assignment"]["tasks"][0]["metadata"]["root_pm_bot_id"] == "bot-pm"
 

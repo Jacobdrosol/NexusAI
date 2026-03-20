@@ -166,12 +166,14 @@
     </div>
     <div id="messages" class="messages chat-messages">
       {% for m in messages %}
-      <div class="message {{ m.role }}{% if m.metadata and (((m.metadata.get('mode') in ['pm_run_report', 'assign_summary', 'assign_pending']) and (m.metadata.get('run_status') == 'failed' or m.metadata.get('ingest_allowed') == false)) or m.metadata.get('mode') == 'assign_error') %} message-pm-failed{% elif m.metadata and m.metadata.get('mode') == 'assign_pending' %} message-pm-queued{% elif m.metadata and m.metadata.get('mode') == 'pm_run_report' and m.metadata.get('run_status') == 'passed' %} message-pm-passed{% endif %}" data-message-id="{{ m.id }}">
+      <div class="message {{ m.role }}{% if m.metadata and (((m.metadata.get('mode') in ['pm_run_report', 'assign_summary', 'assign_pending']) and (m.metadata.get('run_status') == 'failed' or m.metadata.get('ingest_allowed') == false)) or m.metadata.get('mode') == 'assign_error') %} message-pm-failed{% elif m.metadata and m.metadata.get('mode') == 'assign_pending' %} message-pm-queued{% elif m.metadata and m.metadata.get('mode') == 'pm_run_report' and m.metadata.get('run_status') == 'passed' %} message-pm-passed{% elif m.metadata and m.metadata.get('mode') == 'assign_request' %} message-assign-request{% endif %}" data-message-id="{{ m.id }}">
         <div class="message-role">{{ m.role }}</div>
         {% if m.metadata and (m.metadata.get('mode') in ['pm_run_report', 'assign_summary', 'assign_pending']) and (m.metadata.get('run_status') == 'failed' or m.metadata.get('ingest_allowed') == false) %}
         <div class="message-indicator message-indicator-failed">
           {% if m.metadata.get('operator_marked_failed') %}Operator marked PM run failed{% else %}PM pipeline failed{% endif %}
         </div>
+        {% elif m.metadata and m.metadata.get('mode') == 'assign_request' %}
+        <div class="message-indicator message-indicator-assign">Assignment request{% if m.metadata.get('assigned_pm_bot_id') %} -> {{ m.metadata.get('assigned_pm_bot_id') }}{% elif m.metadata.get('requested_pm_bot_id') %} -> {{ m.metadata.get('requested_pm_bot_id') }}{% endif %}</div>
         {% elif m.metadata and m.metadata.get('mode') == 'assign_pending' %}
         <div class="message-indicator message-indicator-queued">PM pipeline queued</div>
         {% elif m.metadata and m.metadata.get('mode') == 'pm_run_report' and m.metadata.get('run_status') == 'passed' %}
@@ -182,7 +184,9 @@
         <div class="message-body">{{ m.content }}</div>
         <div class="message-actions">
           <button class="btn btn-sm" onclick="copyMessage(this)">Copy</button>
+          {% if not (m.metadata and m.metadata.get('mode') in ['assign_request', 'assign_pending', 'assign_summary', 'pm_run_report', 'assign_error']) %}
           <button class="btn btn-sm" onclick="rerunMessage(this)">Re-run</button>
+          {% endif %}
           {% if not (m.metadata and (m.metadata.get('mode') in ['pm_run_report', 'assign_summary', 'assign_pending']) and (m.metadata.get('run_status') == 'failed' or m.metadata.get('ingest_allowed') == false)) %}
           <button class="btn btn-sm" onclick="sendMessageToVault(this)">Send to Vault</button>
           {% endif %}
@@ -426,6 +430,11 @@ function canIngestMessageToVault(metadata) {
   return metadata.ingest_allowed !== false || !['pm_run_report', 'assign_summary', 'assign_pending'].includes(mode);
 }
 
+function canRerunMessage(metadata) {
+  const mode = String(metadata?.mode || '').trim();
+  return !['assign_request', 'assign_pending', 'assign_summary', 'pm_run_report', 'assign_error'].includes(mode);
+}
+
 async function pollForAssignmentSummary(orchestrationId, maxAttempts = 20, delayMs = 1500) {
   if (!orchestrationId) return false;
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
@@ -500,7 +509,6 @@ function selectedContextItems() {
 
 function renderMessageActions(meta) {
   const orchestrationId = meta?.orchestration_id;
-  const mode = String(meta?.mode || '').trim();
   const passedPmRun = isPassedPmRunReport(meta);
   const dagBtn = orchestrationId
     ? `<button class="btn btn-sm" onclick="openDagViewer('${orchestrationId}')">View DAG</button>`
@@ -517,9 +525,12 @@ function renderMessageActions(meta) {
   const sendToVaultBtn = canIngestMessageToVault(meta)
     ? `<button class="btn btn-sm" onclick="sendMessageToVault(this)">Send to Vault</button>`
     : '';
+  const rerunBtn = canRerunMessage(meta)
+    ? `<button class="btn btn-sm" onclick="rerunMessage(this)">Re-run</button>`
+    : '';
   return `
     <button class="btn btn-sm" onclick="copyMessage(this)">Copy</button>
-    <button class="btn btn-sm" onclick="rerunMessage(this)">Re-run</button>
+    ${rerunBtn}
     ${sendToVaultBtn}
     ${recapBtn}
     ${applyBtn}
@@ -538,6 +549,11 @@ function renderMessageIndicators(meta) {
   }
   if (mode === 'assign_error') {
     return '<div class="message-indicator message-indicator-failed">PM assignment failed</div>';
+  }
+  if (mode === 'assign_request') {
+    const pmBotId = String(meta?.assigned_pm_bot_id || meta?.requested_pm_bot_id || '').trim();
+    const suffix = pmBotId ? ' -> ' + esc(pmBotId) : '';
+    return `<div class="message-indicator message-indicator-assign">Assignment request${suffix}</div>`;
   }
   if (mode === 'assign_pending') {
     return '<div class="message-indicator message-indicator-queued">PM pipeline queued</div>';
@@ -715,11 +731,13 @@ function appendMessage(role, content, id='temp-' + Date.now(), meta=null) {
   const assignError = String(meta?.mode || '').trim() === 'assign_error';
   const queuedPm = String(meta?.mode || '').trim() === 'assign_pending';
   const passedPm = isPassedPmRunReport(meta);
+  const assignRequest = String(meta?.mode || '').trim() === 'assign_request';
   div.className =
     'message ' + role
     + ((failedPm || assignError) ? ' message-pm-failed' : '')
     + ((!failedPm && !assignError && queuedPm) ? ' message-pm-queued' : '')
-    + ((!failedPm && !assignError && !queuedPm && passedPm) ? ' message-pm-passed' : '');
+    + ((!failedPm && !assignError && !queuedPm && passedPm) ? ' message-pm-passed' : '')
+    + ((!failedPm && !assignError && !queuedPm && !passedPm && assignRequest) ? ' message-assign-request' : '');
   div.dataset.messageId = id;
   div.dataset.role = role;
   div.dataset.content = content;
@@ -798,9 +816,11 @@ function hydrateMessageElement(el, message) {
   const assignError = String(message?.metadata?.mode || '').trim() === 'assign_error';
   const queuedPm = String(message?.metadata?.mode || '').trim() === 'assign_pending';
   const passedPm = isPassedPmRunReport(message?.metadata || null);
+  const assignRequest = String(message?.metadata?.mode || '').trim() === 'assign_request';
   el.classList.toggle('message-pm-failed', failedPm || assignError);
   el.classList.toggle('message-pm-queued', !failedPm && !assignError && queuedPm);
   el.classList.toggle('message-pm-passed', !failedPm && !assignError && !queuedPm && passedPm);
+  el.classList.toggle('message-assign-request', !failedPm && !assignError && !queuedPm && !passedPm && assignRequest);
   if (roleEl) roleEl.textContent = message.role || 'assistant';
   const indicatorHtml = renderMessageIndicators(message.metadata || null);
   if (indicatorHtml) {

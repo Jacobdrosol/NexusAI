@@ -1005,3 +1005,45 @@ async def test_scheduler_appends_output_contract_guidance_to_system_prompt():
     assert "Fields that must be populated: course_structure.units." in system_message
     assert "Missing or empty required fields will fail the run." in system_message
     assert "\"course_shell\"" in system_message
+
+
+@pytest.mark.anyio
+async def test_scheduler_appends_docs_only_assignment_scope_to_system_prompt():
+    from control_plane.scheduler.scheduler import Scheduler
+
+    bot_registry = AsyncMock()
+    bot_registry.get.return_value = Bot(
+        id="pm-engineer",
+        name="PM Engineer",
+        role="engineer",
+        system_prompt="Plan the implementation workstreams.",
+        backends=[BackendConfig(type="cloud_api", provider="openai", model="gpt-4o-mini")],
+    )
+    scheduler = Scheduler(bot_registry=bot_registry, worker_registry=AsyncMock())
+    task = Task(
+        id="task-docs-only",
+        bot_id="pm-engineer",
+        payload={
+            "instruction": "Combine the joined research outputs into a plan.",
+            "assignment_request": "Build documentation only in docs/blocks for the mathematics blocks.",
+            "assignment_scope": {
+                "docs_only": True,
+                "requested_output_paths": ["docs/blocks"],
+            },
+        },
+        status="queued",
+        created_at="now",
+        updated_at="now",
+    )
+
+    async def fake_dispatch(backend, payload, task=None):
+        return {"payload": payload}
+
+    scheduler._dispatch_backend = fake_dispatch  # type: ignore[method-assign]
+    result = await scheduler.schedule(task)
+
+    system_message = result["payload"][0]["content"]
+    assert "Plan the implementation workstreams." in system_message
+    assert "Assignment scope:" in system_message
+    assert "documentation-only run" in system_message.lower()
+    assert "docs/blocks" in system_message

@@ -159,6 +159,50 @@ def _inject_system_prompt(system_prompt: str | None, payload: Any) -> Any:
     return [{"role": "system", "content": prompt}, *messages]
 
 
+def _payload_assignment_scope(payload: Any) -> dict[str, Any]:
+    current: Any = payload
+    seen: set[int] = set()
+    for _ in range(8):
+        if not isinstance(current, dict):
+            return {}
+        current_id = id(current)
+        if current_id in seen:
+            return {}
+        seen.add(current_id)
+        scope = current.get("assignment_scope")
+        if isinstance(scope, dict):
+            return scope
+        current = current.get("source_payload")
+    return {}
+
+
+def _assignment_scope_prompt_suffix(payload: Any) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    scope = _payload_assignment_scope(payload)
+    request_text = str(scope.get("request_text") or payload.get("assignment_request") or "").strip()
+    docs_only = bool(scope.get("docs_only", False))
+    requested_output_paths = scope.get("requested_output_paths")
+    if not docs_only and not request_text and not requested_output_paths:
+        return ""
+
+    parts: list[str] = ["Assignment scope:"]
+    if request_text:
+        parts.append("Use the original assignment below as authoritative scope. Do not pivot to a different feature, file set, or recent unrelated workspace change.")
+        parts.append(_truncate_text(request_text, 1200))
+    parts.append("If repo, vault, or workspace search surfaces unrelated files, ignore them. If relevant evidence is missing, say so explicitly instead of changing scope.")
+    if docs_only:
+        parts.append(
+            "This is a documentation-only run. Allowed committed outputs are documentation files only, preferably markdown. "
+            "Do not propose or produce source-code changes, tests, migrations, database work, UI implementation, configuration updates, or repo files outside the requested documentation scope."
+        )
+    if isinstance(requested_output_paths, list) and requested_output_paths:
+        normalized = [str(item).strip() for item in requested_output_paths if str(item).strip()]
+        if normalized:
+            parts.append("Requested output paths: " + ", ".join(normalized[:8]))
+    return "\n\n" + "\n".join(parts)
+
+
 def _lookup_payload_path(payload: Any, path: str) -> Any:
     current: Any = payload
     for part in str(path or "").split("."):
@@ -696,6 +740,9 @@ def _prepare_system_prompt(bot: Any, *, bot_id: str | None = None, payload: Any 
     contract_suffix = _contract_prompt_suffix(bot).strip()
     if contract_suffix:
         suffix_parts.append(contract_suffix)
+    assignment_scope_suffix = _assignment_scope_prompt_suffix(payload).strip()
+    if assignment_scope_suffix:
+        suffix_parts.append(assignment_scope_suffix)
     if bot_id:
         connection_suffix = _connection_context_prompt_suffix(bot_id, bot, payload).strip()
         if connection_suffix:

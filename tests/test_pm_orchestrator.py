@@ -1473,6 +1473,7 @@ async def test_bootstrap_via_pm_workflow_creates_single_pm_task() -> None:
         pm_bot=pm_bot,
         context_items=[],
         project_id="proj-1",
+        bots=[pm_bot],
     )
 
     # Only ONE task created — downstream tasks driven by triggers
@@ -1484,4 +1485,51 @@ async def test_bootstrap_via_pm_workflow_creates_single_pm_task() -> None:
     assert len(result["plan"]["steps"]) == 1
     assert result["plan"]["steps"][0]["bot_id"] == "pm-orchestrator"
     assert result["orchestration_id"]  # non-empty UUID
+
+
+@pytest.mark.anyio
+async def test_bootstrap_via_pm_workflow_persists_docs_only_assignment_scope() -> None:
+    created_task = Task(
+        id="pm-entry-task",
+        bot_id="pm-orchestrator",
+        payload={},
+        status="queued",
+        created_at="2026-01-01T00:00:00+00:00",
+        updated_at="2026-01-01T00:00:00+00:00",
+    )
+    task_manager = type(
+        "TaskManager",
+        (),
+        {"create_task": AsyncMock(return_value=created_task)},
+    )()
+    orchestrator = PMOrchestrator(
+        bot_registry=None,
+        scheduler=None,
+        task_manager=task_manager,
+        chat_manager=None,
+    )
+    pm_bot = Bot(
+        id="pm-orchestrator",
+        name="PM Orchestrator",
+        role="project_manager",
+        backends=[],
+        routing_rules={"workflow": {"triggers": []}},
+    )
+
+    await orchestrator._bootstrap_assignment_via_pm_workflow(
+        conversation_id="conv-1",
+        instruction=(
+            "Build documentation only for the mathematics blocks in docs/blocks. "
+            "Only markdown documents are allowed and this should not affect the site, ui, or database."
+        ),
+        pm_bot=pm_bot,
+        context_items=[],
+        project_id="proj-1",
+        bots=[pm_bot],
+    )
+
+    payload = task_manager.create_task.await_args.kwargs["payload"]
+    assert payload["assignment_request"].startswith("Build documentation only")
+    assert payload["assignment_scope"]["docs_only"] is True
+    assert payload["assignment_scope"]["requested_output_paths"] == ["docs/blocks"]
 

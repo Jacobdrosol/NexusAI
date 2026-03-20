@@ -80,6 +80,69 @@ class PMOrchestrator:
         "pm-final-qc",
     ]
 
+    def _instruction_requests_docs_only_outputs(self, instruction: str) -> bool:
+        text = str(instruction or "").strip().lower()
+        if not text:
+            return False
+        has_docs_signal = any(
+            marker in text
+            for marker in (
+                "documentation",
+                "markdown",
+                ".md",
+                "docs/",
+                "docs\\",
+            )
+        )
+        has_docs_only_signal = any(
+            marker in text
+            for marker in (
+                "only .md",
+                "only md",
+                "only markdown",
+                "markdown only",
+                "docs only",
+                "documentation only",
+                "document-only",
+                "doc-only",
+                "document only",
+                "only .md documents",
+                "only markdown documents",
+                "no code edited",
+                "no other code edited",
+                "shouldn't affect anything with the actual site",
+                "shouldnt affect anything with the actual site",
+            )
+        )
+        return has_docs_signal and has_docs_only_signal
+
+    def _requested_output_paths(self, instruction: str) -> List[str]:
+        text = str(instruction or "").strip()
+        if not text:
+            return []
+        matches = re.findall(r"(?i)\b(?:docs|documentation)[\\/][A-Za-z0-9_.\-\\/]+", text)
+        normalized: List[str] = []
+        seen = set()
+        for match in matches:
+            value = str(match or "").strip().replace("\\", "/").strip("`\"'")
+            value = value.rstrip(".,;:)]}")
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            normalized.append(value)
+        return normalized
+
+    def _extract_assignment_scope(self, instruction: str) -> Dict[str, Any]:
+        docs_only = self._instruction_requests_docs_only_outputs(instruction)
+        scope: Dict[str, Any] = {
+            "request_text": str(instruction or "").strip(),
+            "docs_only": docs_only,
+            "requested_output_paths": self._requested_output_paths(instruction),
+            "requested_output_extensions": [".md"] if docs_only else [],
+            "forbidden_change_domains": ["code", "tests", "database", "ui"] if docs_only else [],
+        }
+        return scope
+
     async def orchestrate_assignment(
         self,
         conversation_id: str,
@@ -130,6 +193,7 @@ class PMOrchestrator:
         allowed_bot_ids = derive_allowed_bot_ids(pm_bot.id, bots)
         workflow_graph_id = bot_workflow_graph_id(pm_bot)
         pipeline_name = f"PM Workflow: {str(pm_bot.name or pm_bot.id)}".strip()
+        assignment_scope = self._extract_assignment_scope(instruction)
         pm_task = await self._task_manager.create_task(
             bot_id=pm_bot.id,
             payload={
@@ -149,6 +213,8 @@ class PMOrchestrator:
                 "conversation_id": conversation_id,
                 "orchestration_id": orchestration_id,
                 "context_items": context_items,
+                "assignment_request": str(instruction or "").strip(),
+                "assignment_scope": assignment_scope,
                 "root_pm_bot_id": pm_bot.id,
                 "allowed_bot_ids": allowed_bot_ids,
                 "workflow_graph_id": workflow_graph_id,

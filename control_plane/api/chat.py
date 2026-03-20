@@ -1363,12 +1363,20 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
     pm_orchestrator = request.app.state.pm_orchestrator
     try:
         conversation = await chat_manager.get_conversation(conversation_id)
+        assign_instruction = _extract_assign_instruction(body.content)
+        user_message_metadata = None
+        if assign_instruction is not None:
+            requested_pm_bot_id = str(body.bot_id or "").strip()
+            user_message_metadata = {
+                "mode": "assign_request",
+                "requested_pm_bot_id": requested_pm_bot_id,
+            }
         user_message = await chat_manager.add_message(
             conversation_id=conversation_id,
             role="user",
             content=body.content,
+            metadata=user_message_metadata,
         )
-        assign_instruction = _extract_assign_instruction(body.content)
         if assign_instruction is not None:
             assign_bot_id = str(body.bot_id or "").strip()
             if not assign_bot_id:
@@ -1403,6 +1411,15 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                 context_items=resolved_context,
                 project_id=conversation.project_id,
             )
+            user_message = await chat_manager.update_message(
+                user_message.id,
+                metadata={
+                    "mode": "assign_request",
+                    "requested_pm_bot_id": assign_bot_id,
+                    "assigned_pm_bot_id": str(assignment.get("pm_bot_id") or assign_bot_id or ""),
+                    "orchestration_id": assignment.get("orchestration_id"),
+                },
+            )
             assistant_message = await chat_manager.add_message(
                 conversation_id=conversation_id,
                 role="assistant",
@@ -1417,6 +1434,7 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                     "mode": "assign_pending",
                     "orchestration_id": assignment.get("orchestration_id"),
                     "task_count": len(assignment.get("tasks", [])),
+                    "assigned_pm_bot_id": str(assignment.get("pm_bot_id") or assign_bot_id or ""),
                 },
             )
 
@@ -1555,13 +1573,21 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
     async def event_gen() -> AsyncGenerator[str, None]:
         try:
             conversation = await chat_manager.get_conversation(conversation_id)
+            assign_instruction = _extract_assign_instruction(body.content)
+            user_message_metadata = None
+            if assign_instruction is not None:
+                requested_pm_bot_id = str(body.bot_id or "").strip()
+                user_message_metadata = {
+                    "mode": "assign_request",
+                    "requested_pm_bot_id": requested_pm_bot_id,
+                }
             user_message = await chat_manager.add_message(
                 conversation_id=conversation_id,
                 role="user",
                 content=body.content,
+                metadata=user_message_metadata,
             )
             yield f"event: user_message\ndata: {user_message.model_dump_json()}\n\n"
-            assign_instruction = _extract_assign_instruction(body.content)
             if assign_instruction is not None:
                 yield 'event: status\ndata: {"phase":"planning","label":"Planning task graph..."}\n\n'
                 assign_bot_id = str(body.bot_id or "").strip()
@@ -1616,6 +1642,16 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                     context_items=resolved_context,
                     project_id=conversation.project_id,
                 )
+                user_message = await chat_manager.update_message(
+                    user_message.id,
+                    metadata={
+                        "mode": "assign_request",
+                        "requested_pm_bot_id": assign_bot_id,
+                        "assigned_pm_bot_id": str(assignment.get("pm_bot_id") or assign_bot_id or ""),
+                        "orchestration_id": assignment.get("orchestration_id"),
+                    },
+                )
+                yield f"event: user_message\ndata: {user_message.model_dump_json()}\n\n"
                 graph_payload = {
                     "orchestration_id": assignment.get("orchestration_id"),
                     "tasks": assignment.get("tasks", []),

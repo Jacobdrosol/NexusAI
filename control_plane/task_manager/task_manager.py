@@ -858,7 +858,25 @@ def _iter_payload_chain(payload: Dict[str, Any], *, max_depth: int = 8):
         current = current.get("source_payload")
 
 
+def _payload_assignment_scope(payload: Dict[str, Any]) -> Dict[str, Any]:
+    for current in _iter_payload_chain(payload):
+        scope = current.get("assignment_scope")
+        if isinstance(scope, dict):
+            return scope
+    return {}
+
+
+def _payload_is_docs_only_request(payload: Dict[str, Any]) -> bool:
+    scope = _payload_assignment_scope(payload)
+    if bool(scope.get("docs_only", False)):
+        return True
+    return _payload_requests_docs_only_outputs(payload)
+
+
 def _payload_requests_docs_only_outputs(payload: Dict[str, Any]) -> bool:
+    scope = _payload_assignment_scope(payload)
+    if bool(scope.get("docs_only", False)):
+        return True
     texts: List[str] = []
     for current in _iter_payload_chain(payload):
         for field in ("title", "instruction"):
@@ -939,6 +957,26 @@ def _result_repo_output_candidate_paths(result: Any) -> List[str]:
             continue
         paths.append(path)
     return paths
+
+
+def _docs_only_workstream_violations(result: Any) -> List[str]:
+    if not isinstance(result, dict):
+        return []
+    workstreams = result.get("implementation_workstreams")
+    if not isinstance(workstreams, list):
+        return []
+    violations: List[str] = []
+    for workstream in workstreams:
+        if not isinstance(workstream, dict):
+            continue
+        title = str(workstream.get("title") or "").strip() or "unnamed workstream"
+        for item in _normalize_string_list(workstream.get("deliverables")):
+            normalized = str(item or "").strip().replace("\\", "/").strip("`")
+            if not normalized:
+                continue
+            if _looks_like_repo_file(normalized) and not _is_documentation_like_repo_file(normalized):
+                violations.append(f"{title}: {normalized}")
+    return violations
 
 
 def _looks_like_assignment_test_execution_payload(payload: Dict[str, Any]) -> bool:
@@ -1427,7 +1465,15 @@ def _assignment_validation_error(task: Task, result: Any) -> str:
     text = _extract_result_output_text(result).strip()
     lowered = text.lower()
 
-    if _payload_requests_docs_only_outputs(payload):
+    if _payload_is_docs_only_request(payload):
+        docs_only_workstream_violations = _docs_only_workstream_violations(result)
+        if docs_only_workstream_violations:
+            preview = ", ".join(docs_only_workstream_violations[:5])
+            return (
+                "Assignment explicitly requested documentation-only markdown outputs, "
+                "but the planning result created non-document implementation workstreams: "
+                f"{preview}."
+            )
         unexpected_paths = _result_non_document_repo_paths(result)
         if unexpected_paths:
             preview = ", ".join(unexpected_paths[:5])
@@ -3891,6 +3937,8 @@ class TaskManager:
                 "fanout_expected_branch_keys",
                 "depends_on_steps",
                 "context_items",
+                "assignment_request",
+                "assignment_scope",
                 "global_acceptance_criteria",
                 "global_quality_gates",
                 "global_risks",
@@ -3990,6 +4038,8 @@ class TaskManager:
             "fanout_expected_branch_keys",
             "depends_on_steps",
             "context_items",
+            "assignment_request",
+            "assignment_scope",
             "global_acceptance_criteria",
             "global_quality_gates",
             "global_risks",
