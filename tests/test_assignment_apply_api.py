@@ -26,7 +26,14 @@ async def test_apply_assignment_writes_extracted_files_into_repo_workspace(cp_ap
         )
         await client.post(
             "/v1/bots",
-            json={"id": "pm-coder", "name": "PM Coder", "role": "coder", "backends": [], "enabled": True},
+            json={
+                "id": "pm-coder",
+                "name": "PM Coder",
+                "role": "coder",
+                "backends": [],
+                "enabled": True,
+                "execution_policy": {"repo_output_mode": "allow"},
+            },
         )
 
         task = await cp_app.state.task_manager.create_task(
@@ -141,3 +148,88 @@ async def test_completed_task_records_extracted_file_artifact(cp_app):
     assert file_artifact is not None
     assert file_artifact.path == "src/generated/demo.ts"
     assert "export const demo = true" in str(file_artifact.content or "")
+
+
+@pytest.mark.anyio
+async def test_apply_assignment_ignores_repo_files_from_deny_policy_bots(cp_app, tmp_path, monkeypatch):
+    project_id = "proj-apply-policy"
+    orchestration_id = "orch-apply-policy"
+    base_root = tmp_path / "repo-workspaces"
+    root = base_root / project_id / "repo"
+    root.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-b", "main"], cwd=root, check=True, capture_output=True)
+    monkeypatch.setenv("NEXUSAI_REPO_WORKSPACE_ROOT", str(base_root))
+    cp_app.state.task_manager._schedule_ready_tasks = AsyncMock(return_value=None)
+
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        await client.post("/v1/projects", json={"id": project_id, "name": "Apply Policy Project", "mode": "isolated"})
+        await client.put(
+            f"/v1/projects/{project_id}/repo/workspace",
+            json={"enabled": True, "managed_path_mode": True},
+        )
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "pm-coder-apply",
+                "name": "PM Coder",
+                "role": "coder",
+                "backends": [],
+                "enabled": True,
+                "execution_policy": {"repo_output_mode": "allow"},
+            },
+        )
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "pm-tester-apply",
+                "name": "PM Tester",
+                "role": "tester",
+                "backends": [],
+                "enabled": True,
+                "execution_policy": {"repo_output_mode": "deny"},
+            },
+        )
+
+        coder_task = await cp_app.state.task_manager.create_task(
+            bot_id="pm-coder-apply",
+            payload={"title": "Write doc"},
+            metadata=TaskMetadata(
+                source="chat_assign",
+                project_id=project_id,
+                orchestration_id=orchestration_id,
+                conversation_id="conv-policy",
+            ),
+        )
+        await cp_app.state.task_manager.update_status(
+            coder_task.id,
+            "completed",
+            result={"output": "File: docs/allowed.md\n```md\n# allowed\n```\n"},
+        )
+
+        tester_task = await cp_app.state.task_manager.create_task(
+            bot_id="pm-tester-apply",
+            payload={"title": "Do not write files"},
+            metadata=TaskMetadata(
+                source="bot_trigger",
+                project_id=project_id,
+                orchestration_id=orchestration_id,
+                conversation_id="conv-policy",
+            ),
+        )
+        await cp_app.state.task_manager.update_status(
+            tester_task.id,
+            "completed",
+            result={"output": "File: docs/blocked.md\n```md\n# blocked\n```\n"},
+        )
+
+        resp = await client.post(
+            f"/v1/projects/{project_id}/repo/workspace/apply-assignment",
+            json={"orchestration_id": orchestration_id},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    applied_paths = [item["path"] for item in body["applied_files"]]
+    assert applied_paths == ["docs/allowed.md"]
+    assert (root / "docs" / "allowed.md").exists()
+    assert not (root / "docs" / "blocked.md").exists()

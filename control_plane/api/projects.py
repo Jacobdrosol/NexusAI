@@ -29,6 +29,7 @@ from control_plane.repo_workspace import (
 )
 from control_plane.security.guards import enforce_body_size, enforce_rate_limit
 from control_plane.task_result_files import extract_file_candidates
+from shared.bot_policy import bot_allows_repo_output
 from shared.exceptions import APIKeyNotFoundError, ProjectNotFoundError
 from shared.models import Project, Task, TaskMetadata
 
@@ -2643,6 +2644,7 @@ async def apply_assignment_to_project_repo_workspace(
 ) -> dict:
     project_registry = request.app.state.project_registry
     task_manager = request.app.state.task_manager
+    bot_registry = request.app.state.bot_registry
     try:
         project = await project_registry.get(project_id)
     except ProjectNotFoundError as e:
@@ -2675,6 +2677,18 @@ async def apply_assignment_to_project_repo_workspace(
             status_code=409,
             detail="assignment is still in progress; wait for all tasks to finish before applying files",
         )
+
+    allowed_repo_output_bot_ids: set[str] = set()
+    for bot_id in {str(task.bot_id or "").strip() for task in scoped_tasks if str(task.bot_id or "").strip()}:
+        try:
+            bot = await bot_registry.get(bot_id)
+        except Exception:
+            continue
+        if bot_allows_repo_output(bot):
+            allowed_repo_output_bot_ids.add(bot_id)
+    scoped_tasks = [
+        task for task in scoped_tasks if str(task.bot_id or "").strip() in allowed_repo_output_bot_ids
+    ]
 
     candidates = _assignment_file_candidates(scoped_tasks)
     if not candidates:

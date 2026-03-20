@@ -80,6 +80,8 @@ def _bot_to_dict(b: Bot) -> dict[str, Any]:
         "connection_context": routing_rules.get("connection_context") if isinstance(routing_rules, dict) else None,
         "launch_profile": routing_rules.get("launch_profile") if isinstance(routing_rules, dict) else None,
         "external_trigger": routing_rules.get("external_trigger") if isinstance(routing_rules, dict) else None,
+        "assignment_capabilities": None,
+        "execution_policy": None,
     }
 
 
@@ -295,6 +297,8 @@ def api_create_bot():
                 "enabled": bool(data.get("enabled", True)),
                 "system_prompt": data.get("system_prompt"),
                 "backends": data.get("backends", []),
+                "assignment_capabilities": data.get("assignment_capabilities"),
+                "execution_policy": data.get("execution_policy"),
                 "routing_rules": _merge_routing_rules(data),
                 "workflow": data.get("workflow"),
             }
@@ -412,6 +416,8 @@ def api_import_bot():
         "enabled": bool(bot_payload.get("enabled", True)),
         "system_prompt": bot_payload.get("system_prompt"),
         "backends": bot_payload.get("backends", []),
+        "assignment_capabilities": bot_payload.get("assignment_capabilities"),
+        "execution_policy": bot_payload.get("execution_policy"),
         "routing_rules": _merge_routing_rules(bot_payload, existing=bot_payload.get("routing_rules")),
         "workflow": bot_payload.get("workflow"),
     }

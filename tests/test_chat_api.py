@@ -209,70 +209,37 @@ async def test_stream_message_persists_partial_when_final_missing(cp_app):
 
 @pytest.mark.anyio
 async def test_assign_message_creates_task_graph_and_summary(cp_app):
-    async def _schedule(task):
-        payload = task.payload if isinstance(task.payload, dict) else {}
-        if str(task.id).startswith("pm-plan-"):
-            return {
-                "output": (
-                    '{"steps":['
-                    '{"id":"step_1","title":"Spec","instruction":"Write spec","role_hint":"researcher","step_kind":"specification","deliverables":["docs/auth_spec.md"],"evidence_requirements":["Proposed repo file artifacts for each listed deliverable"]},'
-                    '{"id":"step_2","title":"Implement","instruction":"Build API","role_hint":"coder","step_kind":"repo_change","deliverables":["src/auth/api.py"],"depends_on":["step_1"],"evidence_requirements":["Proposed repo file artifacts or patches for changed files"]},'
-                    '{"id":"step_3","title":"Test","instruction":"Run tests","role_hint":"tester","step_kind":"test_execution","depends_on":["step_2"],"evidence_requirements":["Executed test command output"]},'
-                    '{"id":"step_4","title":"Review","instruction":"Review diff","role_hint":"reviewer","step_kind":"review","depends_on":["step_3"],"evidence_requirements":["Concrete findings tied to changed files or executed evidence"]}'
-                    "]} "
-                )
-            }
-        step_kind = str(payload.get("step_kind") or "").strip().lower()
-        if step_kind == "specification":
-            return {
-                "output": (
-                    "Deliverable: docs/auth_spec.md\n"
-                    "```markdown\n"
-                    "# Auth API Spec\n"
-                    "\n"
-                    "- Token issuance\n"
-                    "- Validation rules\n"
-                    "```\n"
-                )
-            }
-        if step_kind == "repo_change":
-            return {
-                "output": (
-                    "Deliverable: src/auth/api.py\n"
-                    "```python\n"
-                    "def create_token(user_id):\n"
-                    "    return f'token:{user_id}'\n"
-                    "```\n"
-                )
-            }
-        if step_kind == "test_execution":
-            return {"output": "=== test session starts ===\ncollected 2 items\n2 passed in 0.10s\ncoverage 96%\n"}
-        if step_kind == "review":
-            return {
-                "output": (
-                    "Review findings ordered by severity\n"
-                    "No findings.\n"
-                    "Files reviewed: src/auth/api.py\n"
-                )
-            }
-        return {"output": "Specification and acceptance criteria complete."}
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"steps": []})
 
-    cp_app.state.scheduler.schedule = AsyncMock(side_effect=_schedule)
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
         create_resp = await client.post("/v1/chat/conversations", json={"title": "Assign Chat"})
         conversation_id = create_resp.json()["id"]
 
         await client.post(
             "/v1/bots",
-            json={"id": "bot-pm", "name": "PM Bot", "role": "pm", "backends": [], "enabled": True},
+            json={
+                "id": "bot-pm",
+                "name": "PM Bot",
+                "role": "pm",
+                "backends": [],
+                "enabled": True,
+                "assignment_capabilities": {"is_project_manager": True},
+                "workflow": {
+                    "triggers": [
+                        {
+                            "id": "pm-to-research",
+                            "event": "task_completed",
+                            "target_bot_id": "pm-research-analyst",
+                            "condition": "has_result",
+                            "fan_out_field": "source_result.steps",
+                        }
+                    ]
+                },
+            },
         )
         await client.post(
             "/v1/bots",
-            json={"id": "bot-code", "name": "Code Bot", "role": "coder", "backends": [], "enabled": True},
-        )
-        await client.post(
-            "/v1/bots",
-            json={"id": "bot-test", "name": "Test Bot", "role": "tester", "backends": [], "enabled": True},
+            json={"id": "pm-research-analyst", "name": "Research Bot", "role": "researcher", "backends": [], "enabled": True},
         )
 
         post_resp = await client.post(
@@ -282,14 +249,16 @@ async def test_assign_message_creates_task_graph_and_summary(cp_app):
         assert post_resp.status_code == 200
         data = post_resp.json()
         assert data["mode"] == "assign"
-        assert len(data["assignment"]["tasks"]) >= 2
+        assert len(data["assignment"]["tasks"]) == 1
         assert "Assignment queued" in data["assistant_message"]["content"]
         assert "Assigned Bot: bot-pm" in data["assistant_message"]["content"]
+        assert data["assignment"]["allowed_bot_ids"] == ["bot-pm", "pm-research-analyst"]
+        assert data["assignment"]["tasks"][0]["metadata"]["root_pm_bot_id"] == "bot-pm"
 
         tasks_resp = await client.get("/v1/tasks")
         assert tasks_resp.status_code == 200
         tasks = tasks_resp.json()
-        assert len(tasks) >= 2
+        assert len(tasks) >= 1
         first_payload = tasks[0].get("payload") if isinstance(tasks[0], dict) else {}
         assert isinstance(first_payload, dict)
         assert "acceptance_criteria" in first_payload
@@ -298,39 +267,22 @@ async def test_assign_message_creates_task_graph_and_summary(cp_app):
         for _ in range(60):
             messages_resp = await client.get(f"/v1/chat/conversations/{conversation_id}/messages")
             messages = messages_resp.json()
-            if any("Assignment summary" in str(message.get("content") or "") for message in messages):
+            if any(str((message.get("metadata") or {}).get("mode") or "") == "pm_run_report" for message in messages):
                 break
             await asyncio.sleep(0.05)
 
-        assert any("Assignment summary" in str(message.get("content") or "") for message in messages)
+        run_report = next(message for message in messages if str((message.get("metadata") or {}).get("mode") or "") == "pm_run_report")
+        assert "PM run passed." in str(run_report.get("content") or "")
+        assert run_report["metadata"]["run_status"] == "passed"
 
 
 @pytest.mark.anyio
 async def test_stream_assign_emits_task_events(cp_app):
-    async def _schedule(task):
+    async def _schedule(_task):
         import asyncio
 
-        if str(task.id).startswith("pm-plan-"):
-            return {
-                "output": (
-                    '{"steps":['
-                    '{"id":"step_1","title":"Design","instruction":"Design API","role_hint":"coder","step_kind":"planning","depends_on":[]},'
-                    '{"id":"step_2","title":"Implement","instruction":"Implement API","role_hint":"coder","step_kind":"repo_change","deliverables":["src/api/routes.py"],"depends_on":["step_1"]}'
-                    "]} "
-                )
-            }
         await asyncio.sleep(0.05)
-        payload = task.payload if isinstance(task.payload, dict) else {}
-        if str(payload.get("step_kind") or "") == "repo_change":
-            return {
-                "output": (
-                    "Deliverable: src/api/routes.py\n"
-                    "```python\n"
-                    "router = []\n"
-                    "```\n"
-                )
-            }
-        return {"output": f"done:{task.id}"}
+        return {"steps": []}
 
     cp_app.state.scheduler.schedule = AsyncMock(side_effect=_schedule)
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
@@ -339,11 +291,29 @@ async def test_stream_assign_emits_task_events(cp_app):
 
         await client.post(
             "/v1/bots",
-            json={"id": "bot-pm", "name": "PM Bot", "role": "pm", "backends": [], "enabled": True},
+            json={
+                "id": "bot-pm",
+                "name": "PM Bot",
+                "role": "pm",
+                "backends": [],
+                "enabled": True,
+                "assignment_capabilities": {"is_project_manager": True},
+                "workflow": {
+                    "triggers": [
+                        {
+                            "id": "pm-to-research",
+                            "event": "task_completed",
+                            "target_bot_id": "pm-research-analyst",
+                            "condition": "has_result",
+                            "fan_out_field": "source_result.steps",
+                        }
+                    ]
+                },
+            },
         )
         await client.post(
             "/v1/bots",
-            json={"id": "bot-code", "name": "Code Bot", "role": "coder", "backends": [], "enabled": True},
+            json={"id": "pm-research-analyst", "name": "Research Bot", "role": "researcher", "backends": [], "enabled": True},
         )
 
         stream_resp = await client.post(
@@ -372,6 +342,7 @@ async def test_assign_message_bootstraps_selected_pm_bot_workflow(cp_app):
                 "role": "pm",
                 "backends": [],
                 "enabled": True,
+                "assignment_capabilities": {"is_project_manager": True},
                 "workflow": {
                     "triggers": [
                         {
@@ -401,6 +372,101 @@ async def test_assign_message_bootstraps_selected_pm_bot_workflow(cp_app):
         assert data["assignment"]["tasks"][0]["bot_id"] == "pm-workflow"
         assert data["assignment"]["plan"]["steps"][0]["bot_id"] == "pm-workflow"
         assert "Assigned Bot: pm-workflow" in data["assistant_message"]["content"]
+        assert set(data["assignment"]["tasks"][0]["metadata"]["allowed_bot_ids"]) == {"pm-research-analyst", "pm-workflow"}
+
+
+@pytest.mark.anyio
+async def test_assign_message_requires_explicit_pm_bot_selection(cp_app):
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        create_resp = await client.post("/v1/chat/conversations", json={"title": "Assign Missing PM"})
+        conversation_id = create_resp.json()["id"]
+
+        post_resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={"content": "@assign Build the workflow"},
+        )
+
+    assert post_resp.status_code == 400
+    assert "explicit PM bot selection" in str(post_resp.json().get("detail") or "")
+
+
+@pytest.mark.anyio
+async def test_assign_message_rejects_non_pm_bot(cp_app):
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        create_resp = await client.post("/v1/chat/conversations", json={"title": "Assign Wrong Bot"})
+        conversation_id = create_resp.json()["id"]
+
+        await client.post(
+            "/v1/bots",
+            json={"id": "not-pm", "name": "Not PM", "role": "assistant", "backends": [], "enabled": True},
+        )
+
+        post_resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={"content": "@assign Build the workflow", "bot_id": "not-pm"},
+        )
+
+    assert post_resp.status_code == 404
+    assert "not configured as a project manager" in str(post_resp.json().get("detail") or "")
+
+
+@pytest.mark.anyio
+async def test_mark_pm_run_failed_reclassifies_run_report(cp_app):
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"steps": []})
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        create_resp = await client.post("/v1/chat/conversations", json={"title": "Assign Reclassify"})
+        conversation_id = create_resp.json()["id"]
+
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "pm-workflow",
+                "name": "PM Workflow",
+                "role": "pm",
+                "backends": [],
+                "enabled": True,
+                "assignment_capabilities": {"is_project_manager": True},
+                "workflow": {
+                    "triggers": [
+                        {
+                            "id": "pm-to-research",
+                            "event": "task_completed",
+                            "target_bot_id": "pm-research-analyst",
+                            "condition": "has_result",
+                            "fan_out_field": "source_result.steps",
+                        }
+                    ]
+                },
+            },
+        )
+        await client.post(
+            "/v1/bots",
+            json={"id": "pm-research-analyst", "name": "Research Bot", "role": "researcher", "backends": [], "enabled": True},
+        )
+
+        assign_resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={"content": "@assign Build the workflow", "bot_id": "pm-workflow"},
+        )
+        orchestration_id = assign_resp.json()["assignment"]["orchestration_id"]
+
+        for _ in range(60):
+            messages_resp = await client.get(f"/v1/chat/conversations/{conversation_id}/messages")
+            messages = messages_resp.json()
+            if any(str((message.get("metadata") or {}).get("mode") or "") == "pm_run_report" for message in messages):
+                break
+            await asyncio.sleep(0.05)
+
+        reclassify_resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/orchestrations/{orchestration_id}/mark-failed"
+        )
+
+    assert reclassify_resp.status_code == 200
+    body = reclassify_resp.json()
+    assert body["metadata"]["run_status"] == "failed"
+    assert body["metadata"]["ingest_allowed"] is False
+    assert body["metadata"]["operator_marked_failed"] is True
+    assert body["content"].startswith("PM run failed")
 
 
 @pytest.mark.anyio
@@ -413,28 +479,7 @@ async def test_assign_message_includes_repo_profile_context_for_language_selecti
     (workspace_root / "App" / "Pages" / "Index.razor").write_text("<h1>Hello</h1>\n", encoding="utf-8")
     (workspace_root / "App" / "Services" / "LessonService.cs").write_text("public class LessonService {}\n", encoding="utf-8")
 
-    captured_prompt = {}
-
-    async def _schedule(task):
-        if str(task.id).startswith("pm-plan-"):
-            captured_prompt["prompt"] = task.payload
-            return {
-                "output": (
-                    '{"steps":['
-                    '{"id":"step_1","title":"Implement page","instruction":"Build the lesson page","role_hint":"coder","step_kind":"repo_change","deliverables":["App/Pages/Lesson.razor"]}'
-                    "]}"
-                )
-            }
-        return {
-            "output": (
-                "Deliverable: App/Pages/Lesson.razor\n"
-                "```razor\n"
-                "<h1>Lesson</h1>\n"
-                "```\n"
-            )
-        }
-
-    cp_app.state.scheduler.schedule = AsyncMock(side_effect=_schedule)
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"steps": []})
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
         create_project = await client.post(
             "/v1/projects",
@@ -479,6 +524,18 @@ async def test_assign_message_includes_repo_profile_context_for_language_selecti
                 "role": "pm",
                 "backends": [],
                 "enabled": True,
+                "assignment_capabilities": {"is_project_manager": True},
+                "workflow": {
+                    "triggers": [
+                        {
+                            "id": "pm-to-research",
+                            "event": "task_completed",
+                            "target_bot_id": "pm-research-analyst",
+                            "condition": "has_result",
+                            "fan_out_field": "source_result.steps",
+                        }
+                    ]
+                },
                 "routing_rules": {
                     "chat_tool_access": {
                         "enabled": True,
@@ -490,7 +547,7 @@ async def test_assign_message_includes_repo_profile_context_for_language_selecti
         )
         await client.post(
             "/v1/bots",
-            json={"id": "bot-code-profile", "name": "Code Profile Bot", "role": "coder", "backends": [], "enabled": True},
+            json={"id": "pm-research-analyst", "name": "Research Bot", "role": "researcher", "backends": [], "enabled": True},
         )
 
         resp = await client.post(
@@ -499,13 +556,14 @@ async def test_assign_message_includes_repo_profile_context_for_language_selecti
         )
         assert resp.status_code == 200
 
-    prompt = captured_prompt.get("prompt")
-    assert isinstance(prompt, list)
-    user_prompt = str(prompt[1]["content"])
-    assert "[repo-profile] Workspace stack summary" in user_prompt
-    assert "Likely primary stack: .NET" in user_prompt
-    assert "Pages and UI components should prefer `.razor` files" in user_prompt
-    assert "App/Pages/Index.razor" in user_prompt
+    tasks = await cp_app.state.task_manager.list_tasks()
+    root_task = next(task for task in tasks if task.bot_id == "bot-pm-profile")
+    context_items = root_task.payload.get("context_items")
+    joined_context = "\n".join(context_items or [])
+    assert "[repo-profile] Workspace stack summary" in joined_context
+    assert "Likely primary stack: .NET" in joined_context
+    assert "Pages and UI components should prefer `.razor` files" in joined_context
+    assert "App/Pages/Index.razor" in joined_context
 
 
 @pytest.mark.anyio
@@ -515,28 +573,7 @@ async def test_assign_message_includes_repo_profile_context_without_filesystem_t
     (workspace_root / "GlobeIQ.sln").write_text("Microsoft Visual Studio Solution File\n", encoding="utf-8")
     (workspace_root / "App" / "App.csproj").write_text("<Project Sdk=\"Microsoft.NET.Sdk.Web\"></Project>\n", encoding="utf-8")
 
-    captured_prompt = {}
-
-    async def _schedule(task):
-        if str(task.id).startswith("pm-plan-"):
-            captured_prompt["prompt"] = task.payload
-            return {
-                "output": (
-                    '{"steps":['
-                    '{"id":"step_1","title":"Implement page","instruction":"Build the lesson page","role_hint":"coder","step_kind":"repo_change","deliverables":["App/Pages/Lesson.razor"]}'
-                    "]}"
-                )
-            }
-        return {
-            "output": (
-                "Deliverable: App/Pages/Lesson.razor\n"
-                "```razor\n"
-                "<h1>Lesson</h1>\n"
-                "```\n"
-            )
-        }
-
-    cp_app.state.scheduler.schedule = AsyncMock(side_effect=_schedule)
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"steps": []})
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
         create_project = await client.post(
             "/v1/projects",
@@ -581,6 +618,18 @@ async def test_assign_message_includes_repo_profile_context_without_filesystem_t
                 "role": "pm",
                 "backends": [],
                 "enabled": True,
+                "assignment_capabilities": {"is_project_manager": True},
+                "workflow": {
+                    "triggers": [
+                        {
+                            "id": "pm-to-research",
+                            "event": "task_completed",
+                            "target_bot_id": "pm-research-analyst",
+                            "condition": "has_result",
+                            "fan_out_field": "source_result.steps",
+                        }
+                    ]
+                },
                 "routing_rules": {
                     "chat_tool_access": {
                         "enabled": True,
@@ -592,7 +641,7 @@ async def test_assign_message_includes_repo_profile_context_without_filesystem_t
         )
         await client.post(
             "/v1/bots",
-            json={"id": "bot-code-profile-no-fs", "name": "Code Profile Bot No FS", "role": "coder", "backends": [], "enabled": True},
+            json={"id": "pm-research-analyst", "name": "Research Bot", "role": "researcher", "backends": [], "enabled": True},
         )
 
         resp = await client.post(
@@ -601,11 +650,12 @@ async def test_assign_message_includes_repo_profile_context_without_filesystem_t
         )
         assert resp.status_code == 200
 
-    prompt = captured_prompt.get("prompt")
-    assert isinstance(prompt, list)
-    user_prompt = str(prompt[1]["content"])
-    assert "[repo-profile] Workspace stack summary" in user_prompt
-    assert "Likely primary stack: .NET" in user_prompt
+    tasks = await cp_app.state.task_manager.list_tasks()
+    root_task = next(task for task in tasks if task.bot_id == "bot-pm-profile-no-fs")
+    context_items = root_task.payload.get("context_items")
+    joined_context = "\n".join(context_items or [])
+    assert "[repo-profile] Workspace stack summary" in joined_context
+    assert "Likely primary stack: .NET" in joined_context
 
 
 @pytest.mark.anyio
@@ -615,21 +665,7 @@ async def test_assign_message_includes_repo_profile_context_even_when_tool_acces
     (workspace_root / "GlobeIQ.sln").write_text("Microsoft Visual Studio Solution File\n", encoding="utf-8")
     (workspace_root / "App" / "App.csproj").write_text("<Project Sdk=\"Microsoft.NET.Sdk.Web\"></Project>\n", encoding="utf-8")
 
-    captured_prompt = {}
-
-    async def _schedule(task):
-        if str(task.id).startswith("pm-plan-"):
-            captured_prompt["prompt"] = task.payload
-            return {
-                "output": (
-                    '{"steps":['
-                    '{"id":"step_1","title":"Implement page","instruction":"Build the lesson page","role_hint":"coder","step_kind":"repo_change","deliverables":["App/Pages/Lesson.razor"]}'
-                    "]}"
-                )
-            }
-        return {"output": "ok"}
-
-    cp_app.state.scheduler.schedule = AsyncMock(side_effect=_schedule)
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"steps": []})
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
         create_project = await client.post(
             "/v1/projects",
@@ -674,6 +710,18 @@ async def test_assign_message_includes_repo_profile_context_even_when_tool_acces
                 "role": "pm",
                 "backends": [],
                 "enabled": True,
+                "assignment_capabilities": {"is_project_manager": True},
+                "workflow": {
+                    "triggers": [
+                        {
+                            "id": "pm-to-research",
+                            "event": "task_completed",
+                            "target_bot_id": "pm-research-analyst",
+                            "condition": "has_result",
+                            "fan_out_field": "source_result.steps",
+                        }
+                    ]
+                },
                 "routing_rules": {
                     "chat_tool_access": {
                         "enabled": False,
@@ -683,6 +731,10 @@ async def test_assign_message_includes_repo_profile_context_even_when_tool_acces
                 },
             },
         )
+        await client.post(
+            "/v1/bots",
+            json={"id": "pm-research-analyst", "name": "Research Bot", "role": "researcher", "backends": [], "enabled": True},
+        )
 
         resp = await client.post(
             f"/v1/chat/conversations/{conversation_id}/messages",
@@ -690,11 +742,12 @@ async def test_assign_message_includes_repo_profile_context_even_when_tool_acces
         )
         assert resp.status_code == 200
 
-    prompt = captured_prompt.get("prompt")
-    assert isinstance(prompt, list)
-    user_prompt = str(prompt[1]["content"])
-    assert "[repo-profile] Workspace stack summary" in user_prompt
-    assert "Likely primary stack: .NET" in user_prompt
+    tasks = await cp_app.state.task_manager.list_tasks()
+    root_task = next(task for task in tasks if task.bot_id == "bot-pm-profile-disabled")
+    context_items = root_task.payload.get("context_items")
+    joined_context = "\n".join(context_items or [])
+    assert "[repo-profile] Workspace stack summary" in joined_context
+    assert "Likely primary stack: .NET" in joined_context
 
 
 @pytest.mark.anyio

@@ -14,6 +14,7 @@ import aiosqlite
 
 from control_plane.sqlite_helpers import open_sqlite
 from control_plane.task_result_files import extract_file_candidates
+from shared.bot_policy import bot_allows_repo_output
 from shared.exceptions import TaskNotFoundError
 from shared.models import BotRun, BotRunArtifact, Task, TaskError, TaskMetadata
 from shared.settings_manager import SettingsManager
@@ -919,6 +920,22 @@ def _result_non_document_repo_paths(result: Any) -> List[str]:
         if _is_assignment_execution_artifact_file(path) or _is_probable_test_file(path):
             continue
         if _is_documentation_like_repo_file(path):
+            continue
+        paths.append(path)
+    return paths
+
+
+def _result_repo_output_candidate_paths(result: Any) -> List[str]:
+    paths: List[str] = []
+    seen: Set[str] = set()
+    for candidate in extract_file_candidates(result):
+        path = str(candidate.get("path") or "").strip().replace("\\", "/").strip("`")
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        if not _looks_like_repo_file(path):
+            continue
+        if _is_assignment_execution_artifact_file(path):
             continue
         paths.append(path)
     return paths
@@ -2639,6 +2656,18 @@ class TaskManager:
             validation_error = _assignment_validation_error(task, result)
             if validation_error:
                 raise ValueError(validation_error)
+            if self._bot_registry is not None:
+                try:
+                    bot = await self._bot_registry.get(task.bot_id)
+                except Exception:
+                    bot = None
+                if bot is not None and not bot_allows_repo_output(bot):
+                    repo_output_paths = _result_repo_output_candidate_paths(result)
+                    if repo_output_paths:
+                        preview = ", ".join(repo_output_paths[:5])
+                        raise ValueError(
+                            f"Bot '{task.bot_id}' is not allowed to emit repo file outputs, but returned: {preview}."
+                        )
             payload = task.payload if isinstance(task.payload, dict) else {}
             if (
                 self._project_registry is not None
@@ -2863,6 +2892,18 @@ class TaskManager:
             and str(candidate.metadata.source or "").strip().lower() in {"chat_assign", "auto_retry", "bot_trigger"}
         ]
         scoped_tasks = self._filter_assignment_tasks_to_branch_scope(scoped_tasks, payload)
+        if self._bot_registry is not None:
+            allowed_repo_output_bot_ids: Set[str] = set()
+            for bot_id in {str(candidate.bot_id or "").strip() for candidate in scoped_tasks if str(candidate.bot_id or "").strip()}:
+                try:
+                    bot = await self._bot_registry.get(bot_id)
+                except Exception:
+                    continue
+                if bot_allows_repo_output(bot):
+                    allowed_repo_output_bot_ids.add(bot_id)
+            scoped_tasks = [
+                candidate for candidate in scoped_tasks if str(candidate.bot_id or "").strip() in allowed_repo_output_bot_ids
+            ]
         file_candidates = _assignment_file_candidates(scoped_tasks)
         if not file_candidates:
             raise _TaskExecutionFailure("no assignment file outputs were detected to run tests against")
@@ -3318,6 +3359,113 @@ class TaskManager:
             ),
         }
 
+    def _trigger_depth_limit(self, metadata: TaskMetadata) -> int:
+        default_limit = max(1, _settings_int("bot_trigger_max_depth", 60))
+        if str(metadata.run_class or "").strip().lower() == "pm_assignment":
+            return max(default_limit, _settings_int("pm_assignment_trigger_max_depth", 120))
+        return default_limit
+
+    def _workflow_route_failure_type(self, task: Task) -> str:
+        if isinstance(task.result, dict):
+            for key in ("failure_type", "outcome", "status"):
+                value = str(task.result.get(key) or "").strip().lower()
+                if value:
+                    return value
+        if task.error is not None:
+            code = str(task.error.code or "").strip().lower()
+            if code:
+                return code
+            message = str(task.error.message or "").strip().lower()
+            if message:
+                return message[:80]
+        return str(task.status or "unknown").strip().lower() or "unknown"
+
+    def _workflow_route_branch_identity(self, task: Task, payload: Any) -> str:
+        metadata = task.metadata or TaskMetadata()
+        if isinstance(payload, dict):
+            fanout_id = str(self._resolve_fanout_id(payload) or "").strip()
+            branch_key = str(self._resolve_join_branch_key(payload) or "").strip()
+            if fanout_id or branch_key:
+                return "|".join(part for part in (fanout_id, branch_key) if part)
+            workstream_index = str(payload.get("workstream_index") or "").strip()
+            if workstream_index:
+                return workstream_index
+        return str(metadata.step_id or metadata.original_task_id or task.id).strip() or task.id
+
+    async def _workflow_route_repeat_count(
+        self,
+        source_task: Task,
+        target_bot_id: str,
+        payload: Any,
+    ) -> int:
+        metadata = source_task.metadata or TaskMetadata()
+        root_id = metadata.workflow_root_task_id or source_task.id
+        orchestration_id = str(metadata.orchestration_id or "").strip()
+        branch_identity = self._workflow_route_branch_identity(source_task, payload)
+        failure_type = self._workflow_route_failure_type(source_task)
+
+        async with self._lock:
+            tasks = list(self._tasks.values())
+
+        repeat_count = 0
+        for candidate in tasks:
+            if candidate.bot_id != target_bot_id:
+                continue
+            candidate_meta = candidate.metadata or TaskMetadata()
+            if str(candidate_meta.source or "").strip().lower() != "bot_trigger":
+                continue
+            if (candidate_meta.workflow_root_task_id or candidate.id) != root_id:
+                continue
+            if str(candidate_meta.orchestration_id or "").strip() != orchestration_id:
+                continue
+            parent_task_id = str(candidate_meta.parent_task_id or "").strip()
+            if not parent_task_id:
+                continue
+            parent_task = next((item for item in tasks if item.id == parent_task_id), None)
+            if parent_task is None or parent_task.bot_id != source_task.bot_id:
+                continue
+            if self._workflow_route_failure_type(parent_task) != failure_type:
+                continue
+            if self._workflow_route_branch_identity(parent_task, candidate.payload) != branch_identity:
+                continue
+            repeat_count += 1
+        return repeat_count
+
+    async def _record_workflow_loop_guard_stop(
+        self,
+        source_task: Task,
+        trigger_id: str,
+        target_bot_id: str,
+        branch_identity: str,
+        failure_type: str,
+        repeat_count: int,
+        repeat_limit: int,
+        reason: str,
+    ) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        details = {
+            "trigger_id": trigger_id,
+            "target_bot_id": target_bot_id,
+            "branch_identity": branch_identity,
+            "failure_type": failure_type,
+            "repeat_count": repeat_count,
+            "repeat_limit": repeat_limit,
+            "reason": reason,
+        }
+        await self._upsert_artifact(
+            BotRunArtifact(
+                id=f"{source_task.id}:loop-guard:{trigger_id or 'unknown'}:{target_bot_id or 'unknown'}",
+                run_id=source_task.id,
+                task_id=source_task.id,
+                bot_id=source_task.bot_id,
+                kind="error",
+                label="Workflow Loop Guard Stop",
+                content=json.dumps(details, indent=2, sort_keys=True),
+                metadata=details,
+                created_at=now,
+            )
+        )
+
     async def _dispatch_triggers(self, task: Task) -> None:
         if self._bot_registry is None:
             return
@@ -3330,17 +3478,27 @@ class TaskManager:
             return
 
         metadata = task.metadata or TaskMetadata()
-        
+
         # For plan-managed orchestrated tasks, skip forward triggers because the PM plan already
         # defines the main forward path. Backward-triggered remediation tasks are created with
         # source="bot_trigger"; those are allowed to flow forward again so repair loops can close.
         source = str(metadata.source or "").strip().lower()
         is_plan_managed_orchestrated = source in {"chat_assign", "auto_retry"}
-        
+
         trigger_depth = int(metadata.trigger_depth or 0)
-        max_depth = max(1, _settings_int("bot_trigger_max_depth", 20))
+        max_depth = self._trigger_depth_limit(metadata)
         if trigger_depth >= max_depth:
             logger.warning("Skipping bot triggers for task %s due to depth cap %s", task.id, max_depth)
+            await self._record_workflow_loop_guard_stop(
+                source_task=task,
+                trigger_id="depth-limit",
+                target_bot_id="",
+                branch_identity=self._workflow_route_branch_identity(task, task.payload),
+                failure_type=self._workflow_route_failure_type(task),
+                repeat_count=trigger_depth,
+                repeat_limit=max_depth,
+                reason="trigger_depth_limit",
+            )
             return
 
         event = "task_completed" if task.status == "completed" else "task_failed"
@@ -3400,6 +3558,36 @@ class TaskManager:
                 if not target_bot_id:
                     logger.warning("[TRIGGER] SKIP trigger=%s task=%s reason=target_bot_unresolved configured_target=%s", trigger.id, task.id, trigger.target_bot_id)
                     continue
+                allowed_bot_ids = [
+                    str(item).strip()
+                    for item in (metadata.allowed_bot_ids or [])
+                    if str(item).strip()
+                ]
+                if allowed_bot_ids and target_bot_id not in allowed_bot_ids:
+                    message = (
+                        f"trigger target '{target_bot_id}' is outside the orchestration allowlist for "
+                        f"workflow '{metadata.workflow_graph_id or metadata.orchestration_id or 'unknown'}'"
+                    )
+                    logger.warning("[TRIGGER] SKIP trigger=%s task=%s reason=target_not_allowed target=%s", trigger.id, task.id, target_bot_id)
+                    await self._record_trigger_dispatch_error(
+                        source_task=task,
+                        trigger_id=str(getattr(trigger, "id", "") or ""),
+                        target_bot_id=str(target_bot_id or ""),
+                        message=message,
+                    )
+                    continue
+                if self._bot_registry is not None:
+                    try:
+                        await self._bot_registry.get(target_bot_id)
+                    except Exception:
+                        logger.warning("[TRIGGER] SKIP trigger=%s task=%s reason=target_bot_missing target=%s", trigger.id, task.id, target_bot_id)
+                        await self._record_trigger_dispatch_error(
+                            source_task=task,
+                            trigger_id=str(getattr(trigger, "id", "") or ""),
+                            target_bot_id=str(target_bot_id or ""),
+                            message=f"trigger target bot '{target_bot_id}' does not exist or is unavailable",
+                        )
+                        continue
                 payloads = self._build_trigger_payloads(task, trigger)
                 if not payloads:
                     logger.warning("[TRIGGER] SKIP trigger=%s task=%s reason=no_payloads target=%s", trigger.id, task.id, target_bot_id)
@@ -3423,6 +3611,10 @@ class TaskManager:
                     trigger_rule_id=trigger.id,
                     trigger_depth=trigger_depth + 1,
                     workflow_root_task_id=metadata.workflow_root_task_id or task.id,
+                    root_pm_bot_id=metadata.root_pm_bot_id,
+                    allowed_bot_ids=list(allowed_bot_ids),
+                    workflow_graph_id=metadata.workflow_graph_id,
+                    run_class=metadata.run_class,
                 )
                 is_fanout = bool(str(getattr(trigger, "fan_out_field", "") or "").strip())
                 is_join = self._trigger_uses_join(trigger)
@@ -3442,6 +3634,28 @@ class TaskManager:
                 for payload in payloads:
                     branch_metadata = next_metadata
                     if isinstance(payload, dict):
+                        if str(metadata.run_class or "").strip().lower() == "pm_assignment":
+                            repeat_limit = max(1, _settings_int("workflow_route_repeat_limit", 6))
+                            repeat_count = await self._workflow_route_repeat_count(task, target_bot_id, payload)
+                            if repeat_count >= repeat_limit:
+                                logger.warning(
+                                    "[TRIGGER] SKIP trigger=%s task=%s reason=workflow_loop_guard target=%s repeat_count=%s",
+                                    trigger.id,
+                                    task.id,
+                                    target_bot_id,
+                                    repeat_count,
+                                )
+                                await self._record_workflow_loop_guard_stop(
+                                    source_task=task,
+                                    trigger_id=str(getattr(trigger, "id", "") or ""),
+                                    target_bot_id=str(target_bot_id or ""),
+                                    branch_identity=self._workflow_route_branch_identity(task, payload),
+                                    failure_type=self._workflow_route_failure_type(task),
+                                    repeat_count=repeat_count,
+                                    repeat_limit=repeat_limit,
+                                    reason="route_repeat_limit",
+                                )
+                                continue
                         branch_step_id = self._fanout_step_id(task, trigger, payload)
                         if branch_step_id:
                             existing = await self._find_task_by_step_id(branch_step_id, target_bot_id)

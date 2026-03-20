@@ -22,6 +22,10 @@
       <div><strong>Role:</strong> {{ bot.role }}</div>
       <div><strong>Priority:</strong> {{ bot.priority }}</div>
       <div><strong>Enabled:</strong> {{ 'yes' if bot.enabled else 'no' }}</div>
+      <div><strong>Project Manager:</strong> {{ 'yes' if bot.assignment_capabilities and bot.assignment_capabilities.is_project_manager else 'no' }}</div>
+      <div><strong>Repo Output:</strong> {{ (bot.execution_policy.repo_output_mode if bot.execution_policy else 'deny') or 'deny' }}</div>
+      <div><strong>DB Actions:</strong> {{ 'allowed' if bot.execution_policy and bot.execution_policy.can_apply_db_actions else 'blocked' }}</div>
+      <div><strong>Run Result Ingest:</strong> {{ 'allowed' if not bot.execution_policy or bot.execution_policy.allow_run_result_ingest else 'blocked' }}</div>
       {% if bot.system_prompt %}
       <div style="margin-top:0.5rem;"><strong>System Prompt:</strong></div>
       <pre style="white-space:pre-wrap;margin-top:0.25rem;">{{ bot.system_prompt }}</pre>
@@ -80,6 +84,46 @@
 </section>
 
 <section class="panel" style="margin-bottom:1rem;">
+  <h2 class="panel-title">Execution Policy</h2>
+  {% set policy = bot.execution_policy if bot.execution_policy else {} %}
+  {% set db_policy = policy.db_action_policy if policy and policy.db_action_policy else {} %}
+  <div class="split-grid" style="grid-template-columns:1fr 1fr;">
+    <div>
+      <div><strong>Repo Output Mode:</strong> {{ policy.repo_output_mode if policy else 'deny' }}</div>
+      <div><strong>Can Apply DB Actions:</strong> {{ 'yes' if policy and policy.can_apply_db_actions else 'no' }}</div>
+      <div><strong>Allow Run Result Ingest:</strong> {{ 'yes' if not policy or policy.allow_run_result_ingest else 'no' }}</div>
+    </div>
+    <div>
+      <div><strong>DB Schema Introspection:</strong> {{ 'yes' if db_policy and db_policy.allow_schema_introspection else 'no' }}</div>
+      <div><strong>Additive Schema Changes:</strong> {{ 'yes' if db_policy and db_policy.allow_additive_schema_changes else 'no' }}</div>
+      <div><strong>Migration Apply:</strong> {{ 'yes' if db_policy and db_policy.allow_migration_apply else 'no' }}</div>
+      <div><strong>Mark Migration Applied:</strong> {{ 'yes' if db_policy and db_policy.allow_migration_mark_applied else 'no' }}</div>
+      <div><strong>Safe Metadata Updates:</strong> {{ 'yes' if db_policy and db_policy.allow_safe_metadata_updates else 'no' }}</div>
+    </div>
+  </div>
+  {% if db_policy and db_policy.denied_statement_types %}
+  <div style="margin-top:0.75rem;">
+    <strong>Denied SQL Statement Types</strong>
+    <ul style="margin-top:0.35rem;padding-left:1.2rem;">
+      {% for item in db_policy.denied_statement_types %}
+      <li><code>{{ item }}</code></li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+  {% if db_policy and db_policy.denied_sql_patterns %}
+  <div style="margin-top:0.75rem;">
+    <strong>Denied SQL Patterns</strong>
+    <ul style="margin-top:0.35rem;padding-left:1.2rem;">
+      {% for item in db_policy.denied_sql_patterns %}
+      <li><code>{{ item }}</code></li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+</section>
+
+<section class="panel" style="margin-bottom:1rem;">
   <div class="page-header" style="margin-bottom:0.75rem;">
     <h2 class="panel-title">Workflow Orchestration</h2>
     <div>
@@ -115,6 +159,58 @@
       {% endfor %}
     </tbody>
   </table>
+</section>
+
+<section class="panel" style="margin-bottom:1rem;">
+  <h2 class="panel-title">Workflow Reference Graph</h2>
+  {% set graph = bot.workflow.reference_graph if bot.workflow and bot.workflow.reference_graph else None %}
+  {% if graph %}
+  <div class="split-grid" style="grid-template-columns:1fr 1fr;gap:1rem;">
+    <div>
+      <div><strong>Graph ID:</strong> {{ graph.graph_id }}</div>
+      <div><strong>Entry Bot:</strong> {{ graph.entry_bot_id }}</div>
+      <div><strong>Current Bot:</strong> {{ graph.current_bot_id }}</div>
+      <div style="margin-top:0.75rem;"><strong>Pipeline Nodes</strong></div>
+      <ul style="margin-top:0.35rem;padding-left:1.2rem;">
+        {% for node in graph.nodes %}
+        <li>
+          {% if node.bot_id == graph.current_bot_id %}<strong>{% endif %}
+          <code>{{ node.bot_id }}</code>{% if node.title %} - {{ node.title }}{% endif %}{% if node.stage_kind %} ({{ node.stage_kind }}){% endif %}
+          {% if node.bot_id == graph.current_bot_id %}</strong>{% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+    <div>
+      <div><strong>Incoming / Previous Bots</strong></div>
+      <ul style="margin-top:0.35rem;padding-left:1.2rem;">
+        {% for edge in graph.edges if edge.target_bot_id == graph.current_bot_id %}
+        <li><code>{{ edge.source_bot_id }}</code> via {{ edge.title or edge.trigger_id or edge.route_kind }}</li>
+        {% else %}
+        <li class="empty">No incoming edges</li>
+        {% endfor %}
+      </ul>
+      <div style="margin-top:0.75rem;"><strong>Outgoing / Next Bots</strong></div>
+      <ul style="margin-top:0.35rem;padding-left:1.2rem;">
+        {% for edge in graph.edges if edge.source_bot_id == graph.current_bot_id and edge.route_kind == 'forward' %}
+        <li><code>{{ edge.target_bot_id }}</code> via {{ edge.title or edge.trigger_id or edge.route_kind }}</li>
+        {% else %}
+        <li class="empty">No forward edges</li>
+        {% endfor %}
+      </ul>
+      <div style="margin-top:0.75rem;"><strong>Backward / Failure Routes</strong></div>
+      <ul style="margin-top:0.35rem;padding-left:1.2rem;">
+        {% for edge in graph.edges if edge.source_bot_id == graph.current_bot_id and edge.route_kind == 'backward' %}
+        <li><code>{{ edge.target_bot_id }}</code> via {{ edge.title or edge.trigger_id or edge.route_kind }}</li>
+        {% else %}
+        <li class="empty">No backward edges</li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+  {% else %}
+  <div class="empty">No workflow reference graph configured for this bot.</div>
+  {% endif %}
 </section>
 
 <section class="panel" style="margin-bottom:1rem;">

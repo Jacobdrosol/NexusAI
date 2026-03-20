@@ -591,6 +591,13 @@ class CPClient:
     def post_message(self, conversation_id: str, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return self._post(f"/v1/chat/conversations/{conversation_id}/messages", body, timeout=_CHAT_TIMEOUT)
 
+    def mark_pm_run_failed(self, conversation_id: str, orchestration_id: str) -> Optional[Dict[str, Any]]:
+        return self._post(
+            f"/v1/chat/conversations/{conversation_id}/orchestrations/{orchestration_id}/mark-failed",
+            {},
+            timeout=_CHAT_TIMEOUT,
+        )
+
     def update_conversation_tool_access(
         self,
         conversation_id: str,

@@ -172,12 +172,17 @@
         <div class="message-actions">
           <button class="btn btn-sm" onclick="copyMessage(this)">Copy</button>
           <button class="btn btn-sm" onclick="rerunMessage(this)">Re-run</button>
+          {% if not (m.metadata and m.metadata.get('mode') == 'pm_run_report' and m.metadata.get('run_status') == 'failed') %}
           <button class="btn btn-sm" onclick="sendMessageToVault(this)">Send to Vault</button>
+          {% endif %}
           {% if m.metadata and m.metadata.get('orchestration_id') %}
           <button class="btn btn-sm" onclick="openAssignmentRecap('{{ m.metadata.get('orchestration_id') }}')">Full Recap</button>
           {% endif %}
-          {% if selected_conversation and selected_conversation.project_id and m.metadata and m.metadata.get('orchestration_id') and m.metadata.get('mode') in ['assign_summary', 'assign_error'] %}
+          {% if selected_conversation and selected_conversation.project_id and m.metadata and m.metadata.get('orchestration_id') and m.metadata.get('mode') == 'pm_run_report' and m.metadata.get('run_status') == 'passed' %}
           <button class="btn btn-sm" onclick="applyAssignmentFiles('{{ m.metadata.get('orchestration_id') }}', this)">Apply Files to Repo</button>
+          {% endif %}
+          {% if m.metadata and m.metadata.get('orchestration_id') and m.metadata.get('mode') == 'pm_run_report' and m.metadata.get('run_status') == 'passed' %}
+          <button class="btn btn-sm btn-danger" onclick="markPmRunFailed('{{ m.metadata.get('orchestration_id') }}', this)">Mark Failed</button>
           {% endif %}
           {% if m.metadata and m.metadata.get('orchestration_id') %}
           <button class="btn btn-sm" onclick="openDagViewer('{{ m.metadata.get('orchestration_id') }}')">View DAG</button>
@@ -291,10 +296,10 @@
         <textarea class="form-control" name="instruction" rows="5" placeholder="Break this work into tasks and assign..." required></textarea>
       </div>
       <div class="form-group">
-        <label>PM Bot (optional)</label>
-        <select class="form-control" name="bot_id">
-          <option value="">Auto-detect PM bot</option>
-          {% for b in bots %}
+        <label>PM Bot</label>
+        <select class="form-control" name="bot_id" required>
+          <option value="">Select a project manager bot</option>
+          {% for b in bots if b.assignment_capabilities and b.assignment_capabilities.is_project_manager %}
           <option value="{{ b.id }}">{{ b.name }} ({{ b.role }})</option>
           {% endfor %}
         </select>
@@ -368,8 +373,32 @@ function hasAssignmentTerminalMessage(orchestrationId) {
     const metadata = message && typeof message === 'object' ? message.metadata : null;
     if (!metadata || typeof metadata !== 'object') return false;
     if (String(metadata.orchestration_id || '') !== String(orchestrationId)) return false;
-    return metadata.mode === 'assign_summary' || metadata.mode === 'assign_error';
+    return isAssignmentTerminalMessage(metadata);
   });
+}
+
+function isAssignmentTerminalMessage(metadata) {
+  const mode = String(metadata?.mode || '').trim();
+  return mode === 'pm_run_report' || mode === 'assign_error';
+}
+
+function isPassedPmRunReport(metadata) {
+  if (!metadata || typeof metadata !== 'object') return false;
+  return String(metadata.mode || '').trim() === 'pm_run_report'
+    && String(metadata.run_status || '').trim().toLowerCase() === 'passed';
+}
+
+function canMarkPmRunFailed(metadata) {
+  if (!isPassedPmRunReport(metadata)) return false;
+  return metadata.operator_marked_failed !== true;
+}
+
+function canIngestMessageToVault(metadata) {
+  if (!metadata || typeof metadata !== 'object') return true;
+  const mode = String(metadata.mode || '').trim();
+  const runStatus = String(metadata.run_status || '').trim().toLowerCase();
+  if (mode === 'pm_run_report' && runStatus === 'failed') return false;
+  return metadata.ingest_allowed !== false || mode !== 'pm_run_report';
 }
 
 async function pollForAssignmentSummary(orchestrationId, maxAttempts = 20, delayMs = 1500) {
@@ -447,21 +476,29 @@ function selectedContextItems() {
 function renderMessageActions(meta) {
   const orchestrationId = meta?.orchestration_id;
   const mode = String(meta?.mode || '').trim();
+  const passedPmRun = isPassedPmRunReport(meta);
   const dagBtn = orchestrationId
     ? `<button class="btn btn-sm" onclick="openDagViewer('${orchestrationId}')">View DAG</button>`
     : '';
   const recapBtn = orchestrationId
     ? `<button class="btn btn-sm" onclick="openAssignmentRecap('${orchestrationId}')">Full Recap</button>`
     : '';
-  const applyBtn = orchestrationId && selectedConversationProjectId && ['assign_summary', 'assign_error'].includes(mode)
+  const applyBtn = orchestrationId && selectedConversationProjectId && passedPmRun
     ? `<button class="btn btn-sm" onclick="applyAssignmentFiles('${orchestrationId}', this)">Apply Files to Repo</button>`
+    : '';
+  const markFailedBtn = orchestrationId && canMarkPmRunFailed(meta)
+    ? `<button class="btn btn-sm btn-danger" onclick="markPmRunFailed('${orchestrationId}', this)">Mark Failed</button>`
+    : '';
+  const sendToVaultBtn = canIngestMessageToVault(meta)
+    ? `<button class="btn btn-sm" onclick="sendMessageToVault(this)">Send to Vault</button>`
     : '';
   return `
     <button class="btn btn-sm" onclick="copyMessage(this)">Copy</button>
     <button class="btn btn-sm" onclick="rerunMessage(this)">Re-run</button>
-    <button class="btn btn-sm" onclick="sendMessageToVault(this)">Send to Vault</button>
+    ${sendToVaultBtn}
     ${recapBtn}
     ${applyBtn}
+    ${markFailedBtn}
     ${dagBtn}
   `;
 }
@@ -1129,7 +1166,12 @@ document.getElementById('form-assign')?.addEventListener('submit', async functio
   e.preventDefault();
   const fd = new FormData(this);
   const instruction = (fd.get('instruction') || '').toString().trim();
+  const botId = (fd.get('bot_id') || '').toString().trim();
   if (!instruction) return;
+  if (!botId) {
+    alert('Select an explicit project manager bot.');
+    return;
+  }
   const includeProjectContext = document.getElementById('include-project-context');
   const res = await fetch('/api/chat/messages', {
     method: 'POST',
@@ -1137,7 +1179,7 @@ document.getElementById('form-assign')?.addEventListener('submit', async functio
     body: JSON.stringify({
       conversation_id: fd.get('conversation_id'),
       content: '@assign ' + instruction,
-      bot_id: fd.get('bot_id') || null,
+      bot_id: botId,
       include_project_context: includeProjectContext ? includeProjectContext.checked : false,
       use_workspace_tools: !!document.getElementById('use-workspace-tools-message')?.checked
     }),
@@ -1162,7 +1204,7 @@ function getMessageData(buttonEl) {
   const messageId = messageEl?.dataset.messageId || '';
   const content = messageEl?.querySelector('.message-body')?.textContent || '';
   const role = messageEl?.querySelector('.message-role')?.textContent || '';
-  const msg = initialMessages.find(m => String(m.id) === String(messageId));
+  const msg = messageMap.get(String(messageId)) || initialMessages.find(m => String(m.id) === String(messageId));
   let inlineMeta = null;
   try { inlineMeta = messageEl?.dataset?.meta ? JSON.parse(messageEl.dataset.meta) : null; } catch (_) {}
   return {
@@ -1202,6 +1244,39 @@ async function sendMessageToVault(btn) {
   });
   if (res.ok) alert('Message sent to vault.');
   else alert('Send to vault failed.');
+}
+
+async function markPmRunFailed(orchestrationId, buttonEl) {
+  if (!selectedConversationId || !orchestrationId) {
+    alert('Missing conversation or orchestration id.');
+    return;
+  }
+  if (!confirm('Mark this PM run as failed? This only reclassifies the run and does not rerun it.')) return;
+  const originalLabel = buttonEl ? buttonEl.textContent : 'Mark Failed';
+  if (buttonEl) {
+    buttonEl.disabled = true;
+    buttonEl.textContent = 'Marking...';
+  }
+  try {
+    const res = await fetch('/api/chat/orchestrations/' + encodeURIComponent(orchestrationId) + '/mark-failed', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
+      body: JSON.stringify({conversation_id: selectedConversationId}),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data.error || 'Failed to mark PM run as failed');
+    }
+    upsertMessage(data);
+    alert('PM run marked as failed.');
+  } catch (error) {
+    alert(error.message || 'Failed to mark PM run as failed');
+  } finally {
+    if (buttonEl) {
+      buttonEl.disabled = false;
+      buttonEl.textContent = originalLabel;
+    }
+  }
 }
 
 async function ingestConversation(conversationId) {

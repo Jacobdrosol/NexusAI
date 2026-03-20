@@ -5,6 +5,8 @@ from typing import Any, Dict, List, Set
 import pytest
 from unittest.mock import AsyncMock
 
+from shared.models import Bot, TaskMetadata
+
 
 @pytest.fixture(autouse=True)
 async def _close_task_managers_after_each_test(monkeypatch):
@@ -71,6 +73,112 @@ async def test_task_runs_and_completes():
         await asyncio.sleep(0.1)
     assert updated.status == "completed"
     assert updated.result == {"answer": "42"}
+
+
+@pytest.mark.anyio
+async def test_task_manager_fails_deny_policy_bot_that_emits_repo_file(tmp_path):
+    import asyncio
+
+    from control_plane.task_manager.task_manager import TaskManager
+
+    class StubRegistry:
+        def __init__(self):
+            self._bots = {
+                "pm-tester": Bot(
+                    id="pm-tester",
+                    name="PM Tester",
+                    role="tester",
+                    backends=[],
+                    execution_policy={"repo_output_mode": "deny"},
+                )
+            }
+
+        async def get(self, bot_id):
+            return self._bots[bot_id]
+
+    class StubScheduler:
+        async def schedule(self, _task):
+            return {"output": "File: docs/should-not-exist.md\n```md\n# nope\n```\n"}
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "policy.db"), bot_registry=StubRegistry())
+    task = await tm.create_task(bot_id="pm-tester", payload={"title": "Validate docs"})
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.05)
+
+    updated = await tm.get_task(task.id)
+    assert updated.status == "failed"
+    assert updated.error is not None
+    assert "not allowed to emit repo file outputs" in updated.error.message
+
+
+@pytest.mark.anyio
+async def test_task_manager_blocks_trigger_targets_outside_orchestration_allowlist(tmp_path):
+    import asyncio
+
+    from control_plane.task_manager.task_manager import TaskManager
+
+    class StubRegistry:
+        def __init__(self):
+                self._bots = {
+                    "pm-root": Bot(
+                        id="pm-root",
+                        name="PM Root",
+                        role="pm",
+                        backends=[],
+                        workflow={
+                            "triggers": [
+                                {
+                                    "id": "root-to-foreign",
+                                    "event": "task_completed",
+                                    "target_bot_id": "foreign-bot",
+                                    "condition": "has_result",
+                                    "fan_out_field": "source_result.steps",
+                                }
+                            ]
+                        },
+                    ),
+                "foreign-bot": Bot(id="foreign-bot", name="Foreign", role="assistant", backends=[]),
+            }
+
+        async def get(self, bot_id):
+            return self._bots[bot_id]
+
+    class StubScheduler:
+        async def schedule(self, _task):
+            return {"steps": [{"title": "should-not-dispatch"}]}
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "allowlist.db"), bot_registry=StubRegistry())
+    task = await tm.create_task(
+        bot_id="pm-root",
+        payload={"title": "Entry"},
+        metadata=TaskMetadata(
+            source="chat_assign",
+            orchestration_id="orch-allowlist",
+            allowed_bot_ids=["pm-root"],
+            workflow_graph_id="pm-graph",
+            run_class="pm_assignment",
+        ),
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.05)
+
+    tasks = await tm.list_tasks(orchestration_id="orch-allowlist")
+    assert [item.bot_id for item in tasks] == ["pm-root"]
+    artifacts = []
+    for _ in range(20):
+        artifacts = await tm.list_bot_run_artifacts("pm-root", task_id=task.id)
+        if any("outside the orchestration allowlist" in str(item.content or "") for item in artifacts):
+            break
+        await asyncio.sleep(0.05)
+    assert any("outside the orchestration allowlist" in str(item.content or "") for item in artifacts)
 
 
 @pytest.mark.anyio

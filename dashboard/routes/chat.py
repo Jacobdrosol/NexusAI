@@ -113,6 +113,15 @@ def _assignment_full_recap(orchestration_id: str, tasks: list[dict[str, Any]]) -
 logger = logging.getLogger(__name__)
 
 
+def _is_failed_pm_run_message(message: dict[str, Any]) -> bool:
+    metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
+    if str(metadata.get("mode") or "").strip() not in {"pm_run_report", "assign_summary"}:
+        return False
+    run_status = str(metadata.get("run_status") or "").strip().lower()
+    ingest_allowed = metadata.get("ingest_allowed")
+    return run_status == "failed" or ingest_allowed is False
+
+
 def _cp_error_response(cp, fallback: str = "control plane unavailable"):
     err = cp.last_error() if hasattr(cp, "last_error") else {}
     detail = ""
@@ -655,6 +664,8 @@ def api_ingest_chat():
 
     lines = []
     for m in messages:
+        if isinstance(m, dict) and _is_failed_pm_run_message(m):
+            continue
         lines.append(f"[{m.get('role', 'unknown')}] {m.get('content', '')}")
     content = "\n\n".join(lines)
     title = f"Chat: {conversation.get('title', conversation_id)}"
@@ -682,6 +693,8 @@ def api_ingest_message_to_vault():
     namespace = (data.get("namespace") or "global").strip() or "global"
     if not isinstance(message, dict):
         return jsonify({"error": "message object is required"}), 400
+    if _is_failed_pm_run_message(message):
+        return jsonify({"error": "failed PM run reports cannot be ingested into the vault"}), 400
     content = str(message.get("content") or "").strip()
     if not content:
         return jsonify({"error": "message content is required"}), 400
@@ -705,6 +718,20 @@ def api_ingest_message_to_vault():
     if ingested is None:
         return jsonify({"error": "vault ingestion failed"}), 502
     return jsonify(ingested), 201
+
+
+@bp.post("/api/chat/orchestrations/<orchestration_id>/mark-failed")
+@login_required
+def api_mark_pm_run_failed(orchestration_id: str):
+    data: Dict[str, Any] = request.get_json(force=True) or {}
+    conversation_id = str(data.get("conversation_id") or "").strip()
+    if not conversation_id:
+        return jsonify({"error": "conversation_id is required"}), 400
+    cp = get_cp_client()
+    updated = cp.mark_pm_run_failed(conversation_id, orchestration_id)
+    if updated is None:
+        return _cp_error_response(cp, fallback="failed to mark PM run as failed")
+    return jsonify(updated)
 
 
 @bp.get("/api/chat/orchestrations/<orchestration_id>/graph")

@@ -4,6 +4,12 @@ import re
 import uuid
 from typing import Any, Dict, List, Optional
 
+from shared.bot_policy import (
+    bot_has_explicit_workflow,
+    bot_is_project_manager,
+    bot_workflow_graph_id,
+    derive_allowed_bot_ids,
+)
 from shared.exceptions import BotNotFoundError
 from shared.models import Bot, Task, TaskMetadata
 
@@ -69,125 +75,26 @@ class PMOrchestrator:
         context_items: Optional[List[str]] = None,
         project_id: Optional[str] = None,
     ) -> Dict[str, Any]:
+        requested_pm_bot_id = str(requested_pm_bot_id or "").strip()
+        if not requested_pm_bot_id:
+            raise BotNotFoundError("PM assignment requires an explicit project manager bot selection")
         bots = await self._bot_registry.list()
         pm_bot = self._select_pm_bot(bots, requested_pm_bot_id=requested_pm_bot_id)
         if pm_bot is None:
             raise BotNotFoundError("No PM bot available for assignment")
-
-        if self._should_bootstrap_assignment_via_pm_workflow(pm_bot):
-            return await self._bootstrap_assignment_via_pm_workflow(
-                conversation_id=conversation_id,
-                instruction=instruction,
-                pm_bot=pm_bot,
-                context_items=context_items or [],
-                project_id=project_id,
+        if not bot_has_explicit_workflow(pm_bot):
+            raise BotNotFoundError(
+                f"Selected PM bot '{pm_bot.id}' is missing an explicit workflow configuration"
             )
 
-        plan = await self._build_plan(
+        return await self._bootstrap_assignment_via_pm_workflow(
+            conversation_id=conversation_id,
             instruction=instruction,
-            pm_bot_id=pm_bot.id,
-            bots=bots,
+            pm_bot=pm_bot,
             context_items=context_items or [],
+            project_id=project_id,
+            bots=bots,
         )
-        plan = self._expand_test_execution_steps(plan)
-        plan = self._sanitize_plan_for_operator_scope(plan, instruction=instruction)
-
-        orchestration_id = str(uuid.uuid4())
-        task_ids_by_step: Dict[str, str] = {}
-        created_tasks: List[Task] = []
-        global_acceptance_criteria = self._normalize_string_list(plan.get("global_acceptance_criteria"))
-        global_quality_gates = self._normalize_string_list(plan.get("global_quality_gates"))
-        global_risks = self._normalize_string_list(plan.get("risks"))
-
-        for idx, step in enumerate(plan["steps"]):
-            step_id = str(step.get("id") or f"step_{idx + 1}")
-            role_hint = str(step.get("role_hint") or "").strip().lower()
-            explicit_bot_id = str(step.get("bot_id") or "").strip()
-            acceptance_criteria = self._normalize_string_list(step.get("acceptance_criteria"))
-            raw_deliverables = self._normalize_string_list(step.get("deliverables"))
-            quality_gates = self._normalize_string_list(step.get("quality_gates"))
-            step_kind = self._normalize_step_kind(
-                step.get("step_kind"),
-                title=str(step.get("title") or ""),
-                instruction=str(step.get("instruction") or ""),
-                role_hint=role_hint,
-                deliverables=raw_deliverables,
-            )
-            deliverables = self._normalize_deliverables_for_step(step_kind=step_kind, deliverables=raw_deliverables)
-            evidence_requirements = self._normalize_evidence_requirements(
-                step_kind=step_kind,
-                deliverables=deliverables,
-                evidence_requirements=self._normalize_string_list(step.get("evidence_requirements")),
-            )
-            if explicit_bot_id:
-                target_bot = self._get_bot_by_id(bots, explicit_bot_id)
-                if target_bot is None:
-                    raise BotNotFoundError(
-                        f"Explicit bot_id '{explicit_bot_id}' not found for step '{step_id}'"
-                    )
-            else:
-                target_bot = self._pick_target_bot(bots, role_hint=role_hint, pm_bot_id=pm_bot.id)
-                if role_hint:
-                    logger.warning(
-                        "Step '%s' has no explicit bot_id; using heuristic fallback for role_hint='%s' → selected bot '%s'",
-                        step_id,
-                        role_hint,
-                        target_bot.id,
-                    )
-            depends_ids = [
-                task_ids_by_step[d]
-                for d in (step.get("depends_on") or [])
-                if isinstance(d, str) and d in task_ids_by_step
-            ]
-            task = await self._task_manager.create_task(
-                bot_id=target_bot.id,
-                payload={
-                    "title": str(step.get("title") or step_id),
-                    "instruction": self._build_step_instruction(
-                        base_instruction=str(step.get("instruction") or instruction),
-                        step_kind=step_kind,
-                        deliverables=deliverables,
-                        evidence_requirements=evidence_requirements,
-                        context_items=context_items,
-                        role_hint=role_hint,
-                    ),
-                    "role_hint": role_hint or "assistant",
-                    "step_kind": step_kind,
-                    "evidence_requirements": evidence_requirements,
-                    "step_number": idx + 1,
-                    "step_count": len(plan["steps"]),
-                    "depends_on_steps": [str(dep) for dep in (step.get("depends_on") or []) if str(dep).strip()],
-                    "acceptance_criteria": acceptance_criteria,
-                    "deliverables": deliverables,
-                    "quality_gates": quality_gates,
-                    "global_acceptance_criteria": global_acceptance_criteria,
-                    "global_quality_gates": global_quality_gates,
-                    "global_risks": global_risks,
-                    "source": "chat_assign",
-                    "project_id": project_id,
-                    "conversation_id": conversation_id,
-                    "orchestration_id": orchestration_id,
-                    "context_items": context_items,
-                },
-                metadata=TaskMetadata(
-                    source="chat_assign",
-                    project_id=project_id,
-                    conversation_id=conversation_id,
-                    orchestration_id=orchestration_id,
-                    step_id=step_id,
-                ),
-                depends_on=depends_ids,
-            )
-            task_ids_by_step[step_id] = task.id
-            created_tasks.append(task)
-
-        return {
-            "orchestration_id": orchestration_id,
-            "pm_bot_id": pm_bot.id,
-            "instruction": instruction,
-            "plan": plan,
-            "tasks": [t.model_dump() for t in created_tasks],
-        }
 
     def _should_bootstrap_assignment_via_pm_workflow(self, pm_bot: Bot) -> bool:
         workflow = self._bot_workflow(pm_bot)
@@ -204,8 +111,11 @@ class PMOrchestrator:
         pm_bot: Bot,
         context_items: List[str],
         project_id: Optional[str],
+        bots: List[Bot],
     ) -> Dict[str, Any]:
         orchestration_id = str(uuid.uuid4())
+        allowed_bot_ids = derive_allowed_bot_ids(pm_bot.id, bots)
+        workflow_graph_id = bot_workflow_graph_id(pm_bot)
         pm_task = await self._task_manager.create_task(
             bot_id=pm_bot.id,
             payload={
@@ -225,6 +135,10 @@ class PMOrchestrator:
                 "conversation_id": conversation_id,
                 "orchestration_id": orchestration_id,
                 "context_items": context_items,
+                "root_pm_bot_id": pm_bot.id,
+                "allowed_bot_ids": allowed_bot_ids,
+                "workflow_graph_id": workflow_graph_id,
+                "run_class": "pm_assignment",
             },
             metadata=TaskMetadata(
                 source="chat_assign",
@@ -232,6 +146,10 @@ class PMOrchestrator:
                 conversation_id=conversation_id,
                 orchestration_id=orchestration_id,
                 step_id="pm_assignment_entry",
+                root_pm_bot_id=pm_bot.id,
+                allowed_bot_ids=allowed_bot_ids,
+                workflow_graph_id=workflow_graph_id,
+                run_class="pm_assignment",
             ),
         )
         return {
@@ -259,6 +177,8 @@ class PMOrchestrator:
                 ],
             },
             "tasks": [pm_task.model_dump()],
+            "allowed_bot_ids": allowed_bot_ids,
+            "workflow_graph_id": workflow_graph_id,
         }
 
     async def wait_for_completion(
@@ -362,17 +282,36 @@ class PMOrchestrator:
         assignment: Dict[str, Any],
         completion: Dict[str, Any],
     ) -> Any:
+        failed = int(completion.get("failed") or 0)
+        all_terminal = bool(completion.get("all_terminal"))
+        run_status = "passed" if failed == 0 and all_terminal else "failed"
+        task_count = int(completion.get("task_count") or 0)
+        completed = int(completion.get("completed") or 0)
+        pm_bot_id = str(assignment.get("pm_bot_id") or "")
+        orchestration_id = str(assignment.get("orchestration_id") or "")
+        lines = [
+            f"PM run {run_status}.",
+            f"Assigned Bot: {pm_bot_id}",
+            f"Orchestration ID: {orchestration_id}",
+            f"Tasks: {task_count} total, {completed} completed, {failed} failed.",
+            "Open View DAG or Full Recap for full task-by-task details.",
+        ]
+        if not all_terminal:
+            lines.append("Run summary captured before all tasks reached a terminal state.")
         return await self._chat_manager.add_message(
             conversation_id=conversation_id,
             role="assistant",
-            content=str(completion.get("summary_text") or ""),
-            bot_id=str(assignment.get("pm_bot_id") or ""),
+            content="\n".join(lines),
+            bot_id=pm_bot_id,
             metadata={
-                "mode": "assign_summary",
-                "orchestration_id": assignment.get("orchestration_id"),
-                "task_count": completion.get("task_count"),
-                "completed": completion.get("completed"),
-                "failed": completion.get("failed"),
+                "mode": "pm_run_report",
+                "orchestration_id": orchestration_id,
+                "task_count": task_count,
+                "completed": completed,
+                "failed": failed,
+                "run_status": run_status,
+                "ingest_allowed": run_status == "passed",
+                "full_summary_text": str(completion.get("summary_text") or ""),
             },
         )
 
@@ -861,22 +800,19 @@ class PMOrchestrator:
         }
 
     def _select_pm_bot(self, bots: List[Bot], requested_pm_bot_id: Optional[str]) -> Optional[Bot]:
-        if requested_pm_bot_id:
-            for bot in bots:
-                if bot.id == requested_pm_bot_id and bot.enabled:
-                    return bot
-        pm_patterns = [
-            r"\bpm\b",
-            r"project[_\s-]*manager",
-            r"program[_\s-]*manager",
-            r"orchestrator",
-            r"planner",
-        ]
+        selected_id = str(requested_pm_bot_id or "").strip()
+        if not selected_id:
+            return None
         for bot in bots:
-            role = str(bot.role or "").lower()
-            name = str(bot.name or "").lower()
-            if bot.enabled and any(re.search(pattern, role) or re.search(pattern, name) for pattern in pm_patterns):
-                return bot
+            if bot.id != selected_id:
+                continue
+            if not bot.enabled:
+                raise BotNotFoundError(f"Selected PM bot '{selected_id}' is disabled")
+            if not bot_is_project_manager(bot):
+                raise BotNotFoundError(
+                    f"Selected bot '{selected_id}' is not configured as a project manager"
+                )
+            return bot
         return None
 
     def _get_bot_by_id(self, bots: List[Bot], bot_id: str) -> Optional[Bot]:

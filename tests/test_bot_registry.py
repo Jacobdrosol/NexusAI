@@ -63,3 +63,37 @@ async def test_persists_across_reloads_and_does_not_reseed_existing(tmp_path):
     )
     still = await reg2.get("bot1")
     assert still.name == "Bot 1"
+
+
+@pytest.mark.anyio
+async def test_register_rejects_invalid_reference_graph():
+    from control_plane.registry.bot_registry import BotRegistry
+
+    reg = BotRegistry()
+    with pytest.raises(ValueError):
+        await reg.register(
+            Bot(
+                id="pm-orchestrator",
+                name="PM Orchestrator",
+                role="pm",
+                backends=[],
+                assignment_capabilities={"is_project_manager": True},
+                workflow={
+                    "triggers": [
+                        {
+                            "id": "pm-to-research",
+                            "event": "task_completed",
+                            "target_bot_id": "pm-research-analyst",
+                            "condition": "has_result",
+                        }
+                    ],
+                    "reference_graph": {
+                        "graph_id": "pm-graph",
+                        "entry_bot_id": "pm-orchestrator",
+                        "current_bot_id": "wrong-bot-id",
+                        "nodes": [{"bot_id": "pm-orchestrator"}],
+                        "edges": [],
+                    },
+                },
+            )
+        )

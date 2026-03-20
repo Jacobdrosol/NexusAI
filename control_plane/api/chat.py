@@ -1126,6 +1126,30 @@ def _extract_task_output(result: Any) -> str:
     return str(result)
 
 
+def _render_pm_run_report_content(
+    *,
+    pm_bot_id: str,
+    orchestration_id: str,
+    task_count: int,
+    completed: int,
+    failed: int,
+    run_status: str,
+    operator_marked_failed: bool = False,
+) -> str:
+    first_line = f"PM run {run_status}."
+    if operator_marked_failed:
+        first_line = "PM run failed (operator-marked)."
+    return "\n".join(
+        [
+            first_line,
+            f"Assigned Bot: {pm_bot_id}",
+            f"Orchestration ID: {orchestration_id}",
+            f"Tasks: {task_count} total, {completed} completed, {failed} failed.",
+            "Open View DAG or Full Recap for full task-by-task details.",
+        ]
+    )
+
+
 @router.post("/conversations", response_model=ChatConversation)
 async def create_conversation(request: Request, body: CreateConversationRequest) -> ChatConversation:
     chat_manager = request.app.state.chat_manager
@@ -1232,6 +1256,56 @@ async def list_messages(
         raise HTTPException(status_code=404, detail=str(e))
 
 
+@router.post("/conversations/{conversation_id}/orchestrations/{orchestration_id}/mark-failed", response_model=ChatMessage)
+async def mark_pm_run_failed(conversation_id: str, orchestration_id: str, request: Request) -> ChatMessage:
+    chat_manager = request.app.state.chat_manager
+    try:
+        messages = await chat_manager.list_messages(conversation_id, limit=500)
+    except ConversationNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    target: Optional[ChatMessage] = None
+    for message in reversed(messages):
+        metadata = message.metadata if isinstance(message.metadata, dict) else {}
+        if str(metadata.get("orchestration_id") or "").strip() != str(orchestration_id or "").strip():
+            continue
+        if str(metadata.get("mode") or "").strip() not in {"pm_run_report", "assign_summary"}:
+            continue
+        target = message
+        break
+    if target is None:
+        raise HTTPException(status_code=404, detail="PM run report message not found for this orchestration")
+
+    existing_metadata = target.metadata if isinstance(target.metadata, dict) else {}
+    task_count = int(existing_metadata.get("task_count") or 0)
+    completed = int(existing_metadata.get("completed") or 0)
+    failed = max(1, int(existing_metadata.get("failed") or 0))
+    pm_bot_id = str(target.bot_id or "")
+    updated_metadata = dict(existing_metadata)
+    updated_metadata.update(
+        {
+            "mode": "pm_run_report",
+            "run_status": "failed",
+            "ingest_allowed": False,
+            "operator_marked_failed": True,
+        }
+    )
+    content = _render_pm_run_report_content(
+        pm_bot_id=pm_bot_id,
+        orchestration_id=str(orchestration_id or "").strip(),
+        task_count=task_count,
+        completed=completed,
+        failed=failed,
+        run_status="failed",
+        operator_marked_failed=True,
+    )
+    return await chat_manager.update_message(
+        target.id,
+        content=content,
+        metadata=updated_metadata,
+    )
+
+
 @router.post("/conversations/{conversation_id}/messages")
 async def post_message(conversation_id: str, request: Request, body: PostMessageRequest) -> dict:
     await enforce_body_size(request, route_name="chat_messages", default_max_bytes=200_000)
@@ -1253,7 +1327,9 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
         )
         assign_instruction = _extract_assign_instruction(body.content)
         if assign_instruction is not None:
-            assign_bot_id = body.bot_id or conversation.default_bot_id
+            assign_bot_id = str(body.bot_id or "").strip()
+            if not assign_bot_id:
+                raise HTTPException(status_code=400, detail="PM assignment requires an explicit PM bot selection")
             tool_access = await _effective_tool_access(
                 request,
                 conversation=conversation,
@@ -1413,6 +1489,8 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
         raise HTTPException(status_code=404, detail=str(e))
     except BotNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1443,7 +1521,9 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
             assign_instruction = _extract_assign_instruction(body.content)
             if assign_instruction is not None:
                 yield 'event: status\ndata: {"phase":"planning","label":"Planning task graph..."}\n\n'
-                assign_bot_id = body.bot_id or conversation.default_bot_id
+                assign_bot_id = str(body.bot_id or "").strip()
+                if not assign_bot_id:
+                    raise HTTPException(status_code=400, detail="PM assignment requires an explicit PM bot selection")
                 tool_access = await _effective_tool_access(
                     request,
                     conversation=conversation,

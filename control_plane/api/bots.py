@@ -7,11 +7,18 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from control_plane.audit.utils import record_audit_event
 from control_plane.security.guards import enforce_body_size, enforce_rate_limit
 from shared.exceptions import BotNotFoundError
+from shared.bot_policy import validate_bot_configuration
 from shared.models import Bot, BotRun, BotRunArtifact, Task, TaskMetadata
 from shared.settings_manager import SettingsManager
 
 router = APIRouter(prefix="/v1/bots", tags=["bots"])
 logger = logging.getLogger(__name__)
+
+
+def _validate_bot_or_400(bot: Bot) -> None:
+    errors = validate_bot_configuration(bot)
+    if errors:
+        raise HTTPException(status_code=400, detail=" ".join(errors))
 
 
 def _settings_int(name: str, default: int) -> int:
@@ -113,6 +120,7 @@ def _resolve_external_payload(config: Dict[str, Any], body: Any) -> Any:
 
 @router.post("", response_model=Bot)
 async def create_bot(request: Request, bot: Bot) -> Bot:
+    _validate_bot_or_400(bot)
     bot_registry = request.app.state.bot_registry
     await bot_registry.register(bot)
     await record_audit_event(request, action="bots.create", resource=f"bot:{bot.id}")
@@ -136,6 +144,9 @@ async def get_bot(bot_id: str, request: Request) -> Bot:
 
 @router.put("/{bot_id}", response_model=Bot)
 async def update_bot(bot_id: str, request: Request, bot: Bot) -> Bot:
+    if bot.id != bot_id:
+        raise HTTPException(status_code=400, detail="bot.id must match the path bot_id")
+    _validate_bot_or_400(bot)
     bot_registry = request.app.state.bot_registry
     try:
         await bot_registry.update(bot_id, bot)

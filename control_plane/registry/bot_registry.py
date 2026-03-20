@@ -9,6 +9,7 @@ import aiosqlite
 
 from control_plane.sqlite_helpers import open_sqlite
 from shared.exceptions import BotNotFoundError
+from shared.bot_policy import validate_bot_configuration
 from shared.models import Bot
 
 logger = logging.getLogger(__name__)
@@ -76,6 +77,9 @@ class BotRegistry:
 
     async def register(self, bot: Bot) -> None:
         await self._ensure_db()
+        errors = validate_bot_configuration(bot)
+        if errors:
+            raise ValueError(" ".join(errors))
         async with self._lock:
             self._bots[bot.id] = bot
             logger.info("Registered bot %s", bot.id)
@@ -95,6 +99,9 @@ class BotRegistry:
 
     async def update(self, bot_id: str, bot: Bot) -> None:
         await self._ensure_db()
+        errors = validate_bot_configuration(bot)
+        if errors:
+            raise ValueError(" ".join(errors))
         async with self._lock:
             if bot_id not in self._bots:
                 raise BotNotFoundError(f"Bot not found: {bot_id}")
@@ -133,6 +140,9 @@ class BotRegistry:
             for cfg in configs:
                 try:
                     bot = Bot.model_validate(cfg)
+                    errors = validate_bot_configuration(bot)
+                    if errors:
+                        raise ValueError(" ".join(errors))
                     if bot.id in self._bots and not force:
                         continue
                     for backend in bot.backends:

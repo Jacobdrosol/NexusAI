@@ -77,6 +77,30 @@ class BotWorkflowTrigger(BaseModel):
     title: Optional[str] = None
 
 
+class AssignmentCapabilities(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    is_project_manager: bool = False
+
+
+class DBActionPolicy(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    allow_schema_introspection: bool = False
+    allow_additive_schema_changes: bool = False
+    allow_migration_apply: bool = False
+    allow_migration_mark_applied: bool = False
+    allow_safe_metadata_updates: bool = False
+    denied_statement_types: List[str] = Field(default_factory=list)
+    denied_sql_patterns: List[str] = Field(default_factory=list)
+
+
+class BotExecutionPolicy(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    repo_output_mode: Literal["allow", "deny"] = "deny"
+    can_apply_db_actions: bool = False
+    db_action_policy: Optional[DBActionPolicy] = None
+    allow_run_result_ingest: bool = True
+
+
 class BotContextAccess(BaseModel):
     """Declares what context a bot needs injected into its task payload.
 
@@ -93,10 +117,36 @@ class BotContextAccess(BaseModel):
     can_self_serve: List[str] = Field(default_factory=list)
 
 
+class WorkflowReferenceGraphNode(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    bot_id: str
+    title: Optional[str] = None
+    stage_kind: Optional[str] = None
+
+
+class WorkflowReferenceGraphEdge(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    source_bot_id: str
+    target_bot_id: str
+    route_kind: Literal["forward", "backward"] = "forward"
+    trigger_id: Optional[str] = None
+    title: Optional[str] = None
+
+
+class WorkflowReferenceGraph(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    graph_id: str
+    entry_bot_id: str
+    current_bot_id: str
+    nodes: List[WorkflowReferenceGraphNode] = Field(default_factory=list)
+    edges: List[WorkflowReferenceGraphEdge] = Field(default_factory=list)
+
+
 class BotWorkflow(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     triggers: List[BotWorkflowTrigger] = Field(default_factory=list)
     notes: Optional[str] = None
+    reference_graph: Optional[WorkflowReferenceGraph] = None
 
 
 class Bot(BaseModel):
@@ -111,6 +161,8 @@ class Bot(BaseModel):
     routing_rules: Optional[Any] = None
     workflow: Optional[BotWorkflow] = None
     context_access: Optional[BotContextAccess] = None
+    assignment_capabilities: Optional[AssignmentCapabilities] = None
+    execution_policy: Optional[BotExecutionPolicy] = None
 
 
 class TaskMetadata(BaseModel):
@@ -132,6 +184,10 @@ class TaskMetadata(BaseModel):
     workflow_root_task_id: Optional[str] = None
     pipeline_name: Optional[str] = None
     pipeline_entry_bot_id: Optional[str] = None
+    root_pm_bot_id: Optional[str] = None
+    allowed_bot_ids: List[str] = Field(default_factory=list)
+    workflow_graph_id: Optional[str] = None
+    run_class: Optional[str] = None
 
 
 class TaskError(BaseModel):
