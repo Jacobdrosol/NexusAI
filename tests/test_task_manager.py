@@ -1496,6 +1496,103 @@ async def test_qc_bot_can_route_failures_back_to_source_bot(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_auto_retry_downstream_branch_keeps_forward_triggers(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot
+
+    class StubScheduler:
+        async def schedule(self, task):
+            if task.bot_id == "pm-coder":
+                return {
+                    "status": "pass",
+                    "artifacts": [{"path": "docs/blocks/example.md", "content": "# Example"}],
+                    "handoff_notes": "ready for tester",
+                }
+            if task.bot_id == "pm-tester":
+                return {
+                    "outcome": "pass",
+                    "failure_type": "pass",
+                    "findings": [],
+                    "evidence": [],
+                    "artifacts": [],
+                    "handoff_notes": "ok",
+                }
+            return {"status": "pass"}
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "bots-auto-retry-forward.db"))
+    await bot_registry.register(Bot(
+        id="pm-coder",
+        name="PM Coder",
+        role="coder",
+        backends=[],
+        execution_policy={
+            "repo_output_mode": "allow",
+            "can_apply_db_actions": False,
+            "allow_run_result_ingest": True,
+        },
+        workflow={
+            "triggers": [
+                {
+                    "id": "coder-to-tester",
+                    "event": "task_completed",
+                    "target_bot_id": "pm-tester",
+                    "condition": "has_result",
+                    "result_field": "status",
+                    "result_equals": "pass",
+                }
+            ]
+        },
+    ))
+    await bot_registry.register(Bot(
+        id="pm-tester",
+        name="PM Tester",
+        role="tester",
+        backends=[],
+    ))
+
+    tm = TaskManager(
+        StubScheduler(),
+        db_path=str(tmp_path / "tasks-auto-retry-forward.db"),
+        bot_registry=bot_registry,
+    )
+
+    coder_task = await tm.create_task(
+        bot_id="pm-coder",
+        payload={
+            "title": "Docs branch",
+            "instruction": "Create docs only",
+            "fanout_id": "fanout:pm-engineer:step_4",
+            "fanout_branch_key": "0",
+        },
+        metadata=TaskMetadata(
+            source="auto_retry",
+            orchestration_id="orch-1",
+            project_id="proj-1",
+            parent_task_id="task-engineer",
+            trigger_rule_id="tester-back-coder-implementation",
+            workflow_root_task_id="pm_assignment_entry",
+            run_class="pm_assignment",
+            allowed_bot_ids=["pm-coder", "pm-tester"],
+        ),
+    )
+
+    for _ in range(40):
+        tasks = await tm.list_tasks()
+        if any(task.id != coder_task.id and task.bot_id == "pm-tester" for task in tasks):
+            break
+        await asyncio.sleep(0.1)
+
+    tasks = await tm.list_tasks()
+    tester_tasks = [task for task in tasks if task.id != coder_task.id and task.bot_id == "pm-tester"]
+    assert len(tester_tasks) == 1
+    assert tester_tasks[0].metadata is not None
+    assert tester_tasks[0].metadata.parent_task_id == coder_task.id
+
+
+@pytest.mark.anyio
 async def test_trigger_can_resolve_target_bot_from_result_field(tmp_path):
     import asyncio
 

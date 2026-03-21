@@ -3529,7 +3529,14 @@ class TaskManager:
         # defines the main forward path. Backward-triggered remediation tasks are created with
         # source="bot_trigger"; those are allowed to flow forward again so repair loops can close.
         source = str(metadata.source or "").strip().lower()
-        is_plan_managed_orchestrated = source in {"chat_assign", "auto_retry"}
+        # Only treat root/top-level assignment tasks as plan-managed. Downstream
+        # workflow branches may complete under source="auto_retry" after model
+        # truncation or transient failure recovery, but they still need to keep
+        # moving forward through their configured explicit workflow.
+        is_top_level_assignment_task = not str(metadata.parent_task_id or "").strip() and not str(metadata.trigger_rule_id or "").strip()
+        is_plan_managed_orchestrated = source == "chat_assign" or (
+            source == "auto_retry" and is_top_level_assignment_task
+        )
 
         trigger_depth = int(metadata.trigger_depth or 0)
         max_depth = self._trigger_depth_limit(metadata)
