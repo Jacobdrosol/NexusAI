@@ -1368,6 +1368,74 @@ async def test_trigger_payload_template_preserves_fanout_context_fields(tmp_path
 
 
 @pytest.mark.anyio
+async def test_trigger_payload_template_preserves_upstream_result_fields(tmp_path):
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Task
+
+    class StubScheduler:
+        async def schedule(self, _task):
+            return {"ok": True}
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "templated-trigger-result.db"))
+    trigger = type(
+        "Trigger",
+        (),
+        {
+            "payload_template": {
+                "title": "Validate coder workstream",
+                "instruction": "Validate the produced documentation artifacts.",
+            },
+            "target_bot_id": "pm-tester",
+        },
+    )()
+    task = Task(
+        id="coder-task-1",
+        bot_id="pm-coder",
+        payload={
+            "title": "Document arithmetic block",
+            "instruction": "Create docs only.",
+            "assignment_scope": {
+                "docs_only": True,
+                "requested_output_paths": ["docs/blocks"],
+            },
+            "fanout_id": "fanout:pm-engineer:pm-to-coder-fanout:root:step_4",
+            "fanout_branch_key": "0",
+        },
+        metadata=TaskMetadata(
+            source="bot_trigger",
+            project_id="proj-1",
+            conversation_id="conv-1",
+            orchestration_id="orch-1",
+        ),
+        status="completed",
+        result={
+            "status": "complete",
+            "failure_type": "pass",
+            "artifacts": [
+                {
+                    "path": "docs/blocks/arithmetic.md",
+                    "content": "# Arithmetic",
+                }
+            ],
+            "handoff_notes": "Ready for tester validation.",
+        },
+        created_at="2026-03-20T00:00:00+00:00",
+        updated_at="2026-03-20T00:00:01+00:00",
+    )
+
+    payload = tm._build_trigger_payload(task, trigger)
+
+    assert payload["upstream_failure_type"] == "pass"
+    assert payload["upstream_handoff_notes"] == "Ready for tester validation."
+    assert payload["upstream_artifacts"] == [
+        {
+            "path": "docs/blocks/arithmetic.md",
+            "content": "# Arithmetic",
+        }
+    ]
+
+
+@pytest.mark.anyio
 async def test_qc_bot_can_route_failures_back_to_source_bot(tmp_path):
     import asyncio
 

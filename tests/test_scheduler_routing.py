@@ -1049,3 +1049,50 @@ async def test_scheduler_appends_docs_only_assignment_scope_to_system_prompt():
     assert "docs/blocks" in system_message
     assert "Do not interpret documentation-only as an empty plan." in system_message
     assert "implementation_workstreams" in system_message
+
+
+@pytest.mark.anyio
+async def test_scheduler_appends_docs_only_upstream_artifact_guidance_to_system_prompt():
+    from control_plane.scheduler.scheduler import Scheduler
+
+    bot_registry = AsyncMock()
+    bot_registry.get.return_value = Bot(
+        id="pm-tester",
+        name="PM Tester",
+        role="tester",
+        system_prompt="Validate the workstream deterministically.",
+        backends=[BackendConfig(type="cloud_api", provider="openai", model="gpt-4o-mini")],
+    )
+    scheduler = Scheduler(bot_registry=bot_registry, worker_registry=AsyncMock())
+    task = Task(
+        id="task-docs-only-tester",
+        bot_id="pm-tester",
+        payload={
+            "instruction": "Validate the documentation workstream.",
+            "role_hint": "tester",
+            "assignment_request": "Build documentation only in docs/blocks for the mathematics blocks.",
+            "assignment_scope": {
+                "docs_only": True,
+                "requested_output_paths": ["docs/blocks"],
+            },
+            "upstream_artifacts": [
+                {
+                    "path": "docs/blocks/arithmetic.md",
+                    "content": "# Arithmetic",
+                }
+            ],
+        },
+        status="queued",
+        created_at="now",
+        updated_at="now",
+    )
+
+    async def fake_dispatch(backend, payload, task=None):
+        return {"payload": payload}
+
+    scheduler._dispatch_backend = fake_dispatch  # type: ignore[method-assign]
+    result = await scheduler.schedule(task)
+
+    system_message = result["payload"][0]["content"]
+    assert "upstream_artifacts" in system_message
+    assert "live repo snapshot does not yet contain the proposed markdown files" in system_message

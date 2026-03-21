@@ -3902,6 +3902,11 @@ class TaskManager:
                     if isinstance(upstream_payload, dict):
                         self._promote_trigger_context_fields(final, upstream_payload)
                     self._promote_trigger_context_fields(final, task.payload)
+                if isinstance(task.result, dict):
+                    # Templated payloads still need compact upstream result context so
+                    # downstream validation/review stages can inspect the branch output
+                    # without relying on files already existing in the live repo.
+                    self._promote_trigger_result_fields(final, task.result)
                 # Preserve bot-routing hints that the template never sets explicitly.
                 for _key in ("role_hint", "step_kind"):
                     if _key in base_payload and _key not in final:

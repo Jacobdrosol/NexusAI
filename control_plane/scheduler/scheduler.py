@@ -203,6 +203,10 @@ def _assignment_scope_prompt_suffix(payload: Any) -> str:
         parts.append(
             "For this kind of run, coder branches should create only the requested documentation files, while tester/security/database/ui stages may return pass/skip/not_applicable based on branch applicability rather than inventing code or tests."
         )
+        parts.append(
+            "For tester and reviewer stages on documentation-only branches, treat upstream_artifacts (or source_result.artifacts when present) as the primary branch evidence. "
+            "Do not fail solely because the live repo snapshot does not yet contain the proposed markdown files; assignment apply happens later."
+        )
     if isinstance(requested_output_paths, list) and requested_output_paths:
         normalized = [str(item).strip() for item in requested_output_paths if str(item).strip()]
         if normalized:
