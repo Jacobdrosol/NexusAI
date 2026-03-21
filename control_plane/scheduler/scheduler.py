@@ -279,6 +279,10 @@ def _assignment_scope_prompt_suffix(payload: Any) -> str:
             "Do not propose or produce source-code changes, tests, migrations, database work, UI implementation, configuration updates, or repo files outside the requested documentation scope."
         )
         parts.append(
+            "For documentation-only coder branches, always return the repo-change contract JSON wrapper and place each generated markdown file under artifacts[path, content], "
+            "along with status, change_summary, files_touched, risks, and handoff_notes."
+        )
+        parts.append(
             "Do not interpret documentation-only as an empty plan. Planning bots must still return a complete documentation architecture, "
             "implementation_plan, and implementation_workstreams for the requested docs deliverables. Those workstreams must stay documentation-only."
         )
@@ -288,6 +292,10 @@ def _assignment_scope_prompt_suffix(payload: Any) -> str:
         parts.append(
             "For tester and reviewer stages on documentation-only branches, treat upstream_artifacts (or source_result.artifacts when present) as the primary branch evidence. "
             "Do not fail solely because the live repo snapshot does not yet contain the proposed markdown files; assignment apply happens later."
+        )
+        parts.append(
+            "When validating documentation-only branches, explicitly verify internal markdown links, referenced doc paths, and claimed evidence against the actual upstream_artifacts set. "
+            "Do not claim 'no broken links', 'schema validation passed', or similar checks unless the available artifacts actually support that conclusion."
         )
         parts.append(
             "For final QC on documentation-only runs, prefer the strongest upstream tester evidence over later skip/not_applicable review signals. "

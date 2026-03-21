@@ -2936,6 +2936,83 @@ async def test_output_contract_fails_when_required_fields_are_missing(tmp_path, 
 
 
 @pytest.mark.anyio
+async def test_docs_only_pm_coder_contract_can_be_salvaged_from_artifacts(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot, TaskMetadata
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {
+                "artifacts": [
+                    {
+                        "path": "docs/blocks/implementation/client-rendering-architecture.md",
+                        "content": "# Client Rendering Architecture\n\nThis is a documentation-only architecture guide.",
+                    }
+                ]
+            }
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "docs-coder-contract-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="pm-coder",
+            name="PM Coder",
+            role="coder",
+            backends=[],
+            routing_rules={
+                "output_contract": {
+                    "enabled": True,
+                    "format": "json_object",
+                    "required_fields": [
+                        "status",
+                        "change_summary",
+                        "files_touched",
+                        "artifacts",
+                        "risks",
+                        "handoff_notes",
+                    ],
+                    "fallback_mode": "disabled",
+                }
+            },
+            execution_policy={
+                "repo_output_mode": "allow",
+                "allow_run_result_ingest": True,
+                "can_apply_db_actions": False,
+            },
+        )
+    )
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "docs-coder-contract.db"), bot_registry=bot_registry)
+    task = await tm.create_task(
+        bot_id="pm-coder",
+        payload={
+            "title": "Document client-side rendering architecture",
+            "instruction": "Create only markdown documentation in docs/blocks/implementation.",
+            "step_kind": "repo_change",
+            "deliverables": ["docs/blocks/implementation/client-rendering-architecture.md"],
+            "assignment_scope": {
+                "docs_only": True,
+                "requested_output_paths": ["docs/blocks"],
+            },
+        },
+        metadata=TaskMetadata(source="bot_trigger", orchestration_id="orch-docs-contract"),
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.1)
+
+    assert updated.status == "completed"
+    assert updated.result["status"] == "complete"
+    assert updated.result["files_touched"] == ["docs/blocks/implementation/client-rendering-architecture.md"]
+    assert updated.result["artifacts"][0]["path"] == "docs/blocks/implementation/client-rendering-architecture.md"
+
+
+@pytest.mark.anyio
 async def test_output_contract_can_transform_payload_deterministically(tmp_path):
     import asyncio
 
@@ -5792,6 +5869,94 @@ def test_assignment_validation_rejects_external_api_proposals_when_scope_forbids
     error = _assignment_validation_error(task, result)
 
     assert "in-house / no-external-API approach" in error
+
+
+def test_assignment_validation_rejects_broken_internal_markdown_links_in_docs_only_outputs():
+    from control_plane.task_manager.task_manager import _assignment_validation_error
+    from shared.models import Task, TaskMetadata
+
+    task = Task(
+        id="task-doc-links",
+        bot_id="pm-coder",
+        payload={
+            "title": "Build bandwidth guide",
+            "instruction": "Create only markdown documentation in docs/blocks/implementation.",
+            "step_kind": "repo_change",
+            "deliverables": ["docs/blocks/implementation/bandwidth-optimization.md"],
+            "assignment_scope": {
+                "docs_only": True,
+                "requested_output_paths": ["docs/blocks"],
+            },
+        },
+        metadata=TaskMetadata(source="bot_trigger", orchestration_id="orch-doc-links"),
+        created_at="2026-03-21T00:00:00+00:00",
+        updated_at="2026-03-21T00:00:00+00:00",
+    )
+
+    result = {
+        "artifacts": [
+            {
+                "path": "docs/blocks/implementation/bandwidth-optimization.md",
+                "content": (
+                    "# Bandwidth Optimization\n\n"
+                    "See [Architecture](../architecture/client-rendering.md) and "
+                    "[Catalog](../catalog/math-blocks.md).\n"
+                ),
+            }
+        ]
+    }
+
+    error = _assignment_validation_error(task, result)
+
+    assert "broken internal markdown links" in error.lower()
+    assert "../architecture/client-rendering.md" in error
+
+
+def test_assignment_validation_rejects_docs_only_tester_false_positive_when_upstream_links_are_broken():
+    from control_plane.task_manager.task_manager import _assignment_validation_error
+    from shared.models import Task, TaskMetadata
+
+    task = Task(
+        id="task-docs-tester-links",
+        bot_id="pm-tester",
+        payload={
+            "title": "Validate docs branch",
+            "instruction": "Validate the documentation-only workstream.",
+            "role_hint": "tester",
+            "step_kind": "test_execution",
+            "deliverables": ["docs/blocks/implementation/bandwidth-optimization.md"],
+            "assignment_scope": {
+                "docs_only": True,
+                "requested_output_paths": ["docs/blocks"],
+            },
+            "upstream_artifacts": [
+                {
+                    "path": "docs/blocks/implementation/bandwidth-optimization.md",
+                    "content": (
+                        "# Bandwidth Optimization\n\n"
+                        "See [Architecture](../architecture/client-rendering.md) and "
+                        "[Catalog](../catalog/math-blocks.md).\n"
+                    ),
+                }
+            ],
+        },
+        metadata=TaskMetadata(source="bot_trigger", orchestration_id="orch-docs-tester-links"),
+        created_at="2026-03-21T00:00:00+00:00",
+        updated_at="2026-03-21T00:00:00+00:00",
+    )
+
+    result = {
+        "failure_type": "pass",
+        "outcome": "pass",
+        "findings": ["No broken links detected."],
+        "evidence": ["Validated internal markdown links."],
+        "handoff_notes": "Looks good.",
+    }
+
+    error = _assignment_validation_error(task, result)
+
+    assert "marked the branch as passed" in error.lower()
+    assert "../catalog/math-blocks.md" in error
 
 
 def test_assignment_validation_allows_no_external_api_research_language():

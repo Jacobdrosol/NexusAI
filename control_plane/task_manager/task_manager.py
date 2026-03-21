@@ -3,11 +3,12 @@ import heapq
 import json
 import logging
 import os
+import posixpath
 import re
 import shutil
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import aiosqlite
@@ -1158,6 +1159,159 @@ def _has_test_execution_evidence(result: Any, text: str) -> bool:
     return any(re.search(pattern, lowered, flags=re.IGNORECASE) for pattern in patterns)
 
 
+def _extract_markdown_link_targets(content: str) -> List[str]:
+    if not content:
+        return []
+    targets: List[str] = []
+    for match in re.finditer(r"(?<!!)\[[^\]]*\]\(([^)]+)\)", str(content)):
+        target = str(match.group(1) or "").strip()
+        if not target:
+            continue
+        if target.startswith("<") and target.endswith(">"):
+            target = target[1:-1].strip()
+        if not target:
+            continue
+        targets.append(target)
+    return targets
+
+
+def _normalize_markdown_link_target(target: str) -> Optional[str]:
+    normalized = str(target or "").strip()
+    if not normalized:
+        return None
+    normalized = normalized.split(maxsplit=1)[0].strip()
+    if not normalized or normalized.startswith("#"):
+        return None
+    lowered = normalized.lower()
+    if "://" in normalized or lowered.startswith(("mailto:", "data:", "javascript:")):
+        return None
+    if lowered.startswith("/"):
+        return normalized.strip("/").replace("\\", "/")
+    return normalized.replace("\\", "/")
+
+
+def _resolve_markdown_relative_path(base_path: str, target: str) -> Optional[str]:
+    normalized = _normalize_markdown_link_target(target)
+    if not normalized:
+        return None
+    base = PurePosixPath(str(base_path or "").replace("\\", "/"))
+    if not str(base):
+        return None
+    base_dir = str(base.parent).replace("\\", "/").strip("/")
+    if normalized.startswith("/"):
+        resolved = normalized.strip("/")
+    else:
+        combined = normalized if not base_dir else f"{base_dir}/{normalized}"
+        resolved = posixpath.normpath(combined).strip("/")
+    if not resolved or resolved.startswith("../") or "/../" in f"/{resolved}/":
+        return None
+    return resolved
+
+
+def _docs_markdown_artifacts(items: Any) -> List[Dict[str, str]]:
+    artifacts: List[Dict[str, str]] = []
+    if not isinstance(items, list):
+        return artifacts
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        path = str(item.get("path") or "").strip().replace("\\", "/")
+        content = str(item.get("content") or "")
+        if not path or not content or not path.lower().endswith(".md"):
+            continue
+        artifacts.append({"path": path, "content": content})
+    return artifacts
+
+
+def _docs_only_broken_markdown_links_from_artifacts(items: Any) -> List[str]:
+    artifacts = _docs_markdown_artifacts(items)
+    if not artifacts:
+        return []
+    artifact_paths = {item["path"] for item in artifacts}
+    broken: List[str] = []
+    seen: Set[str] = set()
+    for item in artifacts:
+        base_path = item["path"]
+        for target in _extract_markdown_link_targets(item["content"]):
+            resolved = _resolve_markdown_relative_path(base_path, target)
+            if not resolved:
+                continue
+            if resolved in artifact_paths:
+                continue
+            if Path(resolved).exists():
+                continue
+            marker = f"{base_path} -> {target}"
+            if marker in seen:
+                continue
+            seen.add(marker)
+            broken.append(marker)
+    return broken
+
+
+def _synthesize_docs_only_repo_change_contract_result(
+    task: Task,
+    result: Any,
+    *,
+    raw_text: str = "",
+) -> Optional[Dict[str, Any]]:
+    payload = task.payload if isinstance(task.payload, dict) else {}
+    if _assignment_step_kind(payload) != "repo_change" or not _payload_is_docs_only_request(payload):
+        return None
+
+    expected_files = [
+        path
+        for path in _assignment_expected_repo_files(payload)
+        if _is_documentation_like_repo_file(path)
+    ]
+    explicit_artifacts = _docs_markdown_artifacts(_result_explicit_artifacts(result))
+    extracted_candidates = [
+        {
+            "path": str(item.get("path") or "").strip().replace("\\", "/"),
+            "content": str(item.get("content") or ""),
+        }
+        for item in extract_file_candidates(result)
+        if _is_documentation_like_repo_file(str(item.get("path") or "").strip().replace("\\", "/"))
+        and str(item.get("content") or "").strip()
+    ]
+
+    artifacts: List[Dict[str, str]] = []
+    seen_paths: Set[str] = set()
+    for item in explicit_artifacts + extracted_candidates:
+        path = item["path"]
+        if not path or path in seen_paths:
+            continue
+        seen_paths.add(path)
+        artifacts.append({"path": path, "content": item["content"]})
+
+    if not artifacts and len(expected_files) == 1 and str(raw_text or "").strip():
+        artifacts = [{"path": expected_files[0], "content": str(raw_text).strip()}]
+        seen_paths.add(expected_files[0])
+
+    if not artifacts:
+        return None
+
+    files_touched = [item["path"] for item in artifacts]
+    titles = _normalize_string_list(payload.get("deliverables")) or _normalize_string_list(payload.get("title"))
+    summary_prefix = "Created requested documentation deliverable"
+    if len(files_touched) > 1:
+        summary_prefix = "Created requested documentation deliverables"
+    return {
+        "status": "complete",
+        "change_summary": [
+            f"{summary_prefix}: {', '.join(files_touched[:5])}"
+        ],
+        "files_touched": files_touched,
+        "artifacts": artifacts,
+        "risks": [
+            "Result was normalized from a partial docs-only coder response; downstream validation should verify markdown structure and internal references carefully."
+        ],
+        "handoff_notes": (
+            "Documentation artifacts were recovered into the repo-change contract. "
+            "Tester should verify front-matter, internal links, path consistency, and scope alignment against the original assignment."
+        ),
+    }
+
+
 def _assignment_result_is_skip(result: Any) -> bool:
     if not isinstance(result, dict):
         return False
@@ -1562,6 +1716,26 @@ def _assignment_validation_error(task: Task, result: Any) -> str:
                 "Assignment explicitly requested documentation-only markdown outputs, "
                 f"but generated non-document repo files: {preview}."
             )
+        if step_kind == "repo_change":
+            broken_links = _docs_only_broken_markdown_links_from_artifacts(_result_explicit_artifacts(result))
+            if broken_links:
+                preview = ", ".join(broken_links[:3])
+                return (
+                    "Documentation output contains broken internal markdown links in generated artifacts: "
+                    f"{preview}."
+                )
+        if (
+            step_kind == "test_execution"
+            and isinstance(result, dict)
+            and str(result.get("failure_type") or result.get("outcome") or "").strip().lower() in {"pass", "completed", "complete"}
+        ):
+            broken_links = _docs_only_broken_markdown_links_from_artifacts(payload.get("upstream_artifacts"))
+            if broken_links:
+                preview = ", ".join(broken_links[:3])
+                return (
+                    "Documentation tester marked the branch as passed even though upstream artifacts contain broken internal markdown links: "
+                    f"{preview}."
+                )
 
     scope_alignment_error = _assignment_scope_alignment_error(payload, result)
     if scope_alignment_error:
@@ -2666,7 +2840,10 @@ class TaskManager:
                 try:
                     parsed = _extract_json_payload(raw_text)
                 except ValueError:
-                    if allow_parse_failure_fallback:
+                    synthesized = _synthesize_docs_only_repo_change_contract_result(task, result, raw_text=raw_text)
+                    if synthesized is not None:
+                        parsed = synthesized
+                    elif allow_parse_failure_fallback:
                         default_notes: list[str] = ["Model output was not parseable JSON; fell back to defaults template."]
                         parsed = _transform_template_value(defaults_template, task.payload, default_notes)
                         if isinstance(parsed, dict):
@@ -2702,6 +2879,11 @@ class TaskManager:
             if not isinstance(normalized, dict):
                 raise ValueError("required fields can only be validated on JSON objects")
             missing = [field for field in required_fields if str(field) not in normalized]
+            if missing:
+                synthesized = _synthesize_docs_only_repo_change_contract_result(task, normalized, raw_text=raw_text)
+                if synthesized is not None:
+                    normalized = _merge_with_contract_defaults(normalized, synthesized)
+                    missing = [field for field in required_fields if str(field) not in normalized]
             if missing:
                 raise ValueError(f"output contract missing required fields: {', '.join(str(field) for field in missing)}")
         if non_empty_fields:
