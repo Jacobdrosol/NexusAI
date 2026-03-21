@@ -150,7 +150,7 @@ class ChatManager:
         if not isinstance(metadata, dict):
             return True
         mode = str(metadata.get("mode") or "").strip().lower()
-        return mode not in {"assign_pending", "pm_run_report", "assign_summary"}
+        return mode not in {"assign_request", "assign_pending", "pm_run_report", "assign_summary", "assign_error"}
 
     async def _reindex_message(
         self,
@@ -594,6 +594,34 @@ class ChatManager:
             ) as cursor:
                 row = await cursor.fetchone()
                 return int(row[0] or 0) if row else 0
+
+    async def count_indexable_messages(self, conversation_id: str) -> int:
+        await self.get_conversation(conversation_id)
+        query = """
+            SELECT COUNT(*)
+            FROM messages
+            WHERE conversation_id = ?
+              AND lower(role) IN ('user', 'assistant')
+              AND COALESCE(lower(json_extract(metadata, '$.mode')), '') NOT IN (
+                'assign_request',
+                'assign_pending',
+                'pm_run_report',
+                'assign_summary',
+                'assign_error'
+              )
+        """
+        try:
+            async with open_sqlite(self._db_path) as db:
+                async with db.execute(query, (conversation_id,)) as cursor:
+                    row = await cursor.fetchone()
+                    return int(row[0] or 0) if row else 0
+        except Exception:
+            messages = await self.list_messages(conversation_id)
+            count = 0
+            for message in messages:
+                if self._message_is_indexable(role=message.role, metadata=message.metadata):
+                    count += 1
+            return count
 
     async def search_message_memory(
         self,

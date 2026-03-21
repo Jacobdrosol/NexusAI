@@ -530,6 +530,102 @@ async def test_assign_message_uses_semantic_transcript_excerpt_for_large_chat(cp
 
 
 @pytest.mark.anyio
+async def test_assign_message_excludes_pm_workflow_messages_from_context_count(cp_app):
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        create_resp = await client.post("/v1/chat/conversations", json={"title": "Assign Context Filtering"})
+        conversation_id = create_resp.json()["id"]
+
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "pm-workflow",
+                "name": "PM Workflow",
+                "role": "pm",
+                "backends": [],
+                "enabled": True,
+                "assignment_capabilities": {"is_project_manager": True},
+                "workflow": {
+                    "triggers": [
+                        {
+                            "id": "pm-to-research",
+                            "event": "task_completed",
+                            "target_bot_id": "pm-research-analyst",
+                            "condition": "has_result",
+                            "fan_out_field": "source_result.steps",
+                        }
+                    ]
+                },
+            },
+        )
+        await client.post(
+            "/v1/bots",
+            json={"id": "pm-research-analyst", "name": "PM Research Analyst", "role": "researcher", "backends": [], "enabled": True},
+        )
+
+        await cp_app.state.chat_manager.add_message(
+            conversation_id,
+            "user",
+            "We need mathematics blocks from algebra through multivariable calculus.",
+        )
+        await cp_app.state.chat_manager.add_message(
+            conversation_id,
+            "assistant",
+            "Here is a roadmap for the mathematics block stack.",
+        )
+        await cp_app.state.chat_manager.add_message(
+            conversation_id,
+            "user",
+            "@assign old failed assignment",
+            metadata={"mode": "assign_request", "orchestration_id": "orch-old"},
+        )
+        await cp_app.state.chat_manager.add_message(
+            conversation_id,
+            "assistant",
+            "PM run failed.",
+            metadata={
+                "mode": "pm_run_report",
+                "orchestration_id": "orch-old",
+                "run_status": "failed",
+                "ingest_allowed": False,
+            },
+        )
+        await cp_app.state.chat_manager.add_message(
+            conversation_id,
+            "assistant",
+            "Assignment queued.",
+            metadata={"mode": "assign_pending", "orchestration_id": "orch-old"},
+        )
+
+        assign_resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": "@assign Build documentation only in docs/blocks for the mathematics blocks",
+                "bot_id": "pm-workflow",
+            },
+        )
+        assert assign_resp.status_code == 200
+
+    tasks = await cp_app.state.task_manager.list_tasks()
+    root_task = next(task for task in tasks if task.bot_id == "pm-workflow")
+    scope = root_task.payload.get("assignment_scope") or {}
+    assert int(scope.get("conversation_message_count") or 0) == 2
+    transcript = str(scope.get("conversation_transcript") or "").lower()
+    assert "multivariable calculus" in transcript
+    assert "pm run failed" not in transcript
+    assert "assignment queued" not in transcript
+
+    messages = await cp_app.state.chat_manager.list_messages(conversation_id)
+    assign_message = next(
+        message
+        for message in messages
+        if str((message.metadata or {}).get("mode") or "") == "assign_request"
+        and str((message.metadata or {}).get("orchestration_id") or "").strip() == str(root_task.metadata.orchestration_id or "").strip()
+    )
+    metadata = assign_message.metadata or {}
+    assert int(metadata.get("assignment_context_message_count") or 0) == 2
+
+
+@pytest.mark.anyio
 async def test_chat_message_memory_prefers_user_intent_hits(cp_app):
     chat_manager = cp_app.state.chat_manager
     conversation = await chat_manager.create_conversation("Memory Ranking")

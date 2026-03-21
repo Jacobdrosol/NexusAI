@@ -1169,6 +1169,41 @@ def _build_assignment_conversation_brief(
     return "\n".join(lines)
 
 
+def _assignment_context_message_is_eligible(
+    message: ChatMessage,
+    *,
+    current_assign_message_id: Optional[str] = None,
+) -> bool:
+    if current_assign_message_id and str(message.id) == str(current_assign_message_id):
+        return False
+    role = str(message.role or "").strip().lower()
+    if role not in {"user", "assistant"}:
+        return False
+    metadata = message.metadata if isinstance(message.metadata, dict) else {}
+    mode = str(metadata.get("mode") or "").strip().lower()
+    if mode in {"assign_request", "assign_pending", "pm_run_report", "assign_summary", "assign_error"}:
+        return False
+    content = str(message.content or "").strip()
+    if not content:
+        return False
+    return True
+
+
+def _filter_assignment_context_messages(
+    messages: List[ChatMessage],
+    *,
+    current_assign_message_id: Optional[str] = None,
+) -> List[ChatMessage]:
+    return [
+        message
+        for message in messages
+        if _assignment_context_message_is_eligible(
+            message,
+            current_assign_message_id=current_assign_message_id,
+        )
+    ]
+
+
 def _build_assignment_conversation_transcript(
     messages: List[ChatMessage],
     *,
@@ -1178,15 +1213,13 @@ def _build_assignment_conversation_transcript(
     head_messages: int = 8,
 ) -> Dict[str, Any]:
     transcript_entries: List[tuple[str, str]] = []
-    for message in messages:
-        if current_assign_message_id and str(message.id) == str(current_assign_message_id):
-            continue
+    eligible_messages = _filter_assignment_context_messages(
+        messages,
+        current_assign_message_id=current_assign_message_id,
+    )
+    for message in eligible_messages:
         role = str(message.role or "").strip().lower()
-        if role not in {"user", "assistant"}:
-            continue
         content = str(message.content or "").strip()
-        if not content:
-            continue
         normalized = re.sub(r"\s+", " ", content).strip()
         if not normalized:
             continue
@@ -1280,17 +1313,21 @@ async def _build_assignment_context_snapshot(
     assign_instruction: str,
     current_assign_message_id: Optional[str],
 ) -> Dict[str, Any]:
-    total_messages = await chat_manager.count_messages(conversation_id)
-    if total_messages <= 120:
+    eligible_message_count = await chat_manager.count_indexable_messages(conversation_id)
+    if eligible_message_count <= 120:
         all_messages = await chat_manager.list_messages(conversation_id)
-        brief = _build_assignment_conversation_brief(
+        eligible_messages = _filter_assignment_context_messages(
             all_messages,
+            current_assign_message_id=current_assign_message_id,
+        )
+        brief = _build_assignment_conversation_brief(
+            eligible_messages,
             current_assign_message_id=current_assign_message_id,
             max_messages=8,
             max_chars=3200,
         )
         transcript = _build_assignment_conversation_transcript(
-            all_messages,
+            eligible_messages,
             current_assign_message_id=current_assign_message_id,
             max_messages=140,
             max_chars=24000,
@@ -1317,12 +1354,32 @@ async def _build_assignment_context_snapshot(
     semantic_messages_by_id: Dict[str, ChatMessage] = {}
     if semantic_message_ids:
         semantic_messages = await chat_manager.get_messages_by_ids(conversation_id, semantic_message_ids)
-        semantic_messages_by_id = {message.id: message for message in semantic_messages}
+        semantic_messages_by_id = {
+            message.id: message
+            for message in semantic_messages
+            if _assignment_context_message_is_eligible(
+                message,
+                current_assign_message_id=current_assign_message_id,
+            )
+        }
+        semantic_hits = [
+            hit
+            for hit in semantic_hits
+            if str(hit.get("message_id") or "").strip() in semantic_messages_by_id
+        ]
 
     combined: List[ChatMessage] = []
     seen: set[str] = set()
-    for message in head_messages + list(semantic_messages_by_id.values()) + tail_messages:
-        if message.id in seen or (current_assign_message_id and str(message.id) == str(current_assign_message_id)):
+    filtered_head = _filter_assignment_context_messages(
+        head_messages,
+        current_assign_message_id=current_assign_message_id,
+    )
+    filtered_tail = _filter_assignment_context_messages(
+        tail_messages,
+        current_assign_message_id=current_assign_message_id,
+    )
+    for message in filtered_head + list(semantic_messages_by_id.values()) + filtered_tail:
+        if message.id in seen:
             continue
         seen.add(message.id)
         combined.append(message)
@@ -1345,7 +1402,7 @@ async def _build_assignment_context_snapshot(
     return {
         "conversation_brief": brief,
         "conversation_transcript": str(transcript.get("conversation_transcript") or ""),
-        "conversation_message_count": total_messages,
+        "conversation_message_count": eligible_message_count,
         "conversation_transcript_strategy": "semantic_excerpt",
         "assignment_memory_hits": memory_hits,
         "assignment_memory_hit_count": len(memory_hits),
