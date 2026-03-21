@@ -960,6 +960,84 @@ def _result_repo_output_candidate_paths(result: Any) -> List[str]:
     return paths
 
 
+def _artifact_repo_paths(value: Any) -> List[str]:
+    paths: List[str] = []
+    seen: Set[str] = set()
+    if isinstance(value, list):
+        items = value
+    else:
+        items = [value]
+    for item in items:
+        raw_path = ""
+        if isinstance(item, dict):
+            raw_path = str(item.get("path") or "").strip()
+        elif isinstance(item, str):
+            raw_path = item.strip()
+        path = raw_path.replace("\\", "/").strip("`")
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        if not _looks_like_repo_file(path):
+            continue
+        if _is_assignment_execution_artifact_file(path):
+            continue
+        paths.append(path)
+    return paths
+
+
+def _docs_only_unexpected_document_repo_paths(payload: Dict[str, Any], result: Any) -> List[str]:
+    if _assignment_step_kind(payload) != "repo_change" or not _payload_is_docs_only_request(payload):
+        return []
+    expected_docs = {
+        path
+        for path in _assignment_expected_repo_files(payload)
+        if _is_documentation_like_repo_file(path)
+    }
+    if not expected_docs:
+        return []
+    unexpected: List[str] = []
+    seen: Set[str] = set()
+    for candidate in extract_file_candidates(result):
+        path = str(candidate.get("path") or "").strip().replace("\\", "/").strip("`")
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        if not _looks_like_repo_file(path):
+            continue
+        if _is_assignment_execution_artifact_file(path):
+            continue
+        if not _is_documentation_like_repo_file(path):
+            continue
+        if path in expected_docs:
+            continue
+        unexpected.append(path)
+    return unexpected
+
+
+def _docs_only_non_writer_branch_may_reference_upstream_docs(
+    payload: Dict[str, Any],
+    result: Any,
+) -> bool:
+    if not _payload_is_docs_only_request(payload):
+        return False
+    if _assignment_step_kind(payload) not in {"test_execution", "review"}:
+        return False
+    repo_output_paths = _result_repo_output_candidate_paths(result)
+    if not repo_output_paths:
+        return False
+    allowed_paths = {
+        path
+        for path in _assignment_expected_repo_files(payload)
+        if _is_documentation_like_repo_file(path)
+    }
+    allowed_paths.update(
+        path
+        for path in _artifact_repo_paths(payload.get("upstream_artifacts"))
+        if _is_documentation_like_repo_file(path)
+    )
+    return bool(allowed_paths) and all(path in allowed_paths for path in repo_output_paths)
+
+
 def _docs_only_workstream_violations(result: Any) -> List[str]:
     if not isinstance(result, dict):
         return []
@@ -1715,6 +1793,13 @@ def _assignment_validation_error(task: Task, result: Any) -> str:
             return (
                 "Assignment explicitly requested documentation-only markdown outputs, "
                 f"but generated non-document repo files: {preview}."
+            )
+        unexpected_doc_paths = _docs_only_unexpected_document_repo_paths(payload, result)
+        if unexpected_doc_paths:
+            preview = ", ".join(unexpected_doc_paths[:5])
+            return (
+                "Documentation workstream emitted markdown files outside its assigned deliverables: "
+                f"{preview}."
             )
         if step_kind == "repo_change":
             broken_links = _docs_only_broken_markdown_links_from_artifacts(_result_explicit_artifacts(result))
@@ -2976,7 +3061,8 @@ class TaskManager:
                     bot = None
                 if bot is not None and not bot_allows_repo_output(bot):
                     repo_output_paths = _result_repo_output_candidate_paths(result)
-                    if repo_output_paths:
+                    payload = task.payload if isinstance(task.payload, dict) else {}
+                    if repo_output_paths and not _docs_only_non_writer_branch_may_reference_upstream_docs(payload, result):
                         preview = ", ".join(repo_output_paths[:5])
                         raise ValueError(
                             f"Bot '{task.bot_id}' is not allowed to emit repo file outputs, but returned: {preview}."

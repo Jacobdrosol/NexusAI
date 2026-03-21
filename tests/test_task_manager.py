@@ -116,6 +116,71 @@ async def test_task_manager_fails_deny_policy_bot_that_emits_repo_file(tmp_path)
 
 
 @pytest.mark.anyio
+async def test_task_manager_allows_docs_only_tester_to_reference_upstream_artifact_paths(tmp_path):
+    import asyncio
+
+    from control_plane.task_manager.task_manager import TaskManager
+
+    class StubRegistry:
+        def __init__(self):
+            self._bots = {
+                "pm-tester": Bot(
+                    id="pm-tester",
+                    name="PM Tester",
+                    role="tester",
+                    backends=[],
+                    execution_policy={"repo_output_mode": "deny"},
+                )
+            }
+
+        async def get(self, bot_id):
+            return self._bots[bot_id]
+
+    class StubScheduler:
+        async def schedule(self, _task):
+            return {
+                "artifacts": ["docs/blocks/web-research-libraries.md"],
+                "failure_type": "pass",
+                "outcome": "pass",
+                "findings": ["Validated upstream markdown deliverable."],
+                "evidence": ["Referenced upstream artifact path during validation."],
+                "handoff_notes": "Proceed.",
+            }
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "policy-docs-tester.db"), bot_registry=StubRegistry())
+    task = await tm.create_task(
+        bot_id="pm-tester",
+        payload={
+            "title": "Validate docs",
+            "step_kind": "test_execution",
+            "instruction": "Validate the docs-only workstream.",
+            "deliverables": ["docs/blocks/web-research-libraries.md"],
+            "assignment_scope": {
+                "docs_only": True,
+                "requested_output_paths": ["docs/blocks"],
+            },
+            "upstream_artifacts": [
+                {
+                    "path": "docs/blocks/web-research-libraries.md",
+                    "content": "# Web Research Libraries\n",
+                }
+            ],
+        },
+        metadata=TaskMetadata(source="bot_trigger", orchestration_id="orch-docs-tester-policy"),
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.05)
+
+    updated = await tm.get_task(task.id)
+    assert updated.status == "completed"
+    assert updated.error is None
+
+
+@pytest.mark.anyio
 async def test_task_manager_blocks_trigger_targets_outside_orchestration_allowlist(tmp_path):
     import asyncio
 
@@ -5798,7 +5863,7 @@ def test_assignment_validation_rejects_non_doc_engineering_workstreams_for_docs_
     assert "src/GlobeIQ.Server/Program.cs" in error
 
 
-def test_assignment_validation_allows_markdown_repo_artifacts_for_docs_only_requests():
+def test_assignment_validation_rejects_extra_markdown_repo_artifacts_outside_docs_only_deliverables():
     from control_plane.task_manager.task_manager import _assignment_validation_error
     from shared.models import Task, TaskMetadata
 
@@ -5826,7 +5891,10 @@ def test_assignment_validation_allows_markdown_repo_artifacts_for_docs_only_requ
         ]
     }
 
-    assert _assignment_validation_error(task, result) == ""
+    error = _assignment_validation_error(task, result)
+
+    assert "outside its assigned deliverables" in error
+    assert "docs/blocks/graphing.md" in error
 
 
 def test_assignment_validation_rejects_external_api_proposals_when_scope_forbids_them():
