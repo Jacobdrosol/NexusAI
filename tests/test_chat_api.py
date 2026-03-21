@@ -254,10 +254,12 @@ async def test_assign_message_creates_task_graph_and_summary(cp_app):
         assert data["user_message"]["metadata"]["requested_pm_bot_id"] == "bot-pm"
         assert data["user_message"]["metadata"]["assigned_pm_bot_id"] == "bot-pm"
         assert data["user_message"]["metadata"]["orchestration_id"] == data["assignment"]["orchestration_id"]
+        assert data["user_message"]["metadata"]["assignment_context_message_count"] == 0
         assert "Assignment queued" in data["assistant_message"]["content"]
         assert "Assigned Bot: bot-pm" in data["assistant_message"]["content"]
         assert data["assistant_message"]["metadata"]["mode"] == "assign_pending"
         assert data["assistant_message"]["metadata"]["assigned_pm_bot_id"] == "bot-pm"
+        assert data["assistant_message"]["metadata"]["assignment_context_strategy"] == "empty"
         assert data["assignment"]["allowed_bot_ids"] == ["bot-pm", "pm-research-analyst"]
         assert data["assignment"]["tasks"][0]["metadata"]["root_pm_bot_id"] == "bot-pm"
 
@@ -511,6 +513,47 @@ async def test_assign_message_uses_semantic_transcript_excerpt_for_large_chat(cp
     transcript = str(scope.get("conversation_transcript") or "").lower()
     assert "multivariable calculus" in transcript
     assert "desmos" in transcript
+    assert int(scope.get("assignment_memory_hit_count") or 0) >= 1
+    memory_hits = list(scope.get("assignment_memory_hits") or [])
+    assert memory_hits
+    assert any("desmos" in str(hit.get("snippet") or "").lower() for hit in memory_hits)
+
+    messages = await cp_app.state.chat_manager.list_messages(conversation_id)
+    assign_message = next(
+        message
+        for message in messages
+        if str((message.metadata or {}).get("mode") or "") == "assign_request"
+    )
+    metadata = assign_message.metadata or {}
+    assert metadata.get("assignment_context_strategy") == "semantic_excerpt"
+    assert int(metadata.get("assignment_memory_hit_count") or 0) >= 1
+
+
+@pytest.mark.anyio
+async def test_chat_message_memory_prefers_user_intent_hits(cp_app):
+    chat_manager = cp_app.state.chat_manager
+    conversation = await chat_manager.create_conversation("Memory Ranking")
+    await chat_manager.add_message(
+        conversation.id,
+        "user",
+        "We need in-house mathematics blocks and must avoid the Desmos API for this lesson builder.",
+    )
+    await chat_manager.add_message(
+        conversation.id,
+        "assistant",
+        "You could avoid the Desmos API and still build in-house mathematics blocks over time.",
+    )
+
+    hits = await chat_manager.search_message_memory(
+        conversation.id,
+        "in-house mathematics blocks avoid desmos api",
+        limit=2,
+        roles=["user", "assistant"],
+    )
+
+    assert len(hits) >= 2
+    assert hits[0]["role"] == "user"
+    assert float(hits[0]["weighted_score"]) > float(hits[1]["weighted_score"])
 
 
 @pytest.mark.anyio

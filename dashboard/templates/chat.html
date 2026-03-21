@@ -183,6 +183,45 @@
         {% elif m.metadata and m.metadata.get('mode') == 'assign_error' %}
         <div class="message-indicator message-indicator-failed">PM assignment failed</div>
         {% endif %}
+        {% if m.metadata and m.metadata.get('mode') in ['assign_request', 'assign_pending'] and (m.metadata.get('assignment_context_strategy') or m.metadata.get('assignment_memory_hits')) %}
+        {% set context_strategy = m.metadata.get('assignment_context_strategy') %}
+        {% set context_hits = m.metadata.get('assignment_memory_hits') or [] %}
+        <div class="message-context">
+          <div class="message-context-summary">
+            PM context:
+            {% if context_strategy == 'full' %}
+            full chat transcript
+            {% elif context_strategy == 'semantic_excerpt' %}
+            semantic excerpt
+            {% elif context_strategy == 'excerpt' %}
+            bounded transcript excerpt
+            {% elif context_strategy %}
+            {{ context_strategy }}
+            {% else %}
+            transcript snapshot
+            {% endif %}
+            {% if m.metadata.get('assignment_context_message_count') %}
+            · {{ m.metadata.get('assignment_context_message_count') }} message{{ '' if m.metadata.get('assignment_context_message_count') == 1 else 's' }}
+            {% endif %}
+            {% if m.metadata.get('assignment_memory_hit_count') %}
+            · {{ m.metadata.get('assignment_memory_hit_count') }} semantic hit{{ '' if m.metadata.get('assignment_memory_hit_count') == 1 else 's' }}
+            {% endif %}
+          </div>
+          {% if context_hits %}
+          <details class="message-context-details">
+            <summary class="chat-summary">Assignment memory snippets</summary>
+            <div class="message-context-hit-list">
+              {% for hit in context_hits %}
+              <div class="message-context-hit">
+                <div class="message-context-hit-meta">{{ hit.get('role', 'message') }} · score {{ '%.3f'|format(hit.get('weighted_score', hit.get('score', 0))|float) }}</div>
+                <div class="message-context-hit-snippet">{{ hit.get('snippet', '') }}</div>
+              </div>
+              {% endfor %}
+            </div>
+          </details>
+          {% endif %}
+        </div>
+        {% endif %}
         <div class="message-body">{{ m.content }}</div>
         <div class="message-actions">
           <button class="btn btn-sm" onclick="copyMessage(this)">Copy</button>
@@ -570,6 +609,49 @@ function renderMessageIndicators(meta) {
   return '';
 }
 
+function renderAssignmentContextHtml(meta) {
+  const mode = String(meta?.mode || '').trim();
+  if (!['assign_request', 'assign_pending'].includes(mode)) return '';
+  const strategy = String(meta?.assignment_context_strategy || '').trim();
+  const messageCount = Number(meta?.assignment_context_message_count || 0);
+  const hits = Array.isArray(meta?.assignment_memory_hits) ? meta.assignment_memory_hits : [];
+  const hitCount = Number(meta?.assignment_memory_hit_count || hits.length || 0);
+  if (!strategy && !hits.length) return '';
+  let strategyLabel = 'transcript snapshot';
+  if (strategy === 'full') strategyLabel = 'full chat transcript';
+  else if (strategy === 'semantic_excerpt') strategyLabel = 'semantic excerpt';
+  else if (strategy === 'excerpt') strategyLabel = 'bounded transcript excerpt';
+  else if (strategy) strategyLabel = strategy;
+  const parts = ['PM context: ' + esc(strategyLabel)];
+  if (messageCount > 0) parts.push(`${messageCount} message${messageCount === 1 ? '' : 's'}`);
+  if (hitCount > 0) parts.push(`${hitCount} semantic hit${hitCount === 1 ? '' : 's'}`);
+  const hitsHtml = hits.length ? `
+    <details class="message-context-details">
+      <summary class="chat-summary">Assignment memory snippets</summary>
+      <div class="message-context-hit-list">
+        ${hits.map((hit) => {
+          const role = esc(String(hit?.role || 'message').trim() || 'message');
+          const weighted = Number(hit?.weighted_score ?? hit?.score ?? 0);
+          const score = Number.isFinite(weighted) ? weighted.toFixed(3) : '0.000';
+          const snippet = esc(String(hit?.snippet || '').trim());
+          return `
+            <div class="message-context-hit">
+              <div class="message-context-hit-meta">${role} · score ${score}</div>
+              <div class="message-context-hit-snippet">${snippet}</div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    </details>
+  ` : '';
+  return `
+    <div class="message-context">
+      <div class="message-context-summary">${parts.join(' · ')}</div>
+      ${hitsHtml}
+    </div>
+  `;
+}
+
 function escapeHtml(text) {
   return String(text || '').replace(/[&<>"']/g, (c) => (
     {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;', "'":'&#39;'}[c]
@@ -752,6 +834,7 @@ function appendMessage(role, content, id='temp-' + Date.now(), meta=null) {
   div.innerHTML = `
     <div class="message-role">${role}</div>
     ${renderMessageIndicators(meta)}
+    ${renderAssignmentContextHtml(meta)}
     <div class="message-body"></div>
     <div class="message-actions">
       ${renderMessageActions(meta)}
@@ -817,6 +900,7 @@ function hydrateMessageElement(el, message) {
 
   const roleEl = el.querySelector('.message-role');
   const existingIndicator = el.querySelector('.message-indicator');
+  const existingContext = el.querySelector('.message-context');
   const bodyEl = el.querySelector('.message-body');
   const actionsEl = el.querySelector('.message-actions');
   const failedPm = isFailedPmLikeMessage(message?.metadata || null);
@@ -839,6 +923,16 @@ function hydrateMessageElement(el, message) {
     }
   } else if (existingIndicator) {
     existingIndicator.remove();
+  }
+  const contextHtml = renderAssignmentContextHtml(message.metadata || null);
+  if (contextHtml) {
+    if (existingContext) {
+      existingContext.outerHTML = contextHtml;
+    } else if (bodyEl) {
+      bodyEl.insertAdjacentHTML('beforebegin', contextHtml);
+    }
+  } else if (existingContext) {
+    existingContext.remove();
   }
   if (bodyEl) renderMessageBody(bodyEl, message.content || '');
   if (actionsEl) actionsEl.innerHTML = renderMessageActions(message.metadata || null);

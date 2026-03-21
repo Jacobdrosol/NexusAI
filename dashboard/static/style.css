@@ -567,6 +567,50 @@ select.form-control {
   border: 1px solid rgba(56, 189, 248, 0.42);
 }
 
+.message-context {
+  margin-bottom: 0.55rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: 8px;
+  background: rgba(15, 26, 40, 0.72);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.message-context-summary {
+  color: #cbd5e1;
+  font-size: 0.82rem;
+}
+
+.message-context-details {
+  margin-top: 0.45rem;
+}
+
+.message-context-hit-list {
+  margin-top: 0.45rem;
+  display: grid;
+  gap: 0.45rem;
+}
+
+.message-context-hit {
+  padding: 0.5rem 0.55rem;
+  border-radius: 7px;
+  background: rgba(30, 41, 59, 0.78);
+  border: 1px solid rgba(71, 85, 105, 0.34);
+}
+
+.message-context-hit-meta {
+  font-size: 0.74rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #93c5fd;
+  margin-bottom: 0.2rem;
+}
+
+.message-context-hit-snippet {
+  color: #dbe7f5;
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+
 .message-body {
   white-space: normal;
   line-height: 1.65;

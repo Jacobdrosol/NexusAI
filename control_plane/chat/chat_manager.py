@@ -134,6 +134,16 @@ class ChatManager:
             return 0.0
         return float(sum(x * y for x, y in zip(a, b)))
 
+    def _iso_to_ts(self, value: str) -> float:
+        text = str(value or "").strip()
+        if not text:
+            return 0.0
+        try:
+            normalized = text.replace("Z", "+00:00")
+            return datetime.fromisoformat(normalized).timestamp()
+        except Exception:
+            return 0.0
+
     def _message_is_indexable(self, *, role: str, metadata: Any) -> bool:
         if str(role or "").strip().lower() not in {"user", "assistant"}:
             return False
@@ -622,22 +632,38 @@ class ChatManager:
             db.row_factory = aiosqlite.Row
             async with db.execute(query_sql, tuple(params)) as cursor:
                 rows = await cursor.fetchall()
-        scored: List[Dict[str, Any]] = []
+        if not rows:
+            return []
+        timestamps = [self._iso_to_ts(str(row["created_at"] or "")) for row in rows]
+        min_ts = min(timestamps) if timestamps else 0.0
+        max_ts = max(timestamps) if timestamps else 0.0
+        ts_span = max(max_ts - min_ts, 1.0)
+        per_message: Dict[str, Dict[str, Any]] = {}
         for row in rows:
             emb = json.loads(row["embedding"])
-            score = self._cosine(qvec, emb)
-            scored.append(
-                {
-                    "id": row["id"],
-                    "message_id": row["message_id"],
-                    "role": row["role"],
-                    "chunk_index": row["chunk_index"],
-                    "content": row["content"],
-                    "created_at": row["created_at"],
-                    "score": score,
-                }
-            )
-        scored.sort(key=lambda item: (item["score"], item["created_at"]), reverse=True)
+            raw_score = self._cosine(qvec, emb)
+            role = str(row["role"] or "").strip().lower()
+            role_bonus = 0.18 if role == "user" else 0.02
+            created_at = str(row["created_at"] or "")
+            recency_bonus = max(0.0, min(0.08, 0.08 * ((self._iso_to_ts(created_at) - min_ts) / ts_span)))
+            weighted_score = raw_score + role_bonus + recency_bonus
+            candidate = {
+                "id": row["id"],
+                "message_id": row["message_id"],
+                "role": role,
+                "chunk_index": row["chunk_index"],
+                "content": row["content"],
+                "created_at": created_at,
+                "score": raw_score,
+                "weighted_score": weighted_score,
+                "role_bonus": role_bonus,
+                "recency_bonus": recency_bonus,
+            }
+            existing = per_message.get(str(row["message_id"] or ""))
+            if existing is None or float(candidate["weighted_score"]) > float(existing["weighted_score"]):
+                per_message[str(row["message_id"] or "")] = candidate
+        scored = list(per_message.values())
+        scored.sort(key=lambda item: (item["weighted_score"], item["score"], item["created_at"]), reverse=True)
         return scored[: max(1, min(limit, 50))]
 
     async def get_messages_by_ids(self, conversation_id: str, message_ids: List[str]) -> List[ChatMessage]:

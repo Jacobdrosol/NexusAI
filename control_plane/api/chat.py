@@ -1232,6 +1232,47 @@ def _build_assignment_conversation_transcript(
     }
 
 
+def _clip_assignment_memory_snippet(text: str, *, limit: int = 220) -> str:
+    normalized = re.sub(r"\s+", " ", str(text or "").strip()).strip()
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[: max(0, limit - 3)].rstrip() + "..."
+
+
+def _build_assignment_memory_hits(
+    semantic_hits: List[Dict[str, Any]],
+    semantic_messages_by_id: Dict[str, ChatMessage],
+    *,
+    max_hits: int = 8,
+) -> List[Dict[str, Any]]:
+    hits: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for hit in semantic_hits:
+        message_id = str(hit.get("message_id") or "").strip()
+        if not message_id or message_id in seen:
+            continue
+        seen.add(message_id)
+        message = semantic_messages_by_id.get(message_id)
+        snippet = _clip_assignment_memory_snippet(
+            str(hit.get("content") or (message.content if message else "") or "")
+        )
+        if not snippet:
+            continue
+        hits.append(
+            {
+                "message_id": message_id,
+                "role": str(hit.get("role") or (message.role if message else "") or "").strip().lower(),
+                "created_at": str(hit.get("created_at") or (message.created_at if message else "") or ""),
+                "score": round(float(hit.get("score") or 0.0), 4),
+                "weighted_score": round(float(hit.get("weighted_score") or hit.get("score") or 0.0), 4),
+                "snippet": snippet,
+            }
+        )
+        if len(hits) >= max_hits:
+            break
+    return hits
+
+
 async def _build_assignment_context_snapshot(
     chat_manager: Any,
     *,
@@ -1260,6 +1301,8 @@ async def _build_assignment_context_snapshot(
             "conversation_transcript": str(transcript.get("conversation_transcript") or ""),
             "conversation_message_count": int(transcript.get("conversation_message_count") or 0),
             "conversation_transcript_strategy": str(transcript.get("conversation_transcript_strategy") or ""),
+            "assignment_memory_hits": [],
+            "assignment_memory_hit_count": 0,
         }
 
     head_messages = await chat_manager.list_message_slice(conversation_id, limit=10, newest=False)
@@ -1298,11 +1341,23 @@ async def _build_assignment_context_snapshot(
         max_chars=18000,
         head_messages=12,
     )
+    memory_hits = _build_assignment_memory_hits(semantic_hits, semantic_messages_by_id)
     return {
         "conversation_brief": brief,
         "conversation_transcript": str(transcript.get("conversation_transcript") or ""),
         "conversation_message_count": total_messages,
         "conversation_transcript_strategy": "semantic_excerpt",
+        "assignment_memory_hits": memory_hits,
+        "assignment_memory_hit_count": len(memory_hits),
+    }
+
+
+def _assignment_context_message_metadata(context_snapshot: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "assignment_context_strategy": str(context_snapshot.get("conversation_transcript_strategy") or "").strip(),
+        "assignment_context_message_count": int(context_snapshot.get("conversation_message_count") or 0),
+        "assignment_memory_hit_count": int(context_snapshot.get("assignment_memory_hit_count") or 0),
+        "assignment_memory_hits": list(context_snapshot.get("assignment_memory_hits") or []),
     }
 
 
@@ -1601,8 +1656,11 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                 conversation_transcript=str(context_snapshot.get("conversation_transcript") or ""),
                 conversation_message_count=int(context_snapshot.get("conversation_message_count") or 0),
                 conversation_transcript_strategy=str(context_snapshot.get("conversation_transcript_strategy") or ""),
+                assignment_memory_hits=list(context_snapshot.get("assignment_memory_hits") or []),
+                assignment_memory_hit_count=int(context_snapshot.get("assignment_memory_hit_count") or 0),
                 project_id=conversation.project_id,
             )
+            context_meta = _assignment_context_message_metadata(context_snapshot)
             user_message = await chat_manager.update_message(
                 user_message.id,
                 metadata={
@@ -1610,6 +1668,7 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                     "requested_pm_bot_id": assign_bot_id,
                     "assigned_pm_bot_id": str(assignment.get("pm_bot_id") or assign_bot_id or ""),
                     "orchestration_id": assignment.get("orchestration_id"),
+                    **context_meta,
                 },
             )
             assistant_message = await chat_manager.add_message(
@@ -1627,6 +1686,7 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                     "orchestration_id": assignment.get("orchestration_id"),
                     "task_count": len(assignment.get("tasks", [])),
                     "assigned_pm_bot_id": str(assignment.get("pm_bot_id") or assign_bot_id or ""),
+                    **context_meta,
                 },
             )
 
@@ -1842,8 +1902,11 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                     conversation_transcript=str(context_snapshot.get("conversation_transcript") or ""),
                     conversation_message_count=int(context_snapshot.get("conversation_message_count") or 0),
                     conversation_transcript_strategy=str(context_snapshot.get("conversation_transcript_strategy") or ""),
+                    assignment_memory_hits=list(context_snapshot.get("assignment_memory_hits") or []),
+                    assignment_memory_hit_count=int(context_snapshot.get("assignment_memory_hit_count") or 0),
                     project_id=conversation.project_id,
                 )
+                context_meta = _assignment_context_message_metadata(context_snapshot)
                 user_message = await chat_manager.update_message(
                     user_message.id,
                     metadata={
@@ -1851,6 +1914,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                         "requested_pm_bot_id": assign_bot_id,
                         "assigned_pm_bot_id": str(assignment.get("pm_bot_id") or assign_bot_id or ""),
                         "orchestration_id": assignment.get("orchestration_id"),
+                        **context_meta,
                     },
                 )
                 yield f"event: user_message\ndata: {user_message.model_dump_json()}\n\n"

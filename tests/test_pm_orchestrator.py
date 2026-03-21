@@ -1629,6 +1629,16 @@ async def test_bootstrap_via_pm_workflow_persists_conversation_brief_and_scope_c
         ),
         conversation_message_count=3,
         conversation_transcript_strategy="full",
+        assignment_memory_hits=[
+            {
+                "message_id": "msg-1",
+                "role": "user",
+                "score": 0.81,
+                "weighted_score": 0.89,
+                "snippet": "Help me plan mathematics blocks from algebra through multivariable calculus.",
+            }
+        ],
+        assignment_memory_hit_count=1,
         pm_bot=pm_bot,
         context_items=[],
         project_id="proj-1",
@@ -1644,6 +1654,8 @@ async def test_bootstrap_via_pm_workflow_persists_conversation_brief_and_scope_c
     assert scope["conversation_message_count"] == 3
     assert scope["conversation_transcript_strategy"] == "full"
     assert "desmos api" in scope["conversation_transcript"].lower()
+    assert scope["assignment_memory_hit_count"] == 1
+    assert scope["assignment_memory_hits"][0]["role"] == "user"
     assert "algebra" in scope["focus_topics"]
     assert "roadmap" in scope["requested_artifact_hints"]
 

@@ -235,6 +235,8 @@ class PMOrchestrator:
         conversation_transcript: str = "",
         conversation_message_count: int = 0,
         conversation_transcript_strategy: str = "",
+        assignment_memory_hits: Optional[List[Dict[str, Any]]] = None,
+        assignment_memory_hit_count: int = 0,
     ) -> Dict[str, Any]:
         request_text = str(instruction or "").strip()
         prior_context = str(conversation_brief or "").strip()
@@ -248,6 +250,11 @@ class PMOrchestrator:
             "conversation_transcript": transcript,
             "conversation_message_count": max(0, int(conversation_message_count or 0)),
             "conversation_transcript_strategy": str(conversation_transcript_strategy or "").strip(),
+            "assignment_memory_hits": list(assignment_memory_hits or []),
+            "assignment_memory_hit_count": max(
+                int(assignment_memory_hit_count or 0),
+                len(list(assignment_memory_hits or [])),
+            ),
             "docs_only": docs_only,
             "requested_output_paths": self._requested_output_paths(request_text),
             "requested_output_extensions": [".md"] if docs_only else [],
@@ -328,6 +335,8 @@ class PMOrchestrator:
         conversation_transcript: str = "",
         conversation_message_count: int = 0,
         conversation_transcript_strategy: str = "",
+        assignment_memory_hits: Optional[List[Dict[str, Any]]] = None,
+        assignment_memory_hit_count: int = 0,
         project_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         requested_pm_bot_id = str(requested_pm_bot_id or "").strip()
@@ -351,6 +360,8 @@ class PMOrchestrator:
             conversation_transcript=conversation_transcript,
             conversation_message_count=conversation_message_count,
             conversation_transcript_strategy=conversation_transcript_strategy,
+            assignment_memory_hits=assignment_memory_hits,
+            assignment_memory_hit_count=assignment_memory_hit_count,
             project_id=project_id,
             bots=bots,
         )
@@ -373,6 +384,8 @@ class PMOrchestrator:
         conversation_transcript: str = "",
         conversation_message_count: int = 0,
         conversation_transcript_strategy: str = "",
+        assignment_memory_hits: Optional[List[Dict[str, Any]]] = None,
+        assignment_memory_hit_count: int = 0,
         project_id: Optional[str],
         bots: List[Bot],
     ) -> Dict[str, Any]:
@@ -386,6 +399,8 @@ class PMOrchestrator:
             conversation_transcript=conversation_transcript,
             conversation_message_count=conversation_message_count,
             conversation_transcript_strategy=conversation_transcript_strategy,
+            assignment_memory_hits=assignment_memory_hits,
+            assignment_memory_hit_count=assignment_memory_hit_count,
         )
         pm_task = await self._task_manager.create_task(
             bot_id=pm_bot.id,
