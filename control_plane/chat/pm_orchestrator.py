@@ -452,28 +452,30 @@ class PMOrchestrator:
             lines.append("Run summary captured before all tasks reached a terminal state.")
         elif final_qc_required and not final_qc_completed:
             lines.append("Run did not reach a completed Final QC stage, so it cannot be marked as passed.")
-        if run_status == "failed":
-            try:
-                existing_messages = await self._chat_manager.list_messages(conversation_id, limit=500)
-                for message in existing_messages:
-                    metadata = message.metadata if isinstance(message.metadata, dict) else {}
-                    if str(metadata.get("orchestration_id") or "").strip() != orchestration_id:
-                        continue
-                    if str(metadata.get("mode") or "").strip() != "assign_pending":
-                        continue
-                    updated_metadata = dict(metadata)
-                    updated_metadata.update(
-                        {
-                            "run_status": "failed",
-                            "ingest_allowed": False,
-                        }
-                    )
-                    await self._chat_manager.update_message(
-                        message.id,
-                        metadata=updated_metadata,
-                    )
-            except Exception:
-                logger.exception("Failed to mark assign_pending message as failed for orchestration %s", orchestration_id)
+        try:
+            existing_messages = await self._chat_manager.list_messages(conversation_id, limit=500)
+            for message in existing_messages:
+                metadata = message.metadata if isinstance(message.metadata, dict) else {}
+                if str(metadata.get("orchestration_id") or "").strip() != orchestration_id:
+                    continue
+                if str(metadata.get("mode") or "").strip() != "assign_pending":
+                    continue
+                updated_metadata = dict(metadata)
+                updated_metadata.update(
+                    {
+                        "run_status": run_status,
+                        "ingest_allowed": run_status == "passed",
+                    }
+                )
+                await self._chat_manager.update_message(
+                    message.id,
+                    metadata=updated_metadata,
+                )
+        except Exception:
+            logger.exception(
+                "Failed to update assign_pending message status for orchestration %s",
+                orchestration_id,
+            )
         return await self._chat_manager.add_message(
             conversation_id=conversation_id,
             role="assistant",

@@ -1036,6 +1036,55 @@ async def test_persist_summary_message_marks_assign_pending_failed_for_same_orch
 
 
 @pytest.mark.anyio
+async def test_persist_summary_message_marks_assign_pending_passed_for_same_orchestration() -> None:
+    pending_message = type(
+        "PendingMessage",
+        (),
+        {
+            "id": "msg-pending",
+            "metadata": {"mode": "assign_pending", "orchestration_id": "orch-pass", "task_count": 4},
+        },
+    )()
+    updated_message = type("UpdatedMessage", (), {"id": "msg-report"})()
+    chat_manager = type(
+        "ChatManager",
+        (),
+        {
+            "list_messages": AsyncMock(return_value=[pending_message]),
+            "update_message": AsyncMock(return_value=pending_message),
+            "add_message": AsyncMock(return_value=updated_message),
+        },
+    )()
+    orchestrator = PMOrchestrator(
+        bot_registry=None,
+        scheduler=None,
+        task_manager=None,
+        chat_manager=chat_manager,
+    )
+
+    result = await orchestrator.persist_summary_message(
+        conversation_id="conv-1",
+        assignment={"pm_bot_id": "pm-orchestrator", "orchestration_id": "orch-pass"},
+        completion={
+            "task_count": 4,
+            "completed": 4,
+            "failed": 0,
+            "all_terminal": True,
+            "workflow_complete": True,
+            "final_qc_required": True,
+            "final_qc_completed": True,
+            "summary_text": "passed run",
+        },
+    )
+
+    assert result is updated_message
+    chat_manager.update_message.assert_awaited_once()
+    update_kwargs = chat_manager.update_message.await_args.kwargs
+    assert update_kwargs["metadata"]["run_status"] == "passed"
+    assert update_kwargs["metadata"]["ingest_allowed"] is True
+
+
+@pytest.mark.anyio
 async def test_wait_for_completion_tracks_trigger_spawned_orchestration_tasks() -> None:
     engineer_task = Task(
         id="task-engineer",
