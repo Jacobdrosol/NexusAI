@@ -1220,6 +1220,129 @@ async def test_wait_for_completion_marks_pm_workflow_incomplete_when_final_qc_mi
 
 
 @pytest.mark.anyio
+async def test_wait_for_completion_requires_final_qc_on_latest_pm_cycle() -> None:
+    pm_bot = Bot(
+        id="pm-orchestrator",
+        name="PM Orchestrator",
+        role="pm",
+        backends=[],
+        enabled=True,
+        workflow={
+            "reference_graph": {
+                "graph_id": "pm-graph",
+                "entry_bot_id": "pm-orchestrator",
+                "current_bot_id": "pm-orchestrator",
+                "nodes": [
+                    {"bot_id": "pm-orchestrator", "title": "PM Orchestrator"},
+                    {"bot_id": "pm-research-analyst", "title": "PM Research Analyst"},
+                    {"bot_id": "pm-engineer", "title": "PM Engineer"},
+                    {"bot_id": "pm-coder", "title": "PM Coder"},
+                    {"bot_id": "pm-tester", "title": "PM Tester"},
+                    {"bot_id": "pm-security-reviewer", "title": "PM Security Reviewer"},
+                    {"bot_id": "pm-database-engineer", "title": "PM Database Engineer"},
+                    {"bot_id": "pm-ui-tester", "title": "PM UI Tester"},
+                    {"bot_id": "pm-final-qc", "title": "PM Final QC"},
+                ],
+                "edges": [],
+            },
+            "triggers": [],
+        },
+    )
+    first_pm = Task(
+        id="task-pm-1",
+        bot_id="pm-orchestrator",
+        payload={"title": "PM assignment intake"},
+        metadata=TaskMetadata(source="chat_assign", orchestration_id="orch-latest-cycle"),
+        status="completed",
+        created_at="2026-03-20T00:00:00+00:00",
+        updated_at="2026-03-20T00:00:01+00:00",
+        result={"status": "complete"},
+    )
+    first_final_qc = Task(
+        id="task-qc-1",
+        bot_id="pm-final-qc",
+        payload={"title": "Initial final QC"},
+        metadata=TaskMetadata(
+            source="bot_trigger",
+            orchestration_id="orch-latest-cycle",
+            parent_task_id="task-pm-1",
+        ),
+        status="completed",
+        created_at="2026-03-20T00:00:10+00:00",
+        updated_at="2026-03-20T00:00:11+00:00",
+        result={"status": "pass"},
+    )
+    second_pm = Task(
+        id="task-pm-2",
+        bot_id="pm-orchestrator",
+        payload={"title": "PM rerun"},
+        metadata=TaskMetadata(
+            source="bot_trigger",
+            orchestration_id="orch-latest-cycle",
+            parent_task_id="task-qc-1",
+            trigger_rule_id="final-qc-back-pm-incomplete",
+        ),
+        status="completed",
+        created_at="2026-03-20T00:01:00+00:00",
+        updated_at="2026-03-20T00:01:01+00:00",
+        result={"status": "complete"},
+    )
+    second_security = Task(
+        id="task-security-2",
+        bot_id="pm-security-reviewer",
+        payload={"title": "Security review on rerun"},
+        metadata=TaskMetadata(
+            source="bot_trigger",
+            orchestration_id="orch-latest-cycle",
+            parent_task_id="task-pm-2",
+        ),
+        status="completed",
+        created_at="2026-03-20T00:01:20+00:00",
+        updated_at="2026-03-20T00:01:21+00:00",
+        result={"status": "pass"},
+    )
+    task_manager = type(
+        "TaskManager",
+        (),
+        {
+            "list_tasks": AsyncMock(return_value=[first_pm, first_final_qc, second_pm, second_security]),
+            "get_task": AsyncMock(
+                side_effect=lambda task_id: {
+                    "task-pm-1": first_pm,
+                    "task-qc-1": first_final_qc,
+                    "task-pm-2": second_pm,
+                    "task-security-2": second_security,
+                }[task_id]
+            ),
+        },
+    )()
+    bot_registry = type("BotRegistry", (), {"get": AsyncMock(return_value=pm_bot)})()
+    orchestrator = PMOrchestrator(
+        bot_registry=bot_registry,
+        scheduler=None,
+        task_manager=task_manager,
+        chat_manager=None,
+    )
+
+    completion = await orchestrator.wait_for_completion(
+        {
+            "orchestration_id": "orch-latest-cycle",
+            "pm_bot_id": "pm-orchestrator",
+            "tasks": [{"id": "task-pm-1"}],
+        },
+        poll_interval_seconds=0.0,
+        max_wait_seconds=0.01,
+    )
+
+    assert completion["all_terminal"] is True
+    assert completion["final_qc_required"] is True
+    assert completion["final_qc_completed"] is False
+    assert completion["workflow_complete"] is False
+    assert completion["latest_cycle_entry_task_id"] == "task-pm-2"
+    assert "pm-final-qc" in " ".join(completion["missing_stages"])
+
+
+@pytest.mark.anyio
 async def test_persist_summary_message_requires_completed_final_qc_for_pass() -> None:
     updated_message = type("UpdatedMessage", (), {"id": "msg-report"})()
     chat_manager = type(

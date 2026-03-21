@@ -90,12 +90,24 @@ _TESTER_FAIL = {
 
 _SECURITY_PASS = {
     "status": "pass",
+    "outcome": "pass",
     "failure_type": "pass",
     "change_summary": "no issues found",
     "files_touched": [],
     "artifacts": [],
     "risks": [],
     "handoff_notes": "ready for db",
+}
+
+_SECURITY_SKIP = {
+    "status": "completed",
+    "outcome": "skip",
+    "failure_type": "not_applicable",
+    "change_summary": "docs-only branch has no security-sensitive runtime changes",
+    "files_touched": [],
+    "artifacts": [],
+    "risks": [],
+    "handoff_notes": "security review not applicable; continue forward",
 }
 
 _SECURITY_FAIL = {
@@ -280,11 +292,20 @@ async def _make_bot_registry(tmp_path, suffix: str = ""):
         workflow={
             "triggers": [
                 {
+                    "id": "security-skip-join-database",
+                    "event": "task_completed",
+                    "target_bot_id": "pm-database-engineer",
+                    "condition": "has_result",
+                    "result_field": "outcome",
+                    "result_equals": "skip",
+                    "join_group_field": "fanout_id",
+                },
+                {
                     "id": "join-pass-to-db",
                     "event": "task_completed",
                     "target_bot_id": "pm-database-engineer",
                     "condition": "has_result",
-                    "result_field": "status",
+                    "result_field": "outcome",
                     "result_equals": "pass",
                     "join_group_field": "fanout_id",
                 },
@@ -963,3 +984,58 @@ async def test_pm_workflow_ui_tester_pass_routes_to_final_qc(tmp_path):
     ui_tasks = [t for t in tasks if t.bot_id == "pm-ui-tester"]
     assert len(ui_tasks) == 1
     assert ui_tasks[0].result.get("status") == "pass"
+
+
+@pytest.mark.anyio
+async def test_pm_workflow_mixed_security_pass_and_skip_still_joins_to_db(tmp_path):
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import TaskMetadata
+
+    security_call_count = {"n": 0}
+
+    class StubScheduler:
+        async def schedule(self, task):
+            if task.bot_id == "pm-engineer":
+                return _engineer_result("WS1: library comparison", "WS2: implementation guide")
+            if task.bot_id == "pm-coder":
+                return _CODER_PASS
+            if task.bot_id == "pm-tester":
+                return _TESTER_PASS
+            if task.bot_id == "pm-security-reviewer":
+                security_call_count["n"] += 1
+                return _SECURITY_SKIP if security_call_count["n"] == 1 else _SECURITY_PASS
+            if task.bot_id == "pm-database-engineer":
+                return _DB_PASS
+            if task.bot_id == "pm-ui-tester":
+                return _UI_SKIP
+            if task.bot_id == "pm-final-qc":
+                return _QC_PASS
+            return {"status": "pass"}
+
+    bot_registry = await _make_bot_registry(tmp_path, "-test9")
+    tm = TaskManager(
+        StubScheduler(),
+        db_path=str(tmp_path / "pm-routing-test9.db"),
+        bot_registry=bot_registry,
+    )
+
+    await tm.create_task(
+        bot_id="pm-engineer",
+        payload={"instruction": "create docs with mixed review applicability"},
+        metadata=TaskMetadata(source="chat_assign"),
+    )
+
+    expected_total = 10
+    tasks = await _wait_for_terminal(tm, "pm-final-qc", expected_total)
+
+    assert len(tasks) == expected_total, f"Expected {expected_total} tasks, got {len(tasks)}: {_counts(tasks)}"
+    assert all(t.status == "completed" for t in tasks)
+
+    c = _counts(tasks)
+    assert c.get("pm-engineer", 0) == 1
+    assert c.get("pm-coder", 0) == 2
+    assert c.get("pm-tester", 0) == 2
+    assert c.get("pm-security-reviewer", 0) == 2
+    assert c.get("pm-database-engineer", 0) == 1
+    assert c.get("pm-ui-tester", 0) == 1
+    assert c.get("pm-final-qc", 0) == 1

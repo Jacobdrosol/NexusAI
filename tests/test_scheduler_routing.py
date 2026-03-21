@@ -1123,3 +1123,4 @@ async def test_scheduler_appends_docs_only_upstream_artifact_guidance_to_system_
     system_message = result["payload"][0]["content"]
     assert "upstream_artifacts" in system_message
     assert "live repo snapshot does not yet contain the proposed markdown files" in system_message
+    assert "prefer the strongest upstream tester evidence over later skip/not_applicable review signals" in system_message

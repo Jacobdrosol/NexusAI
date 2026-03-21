@@ -587,21 +587,50 @@ class PMOrchestrator:
             elif task.error and task.error.message:
                 lines.append(f"  Error: {task.error.message[:220]}")
 
+        cycle_entry_bot_id = str(assignment.get("pm_bot_id") or "").strip() or (
+            str(stage_order[0]).strip() if stage_order else ""
+        )
+
+        def _task_cycle_token(task: Task) -> tuple[str, str, str]:
+            return (
+                str(task.created_at or ""),
+                str(task.updated_at or ""),
+                str(task.id or ""),
+            )
+
+        cycle_entry_tasks = [
+            task
+            for task in final_tasks
+            if str(task.bot_id or "").strip() == cycle_entry_bot_id
+        ]
+        latest_cycle_anchor = max(cycle_entry_tasks, key=_task_cycle_token) if cycle_entry_tasks else None
+        latest_cycle_anchor_token = _task_cycle_token(latest_cycle_anchor) if latest_cycle_anchor is not None else None
+        latest_cycle_tasks = [
+            task
+            for task in final_tasks
+            if latest_cycle_anchor_token is None or _task_cycle_token(task) >= latest_cycle_anchor_token
+        ]
+        latest_cycle_observed_bot_ids: List[str] = []
+        for task in latest_cycle_tasks:
+            bot_id = str(task.bot_id or "").strip()
+            if bot_id and bot_id not in latest_cycle_observed_bot_ids:
+                latest_cycle_observed_bot_ids.append(bot_id)
+
         final_qc_terminal = any(
             str(task.bot_id or "").strip() == "pm-final-qc"
             and str(task.status or "").strip().lower() in self._TERMINAL_TASK_STATUSES
-            for task in final_tasks
+            for task in latest_cycle_tasks
         )
         final_qc_completed = any(
             str(task.bot_id or "").strip() == "pm-final-qc"
             and str(task.status or "").strip().lower() == "completed"
-            for task in final_tasks
+            for task in latest_cycle_tasks
         )
         workflow_complete = (not final_qc_required) or final_qc_terminal
         missing_stages = [
             stage_id
             for stage_id in stage_order
-            if stage_id and stage_id not in observed_bot_ids
+            if stage_id and stage_id not in latest_cycle_observed_bot_ids
         ]
         if all_terminal and not workflow_complete:
             lines.extend(
@@ -611,8 +640,16 @@ class PMOrchestrator:
                     "Expected terminal stage: pm-final-qc.",
                 ]
             )
+        if latest_cycle_anchor is not None and len(cycle_entry_tasks) > 1:
+            lines.append(
+                "Latest PM cycle entry: "
+                f"{cycle_entry_bot_id} ({str(latest_cycle_anchor.id or '').strip()})"
+            )
         if missing_stages:
-            lines.append(f"Observed stages: {', '.join(observed_bot_ids) if observed_bot_ids else 'none'}")
+            lines.append(
+                "Observed stages in latest PM cycle: "
+                f"{', '.join(latest_cycle_observed_bot_ids) if latest_cycle_observed_bot_ids else 'none'}"
+            )
             lines.append(f"Missing stages: {', '.join(missing_stages)}")
 
         return {
@@ -624,8 +661,10 @@ class PMOrchestrator:
             "workflow_complete": workflow_complete,
             "final_qc_required": final_qc_required,
             "final_qc_completed": final_qc_completed,
-            "observed_bot_ids": observed_bot_ids,
+            "observed_bot_ids": latest_cycle_observed_bot_ids,
             "missing_stages": missing_stages,
+            "latest_cycle_task_count": len(latest_cycle_tasks),
+            "latest_cycle_entry_task_id": str(latest_cycle_anchor.id or "") if latest_cycle_anchor is not None else "",
             "tasks": [task.model_dump() for task in final_tasks],
         }
 

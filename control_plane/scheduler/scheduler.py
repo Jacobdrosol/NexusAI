@@ -289,6 +289,10 @@ def _assignment_scope_prompt_suffix(payload: Any) -> str:
             "For tester and reviewer stages on documentation-only branches, treat upstream_artifacts (or source_result.artifacts when present) as the primary branch evidence. "
             "Do not fail solely because the live repo snapshot does not yet contain the proposed markdown files; assignment apply happens later."
         )
+        parts.append(
+            "For final QC on documentation-only runs, prefer the strongest upstream tester evidence over later skip/not_applicable review signals. "
+            "If a tester has already verified the requested markdown content and later UI/database/security stages skip because the branch has no applicable runtime work, treat those skips as acceptable rather than as missing verification."
+        )
     parts.append(
         "Every downstream stage must validate its output against the original assignment scope above, not only the immediate upstream handoff. "
         "If the handoff drifts from the assignment, call that drift out explicitly and fail or send back the branch."

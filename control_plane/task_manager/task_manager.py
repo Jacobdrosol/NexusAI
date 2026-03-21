@@ -3766,8 +3766,20 @@ class TaskManager:
                     target_bot_id,
                     len(payloads),
                 )
+                compatible_join_triggers = (
+                    self._compatible_join_triggers(workflow, task, trigger, target_bot_id)
+                    if is_join
+                    else None
+                )
                 if is_join:
-                    await self._dispatch_join_trigger(task, trigger, target_bot_id, payloads, next_metadata)
+                    await self._dispatch_join_trigger(
+                        task,
+                        trigger,
+                        target_bot_id,
+                        payloads,
+                        next_metadata,
+                        compatible_join_triggers=compatible_join_triggers,
+                    )
                     continue
                 for payload in payloads:
                     branch_metadata = next_metadata
@@ -4270,6 +4282,46 @@ class TaskManager:
         )
         return any(bool(str(getattr(trigger, field, "") or "").strip()) for field in join_fields)
 
+    def _compatible_join_triggers(
+        self,
+        workflow: Any,
+        task: Task,
+        trigger: Any,
+        target_bot_id: str,
+    ) -> List[Any]:
+        triggers = getattr(workflow, "triggers", None) or []
+        compatible: List[Any] = []
+        trigger_group_field = str(getattr(trigger, "join_group_field", "") or "").strip()
+        trigger_expected_field = str(getattr(trigger, "join_expected_field", "") or "").strip()
+        trigger_sort_field = str(getattr(trigger, "join_sort_field", "") or "").strip()
+        trigger_result_field = str(getattr(trigger, "result_field", "") or "").strip()
+        trigger_condition = str(getattr(trigger, "condition", "") or "").strip()
+        trigger_event = str(getattr(trigger, "event", "") or "").strip()
+        for candidate in triggers:
+            if not getattr(candidate, "enabled", True):
+                continue
+            if not self._trigger_uses_join(candidate):
+                continue
+            if str(getattr(candidate, "event", "") or "").strip() != trigger_event:
+                continue
+            if str(getattr(candidate, "condition", "") or "").strip() != trigger_condition:
+                continue
+            if str(getattr(candidate, "join_group_field", "") or "").strip() != trigger_group_field:
+                continue
+            if str(getattr(candidate, "join_expected_field", "") or "").strip() != trigger_expected_field:
+                continue
+            if str(getattr(candidate, "join_sort_field", "") or "").strip() != trigger_sort_field:
+                continue
+            if str(getattr(candidate, "result_field", "") or "").strip() != trigger_result_field:
+                continue
+            if self._resolve_trigger_target_bot_id(task, getattr(candidate, "target_bot_id", "")) != target_bot_id:
+                continue
+            compatible.append(candidate)
+        if not compatible:
+            return [trigger]
+        compatible.sort(key=lambda item: str(getattr(item, "id", "") or ""))
+        return compatible
+
     async def _dispatch_join_trigger(
         self,
         task: Task,
@@ -4277,14 +4329,28 @@ class TaskManager:
         target_bot_id: str,
         payloads: List[Any],
         next_metadata: TaskMetadata,
+        *,
+        compatible_join_triggers: Optional[List[Any]] = None,
     ) -> None:
         for payload in payloads:
             if not isinstance(payload, dict):
                 continue
-            aggregate_payload = await self._build_join_payload(task, trigger, target_bot_id, payload)
+            aggregate_payload = await self._build_join_payload(
+                task,
+                trigger,
+                target_bot_id,
+                payload,
+                compatible_join_triggers=compatible_join_triggers,
+            )
             if aggregate_payload is None:
                 continue
-            join_step_id = self._join_step_id(task, trigger, payload)
+            join_step_id = self._join_step_id(
+                task,
+                trigger,
+                payload,
+                target_bot_id=target_bot_id,
+                compatible_join_triggers=compatible_join_triggers,
+            )
             if not join_step_id:
                 continue
             existing = await self._find_task_by_step_id(join_step_id, target_bot_id)
@@ -4311,6 +4377,8 @@ class TaskManager:
         trigger: Any,
         target_bot_id: str,
         payload: Dict[str, Any],
+        *,
+        compatible_join_triggers: Optional[List[Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         group_field = str(getattr(trigger, "join_group_field", "") or "").strip()
         expected_field = str(getattr(trigger, "join_expected_field", "") or "").strip()
@@ -4320,7 +4388,13 @@ class TaskManager:
         sort_field = str(getattr(trigger, "join_sort_field", "") or "").strip()
 
         group_value = self._lookup_result_field(payload, group_field) if group_field else None
-        sibling_payloads = self._collect_join_payloads(task, trigger, group_field, group_value)
+        sibling_payloads = self._collect_join_payloads(
+            task,
+            trigger,
+            group_field,
+            group_value,
+            compatible_join_triggers=compatible_join_triggers,
+        )
         fanout_id = self._resolve_fanout_id(payload)
         if fanout_id:
             # Restrict sibling collection to the originating fan-out set so unrelated
@@ -4510,10 +4584,13 @@ class TaskManager:
         trigger: Any,
         group_field: str,
         group_value: Any,
+        *,
+        compatible_join_triggers: Optional[List[Any]] = None,
     ) -> List[Dict[str, Any]]:
         metadata = task.metadata or TaskMetadata()
         root_id = metadata.workflow_root_task_id or task.id
         event = "task_completed" if task.status == "completed" else "task_failed"
+        compatible = list(compatible_join_triggers or [trigger])
         matches: Dict[str, Tuple[Task, Dict[str, Any]]] = {}
         for candidate in self._tasks.values():
             candidate_meta = candidate.metadata or TaskMetadata()
@@ -4533,9 +4610,13 @@ class TaskManager:
                 continue
             if trigger.condition == "has_error" and candidate.error is None:
                 continue
-            if not self._trigger_matches_result(candidate, trigger):
+            matching_trigger = next(
+                (join_trigger for join_trigger in compatible if self._trigger_matches_result(candidate, join_trigger)),
+                None,
+            )
+            if matching_trigger is None:
                 continue
-            candidate_payload = self._build_trigger_payload(candidate, trigger)
+            candidate_payload = self._build_trigger_payload(candidate, matching_trigger)
             if not isinstance(candidate_payload, dict):
                 continue
             candidate_group_value = self._lookup_result_field(candidate_payload, group_field) if group_field else None
@@ -4556,7 +4637,15 @@ class TaskManager:
             return None
         return f"{fanout_id}:{branch_key}"
 
-    def _join_step_id(self, task: Task, trigger: Any, payload: Dict[str, Any]) -> Optional[str]:
+    def _join_step_id(
+        self,
+        task: Task,
+        trigger: Any,
+        payload: Dict[str, Any],
+        *,
+        target_bot_id: str = "",
+        compatible_join_triggers: Optional[List[Any]] = None,
+    ) -> Optional[str]:
         metadata = task.metadata or TaskMetadata()
         root_id = metadata.workflow_root_task_id or task.id
         fanout_id = self._resolve_fanout_id(payload)
@@ -4564,7 +4653,17 @@ class TaskManager:
         group_field = str(getattr(trigger, "join_group_field", "") or "").strip()
         group_value = self._lookup_result_field(payload, group_field) if group_field else "__all__"
         normalized_group = self._normalize_branch_token(group_value, fallback="group")
-        return f"join:{task.bot_id}:{trigger.id}:{root_id}:{normalized_fanout}:{normalized_group}"
+        canonical_trigger_id = str(getattr(trigger, "id", "") or "").strip()
+        compatible_ids = sorted(
+            {
+                str(getattr(item, "id", "") or "").strip()
+                for item in (compatible_join_triggers or [])
+                if str(getattr(item, "id", "") or "").strip()
+            }
+        )
+        if compatible_ids:
+            canonical_trigger_id = compatible_ids[0]
+        return f"join:{task.bot_id}:{canonical_trigger_id}:{root_id}:{normalized_fanout}:{normalized_group}"
 
     def _fanout_id(self, task: Task, trigger: Any) -> Optional[str]:
         fan_out_field = str(getattr(trigger, "fan_out_field", "") or "").strip()
