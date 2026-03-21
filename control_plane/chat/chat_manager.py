@@ -1,14 +1,17 @@
 import asyncio
+import hashlib
 import json
+import math
 import os
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 import aiosqlite
 
 from control_plane.sqlite_helpers import open_sqlite
+from control_plane.vault.chunker import chunk_text
 from shared.exceptions import ConversationNotFoundError
 from shared.models import ChatConversation, ChatMessage
 
@@ -52,6 +55,30 @@ CREATE INDEX IF NOT EXISTS idx_messages_conversation_created_at
 ON messages(conversation_id, created_at)
 """
 
+_CREATE_MESSAGE_MEMORY = """
+CREATE TABLE IF NOT EXISTS chat_message_memory (
+    id TEXT PRIMARY KEY,
+    message_id TEXT NOT NULL,
+    conversation_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    chunk_index INTEGER NOT NULL,
+    content TEXT NOT NULL,
+    embedding TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(message_id) REFERENCES messages(id) ON DELETE CASCADE
+)
+"""
+
+_CREATE_MESSAGE_MEMORY_CONVERSATION_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_chat_message_memory_conversation
+ON chat_message_memory(conversation_id, created_at)
+"""
+
+_CREATE_MESSAGE_MEMORY_MESSAGE_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_chat_message_memory_message
+ON chat_message_memory(message_id)
+"""
+
 _CREATE_CONVERSATIONS_ARCHIVED_UPDATED_INDEX = """
 CREATE INDEX IF NOT EXISTS idx_conversations_archived_updated_at
 ON conversations(archived_at, updated_at)
@@ -84,10 +111,76 @@ class ChatManager:
                 await db.execute(_CREATE_CONVERSATIONS)
                 await db.execute(_CREATE_MESSAGES)
                 await db.execute(_CREATE_MESSAGES_CONVERSATION_CREATED_INDEX)
+                await db.execute(_CREATE_MESSAGE_MEMORY)
+                await db.execute(_CREATE_MESSAGE_MEMORY_CONVERSATION_INDEX)
+                await db.execute(_CREATE_MESSAGE_MEMORY_MESSAGE_INDEX)
                 await db.execute(_CREATE_CONVERSATIONS_ARCHIVED_UPDATED_INDEX)
                 await self._ensure_conversation_columns(db)
                 await db.commit()
             self._db_ready = True
+
+    def _embed(self, text: str, dims: int = 64) -> List[float]:
+        vec = [0.0] * dims
+        for token in text.lower().split():
+            digest = hashlib.sha256(token.encode("utf-8")).digest()
+            idx = int.from_bytes(digest[:2], "big") % dims
+            sign = 1.0 if (digest[2] % 2 == 0) else -1.0
+            vec[idx] += sign
+        norm = math.sqrt(sum(v * v for v in vec)) or 1.0
+        return [v / norm for v in vec]
+
+    def _cosine(self, a: List[float], b: List[float]) -> float:
+        if not a or not b:
+            return 0.0
+        return float(sum(x * y for x, y in zip(a, b)))
+
+    def _message_is_indexable(self, *, role: str, metadata: Any) -> bool:
+        if str(role or "").strip().lower() not in {"user", "assistant"}:
+            return False
+        if not isinstance(metadata, dict):
+            return True
+        mode = str(metadata.get("mode") or "").strip().lower()
+        return mode not in {"assign_pending", "pm_run_report", "assign_summary"}
+
+    async def _reindex_message(
+        self,
+        db: aiosqlite.Connection,
+        *,
+        message_id: str,
+        conversation_id: str,
+        role: str,
+        content: str,
+        metadata: Any,
+        created_at: str,
+    ) -> None:
+        await db.execute("DELETE FROM chat_message_memory WHERE message_id = ?", (message_id,))
+        if not self._message_is_indexable(role=role, metadata=metadata):
+            return
+        normalized = str(content or "").strip()
+        if not normalized:
+            return
+        chunks = chunk_text(normalized, chunk_size=800, overlap=120)
+        for idx, chunk in enumerate(chunks):
+            text = str(chunk or "").strip()
+            if not text:
+                continue
+            await db.execute(
+                """
+                INSERT INTO chat_message_memory (
+                    id, message_id, conversation_id, role, chunk_index, content, embedding, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(uuid.uuid4()),
+                    message_id,
+                    conversation_id,
+                    role,
+                    idx,
+                    text,
+                    json.dumps(self._embed(text)),
+                    created_at,
+                ),
+            )
 
     async def _ensure_conversation_columns(self, db: aiosqlite.Connection) -> None:
         async with db.execute("PRAGMA table_info(conversations)") as cursor:
@@ -337,6 +430,15 @@ class ChatManager:
                     "UPDATE conversations SET updated_at = ? WHERE id = ?",
                     (now, conversation_id),
                 )
+                await self._reindex_message(
+                    db,
+                    message_id=message.id,
+                    conversation_id=message.conversation_id,
+                    role=message.role,
+                    content=message.content,
+                    metadata=message.metadata,
+                    created_at=message.created_at,
+                )
                 await db.commit()
         return message
 
@@ -367,6 +469,44 @@ class ChatManager:
                 """
                 params = (conversation_id, safe_limit)
             async with db.execute(query, params) as cursor:
+                rows = await cursor.fetchall()
+                result: List[ChatMessage] = []
+                for row in rows:
+                    data = dict(row)
+                    if data.get("metadata"):
+                        data["metadata"] = json.loads(data["metadata"])
+                    result.append(ChatMessage.model_validate(data))
+                return result
+
+    async def list_message_slice(
+        self,
+        conversation_id: str,
+        *,
+        limit: int,
+        newest: bool,
+    ) -> List[ChatMessage]:
+        await self.get_conversation(conversation_id)
+        safe_limit = max(1, min(int(limit or 0), 500))
+        async with open_sqlite(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            if newest:
+                query = """
+                    SELECT * FROM (
+                        SELECT * FROM messages
+                        WHERE conversation_id = ?
+                        ORDER BY created_at DESC
+                        LIMIT ?
+                    ) recent
+                    ORDER BY created_at ASC
+                """
+            else:
+                query = """
+                    SELECT * FROM messages
+                    WHERE conversation_id = ?
+                    ORDER BY created_at ASC
+                    LIMIT ?
+                """
+            async with db.execute(query, (conversation_id, safe_limit)) as cursor:
                 rows = await cursor.fetchall()
                 result: List[ChatMessage] = []
                 for row in rows:
@@ -422,6 +562,105 @@ class ChatManager:
                         "UPDATE conversations SET updated_at = ? WHERE id = ?",
                         (datetime.now(timezone.utc).isoformat(), data["conversation_id"]),
                     )
+                    await self._reindex_message(
+                        db,
+                        message_id=message_id,
+                        conversation_id=str(data["conversation_id"]),
+                        role=str(data["role"]),
+                        content=str(updated["content"] or ""),
+                        metadata=updated["metadata"],
+                        created_at=str(data["created_at"]),
+                    )
                     await db.commit()
                     data.update(updated)
                     return ChatMessage.model_validate(data)
+
+    async def count_messages(self, conversation_id: str) -> int:
+        await self.get_conversation(conversation_id)
+        async with open_sqlite(self._db_path) as db:
+            async with db.execute(
+                "SELECT COUNT(*) FROM messages WHERE conversation_id = ?",
+                (conversation_id,),
+            ) as cursor:
+                row = await cursor.fetchone()
+                return int(row[0] or 0) if row else 0
+
+    async def search_message_memory(
+        self,
+        conversation_id: str,
+        query: str,
+        *,
+        limit: int = 12,
+        roles: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        await self.get_conversation(conversation_id)
+        normalized_query = str(query or "").strip()
+        if not normalized_query:
+            return []
+        qvec = self._embed(normalized_query)
+        clauses = ["m.conversation_id = ?"]
+        params: List[Any] = [conversation_id]
+        normalized_roles = [str(role).strip().lower() for role in (roles or []) if str(role).strip()]
+        if normalized_roles:
+            placeholders = ", ".join("?" for _ in normalized_roles)
+            clauses.append(f"m.role IN ({placeholders})")
+            params.extend(normalized_roles)
+        query_sql = f"""
+            SELECT
+                m.id,
+                m.message_id,
+                m.role,
+                m.chunk_index,
+                m.content,
+                m.embedding,
+                msg.created_at
+            FROM chat_message_memory m
+            JOIN messages msg ON msg.id = m.message_id
+            WHERE {' AND '.join(clauses)}
+        """
+        async with open_sqlite(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(query_sql, tuple(params)) as cursor:
+                rows = await cursor.fetchall()
+        scored: List[Dict[str, Any]] = []
+        for row in rows:
+            emb = json.loads(row["embedding"])
+            score = self._cosine(qvec, emb)
+            scored.append(
+                {
+                    "id": row["id"],
+                    "message_id": row["message_id"],
+                    "role": row["role"],
+                    "chunk_index": row["chunk_index"],
+                    "content": row["content"],
+                    "created_at": row["created_at"],
+                    "score": score,
+                }
+            )
+        scored.sort(key=lambda item: (item["score"], item["created_at"]), reverse=True)
+        return scored[: max(1, min(limit, 50))]
+
+    async def get_messages_by_ids(self, conversation_id: str, message_ids: List[str]) -> List[ChatMessage]:
+        await self.get_conversation(conversation_id)
+        normalized_ids = [str(message_id).strip() for message_id in message_ids if str(message_id).strip()]
+        if not normalized_ids:
+            return []
+        placeholders = ", ".join("?" for _ in normalized_ids)
+        query = f"""
+            SELECT * FROM messages
+            WHERE conversation_id = ? AND id IN ({placeholders})
+            ORDER BY created_at ASC
+        """
+        params: List[Any] = [conversation_id]
+        params.extend(normalized_ids)
+        async with open_sqlite(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(query, tuple(params)) as cursor:
+                rows = await cursor.fetchall()
+                result: List[ChatMessage] = []
+                for row in rows:
+                    data = dict(row)
+                    if data.get("metadata"):
+                        data["metadata"] = json.loads(data["metadata"])
+                    result.append(ChatMessage.model_validate(data))
+                return result

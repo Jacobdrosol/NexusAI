@@ -1232,6 +1232,80 @@ def _build_assignment_conversation_transcript(
     }
 
 
+async def _build_assignment_context_snapshot(
+    chat_manager: Any,
+    *,
+    conversation_id: str,
+    assign_instruction: str,
+    current_assign_message_id: Optional[str],
+) -> Dict[str, Any]:
+    total_messages = await chat_manager.count_messages(conversation_id)
+    if total_messages <= 120:
+        all_messages = await chat_manager.list_messages(conversation_id)
+        brief = _build_assignment_conversation_brief(
+            all_messages,
+            current_assign_message_id=current_assign_message_id,
+            max_messages=8,
+            max_chars=3200,
+        )
+        transcript = _build_assignment_conversation_transcript(
+            all_messages,
+            current_assign_message_id=current_assign_message_id,
+            max_messages=140,
+            max_chars=24000,
+            head_messages=10,
+        )
+        return {
+            "conversation_brief": brief,
+            "conversation_transcript": str(transcript.get("conversation_transcript") or ""),
+            "conversation_message_count": int(transcript.get("conversation_message_count") or 0),
+            "conversation_transcript_strategy": str(transcript.get("conversation_transcript_strategy") or ""),
+        }
+
+    head_messages = await chat_manager.list_message_slice(conversation_id, limit=10, newest=False)
+    tail_messages = await chat_manager.list_message_slice(conversation_id, limit=12, newest=True)
+    semantic_hits = await chat_manager.search_message_memory(
+        conversation_id,
+        assign_instruction,
+        limit=16,
+        roles=["user", "assistant"],
+    )
+    semantic_message_ids = [str(item.get("message_id") or "").strip() for item in semantic_hits if str(item.get("message_id") or "").strip()]
+    semantic_messages_by_id: Dict[str, ChatMessage] = {}
+    if semantic_message_ids:
+        semantic_messages = await chat_manager.get_messages_by_ids(conversation_id, semantic_message_ids)
+        semantic_messages_by_id = {message.id: message for message in semantic_messages}
+
+    combined: List[ChatMessage] = []
+    seen: set[str] = set()
+    for message in head_messages + list(semantic_messages_by_id.values()) + tail_messages:
+        if message.id in seen or (current_assign_message_id and str(message.id) == str(current_assign_message_id)):
+            continue
+        seen.add(message.id)
+        combined.append(message)
+    combined.sort(key=lambda item: item.created_at)
+
+    brief = _build_assignment_conversation_brief(
+        combined,
+        current_assign_message_id=current_assign_message_id,
+        max_messages=10,
+        max_chars=3600,
+    )
+    transcript = _build_assignment_conversation_transcript(
+        combined,
+        current_assign_message_id=current_assign_message_id,
+        max_messages=80,
+        max_chars=18000,
+        head_messages=12,
+    )
+    return {
+        "conversation_brief": brief,
+        "conversation_transcript": str(transcript.get("conversation_transcript") or ""),
+        "conversation_message_count": total_messages,
+        "conversation_transcript_strategy": "semantic_excerpt",
+    }
+
+
 def _extract_task_output(result: Any) -> str:
     if isinstance(result, dict):
         output = result.get("output")
@@ -1512,13 +1586,10 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                 force_workspace_context=_repo_intent_requested(assign_instruction),
                 item_limit=assign_item_limit,
             )
-            conversation_messages = await chat_manager.list_messages(conversation_id, limit=40)
-            conversation_brief = _build_assignment_conversation_brief(
-                conversation_messages,
-                current_assign_message_id=user_message.id,
-            )
-            conversation_snapshot = _build_assignment_conversation_transcript(
-                conversation_messages,
+            context_snapshot = await _build_assignment_context_snapshot(
+                chat_manager,
+                conversation_id=conversation_id,
+                assign_instruction=assign_instruction,
                 current_assign_message_id=user_message.id,
             )
             assignment = await pm_orchestrator.orchestrate_assignment(
@@ -1526,10 +1597,10 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                 instruction=assign_instruction,
                 requested_pm_bot_id=body.bot_id,
                 context_items=resolved_context,
-                conversation_brief=conversation_brief,
-                conversation_transcript=str(conversation_snapshot.get("conversation_transcript") or ""),
-                conversation_message_count=int(conversation_snapshot.get("conversation_message_count") or 0),
-                conversation_transcript_strategy=str(conversation_snapshot.get("conversation_transcript_strategy") or ""),
+                conversation_brief=str(context_snapshot.get("conversation_brief") or ""),
+                conversation_transcript=str(context_snapshot.get("conversation_transcript") or ""),
+                conversation_message_count=int(context_snapshot.get("conversation_message_count") or 0),
+                conversation_transcript_strategy=str(context_snapshot.get("conversation_transcript_strategy") or ""),
                 project_id=conversation.project_id,
             )
             user_message = await chat_manager.update_message(
@@ -1756,13 +1827,10 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                         'event: status\ndata: '
                         '{"phase":"context","label":"No repository context retrieved. The response will avoid unverifiable file claims."}\n\n'
                     )
-                conversation_messages = await chat_manager.list_messages(conversation_id, limit=40)
-                conversation_brief = _build_assignment_conversation_brief(
-                    conversation_messages,
-                    current_assign_message_id=user_message.id,
-                )
-                conversation_snapshot = _build_assignment_conversation_transcript(
-                    conversation_messages,
+                context_snapshot = await _build_assignment_context_snapshot(
+                    chat_manager,
+                    conversation_id=conversation_id,
+                    assign_instruction=assign_instruction,
                     current_assign_message_id=user_message.id,
                 )
                 assignment = await pm_orchestrator.orchestrate_assignment(
@@ -1770,10 +1838,10 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                     instruction=assign_instruction,
                     requested_pm_bot_id=body.bot_id,
                     context_items=resolved_context,
-                    conversation_brief=conversation_brief,
-                    conversation_transcript=str(conversation_snapshot.get("conversation_transcript") or ""),
-                    conversation_message_count=int(conversation_snapshot.get("conversation_message_count") or 0),
-                    conversation_transcript_strategy=str(conversation_snapshot.get("conversation_transcript_strategy") or ""),
+                    conversation_brief=str(context_snapshot.get("conversation_brief") or ""),
+                    conversation_transcript=str(context_snapshot.get("conversation_transcript") or ""),
+                    conversation_message_count=int(context_snapshot.get("conversation_message_count") or 0),
+                    conversation_transcript_strategy=str(context_snapshot.get("conversation_transcript_strategy") or ""),
                     project_id=conversation.project_id,
                 )
                 user_message = await chat_manager.update_message(

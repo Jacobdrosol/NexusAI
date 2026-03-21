@@ -445,6 +445,75 @@ async def test_assign_message_persists_prior_user_conversation_brief_into_assign
 
 
 @pytest.mark.anyio
+async def test_assign_message_uses_semantic_transcript_excerpt_for_large_chat(cp_app):
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        create_resp = await client.post("/v1/chat/conversations", json={"title": "Huge Assign Chat"})
+        conversation_id = create_resp.json()["id"]
+
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "pm-workflow",
+                "name": "PM Workflow",
+                "role": "pm",
+                "backends": [],
+                "enabled": True,
+                "assignment_capabilities": {"is_project_manager": True},
+                "workflow": {
+                    "triggers": [
+                        {
+                            "id": "pm-to-research",
+                            "event": "task_completed",
+                            "target_bot_id": "pm-research-analyst",
+                            "condition": "has_result",
+                            "fan_out_field": "source_result.steps",
+                        }
+                    ]
+                },
+            },
+        )
+        await client.post(
+            "/v1/bots",
+            json={"id": "pm-research-analyst", "name": "PM Research Analyst", "role": "researcher", "backends": [], "enabled": True},
+        )
+
+        early_message = (
+            "Help me plan mathematics blocks from algebra through multivariable calculus. "
+            "Build as much as possible in house and avoid external APIs like Desmos."
+        )
+        first_resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={"content": early_message},
+        )
+        assert first_resp.status_code == 200
+
+        for idx in range(130):
+            await cp_app.state.chat_manager.add_message(
+                conversation_id=conversation_id,
+                role="user",
+                content=f"Filler planning note {idx}: keep iterating on lesson-builder ideas and editorial details.",
+            )
+
+        assign_resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": "@assign Build documentation only in docs/blocks for the mathematics blocks",
+                "bot_id": "pm-workflow",
+            },
+        )
+        assert assign_resp.status_code == 200
+
+    tasks = await cp_app.state.task_manager.list_tasks()
+    root_task = next(task for task in tasks if task.bot_id == "pm-workflow")
+    scope = root_task.payload.get("assignment_scope") or {}
+    assert scope.get("conversation_transcript_strategy") == "semantic_excerpt"
+    assert int(scope.get("conversation_message_count") or 0) >= 131
+    transcript = str(scope.get("conversation_transcript") or "").lower()
+    assert "multivariable calculus" in transcript
+    assert "desmos" in transcript
+
+
+@pytest.mark.anyio
 async def test_assign_message_requires_explicit_pm_bot_selection(cp_app):
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
         create_resp = await client.post("/v1/chat/conversations", json={"title": "Assign Missing PM"})
