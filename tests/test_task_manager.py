@@ -5794,6 +5794,62 @@ def test_assignment_validation_rejects_external_api_proposals_when_scope_forbids
     assert "in-house / no-external-API approach" in error
 
 
+def test_assignment_validation_allows_no_external_api_research_language():
+    from control_plane.task_manager.task_manager import _assignment_validation_error
+    from shared.models import Task, TaskMetadata
+
+    task = Task(
+        id="task-no-external-api-research",
+        bot_id="pm-research-analyst",
+        payload={
+            "title": "Research locally hosted math libraries",
+            "instruction": (
+                "Investigate open-source, client-side libraries that can render interactive mathematics "
+                "without external API calls and are suitable for offline hosting."
+            ),
+            "step_kind": "specification",
+            "deliverables": ["docs/blocks/web-research.md"],
+            "assignment_scope": {
+                "docs_only": True,
+                "avoid_external_apis": True,
+                "prefer_in_house": True,
+                "requested_output_paths": ["docs/blocks"],
+            },
+        },
+        metadata=TaskMetadata(source="bot_trigger", orchestration_id="orch-no-external-api-research"),
+        created_at="2026-03-20T00:00:00+00:00",
+        updated_at="2026-03-20T00:00:00+00:00",
+    )
+
+    result = {
+        "status": "complete",
+        "failure_type": "pass",
+        "summary": (
+            "Compared open-source libraries that work without external API calls and can be hosted locally "
+            "for in-house client-side rendering."
+        ),
+        "requirements": [
+            "Avoid external API calls.",
+            "Prefer offline hosting and locally owned assets.",
+        ],
+        "assumptions": ["Libraries will be hosted locally within the project."],
+        "artifacts": [
+            {
+                "label": "Library comparison",
+                "content": (
+                    "Reviewed open-source client-side libraries for interactive math rendering without external API calls. "
+                    "All recommended options support local hosting."
+                ),
+                "path": "docs/blocks/web-research.md",
+            }
+        ],
+        "risks": ["Bundle size must remain bounded."],
+        "handoff_notes": "Proceed with locally hosted, in-house documentation guidance only.",
+    }
+
+    assert _assignment_validation_error(task, result) == ""
+
+
 def test_assignment_validation_allows_skip_for_test_execution_steps():
     from control_plane.task_manager.task_manager import _assignment_validation_error
     from shared.models import Task, TaskMetadata

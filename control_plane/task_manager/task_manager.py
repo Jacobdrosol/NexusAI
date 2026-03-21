@@ -1019,17 +1019,39 @@ def _assignment_scope_alignment_error(payload: Dict[str, Any], result: Any) -> s
         return ""
 
     if bool(scope.get("avoid_external_apis", False)):
-        forbidden_api_markers = (
-            "desmos api",
-            "geogebra api",
-            "external api",
-            "third-party api",
-            "3rd-party api",
-            "paid provider api",
-            "separate provider api",
-            "external provider api",
+        dependency_patterns = (
+            r"\buse\s+the\s+desmos\s+api\b",
+            r"\brely\s+on\s+the\s+desmos\s+api\b",
+            r"\bintegrat(?:e|ing)\s+the\s+desmos\s+api\b",
+            r"\buse\s+the\s+geogebra\s+api\b",
+            r"\brely\s+on\s+the\s+geogebra\s+api\b",
+            r"\brely\s+on\s+an?\s+external\s+api\b",
+            r"\buse\s+an?\s+external\s+api\b",
+            r"\bintegrat(?:e|ing)\s+an?\s+external\s+api\b",
+            r"\brely\s+on\s+an?\s+third-?party\s+api\b",
+            r"\buse\s+an?\s+third-?party\s+api\b",
+            r"\bintegrat(?:e|ing)\s+an?\s+third-?party\s+api\b",
+            r"\brely\s+on\s+an?\s+external\s+product\b",
+            r"\buse\s+an?\s+external\s+product\b",
+            r"\bwire\s+the\s+desmos\s+api\b",
+            r"\bwire\s+an?\s+external\s+api\b",
         )
-        if any(marker in combined for marker in forbidden_api_markers):
+        allowed_context_patterns = (
+            r"\bwithout\s+external\s+api(?:\s+calls?)?\b",
+            r"\bwithout\s+the\s+desmos\s+api\b",
+            r"\bavoid\s+external\s+api(?:\s+calls?)?\b",
+            r"\bavoid\s+the\s+desmos\s+api\b",
+            r"\bdo\s+not\s+rely\s+on\s+external\s+api(?:\s+calls?)?\b",
+            r"\bdo\s+not\s+use\s+external\s+api(?:\s+calls?)?\b",
+            r"\bno\s+external\s+api(?:\s+calls?)?\b",
+            r"\bhost(?:ed)?\s+locally\b",
+            r"\boffline\s+hosting\b",
+            r"\blocal\s+hosting\b",
+            r"\bopen-source\b",
+        )
+        positive_match = any(re.search(pattern, combined, re.IGNORECASE) for pattern in dependency_patterns)
+        allowed_context = any(re.search(pattern, combined, re.IGNORECASE) for pattern in allowed_context_patterns)
+        if positive_match and not allowed_context:
             return (
                 "Assignment scope requires an in-house / no-external-API approach, "
                 "but the output proposes an external product or third-party API dependency."

@@ -263,6 +263,11 @@ def _assignment_scope_prompt_suffix(payload: Any) -> str:
     if hard_constraints:
         parts.append("Non-negotiable constraints:")
         parts.extend(f"- {item}" for item in hard_constraints)
+    if avoid_external_apis:
+        parts.append(
+            "You may mention external products or APIs only to reject them, compare against them, or explain why they are out of scope. "
+            "Do not recommend, depend on, or instruct the user to integrate them."
+        )
     if isinstance(constraint_hints, list):
         normalized_constraints = [str(item).strip() for item in constraint_hints if str(item).strip()]
         if normalized_constraints:
