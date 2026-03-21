@@ -979,6 +979,65 @@ def _docs_only_workstream_violations(result: Any) -> List[str]:
     return violations
 
 
+def _assignment_scope_alignment_error(payload: Dict[str, Any], result: Any) -> str:
+    scope = _payload_assignment_scope(payload)
+    if not scope or not isinstance(result, dict):
+        return ""
+
+    fragments: List[str] = []
+    for key in ("summary", "handoff_notes", "architecture", "implementation_plan", "findings", "evidence", "requirements", "risks"):
+        value = result.get(key)
+        if isinstance(value, list):
+            fragments.extend(str(item or "").strip() for item in value[:16] if str(item or "").strip())
+        elif value not in (None, ""):
+            fragments.append(str(value).strip())
+
+    workstreams = result.get("implementation_workstreams")
+    if isinstance(workstreams, list):
+        for workstream in workstreams[:12]:
+            if not isinstance(workstream, dict):
+                continue
+            for key in ("title", "instruction", "test_strategy"):
+                value = str(workstream.get(key) or "").strip()
+                if value:
+                    fragments.append(value)
+            fragments.extend(_normalize_string_list(workstream.get("deliverables"))[:8])
+
+    for artifact in _result_explicit_artifacts(result)[:12]:
+        label = str(artifact.get("label") or "").strip()
+        path = str(artifact.get("path") or "").strip()
+        content = str(artifact.get("content") or "").strip()
+        if label:
+            fragments.append(label)
+        if path:
+            fragments.append(path)
+        if content:
+            fragments.append(content[:800])
+
+    combined = "\n".join(fragment for fragment in fragments if fragment).lower()
+    if not combined:
+        return ""
+
+    if bool(scope.get("avoid_external_apis", False)):
+        forbidden_api_markers = (
+            "desmos api",
+            "geogebra api",
+            "external api",
+            "third-party api",
+            "3rd-party api",
+            "paid provider api",
+            "separate provider api",
+            "external provider api",
+        )
+        if any(marker in combined for marker in forbidden_api_markers):
+            return (
+                "Assignment scope requires an in-house / no-external-API approach, "
+                "but the output proposes an external product or third-party API dependency."
+            )
+
+    return ""
+
+
 def _looks_like_assignment_test_execution_payload(payload: Dict[str, Any]) -> bool:
     # Role hint takes precedence - if explicitly tester/qa, treat as test execution
     role_hint = str(payload.get("role_hint") or "").strip().lower()
@@ -1481,6 +1540,10 @@ def _assignment_validation_error(task: Task, result: Any) -> str:
                 "Assignment explicitly requested documentation-only markdown outputs, "
                 f"but generated non-document repo files: {preview}."
             )
+
+    scope_alignment_error = _assignment_scope_alignment_error(payload, result)
+    if scope_alignment_error:
+        return scope_alignment_error
 
     if not text:
         return ""

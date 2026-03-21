@@ -1124,6 +1124,51 @@ def _extract_assign_instruction(content: str) -> Optional[str]:
     return instruction or None
 
 
+def _build_assignment_conversation_brief(
+    messages: List[ChatMessage],
+    *,
+    current_assign_message_id: Optional[str] = None,
+    max_messages: int = 6,
+    max_chars: int = 2400,
+) -> str:
+    selected: List[str] = []
+    total_chars = 0
+    for message in reversed(messages):
+        if current_assign_message_id and str(message.id) == str(current_assign_message_id):
+            continue
+        if str(message.role or "").strip().lower() != "user":
+            continue
+        content = str(message.content or "").strip()
+        if not content:
+            continue
+        if _extract_assign_instruction(content) is not None:
+            continue
+        lowered = content.lower()
+        if len(content) < 140 and any(
+            marker in lowered
+            for marker in (
+                "don't truncate",
+                "do not truncate",
+                "you truncated",
+                "stop truncating",
+            )
+        ):
+            continue
+        normalized = re.sub(r"\s+", " ", content).strip()
+        if not normalized:
+            continue
+        snippet = normalized[:600] + ("..." if len(normalized) > 600 else "")
+        selected.append(snippet)
+        total_chars += len(snippet)
+        if len(selected) >= max_messages or total_chars >= max_chars:
+            break
+    if not selected:
+        return ""
+    selected.reverse()
+    lines = [f"Prior user intent {idx + 1}: {item}" for idx, item in enumerate(selected)]
+    return "\n".join(lines)
+
+
 def _extract_task_output(result: Any) -> str:
     if isinstance(result, dict):
         output = result.get("output")
@@ -1404,11 +1449,17 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                 force_workspace_context=_repo_intent_requested(assign_instruction),
                 item_limit=assign_item_limit,
             )
+            conversation_messages = await chat_manager.list_messages(conversation_id, limit=40)
+            conversation_brief = _build_assignment_conversation_brief(
+                conversation_messages,
+                current_assign_message_id=user_message.id,
+            )
             assignment = await pm_orchestrator.orchestrate_assignment(
                 conversation_id=conversation_id,
                 instruction=assign_instruction,
                 requested_pm_bot_id=body.bot_id,
                 context_items=resolved_context,
+                conversation_brief=conversation_brief,
                 project_id=conversation.project_id,
             )
             user_message = await chat_manager.update_message(
@@ -1635,11 +1686,17 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                         'event: status\ndata: '
                         '{"phase":"context","label":"No repository context retrieved. The response will avoid unverifiable file claims."}\n\n'
                     )
+                conversation_messages = await chat_manager.list_messages(conversation_id, limit=40)
+                conversation_brief = _build_assignment_conversation_brief(
+                    conversation_messages,
+                    current_assign_message_id=user_message.id,
+                )
                 assignment = await pm_orchestrator.orchestrate_assignment(
                     conversation_id=conversation_id,
                     instruction=assign_instruction,
                     requested_pm_bot_id=body.bot_id,
                     context_items=resolved_context,
+                    conversation_brief=conversation_brief,
                     project_id=conversation.project_id,
                 )
                 user_message = await chat_manager.update_message(

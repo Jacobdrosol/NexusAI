@@ -5752,6 +5752,48 @@ def test_assignment_validation_allows_markdown_repo_artifacts_for_docs_only_requ
     assert _assignment_validation_error(task, result) == ""
 
 
+def test_assignment_validation_rejects_external_api_proposals_when_scope_forbids_them():
+    from control_plane.task_manager.task_manager import _assignment_validation_error
+    from shared.models import Task, TaskMetadata
+
+    task = Task(
+        id="task-no-external-api",
+        bot_id="pm-engineer",
+        payload={
+            "title": "Plan in-house mathematics block documentation",
+            "instruction": "Create the documentation plan and keep the solution in house without relying on external APIs.",
+            "step_kind": "planning",
+            "deliverables": ["Implementation plan", "Coder workstreams"],
+            "assignment_scope": {
+                "docs_only": True,
+                "avoid_external_apis": True,
+                "prefer_in_house": True,
+                "requested_output_paths": ["docs/blocks"],
+            },
+        },
+        metadata=TaskMetadata(source="bot_trigger", orchestration_id="orch-no-external-api"),
+        created_at="2026-03-20T00:00:00+00:00",
+        updated_at="2026-03-20T00:00:00+00:00",
+    )
+
+    result = {
+        "implementation_plan": [
+            "Use the Desmos API for the graphing experience and rely on an external API for rendering."
+        ],
+        "implementation_workstreams": [
+            {
+                "title": "External graphing integration",
+                "instruction": "Wire the Desmos API into the documentation examples.",
+                "deliverables": ["docs/blocks/graphing.md"],
+            }
+        ],
+    }
+
+    error = _assignment_validation_error(task, result)
+
+    assert "in-house / no-external-API approach" in error
+
+
 def test_assignment_validation_allows_skip_for_test_execution_steps():
     from control_plane.task_manager.task_manager import _assignment_validation_error
     from shared.models import Task, TaskMetadata

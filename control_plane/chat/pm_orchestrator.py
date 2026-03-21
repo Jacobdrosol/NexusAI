@@ -116,6 +116,60 @@ class PMOrchestrator:
         )
         return has_docs_signal and has_docs_only_signal
 
+    def _requested_outcome_style(self, text: str) -> str:
+        lowered = str(text or "").strip().lower()
+        if not lowered:
+            return ""
+        if any(
+            phrase in lowered
+            for phrase in (
+                "rundown map",
+                "roadmap",
+                "block roadmap",
+                "identify a bunch",
+                "what we can do",
+                "how we can expand",
+                "help me plan building",
+                "focus on math blocks",
+            )
+        ):
+            return "roadmap"
+        if any(
+            phrase in lowered
+            for phrase in (
+                "documentation first",
+                "build documentation",
+                "documentation only",
+                "docs only",
+            )
+        ):
+            return "documentation_plan"
+        return ""
+
+    def _extract_focus_topics(self, text: str) -> List[str]:
+        haystack = str(text or "")
+        lowered = haystack.lower()
+        candidates: List[str] = []
+        phrase_catalog = (
+            "coordinate planes",
+            "geometry blocks",
+            "graphing",
+            "math blocks",
+            "mathematics blocks",
+            "algebra",
+            "trigonometry",
+            "statistics",
+            "calculus",
+            "multivariable calculus",
+            "interactive functionality",
+            "client side",
+            "lesson builder",
+        )
+        for phrase in phrase_catalog:
+            if phrase in lowered and phrase not in candidates:
+                candidates.append(phrase)
+        return candidates[:12]
+
     def _requested_output_paths(self, instruction: str) -> List[str]:
         text = str(instruction or "").strip()
         if not text:
@@ -132,14 +186,80 @@ class PMOrchestrator:
             normalized.append(value)
         return normalized
 
-    def _extract_assignment_scope(self, instruction: str) -> Dict[str, Any]:
-        docs_only = self._instruction_requests_docs_only_outputs(instruction)
+    def _extract_assignment_scope(self, instruction: str, *, conversation_brief: str = "") -> Dict[str, Any]:
+        request_text = str(instruction or "").strip()
+        prior_context = str(conversation_brief or "").strip()
+        combined_text = "\n".join(part for part in (prior_context, request_text) if part).strip()
+        lowered = combined_text.lower()
+        docs_only = self._instruction_requests_docs_only_outputs(request_text)
         scope: Dict[str, Any] = {
-            "request_text": str(instruction or "").strip(),
+            "request_text": request_text,
+            "conversation_brief": prior_context,
             "docs_only": docs_only,
-            "requested_output_paths": self._requested_output_paths(instruction),
+            "requested_output_paths": self._requested_output_paths(request_text),
             "requested_output_extensions": [".md"] if docs_only else [],
             "forbidden_change_domains": ["code", "tests", "database", "ui"] if docs_only else [],
+            "prefer_in_house": any(
+                marker in lowered
+                for marker in (
+                    "in house",
+                    "in-house",
+                    "build everything in house",
+                    "build as much as possible to be in house",
+                    "own the stack",
+                    "host locally",
+                    "locally hosted",
+                )
+            ),
+            "avoid_external_apis": any(
+                marker in lowered
+                for marker in (
+                    "don't want to use any api",
+                    "do not want to use any api",
+                    "don't want to use the desmos api",
+                    "do not want to use the desmos api",
+                    "do not rely on the desmos api",
+                    "don't rely on the desmos api",
+                    "do not rely on external api",
+                    "don't rely on external api",
+                    "no external api",
+                    "avoid external api",
+                    "separate provider",
+                    "third-party provider",
+                )
+            ),
+            "prefer_client_side_execution": any(
+                marker in lowered
+                for marker in (
+                    "client side",
+                    "client-side",
+                    "render in the browser",
+                    "offload onto the client",
+                    "offload to the client",
+                )
+            ),
+            "minimize_server_load": any(
+                marker in lowered
+                for marker in (
+                    "resource light on the server",
+                    "minimize server cost",
+                    "minimize server load",
+                    "don't balloon how much resources we are using on our server",
+                    "server cost",
+                )
+            ),
+            "minimize_bandwidth": any(
+                marker in lowered
+                for marker in (
+                    "little bandwidth",
+                    "low bandwidth",
+                    "minimize bandwidth",
+                    "transported to users",
+                    "bandwidth to transmit data",
+                )
+            ),
+            "requested_outcome_style": self._requested_outcome_style(combined_text),
+            "focus_topics": self._extract_focus_topics(combined_text),
         }
         return scope
 
@@ -149,6 +269,7 @@ class PMOrchestrator:
         instruction: str,
         requested_pm_bot_id: Optional[str] = None,
         context_items: Optional[List[str]] = None,
+        conversation_brief: str = "",
         project_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         requested_pm_bot_id = str(requested_pm_bot_id or "").strip()
@@ -168,6 +289,7 @@ class PMOrchestrator:
             instruction=instruction,
             pm_bot=pm_bot,
             context_items=context_items or [],
+            conversation_brief=conversation_brief,
             project_id=project_id,
             bots=bots,
         )
@@ -186,6 +308,7 @@ class PMOrchestrator:
         instruction: str,
         pm_bot: Bot,
         context_items: List[str],
+        conversation_brief: str = "",
         project_id: Optional[str],
         bots: List[Bot],
     ) -> Dict[str, Any]:
@@ -193,7 +316,10 @@ class PMOrchestrator:
         allowed_bot_ids = derive_allowed_bot_ids(pm_bot.id, bots)
         workflow_graph_id = bot_workflow_graph_id(pm_bot)
         pipeline_name = f"PM Workflow: {str(pm_bot.name or pm_bot.id)}".strip()
-        assignment_scope = self._extract_assignment_scope(instruction)
+        assignment_scope = self._extract_assignment_scope(
+            instruction,
+            conversation_brief=conversation_brief,
+        )
         pm_task = await self._task_manager.create_task(
             bot_id=pm_bot.id,
             payload={

@@ -382,6 +382,67 @@ async def test_assign_message_bootstraps_selected_pm_bot_workflow(cp_app):
 
 
 @pytest.mark.anyio
+async def test_assign_message_persists_prior_user_conversation_brief_into_assignment_scope(cp_app):
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        create_resp = await client.post("/v1/chat/conversations", json={"title": "Assign With Prior Intent"})
+        conversation_id = create_resp.json()["id"]
+
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "pm-workflow",
+                "name": "PM Workflow",
+                "role": "pm",
+                "backends": [],
+                "enabled": True,
+                "assignment_capabilities": {"is_project_manager": True},
+                "workflow": {
+                    "triggers": [
+                        {
+                            "id": "pm-to-research",
+                            "event": "task_completed",
+                            "target_bot_id": "pm-research-analyst",
+                            "condition": "has_result",
+                            "fan_out_field": "source_result.steps",
+                        }
+                    ]
+                },
+            },
+        )
+        await client.post(
+            "/v1/bots",
+            json={"id": "pm-research-analyst", "name": "PM Research Analyst", "role": "researcher", "backends": [], "enabled": True},
+        )
+
+        pre_resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": (
+                    "Help me plan the mathematics blocks from algebra through multivariable calculus. "
+                    "Build as much as possible in house and avoid external APIs like Desmos."
+                )
+            },
+        )
+        assert pre_resp.status_code == 200
+
+        post_resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": "@assign Build documentation only in docs/blocks for the mathematics blocks",
+                "bot_id": "pm-workflow",
+            },
+        )
+        assert post_resp.status_code == 200
+
+    tasks = await cp_app.state.task_manager.list_tasks()
+    root_task = next(task for task in tasks if task.bot_id == "pm-workflow")
+    scope = root_task.payload.get("assignment_scope") or {}
+    assert "multivariable calculus" in str(scope.get("conversation_brief") or "").lower()
+    assert scope.get("prefer_in_house") is True
+    assert scope.get("avoid_external_apis") is True
+
+
+@pytest.mark.anyio
 async def test_assign_message_requires_explicit_pm_bot_selection(cp_app):
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
         create_resp = await client.post("/v1/chat/conversations", json={"title": "Assign Missing PM"})

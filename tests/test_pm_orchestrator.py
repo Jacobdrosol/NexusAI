@@ -1582,3 +1582,57 @@ async def test_bootstrap_via_pm_workflow_persists_docs_only_assignment_scope() -
     assert payload["assignment_scope"]["docs_only"] is True
     assert payload["assignment_scope"]["requested_output_paths"] == ["docs/blocks"]
 
+
+@pytest.mark.anyio
+async def test_bootstrap_via_pm_workflow_persists_conversation_brief_and_scope_constraints() -> None:
+    created_task = Task(
+        id="pm-entry-task",
+        bot_id="pm-orchestrator",
+        payload={},
+        status="queued",
+        created_at="2026-01-01T00:00:00+00:00",
+        updated_at="2026-01-01T00:00:00+00:00",
+    )
+    task_manager = type(
+        "TaskManager",
+        (),
+        {"create_task": AsyncMock(return_value=created_task)},
+    )()
+    orchestrator = PMOrchestrator(
+        bot_registry=None,
+        scheduler=None,
+        task_manager=task_manager,
+        chat_manager=None,
+    )
+    pm_bot = Bot(
+        id="pm-orchestrator",
+        name="PM Orchestrator",
+        role="project_manager",
+        backends=[],
+        routing_rules={"workflow": {"triggers": []}},
+    )
+
+    await orchestrator._bootstrap_assignment_via_pm_workflow(
+        conversation_id="conv-1",
+        instruction=(
+            "Build documentation only for these mathematics blocks in docs/blocks. "
+            "Make them resource light on the server and client-side rendered."
+        ),
+        conversation_brief=(
+            "Prior user intent 1: Focus on algebra, trigonometry, statistics, calculus, and multivariable calculus.\n"
+            "Prior user intent 2: Build as much as possible in house and do not rely on the Desmos API."
+        ),
+        pm_bot=pm_bot,
+        context_items=[],
+        project_id="proj-1",
+        bots=[pm_bot],
+    )
+
+    payload = task_manager.create_task.await_args.kwargs["payload"]
+    scope = payload["assignment_scope"]
+    assert "algebra" in scope["conversation_brief"].lower()
+    assert scope["prefer_in_house"] is True
+    assert scope["avoid_external_apis"] is True
+    assert scope["prefer_client_side_execution"] is True
+    assert "algebra" in scope["focus_topics"]
+

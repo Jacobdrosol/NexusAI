@@ -1028,7 +1028,18 @@ async def test_scheduler_appends_docs_only_assignment_scope_to_system_prompt():
             "assignment_request": "Build documentation only in docs/blocks for the mathematics blocks.",
             "assignment_scope": {
                 "docs_only": True,
+                "conversation_brief": (
+                    "Prior user intent 1: Focus on algebra, trigonometry, statistics, calculus, and multivariable calculus.\n"
+                    "Prior user intent 2: Build as much as possible in house and do not rely on the Desmos API."
+                ),
                 "requested_output_paths": ["docs/blocks"],
+                "prefer_in_house": True,
+                "avoid_external_apis": True,
+                "prefer_client_side_execution": True,
+                "minimize_server_load": True,
+                "minimize_bandwidth": True,
+                "requested_outcome_style": "roadmap",
+                "focus_topics": ["algebra", "trigonometry", "statistics"],
             },
         },
         status="queued",
@@ -1049,6 +1060,10 @@ async def test_scheduler_appends_docs_only_assignment_scope_to_system_prompt():
     assert "docs/blocks" in system_message
     assert "Do not interpret documentation-only as an empty plan." in system_message
     assert "implementation_workstreams" in system_message
+    assert "Conversation brief from earlier user messages" in system_message
+    assert "Do not rely on external product APIs" in system_message
+    assert "Requested output shape: a roadmap" in system_message
+    assert "Every downstream stage must validate its output against the original assignment scope" in system_message
 
 
 @pytest.mark.anyio

@@ -181,16 +181,67 @@ def _assignment_scope_prompt_suffix(payload: Any) -> str:
         return ""
     scope = _payload_assignment_scope(payload)
     request_text = str(scope.get("request_text") or payload.get("assignment_request") or "").strip()
+    conversation_brief = str(scope.get("conversation_brief") or "").strip()
     docs_only = bool(scope.get("docs_only", False))
     requested_output_paths = scope.get("requested_output_paths")
-    if not docs_only and not request_text and not requested_output_paths:
+    prefer_in_house = bool(scope.get("prefer_in_house", False))
+    avoid_external_apis = bool(scope.get("avoid_external_apis", False))
+    prefer_client_side_execution = bool(scope.get("prefer_client_side_execution", False))
+    minimize_server_load = bool(scope.get("minimize_server_load", False))
+    minimize_bandwidth = bool(scope.get("minimize_bandwidth", False))
+    requested_outcome_style = str(scope.get("requested_outcome_style") or "").strip().lower()
+    focus_topics = scope.get("focus_topics")
+    if (
+        not docs_only
+        and not request_text
+        and not conversation_brief
+        and not requested_output_paths
+        and not prefer_in_house
+        and not avoid_external_apis
+        and not prefer_client_side_execution
+        and not minimize_server_load
+        and not minimize_bandwidth
+        and not requested_outcome_style
+        and not focus_topics
+    ):
         return ""
 
     parts: list[str] = ["Assignment scope:"]
     if request_text:
         parts.append("Use the original assignment below as authoritative scope. Do not pivot to a different feature, file set, or recent unrelated workspace change.")
         parts.append(_truncate_text(request_text, 1200))
+    if conversation_brief:
+        parts.append("Conversation brief from earlier user messages that still constrains this assignment:")
+        parts.append(_truncate_text(conversation_brief, 1200))
     parts.append("If repo, vault, or workspace search surfaces unrelated files, ignore them. If relevant evidence is missing, say so explicitly instead of changing scope.")
+    if isinstance(focus_topics, list):
+        normalized_topics = [str(item).strip() for item in focus_topics if str(item).strip()]
+        if normalized_topics:
+            parts.append("Focus topics: " + ", ".join(normalized_topics[:12]))
+    if requested_outcome_style == "roadmap":
+        parts.append(
+            "Requested output shape: a roadmap, block catalog, phased documentation plan, or comparable expansion map. "
+            "Do not substitute only generic infrastructure guidance if the user asked what to build and how to expand."
+        )
+    elif requested_outcome_style == "documentation_plan":
+        parts.append(
+            "Requested output shape: documentation-first planning artifacts. Keep the output actionable for later implementation, "
+            "but do not substitute source-code work for the requested documentation plan."
+        )
+    hard_constraints: list[str] = []
+    if prefer_in_house:
+        hard_constraints.append("Prefer in-house and locally owned solutions over outsourced provider workflows.")
+    if avoid_external_apis:
+        hard_constraints.append("Do not rely on external product APIs or paid third-party provider APIs unless the assignment explicitly re-authorizes them.")
+    if prefer_client_side_execution:
+        hard_constraints.append("Prefer client-side rendering and execution when possible.")
+    if minimize_server_load:
+        hard_constraints.append("Keep server CPU, memory, and infrastructure cost low.")
+    if minimize_bandwidth:
+        hard_constraints.append("Keep payloads and asset delivery bandwidth-light for end users.")
+    if hard_constraints:
+        parts.append("Non-negotiable constraints:")
+        parts.extend(f"- {item}" for item in hard_constraints)
     if docs_only:
         parts.append(
             "This is a documentation-only run. Allowed committed outputs are documentation files only, preferably markdown. "
@@ -207,6 +258,10 @@ def _assignment_scope_prompt_suffix(payload: Any) -> str:
             "For tester and reviewer stages on documentation-only branches, treat upstream_artifacts (or source_result.artifacts when present) as the primary branch evidence. "
             "Do not fail solely because the live repo snapshot does not yet contain the proposed markdown files; assignment apply happens later."
         )
+    parts.append(
+        "Every downstream stage must validate its output against the original assignment scope above, not only the immediate upstream handoff. "
+        "If the handoff drifts from the assignment, call that drift out explicitly and fail or send back the branch."
+    )
     if isinstance(requested_output_paths, list) and requested_output_paths:
         normalized = [str(item).strip() for item in requested_output_paths if str(item).strip()]
         if normalized:
