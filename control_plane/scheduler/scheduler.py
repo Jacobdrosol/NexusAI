@@ -182,6 +182,9 @@ def _assignment_scope_prompt_suffix(payload: Any) -> str:
     scope = _payload_assignment_scope(payload)
     request_text = str(scope.get("request_text") or payload.get("assignment_request") or "").strip()
     conversation_brief = str(scope.get("conversation_brief") or "").strip()
+    conversation_transcript = str(scope.get("conversation_transcript") or "").strip()
+    conversation_message_count = int(scope.get("conversation_message_count") or 0)
+    conversation_transcript_strategy = str(scope.get("conversation_transcript_strategy") or "").strip().lower()
     docs_only = bool(scope.get("docs_only", False))
     requested_output_paths = scope.get("requested_output_paths")
     prefer_in_house = bool(scope.get("prefer_in_house", False))
@@ -191,10 +194,13 @@ def _assignment_scope_prompt_suffix(payload: Any) -> str:
     minimize_bandwidth = bool(scope.get("minimize_bandwidth", False))
     requested_outcome_style = str(scope.get("requested_outcome_style") or "").strip().lower()
     focus_topics = scope.get("focus_topics")
+    requested_artifact_hints = scope.get("requested_artifact_hints")
+    constraint_hints = scope.get("constraint_hints")
     if (
         not docs_only
         and not request_text
         and not conversation_brief
+        and not conversation_transcript
         and not requested_output_paths
         and not prefer_in_house
         and not avoid_external_apis
@@ -203,6 +209,8 @@ def _assignment_scope_prompt_suffix(payload: Any) -> str:
         and not minimize_bandwidth
         and not requested_outcome_style
         and not focus_topics
+        and not requested_artifact_hints
+        and not constraint_hints
     ):
         return ""
 
@@ -213,11 +221,24 @@ def _assignment_scope_prompt_suffix(payload: Any) -> str:
     if conversation_brief:
         parts.append("Conversation brief from earlier user messages that still constrains this assignment:")
         parts.append(_truncate_text(conversation_brief, 1200))
+    if conversation_transcript:
+        transcript_label = "Conversation transcript"
+        if conversation_message_count > 0:
+            transcript_label += f" ({conversation_message_count} prior message(s)"
+            if conversation_transcript_strategy:
+                transcript_label += f", {conversation_transcript_strategy}"
+            transcript_label += ")"
+        parts.append(transcript_label + ":")
+        parts.append(_truncate_text(conversation_transcript, 2200))
     parts.append("If repo, vault, or workspace search surfaces unrelated files, ignore them. If relevant evidence is missing, say so explicitly instead of changing scope.")
     if isinstance(focus_topics, list):
         normalized_topics = [str(item).strip() for item in focus_topics if str(item).strip()]
         if normalized_topics:
             parts.append("Focus topics: " + ", ".join(normalized_topics[:12]))
+    if isinstance(requested_artifact_hints, list):
+        normalized_hints = [str(item).strip() for item in requested_artifact_hints if str(item).strip()]
+        if normalized_hints:
+            parts.append("Requested artifact shapes: " + ", ".join(normalized_hints[:12]))
     if requested_outcome_style == "roadmap":
         parts.append(
             "Requested output shape: a roadmap, block catalog, phased documentation plan, or comparable expansion map. "
@@ -242,6 +263,11 @@ def _assignment_scope_prompt_suffix(payload: Any) -> str:
     if hard_constraints:
         parts.append("Non-negotiable constraints:")
         parts.extend(f"- {item}" for item in hard_constraints)
+    if isinstance(constraint_hints, list):
+        normalized_constraints = [str(item).strip() for item in constraint_hints if str(item).strip()]
+        if normalized_constraints:
+            parts.append("Interpreted scope constraints:")
+            parts.extend(f"- {item}" for item in normalized_constraints[:12])
     if docs_only:
         parts.append(
             "This is a documentation-only run. Allowed committed outputs are documentation files only, preferably markdown. "

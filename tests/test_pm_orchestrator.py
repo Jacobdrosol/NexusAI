@@ -1622,6 +1622,13 @@ async def test_bootstrap_via_pm_workflow_persists_conversation_brief_and_scope_c
             "Prior user intent 1: Focus on algebra, trigonometry, statistics, calculus, and multivariable calculus.\n"
             "Prior user intent 2: Build as much as possible in house and do not rely on the Desmos API."
         ),
+        conversation_transcript=(
+            "user: Help me plan the mathematics blocks from algebra through multivariable calculus.\n"
+            "assistant: Here is a roadmap.\n"
+            "user: Build as much as possible in house and do not rely on the Desmos API."
+        ),
+        conversation_message_count=3,
+        conversation_transcript_strategy="full",
         pm_bot=pm_bot,
         context_items=[],
         project_id="proj-1",
@@ -1634,5 +1641,9 @@ async def test_bootstrap_via_pm_workflow_persists_conversation_brief_and_scope_c
     assert scope["prefer_in_house"] is True
     assert scope["avoid_external_apis"] is True
     assert scope["prefer_client_side_execution"] is True
+    assert scope["conversation_message_count"] == 3
+    assert scope["conversation_transcript_strategy"] == "full"
+    assert "desmos api" in scope["conversation_transcript"].lower()
     assert "algebra" in scope["focus_topics"]
+    assert "roadmap" in scope["requested_artifact_hints"]
 

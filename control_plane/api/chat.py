@@ -1169,6 +1169,69 @@ def _build_assignment_conversation_brief(
     return "\n".join(lines)
 
 
+def _build_assignment_conversation_transcript(
+    messages: List[ChatMessage],
+    *,
+    current_assign_message_id: Optional[str] = None,
+    max_messages: int = 120,
+    max_chars: int = 24000,
+    head_messages: int = 8,
+) -> Dict[str, Any]:
+    transcript_entries: List[tuple[str, str]] = []
+    for message in messages:
+        if current_assign_message_id and str(message.id) == str(current_assign_message_id):
+            continue
+        role = str(message.role or "").strip().lower()
+        if role not in {"user", "assistant"}:
+            continue
+        content = str(message.content or "").strip()
+        if not content:
+            continue
+        normalized = re.sub(r"\s+", " ", content).strip()
+        if not normalized:
+            continue
+        transcript_entries.append((role, normalized))
+
+    if not transcript_entries:
+        return {
+            "conversation_transcript": "",
+            "conversation_message_count": 0,
+            "conversation_transcript_strategy": "empty",
+        }
+
+    rendered_entries = [f"{role}: {content}" for role, content in transcript_entries]
+    full_transcript = "\n".join(rendered_entries)
+    if len(transcript_entries) <= max_messages and len(full_transcript) <= max_chars:
+        return {
+            "conversation_transcript": full_transcript,
+            "conversation_message_count": len(transcript_entries),
+            "conversation_transcript_strategy": "full",
+        }
+
+    kept: List[str] = []
+    for item in rendered_entries[:head_messages]:
+        kept.append(item)
+    omitted_count = max(0, len(rendered_entries) - len(kept))
+    tail: List[str] = []
+    used_chars = sum(len(item) + 1 for item in kept)
+    for item in reversed(rendered_entries[head_messages:]):
+        item_cost = len(item) + 1
+        if len(kept) + len(tail) >= max_messages or used_chars + item_cost > max_chars:
+            break
+        tail.append(item)
+        used_chars += item_cost
+    tail.reverse()
+    omitted_count = max(0, len(rendered_entries) - len(kept) - len(tail))
+    if omitted_count > 0:
+        kept.append(f"... ({omitted_count} earlier chat message(s) omitted for size) ...")
+    kept.extend(tail)
+    return {
+        "conversation_transcript": "\n".join(kept),
+        "conversation_message_count": len(transcript_entries),
+        "conversation_transcript_strategy": "excerpt",
+    }
+
+
 def _extract_task_output(result: Any) -> str:
     if isinstance(result, dict):
         output = result.get("output")
@@ -1454,12 +1517,19 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                 conversation_messages,
                 current_assign_message_id=user_message.id,
             )
+            conversation_snapshot = _build_assignment_conversation_transcript(
+                conversation_messages,
+                current_assign_message_id=user_message.id,
+            )
             assignment = await pm_orchestrator.orchestrate_assignment(
                 conversation_id=conversation_id,
                 instruction=assign_instruction,
                 requested_pm_bot_id=body.bot_id,
                 context_items=resolved_context,
                 conversation_brief=conversation_brief,
+                conversation_transcript=str(conversation_snapshot.get("conversation_transcript") or ""),
+                conversation_message_count=int(conversation_snapshot.get("conversation_message_count") or 0),
+                conversation_transcript_strategy=str(conversation_snapshot.get("conversation_transcript_strategy") or ""),
                 project_id=conversation.project_id,
             )
             user_message = await chat_manager.update_message(
@@ -1691,12 +1761,19 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                     conversation_messages,
                     current_assign_message_id=user_message.id,
                 )
+                conversation_snapshot = _build_assignment_conversation_transcript(
+                    conversation_messages,
+                    current_assign_message_id=user_message.id,
+                )
                 assignment = await pm_orchestrator.orchestrate_assignment(
                     conversation_id=conversation_id,
                     instruction=assign_instruction,
                     requested_pm_bot_id=body.bot_id,
                     context_items=resolved_context,
                     conversation_brief=conversation_brief,
+                    conversation_transcript=str(conversation_snapshot.get("conversation_transcript") or ""),
+                    conversation_message_count=int(conversation_snapshot.get("conversation_message_count") or 0),
+                    conversation_transcript_strategy=str(conversation_snapshot.get("conversation_transcript_strategy") or ""),
                     project_id=conversation.project_id,
                 )
                 user_message = await chat_manager.update_message(

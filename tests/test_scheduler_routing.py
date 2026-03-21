@@ -1032,6 +1032,13 @@ async def test_scheduler_appends_docs_only_assignment_scope_to_system_prompt():
                     "Prior user intent 1: Focus on algebra, trigonometry, statistics, calculus, and multivariable calculus.\n"
                     "Prior user intent 2: Build as much as possible in house and do not rely on the Desmos API."
                 ),
+                "conversation_transcript": (
+                    "user: Help me plan the mathematics blocks from algebra through multivariable calculus.\n"
+                    "assistant: Here is a roadmap.\n"
+                    "user: Build as much as possible in house and do not rely on the Desmos API."
+                ),
+                "conversation_message_count": 3,
+                "conversation_transcript_strategy": "full",
                 "requested_output_paths": ["docs/blocks"],
                 "prefer_in_house": True,
                 "avoid_external_apis": True,
@@ -1040,6 +1047,8 @@ async def test_scheduler_appends_docs_only_assignment_scope_to_system_prompt():
                 "minimize_bandwidth": True,
                 "requested_outcome_style": "roadmap",
                 "focus_topics": ["algebra", "trigonometry", "statistics"],
+                "requested_artifact_hints": ["roadmap", "guide"],
+                "constraint_hints": ["Prefer in-house or locally owned solutions."],
             },
         },
         status="queued",
@@ -1061,7 +1070,10 @@ async def test_scheduler_appends_docs_only_assignment_scope_to_system_prompt():
     assert "Do not interpret documentation-only as an empty plan." in system_message
     assert "implementation_workstreams" in system_message
     assert "Conversation brief from earlier user messages" in system_message
+    assert "Conversation transcript (3 prior message(s), full):" in system_message
+    assert "Requested artifact shapes: roadmap, guide" in system_message
     assert "Do not rely on external product APIs" in system_message
+    assert "Interpreted scope constraints:" in system_message
     assert "Requested output shape: a roadmap" in system_message
     assert "Every downstream stage must validate its output against the original assignment scope" in system_message
 

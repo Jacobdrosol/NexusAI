@@ -438,6 +438,8 @@ async def test_assign_message_persists_prior_user_conversation_brief_into_assign
     root_task = next(task for task in tasks if task.bot_id == "pm-workflow")
     scope = root_task.payload.get("assignment_scope") or {}
     assert "multivariable calculus" in str(scope.get("conversation_brief") or "").lower()
+    assert "user: help me plan the mathematics blocks" in str(scope.get("conversation_transcript") or "").lower()
+    assert int(scope.get("conversation_message_count") or 0) >= 1
     assert scope.get("prefer_in_house") is True
     assert scope.get("avoid_external_apis") is True
 
