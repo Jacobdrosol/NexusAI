@@ -582,6 +582,8 @@ def _is_retryable_error_message(message: str) -> bool:
         "http 502",
         "http 503",
         "http 504",
+        "documentation output contains broken internal markdown links",
+        "documentation workstream emitted markdown files outside its assigned deliverables",
     ]
     return any(marker in normalized for marker in retryable_markers)
 

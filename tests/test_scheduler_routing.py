@@ -151,6 +151,50 @@ async def test_scheduler_injects_bot_system_prompt_into_payload():
 
 
 @pytest.mark.anyio
+async def test_scheduler_injects_retry_guidance_into_payload():
+    from control_plane.scheduler.scheduler import Scheduler
+    from shared.models import TaskError, TaskMetadata
+
+    bot_registry = AsyncMock()
+    bot_registry.get.return_value = Bot(
+        id="doc-writer",
+        name="Doc Writer",
+        role="writer",
+        system_prompt="Return only strict JSON.",
+        backends=[BackendConfig(type="cloud_api", provider="openai", model="gpt-4o-mini")],
+    )
+    scheduler = Scheduler(bot_registry=bot_registry, worker_registry=AsyncMock())
+    task = Task(
+        id="task-retry-1",
+        bot_id="doc-writer",
+        payload={"instruction": "fix docs"},
+        status="queued",
+        created_at="now",
+        updated_at="now",
+        metadata=TaskMetadata(retry_attempt=1, source="auto_retry"),
+        error=TaskError(
+            message=(
+                "Documentation output contains broken internal markdown links in generated artifacts: "
+                "docs/blocks/implementation-guide.md -> ../project-context-research.md."
+            )
+        ),
+    )
+
+    async def fake_dispatch(backend, payload, task=None):
+        return {"payload": payload}
+
+    scheduler._dispatch_backend = fake_dispatch  # type: ignore[method-assign]
+    result = await scheduler.schedule(task)
+
+    assert isinstance(result["payload"], list)
+    system_prompt = result["payload"][0]["content"]
+    assert "Retry guidance:" in system_prompt
+    assert "Previous attempt failed with this error:" in system_prompt
+    assert "broken internal markdown links" in system_prompt
+    assert "resolve internal markdown links relative to the generated file path" in system_prompt
+
+
+@pytest.mark.anyio
 async def test_scheduler_injects_attached_connection_schema_into_model_prompt(monkeypatch):
     from control_plane.scheduler.scheduler import Scheduler
     from dashboard.models import BotConnection as DashboardBotConnection

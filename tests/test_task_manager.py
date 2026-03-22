@@ -448,6 +448,48 @@ async def test_task_manager_auto_retries_invalid_structured_output(tmp_path, mon
 
 
 @pytest.mark.anyio
+async def test_task_manager_auto_retries_docs_broken_link_validation_failures(tmp_path, monkeypatch):
+    import asyncio
+
+    from control_plane.task_manager import task_manager as task_manager_module
+    from control_plane.task_manager.task_manager import TaskManager
+
+    attempts = 0
+
+    class StubScheduler:
+        async def schedule(self, task):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise RuntimeError(
+                    "Documentation output contains broken internal markdown links in generated artifacts: "
+                    "docs/blocks/implementation-guide.md -> ../project-context-research.md."
+                )
+            return {"ok": True, "attempts": attempts}
+
+    monkeypatch.setenv("NEXUSAI_TASK_MAX_CONCURRENCY", "1")
+    monkeypatch.setattr(task_manager_module, "_settings_int", lambda name, default: 1 if name == "max_task_retries" else default)
+    monkeypatch.setattr(task_manager_module, "_settings_float", lambda name, default: 0.01 if name == "task_retry_delay" else default)
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "retry-doc-links.db"))
+    task = await tm.create_task(
+        bot_id="pm-coder",
+        payload={"instruction": "write docs", "deliverables": ["docs/blocks/implementation-guide.md"]},
+    )
+
+    for _ in range(80):
+        updated = await tm.get_task(task.id)
+        if updated.status == "completed":
+            break
+        await asyncio.sleep(0.1)
+
+    updated = await tm.get_task(task.id)
+    assert updated.status == "completed"
+    assert updated.result["ok"] is True
+    assert updated.metadata is not None
+    assert updated.metadata.retry_attempt == 1
+
+
+@pytest.mark.anyio
 async def test_manual_retry_creates_new_task_with_override(tmp_path):
     import asyncio
 

@@ -848,7 +848,37 @@ def _connection_context_prompt_suffix(bot_id: str, bot: Any, payload: Any) -> st
     return "\n\n" + rendered
 
 
-def _prepare_system_prompt(bot: Any, *, bot_id: str | None = None, payload: Any = None) -> str | None:
+def _retry_prompt_suffix(task: Task | None) -> str:
+    if task is None or task.error is None:
+        return ""
+    metadata = task.metadata
+    retry_attempt = int(metadata.retry_attempt or 0) if metadata is not None else 0
+    if retry_attempt <= 0:
+        return ""
+    error_message = str(task.error.message or "").strip()
+    if not error_message:
+        return ""
+    guidance = [
+        f"Retry attempt: {retry_attempt}.",
+        "Previous attempt failed with this error:",
+        error_message,
+        "Correct that exact issue on this retry while preserving the original scope and output contract.",
+    ]
+    lowered = error_message.lower()
+    if "broken internal markdown links" in lowered:
+        guidance.append(
+            "For documentation files, resolve internal markdown links relative to the generated file path. "
+            "Only link to markdown docs that actually exist in the upstream artifacts, the current deliverables, or the live repository."
+        )
+    if "outside its assigned deliverables" in lowered:
+        guidance.append(
+            "Only emit the markdown files explicitly assigned in this workstream. "
+            "Do not add extra documentation files outside the listed deliverables."
+        )
+    return "\n\nRetry guidance:\n" + "\n".join(guidance)
+
+
+def _prepare_system_prompt(bot: Any, *, bot_id: str | None = None, payload: Any = None, task: Task | None = None) -> str | None:
     base = str(getattr(bot, "system_prompt", None) or "").strip()
     suffix_parts: list[str] = []
     contract_suffix = _contract_prompt_suffix(bot).strip()
@@ -861,6 +891,9 @@ def _prepare_system_prompt(bot: Any, *, bot_id: str | None = None, payload: Any 
         connection_suffix = _connection_context_prompt_suffix(bot_id, bot, payload).strip()
         if connection_suffix:
             suffix_parts.append(connection_suffix)
+    retry_suffix = _retry_prompt_suffix(task).strip()
+    if retry_suffix:
+        suffix_parts.append(retry_suffix)
     suffix = "\n".join(part for part in suffix_parts if part).strip()
     if not suffix:
         return base or None
@@ -874,7 +907,10 @@ def _prepare_system_prompt(bot: Any, *, bot_id: str | None = None, payload: Any 
 def _prepare_payload_for_backend(bot: Any, backend: BackendConfig, payload: Any, *, task: Task | None = None) -> Any:
     if backend.type == "custom":
         return payload
-    return _inject_system_prompt(_prepare_system_prompt(bot, bot_id=getattr(task, "bot_id", None), payload=payload), payload)
+    return _inject_system_prompt(
+        _prepare_system_prompt(bot, bot_id=getattr(task, "bot_id", None), payload=payload, task=task),
+        payload,
+    )
 
 
 class Scheduler:
