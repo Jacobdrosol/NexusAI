@@ -6098,6 +6098,44 @@ def test_assignment_validation_allows_repo_change_links_to_upstream_markdown_art
     assert _assignment_validation_error(task, result) == ""
 
 
+def test_assignment_validation_allows_docs_to_link_to_repo_source_files():
+    from control_plane.task_manager.task_manager import _assignment_validation_error
+    from shared.models import Task, TaskMetadata
+
+    task = Task(
+        id="task-doc-links-source",
+        bot_id="pm-coder",
+        payload={
+            "title": "Create catalog",
+            "instruction": "Create only markdown documentation in docs/blocks.",
+            "step_kind": "repo_change",
+            "deliverables": ["docs/blocks/mathematics-block-catalog.md"],
+            "assignment_scope": {
+                "docs_only": True,
+                "requested_output_paths": ["docs/blocks"],
+            },
+        },
+        metadata=TaskMetadata(source="bot_trigger", orchestration_id="orch-doc-links-source"),
+        created_at="2026-03-22T00:00:00+00:00",
+        updated_at="2026-03-22T00:00:00+00:00",
+    )
+
+    result = {
+        "artifacts": [
+            {
+                "path": "docs/blocks/mathematics-block-catalog.md",
+                "content": (
+                    "# Math Block Catalog\n\n"
+                    "See [BlockSchemas](../../GlobeIQ.Server/Models/BlockSchemas.cs) and "
+                    "[SchemaMapBuilder](../../GlobeIQ.Server/BlocksApi/SchemaMapBuilder.cs).\n"
+                ),
+            }
+        ]
+    }
+
+    assert _assignment_validation_error(task, result) == ""
+
+
 def test_assignment_validation_rejects_docs_only_tester_false_positive_when_upstream_links_are_broken():
     from control_plane.task_manager.task_manager import _assignment_validation_error
     from shared.models import Task, TaskMetadata

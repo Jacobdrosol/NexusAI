@@ -1292,6 +1292,8 @@ def _resolve_markdown_relative_path(base_path: str, target: str) -> Optional[str
     normalized = _normalize_markdown_link_target(target)
     if not normalized:
         return None
+    if not normalized.lower().endswith(".md"):
+        return None
     base = PurePosixPath(str(base_path or "").replace("\\", "/"))
     if not str(base):
         return None
