@@ -1020,7 +1020,8 @@ def _docs_only_non_writer_branch_may_reference_upstream_docs(
 ) -> bool:
     if not _payload_is_docs_only_request(payload):
         return False
-    if _assignment_step_kind(payload) not in {"test_execution", "review"}:
+    step_kind = _assignment_step_kind(payload)
+    if step_kind not in {"planning", "test_execution", "review"}:
         return False
     repo_output_paths = _result_repo_output_candidate_paths(result)
     if not repo_output_paths:
@@ -1030,11 +1031,28 @@ def _docs_only_non_writer_branch_may_reference_upstream_docs(
         for path in _assignment_expected_repo_files(payload)
         if _is_documentation_like_repo_file(path)
     }
-    allowed_paths.update(
-        path
-        for path in _artifact_repo_paths(payload.get("upstream_artifacts"))
-        if _is_documentation_like_repo_file(path)
-    )
+    if step_kind == "planning" and isinstance(result, dict):
+        workstreams = result.get("implementation_workstreams")
+        if isinstance(workstreams, list):
+            for workstream in workstreams:
+                if not isinstance(workstream, dict):
+                    continue
+                allowed_paths.update(
+                    path
+                    for path in _artifact_repo_paths(workstream.get("deliverables"))
+                    if _is_documentation_like_repo_file(path)
+                )
+        allowed_paths.update(
+            path
+            for path in _artifact_repo_paths(_result_explicit_artifacts(result))
+            if _is_documentation_like_repo_file(path)
+        )
+    else:
+        allowed_paths.update(
+            path
+            for path in _artifact_repo_paths(payload.get("upstream_artifacts"))
+            if _is_documentation_like_repo_file(path)
+        )
     return bool(allowed_paths) and all(path in allowed_paths for path in repo_output_paths)
 
 

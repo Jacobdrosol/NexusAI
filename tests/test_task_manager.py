@@ -181,6 +181,81 @@ async def test_task_manager_allows_docs_only_tester_to_reference_upstream_artifa
 
 
 @pytest.mark.anyio
+async def test_task_manager_allows_docs_only_engineer_to_reference_planned_doc_paths(tmp_path):
+    import asyncio
+
+    from control_plane.task_manager.task_manager import TaskManager
+
+    class StubRegistry:
+        def __init__(self):
+            self._bots = {
+                "pm-engineer": Bot(
+                    id="pm-engineer",
+                    name="PM Engineer",
+                    role="engineer",
+                    backends=[],
+                    execution_policy={"repo_output_mode": "deny"},
+                )
+            }
+
+        async def get(self, bot_id):
+            return self._bots[bot_id]
+
+    class StubScheduler:
+        async def schedule(self, _task):
+            return {
+                "architecture": ["Docs-only planning for mathematics blocks."],
+                "implementation_plan": ["Plan the documentation workstreams."],
+                "implementation_workstreams": [
+                    {
+                        "title": "Schema Documentation",
+                        "instruction": "Create schema docs.",
+                        "deliverables": [
+                            "docs/blocks/schema-specifications.md",
+                            "docs/blocks/client-rendering-architecture.md",
+                            "docs/blocks/block-catalog.md",
+                        ],
+                    }
+                ],
+                "artifacts": [
+                    {
+                        "path": "docs/blocks/client-rendering-architecture.md",
+                        "content": "# Planned Architecture Doc\n",
+                    }
+                ],
+                "risks": ["Needs downstream coder execution."],
+                "handoff_notes": "Proceed to coder fan-out.",
+                "status": "complete",
+            }
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "policy-docs-engineer.db"), bot_registry=StubRegistry())
+    task = await tm.create_task(
+        bot_id="pm-engineer",
+        payload={
+            "title": "Synthesize research and create engineering stories",
+            "step_kind": "planning",
+            "instruction": "Create docs-only engineering stories under docs/blocks.",
+            "deliverables": ["Implementation plan", "Coder workstreams", "Risk summary"],
+            "assignment_scope": {
+                "docs_only": True,
+                "requested_output_paths": ["docs/blocks"],
+            },
+        },
+        metadata=TaskMetadata(source="bot_trigger", orchestration_id="orch-docs-engineer-policy"),
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.05)
+
+    updated = await tm.get_task(task.id)
+    assert updated.status == "completed"
+    assert updated.error is None
+
+
+@pytest.mark.anyio
 async def test_task_manager_blocks_trigger_targets_outside_orchestration_allowlist(tmp_path):
     import asyncio
 
