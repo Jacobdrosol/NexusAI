@@ -1276,6 +1276,8 @@ def _normalize_markdown_link_target(target: str) -> Optional[str]:
     if not normalized:
         return None
     normalized = normalized.split(maxsplit=1)[0].strip()
+    normalized = normalized.split("#", 1)[0].strip()
+    normalized = normalized.split("?", 1)[0].strip()
     if not normalized or normalized.startswith("#"):
         return None
     lowered = normalized.lower()
@@ -1312,6 +1314,10 @@ def _docs_markdown_artifacts(items: Any) -> List[Dict[str, str]]:
         if not isinstance(item, dict):
             continue
         path = str(item.get("path") or "").strip().replace("\\", "/")
+        if not path:
+            label_path = str(item.get("label") or item.get("name") or "").strip().replace("\\", "/").strip("`")
+            if _looks_like_repo_file(label_path):
+                path = label_path
         content = str(item.get("content") or "")
         if not path or not content or not path.lower().endswith(".md"):
             continue
@@ -1820,7 +1826,11 @@ def _assignment_validation_error(task: Task, result: Any) -> str:
                 f"{preview}."
             )
         if step_kind == "repo_change":
-            broken_links = _docs_only_broken_markdown_links_from_artifacts(_result_explicit_artifacts(result))
+            validation_artifacts = _result_explicit_artifacts(result)
+            upstream_artifacts = payload.get("upstream_artifacts")
+            if isinstance(upstream_artifacts, list):
+                validation_artifacts = validation_artifacts + [item for item in upstream_artifacts if isinstance(item, dict)]
+            broken_links = _docs_only_broken_markdown_links_from_artifacts(validation_artifacts)
             if broken_links:
                 preview = ", ".join(broken_links[:3])
                 return (

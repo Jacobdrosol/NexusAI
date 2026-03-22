@@ -6055,6 +6055,49 @@ def test_assignment_validation_rejects_broken_internal_markdown_links_in_docs_on
     assert "../architecture/client-rendering.md" in error
 
 
+def test_assignment_validation_allows_repo_change_links_to_upstream_markdown_artifacts_with_label_paths():
+    from control_plane.task_manager.task_manager import _assignment_validation_error
+    from shared.models import Task, TaskMetadata
+
+    task = Task(
+        id="task-doc-links-upstream",
+        bot_id="pm-coder",
+        payload={
+            "title": "Create README",
+            "instruction": "Create only markdown documentation in docs/blocks.",
+            "step_kind": "repo_change",
+            "deliverables": ["docs/blocks/README.md"],
+            "assignment_scope": {
+                "docs_only": True,
+                "requested_output_paths": ["docs/blocks"],
+            },
+            "upstream_artifacts": [
+                {
+                    "label": "docs/blocks/block-catalog.md",
+                    "content": "# Block Catalog\n\n## ALG-001\n",
+                }
+            ],
+        },
+        metadata=TaskMetadata(source="bot_trigger", orchestration_id="orch-doc-links-upstream"),
+        created_at="2026-03-22T00:00:00+00:00",
+        updated_at="2026-03-22T00:00:00+00:00",
+    )
+
+    result = {
+        "artifacts": [
+            {
+                "path": "docs/blocks/README.md",
+                "content": (
+                    "# Math Blocks\n\n"
+                    "See [ALG-001](./block-catalog.md#alg-001).\n"
+                ),
+            }
+        ]
+    }
+
+    assert _assignment_validation_error(task, result) == ""
+
+
 def test_assignment_validation_rejects_docs_only_tester_false_positive_when_upstream_links_are_broken():
     from control_plane.task_manager.task_manager import _assignment_validation_error
     from shared.models import Task, TaskMetadata
