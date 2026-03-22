@@ -1075,6 +1075,7 @@ async def test_scheduler_appends_docs_only_assignment_scope_to_system_prompt():
     assert "Do not rely on external product APIs" in system_message
     assert "Interpreted scope constraints:" in system_message
     assert "Requested output shape: a roadmap" in system_message
+    assert "only cross-link to markdown docs that actually exist" in system_message
     assert "Every downstream stage must validate its output against the original assignment scope" in system_message
 
 
@@ -1125,4 +1126,5 @@ async def test_scheduler_appends_docs_only_upstream_artifact_guidance_to_system_
     assert "live repo snapshot does not yet contain the proposed markdown files" in system_message
     assert "always return the repo-change contract JSON wrapper" in system_message
     assert "explicitly verify internal markdown links" in system_message
+    assert "Do not invent sibling folders, placeholder doc names, or guessed markdown paths" in system_message
     assert "prefer the strongest upstream tester evidence over later skip/not_applicable review signals" in system_message

@@ -298,6 +298,11 @@ def _assignment_scope_prompt_suffix(payload: Any) -> str:
             "Do not claim 'no broken links', 'schema validation passed', or similar checks unless the available artifacts actually support that conclusion."
         )
         parts.append(
+            "For documentation-only planning and coder stages, only cross-link to markdown docs that actually exist in the upstream_artifacts set, the current branch deliverables, or the live repository. "
+            "Do not invent sibling folders, placeholder doc names, or guessed markdown paths just to make the docs feel complete. "
+            "Links to real repository source files (for example .cs, .razor, .js) are allowed when they truly exist and support the documentation."
+        )
+        parts.append(
             "For final QC on documentation-only runs, prefer the strongest upstream tester evidence over later skip/not_applicable review signals. "
             "If a tester has already verified the requested markdown content and later UI/database/security stages skip because the branch has no applicable runtime work, treat those skips as acceptable rather than as missing verification."
         )
