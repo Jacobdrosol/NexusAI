@@ -6097,6 +6097,62 @@ def test_assignment_validation_rejects_broken_internal_markdown_links_in_docs_on
     assert "../architecture/client-rendering.md" in error
 
 
+def test_docs_only_specification_branch_may_emit_assigned_markdown_deliverable():
+    from control_plane.task_manager.task_manager import _docs_only_non_writer_branch_may_reference_upstream_docs
+
+    payload = {
+        "title": "Web Research",
+        "instruction": "Produce a markdown comparison placed at docs/blocks/client-math-libraries.md.",
+        "role_hint": "researcher",
+        "step_kind": "specification",
+        "deliverables": ["docs/blocks/client-math-libraries.md"],
+        "assignment_scope": {
+            "docs_only": True,
+            "requested_output_paths": ["docs/blocks"],
+        },
+    }
+    result = {
+        "artifacts": [
+            {
+                "path": "docs/blocks/client-math-libraries.md",
+                "content": "# Client Math Libraries\n",
+            }
+        ]
+    }
+
+    assert _docs_only_non_writer_branch_may_reference_upstream_docs(payload, result) is True
+
+
+def test_docs_only_specification_branch_still_rejects_extra_markdown_outputs():
+    from control_plane.task_manager.task_manager import _docs_only_non_writer_branch_may_reference_upstream_docs
+
+    payload = {
+        "title": "Web Research",
+        "instruction": "Produce a markdown comparison placed at docs/blocks/client-math-libraries.md.",
+        "role_hint": "researcher",
+        "step_kind": "specification",
+        "deliverables": ["docs/blocks/client-math-libraries.md"],
+        "assignment_scope": {
+            "docs_only": True,
+            "requested_output_paths": ["docs/blocks"],
+        },
+    }
+    result = {
+        "artifacts": [
+            {
+                "path": "docs/blocks/client-math-libraries.md",
+                "content": "# Client Math Libraries\n",
+            },
+            {
+                "path": "docs/blocks/mathematics-block-catalog.md",
+                "content": "# Extra\n",
+            },
+        ]
+    }
+
+    assert _docs_only_non_writer_branch_may_reference_upstream_docs(payload, result) is False
+
+
 def test_assignment_validation_allows_repo_change_links_to_upstream_markdown_artifacts_with_label_paths():
     from control_plane.task_manager.task_manager import _assignment_validation_error
     from shared.models import Task, TaskMetadata

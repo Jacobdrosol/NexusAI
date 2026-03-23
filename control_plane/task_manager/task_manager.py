@@ -1023,7 +1023,7 @@ def _docs_only_non_writer_branch_may_reference_upstream_docs(
     if not _payload_is_docs_only_request(payload):
         return False
     step_kind = _assignment_step_kind(payload)
-    if step_kind not in {"planning", "test_execution", "review"}:
+    if step_kind not in {"specification", "planning", "test_execution", "review"}:
         return False
     repo_output_paths = _result_repo_output_candidate_paths(result)
     if not repo_output_paths:
