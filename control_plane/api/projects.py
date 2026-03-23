@@ -633,7 +633,11 @@ def _assignment_task_sort_key(task: Task) -> tuple[int, str, str]:
     return (step_number, str(task.created_at or ""), str(task.updated_at or ""))
 
 
-def _assignment_file_candidates(tasks: List[Task]) -> List[Dict[str, Any]]:
+def _assignment_file_candidates(
+    tasks: List[Task],
+    *,
+    preferred_bot_ids: Optional[set[str]] = None,
+) -> List[Dict[str, Any]]:
     merged: Dict[str, Dict[str, Any]] = {}
     ordered_tasks = sorted(tasks, key=_assignment_task_sort_key)
     for task in ordered_tasks:
@@ -645,7 +649,7 @@ def _assignment_file_candidates(tasks: List[Task]) -> List[Dict[str, Any]]:
             if not path or not content:
                 continue
             payload = task.payload if isinstance(task.payload, dict) else {}
-            merged[path] = {
+            new_item = {
                 "path": path,
                 "content": content,
                 "source": str(candidate.get("source") or "task_result"),
@@ -655,6 +659,19 @@ def _assignment_file_candidates(tasks: List[Task]) -> List[Dict[str, Any]]:
                 "task_title": str(payload.get("title") or ""),
                 "step_number": payload.get("step_number"),
             }
+            existing = merged.get(path)
+            if existing is None:
+                merged[path] = new_item
+                continue
+            if preferred_bot_ids:
+                existing_preferred = str(existing.get("bot_id") or "").strip() in preferred_bot_ids
+                new_preferred = str(task.bot_id or "").strip() in preferred_bot_ids
+                if new_preferred and not existing_preferred:
+                    merged[path] = new_item
+                    continue
+                if existing_preferred and not new_preferred:
+                    continue
+            merged[path] = new_item
     return list(merged.values())
 
 
@@ -2896,7 +2913,7 @@ async def review_assignment_in_project_repo_workspace(
         if bot_allows_repo_output(bot):
             allowed_repo_output_bot_ids.add(bot_id)
 
-    candidates = _assignment_file_candidates(scoped_tasks)
+    candidates = _assignment_file_candidates(scoped_tasks, preferred_bot_ids=allowed_repo_output_bot_ids)
     if not candidates:
         raise HTTPException(
             status_code=400,

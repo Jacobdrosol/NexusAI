@@ -1354,6 +1354,33 @@ def _docs_only_broken_markdown_links_from_artifacts(items: Any) -> List[str]:
     return broken
 
 
+_DOC_PLACEHOLDER_MARKERS = (
+    "... (full content omitted for brevity) ...",
+    "full content omitted for brevity",
+    "content omitted for brevity",
+    "omitted for brevity",
+    "... omitted for brevity ...",
+)
+
+
+def _docs_only_placeholder_markdown_artifacts(items: Any) -> List[str]:
+    artifacts = _docs_markdown_artifacts(items)
+    if not artifacts:
+        return []
+    placeholders: List[str] = []
+    seen: Set[str] = set()
+    for item in artifacts:
+        path = str(item.get("path") or "").strip()
+        content = str(item.get("content") or "")
+        lowered = content.lower()
+        if not path or path in seen:
+            continue
+        if any(marker in lowered for marker in _DOC_PLACEHOLDER_MARKERS):
+            seen.add(path)
+            placeholders.append(path)
+    return placeholders
+
+
 def _synthesize_docs_only_repo_change_contract_result(
     task: Task,
     result: Any,
@@ -1834,6 +1861,13 @@ def _assignment_validation_error(task: Task, result: Any) -> str:
             upstream_artifacts = payload.get("upstream_artifacts")
             if isinstance(upstream_artifacts, list):
                 validation_artifacts = validation_artifacts + [item for item in upstream_artifacts if isinstance(item, dict)]
+            placeholder_docs = _docs_only_placeholder_markdown_artifacts(validation_artifacts)
+            if placeholder_docs:
+                preview = ", ".join(placeholder_docs[:5])
+                return (
+                    "Documentation output contains placeholder or omitted markdown content in generated artifacts: "
+                    f"{preview}."
+                )
             broken_links = _docs_only_broken_markdown_links_from_artifacts(validation_artifacts)
             if broken_links:
                 preview = ", ".join(broken_links[:3])
@@ -1842,15 +1876,22 @@ def _assignment_validation_error(task: Task, result: Any) -> str:
                     f"{preview}."
                 )
         if (
-            step_kind == "test_execution"
+            step_kind in {"test_execution", "review"}
             and isinstance(result, dict)
             and str(result.get("failure_type") or result.get("outcome") or "").strip().lower() in {"pass", "completed", "complete"}
         ):
+            placeholder_docs = _docs_only_placeholder_markdown_artifacts(payload.get("upstream_artifacts"))
+            if placeholder_docs:
+                preview = ", ".join(placeholder_docs[:5])
+                return (
+                    "Documentation validation marked the branch as passed even though upstream artifacts contain placeholder or omitted markdown content: "
+                    f"{preview}."
+                )
             broken_links = _docs_only_broken_markdown_links_from_artifacts(payload.get("upstream_artifacts"))
             if broken_links:
                 preview = ", ".join(broken_links[:3])
                 return (
-                    "Documentation tester marked the branch as passed even though upstream artifacts contain broken internal markdown links: "
+                    "Documentation validation marked the branch as passed even though upstream artifacts contain broken internal markdown links: "
                     f"{preview}."
                 )
 

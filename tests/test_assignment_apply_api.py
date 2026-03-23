@@ -302,3 +302,89 @@ async def test_review_assignment_previews_generated_files_without_writing(cp_app
     assert "--- a/docs/existing.md" in review_files["docs/existing.md"]["diff"]
     assert (root / "docs" / "existing.md").read_text(encoding="utf-8") == "# old\n"
     assert not (root / "docs" / "new.md").exists()
+
+
+@pytest.mark.anyio
+async def test_review_assignment_prefers_repo_output_bot_provenance_for_duplicate_paths(cp_app, tmp_path, monkeypatch):
+    project_id = "proj-review-provenance"
+    orchestration_id = "orch-review-provenance"
+    base_root = tmp_path / "repo-workspaces"
+    root = base_root / project_id / "repo"
+    root.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-b", "main"], cwd=root, check=True, capture_output=True)
+    monkeypatch.setenv("NEXUSAI_REPO_WORKSPACE_ROOT", str(base_root))
+    cp_app.state.task_manager._schedule_ready_tasks = AsyncMock(return_value=None)
+
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        await client.post("/v1/projects", json={"id": project_id, "name": "Review Provenance Project", "mode": "isolated"})
+        await client.put(
+            f"/v1/projects/{project_id}/repo/workspace",
+            json={"enabled": True, "managed_path_mode": True},
+        )
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "pm-coder-review-provenance",
+                "name": "PM Coder",
+                "role": "coder",
+                "backends": [],
+                "enabled": True,
+                "execution_policy": {"repo_output_mode": "allow"},
+            },
+        )
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "pm-tester-review-provenance",
+                "name": "PM Tester",
+                "role": "tester",
+                "backends": [],
+                "enabled": True,
+                "execution_policy": {"repo_output_mode": "deny"},
+            },
+        )
+
+        coder_task = await cp_app.state.task_manager.create_task(
+            bot_id="pm-coder-review-provenance",
+            payload={"title": "Write roadmap"},
+            metadata=TaskMetadata(
+                source="chat_assign",
+                project_id=project_id,
+                orchestration_id=orchestration_id,
+                conversation_id="conv-review-provenance",
+            ),
+        )
+        await cp_app.state.task_manager.update_status(
+            coder_task.id,
+            "completed",
+            result={"artifacts": [{"path": "docs/blocks/roadmap.md", "content": "# Roadmap\n"}]},
+        )
+
+        tester_task = await cp_app.state.task_manager.create_task(
+            bot_id="pm-tester-review-provenance",
+            payload={"title": "Echo roadmap"},
+            metadata=TaskMetadata(
+                source="bot_trigger",
+                project_id=project_id,
+                orchestration_id=orchestration_id,
+                conversation_id="conv-review-provenance",
+            ),
+        )
+        await cp_app.state.task_manager.update_status(
+            tester_task.id,
+            "completed",
+            result={"artifacts": [{"path": "docs/blocks/roadmap.md", "content": "# Roadmap\n"}]},
+        )
+
+        resp = await client.post(
+            f"/v1/projects/{project_id}/repo/workspace/review-assignment",
+            json={"orchestration_id": orchestration_id, "include_content": False},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["file_count"] == 1
+    item = body["review_files"][0]
+    assert item["path"] == "docs/blocks/roadmap.md"
+    assert item["bot_id"] == "pm-coder-review-provenance"
+    assert item["apply_eligible"] is True

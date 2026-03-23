@@ -6097,6 +6097,43 @@ def test_assignment_validation_rejects_broken_internal_markdown_links_in_docs_on
     assert "../architecture/client-rendering.md" in error
 
 
+def test_assignment_validation_rejects_placeholder_markdown_content_in_docs_only_outputs():
+    from control_plane.task_manager.task_manager import _assignment_validation_error
+    from shared.models import Task, TaskMetadata
+
+    task = Task(
+        id="task-doc-placeholder",
+        bot_id="pm-coder",
+        payload={
+            "title": "Create catalog template",
+            "instruction": "Create only markdown documentation in docs/blocks.",
+            "step_kind": "repo_change",
+            "deliverables": ["docs/blocks/block-catalog-template.md"],
+            "assignment_scope": {
+                "docs_only": True,
+                "requested_output_paths": ["docs/blocks"],
+            },
+        },
+        metadata=TaskMetadata(source="bot_trigger", orchestration_id="orch-doc-placeholder"),
+        created_at="2026-03-23T00:00:00+00:00",
+        updated_at="2026-03-23T00:00:00+00:00",
+    )
+
+    result = {
+        "artifacts": [
+            {
+                "path": "docs/blocks/block-catalog-template.md",
+                "content": "# Catalog\n\n... (full content omitted for brevity) ...",
+            }
+        ]
+    }
+
+    error = _assignment_validation_error(task, result)
+
+    assert "placeholder or omitted markdown content" in error.lower()
+    assert "docs/blocks/block-catalog-template.md" in error
+
+
 def test_docs_only_specification_branch_may_emit_assigned_markdown_deliverable():
     from control_plane.task_manager.task_manager import _docs_only_non_writer_branch_may_reference_upstream_docs
 
@@ -6279,6 +6316,49 @@ def test_assignment_validation_rejects_docs_only_tester_false_positive_when_upst
 
     assert "marked the branch as passed" in error.lower()
     assert "../catalog/math-blocks.md" in error
+
+
+def test_assignment_validation_rejects_docs_only_validation_false_positive_when_upstream_docs_are_placeholders():
+    from control_plane.task_manager.task_manager import _assignment_validation_error
+    from shared.models import Task, TaskMetadata
+
+    task = Task(
+        id="task-docs-validation-placeholders",
+        bot_id="pm-final-qc",
+        payload={
+            "title": "Final QC docs branch",
+            "instruction": "Validate the documentation-only workstream.",
+            "role_hint": "reviewer",
+            "step_kind": "review",
+            "deliverables": ["Final verification summary"],
+            "assignment_scope": {
+                "docs_only": True,
+                "requested_output_paths": ["docs/blocks"],
+            },
+            "upstream_artifacts": [
+                {
+                    "path": "docs/blocks/block-schema-extension-plan.md",
+                    "content": "# Block Schema Extension Plan\n\n... (full content omitted for brevity) ...",
+                }
+            ],
+        },
+        metadata=TaskMetadata(source="bot_trigger", orchestration_id="orch-docs-validation-placeholders"),
+        created_at="2026-03-23T00:00:00+00:00",
+        updated_at="2026-03-23T00:00:00+00:00",
+    )
+
+    result = {
+        "failure_type": "pass",
+        "outcome": "pass",
+        "findings": ["Looks good."],
+        "evidence": ["Validated the documentation set."],
+        "handoff_notes": "Approved.",
+    }
+
+    error = _assignment_validation_error(task, result)
+
+    assert "placeholder or omitted markdown content" in error.lower()
+    assert "docs/blocks/block-schema-extension-plan.md" in error
 
 
 def test_assignment_validation_allows_no_external_api_research_language():
