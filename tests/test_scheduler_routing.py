@@ -195,6 +195,59 @@ async def test_scheduler_injects_retry_guidance_into_payload():
 
 
 @pytest.mark.anyio
+async def test_scheduler_retry_guidance_includes_available_docs_and_link_correction():
+    from control_plane.scheduler.scheduler import Scheduler
+    from shared.models import TaskError, TaskMetadata
+
+    bot_registry = AsyncMock()
+    bot_registry.get.return_value = Bot(
+        id="pm-coder",
+        name="PM Coder",
+        role="coder",
+        system_prompt="Return only strict JSON.",
+        backends=[BackendConfig(type="cloud_api", provider="openai", model="gpt-4o-mini")],
+    )
+    scheduler = Scheduler(bot_registry=bot_registry, worker_registry=AsyncMock())
+    task = Task(
+        id="task-retry-doc-links",
+        bot_id="pm-coder",
+        payload={
+            "instruction": "create docs",
+            "deliverables": [
+                "docs/blocks/mathematics/math-blocks-roadmap.md",
+                "docs/blocks/mathematics/block-catalog.md",
+            ],
+            "upstream_artifacts": [
+                {"path": "docs/blocks/repo-research-summary.md", "content": "# Repo Summary"},
+                {"path": "docs/blocks/project-context-research.md", "content": "# Project Context"},
+            ],
+        },
+        status="queued",
+        created_at="now",
+        updated_at="now",
+        metadata=TaskMetadata(retry_attempt=1, source="auto_retry"),
+        error=TaskError(
+            message=(
+                "Documentation output contains broken internal markdown links in generated artifacts: "
+                "docs/blocks/mathematics/math-blocks-roadmap.md -> ../../repo-research-summary.md."
+            )
+        ),
+    )
+
+    async def fake_dispatch(backend, payload, task=None):
+        return {"payload": payload}
+
+    scheduler._dispatch_backend = fake_dispatch  # type: ignore[method-assign]
+    result = await scheduler.schedule(task)
+
+    system_prompt = result["payload"][0]["content"]
+    assert "Available markdown docs for this branch and upstream context:" in system_prompt
+    assert "docs/blocks/repo-research-summary.md" in system_prompt
+    assert "Likely link corrections:" in system_prompt
+    assert "replace `../../repo-research-summary.md` with `../repo-research-summary.md`" in system_prompt
+
+
+@pytest.mark.anyio
 async def test_scheduler_injects_attached_connection_schema_into_model_prompt(monkeypatch):
     from control_plane.scheduler.scheduler import Scheduler
     from dashboard.models import BotConnection as DashboardBotConnection

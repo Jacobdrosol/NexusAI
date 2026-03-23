@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import time
+from pathlib import PurePosixPath
 from typing import Any, AsyncGenerator
 
 import httpx
@@ -870,12 +871,85 @@ def _retry_prompt_suffix(task: Task | None) -> str:
             "For documentation files, resolve internal markdown links relative to the generated file path. "
             "Only link to markdown docs that actually exist in the upstream artifacts, the current deliverables, or the live repository."
         )
+        available_docs = _payload_available_markdown_paths(task.payload if task is not None else None)
+        if available_docs:
+            guidance.append("Available markdown docs for this branch and upstream context:")
+            guidance.extend(f"- {path}" for path in available_docs[:24])
+            suggestions = _broken_link_retry_suggestions(error_message, available_docs)
+            if suggestions:
+                guidance.append("Likely link corrections:")
+                guidance.extend(f"- {item}" for item in suggestions[:12])
     if "outside its assigned deliverables" in lowered:
         guidance.append(
             "Only emit the markdown files explicitly assigned in this workstream. "
             "Do not add extra documentation files outside the listed deliverables."
         )
     return "\n\nRetry guidance:\n" + "\n".join(guidance)
+
+
+def _looks_like_markdown_repo_path(value: Any) -> bool:
+    text = str(value or "").strip().replace("\\", "/").strip("`")
+    return bool(text) and "/" in text and text.lower().endswith(".md")
+
+
+def _collect_markdown_paths(value: Any) -> list[str]:
+    items = value if isinstance(value, list) else [value]
+    paths: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        raw_path = ""
+        if isinstance(item, dict):
+            raw_path = str(item.get("path") or item.get("label") or "").strip()
+        elif isinstance(item, str):
+            raw_path = item.strip()
+        normalized = raw_path.replace("\\", "/").strip("`")
+        if not _looks_like_markdown_repo_path(normalized) or normalized in seen:
+            continue
+        seen.add(normalized)
+        paths.append(normalized)
+    return paths
+
+
+def _payload_available_markdown_paths(payload: Any) -> list[str]:
+    if not isinstance(payload, dict):
+        return []
+    paths: list[str] = []
+    seen: set[str] = set()
+
+    def _add(items: list[str]) -> None:
+        for item in items:
+            if item in seen:
+                continue
+            seen.add(item)
+            paths.append(item)
+
+    _add(_collect_markdown_paths(payload.get("deliverables")))
+    _add(_collect_markdown_paths(payload.get("upstream_artifacts")))
+    source_result = payload.get("source_result")
+    if isinstance(source_result, dict):
+        _add(_collect_markdown_paths(source_result.get("artifacts")))
+    workstream = payload.get("workstream")
+    if isinstance(workstream, dict):
+        _add(_collect_markdown_paths(workstream.get("deliverables")))
+    return paths
+
+
+def _broken_link_retry_suggestions(error_message: str, available_docs: list[str]) -> list[str]:
+    suggestions: list[str] = []
+    available_by_name = {PurePosixPath(path).name: path for path in available_docs}
+    matches = re.findall(r"([A-Za-z0-9_./\\-]+\.md)\s*->\s*([A-Za-z0-9_./\\-]+\.md(?:#[^\s,]+)?)", str(error_message or ""))
+    for source_path, broken_ref in matches:
+        source = PurePosixPath(source_path.replace("\\", "/"))
+        broken_target = PurePosixPath(broken_ref.split("#", 1)[0].replace("\\", "/"))
+        candidate = available_by_name.get(broken_target.name)
+        if not candidate:
+            continue
+        try:
+            corrected = os.path.relpath(candidate, start=str(source.parent)).replace("\\", "/")
+        except Exception:
+            continue
+        suggestions.append(f"{source_path}: replace `{broken_ref}` with `{corrected}`")
+    return suggestions
 
 
 def _prepare_system_prompt(bot: Any, *, bot_id: str | None = None, payload: Any = None, task: Task | None = None) -> str | None:
