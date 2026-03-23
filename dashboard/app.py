@@ -60,7 +60,7 @@ def create_app() -> Flask:
     _SM.instance(db_path=str(_DATA_DIR / "nexusai.db"))
 
     # Register blueprints
-    from dashboard.auth import bp as auth_bp
+    from dashboard.auth import api_login_post, api_logout_post, bp as auth_bp
     from dashboard.onboarding import bp as onboarding_bp
     from dashboard.routes.bots import bp as bots_bp
     from dashboard.routes.chat import bp as chat_bp
@@ -90,6 +90,8 @@ def create_app() -> Flask:
 
     # Exempt SSE from CSRF (it's GET-only)
     csrf.exempt(events_bp)
+    csrf.exempt(api_login_post)
+    csrf.exempt(api_logout_post)
 
     # Main blueprint for overview + root redirect
     from flask import Blueprint
