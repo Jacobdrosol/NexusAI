@@ -1211,6 +1211,25 @@ def _assignment_expected_repo_files(payload: Dict[str, Any]) -> List[str]:
     return files
 
 
+def _non_writer_step_repo_deliverables(payload: Dict[str, Any]) -> List[str]:
+    step_kind = _assignment_step_kind(payload)
+    if step_kind not in {"specification", "planning", "test_execution", "review"}:
+        return []
+    repo_paths: List[str] = []
+    seen: Set[str] = set()
+    for item in _normalize_string_list(payload.get("deliverables")):
+        normalized = str(item or "").strip().replace("\\", "/").strip("`")
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        if not _looks_like_repo_file(normalized):
+            continue
+        if _is_assignment_execution_artifact_file(normalized):
+            continue
+        repo_paths.append(normalized)
+    return repo_paths
+
+
 def _result_explicit_artifacts(result: Any) -> List[Dict[str, Any]]:
     if not isinstance(result, dict):
         return []
@@ -3101,6 +3120,22 @@ class TaskManager:
                 return
             await self.update_status(task_id, "running")
             task = await self.get_task(task_id)
+            bot = None
+            if self._bot_registry is not None:
+                try:
+                    bot = await self._bot_registry.get(task.bot_id)
+                except Exception:
+                    bot = None
+            payload = task.payload if isinstance(task.payload, dict) else {}
+            if bot is not None and not bot_allows_repo_output(bot):
+                assigned_repo_deliverables = _non_writer_step_repo_deliverables(payload)
+                if assigned_repo_deliverables:
+                    preview = ", ".join(assigned_repo_deliverables[:5])
+                    step_kind = _assignment_step_kind(payload) or "non_writer"
+                    raise ValueError(
+                        f"Bot '{task.bot_id}' is not allowed to own repo deliverables for "
+                        f"{step_kind} steps, but was assigned: {preview}."
+                    )
             mode = await self._bot_output_contract_mode(task.bot_id)
             internal_result = await self._maybe_run_internal_assignment_step(task)
             if internal_result is not None:
@@ -3127,20 +3162,13 @@ class TaskManager:
             validation_error = _assignment_validation_error(task, result)
             if validation_error:
                 raise ValueError(validation_error)
-            if self._bot_registry is not None:
-                try:
-                    bot = await self._bot_registry.get(task.bot_id)
-                except Exception:
-                    bot = None
-                if bot is not None and not bot_allows_repo_output(bot):
-                    repo_output_paths = _result_repo_output_candidate_paths(result)
-                    payload = task.payload if isinstance(task.payload, dict) else {}
-                    if repo_output_paths and not _docs_only_non_writer_branch_may_reference_upstream_docs(payload, result):
-                        preview = ", ".join(repo_output_paths[:5])
-                        raise ValueError(
-                            f"Bot '{task.bot_id}' is not allowed to emit repo file outputs, but returned: {preview}."
-                        )
-            payload = task.payload if isinstance(task.payload, dict) else {}
+            if bot is not None and not bot_allows_repo_output(bot):
+                repo_output_paths = _result_repo_output_candidate_paths(result)
+                if repo_output_paths:
+                    preview = ", ".join(repo_output_paths[:5])
+                    raise ValueError(
+                        f"Bot '{task.bot_id}' is not allowed to emit repo file outputs, but returned: {preview}."
+                    )
             if (
                 self._project_registry is not None
                 and _assignment_step_kind(payload) == "repo_change"

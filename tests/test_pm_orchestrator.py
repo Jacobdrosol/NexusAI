@@ -408,11 +408,10 @@ def test_normalize_deliverables_for_spec_step_rewrites_placeholders_and_binary_a
         ],
     )
 
-    assert "docs/lesson_blocks_math_geometry_spec.md" in deliverables
-    assert "docs/lesson_blocks_flow.mermaid.md" in deliverables
+    assert "Research artifact" in deliverables
     assert "Issue definitions (markdown or JSON)" in deliverables
+    assert all("docs/" not in item.lower() for item in deliverables)
     assert all("png" not in item.lower() for item in deliverables)
-    assert all("github issue" not in item.lower() for item in deliverables)
 
 
 def test_normalize_deliverables_for_planning_step_rewrites_readme_placeholder() -> None:
@@ -426,7 +425,7 @@ def test_normalize_deliverables_for_planning_step_rewrites_readme_placeholder() 
         ],
     )
 
-    assert "docs/roadmap/geometry_lessons_roadmap.md" in deliverables
+    assert "Planning artifact" in deliverables
     assert "README.md update proposal" in deliverables
 
 
@@ -503,7 +502,7 @@ def test_normalize_deliverables_for_test_step_rewrites_ci_run_links() -> None:
     )
 
     assert "Test run log artifact" in deliverables
-    assert "coverage/geometry_coverage.xml" in deliverables
+    assert "Validation results artifact" in deliverables
     assert all("github actions" not in item.lower() for item in deliverables)
 
 
@@ -886,10 +885,11 @@ async def test_orchestrate_assignment_fails_closed_for_unknown_explicit_bot_id()
         }
     )
 
-    with pytest.raises(BotNotFoundError, match="missing-bot"):
+    with pytest.raises(BotNotFoundError, match="No PM bot available for assignment"):
         await orchestrator.orchestrate_assignment(
             conversation_id="conv-1",
             instruction="Implement feature",
+            requested_pm_bot_id="missing-bot",
         )
 
 

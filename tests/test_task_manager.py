@@ -154,7 +154,11 @@ async def test_task_manager_allows_docs_only_tester_to_reference_upstream_artifa
             "title": "Validate docs",
             "step_kind": "test_execution",
             "instruction": "Validate the docs-only workstream.",
-            "deliverables": ["docs/blocks/web-research-libraries.md"],
+            "deliverables": ["Test run log artifact", "Validation results artifact"],
+            "workstream": {
+                "title": "Write docs",
+                "deliverables": ["docs/blocks/web-research-libraries.md"],
+            },
             "assignment_scope": {
                 "docs_only": True,
                 "requested_output_paths": ["docs/blocks"],
@@ -219,7 +223,7 @@ async def test_task_manager_allows_docs_only_engineer_to_reference_planned_doc_p
                 ],
                 "artifacts": [
                     {
-                        "path": "docs/blocks/client-rendering-architecture.md",
+                        "label": "Implementation planning artifact",
                         "content": "# Planned Architecture Doc\n",
                     }
                 ],
@@ -253,6 +257,139 @@ async def test_task_manager_allows_docs_only_engineer_to_reference_planned_doc_p
     updated = await tm.get_task(task.id)
     assert updated.status == "completed"
     assert updated.error is None
+
+
+@pytest.mark.anyio
+async def test_task_manager_fails_non_writer_stage_with_repo_deliverables_before_execution(tmp_path):
+    import asyncio
+
+    from control_plane.task_manager.task_manager import TaskManager
+
+    class StubRegistry:
+        def __init__(self):
+            self._bots = {
+                "pm-research-analyst": Bot(
+                    id="pm-research-analyst",
+                    name="PM Research Analyst",
+                    role="researcher",
+                    backends=[],
+                    execution_policy={"repo_output_mode": "deny"},
+                )
+            }
+
+        async def get(self, bot_id):
+            return self._bots[bot_id]
+
+    class StubScheduler:
+        def __init__(self):
+            self.called = False
+
+        async def schedule(self, _task):
+            self.called = True
+            return {"status": "complete"}
+
+    scheduler = StubScheduler()
+    tm = TaskManager(scheduler, db_path=str(tmp_path / "policy-docs-research-assignment.db"), bot_registry=StubRegistry())
+    task = await tm.create_task(
+        bot_id="pm-research-analyst",
+        payload={
+            "title": "Repo research",
+            "step_kind": "specification",
+            "instruction": "Research the repository and report back.",
+            "deliverables": ["docs/blocks/repo-discovery.md"],
+            "assignment_scope": {
+                "docs_only": True,
+                "requested_output_paths": ["docs/blocks"],
+            },
+        },
+        metadata=TaskMetadata(source="bot_trigger", orchestration_id="orch-docs-research-assignment"),
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.05)
+
+    updated = await tm.get_task(task.id)
+    assert updated.status == "failed"
+    assert updated.error is not None
+    assert "not allowed to own repo deliverables" in updated.error.message
+    assert "docs/blocks/repo-discovery.md" in updated.error.message
+    assert scheduler.called is False
+
+
+@pytest.mark.anyio
+async def test_task_manager_rejects_docs_only_engineer_repo_artifact_outputs(tmp_path):
+    import asyncio
+
+    from control_plane.task_manager.task_manager import TaskManager
+
+    class StubRegistry:
+        def __init__(self):
+            self._bots = {
+                "pm-engineer": Bot(
+                    id="pm-engineer",
+                    name="PM Engineer",
+                    role="engineer",
+                    backends=[],
+                    execution_policy={"repo_output_mode": "deny"},
+                )
+            }
+
+        async def get(self, bot_id):
+            return self._bots[bot_id]
+
+    class StubScheduler:
+        async def schedule(self, _task):
+            return {
+                "architecture": ["Docs-only planning for mathematics blocks."],
+                "implementation_plan": ["Plan the documentation workstreams."],
+                "implementation_workstreams": [
+                    {
+                        "title": "Schema Documentation",
+                        "instruction": "Create schema docs.",
+                        "deliverables": ["docs/blocks/schema-specifications.md"],
+                    }
+                ],
+                "artifacts": [
+                    {
+                        "path": "docs/blocks/client-rendering-architecture.md",
+                        "content": "# Planned Architecture Doc\n",
+                    }
+                ],
+                "risks": ["Needs downstream coder execution."],
+                "handoff_notes": "Proceed to coder fan-out.",
+                "status": "complete",
+            }
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "policy-docs-engineer-repo-output.db"), bot_registry=StubRegistry())
+    task = await tm.create_task(
+        bot_id="pm-engineer",
+        payload={
+            "title": "Synthesize research and create engineering stories",
+            "step_kind": "planning",
+            "instruction": "Create docs-only engineering stories under docs/blocks.",
+            "deliverables": ["Implementation plan", "Coder workstreams", "Risk summary"],
+            "assignment_scope": {
+                "docs_only": True,
+                "requested_output_paths": ["docs/blocks"],
+            },
+        },
+        metadata=TaskMetadata(source="bot_trigger", orchestration_id="orch-docs-engineer-policy-fail"),
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.05)
+
+    updated = await tm.get_task(task.id)
+    assert updated.status == "failed"
+    assert updated.error is not None
+    assert "not allowed to emit repo file outputs" in updated.error.message
+    assert "docs/blocks/client-rendering-architecture.md" in updated.error.message
 
 
 @pytest.mark.anyio
