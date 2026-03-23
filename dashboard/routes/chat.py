@@ -585,6 +585,30 @@ def api_apply_assignment_files():
     return jsonify(result)
 
 
+@bp.post("/api/chat/assignments/review")
+@login_required
+def api_review_assignment_files():
+    data: dict[str, Any] = request.get_json(force=True) or {}
+    orchestration_id = (data.get("orchestration_id") or "").strip()
+    project_id = (data.get("project_id") or "").strip()
+    if not orchestration_id:
+        return jsonify({"error": "orchestration_id is required"}), 400
+    if not project_id:
+        return jsonify({"error": "project_id is required"}), 400
+
+    cp = get_cp_client()
+    result = cp.review_project_assignment_files(
+        project_id=project_id,
+        orchestration_id=orchestration_id,
+        include_content=bool(data.get("include_content", True)),
+        max_content_chars=int(data.get("max_content_chars", 20000) or 20000),
+        diff_context_lines=int(data.get("diff_context_lines", 3) or 3),
+    )
+    if result is None:
+        return _cp_error_response(cp, "assignment review failed")
+    return jsonify(result)
+
+
 @bp.get("/api/chat/conversations/<conversation_id>/messages")
 @login_required
 def api_list_messages(conversation_id: str):

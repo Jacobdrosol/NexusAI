@@ -967,6 +967,49 @@ def test_chat_apply_assignment_api_proxies_control_plane(dashboard_client):
     assert body["applied_files"][0]["path"] == "src/demo.ts"
 
 
+def test_chat_review_assignment_api_proxies_control_plane(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def review_project_assignment_files(
+            self,
+            project_id,
+            orchestration_id,
+            include_content=True,
+            max_content_chars=20000,
+            diff_context_lines=3,
+        ):
+            return {
+                "status": "ok",
+                "project_id": project_id,
+                "orchestration_id": orchestration_id,
+                "file_count": 1,
+                "apply_eligible_count": 1,
+                "status_counts": {"new": 1},
+                "review_files": [
+                    {
+                        "path": "docs/demo.md",
+                        "status": "new",
+                        "apply_eligible": True,
+                        "diff": "--- /dev/null\n+++ b/docs/demo.md\n",
+                        "generated_content": "# demo\n",
+                    }
+                ],
+                "workspace": {"branch": "main", "porcelain": []},
+            }
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/chat/assignments/review",
+            json={"project_id": "proj-1", "orchestration_id": "orch-1", "include_content": True},
+        )
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["status"] == "ok"
+    assert body["review_files"][0]["path"] == "docs/demo.md"
+
+
 def test_chat_orchestration_recap_api_builds_full_recap(dashboard_client):
     _login_admin(dashboard_client)
 

@@ -1383,6 +1383,149 @@ async def test_persist_summary_message_requires_completed_final_qc_for_pass() ->
     assert "cannot be marked as passed" in add_kwargs["content"]
 
 
+@pytest.mark.anyio
+async def test_wait_for_completion_requires_latest_cycle_deliverables() -> None:
+    pm_bot = Bot(
+        id="pm-orchestrator",
+        name="PM Orchestrator",
+        role="pm",
+        backends=[],
+        enabled=True,
+        workflow={
+            "reference_graph": {
+                "graph_id": "pm-graph",
+                "entry_bot_id": "pm-orchestrator",
+                "current_bot_id": "pm-orchestrator",
+                "nodes": [
+                    {"bot_id": "pm-orchestrator", "title": "PM Orchestrator"},
+                    {"bot_id": "pm-engineer", "title": "PM Engineer"},
+                    {"bot_id": "pm-coder", "title": "PM Coder"},
+                    {"bot_id": "pm-final-qc", "title": "PM Final QC"},
+                ],
+                "edges": [],
+            },
+            "triggers": [],
+        },
+    )
+    root_task = Task(
+        id="task-pm",
+        bot_id="pm-orchestrator",
+        payload={"title": "PM assignment intake"},
+        metadata=TaskMetadata(source="chat_assign", orchestration_id="orch-deliverables"),
+        status="completed",
+        created_at="2026-03-20T00:00:00+00:00",
+        updated_at="2026-03-20T00:00:01+00:00",
+        result={"status": "complete"},
+    )
+    coder_task = Task(
+        id="task-coder",
+        bot_id="pm-coder",
+        payload={"title": "Write docs", "deliverables": ["docs/blocks/guide.md"]},
+        metadata=TaskMetadata(
+            source="bot_trigger",
+            orchestration_id="orch-deliverables",
+            parent_task_id="task-pm",
+        ),
+        status="completed",
+        created_at="2026-03-20T00:00:02+00:00",
+        updated_at="2026-03-20T00:00:03+00:00",
+        result={"output": "No file produced"},
+    )
+    final_qc = Task(
+        id="task-final",
+        bot_id="pm-final-qc",
+        payload={"title": "Final QC"},
+        metadata=TaskMetadata(
+            source="bot_trigger",
+            orchestration_id="orch-deliverables",
+            parent_task_id="task-coder",
+        ),
+        status="completed",
+        created_at="2026-03-20T00:00:04+00:00",
+        updated_at="2026-03-20T00:00:05+00:00",
+        result={"status": "pass"},
+    )
+    task_manager = type(
+        "TaskManager",
+        (),
+        {
+            "list_tasks": AsyncMock(return_value=[root_task, coder_task, final_qc]),
+            "get_task": AsyncMock(
+                side_effect=lambda task_id: {
+                    "task-pm": root_task,
+                    "task-coder": coder_task,
+                    "task-final": final_qc,
+                }[task_id]
+            ),
+        },
+    )()
+    bot_registry = type("BotRegistry", (), {"get": AsyncMock(return_value=pm_bot)})()
+    orchestrator = PMOrchestrator(
+        bot_registry=bot_registry,
+        scheduler=None,
+        task_manager=task_manager,
+        chat_manager=None,
+    )
+
+    completion = await orchestrator.wait_for_completion(
+        {
+            "orchestration_id": "orch-deliverables",
+            "pm_bot_id": "pm-orchestrator",
+            "tasks": [{"id": "task-pm"}],
+        },
+        poll_interval_seconds=0.0,
+        max_wait_seconds=0.01,
+    )
+
+    assert completion["final_qc_completed"] is True
+    assert completion["deliverables_complete"] is False
+    assert completion["workflow_complete"] is False
+    assert "docs/blocks/guide.md" in completion["missing_deliverables"]
+
+
+@pytest.mark.anyio
+async def test_persist_summary_message_requires_latest_cycle_deliverables_for_pass() -> None:
+    updated_message = type("UpdatedMessage", (), {"id": "msg-report"})()
+    chat_manager = type(
+        "ChatManager",
+        (),
+        {
+            "list_messages": AsyncMock(return_value=[]),
+            "update_message": AsyncMock(),
+            "add_message": AsyncMock(return_value=updated_message),
+        },
+    )()
+    orchestrator = PMOrchestrator(
+        bot_registry=None,
+        scheduler=None,
+        task_manager=None,
+        chat_manager=chat_manager,
+    )
+
+    result = await orchestrator.persist_summary_message(
+        conversation_id="conv-1",
+        assignment={"pm_bot_id": "pm-orchestrator", "orchestration_id": "orch-missing-files"},
+        completion={
+            "task_count": 3,
+            "completed": 3,
+            "failed": 0,
+            "all_terminal": True,
+            "workflow_complete": False,
+            "final_qc_required": True,
+            "final_qc_completed": True,
+            "deliverables_complete": False,
+            "missing_deliverables": ["docs/blocks/guide.md"],
+            "summary_text": "missing deliverables",
+        },
+    )
+
+    assert result is updated_message
+    add_kwargs = chat_manager.add_message.await_args.kwargs
+    assert add_kwargs["metadata"]["run_status"] == "failed"
+    assert add_kwargs["metadata"]["deliverables_complete"] is False
+    assert "docs/blocks/guide.md" in add_kwargs["content"]
+
+
 # ---------------------------------------------------------------------------
 # Namespace injection hint tests
 # ---------------------------------------------------------------------------

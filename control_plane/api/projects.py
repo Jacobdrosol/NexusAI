@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import ast
+import difflib
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 import base64
@@ -115,6 +116,13 @@ class RepoWorkspaceRunRequest(BaseModel):
 class RepoWorkspaceApplyAssignmentRequest(BaseModel):
     orchestration_id: str
     overwrite: bool = True
+
+
+class RepoWorkspacePreviewAssignmentRequest(BaseModel):
+    orchestration_id: str
+    include_content: bool = True
+    max_content_chars: int = Field(default=20000, ge=1000, le=200000)
+    diff_context_lines: int = Field(default=3, ge=0, le=20)
 
 
 class RepoWorkspaceDiscardUntrackedRequest(BaseModel):
@@ -689,6 +697,95 @@ def _write_assignment_files(
     return applied
 
 
+def _read_workspace_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return path.read_text(encoding="utf-8", errors="replace")
+
+
+def _truncate_preview_text(text: str, limit: int) -> tuple[str, bool]:
+    if limit <= 0:
+        return ("", bool(text))
+    if len(text) <= limit:
+        return (text, False)
+    return (text[:limit], True)
+
+
+def _assignment_file_review_items(
+    *,
+    root: Path,
+    candidates: List[Dict[str, Any]],
+    include_content: bool,
+    max_content_chars: int,
+    diff_context_lines: int,
+) -> List[Dict[str, Any]]:
+    reviewed: List[Dict[str, Any]] = []
+    for item in candidates:
+        relative_path = str(item.get("path") or "").strip()
+        if not relative_path:
+            continue
+        target = (root / relative_path).resolve(strict=False)
+        within_workspace = is_within_workspace(root, target)
+        generated_content = str(item.get("content") or "")
+        current_content = ""
+        exists = within_workspace and target.exists() and target.is_file()
+        if exists:
+            current_content = _read_workspace_text(target)
+        if not within_workspace:
+            status = "invalid"
+        elif not exists:
+            status = "new"
+        elif current_content == generated_content:
+            status = "unchanged"
+        else:
+            status = "modified"
+        from_name = f"a/{relative_path}" if exists else "/dev/null"
+        to_name = f"b/{relative_path}"
+        diff_text = "".join(
+            difflib.unified_diff(
+                current_content.splitlines(keepends=True),
+                generated_content.splitlines(keepends=True),
+                fromfile=from_name,
+                tofile=to_name,
+                n=diff_context_lines,
+            )
+        )
+        diff_preview, diff_truncated = _truncate_preview_text(diff_text, max_content_chars)
+        generated_preview = ""
+        generated_truncated = False
+        current_preview = ""
+        current_truncated = False
+        if include_content:
+            generated_preview, generated_truncated = _truncate_preview_text(generated_content, max_content_chars)
+            if exists:
+                current_preview, current_truncated = _truncate_preview_text(current_content, max_content_chars)
+        reviewed.append(
+            {
+                "path": relative_path,
+                "status": status,
+                "exists": exists,
+                "within_workspace": within_workspace,
+                "apply_eligible": bool(item.get("apply_eligible")),
+                "task_id": item.get("task_id"),
+                "bot_id": item.get("bot_id"),
+                "task_title": item.get("task_title"),
+                "step_number": item.get("step_number"),
+                "source": item.get("source"),
+                "language": item.get("language"),
+                "generated_size": len(generated_content),
+                "current_size": len(current_content) if exists else 0,
+                "diff": diff_preview,
+                "diff_truncated": diff_truncated,
+                "generated_content": generated_preview if include_content else None,
+                "generated_content_truncated": generated_truncated if include_content else False,
+                "current_content": current_preview if include_content and exists else None,
+                "current_content_truncated": current_truncated if include_content and exists else False,
+            }
+        )
+    return reviewed
+
+
 def _porcelain_untracked_paths(porcelain_lines: List[str]) -> List[str]:
     paths: List[str] = []
     for line in porcelain_lines:
@@ -774,6 +871,41 @@ def _discard_untracked_workspace_paths(
             removed.append(relative_path)
             _prune_empty_parent_dirs(start=target.parent, root=root)
     return removed
+
+
+async def _project_assignment_scope(
+    *,
+    project_id: str,
+    orchestration_id: str,
+    project_registry: Any,
+    task_manager: Any,
+) -> tuple[Project, Dict[str, Any], Path, Dict[str, Any], List[Task]]:
+    try:
+        project = await project_registry.get(project_id)
+    except ProjectNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    cfg = _extract_project_repo_workspace(project)
+    root = _resolve_repo_workspace_root(project_id, cfg, require_enabled=True)
+    snapshot = await _repo_status_snapshot(root=root, cfg=cfg)
+    if not bool(snapshot.get("is_repo")):
+        raise HTTPException(status_code=400, detail="repo workspace is not a git repository; clone it before reviewing or applying files")
+
+    task_id = str(orchestration_id or "").strip()
+    if not task_id:
+        raise HTTPException(status_code=400, detail="orchestration_id is required")
+
+    tasks = await task_manager.list_tasks(orchestration_id=task_id, limit=500)
+    scoped_tasks = [
+        task
+        for task in tasks
+        if task.metadata
+        and task.metadata.project_id == project_id
+        and str(task.metadata.source or "").strip().lower() in {"chat_assign", "auto_retry", "bot_trigger"}
+    ]
+    if not scoped_tasks:
+        raise HTTPException(status_code=404, detail="no assignment tasks found for this project and orchestration")
+    return project, cfg, root, snapshot, scoped_tasks
 
 
 def _allowed_workspace_commands() -> set[str]:
@@ -2645,31 +2777,13 @@ async def apply_assignment_to_project_repo_workspace(
     project_registry = request.app.state.project_registry
     task_manager = request.app.state.task_manager
     bot_registry = request.app.state.bot_registry
-    try:
-        project = await project_registry.get(project_id)
-    except ProjectNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-
-    cfg = _extract_project_repo_workspace(project)
-    root = _resolve_repo_workspace_root(project_id, cfg, require_enabled=True)
-    snapshot = await _repo_status_snapshot(root=root, cfg=cfg)
-    if not bool(snapshot.get("is_repo")):
-        raise HTTPException(status_code=400, detail="repo workspace is not a git repository; clone it before applying files")
-
     orchestration_id = str(body.orchestration_id or "").strip()
-    if not orchestration_id:
-        raise HTTPException(status_code=400, detail="orchestration_id is required")
-
-    tasks = await task_manager.list_tasks(orchestration_id=orchestration_id, limit=500)
-    scoped_tasks = [
-        task
-        for task in tasks
-        if task.metadata
-        and task.metadata.project_id == project_id
-        and str(task.metadata.source or "").strip().lower() in {"chat_assign", "auto_retry", "bot_trigger"}
-    ]
-    if not scoped_tasks:
-        raise HTTPException(status_code=404, detail="no assignment tasks found for this project and orchestration")
+    _, cfg, root, snapshot, scoped_tasks = await _project_assignment_scope(
+        project_id=project_id,
+        orchestration_id=orchestration_id,
+        project_registry=project_registry,
+        task_manager=task_manager,
+    )
 
     in_progress = [task.id for task in scoped_tasks if task.status in {"queued", "blocked", "running"}]
     if in_progress:
@@ -2753,6 +2867,91 @@ async def apply_assignment_to_project_repo_workspace(
         "commit_sha": commit_sha,
         "commit_error": commit_error,
         "workspace": updated_snapshot,
+    }
+
+
+@router.post("/{project_id}/repo/workspace/review-assignment")
+async def review_assignment_in_project_repo_workspace(
+    project_id: str,
+    request: Request,
+    body: RepoWorkspacePreviewAssignmentRequest,
+) -> dict:
+    project_registry = request.app.state.project_registry
+    task_manager = request.app.state.task_manager
+    bot_registry = request.app.state.bot_registry
+    orchestration_id = str(body.orchestration_id or "").strip()
+    _, cfg, root, snapshot, scoped_tasks = await _project_assignment_scope(
+        project_id=project_id,
+        orchestration_id=orchestration_id,
+        project_registry=project_registry,
+        task_manager=task_manager,
+    )
+
+    allowed_repo_output_bot_ids: set[str] = set()
+    for bot_id in {str(task.bot_id or "").strip() for task in scoped_tasks if str(task.bot_id or "").strip()}:
+        try:
+            bot = await bot_registry.get(bot_id)
+        except Exception:
+            continue
+        if bot_allows_repo_output(bot):
+            allowed_repo_output_bot_ids.add(bot_id)
+
+    candidates = _assignment_file_candidates(scoped_tasks)
+    if not candidates:
+        raise HTTPException(
+            status_code=400,
+            detail="no file outputs were detected in the assignment results",
+        )
+
+    reviewed_candidates: List[Dict[str, Any]] = []
+    for item in candidates:
+        enriched = dict(item)
+        enriched["apply_eligible"] = str(item.get("bot_id") or "").strip() in allowed_repo_output_bot_ids
+        reviewed_candidates.append(enriched)
+    review_files = _assignment_file_review_items(
+        root=root,
+        candidates=reviewed_candidates,
+        include_content=bool(body.include_content),
+        max_content_chars=int(body.max_content_chars),
+        diff_context_lines=int(body.diff_context_lines),
+    )
+    status_counts: Dict[str, int] = {}
+    for item in review_files:
+        status_key = str(item.get("status") or "unknown")
+        status_counts[status_key] = status_counts.get(status_key, 0) + 1
+
+    await record_audit_event(
+        request,
+        action="projects.repo_workspace.review_assignment",
+        resource=f"project:{project_id}",
+        details={
+            "orchestration_id": orchestration_id,
+            "file_count": len(review_files),
+            "include_content": bool(body.include_content),
+        },
+    )
+    await _record_repo_workspace_usage(
+        request,
+        project_id=project_id,
+        action="review_assignment",
+        status="ok",
+        details={
+            "orchestration_id": orchestration_id,
+            "file_count": len(review_files),
+            "apply_eligible_count": sum(1 for item in review_files if bool(item.get("apply_eligible"))),
+            "files": [item.get("path") for item in review_files],
+        },
+    )
+    return {
+        "status": "ok",
+        "project_id": project_id,
+        "orchestration_id": orchestration_id,
+        "file_count": len(review_files),
+        "apply_eligible_count": sum(1 for item in review_files if bool(item.get("apply_eligible"))),
+        "status_counts": status_counts,
+        "in_progress_task_ids": [task.id for task in scoped_tasks if task.status in {"queued", "blocked", "running"}],
+        "review_files": review_files,
+        "workspace": snapshot,
     }
 
 

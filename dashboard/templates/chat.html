@@ -234,6 +234,9 @@
           {% if m.metadata and m.metadata.get('orchestration_id') %}
           <button class="btn btn-sm" onclick="openAssignmentRecap('{{ m.metadata.get('orchestration_id') }}')">Full Recap</button>
           {% endif %}
+          {% if selected_conversation and selected_conversation.project_id and m.metadata and m.metadata.get('orchestration_id') %}
+          <button class="btn btn-sm" onclick="reviewAssignmentFiles('{{ m.metadata.get('orchestration_id') }}', this)">Review Files</button>
+          {% endif %}
           {% if selected_conversation and selected_conversation.project_id and m.metadata and m.metadata.get('orchestration_id') and m.metadata.get('mode') == 'pm_run_report' and m.metadata.get('run_status') == 'passed' %}
           <button class="btn btn-sm" onclick="applyAssignmentFiles('{{ m.metadata.get('orchestration_id') }}', this)">Apply Files to Repo</button>
           {% endif %}
@@ -398,6 +401,18 @@
   </div>
 </div>
 
+<div id="modal-assign-review" class="modal" style="display:none;">
+  <div class="modal-content" style="max-width:960px;">
+    <h2>Assignment File Review</h2>
+    <div id="assign-review-state" class="state-info" style="margin-bottom:0.75rem;">No assignment review loaded yet.</div>
+    <pre id="assign-review-pre" style="max-height:65vh;overflow:auto;white-space:pre-wrap;"></pre>
+    <div class="modal-actions">
+      <button id="assign-review-download" class="btn" type="button" onclick="downloadAssignmentReviewJson()" style="display:none;">Download Review JSON</button>
+      <button class="btn" type="button" onclick="hideModal('modal-assign-review')">Close</button>
+    </div>
+  </div>
+</div>
+
 <div id="modal-assign-recap" class="modal" style="display:none;">
   <div class="modal-content" style="max-width:960px;">
     <h2>Assignment Full Recap</h2>
@@ -419,6 +434,7 @@ const messageMap = new Map((initialMessages || []).map((m) => [String(m.id), m])
 let refreshTimer = null;
 let activeDagGraph = null;
 let activeDagSelectedNodeId = '';
+let lastAssignmentReviewResult = null;
 
 async function refreshMessagesUntilSettled(maxAttempts = 6, delayMs = 600) {
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
@@ -558,6 +574,9 @@ function renderMessageActions(meta) {
   const recapBtn = orchestrationId
     ? `<button class="btn btn-sm" onclick="openAssignmentRecap('${orchestrationId}')">Full Recap</button>`
     : '';
+  const reviewBtn = orchestrationId && selectedConversationProjectId
+    ? `<button class="btn btn-sm" onclick="reviewAssignmentFiles('${orchestrationId}', this)">Review Files</button>`
+    : '';
   const applyBtn = orchestrationId && selectedConversationProjectId && passedPmRun
     ? `<button class="btn btn-sm" onclick="applyAssignmentFiles('${orchestrationId}', this)">Apply Files to Repo</button>`
     : '';
@@ -575,6 +594,7 @@ function renderMessageActions(meta) {
     ${rerunBtn}
     ${sendToVaultBtn}
     ${recapBtn}
+    ${reviewBtn}
     ${applyBtn}
     ${markFailedBtn}
     ${dagBtn}
@@ -1533,6 +1553,138 @@ function showAssignmentApplyResult(result) {
   if (pre) pre.textContent = renderAssignmentApplySummary(result);
   const modal = document.getElementById('modal-assign-apply');
   if (modal) modal.style.display = 'flex';
+}
+
+function renderAssignmentReviewSummary(result) {
+  const files = Array.isArray(result?.review_files) ? result.review_files : [];
+  const counts = result?.status_counts || {};
+  const lines = [];
+  lines.push(`Orchestration ID: ${result?.orchestration_id || 'unknown'}`);
+  lines.push(`Files detected: ${files.length}`);
+  lines.push(`Apply-eligible files: ${Number(result?.apply_eligible_count || 0)}`);
+  if (counts && Object.keys(counts).length) {
+    lines.push('Status counts:');
+    Object.entries(counts).forEach(([key, value]) => lines.push(`- ${key}: ${value}`));
+  }
+  if (Array.isArray(result?.in_progress_task_ids) && result.in_progress_task_ids.length) {
+    lines.push(`In-progress tasks: ${result.in_progress_task_ids.join(', ')}`);
+  }
+  lines.push('');
+  files.forEach((file) => {
+    lines.push(`File: ${file.path}`);
+    lines.push(`- Status: ${file.status}`);
+    lines.push(`- Apply eligible: ${file.apply_eligible ? 'yes' : 'no'}`);
+    if (file.bot_id) lines.push(`- Bot: ${file.bot_id}`);
+    if (file.task_title) lines.push(`- Task: ${file.task_title}`);
+    if (file.step_number !== null && file.step_number !== undefined && file.step_number !== '') {
+      lines.push(`- Step: ${file.step_number}`);
+    }
+    if (file.generated_size !== undefined) lines.push(`- Generated size: ${file.generated_size} chars`);
+    if (file.current_size !== undefined) lines.push(`- Current size: ${file.current_size} chars`);
+    if (file.diff) {
+      lines.push('- Diff:');
+      lines.push(String(file.diff));
+      if (file.diff_truncated) lines.push('[diff truncated]');
+    } else {
+      lines.push('- Diff: (no textual diff)');
+    }
+    if (file.generated_content !== null && file.generated_content !== undefined) {
+      lines.push('- Generated content:');
+      lines.push(String(file.generated_content));
+      if (file.generated_content_truncated) lines.push('[generated content truncated]');
+    }
+    lines.push('');
+  });
+  return lines.join('\n');
+}
+
+function showAssignmentReviewResult(result) {
+  lastAssignmentReviewResult = result || null;
+  const state = document.getElementById('assign-review-state');
+  const pre = document.getElementById('assign-review-pre');
+  const downloadBtn = document.getElementById('assign-review-download');
+  if (state) {
+    const count = Number(result?.file_count || 0);
+    state.className = 'state-info';
+    state.textContent = `Assignment review loaded (${count} file${count === 1 ? '' : 's'}).`;
+  }
+  if (pre) pre.textContent = renderAssignmentReviewSummary(result);
+  if (downloadBtn) downloadBtn.style.display = result ? 'inline-block' : 'none';
+  const modal = document.getElementById('modal-assign-review');
+  if (modal) modal.style.display = 'flex';
+}
+
+function downloadAssignmentReviewJson() {
+  if (!lastAssignmentReviewResult) {
+    alert('No assignment review is loaded.');
+    return;
+  }
+  const orchestrationId = String(lastAssignmentReviewResult?.orchestration_id || 'assignment-review').trim() || 'assignment-review';
+  const blob = new Blob([JSON.stringify(lastAssignmentReviewResult, null, 2)], {type: 'application/json'});
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `${orchestrationId}-review.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+async function reviewAssignmentFiles(orchestrationId, buttonEl) {
+  if (!selectedConversationProjectId) {
+    alert('This conversation is not attached to a project repo workspace.');
+    return;
+  }
+  if (!orchestrationId) {
+    alert('Missing orchestration ID.');
+    return;
+  }
+  const state = document.getElementById('assign-review-state');
+  const pre = document.getElementById('assign-review-pre');
+  const modal = document.getElementById('modal-assign-review');
+  const originalLabel = buttonEl ? buttonEl.textContent : 'Review Files';
+  if (buttonEl) {
+    buttonEl.disabled = true;
+    buttonEl.textContent = 'Reviewing...';
+  }
+  if (state) {
+    state.className = 'state-loading';
+    state.textContent = 'Loading assignment file review...';
+  }
+  if (pre) pre.textContent = '';
+  if (modal) modal.style.display = 'flex';
+  try {
+    const res = await fetch('/api/chat/assignments/review', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
+      body: JSON.stringify({
+        project_id: selectedConversationProjectId,
+        orchestration_id: orchestrationId,
+        include_content: true,
+        max_content_chars: 20000,
+        diff_context_lines: 3,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data.error || 'Assignment review failed');
+    }
+    showAssignmentReviewResult(data);
+  } catch (error) {
+    lastAssignmentReviewResult = null;
+    const downloadBtn = document.getElementById('assign-review-download');
+    if (downloadBtn) downloadBtn.style.display = 'none';
+    if (state) {
+      state.className = 'state-error';
+      state.textContent = error.message || 'Assignment review failed';
+    }
+  } finally {
+    if (buttonEl) {
+      buttonEl.disabled = false;
+      buttonEl.textContent = originalLabel;
+    }
+  }
 }
 
 async function applyAssignmentFiles(orchestrationId, buttonEl) {

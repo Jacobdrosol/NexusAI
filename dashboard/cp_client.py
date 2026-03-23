@@ -513,6 +513,27 @@ class CPClient:
             timeout=_INGEST_TIMEOUT,
         )
 
+    def review_project_assignment_files(
+        self,
+        project_id: str,
+        *,
+        orchestration_id: str,
+        include_content: bool = True,
+        max_content_chars: int = 20000,
+        diff_context_lines: int = 3,
+    ) -> Optional[Dict[str, Any]]:
+        body: Dict[str, Any] = {
+            "orchestration_id": orchestration_id,
+            "include_content": bool(include_content),
+            "max_content_chars": max(1000, min(int(max_content_chars), 200000)),
+            "diff_context_lines": max(0, min(int(diff_context_lines), 20)),
+        }
+        return self._post(
+            f"/v1/projects/{project_id}/repo/workspace/review-assignment",
+            body,
+            timeout=_INGEST_TIMEOUT,
+        )
+
     def list_project_repo_workspace_runs(
         self,
         project_id: str,

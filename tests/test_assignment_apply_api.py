@@ -233,3 +233,72 @@ async def test_apply_assignment_ignores_repo_files_from_deny_policy_bots(cp_app,
     assert applied_paths == ["docs/allowed.md"]
     assert (root / "docs" / "allowed.md").exists()
     assert not (root / "docs" / "blocked.md").exists()
+
+
+@pytest.mark.anyio
+async def test_review_assignment_previews_generated_files_without_writing(cp_app, tmp_path, monkeypatch):
+    project_id = "proj-review"
+    orchestration_id = "orch-review-1"
+    base_root = tmp_path / "repo-workspaces"
+    root = base_root / project_id / "repo"
+    root.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-b", "main"], cwd=root, check=True, capture_output=True)
+    (root / "docs").mkdir(parents=True, exist_ok=True)
+    (root / "docs" / "existing.md").write_text("# old\n", encoding="utf-8")
+    monkeypatch.setenv("NEXUSAI_REPO_WORKSPACE_ROOT", str(base_root))
+    cp_app.state.task_manager._schedule_ready_tasks = AsyncMock(return_value=None)
+
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        await client.post("/v1/projects", json={"id": project_id, "name": "Review Project", "mode": "isolated"})
+        await client.put(
+            f"/v1/projects/{project_id}/repo/workspace",
+            json={"enabled": True, "managed_path_mode": True},
+        )
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "pm-coder-review",
+                "name": "PM Coder",
+                "role": "coder",
+                "backends": [],
+                "enabled": True,
+                "execution_policy": {"repo_output_mode": "allow"},
+            },
+        )
+
+        task = await cp_app.state.task_manager.create_task(
+            bot_id="pm-coder-review",
+            payload={"title": "Preview docs", "step_number": 1},
+            metadata=TaskMetadata(
+                source="chat_assign",
+                project_id=project_id,
+                orchestration_id=orchestration_id,
+                conversation_id="conv-review",
+            ),
+        )
+        await cp_app.state.task_manager.update_status(
+            task.id,
+            "completed",
+            result={
+                "artifacts": [
+                    {"path": "docs/existing.md", "content": "# new\n"},
+                    {"path": "docs/new.md", "content": "# created\n"},
+                ]
+            },
+        )
+
+        resp = await client.post(
+            f"/v1/projects/{project_id}/repo/workspace/review-assignment",
+            json={"orchestration_id": orchestration_id, "include_content": True},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["file_count"] == 2
+    review_files = {item["path"]: item for item in body["review_files"]}
+    assert review_files["docs/existing.md"]["status"] == "modified"
+    assert review_files["docs/new.md"]["status"] == "new"
+    assert "--- a/docs/existing.md" in review_files["docs/existing.md"]["diff"]
+    assert (root / "docs" / "existing.md").read_text(encoding="utf-8") == "# old\n"
+    assert not (root / "docs" / "new.md").exists()

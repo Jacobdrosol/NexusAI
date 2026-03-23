@@ -4,6 +4,7 @@ import re
 import uuid
 from typing import Any, Dict, List, Optional
 
+from control_plane.task_result_files import extract_file_candidates
 from shared.bot_policy import (
     bot_has_explicit_workflow,
     bot_is_project_manager,
@@ -615,6 +616,24 @@ class PMOrchestrator:
             bot_id = str(task.bot_id or "").strip()
             if bot_id and bot_id not in latest_cycle_observed_bot_ids:
                 latest_cycle_observed_bot_ids.append(bot_id)
+        expected_repo_deliverables: List[str] = []
+        produced_repo_files: List[str] = []
+        for task in latest_cycle_tasks:
+            payload = task.payload if isinstance(task.payload, dict) else {}
+            for item in payload.get("deliverables") if isinstance(payload.get("deliverables"), list) else []:
+                text = str(item or "").strip().replace("\\", "/")
+                if text and self._looks_like_repo_file(text) and text not in expected_repo_deliverables:
+                    expected_repo_deliverables.append(text)
+            if str(task.status or "").strip().lower() != "completed":
+                continue
+            for candidate in extract_file_candidates(task.result):
+                path = str(candidate.get("path") or "").strip().replace("\\", "/")
+                if path and self._looks_like_repo_file(path) and path not in produced_repo_files:
+                    produced_repo_files.append(path)
+        missing_deliverables = [
+            path for path in expected_repo_deliverables if path not in produced_repo_files
+        ]
+        deliverables_complete = not missing_deliverables
 
         final_qc_terminal = any(
             str(task.bot_id or "").strip() == "pm-final-qc"
@@ -626,7 +645,7 @@ class PMOrchestrator:
             and str(task.status or "").strip().lower() == "completed"
             for task in latest_cycle_tasks
         )
-        workflow_complete = (not final_qc_required) or final_qc_terminal
+        workflow_complete = ((not final_qc_required) or final_qc_terminal) and deliverables_complete
         missing_stages = [
             stage_id
             for stage_id in stage_order
@@ -651,6 +670,11 @@ class PMOrchestrator:
                 f"{', '.join(latest_cycle_observed_bot_ids) if latest_cycle_observed_bot_ids else 'none'}"
             )
             lines.append(f"Missing stages: {', '.join(missing_stages)}")
+        if missing_deliverables:
+            lines.append(
+                "Missing latest-cycle deliverables: "
+                f"{', '.join(missing_deliverables)}"
+            )
 
         return {
             "summary_text": "\n".join(lines),
@@ -661,6 +685,10 @@ class PMOrchestrator:
             "workflow_complete": workflow_complete,
             "final_qc_required": final_qc_required,
             "final_qc_completed": final_qc_completed,
+            "deliverables_complete": deliverables_complete,
+            "expected_deliverables": expected_repo_deliverables,
+            "produced_deliverables": produced_repo_files,
+            "missing_deliverables": missing_deliverables,
             "observed_bot_ids": latest_cycle_observed_bot_ids,
             "missing_stages": missing_stages,
             "latest_cycle_task_count": len(latest_cycle_tasks),
@@ -679,9 +707,10 @@ class PMOrchestrator:
         workflow_complete = bool(completion.get("workflow_complete", True))
         final_qc_required = bool(completion.get("final_qc_required"))
         final_qc_completed = bool(completion.get("final_qc_completed"))
+        deliverables_complete = bool(completion.get("deliverables_complete", True))
         run_status = (
             "passed"
-            if failed == 0 and all_terminal and workflow_complete and (not final_qc_required or final_qc_completed)
+            if failed == 0 and all_terminal and workflow_complete and deliverables_complete and (not final_qc_required or final_qc_completed)
             else "failed"
         )
         task_count = int(completion.get("task_count") or 0)
@@ -699,6 +728,13 @@ class PMOrchestrator:
             lines.append("Run summary captured before all tasks reached a terminal state.")
         elif final_qc_required and not final_qc_completed:
             lines.append("Run did not reach a completed Final QC stage, so it cannot be marked as passed.")
+        elif not deliverables_complete:
+            missing_deliverables = completion.get("missing_deliverables") or []
+            lines.append(
+                "Run did not produce all expected latest-cycle deliverables, so it cannot be marked as passed."
+            )
+            if missing_deliverables:
+                lines.append("Missing deliverables: " + ", ".join(str(item) for item in missing_deliverables))
         try:
             existing_messages = await self._chat_manager.list_messages(conversation_id, limit=500)
             for message in existing_messages:
@@ -739,6 +775,8 @@ class PMOrchestrator:
                 "workflow_complete": workflow_complete,
                 "final_qc_required": final_qc_required,
                 "final_qc_completed": final_qc_completed,
+                "deliverables_complete": deliverables_complete,
+                "missing_deliverables": list(completion.get("missing_deliverables") or []),
                 "full_summary_text": str(completion.get("summary_text") or ""),
             },
         )
