@@ -1561,7 +1561,7 @@ async def restore_conversation(conversation_id: str, request: Request) -> ChatCo
 async def list_messages(
     conversation_id: str,
     request: Request,
-    limit: int = Query(default=120, ge=1, le=1000),
+    limit: int = Query(default=2000, ge=1, le=2000),
 ) -> List[ChatMessage]:
     chat_manager = request.app.state.chat_manager
     try:

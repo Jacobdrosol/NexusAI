@@ -13,6 +13,7 @@ from flask_login import login_required
 from dashboard.cp_client import get_cp_client
 
 bp = Blueprint("chat", __name__)
+_CHAT_HISTORY_LIMIT = 2000
 
 
 def _task_sort_key(task: dict[str, Any]) -> tuple[int, int, str, str]:
@@ -372,7 +373,9 @@ def chat_page() -> str:
                     selected = c
                     break
             try:
-                messages = _normalize_message_rows(_cp_list_messages_safe(cp, selected_id, limit=120) or [])
+                messages = _normalize_message_rows(
+                    _cp_list_messages_safe(cp, selected_id, limit=_CHAT_HISTORY_LIMIT) or []
+                )
             except Exception:
                 messages = []
                 page_error = page_error or "Selected conversation messages could not be loaded."
@@ -613,11 +616,11 @@ def api_review_assignment_files():
 @login_required
 def api_list_messages(conversation_id: str):
     cp = get_cp_client()
-    raw_limit = request.args.get("limit", "120")
+    raw_limit = request.args.get("limit")
     try:
-        limit = max(1, min(int(raw_limit), 1000))
+        limit = max(1, min(int(raw_limit), _CHAT_HISTORY_LIMIT)) if raw_limit is not None else _CHAT_HISTORY_LIMIT
     except Exception:
-        limit = 120
+        limit = _CHAT_HISTORY_LIMIT
     messages = _cp_list_messages_safe(cp, conversation_id, limit=limit)
     if messages is None:
         return _cp_error_response(cp, "chat messages unavailable")

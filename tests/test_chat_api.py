@@ -124,6 +124,41 @@ async def test_archive_and_restore_conversation_visibility(cp_app):
 
 
 @pytest.mark.anyio
+async def test_list_messages_returns_more_than_legacy_120_default(cp_app, monkeypatch):
+    monkeypatch.setenv("CP_RATE_LIMIT_CHAT_MESSAGES_COUNT", "1000")
+    monkeypatch.setenv("CP_RATE_LIMIT_CHAT_MESSAGES_WINDOW_SECONDS", "60")
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "assistant reply"})
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        create_resp = await client.post("/v1/chat/conversations", json={"title": "Long History"})
+        assert create_resp.status_code == 200
+        conversation_id = create_resp.json()["id"]
+
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-history",
+                "name": "History Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+            },
+        )
+
+        for index in range(130):
+            post_resp = await client.post(
+                f"/v1/chat/conversations/{conversation_id}/messages",
+                json={"content": f"message {index}", "bot_id": "bot-history"},
+            )
+            assert post_resp.status_code == 200
+
+        messages_resp = await client.get(f"/v1/chat/conversations/{conversation_id}/messages")
+        assert messages_resp.status_code == 200
+        messages = messages_resp.json()
+        assert len(messages) == 260
+        assert messages[0]["content"] == "message 0"
+
+
+@pytest.mark.anyio
 async def test_stream_message_endpoint(cp_app):
     async def _stream(_task):
         yield {"event": "backend_selected", "provider": "ollama", "model": "llama3.1:8b", "worker_id": "w1"}

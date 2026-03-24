@@ -399,6 +399,48 @@ def test_chat_page_handles_non_json_serializable_message_fields(dashboard_client
     assert b"hello" in resp.data
 
 
+def test_chat_page_requests_full_history_for_selected_conversation(dashboard_client):
+    _login_admin(dashboard_client)
+    seen: dict[str, object] = {}
+
+    class FakeCP:
+        def list_conversations(self, archived="all", project_id=None):
+            return [
+                {
+                    "id": "c-full",
+                    "title": "Full History",
+                    "project_id": None,
+                    "bridge_project_ids": [],
+                    "updated_at": "2026-03-12T00:00:00+00:00",
+                    "archived_at": None,
+                    "tool_access_enabled": False,
+                    "tool_access_filesystem": False,
+                    "tool_access_repo_search": False,
+                }
+            ]
+
+        def list_messages(self, conversation_id, limit=None):
+            seen["conversation_id"] = conversation_id
+            seen["limit"] = limit
+            return [{"id": "m1", "role": "assistant", "content": "older history"}]
+
+        def list_bots(self):
+            return []
+
+        def list_projects(self):
+            return []
+
+        def list_vault_items(self, **kwargs):
+            return []
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/chat?conversation_id=c-full")
+
+    assert resp.status_code == 200
+    assert seen == {"conversation_id": "c-full", "limit": 2000}
+    assert b"older history" in resp.data
+
+
 def test_chat_page_handles_wrapped_vault_item_responses(dashboard_client):
     _login_admin(dashboard_client)
 
@@ -913,15 +955,19 @@ def test_chat_message_api_surfaces_control_plane_error(dashboard_client):
 
 def test_chat_messages_api_proxies_control_plane_messages(dashboard_client):
     _login_admin(dashboard_client)
+    seen: dict[str, object] = {}
 
     class FakeCP:
-        def list_messages(self, conversation_id):
+        def list_messages(self, conversation_id, limit=None):
+            seen["conversation_id"] = conversation_id
+            seen["limit"] = limit
             return [{"id": "m1", "role": "assistant", "content": "hello"}]
 
     with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
         resp = dashboard_client.get("/api/chat/conversations/c1/messages")
 
     assert resp.status_code == 200
+    assert seen == {"conversation_id": "c1", "limit": 2000}
     assert resp.get_json()[0]["content"] == "hello"
 
 
