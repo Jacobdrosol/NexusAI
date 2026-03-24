@@ -437,8 +437,47 @@ def test_chat_page_requests_full_history_for_selected_conversation(dashboard_cli
         resp = dashboard_client.get("/chat?conversation_id=c-full")
 
     assert resp.status_code == 200
-    assert seen == {"conversation_id": "c-full", "limit": 2000}
+    assert seen == {"conversation_id": "c-full", "limit": None}
     assert b"older history" in resp.data
+
+
+def test_chat_page_preserves_raw_markdown_content_for_selected_conversation(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_conversations(self, archived="all", project_id=None):
+            return [
+                {
+                    "id": "c-md",
+                    "title": "Markdown Chat",
+                    "project_id": None,
+                    "bridge_project_ids": [],
+                    "updated_at": "2026-03-12T00:00:00+00:00",
+                    "archived_at": None,
+                    "tool_access_enabled": False,
+                    "tool_access_filesystem": False,
+                    "tool_access_repo_search": False,
+                }
+            ]
+
+        def list_messages(self, conversation_id, limit=None):
+            return [{"id": "m-md", "role": "assistant", "content": "# Heading\n\n- Item"}]
+
+        def list_bots(self):
+            return []
+
+        def list_projects(self):
+            return []
+
+        def list_vault_items(self, **kwargs):
+            return []
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/chat?conversation_id=c-md")
+
+    assert resp.status_code == 200
+    assert b'data-content="# Heading' in resp.data
+    assert b'data-raw-content="# Heading' in resp.data
 
 
 def test_chat_page_handles_wrapped_vault_item_responses(dashboard_client):
@@ -967,7 +1006,7 @@ def test_chat_messages_api_proxies_control_plane_messages(dashboard_client):
         resp = dashboard_client.get("/api/chat/conversations/c1/messages")
 
     assert resp.status_code == 200
-    assert seen == {"conversation_id": "c1", "limit": 2000}
+    assert seen == {"conversation_id": "c1", "limit": None}
     assert resp.get_json()[0]["content"] == "hello"
 
 

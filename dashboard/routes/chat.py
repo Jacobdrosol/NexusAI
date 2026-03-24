@@ -13,7 +13,6 @@ from flask_login import login_required
 from dashboard.cp_client import get_cp_client
 
 bp = Blueprint("chat", __name__)
-_CHAT_HISTORY_LIMIT = 2000
 
 
 def _task_sort_key(task: dict[str, Any]) -> tuple[int, int, str, str]:
@@ -306,7 +305,7 @@ def _normalize_vault_item_rows(raw: Any) -> list[dict[str, Any]]:
     return result
 
 
-def _cp_list_messages_safe(cp: Any, conversation_id: str, *, limit: int) -> Any:
+def _cp_list_messages_safe(cp: Any, conversation_id: str, *, limit: int | None) -> Any:
     try:
         return cp.list_messages(conversation_id, limit=limit)
     except TypeError:
@@ -374,7 +373,7 @@ def chat_page() -> str:
                     break
             try:
                 messages = _normalize_message_rows(
-                    _cp_list_messages_safe(cp, selected_id, limit=_CHAT_HISTORY_LIMIT) or []
+                    _cp_list_messages_safe(cp, selected_id, limit=None) or []
                 )
             except Exception:
                 messages = []
@@ -618,9 +617,9 @@ def api_list_messages(conversation_id: str):
     cp = get_cp_client()
     raw_limit = request.args.get("limit")
     try:
-        limit = max(1, min(int(raw_limit), _CHAT_HISTORY_LIMIT)) if raw_limit is not None else _CHAT_HISTORY_LIMIT
+        limit = max(1, int(raw_limit)) if raw_limit is not None else None
     except Exception:
-        limit = _CHAT_HISTORY_LIMIT
+        limit = None
     messages = _cp_list_messages_safe(cp, conversation_id, limit=limit)
     if messages is None:
         return _cp_error_response(cp, "chat messages unavailable")
