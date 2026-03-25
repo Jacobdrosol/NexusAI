@@ -900,6 +900,10 @@ function appendPendingAssistantToken(text, pendingEl = null) {
   renderMessageBody(bodyEl, current + text);
 }
 
+function isStreamingMessage(message) {
+  return !!(message && message.metadata && message.metadata.streaming === true);
+}
+
 function reconcilePendingElement(message) {
   const role = String(message?.role || '');
   const content = String(message?.content || '');
@@ -924,8 +928,13 @@ function hydrateMessageElement(el, message) {
   el.dataset.role = message.role || 'assistant';
   el.dataset.content = message.content || '';
   delete el.dataset.pending;
-  delete el.dataset.pendingAssistant;
-  delete el.dataset.streamingStarted;
+  if (isStreamingMessage(message) && String(message.role || 'assistant') === 'assistant') {
+    el.dataset.pendingAssistant = 'true';
+    el.dataset.streamingStarted = 'true';
+  } else {
+    delete el.dataset.pendingAssistant;
+    delete el.dataset.streamingStarted;
+  }
   if (message.metadata) {
     el.dataset.meta = JSON.stringify(message.metadata);
   } else {
@@ -990,6 +999,66 @@ function upsertMessage(message, preferredElement = null) {
   }
   if (!el) return null;
   return hydrateMessageElement(el, message);
+}
+
+function processChatStreamEventBlock(block, pending, tempUser) {
+  let eventType = 'message';
+  const dataLines = [];
+  block.split('\n').forEach((rawLine) => {
+    const line = rawLine.replace(/\r$/, '');
+    if (line.startsWith('event:')) eventType = line.slice(6).trim();
+    if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart());
+  });
+  const dataText = dataLines.join('\n');
+  if (!dataText) return {sawDone: false};
+  try {
+    const parsed = JSON.parse(dataText);
+    if (eventType === 'task_graph') {
+      (parsed.tasks || []).forEach((t) => {
+        upsertTaskEvent({
+          task_id: t.id,
+          status: t.status || 'queued',
+          bot_id: t.bot_id,
+          title: (t.payload && t.payload.title) || '',
+        });
+      });
+    } else if (eventType === 'task_status') {
+      upsertTaskEvent(parsed);
+      const statuses = Array.from(taskEventMap.values()).map((t) => t.status);
+      if (statuses.length > 0 && statuses.every((s) => s === 'completed' || s === 'failed')) {
+        const stateEl = document.getElementById('task-event-state');
+        if (stateEl) {
+          stateEl.className = 'state-info';
+          stateEl.textContent = 'Task graph completed.';
+        }
+      }
+    } else if (eventType === 'context_summary') {
+      const sources = Array.isArray(parsed.sources) ? parsed.sources.filter(Boolean) : [];
+      if (sources.length > 0) {
+        const preview = sources.slice(0, 3).join('; ');
+        setPendingAssistantStatus(`Using repo context from: ${preview}`, pending);
+      } else {
+        setPendingAssistantStatus('No repository context was resolved for this turn.', pending);
+      }
+    } else if (eventType === 'status') {
+      setPendingAssistantStatus(parsed.label || 'Working...', pending);
+    } else if (eventType === 'token') {
+      appendPendingAssistantToken(parsed.text || '', pending);
+    } else if (eventType === 'user_message') {
+      upsertMessage(parsed, tempUser);
+    } else if (eventType === 'assistant_message' && pending) {
+      upsertMessage(parsed, pending);
+    } else if (eventType === 'error') {
+      setPendingAssistantStatus(parsed.error || 'Stream error', pending);
+      alert(parsed.error || 'Stream error');
+    } else if (eventType === 'done') {
+      setTimeout(refreshMessages, 150);
+      return {sawDone: true};
+    }
+  } catch (_) {
+    // ignore malformed frames
+  }
+  return {sawDone: false};
 }
 
 async function refreshMessages() {
@@ -1284,69 +1353,22 @@ async function sendMessage(streamMode) {
     let buffer = '';
     while (true) {
       const {done, value} = await reader.read();
-      if (done) break;
+      if (done) {
+        buffer += decoder.decode();
+        break;
+      }
       buffer += decoder.decode(value, {stream: true});
       let idx;
       while ((idx = buffer.indexOf('\n\n')) >= 0) {
         const block = buffer.slice(0, idx);
         buffer = buffer.slice(idx + 2);
-        let eventType = 'message';
-        const dataLines = [];
-        block.split('\n').forEach((rawLine) => {
-          const line = rawLine.replace(/\r$/, '');
-          if (line.startsWith('event:')) eventType = line.slice(6).trim();
-          if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart());
-        });
-        const dataText = dataLines.join('\n');
-        if (!dataText) continue;
-        try {
-          const parsed = JSON.parse(dataText);
-          if (eventType === 'task_graph') {
-            (parsed.tasks || []).forEach((t) => {
-              upsertTaskEvent({
-                task_id: t.id,
-                status: t.status || 'queued',
-                bot_id: t.bot_id,
-                title: (t.payload && t.payload.title) || '',
-              });
-            });
-          } else if (eventType === 'task_status') {
-            upsertTaskEvent(parsed);
-            const statuses = Array.from(taskEventMap.values()).map((t) => t.status);
-            if (statuses.length > 0 && statuses.every((s) => s === 'completed' || s === 'failed')) {
-              const stateEl = document.getElementById('task-event-state');
-              if (stateEl) {
-                stateEl.className = 'state-info';
-                stateEl.textContent = 'Task graph completed.';
-              }
-            }
-          } else if (eventType === 'context_summary') {
-            const sources = Array.isArray(parsed.sources) ? parsed.sources.filter(Boolean) : [];
-            if (sources.length > 0) {
-              const preview = sources.slice(0, 3).join('; ');
-              setPendingAssistantStatus(`Using repo context from: ${preview}`, pending);
-            } else {
-              setPendingAssistantStatus('No repository context was resolved for this turn.', pending);
-            }
-          } else if (eventType === 'status') {
-            setPendingAssistantStatus(parsed.label || 'Working...', pending);
-          } else if (eventType === 'token') {
-            appendPendingAssistantToken(parsed.text || '', pending);
-          } else if (eventType === 'user_message') {
-            upsertMessage(parsed, tempUser);
-          } else if (eventType === 'assistant_message' && pending) {
-            upsertMessage(parsed, pending);
-          } else if (eventType === 'error') {
-            setPendingAssistantStatus(parsed.error || 'Stream error', pending);
-            alert(parsed.error || 'Stream error');
-          } else if (eventType === 'done') {
-            sawDone = true;
-            setTimeout(refreshMessages, 150);
-          }
-        } catch (_) {
-          // ignore malformed frames
-        }
+        const outcome = processChatStreamEventBlock(block, pending, tempUser);
+        if (outcome.sawDone) sawDone = true;
       }
+    }
+    if (buffer.trim()) {
+      const outcome = processChatStreamEventBlock(buffer, pending, tempUser);
+      if (outcome.sawDone) sawDone = true;
     }
   } catch (_) {
     setPendingAssistantStatus('Stream connection failed. Rechecking saved response...', pending);
