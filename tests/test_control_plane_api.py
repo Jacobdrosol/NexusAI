@@ -312,6 +312,33 @@ async def test_create_bot_returns_structured_validation_errors_for_workflow_poli
 
 
 @pytest.mark.anyio
+async def test_update_bot_returns_structured_validation_errors_for_id_mismatch(cp_client):
+    await cp_client.post(
+        "/v1/bots",
+        json={"id": "bot-update", "name": "Bot Update", "role": "assistant", "backends": []},
+    )
+    resp = await cp_client.put(
+        "/v1/bots/bot-update",
+        json={
+            "id": "bot-different",
+            "name": "Bot Different",
+            "role": "assistant",
+            "backends": [],
+        },
+    )
+
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert detail["reason_code"] == "bot_id_mismatch"
+    assert detail["message"] == "bot.id must match the path bot_id"
+    assert any(
+        item.get("field_path") == "id"
+        and item.get("invalid_value") == "bot-different"
+        for item in detail["validation_errors"]
+    )
+
+
+@pytest.mark.anyio
 async def test_external_bot_trigger_creates_task_with_auth_and_payload_field(cp_client):
     create = await cp_client.post(
         "/v1/bots",
