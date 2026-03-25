@@ -17,6 +17,14 @@ from shared.models import Bot, Task, TaskMetadata
 logger = logging.getLogger(__name__)
 
 
+def _task_result_is_skip(result: Any) -> bool:
+    if not isinstance(result, dict):
+        return False
+    outcome = str(result.get("outcome") or result.get("status") or "").strip().lower()
+    failure_type = str(result.get("failure_type") or "").strip().lower()
+    return outcome == "skip" or failure_type in {"skip", "not_applicable", "not-applicable", "n/a"}
+
+
 class PMOrchestrator:
     """Creates dependency-ordered tasks from a high-level chat assignment."""
 
@@ -645,12 +653,24 @@ class PMOrchestrator:
             and str(task.status or "").strip().lower() == "completed"
             for task in latest_cycle_tasks
         )
+        skipped_stages = [
+            stage_id
+            for stage_id in stage_order
+            if stage_id
+            and any(
+                str(task.bot_id or "").strip() == stage_id
+                and str(task.status or "").strip().lower() == "completed"
+                and _task_result_is_skip(task.result)
+                for task in latest_cycle_tasks
+            )
+        ]
         workflow_complete = ((not final_qc_required) or final_qc_terminal) and deliverables_complete
         missing_stages = [
             stage_id
             for stage_id in stage_order
             if stage_id and stage_id not in latest_cycle_observed_bot_ids
         ]
+        workflow_policy_codes: List[str] = []
         if all_terminal and not workflow_complete:
             lines.extend(
                 [
@@ -659,6 +679,7 @@ class PMOrchestrator:
                     "Expected terminal stage: pm-final-qc.",
                 ]
             )
+            workflow_policy_codes.append("workflow_incomplete")
         if latest_cycle_anchor is not None and len(cycle_entry_tasks) > 1:
             lines.append(
                 "Latest PM cycle entry: "
@@ -670,11 +691,18 @@ class PMOrchestrator:
                 f"{', '.join(latest_cycle_observed_bot_ids) if latest_cycle_observed_bot_ids else 'none'}"
             )
             lines.append(f"Missing stages: {', '.join(missing_stages)}")
+            workflow_policy_codes.extend(f"missing_downstream_stage:{stage_id}" for stage_id in missing_stages)
+        if skipped_stages:
+            lines.append(f"Skipped stages: {', '.join(skipped_stages)}")
+            workflow_policy_codes.extend(f"skipped_downstream_stage:{stage_id}" for stage_id in skipped_stages)
         if missing_deliverables:
             lines.append(
                 "Missing latest-cycle deliverables: "
                 f"{', '.join(missing_deliverables)}"
             )
+            workflow_policy_codes.append("missing_latest_cycle_deliverables")
+        if workflow_policy_codes:
+            lines.append("Workflow reason codes: " + ", ".join(workflow_policy_codes))
 
         return {
             "summary_text": "\n".join(lines),
@@ -691,6 +719,8 @@ class PMOrchestrator:
             "missing_deliverables": missing_deliverables,
             "observed_bot_ids": latest_cycle_observed_bot_ids,
             "missing_stages": missing_stages,
+            "skipped_stages": skipped_stages,
+            "workflow_policy_codes": workflow_policy_codes,
             "latest_cycle_task_count": len(latest_cycle_tasks),
             "latest_cycle_entry_task_id": str(latest_cycle_anchor.id or "") if latest_cycle_anchor is not None else "",
             "tasks": [task.model_dump() for task in final_tasks],
@@ -735,6 +765,15 @@ class PMOrchestrator:
             )
             if missing_deliverables:
                 lines.append("Missing deliverables: " + ", ".join(str(item) for item in missing_deliverables))
+        missing_stages = [str(item) for item in (completion.get("missing_stages") or []) if str(item)]
+        skipped_stages = [str(item) for item in (completion.get("skipped_stages") or []) if str(item)]
+        workflow_policy_codes = [str(item) for item in (completion.get("workflow_policy_codes") or []) if str(item)]
+        if missing_stages:
+            lines.append("Missing stages: " + ", ".join(missing_stages))
+        if skipped_stages:
+            lines.append("Skipped stages: " + ", ".join(skipped_stages))
+        if workflow_policy_codes:
+            lines.append("Workflow reason codes: " + ", ".join(workflow_policy_codes))
         try:
             existing_messages = await self._chat_manager.list_messages(conversation_id, limit=500)
             for message in existing_messages:
@@ -748,6 +787,9 @@ class PMOrchestrator:
                     {
                         "run_status": run_status,
                         "ingest_allowed": run_status == "passed",
+                        "missing_stages": missing_stages,
+                        "skipped_stages": skipped_stages,
+                        "workflow_policy_codes": workflow_policy_codes,
                     }
                 )
                 await self._chat_manager.update_message(
@@ -777,6 +819,9 @@ class PMOrchestrator:
                 "final_qc_completed": final_qc_completed,
                 "deliverables_complete": deliverables_complete,
                 "missing_deliverables": list(completion.get("missing_deliverables") or []),
+                "missing_stages": missing_stages,
+                "skipped_stages": skipped_stages,
+                "workflow_policy_codes": workflow_policy_codes,
                 "full_summary_text": str(completion.get("summary_text") or ""),
             },
         )

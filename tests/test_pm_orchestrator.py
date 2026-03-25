@@ -1484,6 +1484,121 @@ async def test_wait_for_completion_requires_latest_cycle_deliverables() -> None:
 
 
 @pytest.mark.anyio
+async def test_wait_for_completion_tracks_skipped_downstream_stages_separately() -> None:
+    pm_bot = Bot(
+        id="pm-orchestrator",
+        name="PM Orchestrator",
+        role="pm",
+        backends=[],
+        enabled=True,
+        workflow={
+            "reference_graph": {
+                "graph_id": "pm-graph",
+                "entry_bot_id": "pm-orchestrator",
+                "current_bot_id": "pm-orchestrator",
+                "nodes": [
+                    {"bot_id": "pm-orchestrator", "title": "PM Orchestrator"},
+                    {"bot_id": "pm-database-engineer", "title": "PM Database Engineer"},
+                    {"bot_id": "pm-ui-tester", "title": "PM UI Tester"},
+                    {"bot_id": "pm-final-qc", "title": "PM Final QC"},
+                ],
+                "edges": [],
+            },
+            "triggers": [],
+        },
+    )
+    root_task = Task(
+        id="task-pm-skip",
+        bot_id="pm-orchestrator",
+        payload={"title": "PM assignment intake"},
+        metadata=TaskMetadata(source="chat_assign", orchestration_id="orch-skip-stage"),
+        status="completed",
+        created_at="2026-03-20T00:00:00+00:00",
+        updated_at="2026-03-20T00:00:01+00:00",
+        result={"status": "complete"},
+    )
+    db_task = Task(
+        id="task-db-skip",
+        bot_id="pm-database-engineer",
+        payload={"title": "DB pass-through"},
+        metadata=TaskMetadata(
+            source="bot_trigger",
+            orchestration_id="orch-skip-stage",
+            parent_task_id="task-pm-skip",
+        ),
+        status="completed",
+        created_at="2026-03-20T00:00:02+00:00",
+        updated_at="2026-03-20T00:00:03+00:00",
+        result={"status": "pass"},
+    )
+    ui_task = Task(
+        id="task-ui-skip",
+        bot_id="pm-ui-tester",
+        payload={"title": "UI pass-through"},
+        metadata=TaskMetadata(
+            source="bot_trigger",
+            orchestration_id="orch-skip-stage",
+            parent_task_id="task-db-skip",
+        ),
+        status="completed",
+        created_at="2026-03-20T00:00:04+00:00",
+        updated_at="2026-03-20T00:00:05+00:00",
+        result={"outcome": "skip", "failure_type": "not_applicable"},
+    )
+    final_qc = Task(
+        id="task-final-skip",
+        bot_id="pm-final-qc",
+        payload={"title": "Final QC"},
+        metadata=TaskMetadata(
+            source="bot_trigger",
+            orchestration_id="orch-skip-stage",
+            parent_task_id="task-ui-skip",
+        ),
+        status="completed",
+        created_at="2026-03-20T00:00:06+00:00",
+        updated_at="2026-03-20T00:00:07+00:00",
+        result={"status": "pass"},
+    )
+    task_manager = type(
+        "TaskManager",
+        (),
+        {
+            "list_tasks": AsyncMock(return_value=[root_task, db_task, ui_task, final_qc]),
+            "get_task": AsyncMock(
+                side_effect=lambda task_id: {
+                    "task-pm-skip": root_task,
+                    "task-db-skip": db_task,
+                    "task-ui-skip": ui_task,
+                    "task-final-skip": final_qc,
+                }[task_id]
+            ),
+        },
+    )()
+    bot_registry = type("BotRegistry", (), {"get": AsyncMock(return_value=pm_bot)})()
+    orchestrator = PMOrchestrator(
+        bot_registry=bot_registry,
+        scheduler=None,
+        task_manager=task_manager,
+        chat_manager=None,
+    )
+
+    completion = await orchestrator.wait_for_completion(
+        {
+            "orchestration_id": "orch-skip-stage",
+            "pm_bot_id": "pm-orchestrator",
+            "tasks": [{"id": "task-pm-skip"}],
+        },
+        poll_interval_seconds=0.0,
+        max_wait_seconds=0.01,
+    )
+
+    assert completion["workflow_complete"] is True
+    assert completion["missing_stages"] == []
+    assert completion["skipped_stages"] == ["pm-ui-tester"]
+    assert "skipped_downstream_stage:pm-ui-tester" in completion["workflow_policy_codes"]
+
+
+@pytest.mark.anyio
 async def test_persist_summary_message_requires_latest_cycle_deliverables_for_pass() -> None:
     updated_message = type("UpdatedMessage", (), {"id": "msg-report"})()
     chat_manager = type(

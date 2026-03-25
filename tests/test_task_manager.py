@@ -112,6 +112,9 @@ async def test_task_manager_fails_deny_policy_bot_that_emits_repo_file(tmp_path)
     updated = await tm.get_task(task.id)
     assert updated.status == "failed"
     assert updated.error is not None
+    assert updated.error.code == "non_writer_emitted_repo_outputs"
+    assert isinstance(updated.error.details, dict)
+    assert updated.error.details.get("paths") == ["docs/should-not-exist.md"]
     assert "not allowed to emit repo file outputs" in updated.error.message
 
 
@@ -314,6 +317,9 @@ async def test_task_manager_fails_non_writer_stage_with_repo_deliverables_before
     updated = await tm.get_task(task.id)
     assert updated.status == "failed"
     assert updated.error is not None
+    assert updated.error.code == "non_writer_assigned_repo_deliverables"
+    assert isinstance(updated.error.details, dict)
+    assert updated.error.details.get("paths") == ["docs/blocks/repo-discovery.md"]
     assert "not allowed to own repo deliverables" in updated.error.message
     assert "docs/blocks/repo-discovery.md" in updated.error.message
     assert scheduler.called is False
@@ -388,8 +394,63 @@ async def test_task_manager_rejects_docs_only_engineer_repo_artifact_outputs(tmp
     updated = await tm.get_task(task.id)
     assert updated.status == "failed"
     assert updated.error is not None
+    assert updated.error.code == "non_writer_emitted_repo_outputs"
+    assert isinstance(updated.error.details, dict)
+    assert updated.error.details.get("paths") == ["docs/blocks/client-rendering-architecture.md"]
     assert "not allowed to emit repo file outputs" in updated.error.message
     assert "docs/blocks/client-rendering-architecture.md" in updated.error.message
+
+
+@pytest.mark.anyio
+async def test_task_manager_reports_structured_docs_only_broken_link_violation(tmp_path):
+    import asyncio
+
+    from control_plane.task_manager.task_manager import TaskManager
+
+    class StubScheduler:
+        async def schedule(self, _task):
+            return {
+                "artifacts": [
+                    {
+                        "path": "docs/blocks/implementation/bandwidth-optimization.md",
+                        "content": (
+                            "# Bandwidth Optimization\n\n"
+                            "See [Architecture](../architecture/client-rendering.md).\n"
+                        ),
+                    }
+                ]
+            }
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "docs-links-violation.db"))
+    task = await tm.create_task(
+        bot_id="pm-coder",
+        payload={
+            "title": "Build bandwidth guide",
+            "instruction": "Create only markdown documentation in docs/blocks/implementation.",
+            "step_kind": "repo_change",
+            "deliverables": ["docs/blocks/implementation/bandwidth-optimization.md"],
+            "assignment_scope": {
+                "docs_only": True,
+                "requested_output_paths": ["docs/blocks"],
+            },
+        },
+        metadata=TaskMetadata(source="bot_trigger", orchestration_id="orch-doc-links-structured"),
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.05)
+
+    updated = await tm.get_task(task.id)
+    assert updated.status == "failed"
+    assert updated.error is not None
+    assert updated.error.code == "docs_only_broken_markdown_links"
+    assert isinstance(updated.error.details, dict)
+    assert updated.error.details.get("broken_links") == [
+        "docs/blocks/implementation/bandwidth-optimization.md -> ../architecture/client-rendering.md"
+    ]
 
 
 @pytest.mark.anyio

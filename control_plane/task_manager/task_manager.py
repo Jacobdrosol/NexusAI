@@ -93,6 +93,21 @@ class _TaskExecutionFailure(Exception):
         self.result = result
 
 
+class _TaskPolicyViolation(Exception):
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str,
+        details: Optional[Dict[str, Any]] = None,
+        result: Any = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = str(code or "").strip() or "workflow_policy_violation"
+        self.details = details or {}
+        self.result = result
+
+
 def _summarize_payload(payload: Any) -> str:
     if isinstance(payload, dict):
         keys = sorted(str(key) for key in payload.keys())
@@ -1213,7 +1228,7 @@ def _assignment_expected_repo_files(payload: Dict[str, Any]) -> List[str]:
 
 def _non_writer_step_repo_deliverables(payload: Dict[str, Any]) -> List[str]:
     step_kind = _assignment_step_kind(payload)
-    if step_kind not in {"specification", "planning", "test_execution", "review"}:
+    if step_kind not in {"specification", "planning"}:
         return []
     repo_paths: List[str] = []
     seen: Set[str] = set()
@@ -1835,13 +1850,13 @@ def _requires_release_tag_evidence(payload: Dict[str, Any]) -> bool:
     return "git tag" in combined or "release tag" in combined or "tag url" in combined
 
 
-def _assignment_validation_error(task: Task, result: Any) -> str:
+def _assignment_validation_failure(task: Task, result: Any) -> Optional[Dict[str, Any]]:
     metadata = task.metadata
     if metadata is None:
-        return ""
+        return None
     source = str(metadata.source or "").strip().lower()
     if source not in {"chat_assign", "auto_retry"} and not metadata.orchestration_id:
-        return ""
+        return None
     payload = task.payload if isinstance(task.payload, dict) else {}
     role_hint = str(payload.get("role_hint") or "").strip().lower()
     step_kind = _assignment_step_kind(payload)
@@ -1856,25 +1871,37 @@ def _assignment_validation_error(task: Task, result: Any) -> str:
         docs_only_workstream_violations = _docs_only_workstream_violations(result)
         if docs_only_workstream_violations:
             preview = ", ".join(docs_only_workstream_violations[:5])
-            return (
-                "Assignment explicitly requested documentation-only markdown outputs, "
-                "but the planning result created non-document implementation workstreams: "
-                f"{preview}."
-            )
+            return {
+                "code": "docs_only_unexpected_deliverables",
+                "message": (
+                    "Assignment explicitly requested documentation-only markdown outputs, "
+                    "but the planning result created non-document implementation workstreams: "
+                    f"{preview}."
+                ),
+                "details": {"step_kind": step_kind, "violations": docs_only_workstream_violations},
+            }
         unexpected_paths = _result_non_document_repo_paths(result)
         if unexpected_paths:
             preview = ", ".join(unexpected_paths[:5])
-            return (
-                "Assignment explicitly requested documentation-only markdown outputs, "
-                f"but generated non-document repo files: {preview}."
-            )
+            return {
+                "code": "docs_only_unexpected_deliverables",
+                "message": (
+                    "Assignment explicitly requested documentation-only markdown outputs, "
+                    f"but generated non-document repo files: {preview}."
+                ),
+                "details": {"step_kind": step_kind, "paths": unexpected_paths},
+            }
         unexpected_doc_paths = _docs_only_unexpected_document_repo_paths(payload, result)
         if unexpected_doc_paths:
             preview = ", ".join(unexpected_doc_paths[:5])
-            return (
-                "Documentation workstream emitted markdown files outside its assigned deliverables: "
-                f"{preview}."
-            )
+            return {
+                "code": "docs_only_unexpected_deliverables",
+                "message": (
+                    "Documentation workstream emitted markdown files outside its assigned deliverables: "
+                    f"{preview}."
+                ),
+                "details": {"step_kind": step_kind, "paths": unexpected_doc_paths},
+            }
         if step_kind == "repo_change":
             validation_artifacts = _result_explicit_artifacts(result)
             upstream_artifacts = payload.get("upstream_artifacts")
@@ -1883,17 +1910,25 @@ def _assignment_validation_error(task: Task, result: Any) -> str:
             placeholder_docs = _docs_only_placeholder_markdown_artifacts(validation_artifacts)
             if placeholder_docs:
                 preview = ", ".join(placeholder_docs[:5])
-                return (
-                    "Documentation output contains placeholder or omitted markdown content in generated artifacts: "
-                    f"{preview}."
-                )
+                return {
+                    "code": "docs_only_placeholder_content",
+                    "message": (
+                        "Documentation output contains placeholder or omitted markdown content in generated artifacts: "
+                        f"{preview}."
+                    ),
+                    "details": {"step_kind": step_kind, "paths": placeholder_docs},
+                }
             broken_links = _docs_only_broken_markdown_links_from_artifacts(validation_artifacts)
             if broken_links:
                 preview = ", ".join(broken_links[:3])
-                return (
-                    "Documentation output contains broken internal markdown links in generated artifacts: "
-                    f"{preview}."
-                )
+                return {
+                    "code": "docs_only_broken_markdown_links",
+                    "message": (
+                        "Documentation output contains broken internal markdown links in generated artifacts: "
+                        f"{preview}."
+                    ),
+                    "details": {"step_kind": step_kind, "broken_links": broken_links},
+                }
         if (
             step_kind in {"test_execution", "review"}
             and isinstance(result, dict)
@@ -1902,24 +1937,44 @@ def _assignment_validation_error(task: Task, result: Any) -> str:
             placeholder_docs = _docs_only_placeholder_markdown_artifacts(payload.get("upstream_artifacts"))
             if placeholder_docs:
                 preview = ", ".join(placeholder_docs[:5])
-                return (
-                    "Documentation validation marked the branch as passed even though upstream artifacts contain placeholder or omitted markdown content: "
-                    f"{preview}."
-                )
+                return {
+                    "code": "docs_only_false_pass",
+                    "message": (
+                        "Documentation validation marked the branch as passed even though upstream artifacts contain placeholder or omitted markdown content: "
+                        f"{preview}."
+                    ),
+                    "details": {
+                        "step_kind": step_kind,
+                        "reason_code": "docs_only_placeholder_content",
+                        "paths": placeholder_docs,
+                    },
+                }
             broken_links = _docs_only_broken_markdown_links_from_artifacts(payload.get("upstream_artifacts"))
             if broken_links:
                 preview = ", ".join(broken_links[:3])
-                return (
-                    "Documentation validation marked the branch as passed even though upstream artifacts contain broken internal markdown links: "
-                    f"{preview}."
-                )
+                return {
+                    "code": "docs_only_false_pass",
+                    "message": (
+                        "Documentation validation marked the branch as passed even though upstream artifacts contain broken internal markdown links: "
+                        f"{preview}."
+                    ),
+                    "details": {
+                        "step_kind": step_kind,
+                        "reason_code": "docs_only_broken_markdown_links",
+                        "broken_links": broken_links,
+                    },
+                }
 
     scope_alignment_error = _assignment_scope_alignment_error(payload, result)
     if scope_alignment_error:
-        return scope_alignment_error
+        return {
+            "code": "assignment_scope_mismatch",
+            "message": scope_alignment_error,
+            "details": {"step_kind": step_kind},
+        }
 
     if not text:
-        return ""
+        return None
 
     invalid_markers = [
         "pending - not executed",
@@ -1953,86 +2008,130 @@ def _assignment_validation_error(task: Task, result: Any) -> str:
     ]
     for marker in invalid_markers:
         if marker in lowered:
-            return (
-                "Assignment task output is unverified and cannot be marked completed: "
-                f"detected '{marker}'."
-            )
+            return {
+                "code": "assignment_unverified_output",
+                "message": (
+                    "Assignment task output is unverified and cannot be marked completed: "
+                    f"detected '{marker}'."
+                ),
+                "details": {"marker": marker, "step_kind": step_kind},
+            }
 
     if step_kind in {"test_execution", "review"} and _assignment_result_is_skip(result):
-        return ""
+        return None
 
     if step_kind == "repo_change" and not _has_repo_change_evidence(payload, result):
         required = ", ".join(evidence_requirements[:2]) or "repo file artifacts"
-        return (
-            "Assignment repo-change step is missing concrete changed-file evidence; "
-            f"required evidence: {required}."
-        )
+        return {
+            "code": "assignment_missing_repo_evidence",
+            "message": (
+                "Assignment repo-change step is missing concrete changed-file evidence; "
+                f"required evidence: {required}."
+            ),
+            "details": {"required_evidence": evidence_requirements[:2], "step_kind": step_kind},
+        }
 
     if step_kind in {"specification", "planning"} and _requires_repo_artifact_evidence(payload):
         if not _has_repo_change_evidence(payload, result):
             required = ", ".join(evidence_requirements[:2]) or "committed file or diff evidence"
-            return (
-                "Assignment planning/specification step is missing repo-backed evidence; "
-                f"required evidence: {required}."
-            )
+            return {
+                "code": "assignment_missing_repo_evidence",
+                "message": (
+                    "Assignment planning/specification step is missing repo-backed evidence; "
+                    f"required evidence: {required}."
+                ),
+                "details": {"required_evidence": evidence_requirements[:2], "step_kind": step_kind},
+            }
 
     if _requires_link_evidence(payload) and not _has_non_placeholder_url_evidence(text):
         required = ", ".join(evidence_requirements[:2]) or "link-backed evidence"
-        return (
-            "Assignment step is missing non-placeholder link evidence; "
-            f"required evidence: {required}."
-        )
+        return {
+            "code": "assignment_missing_link_evidence",
+            "message": (
+                "Assignment step is missing non-placeholder link evidence; "
+                f"required evidence: {required}."
+            ),
+            "details": {"required_evidence": evidence_requirements[:2], "step_kind": step_kind},
+        }
 
     if step_kind == "test_execution" and _requires_repo_artifact_evidence(payload):
         if not _has_repo_change_evidence(payload, result):
             required = ", ".join(evidence_requirements[:2]) or "test artifacts"
-            return (
-                "Assignment test step is missing concrete test artifact evidence; "
-                f"required evidence: {required}."
-            )
+            return {
+                "code": "assignment_missing_test_artifacts",
+                "message": (
+                    "Assignment test step is missing concrete test artifact evidence; "
+                    f"required evidence: {required}."
+                ),
+                "details": {"required_evidence": evidence_requirements[:2], "step_kind": step_kind},
+            }
 
     if step_kind == "test_execution" and not _has_test_execution_evidence(result, text):
         required = ", ".join(evidence_requirements[:2]) or "executed test evidence"
-        return (
-            "Assignment test step is missing execution-backed evidence; "
-            f"required evidence: {required}."
-        )
+        return {
+            "code": "assignment_missing_test_execution_evidence",
+            "message": (
+                "Assignment test step is missing execution-backed evidence; "
+                f"required evidence: {required}."
+            ),
+            "details": {"required_evidence": evidence_requirements[:2], "step_kind": step_kind},
+        }
 
     if step_kind == "review" and not _has_review_evidence(result, text):
         required = ", ".join(evidence_requirements[:2]) or "review findings tied to changed files"
-        return (
-            "Assignment review step is missing concrete review evidence; "
-            f"required evidence: {required}."
-        )
+        return {
+            "code": "assignment_missing_review_evidence",
+            "message": (
+                "Assignment review step is missing concrete review evidence; "
+                f"required evidence: {required}."
+            ),
+            "details": {"required_evidence": evidence_requirements[:2], "step_kind": step_kind},
+        }
 
     if step_kind == "release" and not _has_release_evidence(result, text):
         required = ", ".join(evidence_requirements[:2]) or "release artifacts"
-        return (
-            "Assignment release step is missing release-backed evidence; "
-            f"required evidence: {required}."
-        )
+        return {
+            "code": "assignment_missing_release_evidence",
+            "message": (
+                "Assignment release step is missing release-backed evidence; "
+                f"required evidence: {required}."
+            ),
+            "details": {"required_evidence": evidence_requirements[:2], "step_kind": step_kind},
+        }
 
     if step_kind in {"repo_change", "release"} and _requires_commit_sha_evidence(payload) and not _has_non_placeholder_commit_sha(text):
         required = ", ".join(evidence_requirements[:2]) or "commit SHA evidence"
-        return (
-            "Assignment step is missing non-placeholder commit SHA evidence; "
-            f"required evidence: {required}."
-        )
+        return {
+            "code": "assignment_missing_commit_sha_evidence",
+            "message": (
+                "Assignment step is missing non-placeholder commit SHA evidence; "
+                f"required evidence: {required}."
+            ),
+            "details": {"required_evidence": evidence_requirements[:2], "step_kind": step_kind},
+        }
 
     if step_kind in {"repo_change", "release"} and _requires_pull_request_evidence(payload) and not _has_non_placeholder_pull_request_url(text):
         required = ", ".join(evidence_requirements[:2]) or "pull request evidence"
-        return (
-            "Assignment step is missing non-placeholder pull request evidence; "
-            f"required evidence: {required}."
-        )
+        return {
+            "code": "assignment_missing_pull_request_evidence",
+            "message": (
+                "Assignment step is missing non-placeholder pull request evidence; "
+                f"required evidence: {required}."
+            ),
+            "details": {"required_evidence": evidence_requirements[:2], "step_kind": step_kind},
+        }
 
     if step_kind == "release" and _requires_release_tag_evidence(payload):
         if not re.search(r"\bv\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?\b", text):
             required = ", ".join(evidence_requirements[:2]) or "release tag evidence"
-            return (
-                "Assignment release step is missing release-tag evidence; "
-                f"required evidence: {required}."
-            )
+            return {
+                "code": "assignment_missing_release_tag_evidence",
+                "message": (
+                    "Assignment release step is missing release-tag evidence; "
+                    f"required evidence: {required}."
+                ),
+                "details": {"required_evidence": evidence_requirements[:2], "step_kind": step_kind},
+            }
 
     if role_hint in {"tester", "qa", "reviewer", "security", "security-reviewer"}:
         soft_markers = [
@@ -2050,12 +2149,21 @@ def _assignment_validation_error(task: Task, result: Any) -> str:
         ]
         matched = [marker for marker in soft_markers if marker in lowered]
         if matched:
-            return (
-                "Assignment task output reads like guidance or a checklist rather than executed review/test evidence: "
-                + ", ".join(matched[:3])
-                + "."
-            )
-    return ""
+            return {
+                "code": "assignment_guidance_instead_of_evidence",
+                "message": (
+                    "Assignment task output reads like guidance or a checklist rather than executed review/test evidence: "
+                    + ", ".join(matched[:3])
+                    + "."
+                ),
+                "details": {"markers": matched[:3], "step_kind": step_kind},
+            }
+    return None
+
+
+def _assignment_validation_error(task: Task, result: Any) -> str:
+    failure = _assignment_validation_failure(task, result)
+    return str(failure.get("message") or "") if isinstance(failure, dict) else ""
 
 
 def _task_report_markdown(task: Task) -> str:
@@ -3132,9 +3240,17 @@ class TaskManager:
                 if assigned_repo_deliverables:
                     preview = ", ".join(assigned_repo_deliverables[:5])
                     step_kind = _assignment_step_kind(payload) or "non_writer"
-                    raise ValueError(
-                        f"Bot '{task.bot_id}' is not allowed to own repo deliverables for "
-                        f"{step_kind} steps, but was assigned: {preview}."
+                    raise _TaskPolicyViolation(
+                        (
+                            f"Bot '{task.bot_id}' is not allowed to own repo deliverables for "
+                            f"{step_kind} steps, but was assigned: {preview}."
+                        ),
+                        code="non_writer_assigned_repo_deliverables",
+                        details={
+                            "bot_id": task.bot_id,
+                            "step_kind": step_kind,
+                            "paths": assigned_repo_deliverables,
+                        },
                     )
             mode = await self._bot_output_contract_mode(task.bot_id)
             internal_result = await self._maybe_run_internal_assignment_step(task)
@@ -3159,15 +3275,34 @@ class TaskManager:
                     "Model output remained truncated after available retries; increase backend "
                     "max_tokens/num_predict or num_width/num_ctx."
                 )
-            validation_error = _assignment_validation_error(task, result)
-            if validation_error:
-                raise ValueError(validation_error)
+            validation_failure = _assignment_validation_failure(task, result)
+            if validation_failure:
+                raise _TaskPolicyViolation(
+                    str(validation_failure.get("message") or "Workflow policy validation failed."),
+                    code=str(validation_failure.get("code") or "workflow_policy_violation"),
+                    details={
+                        "bot_id": task.bot_id,
+                        **(
+                            dict(validation_failure.get("details"))
+                            if isinstance(validation_failure.get("details"), dict)
+                            else {}
+                        ),
+                    },
+                    result=result,
+                )
             if bot is not None and not bot_allows_repo_output(bot):
                 repo_output_paths = _result_repo_output_candidate_paths(result)
                 if repo_output_paths:
                     preview = ", ".join(repo_output_paths[:5])
-                    raise ValueError(
-                        f"Bot '{task.bot_id}' is not allowed to emit repo file outputs, but returned: {preview}."
+                    raise _TaskPolicyViolation(
+                        f"Bot '{task.bot_id}' is not allowed to emit repo file outputs, but returned: {preview}.",
+                        code="non_writer_emitted_repo_outputs",
+                        details={
+                            "bot_id": task.bot_id,
+                            "step_kind": _assignment_step_kind(payload) or "",
+                            "paths": repo_output_paths,
+                        },
+                        result=result,
                     )
             if (
                 self._project_registry is not None
@@ -3210,6 +3345,11 @@ class TaskManager:
         except asyncio.CancelledError:
             logger.info("Task %s cancelled", task_id)
             raise
+        except _TaskPolicyViolation as e:
+            logger.warning("Task %s workflow policy violation: code=%s details=%s", task_id, e.code, e.details)
+            task_error = TaskError(message=str(e), code=e.code, details=e.details)
+            task = await self.get_task(task_id)
+            await self.update_status(task_id, "failed", result=e.result, error=task_error)
         except Exception as e:
             logger.error("Task %s failed: %s", task_id, e)
             task = await self.get_task(task_id)

@@ -264,6 +264,54 @@ async def test_create_bot(cp_client):
 
 
 @pytest.mark.anyio
+async def test_create_bot_returns_structured_validation_errors_for_invalid_schema(cp_client):
+    resp = await cp_client.post(
+        "/v1/bots",
+        json={
+            "id": "bot-invalid-policy",
+            "name": "Bot Invalid Policy",
+            "role": "assistant",
+            "backends": [],
+            "execution_policy": {"repo_output_mode": "constrained"},
+        },
+    )
+
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert detail["reason_code"] == "bot_validation_failed"
+    assert detail["message"] == "Bot payload failed schema validation."
+    assert any(
+        item.get("field_path") == "execution_policy.repo_output_mode"
+        and item.get("invalid_value") == "constrained"
+        for item in detail["validation_errors"]
+    )
+
+
+@pytest.mark.anyio
+async def test_create_bot_returns_structured_validation_errors_for_workflow_policy(cp_client):
+    resp = await cp_client.post(
+        "/v1/bots",
+        json={
+            "id": "pm-without-workflow",
+            "name": "PM Without Workflow",
+            "role": "assistant",
+            "backends": [],
+            "assignment_capabilities": {"is_project_manager": True},
+        },
+    )
+
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert detail["reason_code"] == "bot_validation_failed"
+    assert detail["message"] == "Bot payload failed workflow validation."
+    assert any(
+        item.get("field_path") == "workflow.triggers"
+        and "project manager" in str(item.get("message") or "").lower()
+        for item in detail["validation_errors"]
+    )
+
+
+@pytest.mark.anyio
 async def test_external_bot_trigger_creates_task_with_auth_and_payload_field(cp_client):
     create = await cp_client.post(
         "/v1/bots",

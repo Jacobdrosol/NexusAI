@@ -2,7 +2,8 @@ import hmac
 import logging
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Body, HTTPException, Query, Request
+from pydantic import ValidationError
 
 from control_plane.audit.utils import record_audit_event
 from control_plane.security.guards import enforce_body_size, enforce_rate_limit
@@ -15,10 +16,100 @@ router = APIRouter(prefix="/v1/bots", tags=["bots"])
 logger = logging.getLogger(__name__)
 
 
+def _bot_validation_detail(
+    *,
+    reason_code: str,
+    message: str,
+    validation_errors: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    return {
+        "reason_code": reason_code,
+        "message": message,
+        "validation_errors": validation_errors,
+    }
+
+
+def _raise_bot_validation_error(
+    *,
+    reason_code: str,
+    message: str,
+    validation_errors: List[Dict[str, Any]],
+    status_code: int = 400,
+) -> None:
+    detail = _bot_validation_detail(
+        reason_code=reason_code,
+        message=message,
+        validation_errors=validation_errors,
+    )
+    logger.warning(
+        "Bot validation failed: reason_code=%s status=%s validation_errors=%s",
+        reason_code,
+        status_code,
+        validation_errors,
+    )
+    raise HTTPException(status_code=status_code, detail=detail)
+
+
+def _schema_validation_errors(payload: Any, exc: ValidationError) -> List[Dict[str, Any]]:
+    validation_errors: List[Dict[str, Any]] = []
+    for item in exc.errors():
+        loc = [str(part) for part in item.get("loc") or [] if str(part)]
+        field_path = ".".join(loc)
+        invalid_value = _lookup_nested_path(payload, field_path) if field_path else payload
+        validation_errors.append(
+            {
+                "field_path": field_path,
+                "message": str(item.get("msg") or "Invalid value"),
+                "invalid_value": invalid_value,
+                "error_type": str(item.get("type") or "").strip() or None,
+            }
+        )
+    return validation_errors
+
+
+def _policy_validation_errors(errors: List[str]) -> List[Dict[str, Any]]:
+    validation_errors: List[Dict[str, Any]] = []
+    for error in errors:
+        field_path = ""
+        if "workflow.reference_graph" in error:
+            field_path = "workflow.reference_graph"
+        elif "project manager" in error and "workflow triggers" in error:
+            field_path = "workflow.triggers"
+        validation_errors.append(
+            {
+                "field_path": field_path,
+                "message": error,
+                "invalid_value": None,
+            }
+        )
+    return validation_errors
+
+
+def _parse_bot_payload_or_400(payload: Any) -> Bot:
+    if not isinstance(payload, dict):
+        _raise_bot_validation_error(
+            reason_code="bot_validation_failed",
+            message="Bot payload must be a JSON object.",
+            validation_errors=[{"field_path": "", "message": "Expected an object body.", "invalid_value": payload}],
+        )
+    try:
+        return Bot.model_validate(payload)
+    except ValidationError as exc:
+        _raise_bot_validation_error(
+            reason_code="bot_validation_failed",
+            message="Bot payload failed schema validation.",
+            validation_errors=_schema_validation_errors(payload, exc),
+        )
+
+
 def _validate_bot_or_400(bot: Bot) -> None:
     errors = validate_bot_configuration(bot)
     if errors:
-        raise HTTPException(status_code=400, detail=" ".join(errors))
+        _raise_bot_validation_error(
+            reason_code="bot_validation_failed",
+            message="Bot payload failed workflow validation.",
+            validation_errors=_policy_validation_errors(errors),
+        )
 
 
 def _settings_int(name: str, default: int) -> int:
@@ -119,7 +210,8 @@ def _resolve_external_payload(config: Dict[str, Any], body: Any) -> Any:
 
 
 @router.post("", response_model=Bot)
-async def create_bot(request: Request, bot: Bot) -> Bot:
+async def create_bot(request: Request, payload: Any = Body(...)) -> Bot:
+    bot = _parse_bot_payload_or_400(payload)
     _validate_bot_or_400(bot)
     bot_registry = request.app.state.bot_registry
     await bot_registry.register(bot)
@@ -143,9 +235,20 @@ async def get_bot(bot_id: str, request: Request) -> Bot:
 
 
 @router.put("/{bot_id}", response_model=Bot)
-async def update_bot(bot_id: str, request: Request, bot: Bot) -> Bot:
+async def update_bot(bot_id: str, request: Request, payload: Any = Body(...)) -> Bot:
+    bot = _parse_bot_payload_or_400(payload)
     if bot.id != bot_id:
-        raise HTTPException(status_code=400, detail="bot.id must match the path bot_id")
+        _raise_bot_validation_error(
+            reason_code="bot_id_mismatch",
+            message="bot.id must match the path bot_id",
+            validation_errors=[
+                {
+                    "field_path": "id",
+                    "message": "bot.id must match the path bot_id",
+                    "invalid_value": bot.id,
+                }
+            ],
+        )
     _validate_bot_or_400(bot)
     bot_registry = request.app.state.bot_registry
     try:
