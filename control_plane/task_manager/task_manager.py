@@ -94,6 +94,11 @@ class _TaskExecutionFailure(Exception):
 
 
 class _TaskPolicyViolation(Exception):
+    """Policy violation with stable machine-readable reason codes.
+
+    The code field is a stable identifier for the violation type.
+    The details dict always includes 'reason_code' for machine-readable processing.
+    """
     def __init__(
         self,
         message: str,
@@ -104,7 +109,10 @@ class _TaskPolicyViolation(Exception):
     ) -> None:
         super().__init__(message)
         self.code = str(code or "").strip() or "workflow_policy_violation"
-        self.details = details or {}
+        self.details = dict(details) if details else {}
+        # Ensure reason_code is always present for machine-readable processing
+        if "reason_code" not in self.details:
+            self.details["reason_code"] = self.code
         self.result = result
 
 
@@ -962,6 +970,11 @@ def _result_non_document_repo_paths(result: Any) -> List[str]:
 
 
 def _result_repo_output_candidate_paths(result: Any) -> List[str]:
+    """Extract repo file paths from result artifacts that represent ownership claims.
+
+    Excludes execution artifacts (test reports, coverage, logs) and probable test files
+    so that validation-only evidence is not misclassified as repo ownership.
+    """
     paths: List[str] = []
     seen: Set[str] = set()
     for candidate in extract_file_candidates(result):
@@ -971,7 +984,12 @@ def _result_repo_output_candidate_paths(result: Any) -> List[str]:
         seen.add(path)
         if not _looks_like_repo_file(path):
             continue
+        # Exclude execution artifacts (reports/, coverage/, test_logs/, .xml/.html/.txt/.json/.log)
         if _is_assignment_execution_artifact_file(path):
+            continue
+        # Exclude probable test files - validation roles may reference test files as evidence
+        # but these are not repo ownership claims
+        if _is_probable_test_file(path):
             continue
         paths.append(path)
     return paths
@@ -1227,10 +1245,49 @@ def _assignment_expected_repo_files(payload: Dict[str, Any]) -> List[str]:
 
 
 def _non_writer_step_repo_deliverables(payload: Dict[str, Any]) -> List[str]:
+    """Return repo-file paths that a non-writer step is not allowed to own.
+
+    Non-writer roles (tester, qa, reviewer, security, security-reviewer, researcher, analyst)
+    are strictly validation-only and cannot own ANY repo-file outputs. All deliverables from
+    these roles must be validation-only evidence (test reports, coverage files, security findings).
+    This applies regardless of docs-only status - even .md documentation files are prohibited
+    as repo ownership claims for non-writer roles.
+
+    Writer roles in docs-only workstreams may only produce documentation files (.md).
+    """
     step_kind = _assignment_step_kind(payload)
+    role_hint = str(payload.get("role_hint") or "").strip().lower()
+    is_docs_only = _payload_is_docs_only_request(payload)
+
+    # Non-writer roles cannot own repo deliverables in any step
+    non_writer_roles = {"tester", "qa", "reviewer", "security", "security-reviewer", "researcher", "analyst"}
+    if role_hint in non_writer_roles:
+        # These roles are strictly validation-only; ANY repo-file deliverable is prohibited
+        # Only execution artifacts (test reports, coverage, logs) are allowed as evidence
+        repo_paths: List[str] = []
+        seen: Set[str] = set()
+        for item in _normalize_string_list(payload.get("deliverables")):
+            normalized = str(item or "").strip().replace("\\", "/").strip("`")
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            if not _looks_like_repo_file(normalized):
+                continue
+            # Only allow validation-only artifacts (execution artifacts, test files)
+            if _is_assignment_execution_artifact_file(normalized):
+                continue
+            if _is_probable_test_file(normalized):
+                continue
+            # Non-writer roles cannot own ANY repo files - all outputs must be validation-only evidence
+            # This applies even to .md documentation files in docs-only workstreams
+            repo_paths.append(normalized)
+        return repo_paths
+
+    # For specification/planning steps, only documentation files are allowed
     if step_kind not in {"specification", "planning"}:
         return []
-    repo_paths: List[str] = []
+
+    repo_paths = []
     seen: Set[str] = set()
     for item in _normalize_string_list(payload.get("deliverables")):
         normalized = str(item or "").strip().replace("\\", "/").strip("`")
@@ -1241,7 +1298,13 @@ def _non_writer_step_repo_deliverables(payload: Dict[str, Any]) -> List[str]:
             continue
         if _is_assignment_execution_artifact_file(normalized):
             continue
-        repo_paths.append(normalized)
+        # For docs-only workstreams, even writer roles can only produce documentation
+        if is_docs_only and not _is_documentation_like_repo_file(normalized):
+            repo_paths.append(normalized)
+        elif not is_docs_only:
+            # Non-docs-only specification/planning: only non-documentation files are prohibited
+            if not _is_documentation_like_repo_file(normalized):
+                repo_paths.append(normalized)
     return repo_paths
 
 
@@ -1878,7 +1941,11 @@ def _assignment_validation_failure(task: Task, result: Any) -> Optional[Dict[str
                     "but the planning result created non-document implementation workstreams: "
                     f"{preview}."
                 ),
-                "details": {"step_kind": step_kind, "violations": docs_only_workstream_violations},
+                "details": {
+                    "step_kind": step_kind,
+                    "violations": docs_only_workstream_violations,
+                    "reason_code": "docs_only_non_doc_workstream",
+                },
             }
         unexpected_paths = _result_non_document_repo_paths(result)
         if unexpected_paths:
@@ -1889,7 +1956,11 @@ def _assignment_validation_failure(task: Task, result: Any) -> Optional[Dict[str
                     "Assignment explicitly requested documentation-only markdown outputs, "
                     f"but generated non-document repo files: {preview}."
                 ),
-                "details": {"step_kind": step_kind, "paths": unexpected_paths},
+                "details": {
+                    "step_kind": step_kind,
+                    "paths": unexpected_paths,
+                    "reason_code": "docs_only_non_doc_file",
+                },
             }
         unexpected_doc_paths = _docs_only_unexpected_document_repo_paths(payload, result)
         if unexpected_doc_paths:
@@ -1900,7 +1971,11 @@ def _assignment_validation_failure(task: Task, result: Any) -> Optional[Dict[str
                     "Documentation workstream emitted markdown files outside its assigned deliverables: "
                     f"{preview}."
                 ),
-                "details": {"step_kind": step_kind, "paths": unexpected_doc_paths},
+                "details": {
+                    "step_kind": step_kind,
+                    "paths": unexpected_doc_paths,
+                    "reason_code": "docs_only_wrong_doc_path",
+                },
             }
         if step_kind == "repo_change":
             validation_artifacts = _result_explicit_artifacts(result)
@@ -1916,7 +1991,11 @@ def _assignment_validation_failure(task: Task, result: Any) -> Optional[Dict[str
                         "Documentation output contains placeholder or omitted markdown content in generated artifacts: "
                         f"{preview}."
                     ),
-                    "details": {"step_kind": step_kind, "paths": placeholder_docs},
+                    "details": {
+                        "step_kind": step_kind,
+                        "paths": placeholder_docs,
+                        "reason_code": "docs_only_placeholder_content",
+                    },
                 }
             broken_links = _docs_only_broken_markdown_links_from_artifacts(validation_artifacts)
             if broken_links:
@@ -1927,7 +2006,11 @@ def _assignment_validation_failure(task: Task, result: Any) -> Optional[Dict[str
                         "Documentation output contains broken internal markdown links in generated artifacts: "
                         f"{preview}."
                     ),
-                    "details": {"step_kind": step_kind, "broken_links": broken_links},
+                    "details": {
+                        "step_kind": step_kind,
+                        "broken_links": broken_links,
+                        "reason_code": "docs_only_broken_markdown_links",
+                    },
                 }
         if (
             step_kind in {"test_execution", "review"}
@@ -1970,7 +2053,10 @@ def _assignment_validation_failure(task: Task, result: Any) -> Optional[Dict[str
         return {
             "code": "assignment_scope_mismatch",
             "message": scope_alignment_error,
-            "details": {"step_kind": step_kind},
+            "details": {
+                "step_kind": step_kind,
+                "reason_code": "assignment_scope_mismatch",
+            },
         }
 
     if not text:
@@ -2014,7 +2100,11 @@ def _assignment_validation_failure(task: Task, result: Any) -> Optional[Dict[str
                     "Assignment task output is unverified and cannot be marked completed: "
                     f"detected '{marker}'."
                 ),
-                "details": {"marker": marker, "step_kind": step_kind},
+                "details": {
+                    "marker": marker,
+                    "step_kind": step_kind,
+                    "reason_code": "assignment_unverified_output",
+                },
             }
 
     if step_kind in {"test_execution", "review"} and _assignment_result_is_skip(result):
@@ -2028,7 +2118,11 @@ def _assignment_validation_failure(task: Task, result: Any) -> Optional[Dict[str
                 "Assignment repo-change step is missing concrete changed-file evidence; "
                 f"required evidence: {required}."
             ),
-            "details": {"required_evidence": evidence_requirements[:2], "step_kind": step_kind},
+            "details": {
+                "required_evidence": evidence_requirements[:2],
+                "step_kind": step_kind,
+                "reason_code": "missing_repo_change_evidence",
+            },
         }
 
     if step_kind in {"specification", "planning"} and _requires_repo_artifact_evidence(payload):
@@ -2040,7 +2134,11 @@ def _assignment_validation_failure(task: Task, result: Any) -> Optional[Dict[str
                     "Assignment planning/specification step is missing repo-backed evidence; "
                     f"required evidence: {required}."
                 ),
-                "details": {"required_evidence": evidence_requirements[:2], "step_kind": step_kind},
+                "details": {
+                    "required_evidence": evidence_requirements[:2],
+                    "step_kind": step_kind,
+                    "reason_code": "missing_planning_repo_evidence",
+                },
             }
 
     if _requires_link_evidence(payload) and not _has_non_placeholder_url_evidence(text):
@@ -2051,7 +2149,11 @@ def _assignment_validation_failure(task: Task, result: Any) -> Optional[Dict[str
                 "Assignment step is missing non-placeholder link evidence; "
                 f"required evidence: {required}."
             ),
-            "details": {"required_evidence": evidence_requirements[:2], "step_kind": step_kind},
+            "details": {
+                "required_evidence": evidence_requirements[:2],
+                "step_kind": step_kind,
+                "reason_code": "missing_link_evidence",
+            },
         }
 
     if step_kind == "test_execution" and _requires_repo_artifact_evidence(payload):
@@ -2063,7 +2165,11 @@ def _assignment_validation_failure(task: Task, result: Any) -> Optional[Dict[str
                     "Assignment test step is missing concrete test artifact evidence; "
                     f"required evidence: {required}."
                 ),
-                "details": {"required_evidence": evidence_requirements[:2], "step_kind": step_kind},
+                "details": {
+                    "required_evidence": evidence_requirements[:2],
+                    "step_kind": step_kind,
+                    "reason_code": "missing_test_artifact_evidence",
+                },
             }
 
     if step_kind == "test_execution" and not _has_test_execution_evidence(result, text):
@@ -2074,7 +2180,11 @@ def _assignment_validation_failure(task: Task, result: Any) -> Optional[Dict[str
                 "Assignment test step is missing execution-backed evidence; "
                 f"required evidence: {required}."
             ),
-            "details": {"required_evidence": evidence_requirements[:2], "step_kind": step_kind},
+            "details": {
+                "required_evidence": evidence_requirements[:2],
+                "step_kind": step_kind,
+                "reason_code": "missing_test_execution_evidence",
+            },
         }
 
     if step_kind == "review" and not _has_review_evidence(result, text):
@@ -2085,7 +2195,11 @@ def _assignment_validation_failure(task: Task, result: Any) -> Optional[Dict[str
                 "Assignment review step is missing concrete review evidence; "
                 f"required evidence: {required}."
             ),
-            "details": {"required_evidence": evidence_requirements[:2], "step_kind": step_kind},
+            "details": {
+                "required_evidence": evidence_requirements[:2],
+                "step_kind": step_kind,
+                "reason_code": "missing_review_evidence",
+            },
         }
 
     if step_kind == "release" and not _has_release_evidence(result, text):
@@ -2096,7 +2210,11 @@ def _assignment_validation_failure(task: Task, result: Any) -> Optional[Dict[str
                 "Assignment release step is missing release-backed evidence; "
                 f"required evidence: {required}."
             ),
-            "details": {"required_evidence": evidence_requirements[:2], "step_kind": step_kind},
+            "details": {
+                "required_evidence": evidence_requirements[:2],
+                "step_kind": step_kind,
+                "reason_code": "missing_release_evidence",
+            },
         }
 
     if step_kind in {"repo_change", "release"} and _requires_commit_sha_evidence(payload) and not _has_non_placeholder_commit_sha(text):
@@ -2107,7 +2225,11 @@ def _assignment_validation_failure(task: Task, result: Any) -> Optional[Dict[str
                 "Assignment step is missing non-placeholder commit SHA evidence; "
                 f"required evidence: {required}."
             ),
-            "details": {"required_evidence": evidence_requirements[:2], "step_kind": step_kind},
+            "details": {
+                "required_evidence": evidence_requirements[:2],
+                "step_kind": step_kind,
+                "reason_code": "missing_commit_sha_evidence",
+            },
         }
 
     if step_kind in {"repo_change", "release"} and _requires_pull_request_evidence(payload) and not _has_non_placeholder_pull_request_url(text):
@@ -2118,7 +2240,11 @@ def _assignment_validation_failure(task: Task, result: Any) -> Optional[Dict[str
                 "Assignment step is missing non-placeholder pull request evidence; "
                 f"required evidence: {required}."
             ),
-            "details": {"required_evidence": evidence_requirements[:2], "step_kind": step_kind},
+            "details": {
+                "required_evidence": evidence_requirements[:2],
+                "step_kind": step_kind,
+                "reason_code": "missing_pull_request_evidence",
+            },
         }
 
     if step_kind == "release" and _requires_release_tag_evidence(payload):
@@ -2130,7 +2256,11 @@ def _assignment_validation_failure(task: Task, result: Any) -> Optional[Dict[str
                     "Assignment release step is missing release-tag evidence; "
                     f"required evidence: {required}."
                 ),
-                "details": {"required_evidence": evidence_requirements[:2], "step_kind": step_kind},
+                "details": {
+                    "required_evidence": evidence_requirements[:2],
+                    "step_kind": step_kind,
+                    "reason_code": "missing_release_tag_evidence",
+                },
             }
 
     if role_hint in {"tester", "qa", "reviewer", "security", "security-reviewer"}:
@@ -2156,8 +2286,40 @@ def _assignment_validation_failure(task: Task, result: Any) -> Optional[Dict[str
                     + ", ".join(matched[:3])
                     + "."
                 ),
-                "details": {"markers": matched[:3], "step_kind": step_kind},
+                "details": {
+                    "markers": matched[:3],
+                    "step_kind": step_kind,
+                    "reason_code": "guidance_not_evidence",
+                },
             }
+
+        # Non-writer roles (tester/security) must produce validation-only evidence,
+        # not repo-file ownership. Check for repo-file artifacts in result.
+        repo_outputs = _result_repo_output_candidate_paths(result)
+        if repo_outputs:
+            # Filter out allowed validation artifacts
+            non_validation_outputs = [
+                p for p in repo_outputs
+                if not _is_assignment_execution_artifact_file(p)
+                and not _is_probable_test_file(p)
+            ]
+            if non_validation_outputs:
+                preview = ", ".join(non_validation_outputs[:5])
+                return {
+                    "code": "non_writer_validation_emitted_repo_ownership",
+                    "message": (
+                        "Assignment validation step (tester/security/reviewer) emitted repo-file outputs "
+                        "that are not validation-only artifacts; validation roles must produce evidence "
+                        "only, not own repo deliverables: "
+                        f"{preview}."
+                    ),
+                    "details": {
+                        "step_kind": step_kind,
+                        "role_hint": role_hint,
+                        "paths": non_validation_outputs,
+                        "reason_code": "validation_role_cannot_own_repo_files",
+                    },
+                }
     return None
 
 
@@ -3236,6 +3398,10 @@ class TaskManager:
                     bot = None
             payload = task.payload if isinstance(task.payload, dict) else {}
             if bot is not None and not bot_allows_repo_output(bot):
+                # Inject bot role as role_hint if not already present in payload
+                if "role_hint" not in payload and bot.role:
+                    payload = dict(payload)
+                    payload["role_hint"] = str(bot.role).strip().lower()
                 assigned_repo_deliverables = _non_writer_step_repo_deliverables(payload)
                 if assigned_repo_deliverables:
                     preview = ", ".join(assigned_repo_deliverables[:5])
@@ -3250,6 +3416,7 @@ class TaskManager:
                             "bot_id": task.bot_id,
                             "step_kind": step_kind,
                             "paths": assigned_repo_deliverables,
+                            "reason_code": "non_writer_assigned_repo_deliverables",
                         },
                     )
             mode = await self._bot_output_contract_mode(task.bot_id)
@@ -3301,6 +3468,7 @@ class TaskManager:
                             "bot_id": task.bot_id,
                             "step_kind": _assignment_step_kind(payload) or "",
                             "paths": repo_output_paths,
+                            "reason_code": "non_writer_emitted_repo_outputs",
                         },
                         result=result,
                     )

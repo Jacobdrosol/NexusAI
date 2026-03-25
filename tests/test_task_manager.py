@@ -7470,7 +7470,7 @@ async def test_default_failure_trigger_payload_preserves_remediation_context(tmp
             "title": "Validate backend API workstream",
             "instruction": "Run backend controller and service tests for the scoped workstream.",
             "acceptance_criteria": ["All API tests pass for the issues workstream."],
-            "deliverables": ["GlobeIQ.Server/Controllers/IssuesController.cs", "GlobeIQ.Server.Tests/IssuesControllerTests.cs"],
+            "deliverables": ["Test execution report", "Coverage artifact"],
             "quality_gates": ["No failing backend API tests remain."],
             "evidence_requirements": ["Executed dotnet test output"],
             "workstream": {
