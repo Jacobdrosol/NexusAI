@@ -121,6 +121,27 @@ class PMOrchestrator:
                 "no other code edited",
                 "shouldn't affect anything with the actual site",
                 "shouldnt affect anything with the actual site",
+                "should not affect",
+                "not affect the site",
+                "not affect ui",
+                "not affect database",
+                "only markdown documents are allowed",
+                "only .md documents are allowed",
+                "only markdown is allowed",
+                "only .md is allowed",
+                "only documentation",
+                "only docs",
+                "only .md files",
+                "only markdown files",
+                "no code",
+                "no database",
+                "no ui",
+                "no frontend",
+                "no backend",
+                "code changes not allowed",
+                "code not allowed",
+                "docs-only",
+                "doc only",
             )
         )
         return has_docs_signal and has_docs_only_signal
@@ -670,6 +691,28 @@ class PMOrchestrator:
             for stage_id in stage_order
             if stage_id and stage_id not in latest_cycle_observed_bot_ids
         ]
+        # For docs-only runs, distinguish intentionally excluded stages from truly missing ones.
+        # DB and UI stages are legitimately omitted when the request has no DB/UI scope.
+        # Detect docs-only and DB/UI scope from the original instruction in task payloads.
+        original_instruction = ""
+        for task in final_tasks:
+            payload = task.payload if isinstance(task.payload, dict) else {}
+            instr = str(payload.get("instruction") or "")
+            if instr:
+                original_instruction = instr
+                break
+        docs_only_scope = self._instruction_requests_docs_only_outputs(original_instruction)
+        needs_database = self._instruction_mentions_database(original_instruction)
+        needs_ui = self._instruction_mentions_ui(original_instruction)
+        intentionally_excluded_stages: List[str] = []
+        if docs_only_scope:
+            for stage_id in list(missing_stages):
+                if stage_id == "pm-database-engineer" and not needs_database:
+                    intentionally_excluded_stages.append(stage_id)
+                    missing_stages.remove(stage_id)
+                elif stage_id == "pm-ui-tester" and not needs_ui:
+                    intentionally_excluded_stages.append(stage_id)
+                    missing_stages.remove(stage_id)
         workflow_policy_codes: List[str] = []
         if all_terminal and not workflow_complete:
             lines.extend(
@@ -695,6 +738,9 @@ class PMOrchestrator:
         if skipped_stages:
             lines.append(f"Skipped stages: {', '.join(skipped_stages)}")
             workflow_policy_codes.extend(f"skipped_downstream_stage:{stage_id}" for stage_id in skipped_stages)
+        if intentionally_excluded_stages:
+            lines.append(f"Intentionally excluded stages (docs-only scope): {', '.join(intentionally_excluded_stages)}")
+            workflow_policy_codes.extend(f"excluded_downstream_stage:{stage_id}" for stage_id in intentionally_excluded_stages)
         if missing_deliverables:
             lines.append(
                 "Missing latest-cycle deliverables: "
@@ -720,6 +766,7 @@ class PMOrchestrator:
             "observed_bot_ids": latest_cycle_observed_bot_ids,
             "missing_stages": missing_stages,
             "skipped_stages": skipped_stages,
+            "intentionally_excluded_stages": intentionally_excluded_stages,
             "workflow_policy_codes": workflow_policy_codes,
             "latest_cycle_task_count": len(latest_cycle_tasks),
             "latest_cycle_entry_task_id": str(latest_cycle_anchor.id or "") if latest_cycle_anchor is not None else "",
@@ -767,11 +814,14 @@ class PMOrchestrator:
                 lines.append("Missing deliverables: " + ", ".join(str(item) for item in missing_deliverables))
         missing_stages = [str(item) for item in (completion.get("missing_stages") or []) if str(item)]
         skipped_stages = [str(item) for item in (completion.get("skipped_stages") or []) if str(item)]
+        intentionally_excluded_stages = [str(item) for item in (completion.get("intentionally_excluded_stages") or []) if str(item)]
         workflow_policy_codes = [str(item) for item in (completion.get("workflow_policy_codes") or []) if str(item)]
         if missing_stages:
             lines.append("Missing stages: " + ", ".join(missing_stages))
         if skipped_stages:
             lines.append("Skipped stages: " + ", ".join(skipped_stages))
+        if intentionally_excluded_stages:
+            lines.append("Intentionally excluded stages (docs-only scope): " + ", ".join(intentionally_excluded_stages))
         if workflow_policy_codes:
             lines.append("Workflow reason codes: " + ", ".join(workflow_policy_codes))
         try:
@@ -2360,6 +2410,38 @@ class PMOrchestrator:
 
     def _instruction_mentions_database(self, instruction: str) -> bool:
         text = str(instruction or "").lower()
+        # Negative exclusion patterns - if these are present, DB scope is explicitly excluded
+        exclusion_patterns = (
+            "not affect database",
+            "not affect the database",
+            "no database",
+            "no db ",
+            "no db.",
+            "without database",
+            "without db",
+            "exclude database",
+            "exclude db",
+            "database not allowed",
+            "db not allowed",
+            "skip database",
+            "skip db",
+            "omit database",
+            "omit db",
+        )
+        if any(pattern in text for pattern in exclusion_patterns):
+            return False
+        # Handle disjunction patterns like "not affect the site, ui, or database"
+        if "not affect" in text and "database" in text:
+            # Check if "database" appears after "not affect" in a list of excluded items
+            not_affect_idx = text.find("not affect")
+            db_idx = text.find("database")
+            if not_affect_idx >= 0 and db_idx > not_affect_idx:
+                # Check for "or database" or ", database" pattern indicating exclusion
+                preceding_text = text[not_affect_idx:db_idx]
+                if "or database" in preceding_text + "database" or ", database" in preceding_text + "database":
+                    return False
+                if ", ui, or database" in text or "ui, or database" in text:
+                    return False
         keywords = (
             "database",
             "db ",
@@ -2378,6 +2460,28 @@ class PMOrchestrator:
 
     def _instruction_mentions_ui(self, instruction: str) -> bool:
         text = str(instruction or "").lower()
+        # Negative exclusion patterns - if these are present, UI scope is explicitly excluded
+        exclusion_patterns = (
+            "not affect ui",
+            "not affect the ui",
+            "no ui",
+            "no frontend",
+            "no front-end",
+            "without ui",
+            "without frontend",
+            "exclude ui",
+            "exclude frontend",
+            "ui not allowed",
+            "frontend not allowed",
+            "skip ui",
+            "skip frontend",
+            "omit ui",
+            "omit frontend",
+            "not affect the site",
+            "not affect site",
+        )
+        if any(pattern in text for pattern in exclusion_patterns):
+            return False
         keywords = (
             "frontend",
             "front-end",
