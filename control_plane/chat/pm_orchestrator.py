@@ -70,11 +70,13 @@ class PMOrchestrator:
         scheduler: Any,
         task_manager: Any,
         chat_manager: Any,
+        orchestration_workspace_store: Any = None,
     ) -> None:
         self._bot_registry = bot_registry
         self._scheduler = scheduler
         self._task_manager = task_manager
         self._chat_manager = chat_manager
+        self._orchestration_workspace_store = orchestration_workspace_store
 
     _TERMINAL_TASK_STATUSES = {"completed", "failed", "retried", "cancelled"}
     _DEFAULT_PM_STAGE_ORDER = [
@@ -420,6 +422,24 @@ class PMOrchestrator:
         bots: List[Bot],
     ) -> Dict[str, Any]:
         orchestration_id = str(uuid.uuid4())
+        if project_id and self._orchestration_workspace_store is not None:
+            try:
+                from control_plane.api.projects import _ensure_orchestration_temp_workspace
+
+                await _ensure_orchestration_temp_workspace(
+                    project_id=str(project_id),
+                    orchestration_id=orchestration_id,
+                    project_registry=self._scheduler.project_registry,
+                    workspace_store=self._orchestration_workspace_store,
+                    strict=False,
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to prepare temp workspace for project %s orchestration %s",
+                    project_id,
+                    orchestration_id,
+                    exc_info=True,
+                )
         allowed_bot_ids = derive_allowed_bot_ids(pm_bot.id, bots)
         workflow_graph_id = bot_workflow_graph_id(pm_bot)
         pipeline_name = f"PM Workflow: {str(pm_bot.name or pm_bot.id)}".strip()
@@ -522,7 +542,8 @@ class PMOrchestrator:
         last_change_at = time.monotonic()
         settle_window_seconds = max(1.6, poll_interval_seconds * 4.0)
         stage_order = await self._workflow_stage_order_for_assignment(assignment)
-        final_qc_required = "pm-final-qc" in stage_order
+        terminal_stage_id = str(stage_order[-1]).strip() if stage_order else ""
+        final_qc_required = terminal_stage_id == "pm-final-qc"
 
         async def _current_task_ids() -> List[str]:
             if orchestration_id and hasattr(self._task_manager, "list_tasks"):
@@ -664,13 +685,13 @@ class PMOrchestrator:
         ]
         deliverables_complete = not missing_deliverables
 
-        final_qc_terminal = any(
-            str(task.bot_id or "").strip() == "pm-final-qc"
+        terminal_stage_terminal = any(
+            str(task.bot_id or "").strip() == terminal_stage_id
             and str(task.status or "").strip().lower() in self._TERMINAL_TASK_STATUSES
             for task in latest_cycle_tasks
         )
-        final_qc_completed = any(
-            str(task.bot_id or "").strip() == "pm-final-qc"
+        terminal_stage_completed = any(
+            str(task.bot_id or "").strip() == terminal_stage_id
             and str(task.status or "").strip().lower() == "completed"
             for task in latest_cycle_tasks
         )
@@ -685,7 +706,7 @@ class PMOrchestrator:
                 for task in latest_cycle_tasks
             )
         ]
-        workflow_complete = ((not final_qc_required) or final_qc_terminal) and deliverables_complete
+        workflow_complete = ((not terminal_stage_id) or terminal_stage_terminal) and deliverables_complete
         missing_stages = [
             stage_id
             for stage_id in stage_order
@@ -719,7 +740,7 @@ class PMOrchestrator:
                 [
                     "",
                     "Workflow stopped before reaching the configured terminal PM stage.",
-                    "Expected terminal stage: pm-final-qc.",
+                    f"Expected terminal stage: {terminal_stage_id or 'none'}.",
                 ]
             )
             workflow_policy_codes.append("workflow_incomplete")
@@ -758,7 +779,9 @@ class PMOrchestrator:
             "all_terminal": all_terminal,
             "workflow_complete": workflow_complete,
             "final_qc_required": final_qc_required,
-            "final_qc_completed": final_qc_completed,
+            "final_qc_completed": terminal_stage_completed if final_qc_required else False,
+            "terminal_stage_id": terminal_stage_id,
+            "terminal_stage_completed": terminal_stage_completed,
             "deliverables_complete": deliverables_complete,
             "expected_deliverables": expected_repo_deliverables,
             "produced_deliverables": produced_repo_files,

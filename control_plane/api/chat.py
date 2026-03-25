@@ -1573,6 +1573,7 @@ async def list_messages(
 @router.post("/conversations/{conversation_id}/orchestrations/{orchestration_id}/mark-failed", response_model=ChatMessage)
 async def mark_pm_run_failed(conversation_id: str, orchestration_id: str, request: Request) -> ChatMessage:
     chat_manager = request.app.state.chat_manager
+    task_manager = request.app.state.task_manager
     try:
         messages = await chat_manager.list_messages(conversation_id, limit=500)
     except ConversationNotFoundError as e:
@@ -1640,6 +1641,27 @@ async def mark_pm_run_failed(conversation_id: str, orchestration_id: str, reques
         )
         if message.id == target.id:
             updated_target = updated
+    try:
+        tasks = await task_manager.list_tasks(orchestration_id=str(orchestration_id or "").strip(), limit=500)
+    except Exception:
+        tasks = []
+    project_id = next(
+        (
+            str(task.metadata.project_id or "").strip()
+            for task in tasks
+            if task.metadata and str(task.metadata.project_id or "").strip()
+        ),
+        "",
+    )
+    if project_id:
+        from control_plane.api.projects import _cleanup_orchestration_temp_workspace
+
+        await _cleanup_orchestration_temp_workspace(
+            project_id=project_id,
+            orchestration_id=str(orchestration_id or "").strip(),
+            workspace_store=getattr(request.app.state, "orchestration_workspace_store", None),
+            reason="operator_marked_failed",
+        )
     return updated_target or target
 
 

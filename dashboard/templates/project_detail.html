@@ -280,6 +280,16 @@
 
 <section class="panel" style="margin-bottom:1rem;">
   <div class="page-header" style="margin-bottom:0.75rem;">
+    <h2 class="panel-title">Orchestration Temp Workspaces</h2>
+  </div>
+  <div class="mini-note" style="margin-bottom:0.6rem;">
+    PM pipelines now execute in orchestration-scoped temporary workspaces until explicit apply. Deleted or lost temp workspaces remain reviewable through saved task outputs, but they are no longer applyable.
+  </div>
+  <pre style="white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; margin:0;">{{ orchestration_workspaces | tojson(indent=2) }}</pre>
+</section>
+
+<section class="panel" style="margin-bottom:1rem;">
+  <div class="page-header" style="margin-bottom:0.75rem;">
     <h2 class="panel-title">Project Data Vault</h2>
   </div>
   <div class="mini-note" style="margin-bottom:0.75rem;">

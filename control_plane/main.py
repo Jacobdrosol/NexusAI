@@ -15,6 +15,7 @@ from control_plane.chat.pm_orchestrator import PMOrchestrator
 from control_plane.github.webhook_store import GitHubWebhookStore
 from control_plane.keys.key_vault import KeyVault
 from control_plane.observability import install_observability
+from control_plane.orchestration_workspace_store import OrchestrationWorkspaceStore
 from control_plane.registry.bot_registry import BotRegistry
 from control_plane.registry.model_registry import ModelRegistry
 from control_plane.registry.project_registry import ProjectRegistry
@@ -56,6 +57,7 @@ async def lifespan(app: FastAPI):
     github_webhook_store = GitHubWebhookStore()
     audit_log = AuditLog()
     repo_workspace_usage_store = RepoWorkspaceUsageStore()
+    orchestration_workspace_store = OrchestrationWorkspaceStore()
 
     # Load from YAML configs
     workers_dir = cp_cfg.get("workers_config_dir", "config/workers")
@@ -78,12 +80,17 @@ async def lifespan(app: FastAPI):
         model_registry=model_registry,
         project_registry=project_registry,
     )
-    task_manager = TaskManager(scheduler, bot_registry=bot_registry)
+    task_manager = TaskManager(
+        scheduler,
+        bot_registry=bot_registry,
+        orchestration_workspace_store=orchestration_workspace_store,
+    )
     pm_orchestrator = PMOrchestrator(
         bot_registry=bot_registry,
         scheduler=scheduler,
         task_manager=task_manager,
         chat_manager=chat_manager,
+        orchestration_workspace_store=orchestration_workspace_store,
     )
 
     # Store on app state
@@ -98,6 +105,7 @@ async def lifespan(app: FastAPI):
     app.state.github_webhook_store = github_webhook_store
     app.state.audit_log = audit_log
     app.state.repo_workspace_usage_store = repo_workspace_usage_store
+    app.state.orchestration_workspace_store = orchestration_workspace_store
     app.state.scheduler = scheduler
     app.state.task_manager = task_manager
     app.state.pm_orchestrator = pm_orchestrator

@@ -2395,13 +2395,24 @@ def _task_report_markdown(task: Task) -> str:
 
 
 class TaskManager:
-    def __init__(self, scheduler: Any, db_path: Optional[str] = None, bot_registry: Optional[Any] = None) -> None:
+    def __init__(
+        self,
+        scheduler: Any,
+        db_path: Optional[str] = None,
+        bot_registry: Optional[Any] = None,
+        orchestration_workspace_store: Optional[Any] = None,
+    ) -> None:
+        if orchestration_workspace_store is None:
+            from control_plane.orchestration_workspace_store import OrchestrationWorkspaceStore
+
+            orchestration_workspace_store = OrchestrationWorkspaceStore()
         self._tasks: Dict[str, Task] = {}
         self._lock = asyncio.Lock()
         self._init_lock = asyncio.Lock()
         self._scheduler = scheduler
         self._bot_registry = bot_registry
         self._project_registry = getattr(scheduler, "project_registry", None)
+        self._orchestration_workspace_store = orchestration_workspace_store
         self._db_ready = False
         self._running_task_ids: set[str] = set()
         self._runner_tasks: Dict[str, asyncio.Task[Any]] = {}
@@ -3382,6 +3393,37 @@ class TaskManager:
             if status in {"completed", "failed"}:
                 await self._dispatch_triggers(updated_task)
             await self._try_unblock_tasks()
+        if status == "failed":
+            await self._cleanup_failed_orchestration_workspace(updated_task)
+
+    async def _cleanup_failed_orchestration_workspace(self, task: Task) -> None:
+        if self._orchestration_workspace_store is None:
+            return
+        metadata = task.metadata or TaskMetadata()
+        project_id = str(metadata.project_id or "").strip()
+        orchestration_id = str(metadata.orchestration_id or "").strip()
+        source = str(metadata.source or "").strip().lower()
+        if not project_id or not orchestration_id or source not in {"chat_assign", "auto_retry", "bot_trigger"}:
+            return
+        async with self._lock:
+            related = [
+                candidate
+                for candidate in self._tasks.values()
+                if candidate.metadata
+                and str(candidate.metadata.project_id or "").strip() == project_id
+                and str(candidate.metadata.orchestration_id or "").strip() == orchestration_id
+                and str(candidate.metadata.source or "").strip().lower() in {"chat_assign", "auto_retry", "bot_trigger"}
+            ]
+        if any(str(candidate.status or "").strip().lower() not in self._TERMINAL_TASK_STATUSES for candidate in related):
+            return
+        from control_plane.api.projects import _cleanup_orchestration_temp_workspace
+
+        await _cleanup_orchestration_temp_workspace(
+            project_id=project_id,
+            orchestration_id=orchestration_id,
+            workspace_store=self._orchestration_workspace_store,
+            reason="pipeline_failed",
+        )
 
     async def _run_task(self, task_id: str) -> None:
         raw_result: Any = None
@@ -3666,6 +3708,7 @@ class TaskManager:
             _allowed_workspace_commands,
             _assignment_file_candidates,
             _bootstrap_command_specs,
+            _ensure_orchestration_temp_workspace,
             _extract_project_repo_workspace,
             _repo_status_snapshot,
             _resolve_repo_workspace_root,
@@ -3684,10 +3727,22 @@ class TaskManager:
         if not bool(cfg.get("allow_command_execution", False)):
             raise _TaskExecutionFailure("repo workspace command execution is disabled for this project")
 
-        root = _resolve_repo_workspace_root(project_id, cfg, require_enabled=True)
-        snapshot = await _repo_status_snapshot(root=root, cfg=cfg)
+        source_root = _resolve_repo_workspace_root(project_id, cfg, require_enabled=True)
+        snapshot = await _repo_status_snapshot(root=source_root, cfg=cfg)
         if not bool(snapshot.get("is_repo")):
             raise _TaskExecutionFailure("repo workspace is not a git repository; clone it before running assignment tests")
+        workspace_entry = await _ensure_orchestration_temp_workspace(
+            project_id=project_id,
+            orchestration_id=orchestration_id,
+            project_registry=self._project_registry,
+            workspace_store=self._orchestration_workspace_store,
+            strict=True,
+        )
+        if workspace_entry is None:
+            raise _TaskExecutionFailure("orchestration temp workspace is unavailable for assignment execution")
+        root = Path(str(workspace_entry.get("temp_root") or "").strip())
+        if not root.exists():
+            raise _TaskExecutionFailure("orchestration temp workspace path does not exist")
 
         scoped_tasks = [
             candidate
@@ -3747,6 +3802,7 @@ class TaskManager:
                 "artifacts": [],
                 "applied_files": applied_files,
                 "workspace": workspace_snap,
+                "assignment_workspace": workspace_entry,
                 "usage": {},
                 "executed_commands": [],
                 "command_results": [],
@@ -3989,6 +4045,7 @@ class TaskManager:
             workspace=workspace,
             usage=_aggregate_usage(usage_parts),
         )
+        result["assignment_workspace"] = workspace_entry
         missing_tools = _missing_assignment_runtime_tools(command_results)
         if missing_tools:
             findings = [

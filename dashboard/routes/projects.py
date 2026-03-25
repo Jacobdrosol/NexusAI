@@ -271,6 +271,11 @@ def project_detail_page(project_id: str):
         if hasattr(cp, "get_project_repo_workspace")
         else None
     )
+    orchestration_workspaces = (
+        cp.list_project_orchestration_workspaces(project_id)
+        if hasattr(cp, "list_project_orchestration_workspaces")
+        else {"workspaces": []}
+    ) or {"workspaces": []}
     return render_template(
         "project_detail.html",
         project=project,
@@ -285,6 +290,7 @@ def project_detail_page(project_id: str):
         ),
         chat_tool_access=chat_tool_access,
         repo_workspace=repo_workspace,
+        orchestration_workspaces=orchestration_workspaces.get("workspaces") or [],
         project_data_root=str(project_data_root),
         project_data_tree=build_project_data_tree(project_id),
         project_connections=_project_connections(project_id),

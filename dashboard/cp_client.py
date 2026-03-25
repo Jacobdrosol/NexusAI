@@ -555,6 +555,9 @@ class CPClient:
             path += f"?since_hours={safe_hours}"
         return self._get(path)
 
+    def list_project_orchestration_workspaces(self, project_id: str) -> Optional[Dict[str, Any]]:
+        return self._get(f"/v1/projects/{project_id}/repo/workspace/orchestrations")
+
     # Models
     def list_models(self) -> Optional[List[Dict[str, Any]]]:
         return self._get("/v1/models")

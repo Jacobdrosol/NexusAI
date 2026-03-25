@@ -4746,6 +4746,128 @@ async def test_chat_assign_test_execution_runs_in_repo_workspace_without_schedul
 
 
 @pytest.mark.anyio
+async def test_chat_assign_test_execution_uses_orchestration_temp_workspace(tmp_path, monkeypatch):
+    import asyncio
+
+    from control_plane.api import projects as projects_module
+    from control_plane.orchestration_workspace_store import OrchestrationWorkspaceStore
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Project, TaskMetadata
+
+    class StubProjectRegistry:
+        async def get(self, project_id):
+            return Project(
+                id=project_id,
+                name="Proj",
+                settings_overrides={
+                    "repo_workspace": {
+                        "enabled": True,
+                        "managed_path_mode": False,
+                        "root_path": str(tmp_path / "repo"),
+                        "allow_command_execution": True,
+                    }
+                },
+            )
+
+    class StubScheduler:
+        def __init__(self):
+            self.project_registry = StubProjectRegistry()
+
+        async def schedule(self, task):
+            raise AssertionError("scheduler should not be used for internal test execution")
+
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    (repo_root / ".git").mkdir()
+
+    monkeypatch.setattr(projects_module, "_extract_project_repo_workspace", lambda project: project.settings_overrides["repo_workspace"])
+    monkeypatch.setattr(projects_module, "_resolve_repo_workspace_root", lambda project_id, cfg, require_enabled=True: repo_root)
+
+    async def _snapshot(*, root, cfg):
+        return {"is_repo": True, "root": str(root), "porcelain": []}
+
+    monkeypatch.setattr(projects_module, "_repo_status_snapshot", _snapshot)
+
+    async def _prepare_temp_workspace(*, project_id, root, ref=None):
+        temp_root = tmp_path / "temp" / project_id / "orch-1"
+        temp_root.mkdir(parents=True, exist_ok=True)
+        return {"mode": "copy", "path": temp_root, "setup_result": None}
+
+    monkeypatch.setattr(projects_module, "_prepare_temp_workspace", _prepare_temp_workspace)
+    monkeypatch.setattr(
+        projects_module,
+        "_assignment_file_candidates",
+        lambda tasks: [
+            {"path": "src/generated.py", "content": "def ok():\n    return True\n"},
+            {"path": "tests/test_generated.py", "content": "def test_ok():\n    assert True\n"},
+        ],
+    )
+    monkeypatch.setattr(projects_module, "_bootstrap_command_specs", lambda root, languages: [])
+
+    async def _run_repo_command(args, *, cwd, timeout_seconds=None, env_overrides=None):
+        return {
+            "ok": True,
+            "command": args,
+            "exit_code": 0,
+            "stdout": "1 passed",
+            "stderr": "",
+            "resource_usage": {},
+        }
+
+    monkeypatch.setattr(projects_module, "_run_repo_command", _run_repo_command)
+
+    store = OrchestrationWorkspaceStore()
+    tm = TaskManager(
+        StubScheduler(),
+        db_path=str(tmp_path / "chat-assign-test-execution-temp.db"),
+        orchestration_workspace_store=store,
+    )
+    task = await tm.create_task(
+        bot_id="pm-tester",
+        payload={
+            "instruction": "run generated tests",
+            "role_hint": "tester",
+            "step_kind": "test_execution",
+            "deliverables": ["coverage report artifact"],
+            "evidence_requirements": ["Executed test command output"],
+        },
+        metadata=TaskMetadata(
+            source="chat_assign",
+            project_id="proj-1",
+            orchestration_id="orch-1",
+        ),
+    )
+    upstream = await tm.create_task(
+        bot_id="pm-coder",
+        payload={"title": "Write files"},
+        metadata=TaskMetadata(
+            source="chat_assign",
+            project_id="proj-1",
+            orchestration_id="orch-1",
+        ),
+    )
+    await tm.update_status(
+        upstream.id,
+        "completed",
+        result={"artifacts": [{"path": "src/generated.py", "content": "def ok():\n    return True\n"}]},
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.1)
+
+    assert updated.status == "completed"
+    assert updated.result is not None
+    assignment_workspace = updated.result.get("assignment_workspace") or {}
+    assert assignment_workspace.get("lifecycle_state") == "retained"
+    assert assignment_workspace.get("temp_root")
+    assert not (repo_root / "src" / "generated.py").exists()
+    assert (tmp_path / "temp" / "proj-1" / "orch-1" / "src" / "generated.py").exists()
+
+
+@pytest.mark.anyio
 async def test_chat_assign_python_test_execution_writes_requested_text_report(tmp_path, monkeypatch):
     import asyncio
 
@@ -5426,7 +5548,7 @@ async def test_chat_assign_test_execution_detects_and_runs_generated_dotnet_test
 
     async def _run_repo_command(args, *, cwd, timeout_seconds=None, env_overrides=None):
         if args[:2] == ["dotnet", "test"]:
-            coverage_file = repo_root / ".nexusai_test_results" / "run" / "coverage.cobertura.xml"
+            coverage_file = cwd / ".nexusai_test_results" / "run" / "coverage.cobertura.xml"
             coverage_file.parent.mkdir(parents=True, exist_ok=True)
             coverage_file.write_text("<coverage />\n", encoding="utf-8")
         return {
@@ -6747,7 +6869,7 @@ async def test_chat_assign_test_execution_runs_generated_go_tests(tmp_path, monk
                 "resource_usage": {},
             }
         if args[:3] == ["go", "test", "./..."]:
-            coverage_file = repo_root / "coverage" / "report.out"
+            coverage_file = cwd / "coverage" / "report.out"
             coverage_file.parent.mkdir(parents=True, exist_ok=True)
             coverage_file.write_text("mode: set\n", encoding="utf-8")
             return {

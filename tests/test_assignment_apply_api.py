@@ -7,6 +7,18 @@ from httpx import ASGITransport, AsyncClient
 from shared.models import TaskMetadata
 
 
+async def _register_temp_workspace(cp_app, *, project_id: str, orchestration_id: str, root) -> None:
+    temp_root = root.parent / "temp-workspaces" / orchestration_id
+    temp_root.mkdir(parents=True, exist_ok=True)
+    await cp_app.state.orchestration_workspace_store.register(
+        project_id=project_id,
+        orchestration_id=orchestration_id,
+        source_root=str(root),
+        temp_root=str(temp_root),
+        mode="copy",
+    )
+
+
 @pytest.mark.anyio
 async def test_apply_assignment_writes_extracted_files_into_repo_workspace(cp_app, tmp_path, monkeypatch):
     project_id = "proj-apply"
@@ -58,6 +70,7 @@ async def test_apply_assignment_writes_extracted_files_into_repo_workspace(cp_ap
                 )
             },
         )
+        await _register_temp_workspace(cp_app, project_id=project_id, orchestration_id=orchestration_id, root=root)
 
         resp = await client.post(
             f"/v1/projects/{project_id}/repo/workspace/apply-assignment",
@@ -71,6 +84,7 @@ async def test_apply_assignment_writes_extracted_files_into_repo_workspace(cp_ap
     assert (root / "src" / "lessonBlocks" / "MathBlock.tsx").read_text(encoding="utf-8").strip().startswith(
         "export const MathBlock"
     )
+    assert body["assignment_workspace"]["lifecycle_state"] == "applied"
     assert body["workspace"]["is_repo"] is True
 
 
@@ -114,6 +128,59 @@ async def test_apply_assignment_rejects_in_progress_tasks(cp_app, tmp_path, monk
 
     assert resp.status_code == 409
     assert "still in progress" in (resp.json().get("detail") or "").lower()
+
+
+@pytest.mark.anyio
+async def test_apply_assignment_requires_retained_temp_workspace(cp_app, tmp_path, monkeypatch):
+    project_id = "proj-apply-no-temp"
+    orchestration_id = "orch-apply-no-temp"
+    base_root = tmp_path / "repo-workspaces"
+    root = base_root / project_id / "repo"
+    root.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-b", "main"], cwd=root, check=True, capture_output=True)
+    monkeypatch.setenv("NEXUSAI_REPO_WORKSPACE_ROOT", str(base_root))
+    cp_app.state.task_manager._schedule_ready_tasks = AsyncMock(return_value=None)
+
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        await client.post("/v1/projects", json={"id": project_id, "name": "Apply No Temp Project", "mode": "isolated"})
+        await client.put(
+            f"/v1/projects/{project_id}/repo/workspace",
+            json={"enabled": True, "managed_path_mode": True},
+        )
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "pm-coder-no-temp",
+                "name": "PM Coder",
+                "role": "coder",
+                "backends": [],
+                "enabled": True,
+                "execution_policy": {"repo_output_mode": "allow"},
+            },
+        )
+        task = await cp_app.state.task_manager.create_task(
+            bot_id="pm-coder-no-temp",
+            payload={"title": "Implement without temp"},
+            metadata=TaskMetadata(
+                source="chat_assign",
+                project_id=project_id,
+                orchestration_id=orchestration_id,
+                conversation_id="conv-no-temp",
+            ),
+        )
+        await cp_app.state.task_manager.update_status(
+            task.id,
+            "completed",
+            result={"output": "File: docs/example.md\n```md\n# example\n```\n"},
+        )
+
+        resp = await client.post(
+            f"/v1/projects/{project_id}/repo/workspace/apply-assignment",
+            json={"orchestration_id": orchestration_id},
+        )
+
+    assert resp.status_code == 409
+    assert "temp workspace" in (resp.json().get("detail") or "").lower()
 
 
 @pytest.mark.anyio
@@ -221,6 +288,7 @@ async def test_apply_assignment_ignores_repo_files_from_deny_policy_bots(cp_app,
             "completed",
             result={"output": "File: docs/blocked.md\n```md\n# blocked\n```\n"},
         )
+        await _register_temp_workspace(cp_app, project_id=project_id, orchestration_id=orchestration_id, root=root)
 
         resp = await client.post(
             f"/v1/projects/{project_id}/repo/workspace/apply-assignment",
@@ -296,6 +364,7 @@ async def test_review_assignment_previews_generated_files_without_writing(cp_app
     body = resp.json()
     assert body["status"] == "ok"
     assert body["file_count"] == 2
+    assert body["assignment_workspace"]["workspace_source"] == "orchestration_temp"
     review_files = {item["path"]: item for item in body["review_files"]}
     assert review_files["docs/existing.md"]["status"] == "modified"
     assert review_files["docs/new.md"]["status"] == "new"

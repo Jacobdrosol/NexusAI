@@ -22,6 +22,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from control_plane.audit.utils import record_audit_event
+from control_plane.orchestration_workspace_store import OrchestrationWorkspaceStore
 from control_plane.repo_workspace import (
     build_github_http_auth_header,
     is_within_workspace,
@@ -127,6 +128,11 @@ class RepoWorkspacePreviewAssignmentRequest(BaseModel):
 
 class RepoWorkspaceDiscardUntrackedRequest(BaseModel):
     paths: List[str] = Field(default_factory=list)
+
+
+def _workspace_store(request: Request) -> Optional[OrchestrationWorkspaceStore]:
+    store = getattr(request.app.state, "orchestration_workspace_store", None)
+    return store if isinstance(store, OrchestrationWorkspaceStore) else None
 
 
 _CLOUD_POLICY_VALUES = {"allow", "redact", "block"}
@@ -1197,6 +1203,10 @@ def _bootstrap_command_specs(workspace: Path, languages: List[str]) -> List[Dict
 
 
 async def _is_git_repository(root: Path) -> bool:
+    git_dir = root / ".git"
+    if git_dir.exists():
+        return True
+    return False
     check_repo = await _run_repo_command(
         ["git", "rev-parse", "--is-inside-work-tree"],
         cwd=root,
@@ -1262,6 +1272,98 @@ async def _cleanup_temp_workspace(
     except Exception:
         pass
     return output
+
+
+async def _orchestration_workspace_details(
+    *,
+    project_id: str,
+    orchestration_id: str,
+    workspace_store: Optional[OrchestrationWorkspaceStore],
+) -> Dict[str, Any]:
+    if workspace_store is None:
+        return {
+            "project_id": str(project_id or "").strip(),
+            "orchestration_id": str(orchestration_id or "").strip(),
+            "workspace_source": "orchestration_temp",
+            "lifecycle_state": "unavailable",
+            "availability_reason": "temp_workspace_tracking_disabled",
+        }
+    entry = await workspace_store.get(project_id=project_id, orchestration_id=orchestration_id)
+    if entry is None:
+        return {
+            "project_id": str(project_id or "").strip(),
+            "orchestration_id": str(orchestration_id or "").strip(),
+            "workspace_source": "orchestration_temp",
+            "lifecycle_state": "unavailable",
+            "availability_reason": "temp_workspace_not_found",
+        }
+    return entry
+
+
+async def _ensure_orchestration_temp_workspace(
+    *,
+    project_id: str,
+    orchestration_id: str,
+    project_registry: Any,
+    workspace_store: Optional[OrchestrationWorkspaceStore],
+    strict: bool,
+) -> Optional[Dict[str, Any]]:
+    if workspace_store is None:
+        return None
+    existing = await workspace_store.get(project_id=project_id, orchestration_id=orchestration_id)
+    if existing is not None and str(existing.get("lifecycle_state") or "") == "retained" and bool(existing.get("path_exists")):
+        return existing
+    try:
+        project = await project_registry.get(project_id)
+        cfg = _extract_project_repo_workspace(project)
+        root = _resolve_repo_workspace_root(project_id, cfg, require_enabled=True)
+        snapshot = await _repo_status_snapshot(root=root, cfg=cfg)
+        if not bool(snapshot.get("is_repo")):
+            raise HTTPException(status_code=400, detail="repo workspace is not a git repository")
+        temp_ctx = await _prepare_temp_workspace(project_id=project_id, root=root)
+    except HTTPException:
+        if strict:
+            raise
+        return None
+    return await workspace_store.register(
+        project_id=project_id,
+        orchestration_id=orchestration_id,
+        source_root=str(root),
+        temp_root=str(temp_ctx["path"]),
+        mode=str(temp_ctx.get("mode") or ""),
+    )
+
+
+async def _cleanup_orchestration_temp_workspace(
+    *,
+    project_id: str,
+    orchestration_id: str,
+    workspace_store: Optional[OrchestrationWorkspaceStore],
+    reason: str,
+) -> Optional[Dict[str, Any]]:
+    if workspace_store is None:
+        return None
+    entry = await workspace_store.get(project_id=project_id, orchestration_id=orchestration_id)
+    if entry is None:
+        return None
+    lifecycle_state = str(entry.get("lifecycle_state") or "").strip()
+    if lifecycle_state in {"deleted", "applied"}:
+        return entry
+    temp_root = Path(str(entry.get("temp_root") or "").strip()) if str(entry.get("temp_root") or "").strip() else None
+    source_root = Path(str(entry.get("source_root") or "").strip()) if str(entry.get("source_root") or "").strip() else None
+    mode = str(entry.get("mode") or "").strip()
+    cleanup_result: Dict[str, Any] = {}
+    if temp_root is not None and source_root is not None and temp_root.exists():
+        cleanup_result = await _cleanup_temp_workspace(base_root=source_root, temp_root=temp_root, mode=mode)
+    deleted = await workspace_store.mark_deleted(
+        project_id=project_id,
+        orchestration_id=orchestration_id,
+        reason=reason,
+    )
+    if deleted is None:
+        return None
+    deleted["cleanup_result"] = cleanup_result
+    return deleted
 
 
 async def _fetch_github_identity(token: str, repo_full_name: Optional[str] = None) -> Dict[str, Any]:
@@ -2794,6 +2896,7 @@ async def apply_assignment_to_project_repo_workspace(
     project_registry = request.app.state.project_registry
     task_manager = request.app.state.task_manager
     bot_registry = request.app.state.bot_registry
+    workspace_store = _workspace_store(request)
     orchestration_id = str(body.orchestration_id or "").strip()
     _, cfg, root, snapshot, scoped_tasks = await _project_assignment_scope(
         project_id=project_id,
@@ -2807,6 +2910,17 @@ async def apply_assignment_to_project_repo_workspace(
         raise HTTPException(
             status_code=409,
             detail="assignment is still in progress; wait for all tasks to finish before applying files",
+        )
+    assignment_workspace = await _orchestration_workspace_details(
+        project_id=project_id,
+        orchestration_id=orchestration_id,
+        workspace_store=workspace_store,
+    )
+    if str(assignment_workspace.get("lifecycle_state") or "").strip() != "retained":
+        reason = str(assignment_workspace.get("availability_reason") or "temp_workspace_not_available").strip()
+        raise HTTPException(
+            status_code=409,
+            detail=f"assignment temp workspace is not available for apply ({reason})",
         )
 
     allowed_repo_output_bot_ids: set[str] = set()
@@ -2854,6 +2968,16 @@ async def apply_assignment_to_project_repo_workspace(
             commit_error = str(_exc)
 
     updated_snapshot = await _repo_status_snapshot(root=root, cfg=cfg)
+    assignment_workspace = await _cleanup_orchestration_temp_workspace(
+        project_id=project_id,
+        orchestration_id=orchestration_id,
+        workspace_store=workspace_store,
+        reason="applied_to_project_repo",
+    )
+    if workspace_store is not None:
+        applied_entry = await workspace_store.mark_applied(project_id=project_id, orchestration_id=orchestration_id)
+        if applied_entry is not None:
+            assignment_workspace = applied_entry
     await record_audit_event(
         request,
         action="projects.repo_workspace.apply_assignment",
@@ -2884,6 +3008,7 @@ async def apply_assignment_to_project_repo_workspace(
         "commit_sha": commit_sha,
         "commit_error": commit_error,
         "workspace": updated_snapshot,
+        "assignment_workspace": assignment_workspace,
     }
 
 
@@ -2896,6 +3021,7 @@ async def review_assignment_in_project_repo_workspace(
     project_registry = request.app.state.project_registry
     task_manager = request.app.state.task_manager
     bot_registry = request.app.state.bot_registry
+    workspace_store = _workspace_store(request)
     orchestration_id = str(body.orchestration_id or "").strip()
     _, cfg, root, snapshot, scoped_tasks = await _project_assignment_scope(
         project_id=project_id,
@@ -2969,6 +3095,22 @@ async def review_assignment_in_project_repo_workspace(
         "in_progress_task_ids": [task.id for task in scoped_tasks if task.status in {"queued", "blocked", "running"}],
         "review_files": review_files,
         "workspace": snapshot,
+        "assignment_workspace": await _orchestration_workspace_details(
+            project_id=project_id,
+            orchestration_id=orchestration_id,
+            workspace_store=workspace_store,
+        ),
+    }
+
+
+@router.get("/{project_id}/repo/workspace/orchestrations")
+async def list_project_orchestration_workspaces(project_id: str, request: Request) -> dict:
+    workspace_store = _workspace_store(request)
+    entries = await workspace_store.list_for_project(project_id) if workspace_store is not None else []
+    return {
+        "status": "ok",
+        "project_id": project_id,
+        "workspaces": entries,
     }
 
 

@@ -28,6 +28,7 @@ async def cp_app(tmp_path):
     from control_plane.vault.mcp_broker import MCPBroker
     from control_plane.vault.vault_manager import VaultManager
     from control_plane.observability import install_observability
+    from control_plane.orchestration_workspace_store import OrchestrationWorkspaceStore
     from fastapi import FastAPI
     from control_plane.api import audit, bots, chat, keys, models_catalog, projects, tasks, vault, workers as workers_api
 
@@ -53,6 +54,7 @@ async def cp_app(tmp_path):
     mcp_broker = MCPBroker(vault_manager=vault_manager)
     github_webhook_store = GitHubWebhookStore(db_path=str(tmp_path / "github_webhooks.db"))
     audit_log = AuditLog(db_path=str(tmp_path / "audit.db"))
+    orchestration_workspace_store = OrchestrationWorkspaceStore()
     scheduler = Scheduler(
         bot_registry,
         worker_registry,
@@ -60,12 +62,17 @@ async def cp_app(tmp_path):
         model_registry=model_registry,
         project_registry=project_registry,
     )
-    task_manager = TaskManager(scheduler, db_path=str(tmp_path / "tasks.db"))
+    task_manager = TaskManager(
+        scheduler,
+        db_path=str(tmp_path / "tasks.db"),
+        orchestration_workspace_store=orchestration_workspace_store,
+    )
     pm_orchestrator = PMOrchestrator(
         bot_registry=bot_registry,
         scheduler=scheduler,
         task_manager=task_manager,
         chat_manager=chat_manager,
+        orchestration_workspace_store=orchestration_workspace_store,
     )
 
     app.state.worker_registry = worker_registry
@@ -78,6 +85,7 @@ async def cp_app(tmp_path):
     app.state.mcp_broker = mcp_broker
     app.state.github_webhook_store = github_webhook_store
     app.state.audit_log = audit_log
+    app.state.orchestration_workspace_store = orchestration_workspace_store
     app.state.scheduler = scheduler
     app.state.task_manager = task_manager
     app.state.pm_orchestrator = pm_orchestrator
