@@ -110,12 +110,20 @@ async def test_chat_message_includes_attachments_in_scheduler_payload(cp_app):
                         "mime_type": "text/markdown",
                         "kind": "text",
                         "text_content": "# Notes\n- one\n",
+                        "size_bytes": 14,
                     },
                     {
                         "name": "failure.png",
                         "mime_type": "image/png",
                         "kind": "image",
                         "data_url": "data:image/png;base64,aGVsbG8=",
+                        "size_bytes": 5,
+                    },
+                    {
+                        "name": "bundle.zip",
+                        "mime_type": "application/zip",
+                        "kind": "binary",
+                        "size_bytes": 2048,
                     },
                 ],
             },
@@ -128,7 +136,83 @@ async def test_chat_message_includes_attachments_in_scheduler_payload(cp_app):
     assert isinstance(user_message["content"], list)
     assert any(part.get("type") == "text" and "Use these attachments." in str(part.get("text") or "") for part in user_message["content"])
     assert any(part.get("type") == "text" and "Attached file: notes.md" in str(part.get("text") or "") for part in user_message["content"])
+    assert any(part.get("type") == "text" and "Attached file: bundle.zip" in str(part.get("text") or "") for part in user_message["content"])
     assert any(part.get("type") == "image_url" for part in user_message["content"])
+
+
+@pytest.mark.anyio
+async def test_chat_message_rejects_more_than_15_attachments(cp_app):
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "assistant reply"})
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        create_resp = await client.post("/v1/chat/conversations", json={"title": "Chat Too Many Attachments"})
+        conversation_id = create_resp.json()["id"]
+
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-attach-limit",
+                "name": "Attach Limit Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+            },
+        )
+
+        attachments = [
+            {
+                "name": f"note-{index}.md",
+                "mime_type": "text/markdown",
+                "kind": "text",
+                "text_content": "# Note",
+                "size_bytes": 6,
+            }
+            for index in range(16)
+        ]
+        post_resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={"content": "too many", "bot_id": "bot-attach-limit", "attachments": attachments},
+        )
+
+    assert post_resp.status_code == 400
+    assert "Maximum is 15 files" in str(post_resp.json().get("detail") or "")
+
+
+@pytest.mark.anyio
+async def test_chat_message_rejects_attachment_total_size_over_1gb(cp_app):
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "assistant reply"})
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        create_resp = await client.post("/v1/chat/conversations", json={"title": "Chat Attachment Size Limit"})
+        conversation_id = create_resp.json()["id"]
+
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-attach-size-limit",
+                "name": "Attach Size Limit Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+            },
+        )
+
+        post_resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": "too big",
+                "bot_id": "bot-attach-size-limit",
+                "attachments": [
+                    {
+                        "name": "archive.zip",
+                        "mime_type": "application/zip",
+                        "kind": "binary",
+                        "size_bytes": (1024 * 1024 * 1024) + 1,
+                    }
+                ],
+            },
+        )
+
+    assert post_resp.status_code == 400
+    assert "Maximum total attachment size is 1 GB" in str(post_resp.json().get("detail") or "")
 
 
 @pytest.mark.anyio

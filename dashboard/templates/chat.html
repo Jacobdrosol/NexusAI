@@ -9,6 +9,107 @@
 {% if error %}
 <div class="alert alert-error">{{ error }}</div>
 {% endif %}
+<style>
+.chat-compose-dropzone {
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 14px;
+  padding: 0.9rem;
+  background: rgba(10, 17, 30, 0.72);
+  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+.chat-compose-dropzone.drag-active {
+  border-color: #4fd1c5;
+  background: rgba(28, 56, 66, 0.88);
+  box-shadow: 0 0 0 1px rgba(79, 209, 197, 0.35);
+}
+.chat-compose-textarea {
+  min-height: 96px;
+  resize: vertical;
+}
+.chat-attachment-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  margin-top: 0.75rem;
+}
+.chat-attachment-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  max-width: 320px;
+  padding: 0.42rem 0.78rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(255,255,255,0.08);
+  color: #e6edf7;
+  font-size: 0.92rem;
+}
+.chat-attachment-chip-preview {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  object-fit: cover;
+  border: 1px solid rgba(255,255,255,0.14);
+  flex: 0 0 auto;
+}
+.chat-attachment-chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-attachment-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin-left: 0.1rem;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.14);
+  color: #f8fafc;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease, background 0.12s ease;
+}
+.chat-attachment-chip:hover .chat-attachment-chip-remove,
+.chat-attachment-chip:focus-within .chat-attachment-chip-remove {
+  opacity: 1;
+  pointer-events: auto;
+}
+.chat-attachment-chip-remove:hover {
+  background: rgba(248, 113, 113, 0.34);
+}
+.chat-compose-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-top: 0.85rem;
+  flex-wrap: wrap;
+}
+.chat-compose-footer-left {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+.chat-attachment-trigger {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 999px;
+  font-size: 1.25rem;
+  line-height: 1;
+}
+.chat-stream-btn-inline {
+  min-width: 140px;
+}
+.chat-attachment-hint {
+  margin-top: 0.55rem;
+}
+</style>
 
 <div class="split-grid chat-split-grid">
   <section class="panel chat-panel-side">
@@ -269,16 +370,23 @@
       <input type="hidden" name="conversation_id" value="{{ selected_conversation.id }}">
       <input type="hidden" name="bot_id" id="chat-send-bot-id" value="{{ selected_conversation.default_bot_id or '' }}">
       <input type="file" id="chat-attachment-input" style="display:none;" multiple onchange="handleChatAttachmentSelect(event)">
-      <div class="chat-compose-row">
-        <textarea class="form-control" name="content" placeholder="Type a message or use @assign ..." required></textarea>
-        <button type="button" class="btn" onclick="triggerChatAttachmentPicker()">Attach Files</button>
-        <button type="button" class="btn btn-primary chat-stream-btn" onclick="sendMessage(true)">Stream Message</button>
+      <div id="chat-compose-dropzone" class="chat-compose-dropzone">
+        <div class="chat-compose-row">
+          <textarea class="form-control chat-compose-textarea" name="content" placeholder="Type a message or use @assign ..."></textarea>
+        </div>
+        <div id="chat-attachment-list" class="chat-attachment-list" aria-live="polite"></div>
+        <div class="mini-note chat-attachment-hint">Drag files here or use +. Max {{ chat_attachment_limits.max_files }} files, 1 GB total.</div>
+        <div class="chat-compose-footer">
+          <div class="chat-compose-footer-left">
+            <button type="button" id="chat-attachment-trigger" class="btn chat-attachment-trigger" onclick="triggerChatAttachmentPicker()" aria-label="Add files">+</button>
+            <button type="button" class="btn btn-primary chat-stream-btn-inline" onclick="sendMessage(true)">Stream Message</button>
+          </div>
+          <label class="context-item chat-message-tools-toggle">
+            <input type="checkbox" id="use-workspace-tools-message">
+            <span>Use workspace tools for this message (if policy allows)</span>
+          </label>
+        </div>
       </div>
-      <div id="chat-attachment-list" class="mini-note" style="margin-top:0.5rem;"></div>
-      <label class="context-item chat-message-tools-toggle">
-        <input type="checkbox" id="use-workspace-tools-message">
-        <span>Use workspace tools for this message (if policy allows)</span>
-      </label>
     </form>
     {% else %}
     <div class="empty">Choose a conversation to begin.</div>
@@ -446,6 +554,10 @@ const selectedConversationProjectId = {{ (selected_conversation.project_id if se
 const initialMessages = {{ messages|tojson }};
 const availableBots = {{ bots|tojson }};
 const availableModels = {{ model_catalog|tojson }};
+const chatAttachmentLimits = {{ chat_attachment_limits|tojson }};
+const CHAT_ATTACHMENT_MAX_FILES = Number(chatAttachmentLimits?.max_files || 15);
+const CHAT_ATTACHMENT_MAX_TOTAL_BYTES = Number(chatAttachmentLimits?.max_total_bytes || 1073741824);
+const CHAT_ATTACHMENT_MAX_TEXT_BYTES = 120000;
 let pendingComposerAttachments = [];
 const taskEventMap = new Map();
 const messageMap = new Map((initialMessages || []).map((m) => [String(m.id), m]));
@@ -700,10 +812,11 @@ function renderMessageAttachmentsHtml(meta) {
         const mime = esc(String(attachment?.mime_type || ''));
         const kind = String(attachment?.kind || '').trim().toLowerCase();
         const dataUrl = String(attachment?.data_url || '').trim();
+        const sizeText = esc(formatAttachmentBytes(attachment?.size_bytes || 0));
         const preview = kind === 'image' && dataUrl
           ? `<div><img src="${esc(dataUrl)}" alt="${name}" style="max-width:220px;max-height:160px;border-radius:8px;border:1px solid rgba(255,255,255,0.12);"></div>`
           : '';
-        return `<div class="message-attachment">${preview}<div class="mini-note">${name}${mime ? ' · ' + mime : ''}</div></div>`;
+        return `<div class="message-attachment">${preview}<div class="mini-note">${name}${mime ? ' · ' + mime : ''}${sizeText ? ' · ' + sizeText : ''}</div></div>`;
       }).join('')}
     </div>
   `;
@@ -752,6 +865,24 @@ function activeBotSupportsImages() {
   return !!backend && modelSupportsImages(backend.provider, backend.model);
 }
 
+function formatAttachmentBytes(value) {
+  const bytes = Number(value || 0);
+  if (!Number.isFinite(bytes) || bytes <= 0) return '';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let size = bytes;
+  let unitIndex = 0;
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex += 1;
+  }
+  const rounded = size >= 100 || unitIndex === 0 ? size.toFixed(0) : size.toFixed(1);
+  return `${rounded} ${units[unitIndex]}`;
+}
+
+function totalPendingAttachmentBytes() {
+  return pendingComposerAttachments.reduce((sum, item) => sum + Number(item?.size_bytes || 0), 0);
+}
+
 function renderComposerAttachments() {
   const shell = document.getElementById('chat-attachment-list');
   if (!shell) return;
@@ -763,14 +894,15 @@ function renderComposerAttachments() {
     const name = esc(String(attachment?.name || 'attachment'));
     const mime = esc(String(attachment?.mime_type || ''));
     const kind = String(attachment?.kind || '').trim().toLowerCase();
+    const sizeText = esc(formatAttachmentBytes(attachment?.size_bytes || 0));
     const preview = kind === 'image' && attachment?.data_url
-      ? `<img src="${esc(String(attachment.data_url))}" alt="${name}" style="max-width:72px;max-height:56px;border-radius:6px;border:1px solid rgba(255,255,255,0.12);margin-right:0.5rem;">`
+      ? `<img class="chat-attachment-chip-preview" src="${esc(String(attachment.data_url))}" alt="${name}">`
       : '';
     return `
-      <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.35rem;">
+      <div class="chat-attachment-chip" title="${name}">
         ${preview}
-        <span>${name}${mime ? ' · ' + mime : ''}</span>
-        <button type="button" class="btn btn-sm" onclick="removeComposerAttachment(${index})">Remove</button>
+        <span class="chat-attachment-chip-label">${name}${mime ? ' · ' + mime : ''}${sizeText ? ' · ' + sizeText : ''}</span>
+        <button type="button" class="chat-attachment-chip-remove" onclick="removeComposerAttachment(${index})" aria-label="Remove ${name}">×</button>
       </div>
     `;
   }).join('');
@@ -805,28 +937,53 @@ async function readComposerAttachment(file) {
         mime_type: file.type || 'image/*',
         kind: 'image',
         data_url: String(reader.result || ''),
+        size_bytes: Number(file.size || 0),
       });
       reader.onerror = () => reject(new Error('Failed to read image attachment: ' + file.name));
       reader.readAsDataURL(file);
     });
   }
   if (!isTextAttachmentFile(file)) {
-    throw new Error('Unsupported binary attachment: ' + file.name + '. Only images and text/code files are supported right now.');
+    return {
+      name: file.name,
+      mime_type: file.type || 'application/octet-stream',
+      kind: 'binary',
+      size_bytes: Number(file.size || 0),
+    };
   }
-  const text = await file.text();
+  const text = await file.slice(0, CHAT_ATTACHMENT_MAX_TEXT_BYTES).text();
   return {
     name: file.name,
     mime_type: file.type || 'text/plain',
     kind: 'text',
-    text_content: text.slice(0, 120000),
+    text_content: text,
+    size_bytes: Number(file.size || 0),
+    truncated: Number(file.size || 0) > CHAT_ATTACHMENT_MAX_TEXT_BYTES,
   };
 }
 
-async function handleChatAttachmentSelect(event) {
-  const files = Array.from(event?.target?.files || []);
-  if (!files.length) return;
+function validateIncomingAttachmentBatch(files) {
+  const nextFiles = Array.from(files || []);
+  if (!nextFiles.length) return true;
+  const nextCount = pendingComposerAttachments.length + nextFiles.length;
+  if (nextCount > CHAT_ATTACHMENT_MAX_FILES) {
+    alert(`You can attach at most ${CHAT_ATTACHMENT_MAX_FILES} files to one message.`);
+    return false;
+  }
+  const nextBytes = totalPendingAttachmentBytes() + nextFiles.reduce((sum, file) => sum + Number(file?.size || 0), 0);
+  if (nextBytes > CHAT_ATTACHMENT_MAX_TOTAL_BYTES) {
+    alert('Attachment limit exceeded. Maximum total attachment size is 1 GB per message.');
+    return false;
+  }
+  return true;
+}
+
+async function addComposerFiles(files) {
+  const nextFiles = Array.from(files || []);
+  if (!nextFiles.length) return;
+  if (!validateIncomingAttachmentBatch(nextFiles)) return;
   const nextAttachments = [];
-  for (const file of files) {
+  for (const file of nextFiles) {
     const attachment = await readComposerAttachment(file);
     nextAttachments.push(attachment);
   }
@@ -837,6 +994,40 @@ async function handleChatAttachmentSelect(event) {
   }
   pendingComposerAttachments = pendingComposerAttachments.concat(nextAttachments);
   renderComposerAttachments();
+}
+
+async function handleChatAttachmentSelect(event) {
+  const files = Array.from(event?.target?.files || []);
+  try {
+    await addComposerFiles(files);
+  } finally {
+    if (event?.target) event.target.value = '';
+  }
+}
+
+function setupChatComposerDragDrop() {
+  const dropzone = document.getElementById('chat-compose-dropzone');
+  if (!dropzone) return;
+  ['dragenter', 'dragover'].forEach((eventName) => {
+    dropzone.addEventListener(eventName, (event) => {
+      event.preventDefault();
+      dropzone.classList.add('drag-active');
+    });
+  });
+  ['dragleave', 'dragend', 'drop'].forEach((eventName) => {
+    dropzone.addEventListener(eventName, (event) => {
+      event.preventDefault();
+      if (eventName !== 'drop') {
+        const related = event.relatedTarget;
+        if (related && dropzone.contains(related)) return;
+      }
+      dropzone.classList.remove('drag-active');
+    });
+  });
+  dropzone.addEventListener('drop', async (event) => {
+    const files = Array.from(event.dataTransfer?.files || []);
+    await addComposerFiles(files);
+  });
 }
 
 function escapeHtml(text) {
@@ -2312,6 +2503,7 @@ syncCreateConversationToolFields();
 syncConversationToolAccessEditor();
 syncSendBotSelection();
 renderComposerAttachments();
+setupChatComposerDragDrop();
 setTaskEventsVisible(false);
 startMessagePolling();
 document.querySelectorAll('#messages .message').forEach((messageEl) => {

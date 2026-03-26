@@ -11,6 +11,7 @@ from flask import Blueprint, Response, jsonify, render_template, request, stream
 from flask_login import login_required
 
 from dashboard.cp_client import get_cp_client
+from shared.chat_attachments import CHAT_ATTACHMENT_MAX_FILES, CHAT_ATTACHMENT_MAX_TOTAL_BYTES
 
 bp = Blueprint("chat", __name__)
 
@@ -449,6 +450,10 @@ def chat_page() -> str:
             repo_context_sections=repo_context_sections,
             repo_context_item_ids=repo_context_item_ids,
             model_catalog=model_catalog,
+            chat_attachment_limits={
+                "max_files": CHAT_ATTACHMENT_MAX_FILES,
+                "max_total_bytes": CHAT_ATTACHMENT_MAX_TOTAL_BYTES,
+            },
             error=page_error,
         )
     except Exception:
@@ -469,6 +474,10 @@ def chat_page() -> str:
             repo_context_sections=[],
             repo_context_item_ids=[],
             model_catalog=[],
+            chat_attachment_limits={
+                "max_files": CHAT_ATTACHMENT_MAX_FILES,
+                "max_total_bytes": CHAT_ATTACHMENT_MAX_TOTAL_BYTES,
+            },
             error="Chat view is temporarily unavailable. Start a new chat or refresh.",
         )
 

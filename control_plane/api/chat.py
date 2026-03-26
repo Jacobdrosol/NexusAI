@@ -1,5 +1,6 @@
 import asyncio
 from collections import Counter
+import base64
 import json
 import os
 from pathlib import Path
@@ -18,6 +19,11 @@ from control_plane.chat.workspace_tools import (
     search_workspace_snippets,
 )
 from control_plane.security.guards import enforce_body_size, enforce_rate_limit
+from shared.chat_attachments import (
+    CHAT_ATTACHMENT_MAX_FILES,
+    CHAT_ATTACHMENT_MAX_TEXT_BYTES,
+    CHAT_ATTACHMENT_MAX_TOTAL_BYTES,
+)
 from shared.exceptions import BotNotFoundError, ConversationNotFoundError
 from shared.models import ChatConversation, ChatMessage, Task, TaskMetadata
 from shared.settings_manager import get_context_limits_for_model
@@ -69,7 +75,8 @@ class PostMessageRequest(BaseModel):
 class ChatAttachmentInput(BaseModel):
     name: str
     mime_type: str
-    kind: Literal["image", "text"]
+    kind: Literal["image", "text", "binary"]
+    size_bytes: int = 0
     data_url: Optional[str] = None
     text_content: Optional[str] = None
 
@@ -129,15 +136,48 @@ _REQUEST_PERMISSION_LINE_RE = re.compile(
     re.IGNORECASE,
 )
 _IMAGE_CAPABILITY_MARKERS = {"image", "images", "vision", "multimodal"}
-_TEXT_ATTACHMENT_CHAR_LIMIT = 120_000
+
+
+def _attachment_size_bytes(item: ChatAttachmentInput) -> int:
+    if item.size_bytes and item.size_bytes > 0:
+        return int(item.size_bytes)
+    kind = str(item.kind or "").strip().lower()
+    if kind == "text":
+        return len(str(item.text_content or "").encode("utf-8"))
+    if kind == "image":
+        data_url = str(item.data_url or "").strip()
+        if "," not in data_url:
+            return 0
+        _, encoded = data_url.split(",", 1)
+        try:
+            return len(base64.b64decode(encoded, validate=False))
+        except Exception:
+            return 0
+    return 0
+
+
+def _validate_attachment_limits(attachments: List[ChatAttachmentInput]) -> None:
+    if len(attachments or []) > CHAT_ATTACHMENT_MAX_FILES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Too many attachments. Maximum is {CHAT_ATTACHMENT_MAX_FILES} files per message.",
+        )
+    total_bytes = sum(max(0, _attachment_size_bytes(item)) for item in (attachments or []))
+    if total_bytes > CHAT_ATTACHMENT_MAX_TOTAL_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail="Attachment limit exceeded. Maximum total attachment size is 1 GB per message.",
+        )
 
 
 def _attachment_payload_dicts(attachments: List[ChatAttachmentInput]) -> List[Dict[str, Any]]:
+    _validate_attachment_limits(attachments)
     normalized: List[Dict[str, Any]] = []
     for item in attachments or []:
         kind = str(item.kind or "").strip().lower()
         name = str(item.name or "").strip() or "attachment"
         mime_type = str(item.mime_type or "").strip().lower() or "application/octet-stream"
+        size_bytes = max(0, _attachment_size_bytes(item))
         if kind == "image":
             data_url = str(item.data_url or "").strip()
             if not data_url.startswith("data:image/"):
@@ -148,18 +188,31 @@ def _attachment_payload_dicts(attachments: List[ChatAttachmentInput]) -> List[Di
                     "mime_type": mime_type,
                     "kind": "image",
                     "data_url": data_url,
+                    "size_bytes": size_bytes,
                 }
             )
             continue
-        text_content = str(item.text_content or "")
-        if not text_content.strip():
-            raise HTTPException(status_code=400, detail=f"Attachment '{name}' must include text content.")
+        if kind == "text":
+            text_content = str(item.text_content or "")
+            if not text_content.strip():
+                raise HTTPException(status_code=400, detail=f"Attachment '{name}' must include text content.")
+            normalized.append(
+                {
+                    "name": name,
+                    "mime_type": mime_type,
+                    "kind": "text",
+                    "text_content": text_content[:CHAT_ATTACHMENT_MAX_TEXT_BYTES],
+                    "size_bytes": size_bytes,
+                    "truncated": size_bytes > CHAT_ATTACHMENT_MAX_TEXT_BYTES,
+                }
+            )
+            continue
         normalized.append(
             {
                 "name": name,
                 "mime_type": mime_type,
-                "kind": "text",
-                "text_content": text_content[:_TEXT_ATTACHMENT_CHAR_LIMIT],
+                "kind": "binary",
+                "size_bytes": size_bytes,
             }
         )
     return normalized
@@ -192,10 +245,27 @@ def _message_attachment_parts(metadata: Any) -> List[Dict[str, Any]]:
             continue
         text_content = str(item.get("text_content") or "")
         if text_content.strip():
+            suffix = ""
+            if bool(item.get("truncated")):
+                suffix = "\n[Attachment content was truncated before model delivery.]"
             parts.append(
                 {
                     "type": "text",
-                    "text": f"[Attached file: {name} ({mime_type})]\n{text_content}",
+                    "text": f"[Attached file: {name} ({mime_type})]\n{text_content}{suffix}",
+                    "name": name,
+                    "mime_type": mime_type,
+                }
+            )
+            continue
+        if kind == "binary":
+            size_bytes = int(item.get("size_bytes") or 0)
+            parts.append(
+                {
+                    "type": "text",
+                    "text": (
+                        f"[Attached file: {name} ({mime_type}, {size_bytes} bytes)]\n"
+                        "Binary attachment was included with the message but its raw contents were not inlined."
+                    ),
                     "name": name,
                     "mime_type": mime_type,
                 }
@@ -1799,7 +1869,7 @@ async def mark_pm_run_failed(conversation_id: str, orchestration_id: str, reques
 
 @router.post("/conversations/{conversation_id}/messages")
 async def post_message(conversation_id: str, request: Request, body: PostMessageRequest) -> dict:
-    await enforce_body_size(request, route_name="chat_messages", default_max_bytes=8_000_000)
+    await enforce_body_size(request, route_name="chat_messages", default_max_bytes=1_500_000_000)
     await enforce_rate_limit(
         request,
         route_name="chat_messages",
@@ -2033,7 +2103,7 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
 
 @router.post("/conversations/{conversation_id}/stream")
 async def stream_message(conversation_id: str, request: Request, body: PostMessageRequest) -> StreamingResponse:
-    await enforce_body_size(request, route_name="chat_stream", default_max_bytes=8_000_000)
+    await enforce_body_size(request, route_name="chat_stream", default_max_bytes=1_500_000_000)
     await enforce_rate_limit(
         request,
         route_name="chat_stream",

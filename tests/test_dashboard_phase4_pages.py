@@ -261,6 +261,8 @@ def test_chat_page_loads_when_logged_in(dashboard_client):
     assert b"create-convo-project-id" in resp.data
     assert b"create-convo-bridge-project-ids" in resp.data
     assert b"Apply Files to Repo" in resp.data
+    assert b"CHAT_ATTACHMENT_MAX_FILES" in resp.data
+    assert b"CHAT_ATTACHMENT_MAX_TOTAL_BYTES" in resp.data
 
 
 def test_chat_page_handles_legacy_selected_conversation_shapes(dashboard_client):
