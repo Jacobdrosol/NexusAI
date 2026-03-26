@@ -1248,10 +1248,23 @@ def _looks_like_assignment_test_execution_payload(payload: Dict[str, Any]) -> bo
 
 def _assignment_expected_repo_files(payload: Dict[str, Any]) -> List[str]:
     files: List[str] = []
-    for item in _normalize_string_list(payload.get("deliverables")):
-        normalized = str(item).strip().replace("\\", "/").strip("`")
+    seen: Set[str] = set()
+
+    def _add_candidate(value: Any) -> None:
+        normalized = str(value or "").strip().replace("\\", "/").strip("`")
+        if not normalized or normalized in seen:
+            return
         if _looks_like_repo_file(normalized):
+            seen.add(normalized)
             files.append(normalized)
+
+    _add_candidate(payload.get("path"))
+    workstream = payload.get("workstream") if isinstance(payload.get("workstream"), dict) else {}
+    _add_candidate(workstream.get("path"))
+    for item in _normalize_string_list(payload.get("deliverables")):
+        _add_candidate(item)
+    for item in _normalize_string_list(workstream.get("deliverables")):
+        _add_candidate(item)
     return files
 
 

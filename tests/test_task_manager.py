@@ -6448,6 +6448,20 @@ def test_assignment_validation_rejects_extra_markdown_repo_artifacts_outside_doc
     assert "docs/blocks/graphing.md" in error
 
 
+def test_assignment_expected_repo_files_uses_explicit_workstream_path():
+    from control_plane.task_manager.task_manager import _assignment_expected_repo_files
+
+    payload = {
+        "deliverables": ["README.md containing overview and links."],
+        "workstream": {
+            "path": "docs/blocks/README.md",
+            "deliverables": ["README.md containing overview and links."],
+        },
+    }
+
+    assert _assignment_expected_repo_files(payload) == ["docs/blocks/README.md"]
+
+
 def test_assignment_validation_rejects_external_api_proposals_when_scope_forbids_them():
     from control_plane.task_manager.task_manager import _assignment_validation_error
     from shared.models import Task, TaskMetadata
