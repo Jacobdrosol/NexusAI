@@ -681,6 +681,70 @@ def _assignment_file_candidates(
     return list(merged.values())
 
 
+def _normalize_assignment_repo_path(value: Any) -> str:
+    text = str(value or "").strip().replace("\\", "/").strip("`")
+    if not text:
+        return ""
+    return text
+
+
+def _assignment_looks_like_repo_file(value: Any) -> bool:
+    text = _normalize_assignment_repo_path(value)
+    if not text:
+        return False
+    if text.startswith(("/", "../")):
+        return False
+    parts = [part for part in text.split("/") if part]
+    if len(parts) < 2:
+        return False
+    filename = parts[-1]
+    return "." in filename and not filename.startswith(".")
+
+
+def _assignment_expected_repo_paths(tasks: List[Task]) -> List[str]:
+    expected: List[str] = []
+    seen: set[str] = set()
+
+    def _add_candidate(value: Any) -> None:
+        normalized = _normalize_assignment_repo_path(value)
+        if not _assignment_looks_like_repo_file(normalized):
+            return
+        if normalized in seen:
+            return
+        seen.add(normalized)
+        expected.append(normalized)
+
+    def _add_many(value: Any) -> None:
+        if isinstance(value, list):
+            for item in value:
+                _add_candidate(item)
+
+    for task in sorted(tasks, key=_assignment_task_sort_key):
+        payload = task.payload if isinstance(task.payload, dict) else {}
+        _add_candidate(payload.get("path"))
+        _add_many(payload.get("deliverables"))
+        workstream = payload.get("workstream") if isinstance(payload.get("workstream"), dict) else {}
+        if workstream:
+            _add_candidate(workstream.get("path"))
+            _add_many(workstream.get("deliverables"))
+        planned_workstreams = payload.get("planned_workstreams")
+        if isinstance(planned_workstreams, list):
+            for item in planned_workstreams:
+                if not isinstance(item, dict):
+                    continue
+                _add_candidate(item.get("path"))
+                _add_many(item.get("deliverables"))
+        planned_doc_paths = payload.get("planned_doc_paths")
+        if isinstance(planned_doc_paths, list):
+            for item in planned_doc_paths:
+                if isinstance(item, dict):
+                    _add_candidate(item.get("path"))
+                    _add_many(item.get("deliverables"))
+                else:
+                    _add_candidate(item)
+    return expected
+
+
 def _write_assignment_files(
     *,
     root: Path,
@@ -3051,6 +3115,12 @@ async def review_assignment_in_project_repo_workspace(
         enriched = dict(item)
         enriched["apply_eligible"] = str(item.get("bot_id") or "").strip() in allowed_repo_output_bot_ids
         reviewed_candidates.append(enriched)
+    expected_deliverables = _assignment_expected_repo_paths(scoped_tasks)
+    generated_deliverables = [
+        _normalize_assignment_repo_path(item.get("path"))
+        for item in reviewed_candidates
+        if _normalize_assignment_repo_path(item.get("path"))
+    ]
     review_files = _assignment_file_review_items(
         root=root,
         candidates=reviewed_candidates,
@@ -3058,6 +3128,16 @@ async def review_assignment_in_project_repo_workspace(
         max_content_chars=int(body.max_content_chars),
         diff_context_lines=int(body.diff_context_lines),
     )
+    review_subset_paths = [
+        _normalize_assignment_repo_path(item.get("path"))
+        for item in review_files
+        if _normalize_assignment_repo_path(item.get("path"))
+    ]
+    missing_deliverables = [
+        path for path in expected_deliverables if path not in generated_deliverables
+    ]
+    canonical_suite_complete = bool(expected_deliverables) and not missing_deliverables
+    review_subset_complete = set(generated_deliverables).issubset(set(review_subset_paths))
     status_counts: Dict[str, int] = {}
     for item in review_files:
         status_key = str(item.get("status") or "unknown")
@@ -3092,6 +3172,11 @@ async def review_assignment_in_project_repo_workspace(
         "file_count": len(review_files),
         "apply_eligible_count": sum(1 for item in review_files if bool(item.get("apply_eligible"))),
         "status_counts": status_counts,
+        "expected_deliverables": expected_deliverables,
+        "generated_deliverables": generated_deliverables,
+        "missing_deliverables": missing_deliverables,
+        "canonical_suite_complete": canonical_suite_complete,
+        "review_subset_complete": review_subset_complete,
         "in_progress_task_ids": [task.id for task in scoped_tasks if task.status in {"queued", "blocked", "running"}],
         "review_files": review_files,
         "workspace": snapshot,

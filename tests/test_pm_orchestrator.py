@@ -1089,6 +1089,9 @@ async def test_persist_summary_message_marks_assign_pending_passed_for_same_orch
             "workflow_complete": True,
             "final_qc_required": True,
             "final_qc_completed": True,
+            "deliverables_complete": True,
+            "expected_deliverables": ["docs/blocks/guide.md"],
+            "produced_deliverables": ["docs/blocks/guide.md"],
             "summary_text": "passed run",
         },
     )
@@ -1098,6 +1101,10 @@ async def test_persist_summary_message_marks_assign_pending_passed_for_same_orch
     update_kwargs = chat_manager.update_message.await_args.kwargs
     assert update_kwargs["metadata"]["run_status"] == "passed"
     assert update_kwargs["metadata"]["ingest_allowed"] is True
+    add_kwargs = chat_manager.add_message.await_args.kwargs
+    assert "Expected latest-cycle deliverables: docs/blocks/guide.md" in add_kwargs["content"]
+    assert "Produced latest-cycle deliverables: docs/blocks/guide.md" in add_kwargs["content"]
+    assert "Final QC passed against the full latest-cycle deliverable suite." in add_kwargs["content"]
 
 
 @pytest.mark.anyio

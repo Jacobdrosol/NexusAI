@@ -336,7 +336,11 @@ async def test_review_assignment_previews_generated_files_without_writing(cp_app
 
         task = await cp_app.state.task_manager.create_task(
             bot_id="pm-coder-review",
-            payload={"title": "Preview docs", "step_number": 1},
+            payload={
+                "title": "Preview docs",
+                "step_number": 1,
+                "deliverables": ["docs/existing.md", "docs/new.md"],
+            },
             metadata=TaskMetadata(
                 source="chat_assign",
                 project_id=project_id,
@@ -365,6 +369,11 @@ async def test_review_assignment_previews_generated_files_without_writing(cp_app
     assert body["status"] == "ok"
     assert body["file_count"] == 2
     assert body["assignment_workspace"]["workspace_source"] == "orchestration_temp"
+    assert body["expected_deliverables"] == ["docs/existing.md", "docs/new.md"]
+    assert body["generated_deliverables"] == ["docs/existing.md", "docs/new.md"]
+    assert body["missing_deliverables"] == []
+    assert body["canonical_suite_complete"] is True
+    assert body["review_subset_complete"] is True
     review_files = {item["path"]: item for item in body["review_files"]}
     assert review_files["docs/existing.md"]["status"] == "modified"
     assert review_files["docs/new.md"]["status"] == "new"
@@ -457,3 +466,4 @@ async def test_review_assignment_prefers_repo_output_bot_provenance_for_duplicat
     assert item["path"] == "docs/blocks/roadmap.md"
     assert item["bot_id"] == "pm-coder-review-provenance"
     assert item["apply_eligible"] is True
+    assert body["generated_deliverables"] == ["docs/blocks/roadmap.md"]

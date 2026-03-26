@@ -768,6 +768,16 @@ class PMOrchestrator:
                 f"{', '.join(missing_deliverables)}"
             )
             workflow_policy_codes.append("missing_latest_cycle_deliverables")
+        if expected_repo_deliverables:
+            lines.append(
+                "Expected latest-cycle deliverables: "
+                f"{', '.join(expected_repo_deliverables)}"
+            )
+        if produced_repo_files:
+            lines.append(
+                "Produced latest-cycle deliverables: "
+                f"{', '.join(produced_repo_files)}"
+            )
         if workflow_policy_codes:
             lines.append("Workflow reason codes: " + ", ".join(workflow_policy_codes))
 
@@ -846,8 +856,16 @@ class PMOrchestrator:
             lines.append("Skipped stages: " + ", ".join(skipped_stages))
         if intentionally_excluded_stages:
             lines.append("Intentionally excluded stages (docs-only scope): " + ", ".join(intentionally_excluded_stages))
+        expected_deliverables = [str(item) for item in (completion.get("expected_deliverables") or []) if str(item)]
+        produced_deliverables = [str(item) for item in (completion.get("produced_deliverables") or []) if str(item)]
+        if expected_deliverables:
+            lines.append("Expected latest-cycle deliverables: " + ", ".join(expected_deliverables))
+        if produced_deliverables:
+            lines.append("Produced latest-cycle deliverables: " + ", ".join(produced_deliverables))
         if workflow_policy_codes:
             lines.append("Workflow reason codes: " + ", ".join(workflow_policy_codes))
+        if run_status == "passed" and final_qc_required and final_qc_completed and deliverables_complete:
+            lines.append("Final QC passed against the full latest-cycle deliverable suite.")
         if failed_task_summaries:
             lines.append("Failed tasks:")
             for item in failed_task_summaries[:6]:
