@@ -1236,7 +1236,7 @@ def test_chat_orchestration_graph_api_handles_unavailable_cp(dashboard_client):
     assert resp.status_code == 502
 
 
-def test_chat_orchestration_graph_api_adds_pm_root_and_trigger_parent_edges(dashboard_client):
+def test_chat_orchestration_graph_api_uses_explicit_entry_task_and_trigger_parent_edges(dashboard_client):
     _login_admin(dashboard_client)
 
     class FakeCP:
@@ -1288,8 +1288,8 @@ def test_chat_orchestration_graph_api_adds_pm_root_and_trigger_parent_edges(dash
     assert body is not None
     nodes = body["nodes"]
     by_id = {node["id"]: node for node in nodes}
-    assert by_id["orchestrator::orch-graph-1"]["bot_id"] == "pm-orchestrator"
-    assert by_id["task-step-1"]["depends_on"] == ["orchestrator::orch-graph-1"]
+    assert "orchestrator::orch-graph-1" not in by_id
+    assert by_id["task-step-1"]["depends_on"] == []
     assert by_id["task-step-1"]["title"] == "Research repo implementation patterns"
     assert by_id["task-step-4"]["step_id"] == "step_4"
     assert by_id["task-trigger-coder"]["depends_on"] == ["task-step-4"]
@@ -1364,6 +1364,124 @@ def test_chat_orchestration_graph_api_includes_reference_graph_stage_order(dashb
     nodes = {node["id"]: node for node in body["nodes"]}
     assert nodes["pm_assignment_entry"]["display_name"] == "PM Orchestrator"
     assert nodes["research-1"]["stage_key"] == "pm-research-analyst"
+
+
+def test_chat_orchestration_graph_api_uses_pipeline_entry_graph_for_pm_docs(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_tasks(self, orchestration_id=None, statuses=None, bot_id=None, limit=200, include_content=False):
+            return [
+                {
+                    "id": "pm-docs-entry",
+                    "bot_id": "pm-docs",
+                    "status": "completed",
+                    "payload": {"title": "Docs assignment intake"},
+                    "depends_on": [],
+                    "metadata": {
+                        "source": "chat_assign",
+                        "orchestration_id": "orch-pm-docs",
+                        "pipeline_entry_bot_id": "pm-docs",
+                        "pm_bot_id": "pm-docs",
+                        "root_pm_bot_id": "pm-docs",
+                    },
+                },
+                {
+                    "id": "research-0",
+                    "bot_id": "pm-docs-research",
+                    "status": "completed",
+                    "payload": {"title": "Repo research", "research_step_index": 0},
+                    "depends_on": ["pm-docs-entry"],
+                    "metadata": {
+                        "source": "bot_trigger",
+                        "orchestration_id": "orch-pm-docs",
+                        "parent_task_id": "pm-docs-entry",
+                        "pipeline_entry_bot_id": "pm-docs",
+                    },
+                },
+                {
+                    "id": "engineer-1",
+                    "bot_id": "pm-docs-engineer",
+                    "status": "queued",
+                    "payload": {"title": "Build the docs plan"},
+                    "depends_on": ["research-0"],
+                    "metadata": {
+                        "source": "bot_trigger",
+                        "orchestration_id": "orch-pm-docs",
+                        "parent_task_id": "research-0",
+                        "pipeline_entry_bot_id": "pm-docs",
+                    },
+                },
+            ]
+
+        def get_bot(self, bot_id):
+            if bot_id == "pm-docs":
+                return {
+                    "id": "pm-docs",
+                    "name": "PM Docs",
+                    "workflow": {
+                        "reference_graph": {
+                            "graph_id": "pm-docs-pipeline-v1",
+                            "entry_bot_id": "pm-docs",
+                            "current_bot_id": "pm-docs",
+                            "nodes": [
+                                {"bot_id": "pm-docs", "title": "PM Docs", "stage_kind": "entry"},
+                                {"bot_id": "pm-docs-research", "title": "PM Docs Research", "stage_kind": "research"},
+                                {"bot_id": "pm-docs-engineer", "title": "PM Docs Engineer", "stage_kind": "planning"},
+                                {"bot_id": "pm-docs-writer", "title": "PM Docs Writer", "stage_kind": "implementation"},
+                                {"bot_id": "pm-docs-validator", "title": "PM Docs Validator", "stage_kind": "validation"},
+                                {"bot_id": "pm-docs-final-qc", "title": "PM Docs Final QC", "stage_kind": "final_qc"},
+                            ],
+                            "edges": [
+                                {"source_bot_id": "pm-docs", "target_bot_id": "pm-docs-research", "route_kind": "forward"},
+                                {"source_bot_id": "pm-docs-research", "target_bot_id": "pm-docs-engineer", "route_kind": "forward"},
+                                {"source_bot_id": "pm-docs-engineer", "target_bot_id": "pm-docs-writer", "route_kind": "forward"},
+                                {"source_bot_id": "pm-docs-writer", "target_bot_id": "pm-docs-validator", "route_kind": "forward"},
+                                {"source_bot_id": "pm-docs-validator", "target_bot_id": "pm-docs-final-qc", "route_kind": "forward"},
+                                {"source_bot_id": "pm-docs-validator", "target_bot_id": "pm-docs-writer", "route_kind": "backward"},
+                                {"source_bot_id": "pm-docs-final-qc", "target_bot_id": "pm-docs", "route_kind": "backward"},
+                            ],
+                        }
+                    },
+                }
+            if bot_id == "pm-docs-engineer":
+                return {
+                    "id": "pm-docs-engineer",
+                    "name": "PM Docs Engineer",
+                    "workflow": {
+                        "reference_graph": {
+                            "graph_id": "wrong-local-view",
+                            "entry_bot_id": "pm-docs-engineer",
+                            "current_bot_id": "pm-docs-engineer",
+                            "nodes": [
+                                {"bot_id": "pm-docs-engineer", "title": "PM Docs Engineer", "stage_kind": "planning"},
+                                {"bot_id": "pm-docs-research", "title": "PM Docs Research", "stage_kind": "research"},
+                                {"bot_id": "pm-docs-writer", "title": "PM Docs Writer", "stage_kind": "implementation"},
+                            ],
+                            "edges": [],
+                        }
+                    },
+                }
+            return {"id": bot_id, "name": bot_id}
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/api/chat/orchestrations/orch-pm-docs/graph")
+
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["reference_graph"]["graph_id"] == "pm-docs-pipeline-v1"
+    assert body["stage_order"][:6] == [
+        "pm-docs",
+        "pm-docs-research",
+        "pm-docs-engineer",
+        "pm-docs-writer",
+        "pm-docs-validator",
+        "pm-docs-final-qc",
+    ]
+    nodes = {node["id"]: node for node in body["nodes"]}
+    assert "orchestrator::orch-pm-docs" not in nodes
+    assert nodes["pm-docs-entry"]["bot_id"] == "pm-docs"
+    assert nodes["research-0"]["depends_on"] == ["pm-docs-entry"]
 
 
 def test_chat_orchestration_graph_api_includes_branch_lane_keys(dashboard_client):

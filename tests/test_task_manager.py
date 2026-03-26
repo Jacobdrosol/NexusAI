@@ -1973,6 +1973,120 @@ async def test_auto_retry_downstream_branch_keeps_forward_triggers(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_running_task_watchdog_retries_stalled_running_task(tmp_path, monkeypatch):
+    import asyncio
+
+    from control_plane.task_manager import task_manager as task_manager_module
+    from control_plane.task_manager.task_manager import TaskManager
+
+    attempts: list[int] = []
+
+    class StubScheduler:
+        async def schedule(self, task):
+            retry_attempt = int((task.metadata.retry_attempt or 0) if task.metadata else 0)
+            attempts.append(retry_attempt)
+            if retry_attempt == 0:
+                try:
+                    await asyncio.sleep(3600)
+                except asyncio.CancelledError:
+                    raise
+            return {"output": "ok"}
+
+    def _settings_float(name: str, default: float) -> float:
+        overrides = {
+            "running_task_watchdog_poll_seconds": 0.05,
+            "running_task_watchdog_initial_stall_seconds": 0.15,
+            "running_task_watchdog_progress_grace_seconds": 0.10,
+            "task_retry_delay": 0.0,
+        }
+        return overrides.get(name, default)
+
+    def _settings_int(name: str, default: int) -> int:
+        overrides = {
+            "max_task_retries": 1,
+        }
+        return overrides.get(name, default)
+
+    monkeypatch.setattr(task_manager_module, "_settings_float", _settings_float)
+    monkeypatch.setattr(task_manager_module, "_settings_int", _settings_int)
+    monkeypatch.setattr(task_manager_module, "_settings_bool", lambda name, default: True)
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "watchdog-retry.db"))
+    try:
+        task = await tm.create_task(bot_id="stall-bot", payload={"instruction": "stall"})
+
+        updated = task
+        for _ in range(80):
+            updated = await tm.get_task(task.id)
+            if updated.status == "completed":
+                break
+            await asyncio.sleep(0.05)
+
+        assert updated.status == "completed"
+        assert attempts[:2] == [0, 1]
+        assert updated.metadata is not None
+        assert int(updated.metadata.retry_attempt or 0) == 1
+        assert str(updated.metadata.source or "").strip().lower() == "auto_retry"
+    finally:
+        await tm.close()
+
+
+@pytest.mark.anyio
+async def test_running_task_watchdog_respects_progress_heartbeat(tmp_path, monkeypatch):
+    import asyncio
+
+    from control_plane.task_manager import task_manager as task_manager_module
+    from control_plane.task_manager.task_manager import TaskManager
+
+    attempts: list[int] = []
+    release = asyncio.Event()
+
+    class StubScheduler:
+        async def schedule(self, task):
+            retry_attempt = int((task.metadata.retry_attempt or 0) if task.metadata else 0)
+            attempts.append(retry_attempt)
+            await release.wait()
+            return {"output": "ok"}
+
+    def _settings_float(name: str, default: float) -> float:
+        overrides = {
+            "running_task_watchdog_poll_seconds": 0.05,
+            "running_task_watchdog_initial_stall_seconds": 0.15,
+            "running_task_watchdog_progress_grace_seconds": 0.10,
+            "task_retry_delay": 0.0,
+        }
+        return overrides.get(name, default)
+
+    monkeypatch.setattr(task_manager_module, "_settings_float", _settings_float)
+    monkeypatch.setattr(task_manager_module, "_settings_int", lambda name, default: 1 if name == "max_task_retries" else default)
+    monkeypatch.setattr(task_manager_module, "_settings_bool", lambda name, default: True)
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "watchdog-progress.db"))
+    try:
+        task = await tm.create_task(bot_id="progress-bot", payload={"instruction": "wait for heartbeat"})
+
+        async def _heartbeat_then_release() -> None:
+            await asyncio.sleep(0.20)
+            await tm.update_status(task.id, "running")
+            await asyncio.sleep(0.06)
+            release.set()
+
+        heartbeat = asyncio.create_task(_heartbeat_then_release())
+        updated = task
+        for _ in range(80):
+            updated = await tm.get_task(task.id)
+            if updated.status == "completed":
+                break
+            await asyncio.sleep(0.05)
+        await heartbeat
+
+        assert updated.status == "completed"
+        assert attempts == [0]
+    finally:
+        await tm.close()
+
+
+@pytest.mark.anyio
 async def test_trigger_can_resolve_target_bot_from_result_field(tmp_path):
     import asyncio
 

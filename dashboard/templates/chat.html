@@ -2077,7 +2077,10 @@ function renderDagGraph(graph) {
     element.addEventListener('click', () => selectDagNode(element.dataset.nodeId || ''));
   });
 
-  const defaultNode = nodes.find((node) => String(node.bot_id || '') === 'pm-orchestrator') || nodes[0];
+  const entryBotId = String(graph?.reference_graph?.entry_bot_id || '').trim();
+  const defaultNode = nodes.find((node) => String(node.bot_id || '') === entryBotId)
+    || nodes.find((node) => String(node.bot_id || '') === 'pm-orchestrator')
+    || nodes[0];
   if (defaultNode) selectDagNode(defaultNode.id);
 
   state.className = 'state-info';

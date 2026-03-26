@@ -6,6 +6,7 @@ import os
 import posixpath
 import re
 import shutil
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -574,6 +575,16 @@ def _settings_float(name: str, default: float) -> float:
         return float(SettingsManager.instance().get(name, default))
     except Exception:
         return default
+
+
+def _settings_bool(name: str, default: bool) -> bool:
+    try:
+        value = SettingsManager.instance().get(name, default)
+    except Exception:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _is_retryable_error_message(message: str) -> bool:
@@ -2417,6 +2428,8 @@ class TaskManager:
         self._running_task_ids: set[str] = set()
         self._runner_tasks: Dict[str, asyncio.Task[Any]] = {}
         self._retry_tasks: Set[asyncio.Task[Any]] = set()
+        self._watchdog_task: Optional[asyncio.Task[Any]] = None
+        self._watchdog_state: Dict[str, Dict[str, Any]] = {}
         self._is_closing = False
         self._max_concurrency = max(1, int(os.environ.get("NEXUSAI_TASK_MAX_CONCURRENCY", "4")))
         if db_path is not None:
@@ -2433,7 +2446,8 @@ class TaskManager:
         async with self._lock:
             runner_tasks = [task for task in self._runner_tasks.values() if not task.done()]
             retry_tasks = [task for task in self._retry_tasks if not task.done()]
-        pending = runner_tasks + retry_tasks
+            watchdog_task = self._watchdog_task if self._watchdog_task is not None and not self._watchdog_task.done() else None
+        pending = runner_tasks + retry_tasks + ([watchdog_task] if watchdog_task is not None else [])
         if pending:
             # Give active tasks a short grace period to finish DB writes before
             # cancellation so aiosqlite worker threads do not outlive the loop.
@@ -2448,6 +2462,8 @@ class TaskManager:
             self._runner_tasks.clear()
             self._retry_tasks.clear()
             self._running_task_ids.clear()
+            self._watchdog_state.clear()
+            self._watchdog_task = None
 
     def __del__(self) -> None:
         # Best-effort cancellation for unmanaged instances (e.g. tests without explicit teardown).
@@ -2458,15 +2474,19 @@ class TaskManager:
             for task in list(self._retry_tasks):
                 if not task.done():
                     task.cancel()
+            if self._watchdog_task is not None and not self._watchdog_task.done():
+                self._watchdog_task.cancel()
         except Exception:
             pass
 
     async def _ensure_db(self) -> None:
         """Lazily initialise the SQLite tasks table and load existing rows."""
         if self._db_ready:
+            await self._ensure_watchdog_started()
             return
         async with self._init_lock:
             if self._db_ready:
+                await self._ensure_watchdog_started()
                 return
             Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
             async with open_sqlite(self._db_path) as db:
@@ -2559,6 +2579,95 @@ class TaskManager:
                         failed,
                     )
             self._db_ready = True
+        await self._ensure_watchdog_started()
+
+    async def _ensure_watchdog_started(self) -> None:
+        if self._is_closing or not _settings_bool("running_task_watchdog_enabled", True):
+            return
+        async with self._lock:
+            if self._watchdog_task is not None and not self._watchdog_task.done():
+                return
+            self._watchdog_task = asyncio.create_task(self._running_task_watchdog())
+
+    async def _running_task_watchdog(self) -> None:
+        try:
+            while not self._is_closing:
+                poll_seconds = max(0.1, _settings_float("running_task_watchdog_poll_seconds", 30.0))
+                await asyncio.sleep(poll_seconds)
+                if self._is_closing or not _settings_bool("running_task_watchdog_enabled", True):
+                    continue
+                try:
+                    await self._check_running_tasks_for_stall()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    logger.warning("Running task watchdog check failed: %s", exc)
+        except asyncio.CancelledError:
+            raise
+
+    async def _check_running_tasks_for_stall(self) -> None:
+        initial_stall_seconds = max(
+            0.1,
+            _settings_float("running_task_watchdog_initial_stall_seconds", 600.0),
+        )
+        progress_grace_seconds = max(
+            0.1,
+            _settings_float("running_task_watchdog_progress_grace_seconds", 300.0),
+        )
+        now_monotonic = time.monotonic()
+        to_retry: List[Tuple[str, str, float, float]] = []
+
+        async with self._lock:
+            running_ids = set()
+            for task_id, task in self._tasks.items():
+                if task.status != "running":
+                    self._watchdog_state.pop(task_id, None)
+                    continue
+                running_ids.add(task_id)
+                runner = self._runner_tasks.get(task_id)
+                state = self._watchdog_state.get(task_id)
+                if state is None:
+                    self._watchdog_state[task_id] = {
+                        "last_updated_at": str(task.updated_at or ""),
+                        "last_progress_monotonic": now_monotonic,
+                        "next_deadline_monotonic": now_monotonic + initial_stall_seconds,
+                        "grace_issued": False,
+                    }
+                    continue
+                current_updated_at = str(task.updated_at or "")
+                if current_updated_at and current_updated_at != str(state.get("last_updated_at") or ""):
+                    state["last_updated_at"] = current_updated_at
+                    state["last_progress_monotonic"] = now_monotonic
+                    state["next_deadline_monotonic"] = now_monotonic + progress_grace_seconds
+                    state["grace_issued"] = False
+                    continue
+                next_deadline = float(state.get("next_deadline_monotonic") or 0.0)
+                if now_monotonic < next_deadline:
+                    continue
+                elapsed_since_progress = max(
+                    0.0,
+                    now_monotonic - float(state.get("last_progress_monotonic") or now_monotonic),
+                )
+                if runner is None or runner.done():
+                    to_retry.append((task_id, "runner_inactive", next_deadline, elapsed_since_progress))
+                    continue
+                if not bool(state.get("grace_issued")):
+                    state["grace_issued"] = True
+                    state["next_deadline_monotonic"] = now_monotonic + progress_grace_seconds
+                    logger.warning(
+                        "Task %s exceeded running watchdog window; runner still alive, granting %.1fs progress grace",
+                        task_id,
+                        progress_grace_seconds,
+                    )
+                    continue
+                to_retry.append((task_id, "no_progress_after_live_check", next_deadline, elapsed_since_progress))
+
+            for task_id in list(self._watchdog_state.keys()):
+                if task_id not in running_ids:
+                    self._watchdog_state.pop(task_id, None)
+
+        for task_id, reason, _, elapsed_since_progress in to_retry:
+            await self._retry_stuck_task(task_id, reason=reason, stagnant_seconds=elapsed_since_progress)
 
     async def _migrate_tasks_table(self, db: aiosqlite.Connection) -> None:
         """Ensure new table columns exist for upgraded installations."""
@@ -3386,6 +3495,18 @@ class TaskManager:
                 }
             )
             updated_task = self._tasks[task_id]
+            if status == "running":
+                self._watchdog_state[task_id] = {
+                    "last_updated_at": now,
+                    "last_progress_monotonic": time.monotonic(),
+                    "next_deadline_monotonic": time.monotonic() + max(
+                        0.1,
+                        _settings_float("running_task_watchdog_initial_stall_seconds", 600.0),
+                    ),
+                    "grace_issued": False,
+                }
+            else:
+                self._watchdog_state.pop(task_id, None)
         await self._persist_task(updated_task)
         await self._upsert_bot_run(updated_task)
         if status in {"completed", "failed", "cancelled", "retried"}:
@@ -3395,6 +3516,43 @@ class TaskManager:
             await self._try_unblock_tasks()
         if status == "failed":
             await self._cleanup_failed_orchestration_workspace(updated_task)
+
+    async def _retry_stuck_task(self, task_id: str, *, reason: str, stagnant_seconds: float) -> None:
+        await self._ensure_db()
+        task: Optional[Task] = None
+        runner: Optional[asyncio.Task[Any]] = None
+        async with self._lock:
+            task = self._tasks.get(task_id)
+            if task is None or task.status != "running":
+                self._watchdog_state.pop(task_id, None)
+                return
+            runner = self._runner_tasks.get(task_id)
+            self._watchdog_state.pop(task_id, None)
+        if runner is not None and not runner.done():
+            runner.cancel()
+        task_error = TaskError(
+            message=(
+                f"Task exceeded running watchdog timeout ({reason}); "
+                f"no progress detected for {int(max(0.0, stagnant_seconds))}s."
+            ),
+            code="task_stuck_timeout",
+            details={
+                "reason_code": "task_stuck_timeout",
+                "watchdog_reason": reason,
+                "stagnant_seconds": int(max(0.0, stagnant_seconds)),
+                "bot_id": task.bot_id,
+                "task_id": task.id,
+            },
+        )
+        if await self._requeue_for_retry(task, task_error):
+            logger.warning(
+                "Task %s marked for automatic retry by running-task watchdog: reason=%s stagnant=%ss",
+                task_id,
+                reason,
+                int(max(0.0, stagnant_seconds)),
+            )
+            return
+        await self.update_status(task_id, "failed", error=task_error)
 
     async def _cleanup_failed_orchestration_workspace(self, task: Task) -> None:
         if self._orchestration_workspace_store is None:

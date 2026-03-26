@@ -788,6 +788,7 @@ def api_orchestration_graph(orchestration_id: str):
     bot_cache: Dict[str, Dict[str, Any]] = {}
     bot_name_map: Dict[str, str] = {}
     reference_graph: Dict[str, Any] | None = None
+    pipeline_entry_bot_id = ""
 
     def _bot_doc(bot_id: str) -> Dict[str, Any] | None:
         normalized = str(bot_id or "").strip()
@@ -802,13 +803,42 @@ def api_orchestration_graph(orchestration_id: str):
         bot_cache[normalized] = bot_doc if isinstance(bot_doc, dict) else {}
         return bot_cache[normalized] or None
 
-    distinct_bot_ids = {
-        str(task.get("bot_id") or "").strip()
-        for task in scoped_tasks
-        if str(task.get("bot_id") or "").strip()
-    }
-    distinct_bot_ids.add("pm-orchestrator")
-    for bot_id in distinct_bot_ids:
+    def _metadata_value(task: Dict[str, Any], key: str) -> str:
+        metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+        return str(metadata.get(key) or "").strip()
+
+    root_candidates = []
+    for task in scoped_tasks:
+        metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+        source = str(metadata.get("source") or "").strip().lower()
+        parent_task_id = str(metadata.get("parent_task_id") or "").strip()
+        if source in {"chat_assign", "auto_retry"} or not parent_task_id:
+            root_candidates.append(task)
+    for task in root_candidates + scoped_tasks:
+        for key in ("pipeline_entry_bot_id", "pm_bot_id", "root_pm_bot_id"):
+            candidate = _metadata_value(task, key)
+            if candidate:
+                pipeline_entry_bot_id = candidate
+                break
+        if pipeline_entry_bot_id:
+            break
+        candidate_bot_id = str(task.get("bot_id") or "").strip()
+        if candidate_bot_id:
+            pipeline_entry_bot_id = candidate_bot_id
+            break
+
+    ordered_bot_ids: List[str] = []
+
+    def _add_bot_id(bot_id: str) -> None:
+        normalized = str(bot_id or "").strip()
+        if normalized and normalized not in ordered_bot_ids:
+            ordered_bot_ids.append(normalized)
+
+    _add_bot_id(pipeline_entry_bot_id)
+    for task in scoped_tasks:
+        _add_bot_id(str(task.get("bot_id") or "").strip())
+
+    for bot_id in ordered_bot_ids:
         bot_doc = _bot_doc(bot_id)
         if bot_doc is None:
             bot_name_map[bot_id] = _humanize_bot_id(bot_id)
@@ -816,8 +846,25 @@ def api_orchestration_graph(orchestration_id: str):
         bot_name_map[bot_id] = str(bot_doc.get("name") or _humanize_bot_id(bot_id))
         workflow = bot_doc.get("workflow") if isinstance(bot_doc.get("workflow"), dict) else {}
         candidate_graph = workflow.get("reference_graph") if isinstance(workflow, dict) else None
-        if reference_graph is None and isinstance(candidate_graph, dict) and candidate_graph.get("nodes"):
+        if (
+            reference_graph is None
+            and isinstance(candidate_graph, dict)
+            and candidate_graph.get("nodes")
+            and (
+                not pipeline_entry_bot_id
+                or str(candidate_graph.get("entry_bot_id") or "").strip() == pipeline_entry_bot_id
+                or bot_id == pipeline_entry_bot_id
+            )
+        ):
             reference_graph = candidate_graph
+    if reference_graph is None:
+        for bot_id in ordered_bot_ids:
+            bot_doc = _bot_doc(bot_id)
+            workflow = bot_doc.get("workflow") if isinstance(bot_doc.get("workflow"), dict) else {}
+            candidate_graph = workflow.get("reference_graph") if isinstance(workflow, dict) else None
+            if isinstance(candidate_graph, dict) and candidate_graph.get("nodes"):
+                reference_graph = candidate_graph
+                break
 
     reference_nodes = (
         reference_graph.get("nodes")
@@ -846,12 +893,18 @@ def api_orchestration_graph(orchestration_id: str):
             "pm-ui-tester",
             "pm-final-qc",
         ]
-    for bot_id in sorted(distinct_bot_ids):
+    for bot_id in ordered_bot_ids:
         if bot_id and bot_id not in stage_order:
             stage_order.append(bot_id)
 
     root_node_id = f"orchestrator::{orchestration_id}"
-    has_explicit_orchestrator = any(str(task.get("bot_id") or "").strip() == "pm-orchestrator" for task in scoped_tasks)
+    synthetic_root_bot_id = pipeline_entry_bot_id or "pm-orchestrator"
+    synthetic_root_name = bot_name_map.get(synthetic_root_bot_id, _humanize_bot_id(synthetic_root_bot_id))
+    synthetic_root_stage_kind = str((reference_node_by_bot.get(synthetic_root_bot_id) or {}).get("stage_kind") or "entry")
+    has_explicit_entry_task = any(
+        str((task.get("metadata") or {}).get("source") or "").strip().lower() in {"chat_assign", "auto_retry"}
+        for task in scoped_tasks
+    )
     is_chat_assignment = any(
         str((task.get("metadata") or {}).get("source") or "").strip().lower() in {"chat_assign", "auto_retry", "bot_trigger"}
         for task in scoped_tasks
@@ -859,28 +912,28 @@ def api_orchestration_graph(orchestration_id: str):
 
     nodes = []
     edges = []
-    if scoped_tasks and is_chat_assignment and not has_explicit_orchestrator:
+    if scoped_tasks and is_chat_assignment and not has_explicit_entry_task:
         nodes.append(
             {
                 "id": root_node_id,
-                "title": "PM Orchestrator",
-                "step_id": "pm-orchestrator",
+                "title": synthetic_root_name,
+                "step_id": synthetic_root_bot_id,
                 "status": "completed",
-                "bot_id": "pm-orchestrator",
-                "display_name": bot_name_map.get("pm-orchestrator", "PM Orchestrator"),
-                "stage_key": "pm-orchestrator",
-                "stage_kind": str((reference_node_by_bot.get("pm-orchestrator") or {}).get("stage_kind") or "entry"),
+                "bot_id": synthetic_root_bot_id,
+                "display_name": synthetic_root_name,
+                "stage_key": synthetic_root_bot_id,
+                "stage_kind": synthetic_root_stage_kind,
                 "depends_on": [],
                 "synthetic": True,
                 "details": {
                     "task_id": root_node_id,
                     "run_id": root_node_id,
-                    "title": "PM Orchestrator",
-                    "bot_id": "pm-orchestrator",
-                    "bot_name": bot_name_map.get("pm-orchestrator", "PM Orchestrator"),
+                    "title": synthetic_root_name,
+                    "bot_id": synthetic_root_bot_id,
+                    "bot_name": synthetic_root_name,
                     "status": "completed",
                     "source": "synthetic_root",
-                    "step_id": "pm-orchestrator",
+                    "step_id": synthetic_root_bot_id,
                     "trigger_rule_id": "",
                     "trigger_depth": 0,
                     "parent_task_id": "",
@@ -937,7 +990,7 @@ def api_orchestration_graph(orchestration_id: str):
                 depends_on = join_task_ids
             elif source == "bot_trigger" and parent_task_id:
                 depends_on = [parent_task_id]
-            elif source in {"chat_assign", "auto_retry"} and is_chat_assignment and not has_explicit_orchestrator:
+            elif source in {"chat_assign", "auto_retry"} and is_chat_assignment and not has_explicit_entry_task:
                 depends_on = [root_node_id]
 
         nodes.append(
