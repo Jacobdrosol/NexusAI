@@ -1122,6 +1122,58 @@ def _docs_only_workstream_violations(result: Any) -> List[str]:
     return violations
 
 
+def _docs_only_canonical_workstream_mismatch(
+    payload: Dict[str, Any],
+    result: Any,
+) -> Optional[Dict[str, Any]]:
+    if _assignment_step_kind(payload) != "planning" or not isinstance(result, dict):
+        return None
+    canonical_paths = [
+        str(item or "").strip().replace("\\", "/").strip("`")
+        for item in _normalize_string_list(payload.get("canonical_doc_paths"))
+        if str(item or "").strip()
+    ]
+    if not canonical_paths:
+        return None
+    workstreams = result.get("implementation_workstreams")
+    if not isinstance(workstreams, list) or not workstreams:
+        return {
+            "expected_paths": canonical_paths,
+            "actual_paths": [],
+            "exact_path_errors": ["implementation_workstreams missing or empty"],
+        }
+
+    actual_paths: List[str] = []
+    exact_path_errors: List[str] = []
+    for index, workstream in enumerate(workstreams):
+        if not isinstance(workstream, dict):
+            exact_path_errors.append(f"workstream {index + 1}: not an object")
+            continue
+        title = str(workstream.get("title") or "").strip() or f"workstream {index + 1}"
+        path = str(workstream.get("path") or "").strip().replace("\\", "/").strip("`")
+        deliverables = [
+            str(item or "").strip().replace("\\", "/").strip("`")
+            for item in _normalize_string_list(workstream.get("deliverables"))
+            if str(item or "").strip()
+        ]
+        if path:
+            actual_paths.append(path)
+        else:
+            exact_path_errors.append(f"{title}: missing path")
+        if len(deliverables) != 1:
+            exact_path_errors.append(f"{title}: deliverables must contain exactly one markdown path")
+        elif path and deliverables[0] != path:
+            exact_path_errors.append(f"{title}: deliverables[0] must match path")
+
+    if actual_paths != canonical_paths or exact_path_errors:
+        return {
+            "expected_paths": canonical_paths,
+            "actual_paths": actual_paths,
+            "exact_path_errors": exact_path_errors,
+        }
+    return None
+
+
 def _assignment_scope_alignment_error(payload: Dict[str, Any], result: Any) -> str:
     scope = _payload_assignment_scope(payload)
     if not scope or not isinstance(result, dict):
@@ -1270,6 +1322,7 @@ def _assignment_expected_repo_files(payload: Dict[str, Any]) -> List[str]:
 
 def _docs_only_declared_markdown_paths(payload: Dict[str, Any]) -> Set[str]:
     declared: Set[str] = set()
+    canonical_paths: Set[str] = set()
 
     def _add_candidate(value: Any) -> None:
         normalized = str(value or "").strip().replace("\\", "/").strip("`")
@@ -1278,6 +1331,14 @@ def _docs_only_declared_markdown_paths(payload: Dict[str, Any]) -> Set[str]:
         if not _is_documentation_like_repo_file(normalized):
             return
         declared.add(normalized)
+
+    for item in _normalize_string_list(payload.get("canonical_doc_paths")):
+        normalized = str(item or "").strip().replace("\\", "/").strip("`")
+        if not normalized or not _looks_like_repo_file(normalized):
+            continue
+        if not _is_documentation_like_repo_file(normalized):
+            continue
+        canonical_paths.add(normalized)
 
     for item in _assignment_expected_repo_files(payload):
         _add_candidate(item)
@@ -1289,17 +1350,27 @@ def _docs_only_declared_markdown_paths(payload: Dict[str, Any]) -> Set[str]:
         _add_candidate(item)
     _add_candidate(workstream.get("path"))
 
+    declared.update(canonical_paths)
+
     for item in _normalize_string_list(payload.get("planned_doc_paths")):
-        _add_candidate(item)
+        normalized = str(item or "").strip().replace("\\", "/").strip("`")
+        if canonical_paths and normalized not in canonical_paths:
+            continue
+        _add_candidate(normalized)
 
     planned_workstreams = payload.get("planned_workstreams")
     if isinstance(planned_workstreams, list):
         for item in planned_workstreams:
             if not isinstance(item, dict):
                 continue
-            _add_candidate(item.get("path"))
+            path = str(item.get("path") or "").strip().replace("\\", "/").strip("`")
+            if not canonical_paths or not path or path in canonical_paths:
+                _add_candidate(path)
             for deliverable in _normalize_string_list(item.get("deliverables")):
-                _add_candidate(deliverable)
+                normalized = str(deliverable or "").strip().replace("\\", "/").strip("`")
+                if canonical_paths and normalized not in canonical_paths:
+                    continue
+                _add_candidate(normalized)
 
     return declared
 
@@ -2064,6 +2135,23 @@ def _assignment_validation_failure(task: Task, result: Any) -> Optional[Dict[str
                     "step_kind": step_kind,
                     "violations": docs_only_workstream_violations,
                     "reason_code": "docs_only_non_doc_workstream",
+                },
+            }
+        canonical_workstream_mismatch = _docs_only_canonical_workstream_mismatch(payload, result)
+        if canonical_workstream_mismatch:
+            preview = ", ".join(canonical_workstream_mismatch["actual_paths"][:5]) or "no valid workstream paths"
+            return {
+                "code": "docs_only_canonical_suite_mismatch",
+                "message": (
+                    "Documentation planning result did not honor the required canonical markdown suite. "
+                    f"Actual workstream paths: {preview}."
+                ),
+                "details": {
+                    "step_kind": step_kind,
+                    "reason_code": "docs_only_canonical_suite_mismatch",
+                    "expected_paths": canonical_workstream_mismatch["expected_paths"],
+                    "actual_paths": canonical_workstream_mismatch["actual_paths"],
+                    "exact_path_errors": canonical_workstream_mismatch["exact_path_errors"],
                 },
             }
         unexpected_paths = _result_non_document_repo_paths(result)

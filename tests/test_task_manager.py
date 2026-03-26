@@ -6772,6 +6772,108 @@ def test_assignment_validation_allows_docs_validator_pass_when_sibling_doc_path_
     assert error == ""
 
 
+def test_assignment_validation_rejects_docs_planning_result_that_ignores_canonical_suite():
+    from control_plane.task_manager.task_manager import _assignment_validation_error
+    from shared.models import Task, TaskMetadata
+
+    task = Task(
+        id="task-doc-engineer-canonical",
+        bot_id="pm-docs-engineer",
+        payload={
+            "title": "Synthesize docs research into plan",
+            "instruction": "Create the exact canonical writing plan.",
+            "step_kind": "planning",
+            "canonical_doc_paths": [
+                "docs/blocks/Mathematics-Block-Overview.md",
+                "docs/blocks/Mathematics-Block-Taxonomy.md",
+            ],
+            "assignment_scope": {
+                "docs_only": True,
+                "requested_output_paths": ["docs/blocks"],
+            },
+        },
+        metadata=TaskMetadata(source="bot_trigger", orchestration_id="orch-doc-engineer-canonical"),
+        created_at="2026-03-26T00:00:00+00:00",
+        updated_at="2026-03-26T00:00:00+00:00",
+    )
+
+    result = {
+        "implementation_workstreams": [
+            {
+                "title": "Architecture Overview",
+                "path": "docs/blocks/architecture.md",
+                "deliverables": ["docs/blocks/architecture.md"],
+            },
+            {
+                "title": "Block Taxonomy",
+                "path": "docs/blocks/block-taxonomy.md",
+                "deliverables": ["docs/blocks/block-taxonomy.md"],
+            },
+        ]
+    }
+
+    error = _assignment_validation_error(task, result)
+
+    assert "canonical markdown suite" in error.lower()
+    assert "docs/blocks/architecture.md" in error
+
+
+def test_assignment_validation_rejects_docs_validator_false_pass_when_only_stale_planned_paths_allow_link():
+    from control_plane.task_manager.task_manager import _assignment_validation_error
+    from shared.models import Task, TaskMetadata
+
+    task = Task(
+        id="task-doc-validator-stale-plan",
+        bot_id="pm-docs-validator",
+        payload={
+            "title": "Validate stale docs branch",
+            "instruction": "Validate the scoped docs branch.",
+            "role_hint": "tester",
+            "step_kind": "test_execution",
+            "path": "docs/blocks/block-taxonomy.md",
+            "deliverables": ["docs/blocks/block-taxonomy.md"],
+            "planned_doc_paths": [
+                "docs/blocks/block-taxonomy.md",
+                "docs/blocks/performance-optimizations.md",
+            ],
+            "canonical_doc_paths": [
+                "docs/blocks/Mathematics-Block-Overview.md",
+                "docs/blocks/Mathematics-Block-Taxonomy.md",
+                "docs/blocks/Performance-and-Bandwidth-Guidelines.md",
+            ],
+            "assignment_scope": {
+                "docs_only": True,
+                "requested_output_paths": ["docs/blocks"],
+            },
+            "upstream_artifacts": [
+                {
+                    "path": "docs/blocks/block-taxonomy.md",
+                    "content": (
+                        "# Block Taxonomy\n\n"
+                        "See [Performance Optimizations](./performance-optimizations.md).\n"
+                    ),
+                }
+            ],
+        },
+        metadata=TaskMetadata(source="bot_trigger", orchestration_id="orch-doc-validator-stale-plan"),
+        created_at="2026-03-26T00:00:00+00:00",
+        updated_at="2026-03-26T00:00:00+00:00",
+    )
+
+    result = {
+        "outcome": "pass",
+        "failure_type": "pass",
+        "findings": ["Branch-scoped docs validation passed."],
+        "evidence": ["Validated the assigned markdown path and planned sibling target."],
+        "artifacts": [],
+    }
+
+    error = _assignment_validation_error(task, result)
+
+    assert "broken internal markdown links" in error.lower()
+    assert "./performance-optimizations.md" in error
+
+
 def test_docs_only_specification_branch_still_rejects_extra_markdown_outputs():
     from control_plane.task_manager.task_manager import _docs_only_non_writer_branch_may_reference_upstream_docs
 
