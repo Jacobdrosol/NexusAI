@@ -339,6 +339,52 @@ async def test_update_bot_returns_structured_validation_errors_for_id_mismatch(c
 
 
 @pytest.mark.anyio
+async def test_create_bot_returns_structured_validation_errors_for_reference_graph_fields(cp_client):
+    resp = await cp_client.post(
+        "/v1/bots",
+        json={
+            "id": "bot-with-bad-graph",
+            "name": "Bot With Bad Graph",
+            "role": "assistant",
+            "backends": [],
+            "workflow": {
+                "triggers": [
+                    {
+                        "id": "trigger-1",
+                        "event": "task_completed",
+                        "target_bot_id": "missing-target-bot",
+                    }
+                ],
+                "reference_graph": {
+                    "graph_id": "test-graph",
+                    "entry_bot_id": "bot-with-bad-graph",
+                    "current_bot_id": "wrong-bot-id",
+                    "nodes": [{"bot_id": "bot-with-bad-graph"}],
+                    "edges": [],
+                },
+            },
+        },
+    )
+
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert detail["reason_code"] == "bot_validation_failed"
+    assert detail["message"] == "Bot payload failed workflow validation."
+
+    validation_errors = detail["validation_errors"]
+    assert any(
+        item.get("field_path") == "workflow.reference_graph.current_bot_id"
+        and "current_bot_id" in str(item.get("message") or "").lower()
+        for item in validation_errors
+    )
+    assert any(
+        item.get("field_path") == "workflow.reference_graph.nodes"
+        and "missing node" in str(item.get("message") or "").lower()
+        for item in validation_errors
+    )
+
+
+@pytest.mark.anyio
 async def test_external_bot_trigger_creates_task_with_auth_and_payload_field(cp_client):
     create = await cp_client.post(
         "/v1/bots",

@@ -70,11 +70,7 @@ def _schema_validation_errors(payload: Any, exc: ValidationError) -> List[Dict[s
 def _policy_validation_errors(errors: List[str]) -> List[Dict[str, Any]]:
     validation_errors: List[Dict[str, Any]] = []
     for error in errors:
-        field_path = ""
-        if "workflow.reference_graph" in error:
-            field_path = "workflow.reference_graph"
-        elif "project manager" in error and "workflow triggers" in error:
-            field_path = "workflow.triggers"
+        field_path = _infer_policy_field_path(error)
         validation_errors.append(
             {
                 "field_path": field_path,
@@ -83,6 +79,25 @@ def _policy_validation_errors(errors: List[str]) -> List[Dict[str, Any]]:
             }
         )
     return validation_errors
+
+
+def _infer_policy_field_path(error: str) -> str:
+    error_lower = error.lower()
+    if "workflow.reference_graph.graph_id" in error_lower:
+        return "workflow.reference_graph.graph_id"
+    if "workflow.reference_graph.current_bot_id" in error_lower:
+        return "workflow.reference_graph.current_bot_id"
+    if "workflow.reference_graph.entry_bot_id" in error_lower:
+        return "workflow.reference_graph.entry_bot_id"
+    if "reference graph" in error_lower:
+        if "node" in error_lower:
+            return "workflow.reference_graph.nodes"
+        if "edge" in error_lower:
+            return "workflow.reference_graph.edges"
+        return "workflow.reference_graph"
+    if "project manager" in error_lower and "workflow triggers" in error_lower:
+        return "workflow.triggers"
+    return ""
 
 
 def _parse_bot_payload_or_400(payload: Any) -> Bot:
