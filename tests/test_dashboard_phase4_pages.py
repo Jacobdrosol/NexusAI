@@ -1851,6 +1851,15 @@ def test_settings_page_loads_for_admin(dashboard_client):
     assert b'data-target="section-deploy"' in resp.data
 
 
+def test_bots_page_supports_multi_file_import(dashboard_client):
+    _login_admin(dashboard_client)
+    resp = dashboard_client.get("/bots")
+    assert resp.status_code == 200
+    assert b'Import Bot(s)' in resp.data
+    assert b'id="bot-import-file"' in resp.data
+    assert b'multiple' in resp.data
+
+
 def test_worker_live_endpoint_returns_payload(dashboard_client):
     _login_admin(dashboard_client)
     from dashboard.db import get_db

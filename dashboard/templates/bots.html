@@ -5,12 +5,12 @@
 <div class="page-header">
   <h1>Bots</h1>
   <div style="display:flex;gap:0.5rem;">
-    <button class="btn" type="button" onclick="triggerBotImport()">Import Bot</button>
+    <button class="btn" type="button" onclick="triggerBotImport()">Import Bot(s)</button>
     <button class="btn btn-primary" onclick="showAddBot()">+ Add Bot</button>
   </div>
 </div>
 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-<input type="file" id="bot-import-file" accept=".json" style="display:none;" onchange="handleBotImportFile(event)">
+<input type="file" id="bot-import-file" accept=".json" multiple style="display:none;" onchange="handleBotImportFile(event)">
 {% if error %}
 <div class="alert alert-error">{{ error }}</div>
 {% endif %}
@@ -86,23 +86,54 @@ function triggerBotImport() {
   input.click();
 }
 
-function handleBotImportFile(event) {
-  const file = event?.target?.files?.[0];
-  if (!file) return;
-  file.text()
-    .then((text) => {
+async function handleBotImportFile(event) {
+  const files = Array.from(event?.target?.files || []);
+  if (!files.length) return;
+  const results = [];
+  for (const file of files) {
+    try {
+      const text = await file.text();
       let bundle = null;
       try {
         bundle = JSON.parse(text);
       } catch (err) {
         throw new Error('Imported bot file must be valid JSON.');
       }
-      return submitBotImport(bundle, false);
-    })
-    .catch((e) => alert(e.message));
+      const data = await submitBotImport(bundle, false, file.name);
+      if (!data) {
+        results.push({fileName: file.name, status: 'skipped', message: 'Skipped overwrite.'});
+        continue;
+      }
+      const botId = String((data.bot && data.bot.id) || file.name);
+      results.push({fileName: file.name, status: 'ok', botId, overwritten: !!data.overwritten});
+    } catch (e) {
+      results.push({fileName: file.name, status: 'error', message: e.message || 'Import failed'});
+    }
+  }
+  const okCount = results.filter((item) => item.status === 'ok').length;
+  const skippedCount = results.filter((item) => item.status === 'skipped').length;
+  const failedCount = results.filter((item) => item.status === 'error').length;
+  const lines = results.map((item) => {
+    if (item.status === 'ok') {
+      return 'OK: ' + item.fileName + ' -> ' + item.botId + (item.overwritten ? ' (overwritten)' : '');
+    }
+    if (item.status === 'skipped') {
+      return 'Skipped: ' + item.fileName + ' -> ' + item.message;
+    }
+    return 'Failed: ' + item.fileName + ' -> ' + item.message;
+  });
+  alert(
+    'Bot import complete.\n'
+    + 'Imported: ' + okCount
+    + '\nSkipped: ' + skippedCount
+    + '\nFailed: ' + failedCount
+    + '\n\n'
+    + lines.join('\n')
+  );
+  if (okCount > 0) location.reload();
 }
 
-function submitBotImport(bundle, overwrite) {
+function submitBotImport(bundle, overwrite, fileName) {
   return fetch('/api/bots/import', {
     method: 'POST',
     headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
@@ -111,22 +142,13 @@ function submitBotImport(bundle, overwrite) {
   .then(async (r) => {
     const data = await r.json().catch(() => ({}));
     if (r.status === 409) {
-      const confirmOverwrite = window.confirm('A bot with this id already exists. Overwrite it?');
+      const targetBotId = String(data.bot_id || (((bundle || {}).bot || {}).id) || fileName || 'this bot');
+      const confirmOverwrite = window.confirm('A bot with id "' + targetBotId + '" already exists. Overwrite it?');
       if (!confirmOverwrite) return null;
-      return submitBotImport(bundle, true);
+      return submitBotImport(bundle, true, fileName);
     }
     if (!r.ok) throw new Error(data.error || 'Import failed');
     return data;
-  })
-  .then((data) => {
-    if (!data) return;
-    const importedBotId = String((data.bot && data.bot.id) || '');
-    alert('Bot import completed.');
-    if (importedBotId) {
-      window.location.href = '/bots/' + encodeURIComponent(importedBotId);
-      return;
-    }
-    location.reload();
   });
 }
 
