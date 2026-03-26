@@ -223,6 +223,18 @@
         </div>
         {% endif %}
         <div class="message-body" data-raw-content="{{ m.content|e }}">{{ m.content }}</div>
+        {% if m.metadata and m.metadata.get('attachments') %}
+        <div class="message-attachments">
+          {% for attachment in m.metadata.get('attachments') %}
+          <div class="message-attachment">
+            {% if attachment.get('kind') == 'image' and attachment.get('data_url') %}
+            <div><img src="{{ attachment.get('data_url') }}" alt="{{ attachment.get('name') }}" style="max-width:220px;max-height:160px;border-radius:8px;border:1px solid rgba(255,255,255,0.12);"></div>
+            {% endif %}
+            <div class="mini-note">{{ attachment.get('name') }}{% if attachment.get('mime_type') %} · {{ attachment.get('mime_type') }}{% endif %}</div>
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
         <div class="message-actions">
           <button class="btn btn-sm" onclick="copyMessage(this)">Copy</button>
           {% if not (m.metadata and m.metadata.get('mode') in ['assign_request', 'assign_pending', 'assign_summary', 'pm_run_report', 'assign_error']) %}
@@ -256,10 +268,13 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="conversation_id" value="{{ selected_conversation.id }}">
       <input type="hidden" name="bot_id" id="chat-send-bot-id" value="{{ selected_conversation.default_bot_id or '' }}">
+      <input type="file" id="chat-attachment-input" style="display:none;" multiple onchange="handleChatAttachmentSelect(event)">
       <div class="chat-compose-row">
         <textarea class="form-control" name="content" placeholder="Type a message or use @assign ..." required></textarea>
+        <button type="button" class="btn" onclick="triggerChatAttachmentPicker()">Attach Files</button>
         <button type="button" class="btn btn-primary chat-stream-btn" onclick="sendMessage(true)">Stream Message</button>
       </div>
+      <div id="chat-attachment-list" class="mini-note" style="margin-top:0.5rem;"></div>
       <label class="context-item chat-message-tools-toggle">
         <input type="checkbox" id="use-workspace-tools-message">
         <span>Use workspace tools for this message (if policy allows)</span>
@@ -429,6 +444,9 @@
 const selectedConversationId = {{ (selected_conversation.id if selected_conversation else "")|tojson }};
 const selectedConversationProjectId = {{ (selected_conversation.project_id if selected_conversation and selected_conversation.project_id else "")|tojson }};
 const initialMessages = {{ messages|tojson }};
+const availableBots = {{ bots|tojson }};
+const availableModels = {{ model_catalog|tojson }};
+let pendingComposerAttachments = [];
 const taskEventMap = new Map();
 const messageMap = new Map((initialMessages || []).map((m) => [String(m.id), m]));
 let refreshTimer = null;
@@ -672,6 +690,155 @@ function renderAssignmentContextHtml(meta) {
   `;
 }
 
+function renderMessageAttachmentsHtml(meta) {
+  const attachments = Array.isArray(meta?.attachments) ? meta.attachments : [];
+  if (!attachments.length) return '';
+  return `
+    <div class="message-attachments">
+      ${attachments.map((attachment) => {
+        const name = esc(String(attachment?.name || 'attachment'));
+        const mime = esc(String(attachment?.mime_type || ''));
+        const kind = String(attachment?.kind || '').trim().toLowerCase();
+        const dataUrl = String(attachment?.data_url || '').trim();
+        const preview = kind === 'image' && dataUrl
+          ? `<div><img src="${esc(dataUrl)}" alt="${name}" style="max-width:220px;max-height:160px;border-radius:8px;border:1px solid rgba(255,255,255,0.12);"></div>`
+          : '';
+        return `<div class="message-attachment">${preview}<div class="mini-note">${name}${mime ? ' · ' + mime : ''}</div></div>`;
+      }).join('')}
+    </div>
+  `;
+}
+
+function activeChatBotId() {
+  const selector = document.getElementById('chat-bot-selector');
+  const hidden = document.getElementById('chat-send-bot-id');
+  return String((selector && selector.value) || (hidden && hidden.value) || '').trim();
+}
+
+function activeChatBot() {
+  const botId = activeChatBotId();
+  return Array.isArray(availableBots) ? availableBots.find((bot) => String(bot?.id || '') === botId) : null;
+}
+
+function modelSupportsImages(provider, modelName) {
+  const providerKey = String(provider || '').trim().toLowerCase();
+  const name = String(modelName || '').trim();
+  const catalogEntry = Array.isArray(availableModels)
+    ? availableModels.find((item) => (
+      String(item?.provider || '').trim().toLowerCase() === providerKey
+      && String(item?.name || '').trim() === name
+      && item?.enabled !== false
+    ))
+    : null;
+  if (catalogEntry) {
+    const caps = Array.isArray(catalogEntry.capabilities)
+      ? catalogEntry.capabilities.map((item) => String(item || '').trim().toLowerCase())
+      : [];
+    return caps.some((item) => ['image', 'images', 'vision', 'multimodal'].includes(item));
+  }
+  const lowered = name.toLowerCase();
+  if (providerKey === 'gemini') return true;
+  if (providerKey === 'openai') return ['gpt-4o', 'gpt-4.1', 'gpt-5'].some((token) => lowered.includes(token));
+  if (providerKey === 'claude') return ['claude-3', 'claude-4'].some((token) => lowered.includes(token));
+  if (providerKey === 'ollama_cloud' || providerKey === 'ollama') {
+    return ['vision', '-vl', 'qwen2.5-vl', 'qwen-vl', 'llava'].some((token) => lowered.includes(token));
+  }
+  return false;
+}
+
+function activeBotSupportsImages() {
+  const bot = activeChatBot();
+  const backend = Array.isArray(bot?.backends) && bot.backends.length ? bot.backends[0] : null;
+  return !!backend && modelSupportsImages(backend.provider, backend.model);
+}
+
+function renderComposerAttachments() {
+  const shell = document.getElementById('chat-attachment-list');
+  if (!shell) return;
+  if (!pendingComposerAttachments.length) {
+    shell.innerHTML = '';
+    return;
+  }
+  shell.innerHTML = pendingComposerAttachments.map((attachment, index) => {
+    const name = esc(String(attachment?.name || 'attachment'));
+    const mime = esc(String(attachment?.mime_type || ''));
+    const kind = String(attachment?.kind || '').trim().toLowerCase();
+    const preview = kind === 'image' && attachment?.data_url
+      ? `<img src="${esc(String(attachment.data_url))}" alt="${name}" style="max-width:72px;max-height:56px;border-radius:6px;border:1px solid rgba(255,255,255,0.12);margin-right:0.5rem;">`
+      : '';
+    return `
+      <div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.35rem;">
+        ${preview}
+        <span>${name}${mime ? ' · ' + mime : ''}</span>
+        <button type="button" class="btn btn-sm" onclick="removeComposerAttachment(${index})">Remove</button>
+      </div>
+    `;
+  }).join('');
+}
+
+function removeComposerAttachment(index) {
+  pendingComposerAttachments = pendingComposerAttachments.filter((_, idx) => idx !== index);
+  renderComposerAttachments();
+}
+
+function triggerChatAttachmentPicker() {
+  const input = document.getElementById('chat-attachment-input');
+  if (!input) return;
+  input.value = '';
+  input.click();
+}
+
+function isTextAttachmentFile(file) {
+  const mime = String(file?.type || '').toLowerCase();
+  const name = String(file?.name || '').toLowerCase();
+  if (mime.startsWith('text/')) return true;
+  if (['application/json', 'application/xml', 'application/javascript'].includes(mime)) return true;
+  return ['.md', '.txt', '.json', '.js', '.ts', '.tsx', '.jsx', '.py', '.cs', '.cpp', '.h', '.html', '.css', '.xml', '.yml', '.yaml', '.sql'].some((ext) => name.endsWith(ext));
+}
+
+async function readComposerAttachment(file) {
+  if (String(file?.type || '').toLowerCase().startsWith('image/')) {
+    return await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve({
+        name: file.name,
+        mime_type: file.type || 'image/*',
+        kind: 'image',
+        data_url: String(reader.result || ''),
+      });
+      reader.onerror = () => reject(new Error('Failed to read image attachment: ' + file.name));
+      reader.readAsDataURL(file);
+    });
+  }
+  if (!isTextAttachmentFile(file)) {
+    throw new Error('Unsupported binary attachment: ' + file.name + '. Only images and text/code files are supported right now.');
+  }
+  const text = await file.text();
+  return {
+    name: file.name,
+    mime_type: file.type || 'text/plain',
+    kind: 'text',
+    text_content: text.slice(0, 120000),
+  };
+}
+
+async function handleChatAttachmentSelect(event) {
+  const files = Array.from(event?.target?.files || []);
+  if (!files.length) return;
+  const nextAttachments = [];
+  for (const file of files) {
+    const attachment = await readComposerAttachment(file);
+    nextAttachments.push(attachment);
+  }
+  const hasImage = nextAttachments.some((item) => String(item?.kind || '') === 'image');
+  if (hasImage && !activeBotSupportsImages()) {
+    alert('The selected chat bot model does not support image attachments. Switch to a vision-capable bot first.');
+    return;
+  }
+  pendingComposerAttachments = pendingComposerAttachments.concat(nextAttachments);
+  renderComposerAttachments();
+}
+
 function escapeHtml(text) {
   return String(text || '').replace(/[&<>"']/g, (c) => (
     {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;', "'":'&#39;'}[c]
@@ -870,6 +1037,7 @@ function appendMessage(role, content, id='temp-' + Date.now(), meta=null) {
     ${renderMessageIndicators(meta)}
     ${renderAssignmentContextHtml(meta)}
     <div class="message-body"></div>
+    ${renderMessageAttachmentsHtml(meta)}
     <div class="message-actions">
       ${renderMessageActions(meta)}
     </div>
@@ -945,6 +1113,7 @@ function hydrateMessageElement(el, message) {
   const existingIndicator = el.querySelector('.message-indicator');
   const existingContext = el.querySelector('.message-context');
   const bodyEl = el.querySelector('.message-body');
+  const existingAttachments = el.querySelector('.message-attachments');
   const actionsEl = el.querySelector('.message-actions');
   const failedPm = isFailedPmLikeMessage(message?.metadata || null);
   const assignError = String(message?.metadata?.mode || '').trim() === 'assign_error';
@@ -976,6 +1145,16 @@ function hydrateMessageElement(el, message) {
     }
   } else if (existingContext) {
     existingContext.remove();
+  }
+  const attachmentsHtml = renderMessageAttachmentsHtml(message.metadata || null);
+  if (attachmentsHtml) {
+    if (existingAttachments) {
+      existingAttachments.outerHTML = attachmentsHtml;
+    } else if (bodyEl) {
+      bodyEl.insertAdjacentHTML('afterend', attachmentsHtml);
+    }
+  } else if (existingAttachments) {
+    existingAttachments.remove();
   }
   if (bodyEl) renderMessageBody(bodyEl, message.content || '');
   if (actionsEl) actionsEl.innerHTML = renderMessageActions(message.metadata || null);
@@ -1236,7 +1415,11 @@ async function sendMessage(streamMode) {
   setTaskEventsVisible(false);
   const fd = new FormData(form);
   const content = (fd.get('content') || '').toString().trim();
-  if (!content) return;
+  if (!content && !pendingComposerAttachments.length) return;
+  if (pendingComposerAttachments.some((item) => String(item?.kind || '') === 'image') && !activeBotSupportsImages()) {
+    alert('The selected chat bot model does not support image attachments. Switch bots or remove the screenshots.');
+    return;
+  }
 
   const payload = {
     ...(function() {
@@ -1252,10 +1435,11 @@ async function sendMessage(streamMode) {
     conversation_id: fd.get('conversation_id'),
     content,
     bot_id: fd.get('bot_id') || null,
+    attachments: pendingComposerAttachments.slice(),
   };
 
   if (!streamMode) {
-    const tempUser = appendMessage('user', content);
+    const tempUser = appendMessage('user', content, undefined, pendingComposerAttachments.length ? {attachments: pendingComposerAttachments.slice()} : null);
     if (tempUser) {
       tempUser.dataset.pending = 'true';
     }
@@ -1264,6 +1448,8 @@ async function sendMessage(streamMode) {
       pending.dataset.pendingAssistant = 'true';
     }
     form.querySelector('textarea[name=content]').value = '';
+    pendingComposerAttachments = [];
+    renderComposerAttachments();
     startMessagePolling();
     try {
       const res = await fetch('/api/chat/messages', {
@@ -1324,7 +1510,7 @@ async function sendMessage(streamMode) {
     }
   }
 
-  const tempUser = appendMessage('user', content);
+  const tempUser = appendMessage('user', content, undefined, pendingComposerAttachments.length ? {attachments: pendingComposerAttachments.slice()} : null);
   if (tempUser) {
     tempUser.dataset.pending = 'true';
     tempUser.dataset.pendingUser = 'true';
@@ -1335,6 +1521,8 @@ async function sendMessage(streamMode) {
   }
   form.reset();
   syncSendBotSelection();
+  pendingComposerAttachments = [];
+  renderComposerAttachments();
   let sawDone = false;
   try {
     const res = await fetch('/api/chat/stream', {
@@ -2113,11 +2301,17 @@ bindConversationActions();
 document.getElementById('create-convo-scope')?.addEventListener('change', syncConversationScopeFields);
 document.getElementById('create-convo-tool-enabled')?.addEventListener('change', syncCreateConversationToolFields);
 document.getElementById('chat-tool-enabled')?.addEventListener('change', syncConversationToolAccessEditor);
-document.getElementById('chat-bot-selector')?.addEventListener('change', syncSendBotSelection);
+document.getElementById('chat-bot-selector')?.addEventListener('change', () => {
+  syncSendBotSelection();
+  if (pendingComposerAttachments.some((item) => String(item?.kind || '') === 'image') && !activeBotSupportsImages()) {
+    alert('The newly selected chat bot model does not support image attachments. Remove the screenshots or switch back to a vision-capable bot.');
+  }
+});
 syncConversationScopeFields();
 syncCreateConversationToolFields();
 syncConversationToolAccessEditor();
 syncSendBotSelection();
+renderComposerAttachments();
 setTaskEventsVisible(false);
 startMessagePolling();
 document.querySelectorAll('#messages .message').forEach((messageEl) => {

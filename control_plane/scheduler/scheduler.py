@@ -1036,6 +1036,132 @@ def _prepare_payload_for_backend(bot: Any, backend: BackendConfig, payload: Any,
     )
 
 
+def _parse_data_url(data_url: str) -> tuple[str, str] | None:
+    text = str(data_url or "").strip()
+    if not text.startswith("data:") or ";base64," not in text:
+        return None
+    header, encoded = text.split(",", 1)
+    mime_type = header[len("data:"):].split(";", 1)[0].strip().lower() or "application/octet-stream"
+    if not encoded:
+        return None
+    return mime_type, encoded
+
+
+def _normalize_message_parts_for_provider(content: Any) -> list[dict[str, Any]]:
+    if isinstance(content, list):
+        parts = [item for item in content if isinstance(item, dict)]
+        if parts:
+            return parts
+    return [{"type": "text", "text": str(content or "")}]
+
+
+def _messages_for_openai(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for message in messages:
+        role = str(message.get("role") or "user")
+        parts = _normalize_message_parts_for_provider(message.get("content"))
+        content_parts: list[dict[str, Any]] = []
+        for part in parts:
+            part_type = str(part.get("type") or "").strip().lower()
+            if part_type == "image_url":
+                image = part.get("image_url") if isinstance(part.get("image_url"), dict) else {}
+                url = str(image.get("url") or "").strip()
+                if url:
+                    content_parts.append({"type": "image_url", "image_url": {"url": url}})
+                continue
+            content_parts.append({"type": "text", "text": str(part.get("text") or "")})
+        if len(content_parts) == 1 and content_parts[0]["type"] == "text":
+            normalized.append({"role": role, "content": content_parts[0]["text"]})
+        else:
+            normalized.append({"role": role, "content": content_parts})
+    return normalized
+
+
+def _messages_for_ollama(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for message in messages:
+        role = str(message.get("role") or "user")
+        parts = _normalize_message_parts_for_provider(message.get("content"))
+        text_parts: list[str] = []
+        images: list[str] = []
+        for part in parts:
+            part_type = str(part.get("type") or "").strip().lower()
+            if part_type == "image_url":
+                image = part.get("image_url") if isinstance(part.get("image_url"), dict) else {}
+                parsed = _parse_data_url(str(image.get("url") or ""))
+                if parsed is not None:
+                    _, encoded = parsed
+                    images.append(encoded)
+                continue
+            text = str(part.get("text") or "")
+            if text:
+                text_parts.append(text)
+        entry: dict[str, Any] = {"role": role, "content": "\n\n".join(text_parts)}
+        if images:
+            entry["images"] = images
+        normalized.append(entry)
+    return normalized
+
+
+def _claude_payload_messages(messages: list[dict[str, Any]]) -> tuple[str | None, list[dict[str, Any]]]:
+    system_chunks: list[str] = []
+    normalized: list[dict[str, Any]] = []
+    for message in messages:
+        role = str(message.get("role") or "user").strip().lower()
+        parts = _normalize_message_parts_for_provider(message.get("content"))
+        content_parts: list[dict[str, Any]] = []
+        for part in parts:
+            part_type = str(part.get("type") or "").strip().lower()
+            if part_type == "image_url":
+                image = part.get("image_url") if isinstance(part.get("image_url"), dict) else {}
+                parsed = _parse_data_url(str(image.get("url") or ""))
+                if parsed is None:
+                    continue
+                mime_type, encoded = parsed
+                content_parts.append(
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": mime_type,
+                            "data": encoded,
+                        },
+                    }
+                )
+                continue
+            content_parts.append({"type": "text", "text": str(part.get("text") or "")})
+        if role == "system":
+            text_only = "\n\n".join(str(part.get("text") or "") for part in content_parts if part.get("type") == "text").strip()
+            if text_only:
+                system_chunks.append(text_only)
+            continue
+        normalized.append({"role": "assistant" if role == "assistant" else "user", "content": content_parts or [{"type": "text", "text": ""}]})
+    system_prompt = "\n\n".join(chunk for chunk in system_chunks if chunk).strip() or None
+    return system_prompt, normalized
+
+
+def _gemini_contents(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    contents: list[dict[str, Any]] = []
+    for message in messages:
+        role = str(message.get("role") or "user").strip().lower()
+        parts = _normalize_message_parts_for_provider(message.get("content"))
+        gemini_parts: list[dict[str, Any]] = []
+        for part in parts:
+            part_type = str(part.get("type") or "").strip().lower()
+            if part_type == "image_url":
+                image = part.get("image_url") if isinstance(part.get("image_url"), dict) else {}
+                parsed = _parse_data_url(str(image.get("url") or ""))
+                if parsed is None:
+                    continue
+                mime_type, encoded = parsed
+                gemini_parts.append({"inline_data": {"mime_type": mime_type, "data": encoded}})
+                continue
+            gemini_parts.append({"text": str(part.get("text") or "")})
+        if gemini_parts:
+            contents.append({"role": "model" if role == "assistant" else "user", "parts": gemini_parts})
+    return contents
+
+
 class Scheduler:
     def __init__(
         self,
@@ -1528,6 +1654,7 @@ class Scheduler:
             if isinstance(payload, list)
             else [{"role": "user", "content": str(payload)}]
         )
+        messages = _messages_for_openai(messages)
         params_dict = backend.params.model_dump(exclude_none=True) if backend.params else {}
         body: dict = {
             "model": backend.model,
@@ -1566,6 +1693,7 @@ class Scheduler:
             if isinstance(payload, list)
             else [{"role": "user", "content": str(payload)}]
         )
+        messages = _messages_for_ollama(messages)
         params_dict = backend.params.model_dump(exclude_none=True) if backend.params else {}
         body: dict = {
             "model": backend.model,
@@ -1624,6 +1752,7 @@ class Scheduler:
             if isinstance(payload, list)
             else [{"role": "user", "content": str(payload)}]
         )
+        system_prompt, messages = _claude_payload_messages(messages)
         params_dict = backend.params.model_dump(exclude_none=True) if backend.params else {}
         max_tokens = params_dict.pop("max_tokens", 1024)
         body: dict = {
@@ -1631,6 +1760,8 @@ class Scheduler:
             "max_tokens": max_tokens,
             "messages": messages,
         }
+        if system_prompt:
+            body["system"] = system_prompt
         body.update(params_dict)
         async with httpx.AsyncClient(timeout=_cloud_timeout()) as client:
             response = await client.post(
@@ -1664,12 +1795,8 @@ class Scheduler:
             if isinstance(payload, list)
             else [{"role": "user", "content": str(payload)}]
         )
-        # Convert messages to Gemini format
-        parts = []
-        for msg in messages:
-            parts.append({"text": msg.get("content", "")})
         body = {
-            "contents": [{"parts": parts}],
+            "contents": _gemini_contents(messages),
         }
         params_dict = backend.params.model_dump(exclude_none=True) if backend.params else {}
         if params_dict:

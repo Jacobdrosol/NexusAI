@@ -359,6 +359,10 @@ def chat_page() -> str:
             projects = cp.list_projects() or []
         except Exception:
             projects = []
+        try:
+            model_catalog = cp.list_models() or []
+        except Exception:
+            model_catalog = []
 
         selected_id = str(request.args.get("conversation_id") or "").strip()
         selected = None
@@ -444,6 +448,7 @@ def chat_page() -> str:
             repo_context_items=repo_context_items,
             repo_context_sections=repo_context_sections,
             repo_context_item_ids=repo_context_item_ids,
+            model_catalog=model_catalog,
             error=page_error,
         )
     except Exception:
@@ -463,6 +468,7 @@ def chat_page() -> str:
             repo_context_items=[],
             repo_context_sections=[],
             repo_context_item_ids=[],
+            model_catalog=[],
             error="Chat view is temporarily unavailable. Start a new chat or refresh.",
         )
 
@@ -545,8 +551,9 @@ def api_send_message():
     data: dict[str, Any] = request.get_json(force=True) or {}
     conversation_id = (data.get("conversation_id") or "").strip()
     content = (data.get("content") or "").strip()
-    if not conversation_id or not content:
-        return jsonify({"error": "conversation_id and content are required"}), 400
+    attachments = data.get("attachments") if isinstance(data.get("attachments"), list) else []
+    if not conversation_id or (not content and not attachments):
+        return jsonify({"error": "conversation_id and either content or attachments are required"}), 400
     cp = get_cp_client()
 
     resp = cp.post_message(
@@ -554,6 +561,7 @@ def api_send_message():
         {
             "content": content,
             "bot_id": data.get("bot_id"),
+            "attachments": data.get("attachments") or [],
             "context_items": data.get("context_items"),
             "context_item_ids": data.get("context_item_ids"),
             "include_project_context": data.get("include_project_context", False),
@@ -632,8 +640,9 @@ def api_send_message_stream():
     data: dict[str, Any] = request.get_json(force=True) or {}
     conversation_id = (data.get("conversation_id") or "").strip()
     content = (data.get("content") or "").strip()
-    if not conversation_id or not content:
-        return jsonify({"error": "conversation_id and content are required"}), 400
+    attachments = data.get("attachments") if isinstance(data.get("attachments"), list) else []
+    if not conversation_id or (not content and not attachments):
+        return jsonify({"error": "conversation_id and either content or attachments are required"}), 400
 
     cp = get_cp_client()
     cp_base = (
@@ -645,6 +654,7 @@ def api_send_message_stream():
     payload = {
         "content": content,
         "bot_id": data.get("bot_id"),
+        "attachments": data.get("attachments") or [],
         "context_items": data.get("context_items"),
         "context_item_ids": data.get("context_item_ids"),
         "include_project_context": data.get("include_project_context", False),

@@ -972,6 +972,33 @@ def test_chat_stream_api_validates_required_fields(dashboard_client):
     assert resp.status_code == 400
 
 
+def test_chat_page_supports_attachment_picker(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_conversations(self, archived="all"):
+            return [{"id": "c1", "title": "Chat 1", "scope": "global"}]
+
+        def list_bots(self):
+            return [{"id": "bot-vision", "name": "Vision Bot", "backends": [{"provider": "openai", "model": "gpt-4o-mini"}]}]
+
+        def list_projects(self):
+            return []
+
+        def list_models(self):
+            return [{"id": "openai-gpt-4o-mini", "name": "gpt-4o-mini", "provider": "openai", "capabilities": ["vision"], "enabled": True}]
+
+        def list_vault_items(self, **kwargs):
+            return []
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/chat?conversation_id=c1")
+
+    assert resp.status_code == 200
+    assert b'id="chat-attachment-input"' in resp.data
+    assert b'Attach Files' in resp.data
+
+
 def test_chat_message_api_surfaces_control_plane_error(dashboard_client):
     _login_admin(dashboard_client)
 
@@ -990,6 +1017,31 @@ def test_chat_message_api_surfaces_control_plane_error(dashboard_client):
 
     assert resp.status_code == 400
     assert b"Bot backend chain is empty" in resp.data
+
+
+def test_chat_message_api_proxies_attachments(dashboard_client):
+    _login_admin(dashboard_client)
+    seen = {}
+
+    class FakeCP:
+        def post_message(self, conversation_id, body):
+            seen["conversation_id"] = conversation_id
+            seen["body"] = body
+            return {"user_message": {"id": "u1", "content": body.get("content", "")}, "assistant_message": {"id": "a1", "content": "ok"}}
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/chat/messages",
+            json={
+                "conversation_id": "c1",
+                "content": "review this",
+                "attachments": [{"name": "notes.md", "mime_type": "text/markdown", "kind": "text", "text_content": "# Notes"}],
+            },
+        )
+
+    assert resp.status_code == 200
+    assert seen["conversation_id"] == "c1"
+    assert seen["body"]["attachments"][0]["name"] == "notes.md"
 
 
 def test_chat_messages_api_proxies_control_plane_messages(dashboard_client):

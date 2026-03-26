@@ -817,6 +817,7 @@ class PMOrchestrator:
         completed = int(completion.get("completed") or 0)
         pm_bot_id = str(assignment.get("pm_bot_id") or "")
         orchestration_id = str(assignment.get("orchestration_id") or "")
+        failed_task_summaries = await self._failed_task_summaries(orchestration_id)
         lines = [
             f"PM run {run_status}.",
             f"Assigned Bot: {pm_bot_id}",
@@ -847,6 +848,10 @@ class PMOrchestrator:
             lines.append("Intentionally excluded stages (docs-only scope): " + ", ".join(intentionally_excluded_stages))
         if workflow_policy_codes:
             lines.append("Workflow reason codes: " + ", ".join(workflow_policy_codes))
+        if failed_task_summaries:
+            lines.append("Failed tasks:")
+            for item in failed_task_summaries[:6]:
+                lines.append(f"- {item}")
         try:
             existing_messages = await self._chat_manager.list_messages(conversation_id, limit=500)
             for message in existing_messages:
@@ -895,9 +900,46 @@ class PMOrchestrator:
                 "missing_stages": missing_stages,
                 "skipped_stages": skipped_stages,
                 "workflow_policy_codes": workflow_policy_codes,
+                "failed_task_summaries": failed_task_summaries,
                 "full_summary_text": str(completion.get("summary_text") or ""),
             },
         )
+
+    async def _failed_task_summaries(self, orchestration_id: str) -> List[str]:
+        if not orchestration_id or self._task_manager is None or not hasattr(self._task_manager, "list_tasks"):
+            return []
+        try:
+            tasks = await self._task_manager.list_tasks(orchestration_id=orchestration_id)
+        except Exception:
+            return []
+        summaries: List[str] = []
+        for task in tasks or []:
+            if str(getattr(task, "status", "") or "").strip().lower() != "failed":
+                continue
+            title = ""
+            if isinstance(getattr(task, "payload", None), dict):
+                title = str(task.payload.get("title") or "").strip()
+            bot_id = str(getattr(task, "bot_id", "") or "").strip() or "unknown-bot"
+            label = title or bot_id
+            error = getattr(task, "error", None)
+            error_code = ""
+            error_message = ""
+            if error is not None:
+                error_code = str(getattr(error, "code", "") or "").strip()
+                error_message = str(getattr(error, "message", "") or "").strip()
+            result = getattr(task, "result", None)
+            failure_type = ""
+            if isinstance(result, dict):
+                failure_type = str(result.get("failure_type") or result.get("outcome") or "").strip()
+            fragments = [f"{label} ({bot_id})"]
+            if error_code:
+                fragments.append(f"code={error_code}")
+            elif failure_type:
+                fragments.append(f"failure_type={failure_type}")
+            if error_message:
+                fragments.append(error_message[:220])
+            summaries.append(" - ".join(fragment for fragment in fragments if fragment))
+        return summaries
 
     async def _workflow_stage_order_for_assignment(self, assignment: Dict[str, Any]) -> List[str]:
         pm_bot_id = str(

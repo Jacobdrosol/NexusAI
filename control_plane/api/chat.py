@@ -63,6 +63,15 @@ class PostMessageRequest(BaseModel):
     context_item_ids: Optional[List[str]] = None
     include_project_context: bool = False
     use_workspace_tools: bool = False
+    attachments: List["ChatAttachmentInput"] = Field(default_factory=list)
+
+
+class ChatAttachmentInput(BaseModel):
+    name: str
+    mime_type: str
+    kind: Literal["image", "text"]
+    data_url: Optional[str] = None
+    text_content: Optional[str] = None
 
 
 class UpdateConversationToolAccessRequest(BaseModel):
@@ -119,6 +128,119 @@ _REQUEST_PERMISSION_LINE_RE = re.compile(
     r"let\s+me\s+know\s+which\s+files|which\s+files\s+would\s+you\s+like\s+me\s+to\s+read)\b",
     re.IGNORECASE,
 )
+_IMAGE_CAPABILITY_MARKERS = {"image", "images", "vision", "multimodal"}
+_TEXT_ATTACHMENT_CHAR_LIMIT = 120_000
+
+
+def _attachment_payload_dicts(attachments: List[ChatAttachmentInput]) -> List[Dict[str, Any]]:
+    normalized: List[Dict[str, Any]] = []
+    for item in attachments or []:
+        kind = str(item.kind or "").strip().lower()
+        name = str(item.name or "").strip() or "attachment"
+        mime_type = str(item.mime_type or "").strip().lower() or "application/octet-stream"
+        if kind == "image":
+            data_url = str(item.data_url or "").strip()
+            if not data_url.startswith("data:image/"):
+                raise HTTPException(status_code=400, detail=f"Attachment '{name}' must provide an image data URL.")
+            normalized.append(
+                {
+                    "name": name,
+                    "mime_type": mime_type,
+                    "kind": "image",
+                    "data_url": data_url,
+                }
+            )
+            continue
+        text_content = str(item.text_content or "")
+        if not text_content.strip():
+            raise HTTPException(status_code=400, detail=f"Attachment '{name}' must include text content.")
+        normalized.append(
+            {
+                "name": name,
+                "mime_type": mime_type,
+                "kind": "text",
+                "text_content": text_content[:_TEXT_ATTACHMENT_CHAR_LIMIT],
+            }
+        )
+    return normalized
+
+
+def _message_attachment_parts(metadata: Any) -> List[Dict[str, Any]]:
+    if not isinstance(metadata, dict):
+        return []
+    raw = metadata.get("attachments")
+    if not isinstance(raw, list):
+        return []
+    parts: List[Dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("kind") or "").strip().lower()
+        name = str(item.get("name") or "").strip() or "attachment"
+        mime_type = str(item.get("mime_type") or "").strip() or "application/octet-stream"
+        if kind == "image":
+            data_url = str(item.get("data_url") or "").strip()
+            if data_url.startswith("data:image/"):
+                parts.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": data_url},
+                        "name": name,
+                        "mime_type": mime_type,
+                    }
+                )
+            continue
+        text_content = str(item.get("text_content") or "")
+        if text_content.strip():
+            parts.append(
+                {
+                    "type": "text",
+                    "text": f"[Attached file: {name} ({mime_type})]\n{text_content}",
+                    "name": name,
+                    "mime_type": mime_type,
+                }
+            )
+    return parts
+
+
+async def _target_supports_image_attachments(request: Request, *, target_bot_id: str) -> bool:
+    bot_registry = getattr(request.app.state, "bot_registry", None)
+    model_registry = getattr(request.app.state, "model_registry", None)
+    if bot_registry is None:
+        return False
+    try:
+        bot = await bot_registry.get(target_bot_id)
+    except Exception:
+        return False
+    backends = getattr(bot, "backends", None) or []
+    if not backends:
+        return False
+    backend = backends[0]
+    provider = str(getattr(backend, "provider", "") or "").strip().lower()
+    model_name = str(getattr(backend, "model", "") or "").strip()
+    if model_registry is not None:
+        try:
+            for catalog_model in await model_registry.list():
+                if not bool(getattr(catalog_model, "enabled", True)):
+                    continue
+                if str(getattr(catalog_model, "provider", "") or "").strip().lower() != provider:
+                    continue
+                if str(getattr(catalog_model, "name", "") or "").strip() != model_name:
+                    continue
+                caps = {str(item or "").strip().lower() for item in (getattr(catalog_model, "capabilities", None) or [])}
+                return bool(caps & _IMAGE_CAPABILITY_MARKERS)
+        except Exception:
+            pass
+    lowered_model = model_name.lower()
+    if provider == "gemini":
+        return True
+    if provider == "openai":
+        return any(token in lowered_model for token in ("gpt-4o", "gpt-4.1", "gpt-5"))
+    if provider == "claude":
+        return any(token in lowered_model for token in ("claude-3", "claude-4"))
+    if provider in {"ollama_cloud", "ollama"}:
+        return any(token in lowered_model for token in ("vision", "-vl", "qwen2.5-vl", "qwen-vl", "llava"))
+    return False
 _GROUNDING_NOTE_LINE_RE = re.compile(r"^\s*grounding\s+note\s*:\s*", re.IGNORECASE)
 _PLANNING_PREAMBLE_LINE_RE = re.compile(
     r"^\s*(i(?:\s*['’]ll|\s+will)\s+help\s+you\b|"
@@ -289,7 +411,17 @@ def _messages_to_payload(
     context_items: Optional[List[str]] = None,
     require_repo_evidence: bool = False,
 ) -> List[dict]:
-    payload = [{"role": m.role, "content": m.content} for m in messages]
+    payload: List[dict] = []
+    for message in messages:
+        attachment_parts = _message_attachment_parts(message.metadata)
+        if attachment_parts:
+            content_parts: List[Dict[str, Any]] = []
+            if str(message.content or "").strip():
+                content_parts.append({"type": "text", "text": str(message.content)})
+            content_parts.extend(attachment_parts)
+            payload.append({"role": message.role, "content": content_parts})
+        else:
+            payload.append({"role": message.role, "content": message.content})
     resolved_context = list(context_items or [])
     sources = _context_source_labels(resolved_context, limit=12)
     if resolved_context:
@@ -1667,7 +1799,7 @@ async def mark_pm_run_failed(conversation_id: str, orchestration_id: str, reques
 
 @router.post("/conversations/{conversation_id}/messages")
 async def post_message(conversation_id: str, request: Request, body: PostMessageRequest) -> dict:
-    await enforce_body_size(request, route_name="chat_messages", default_max_bytes=200_000)
+    await enforce_body_size(request, route_name="chat_messages", default_max_bytes=8_000_000)
     await enforce_rate_limit(
         request,
         route_name="chat_messages",
@@ -1679,6 +1811,15 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
     pm_orchestrator = request.app.state.pm_orchestrator
     try:
         conversation = await chat_manager.get_conversation(conversation_id)
+        target_bot_id = body.bot_id or conversation.default_bot_id
+        attachments = _attachment_payload_dicts(body.attachments)
+        if any(str(item.get("kind") or "") == "image" for item in attachments):
+            if not target_bot_id:
+                raise HTTPException(status_code=400, detail="Image attachments require an explicit bot or conversation bot.")
+            if not await _target_supports_image_attachments(request, target_bot_id=target_bot_id):
+                raise HTTPException(status_code=400, detail="The selected bot model does not support image attachments.")
+        if not str(body.content or "").strip() and not attachments:
+            raise HTTPException(status_code=400, detail="content or attachments are required")
         assign_instruction = _extract_assign_instruction(body.content)
         user_message_metadata = None
         if assign_instruction is not None:
@@ -1687,6 +1828,10 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                 "mode": "assign_request",
                 "requested_pm_bot_id": requested_pm_bot_id,
             }
+        if attachments:
+            base_meta = dict(user_message_metadata or {})
+            base_meta["attachments"] = attachments
+            user_message_metadata = base_meta
         user_message = await chat_manager.add_message(
             conversation_id=conversation_id,
             role="user",
@@ -1802,7 +1947,6 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
             }
 
         messages = await chat_manager.list_messages(conversation_id)
-        target_bot_id = body.bot_id or conversation.default_bot_id
         if not target_bot_id:
             return {"user_message": user_message, "assistant_message": None}
 
@@ -1889,7 +2033,7 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
 
 @router.post("/conversations/{conversation_id}/stream")
 async def stream_message(conversation_id: str, request: Request, body: PostMessageRequest) -> StreamingResponse:
-    await enforce_body_size(request, route_name="chat_stream", default_max_bytes=200_000)
+    await enforce_body_size(request, route_name="chat_stream", default_max_bytes=8_000_000)
     await enforce_rate_limit(
         request,
         route_name="chat_stream",
@@ -1904,6 +2048,15 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
     async def event_gen() -> AsyncGenerator[str, None]:
         try:
             conversation = await chat_manager.get_conversation(conversation_id)
+            target_bot_id = body.bot_id or conversation.default_bot_id
+            attachments = _attachment_payload_dicts(body.attachments)
+            if any(str(item.get("kind") or "") == "image" for item in attachments):
+                if not target_bot_id:
+                    raise HTTPException(status_code=400, detail="Image attachments require an explicit bot or conversation bot.")
+                if not await _target_supports_image_attachments(request, target_bot_id=target_bot_id):
+                    raise HTTPException(status_code=400, detail="The selected bot model does not support image attachments.")
+            if not str(body.content or "").strip() and not attachments:
+                raise HTTPException(status_code=400, detail="content or attachments are required")
             assign_instruction = _extract_assign_instruction(body.content)
             user_message_metadata = None
             if assign_instruction is not None:
@@ -1912,6 +2065,10 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                     "mode": "assign_request",
                     "requested_pm_bot_id": requested_pm_bot_id,
                 }
+            if attachments:
+                base_meta = dict(user_message_metadata or {})
+                base_meta["attachments"] = attachments
+                user_message_metadata = base_meta
             user_message = await chat_manager.add_message(
                 conversation_id=conversation_id,
                 role="user",
@@ -2052,7 +2209,6 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                 return
 
             messages = await chat_manager.list_messages(conversation_id)
-            target_bot_id = body.bot_id or conversation.default_bot_id
             if not target_bot_id:
                 yield "event: done\ndata: {}\n\n"
                 return
