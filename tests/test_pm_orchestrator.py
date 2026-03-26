@@ -1507,6 +1507,163 @@ async def test_wait_for_completion_requires_latest_cycle_deliverables() -> None:
 
 
 @pytest.mark.anyio
+async def test_wait_for_completion_collects_expected_deliverables_from_workstream_payloads() -> None:
+    pm_bot = Bot(
+        id="pm-docs",
+        name="PM Docs",
+        role="pm",
+        backends=[],
+        enabled=True,
+        workflow={
+            "reference_graph": {
+                "graph_id": "pm-docs-graph",
+                "entry_bot_id": "pm-docs",
+                "current_bot_id": "pm-docs",
+                "nodes": [
+                    {"bot_id": "pm-docs", "title": "PM Docs"},
+                    {"bot_id": "pm-docs-engineer", "title": "PM Docs Engineer"},
+                    {"bot_id": "pm-docs-writer", "title": "PM Docs Writer"},
+                    {"bot_id": "pm-docs-final-qc", "title": "PM Docs Final QC"},
+                ],
+                "edges": [],
+            },
+            "triggers": [],
+        },
+    )
+    root_task = Task(
+        id="task-pm-docs",
+        bot_id="pm-docs",
+        payload={"title": "PM assignment intake"},
+        metadata=TaskMetadata(source="chat_assign", orchestration_id="orch-pm-docs-deliverables"),
+        status="completed",
+        created_at="2026-03-26T00:00:00+00:00",
+        updated_at="2026-03-26T00:00:01+00:00",
+        result={"status": "complete"},
+    )
+    engineer_task = Task(
+        id="task-engineer-docs",
+        bot_id="pm-docs-engineer",
+        payload={"title": "Engineer plan"},
+        metadata=TaskMetadata(
+            source="bot_trigger",
+            orchestration_id="orch-pm-docs-deliverables",
+            parent_task_id="task-pm-docs",
+        ),
+        status="completed",
+        created_at="2026-03-26T00:00:02+00:00",
+        updated_at="2026-03-26T00:00:03+00:00",
+        result={"status": "complete"},
+    )
+    writer_one = Task(
+        id="task-writer-1",
+        bot_id="pm-docs-writer",
+        payload={
+            "title": "Write overview",
+            "path": "docs/blocks/Mathematics-Block-Overview.md",
+            "workstream": {
+                "path": "docs/blocks/Mathematics-Block-Overview.md",
+                "deliverables": ["docs/blocks/Mathematics-Block-Overview.md"],
+            },
+            "canonical_doc_paths": [
+                "docs/blocks/Mathematics-Block-Overview.md",
+                "docs/blocks/Mathematics-Block-Taxonomy.md",
+            ],
+        },
+        metadata=TaskMetadata(
+            source="bot_trigger",
+            orchestration_id="orch-pm-docs-deliverables",
+            parent_task_id="task-engineer-docs",
+        ),
+        status="completed",
+        created_at="2026-03-26T00:00:04+00:00",
+        updated_at="2026-03-26T00:00:05+00:00",
+        result={"artifacts": [{"path": "docs/blocks/Mathematics-Block-Overview.md", "content": "# Overview"}]},
+    )
+    writer_two = Task(
+        id="task-writer-2",
+        bot_id="pm-docs-writer",
+        payload={
+            "title": "Write taxonomy",
+            "path": "docs/blocks/Mathematics-Block-Taxonomy.md",
+            "workstream": {
+                "path": "docs/blocks/Mathematics-Block-Taxonomy.md",
+                "deliverables": ["docs/blocks/Mathematics-Block-Taxonomy.md"],
+            },
+            "planned_workstreams": [
+                {"path": "docs/blocks/Mathematics-Block-Overview.md"},
+                {"path": "docs/blocks/Mathematics-Block-Taxonomy.md"},
+            ],
+        },
+        metadata=TaskMetadata(
+            source="bot_trigger",
+            orchestration_id="orch-pm-docs-deliverables",
+            parent_task_id="task-engineer-docs",
+        ),
+        status="completed",
+        created_at="2026-03-26T00:00:06+00:00",
+        updated_at="2026-03-26T00:00:07+00:00",
+        result={"artifacts": [{"path": "docs/blocks/Mathematics-Block-Taxonomy.md", "content": "# Taxonomy"}]},
+    )
+    final_qc = Task(
+        id="task-final-docs",
+        bot_id="pm-docs-final-qc",
+        payload={"title": "Final QC"},
+        metadata=TaskMetadata(
+            source="bot_trigger",
+            orchestration_id="orch-pm-docs-deliverables",
+            parent_task_id="task-writer-2",
+        ),
+        status="completed",
+        created_at="2026-03-26T00:00:08+00:00",
+        updated_at="2026-03-26T00:00:09+00:00",
+        result={"outcome": "pass", "failure_type": "pass"},
+    )
+    task_manager = type(
+        "TaskManager",
+        (),
+        {
+            "list_tasks": AsyncMock(return_value=[root_task, engineer_task, writer_one, writer_two, final_qc]),
+            "get_task": AsyncMock(
+                side_effect=lambda task_id: {
+                    "task-pm-docs": root_task,
+                    "task-engineer-docs": engineer_task,
+                    "task-writer-1": writer_one,
+                    "task-writer-2": writer_two,
+                    "task-final-docs": final_qc,
+                }[task_id]
+            ),
+        },
+    )()
+    bot_registry = type("BotRegistry", (), {"get": AsyncMock(return_value=pm_bot)})()
+    orchestrator = PMOrchestrator(
+        bot_registry=bot_registry,
+        scheduler=None,
+        task_manager=task_manager,
+        chat_manager=None,
+    )
+
+    completion = await orchestrator.wait_for_completion(
+        {
+            "orchestration_id": "orch-pm-docs-deliverables",
+            "pm_bot_id": "pm-docs",
+            "tasks": [{"id": "task-pm-docs"}],
+        },
+        poll_interval_seconds=0.0,
+        max_wait_seconds=0.01,
+    )
+
+    assert completion["expected_deliverables"] == [
+        "docs/blocks/Mathematics-Block-Overview.md",
+        "docs/blocks/Mathematics-Block-Taxonomy.md",
+    ]
+    assert completion["produced_deliverables"] == [
+        "docs/blocks/Mathematics-Block-Overview.md",
+        "docs/blocks/Mathematics-Block-Taxonomy.md",
+    ]
+    assert completion["deliverables_complete"] is True
+
+
+@pytest.mark.anyio
 async def test_wait_for_completion_tracks_skipped_downstream_stages_separately() -> None:
     pm_bot = Bot(
         id="pm-orchestrator",

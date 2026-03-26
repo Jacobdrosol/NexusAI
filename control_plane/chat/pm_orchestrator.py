@@ -670,10 +670,9 @@ class PMOrchestrator:
         produced_repo_files: List[str] = []
         for task in latest_cycle_tasks:
             payload = task.payload if isinstance(task.payload, dict) else {}
-            for item in payload.get("deliverables") if isinstance(payload.get("deliverables"), list) else []:
-                text = str(item or "").strip().replace("\\", "/")
-                if text and self._looks_like_repo_file(text) and text not in expected_repo_deliverables:
-                    expected_repo_deliverables.append(text)
+            for item in self._collect_expected_repo_deliverables_from_payload(payload):
+                if item not in expected_repo_deliverables:
+                    expected_repo_deliverables.append(item)
             if str(task.status or "").strip().lower() != "completed":
                 continue
             for candidate in extract_file_candidates(task.result):
@@ -1960,6 +1959,39 @@ class PMOrchestrator:
             leaf = text.rsplit("/", 1)[-1]
             return "." in leaf
         return "." in text and not text.lower().startswith("http")
+
+    def _collect_expected_repo_deliverables_from_payload(self, payload: dict[str, Any]) -> list[str]:
+        expected: list[str] = []
+        seen: set[str] = set()
+
+        def _add(value: Any) -> None:
+            text = str(value or "").strip().replace("\\", "/").strip("`")
+            if not text or not self._looks_like_repo_file(text) or text in seen:
+                return
+            seen.add(text)
+            expected.append(text)
+
+        def _add_many(value: Any) -> None:
+            if isinstance(value, list):
+                for item in value:
+                    if isinstance(item, dict):
+                        _add(item.get("path"))
+                        _add_many(item.get("deliverables"))
+                    else:
+                        _add(item)
+
+        if not isinstance(payload, dict):
+            return expected
+        _add(payload.get("path"))
+        _add_many(payload.get("deliverables"))
+        workstream = payload.get("workstream")
+        if isinstance(workstream, dict):
+            _add(workstream.get("path"))
+            _add_many(workstream.get("deliverables"))
+        _add_many(payload.get("planned_workstreams"))
+        _add_many(payload.get("planned_doc_paths"))
+        _add_many(payload.get("canonical_doc_paths"))
+        return expected
 
     def _non_repo_artifact_label(self, *, step_kind: str, value: str) -> str:
         lowered = str(value or "").strip().lower()
