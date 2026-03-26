@@ -2305,6 +2305,19 @@ class PMOrchestrator:
         role_hint: str = "",
     ) -> str:
         lines = [str(base_instruction or "").strip()]
+        normalized_role = str(role_hint or "").strip().lower()
+        repo_output_denied_roles = {
+            "tester",
+            "qa",
+            "reviewer",
+            "security",
+            "security-reviewer",
+            "researcher",
+            "analyst",
+            "final-qc",
+            "final_qc",
+        }
+        repo_output_allowed = normalized_role not in repo_output_denied_roles
         has_repo_profile_context = any(
             "[repo-profile]" in str(item or "").lower()
             for item in (context_items or [])
@@ -2330,7 +2343,7 @@ class PMOrchestrator:
                 "Do not introduce a different language, framework, or runtime than the repo profile unless the user explicitly authorizes that additional runtime."
             )
 
-        if any(self._looks_like_repo_file(item) for item in deliverables):
+        if any(self._looks_like_repo_file(item) for item in deliverables) and repo_output_allowed:
             lines.append(
                 "For each repo file deliverable, return the full file content in this exact format: "
                 "`Deliverable: path` on its own line followed by a fenced code block."
@@ -2347,7 +2360,7 @@ class PMOrchestrator:
                 "The repo profile is authoritative. Do not let spec assumptions or requested examples introduce a new runtime "
                 "that the repo does not already declare. Runtime-mismatched repo files will fail validation."
             )
-        elif step_kind in {"specification", "planning", "test_execution", "review"}:
+        elif step_kind in {"specification", "planning", "test_execution", "review"} or not repo_output_allowed:
             lines.append(
                 "This is a non-repo step. Do not return repo file deliverables, committed file contents, or any artifact entries "
                 "with repo-style `path` values such as `docs/...`, `src/...`, or other workspace paths."
@@ -2415,13 +2428,19 @@ class PMOrchestrator:
             lines.append(
                 "Return only real executed command output and concrete artifact paths. Do not provide mocked, representative, or checklist-only test reports."
             )
-            lines.append(
-                "Include an `Executed Commands` section with the commands run, exit codes, and short stdout/stderr excerpts. "
-                "If a report file deliverable exists, return it as `Deliverable: path` followed by a fenced code block containing the artifact content."
-            )
-            lines.append(
-                "If the bot returns JSON, include any generated reports or logs in an `artifacts` array with `{path, content}` objects."
-            )
+            if repo_output_allowed:
+                lines.append(
+                    "Include an `Executed Commands` section with the commands run, exit codes, and short stdout/stderr excerpts. "
+                    "If a report file deliverable exists, return it as `Deliverable: path` followed by a fenced code block containing the artifact content."
+                )
+                lines.append(
+                    "If the bot returns JSON, include any generated reports or logs in an `artifacts` array with `{path, content}` objects."
+                )
+            else:
+                lines.append(
+                    "Include an `Executed Commands` section with the commands run, exit codes, and short stdout/stderr excerpts, "
+                    "but do not emit report files or `artifacts` entries with repo-style workspace paths."
+                )
         if step_kind in {"review", "release"}:
             lines.append(
                 "Do not provide a generic checklist. Return only concrete findings or release evidence backed by actual files, diffs, links, SHAs, or command output."

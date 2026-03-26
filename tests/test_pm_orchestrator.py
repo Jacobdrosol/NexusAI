@@ -595,6 +595,22 @@ def test_build_step_instruction_for_test_execution_demands_command_and_report_ar
     assert "mocked, representative, or checklist-only" in instruction
 
 
+def test_build_step_instruction_blocks_repo_output_for_non_writer_role_even_with_repo_path_deliverable() -> None:
+    orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
+
+    instruction = orchestrator._build_step_instruction(
+        base_instruction="Validate the generated markdown.",
+        step_kind="test_execution",
+        deliverables=["docs/blocks/coordinate-plane.md"],
+        evidence_requirements=["Validation findings and evidence summary"],
+        role_hint="tester",
+    )
+
+    assert "Do not return repo file deliverables" in instruction
+    assert "records without repo file paths" in instruction
+    assert "Deliverable: path" not in instruction
+
+
 def test_build_step_instruction_treats_repo_profile_context_as_authoritative() -> None:
     orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
 

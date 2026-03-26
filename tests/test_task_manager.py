@@ -326,7 +326,7 @@ async def test_task_manager_fails_non_writer_stage_with_repo_deliverables_before
 
 
 @pytest.mark.anyio
-async def test_task_manager_rejects_docs_only_engineer_repo_artifact_outputs(tmp_path):
+async def test_task_manager_strips_docs_only_engineer_repo_artifact_outputs(tmp_path):
     import asyncio
 
     from control_plane.task_manager.task_manager import TaskManager
@@ -392,13 +392,83 @@ async def test_task_manager_rejects_docs_only_engineer_repo_artifact_outputs(tmp
         await asyncio.sleep(0.05)
 
     updated = await tm.get_task(task.id)
-    assert updated.status == "failed"
-    assert updated.error is not None
-    assert updated.error.code == "non_writer_emitted_repo_outputs"
-    assert isinstance(updated.error.details, dict)
-    assert updated.error.details.get("paths") == ["docs/blocks/client-rendering-architecture.md"]
-    assert "not allowed to emit repo file outputs" in updated.error.message
-    assert "docs/blocks/client-rendering-architecture.md" in updated.error.message
+    assert updated.status == "completed"
+    assert updated.error is None
+    assert isinstance(updated.result, dict)
+    assert updated.result.get("artifacts") == []
+    notes = updated.result.get("normalization_notes") or []
+    assert any("Stripped repo-output claims from a deny-policy bot result" in str(item) for item in notes)
+
+
+@pytest.mark.anyio
+async def test_task_manager_strips_deny_policy_repo_artifacts_before_completion(tmp_path):
+    import asyncio
+
+    from control_plane.task_manager.task_manager import TaskManager
+
+    class StubRegistry:
+        def __init__(self):
+            self._bots = {
+                "pm-docs-validator": Bot(
+                    id="pm-docs-validator",
+                    name="PM Docs Validator",
+                    role="tester",
+                    backends=[],
+                    execution_policy={"repo_output_mode": "deny"},
+                )
+            }
+
+        async def get(self, bot_id):
+            return self._bots[bot_id]
+
+    class StubScheduler:
+        async def schedule(self, _task):
+            return {
+                "outcome": "fail",
+                "failure_type": "broken_links",
+                "findings": ["Broken link to a planned sibling doc."],
+                "evidence": ["Observed unresolved markdown link in upstream artifact."],
+                "artifacts": [
+                    {"path": "docs/blocks/coordinate-plane.md", "content": "# Coordinate Plane\n"},
+                    {"path": "test_logs/validator.log", "content": "checked links\n"},
+                ],
+                "files_touched": ["docs/blocks/coordinate-plane.md"],
+                "handoff_notes": "Return to the writer with the broken link finding.",
+            }
+
+    tm = TaskManager(
+        StubScheduler(),
+        db_path=str(tmp_path / "deny-policy-strip.db"),
+        bot_registry=StubRegistry(),
+    )
+    task = await tm.create_task(
+        bot_id="pm-docs-validator",
+        payload={
+            "title": "Validate docs branch",
+            "step_kind": "test_execution",
+            "instruction": "Validate upstream markdown only.",
+            "deliverables": ["Validation summary", "Executed Commands"],
+            "upstream_artifacts": [
+                {"path": "docs/blocks/coordinate-plane.md", "content": "# Coordinate Plane\n"}
+            ],
+        },
+        metadata=TaskMetadata(source="bot_trigger", orchestration_id="orch-deny-strip"),
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.05)
+
+    updated = await tm.get_task(task.id)
+    assert updated.status == "completed"
+    assert updated.error is None
+    assert isinstance(updated.result, dict)
+    assert updated.result.get("artifacts") == [{"path": "test_logs/validator.log", "content": "checked links\n"}]
+    assert updated.result.get("files_touched") == []
+    notes = updated.result.get("normalization_notes") or []
+    assert any("Stripped repo-output claims from a deny-policy bot result" in str(item) for item in notes)
 
 
 @pytest.mark.anyio

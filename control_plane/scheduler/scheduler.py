@@ -9,6 +9,7 @@ from typing import Any, AsyncGenerator
 
 import httpx
 
+from shared.bot_policy import bot_allows_repo_output
 from shared.exceptions import BackendError, BotNotFoundError, NoViableBackendError
 from shared.models import BackendConfig, BackendParams, Task, Worker
 from shared.settings_manager import SettingsManager
@@ -892,6 +893,15 @@ def _looks_like_markdown_repo_path(value: Any) -> bool:
     return bool(text) and "/" in text and text.lower().endswith(".md")
 
 
+def _looks_like_repo_path_target(value: Any) -> bool:
+    text = str(value or "").strip().replace("\\", "/").strip("`")
+    if not text:
+        return False
+    if "/" in text:
+        return True
+    return bool(re.search(r"\.[A-Za-z0-9]{1,8}$", text))
+
+
 def _collect_markdown_paths(value: Any) -> list[str]:
     items = value if isinstance(value, list) else [value]
     paths: list[str] = []
@@ -958,6 +968,9 @@ def _prepare_system_prompt(bot: Any, *, bot_id: str | None = None, payload: Any 
     contract_suffix = _contract_prompt_suffix(bot).strip()
     if contract_suffix:
         suffix_parts.append(contract_suffix)
+    repo_output_policy_suffix = _repo_output_policy_prompt_suffix(bot, payload=payload).strip()
+    if repo_output_policy_suffix:
+        suffix_parts.append(repo_output_policy_suffix)
     assignment_scope_suffix = _assignment_scope_prompt_suffix(payload).strip()
     if assignment_scope_suffix:
         suffix_parts.append(assignment_scope_suffix)
@@ -976,6 +989,42 @@ def _prepare_system_prompt(bot: Any, *, bot_id: str | None = None, payload: Any 
     if suffix in base:
         return base
     return f"{base}\n{suffix}"
+
+
+def _repo_output_policy_prompt_suffix(bot: Any, payload: Any = None) -> str:
+    if bot_allows_repo_output(bot):
+        return ""
+    if not isinstance(payload, dict):
+        return (
+            "\n\nExecution policy:\n"
+            "This bot is not allowed to emit repo file outputs. Do not create, modify, or return repo file artifacts."
+        )
+
+    deliverables = payload.get("deliverables")
+    workstream = payload.get("workstream") if isinstance(payload.get("workstream"), dict) else {}
+    repo_like_targets = []
+    deliverable_items = deliverables if isinstance(deliverables, list) else [deliverables]
+    for item in deliverable_items:
+        if _looks_like_repo_path_target(item):
+            repo_like_targets.append(item)
+    workstream_deliverables = workstream.get("deliverables")
+    workstream_items = workstream_deliverables if isinstance(workstream_deliverables, list) else [workstream_deliverables]
+    for item in workstream_items:
+        if _looks_like_repo_path_target(item):
+            repo_like_targets.append(item)
+    step_kind = str(payload.get("step_kind") or "").strip().lower()
+    if not repo_like_targets and step_kind not in {"repo_change", "implementation", "coding"}:
+        return (
+            "\n\nExecution policy:\n"
+            "This bot is validation-only or planning-only. Do not create, modify, or return repo file artifacts."
+        )
+    return (
+        "\n\nExecution policy:\n"
+        "This bot has execution_policy.repo_output_mode=deny.\n"
+        "Do not create, modify, or return repo file artifacts, full file contents, or `artifacts` entries with repo-style `path` values.\n"
+        "Treat any repo-style deliverables as read-only validation or planning targets only.\n"
+        "If the task appears to require repo outputs, report that contract mismatch in findings/evidence/handoff_notes instead of attempting file generation."
+    )
 
 
 def _prepare_payload_for_backend(bot: Any, backend: BackendConfig, payload: Any, *, task: Task | None = None) -> Any:

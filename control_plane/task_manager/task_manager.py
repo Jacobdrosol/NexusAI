@@ -1377,6 +1377,58 @@ def _result_explicit_artifacts(result: Any) -> List[Dict[str, Any]]:
     return [item for item in artifacts if isinstance(item, dict)]
 
 
+def _strip_repo_output_claims_for_deny_policy(result: Any) -> Any:
+    if not isinstance(result, dict):
+        return result
+    normalized = dict(result)
+    stripped_paths: List[str] = []
+    explicit_artifacts = normalized.get("artifacts")
+    if isinstance(explicit_artifacts, list):
+        kept_artifacts: List[Any] = []
+        for item in explicit_artifacts:
+            if not isinstance(item, dict):
+                kept_artifacts.append(item)
+                continue
+            path = str(item.get("path") or "").strip().replace("\\", "/").strip("`")
+            if (
+                path
+                and _looks_like_repo_file(path)
+                and not _is_assignment_execution_artifact_file(path)
+                and not _is_probable_test_file(path)
+            ):
+                stripped_paths.append(path)
+                continue
+            kept_artifacts.append(item)
+        normalized["artifacts"] = kept_artifacts
+    for field_name in ("files_touched", "changed_files", "created_files", "modified_files"):
+        value = normalized.get(field_name)
+        if not isinstance(value, list):
+            continue
+        kept_items: List[Any] = []
+        for item in value:
+            path = str(item or "").strip().replace("\\", "/").strip("`")
+            if (
+                path
+                and _looks_like_repo_file(path)
+                and not _is_assignment_execution_artifact_file(path)
+                and not _is_probable_test_file(path)
+            ):
+                stripped_paths.append(path)
+                continue
+            kept_items.append(item)
+        normalized[field_name] = kept_items
+    if stripped_paths:
+        existing_notes = normalized.get("normalization_notes")
+        if not isinstance(existing_notes, list):
+            existing_notes = []
+        unique_paths = list(dict.fromkeys(stripped_paths))
+        existing_notes.append(
+            "Stripped repo-output claims from a deny-policy bot result: " + ", ".join(unique_paths[:10])
+        )
+        normalized["normalization_notes"] = existing_notes
+    return normalized
+
+
 def _has_repo_change_evidence(_payload: Dict[str, Any], result: Any) -> bool:
     if extract_file_candidates(result):
         return True
@@ -3692,6 +3744,8 @@ class TaskManager:
             else:
                 raw_result = await self._scheduler.schedule(task)
             result = await self._normalize_task_result(task, raw_result)
+            if bot is not None and not bot_allows_repo_output(bot):
+                result = _strip_repo_output_claims_for_deny_policy(result)
             if _prefers_truncation_retry(task) and _looks_like_truncated_result(raw_result):
                 task_error = TaskError(
                     message=(

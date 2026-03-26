@@ -1225,3 +1225,43 @@ async def test_scheduler_appends_docs_only_upstream_artifact_guidance_to_system_
     assert "explicitly verify internal markdown links" in system_message
     assert "Do not invent sibling folders, placeholder doc names, or guessed markdown paths" in system_message
     assert "prefer the strongest upstream tester evidence over later skip/not_applicable review signals" in system_message
+
+
+@pytest.mark.anyio
+async def test_scheduler_appends_repo_output_deny_policy_to_system_prompt():
+    from control_plane.scheduler.scheduler import Scheduler
+
+    bot_registry = AsyncMock()
+    bot_registry.get.return_value = Bot(
+        id="pm-docs-validator",
+        name="PM Docs Validator",
+        role="tester",
+        system_prompt="Validate the workstream deterministically.",
+        backends=[BackendConfig(type="cloud_api", provider="openai", model="gpt-4o-mini")],
+        execution_policy={"repo_output_mode": "deny"},
+    )
+    scheduler = Scheduler(bot_registry=bot_registry, worker_registry=AsyncMock())
+    task = Task(
+        id="task-policy-deny",
+        bot_id="pm-docs-validator",
+        payload={
+            "instruction": "Validate the documentation branch.",
+            "step_kind": "test_execution",
+            "deliverables": ["docs/blocks/coordinate-plane.md"],
+            "role_hint": "tester",
+        },
+        status="queued",
+        created_at="now",
+        updated_at="now",
+    )
+
+    async def fake_dispatch(backend, payload, task=None):
+        return {"payload": payload}
+
+    scheduler._dispatch_backend = fake_dispatch  # type: ignore[method-assign]
+    result = await scheduler.schedule(task)
+
+    system_message = result["payload"][0]["content"]
+    assert "execution_policy.repo_output_mode=deny" in system_message
+    assert "Do not create, modify, or return repo file artifacts" in system_message
+    assert "Treat any repo-style deliverables as read-only validation or planning targets only." in system_message
