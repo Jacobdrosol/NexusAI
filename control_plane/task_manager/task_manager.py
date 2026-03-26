@@ -1268,6 +1268,42 @@ def _assignment_expected_repo_files(payload: Dict[str, Any]) -> List[str]:
     return files
 
 
+def _docs_only_declared_markdown_paths(payload: Dict[str, Any]) -> Set[str]:
+    declared: Set[str] = set()
+
+    def _add_candidate(value: Any) -> None:
+        normalized = str(value or "").strip().replace("\\", "/").strip("`")
+        if not normalized or not _looks_like_repo_file(normalized):
+            return
+        if not _is_documentation_like_repo_file(normalized):
+            return
+        declared.add(normalized)
+
+    for item in _assignment_expected_repo_files(payload):
+        _add_candidate(item)
+    for item in _artifact_repo_paths(payload.get("upstream_artifacts")):
+        _add_candidate(item)
+
+    workstream = payload.get("workstream") if isinstance(payload.get("workstream"), dict) else {}
+    for item in _normalize_string_list(workstream.get("deliverables")):
+        _add_candidate(item)
+    _add_candidate(workstream.get("path"))
+
+    for item in _normalize_string_list(payload.get("planned_doc_paths")):
+        _add_candidate(item)
+
+    planned_workstreams = payload.get("planned_workstreams")
+    if isinstance(planned_workstreams, list):
+        for item in planned_workstreams:
+            if not isinstance(item, dict):
+                continue
+            _add_candidate(item.get("path"))
+            for deliverable in _normalize_string_list(item.get("deliverables")):
+                _add_candidate(deliverable)
+
+    return declared
+
+
 def _non_writer_step_repo_deliverables(payload: Dict[str, Any]) -> List[str]:
     """Return repo-file paths that a non-writer step is not allowed to own.
 
@@ -1450,11 +1486,16 @@ def _docs_markdown_artifacts(items: Any) -> List[Dict[str, str]]:
     return artifacts
 
 
-def _docs_only_broken_markdown_links_from_artifacts(items: Any) -> List[str]:
+def _docs_only_broken_markdown_links_from_artifacts(
+    items: Any,
+    *,
+    allowed_paths: Set[str] | None = None,
+) -> List[str]:
     artifacts = _docs_markdown_artifacts(items)
     if not artifacts:
         return []
     artifact_paths = {item["path"] for item in artifacts}
+    allowed = {str(item).strip().replace("\\", "/") for item in (allowed_paths or set()) if str(item).strip()}
     broken: List[str] = []
     seen: Set[str] = set()
     for item in artifacts:
@@ -1464,6 +1505,8 @@ def _docs_only_broken_markdown_links_from_artifacts(items: Any) -> List[str]:
             if not resolved:
                 continue
             if resolved in artifact_paths:
+                continue
+            if resolved in allowed:
                 continue
             if Path(resolved).exists():
                 continue
@@ -2021,7 +2064,11 @@ def _assignment_validation_failure(task: Task, result: Any) -> Optional[Dict[str
                         "reason_code": "docs_only_placeholder_content",
                     },
                 }
-            broken_links = _docs_only_broken_markdown_links_from_artifacts(validation_artifacts)
+            allowed_doc_paths = _docs_only_declared_markdown_paths(payload)
+            broken_links = _docs_only_broken_markdown_links_from_artifacts(
+                validation_artifacts,
+                allowed_paths=allowed_doc_paths,
+            )
             if broken_links:
                 preview = ", ".join(broken_links[:3])
                 return {
@@ -2056,7 +2103,11 @@ def _assignment_validation_failure(task: Task, result: Any) -> Optional[Dict[str
                         "paths": placeholder_docs,
                     },
                 }
-            broken_links = _docs_only_broken_markdown_links_from_artifacts(payload.get("upstream_artifacts"))
+            allowed_doc_paths = _docs_only_declared_markdown_paths(payload)
+            broken_links = _docs_only_broken_markdown_links_from_artifacts(
+                payload.get("upstream_artifacts"),
+                allowed_paths=allowed_doc_paths,
+            )
             if broken_links:
                 preview = ", ".join(broken_links[:3])
                 return {

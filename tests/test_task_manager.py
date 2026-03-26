@@ -6545,6 +6545,50 @@ def test_assignment_validation_rejects_broken_internal_markdown_links_in_docs_on
     assert "../architecture/client-rendering.md" in error
 
 
+def test_assignment_validation_allows_declared_sibling_doc_links_in_docs_fanout_branch():
+    from control_plane.task_manager.task_manager import _assignment_validation_error
+    from shared.models import Task, TaskMetadata
+
+    task = Task(
+        id="task-doc-links-planned",
+        bot_id="pm-docs-writer",
+        payload={
+            "title": "Write coordinate plane guide",
+            "instruction": "Create the assigned markdown file only.",
+            "step_kind": "repo_change",
+            "path": "docs/blocks/coordinate-plane.md",
+            "deliverables": ["docs/blocks/coordinate-plane.md"],
+            "planned_doc_paths": [
+                "docs/blocks/coordinate-plane.md",
+                "docs/blocks/performance-guidelines.md",
+            ],
+            "assignment_scope": {
+                "docs_only": True,
+                "requested_output_paths": ["docs/blocks"],
+            },
+        },
+        metadata=TaskMetadata(source="bot_trigger", orchestration_id="orch-doc-links-planned"),
+        created_at="2026-03-25T00:00:00+00:00",
+        updated_at="2026-03-25T00:00:00+00:00",
+    )
+
+    result = {
+        "artifacts": [
+            {
+                "path": "docs/blocks/coordinate-plane.md",
+                "content": (
+                    "# Coordinate Plane\n\n"
+                    "See [Performance Guidelines](./performance-guidelines.md).\n"
+                ),
+            }
+        ]
+    }
+
+    error = _assignment_validation_error(task, result)
+
+    assert error == ""
+
+
 def test_assignment_validation_rejects_placeholder_markdown_content_in_docs_only_outputs():
     from control_plane.task_manager.task_manager import _assignment_validation_error
     from shared.models import Task, TaskMetadata
@@ -6606,6 +6650,56 @@ def test_docs_only_specification_branch_may_emit_assigned_markdown_deliverable()
     }
 
     assert _docs_only_non_writer_branch_may_reference_upstream_docs(payload, result) is True
+
+
+def test_assignment_validation_allows_docs_validator_pass_when_sibling_doc_path_is_declared():
+    from control_plane.task_manager.task_manager import _assignment_validation_error
+    from shared.models import Task, TaskMetadata
+
+    task = Task(
+        id="task-doc-validator-pass",
+        bot_id="pm-docs-validator",
+        payload={
+            "title": "Validate coordinate plane docs",
+            "instruction": "Validate the scoped docs branch.",
+            "role_hint": "tester",
+            "step_kind": "test_execution",
+            "path": "docs/blocks/coordinate-plane.md",
+            "deliverables": ["docs/blocks/coordinate-plane.md"],
+            "planned_doc_paths": [
+                "docs/blocks/coordinate-plane.md",
+                "docs/blocks/performance-guidelines.md",
+            ],
+            "assignment_scope": {
+                "docs_only": True,
+                "requested_output_paths": ["docs/blocks"],
+            },
+            "upstream_artifacts": [
+                {
+                    "path": "docs/blocks/coordinate-plane.md",
+                    "content": (
+                        "# Coordinate Plane\n\n"
+                        "See [Performance Guidelines](./performance-guidelines.md).\n"
+                    ),
+                }
+            ],
+        },
+        metadata=TaskMetadata(source="bot_trigger", orchestration_id="orch-doc-validator-pass"),
+        created_at="2026-03-25T00:00:00+00:00",
+        updated_at="2026-03-25T00:00:00+00:00",
+    )
+
+    result = {
+        "outcome": "pass",
+        "failure_type": "pass",
+        "findings": ["Branch-scoped docs validation passed."],
+        "evidence": ["Validated the assigned markdown path and planned sibling target."],
+        "artifacts": [],
+    }
+
+    error = _assignment_validation_error(task, result)
+
+    assert error == ""
 
 
 def test_docs_only_specification_branch_still_rejects_extra_markdown_outputs():
