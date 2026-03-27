@@ -1581,6 +1581,89 @@ async def test_chat_repo_intent_auto_attaches_project_context(cp_app):
 
 
 @pytest.mark.anyio
+async def test_chat_repo_intent_detects_go_through_my_repo_phrase(cp_app):
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "ok"})
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-repo-go-through"
+        create_project = await client.post(
+            "/v1/projects",
+            json={
+                "id": project_id,
+                "name": "Repo Go Through Project",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        assert create_project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Repo Go Through Chat",
+                "project_id": project_id,
+                "tool_access_enabled": True,
+                "tool_access_repo_search": True,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-repo-go-through",
+                "name": "Repo Go Through Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        ingest = await client.post(
+            "/v1/vault/items",
+            json={
+                "title": "README",
+                "content": "PROJECT_REPO_GO_THROUGH_TOKEN",
+                "namespace": f"project:{project_id}:repo",
+                "project_id": project_id,
+            },
+        )
+        assert ingest.status_code == 200
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": "Can you go through my repo and determine what's already there and what we will need to build out?",
+                "bot_id": "bot-repo-go-through",
+                "use_workspace_tools": True,
+            },
+        )
+        assert resp.status_code == 200
+        assert cp_app.state.scheduler.schedule.await_count == 1
+        task_arg = cp_app.state.scheduler.schedule.await_args[0][0]
+        payload = task_arg.payload
+        assert isinstance(payload, list)
+        assert payload[0]["role"] == "system"
+        assert "[repo:proj-repo-go-through]" in payload[0]["content"]
+        assert "PROJECT_REPO_GO_THROUGH_TOKEN" in payload[0]["content"]
+        assert any(
+            m.get("role") == "system" and "Repository Evidence Policy:" in str(m.get("content", ""))
+            for m in payload
+        )
+
+
+@pytest.mark.anyio
 async def test_chat_repo_intent_does_not_trigger_for_complaint_or_transcript(cp_app):
     cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "ok"})
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:

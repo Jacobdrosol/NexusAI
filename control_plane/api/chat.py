@@ -88,7 +88,7 @@ class UpdateConversationToolAccessRequest(BaseModel):
 
 
 _REPO_ACTION_RE = re.compile(
-    r"\b(read|search|scan|inspect|review|audit|analy[sz]e|open|look\s+through|walk\s+through)\b",
+    r"\b(read|search|scan|inspect|review|audit|analy[sz]e|open|look\s+through|walk\s+through|go\s+through)\b",
     re.IGNORECASE,
 )
 _REPO_TARGET_RE = re.compile(
