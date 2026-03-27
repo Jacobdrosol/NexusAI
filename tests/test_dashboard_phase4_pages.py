@@ -2096,6 +2096,45 @@ def test_settings_tool_status_uses_user_profile_runtime_paths(dashboard_client):
     assert ".dotnet" in captured["path"]
 
 
+def test_settings_persistent_runtime_status_uses_docker_exec(dashboard_client):
+    _login_admin(dashboard_client)
+    dashboard_client.put("/api/settings/tools", json={"enabled_tools": ["code_exec_dotnet"]})
+
+    calls = []
+
+    def _fake_run(command, cwd=None, capture_output=None, text=None, timeout=None, check=None, shell=None, env=None):
+        calls.append(command)
+
+        class Result:
+            def __init__(self, returncode=0, stdout="", stderr=""):
+                self.returncode = returncode
+                self.stdout = stdout
+                self.stderr = stderr
+
+        if isinstance(command, list) and command[:3] == ["docker", "ps", "-q"]:
+            return Result(stdout="abc123\n")
+        if isinstance(command, list) and command[:3] == ["docker", "exec", "abc123"]:
+            return Result(stdout="8.0.419\n")
+        raise AssertionError(f"Unexpected command: {command!r}")
+
+    with patch("dashboard.settings.platform.system", return_value="Linux"), \
+         patch("dashboard.settings._configured_runtime_toolchains", return_value=["dotnet"]), \
+         patch("dashboard.settings.subprocess.run", side_effect=_fake_run):
+        resp = dashboard_client.post("/api/settings/tools/test", json={"tool_id": "code_exec_dotnet"})
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["statuses"][0]["status"] == "installed"
+    assert any(
+        isinstance(command, list) and command[:3] == ["docker", "ps", "-q"]
+        for command in calls
+    )
+    assert any(
+        isinstance(command, list) and command[:3] == ["docker", "exec", "abc123"]
+        for command in calls
+    )
+
+
 def test_bots_page_supports_multi_file_import(dashboard_client):
     _login_admin(dashboard_client)
     resp = dashboard_client.get("/bots")

@@ -130,6 +130,10 @@ def _compose_core_args() -> list[str]:
     ]
 
 
+def _compose_project_name() -> str:
+    return (os.environ.get("NEXUSAI_COMPOSE_PROJECT_NAME") or "nexusai").strip() or "nexusai"
+
+
 def _persistent_toolchains_for_tool(tool_id: str) -> list[str]:
     if not platform.system().lower().startswith("linux"):
         return []
@@ -184,8 +188,28 @@ def _check_control_plane_runtime(check_command: str | None) -> dict[str, Any] | 
     if not check_command:
         return None
     try:
+        container_lookup = subprocess.run(
+            [
+                "docker",
+                "ps",
+                "-q",
+                "--filter",
+                f"label=com.docker.compose.project={_compose_project_name()}",
+                "--filter",
+                "label=com.docker.compose.service=control_plane",
+            ],
+            cwd=str(_repo_root()),
+            capture_output=True,
+            text=True,
+            timeout=_TOOL_CHECK_TIMEOUT_SECONDS,
+            check=False,
+        )
+        container_id = (container_lookup.stdout or "").strip().splitlines()
+        if not container_id:
+            return None
+        target_container = container_id[0].strip()
         completed = subprocess.run(
-            [*_compose_core_args(), "exec", "-T", "control_plane", "sh", "-lc", check_command],
+            ["docker", "exec", target_container, "sh", "-lc", check_command],
             cwd=str(_repo_root()),
             capture_output=True,
             text=True,
