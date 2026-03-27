@@ -288,6 +288,7 @@ def _tool_install_plan(tool_id: str) -> dict[str, Any] | None:
                 "label": "Install .NET SDK 8",
                 "notes": "Uses the official dotnet-install script to install the SDK into the current user profile.",
                 "commands": [
+                    ["bash", "-lc", "set -e; " + linux_pkg_install.format(apt_packages="curl", dnf_packages="curl", yum_packages="curl", label="curl")],
                     python_download_commands["dotnet"],
                     ["bash", "-lc", "set -e; mkdir -p \"$HOME/.dotnet\"; bash /tmp/dotnet-install.sh --channel 8.0 --install-dir \"$HOME/.dotnet\""],
                 ],
@@ -296,6 +297,7 @@ def _tool_install_plan(tool_id: str) -> dict[str, Any] | None:
                 "label": "Install .NET SDK 8",
                 "notes": "dotnet test is included with the .NET SDK.",
                 "commands": [
+                    ["bash", "-lc", "set -e; " + linux_pkg_install.format(apt_packages="curl", dnf_packages="curl", yum_packages="curl", label="curl")],
                     python_download_commands["dotnet"],
                     ["bash", "-lc", "set -e; mkdir -p \"$HOME/.dotnet\"; bash /tmp/dotnet-install.sh --channel 8.0 --install-dir \"$HOME/.dotnet\""],
                 ],

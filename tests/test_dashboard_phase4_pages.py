@@ -2011,6 +2011,16 @@ def test_settings_tools_api_reports_linux_install_support_for_playwright(dashboa
     assert browser["install_supported"] is True
     assert dotnet["install_supported"] is True
 
+    from dashboard import settings as settings_module
+
+    with patch("dashboard.settings.platform.system", return_value="Linux"):
+        plan = settings_module._tool_install_plan("code_exec_dotnet")
+        assert plan is not None
+        assert any(
+            isinstance(command, list) and "curl" in " ".join(command)
+            for command in plan["commands"]
+        )
+
 
 def test_settings_tool_status_uses_user_profile_runtime_paths(dashboard_client):
     _login_admin(dashboard_client)
