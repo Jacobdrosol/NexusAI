@@ -1903,6 +1903,81 @@ def test_settings_page_loads_for_admin(dashboard_client):
     assert b'data-target="section-export-import"' in resp.data
     assert b'data-target="section-audit-log"' in resp.data
     assert b'data-target="section-deploy"' in resp.data
+    assert b"Test Enabled Tools" in resp.data
+    assert b"Task Provider Concurrency Limits" in resp.data
+
+
+def test_settings_tools_api_reports_install_support(dashboard_client):
+    _login_admin(dashboard_client)
+    resp = dashboard_client.get("/api/settings/tools")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    dotnet = next(tool for tool in data["tools"] if tool["id"] == "code_exec_dotnet")
+    git = next(tool for tool in data["tools"] if tool["id"] == "devops_git")
+    assert dotnet["install_supported"] is True
+    assert git["enabled"] is True
+
+
+def test_settings_tool_status_checks_enabled_tools(dashboard_client):
+    _login_admin(dashboard_client)
+    bulk_resp = dashboard_client.put(
+        "/api/settings/tools",
+        json={"enabled_tools": ["code_exec_python", "code_exec_dotnet"]},
+    )
+    assert bulk_resp.status_code == 200
+
+    def _fake_run(command, capture_output=None, text=None, shell=None, timeout=None, check=None):
+        class Result:
+            def __init__(self, returncode, stdout="", stderr=""):
+                self.returncode = returncode
+                self.stdout = stdout
+                self.stderr = stderr
+
+        if command == "python --version":
+            return Result(0, "Python 3.12.2\n", "")
+        if command == "dotnet --version":
+            return Result(1, "", "'dotnet' is not recognized as an internal or external command")
+        raise AssertionError(f"Unexpected tool check command: {command}")
+
+    with patch("dashboard.settings.subprocess.run", side_effect=_fake_run):
+        resp = dashboard_client.post("/api/settings/tools/test", json={"scope": "enabled"})
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    statuses = {item["id"]: item for item in data["statuses"]}
+    assert statuses["code_exec_python"]["status"] == "installed"
+    assert statuses["code_exec_dotnet"]["status"] == "missing"
+
+
+def test_settings_tool_install_enables_tool_after_success(dashboard_client):
+    _login_admin(dashboard_client)
+    dashboard_client.put("/api/settings/tools", json={"enabled_tools": []})
+
+    def _fake_run(command, capture_output=None, text=None, timeout=None, check=None, shell=None):
+        class Result:
+            def __init__(self, returncode, stdout="", stderr=""):
+                self.returncode = returncode
+                self.stdout = stdout
+                self.stderr = stderr
+
+        if isinstance(command, list) and command[:4] == ["winget", "install", "--id", "Microsoft.DotNet.SDK.8"]:
+            return Result(0, "Installed\n", "")
+        if command == "dotnet --version":
+            return Result(0, "8.0.203\n", "")
+        raise AssertionError(f"Unexpected install command: {command}")
+
+    with patch("dashboard.settings.platform.system", return_value="Windows"), \
+         patch("dashboard.settings.subprocess.run", side_effect=_fake_run):
+        resp = dashboard_client.post("/api/settings/tools/install/code_exec_dotnet")
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["tool_status"]["status"] == "installed"
+
+    list_resp = dashboard_client.get("/api/settings/tools")
+    assert list_resp.status_code == 200
+    tools = {tool["id"]: tool for tool in list_resp.get_json()["tools"]}
+    assert tools["code_exec_dotnet"]["enabled"] is True
 
 
 def test_bots_page_supports_multi_file_import(dashboard_client):

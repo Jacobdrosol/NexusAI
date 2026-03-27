@@ -645,6 +645,7 @@ setInterval(function() {
 
 var _toolsLoaded = false;
 var _toolData = { tools: [], categories: [], presets: [] };
+var _toolStatusById = {};
 
 function loadToolCatalog() {
   if (_toolsLoaded) return;
@@ -688,6 +689,8 @@ function renderToolCatalog(data) {
           (t.install_hint && !t.enabled ? '<br><span style="color:#f59e0b;font-size:0.75rem;">' + escHtml(t.install_hint) + '</span>' : '') +
         '</td>' +
         '<td style="padding:0.55rem 0.75rem;color:#a0aec0;font-size:0.82rem;">' + escHtml(t.description) + '</td>' +
+        '<td id="tool-status-' + escHtml(t.id) + '" style="padding:0.55rem 0.75rem;color:#a0aec0;font-size:0.8rem;">Not checked</td>' +
+        '<td id="tool-actions-' + escHtml(t.id) + '" style="padding:0.55rem 0.75rem;white-space:nowrap;">' + renderToolActionsHtml(t) + '</td>' +
         '<td style="padding:0.55rem 0.75rem;text-align:center;">' +
           '<label class="tool-toggle" style="position:relative;display:inline-block;width:40px;height:22px;">' +
             '<input type="checkbox" data-tool-id="' + escHtml(t.id) + '"' + (t.enabled ? ' checked' : '') + ' ' +
@@ -703,12 +706,123 @@ function renderToolCatalog(data) {
           '</label>' +
         '</td>';
       container.appendChild(row);
+      renderToolStatus(t.id, _toolStatusById[t.id] || null);
     });
   });
 }
 
 function escHtml(str) {
   return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function renderToolActionsHtml(tool) {
+  var html = '<button class="btn" type="button" onclick="runSingleToolCheck(\'' + escHtml(tool.id) + '\')" ' +
+    'style="padding:0.25rem 0.65rem;font-size:0.78rem;">Test</button>';
+  if (tool.install_supported) {
+    html += ' <button class="btn btn-primary" type="button" onclick="installToolRuntime(\'' + escHtml(tool.id) + '\')" ' +
+      'style="padding:0.25rem 0.65rem;font-size:0.78rem;">Install</button>';
+  }
+  return html;
+}
+
+function renderToolStatus(toolId, status) {
+  var cell = document.getElementById('tool-status-' + toolId);
+  if (!cell) return;
+  if (!status) {
+    cell.innerHTML = '<span style="color:#718096;">Not checked</span>';
+    return;
+  }
+  var colors = {
+    installed: '#10b981',
+    missing: '#f59e0b',
+    error: '#ef4444',
+    unverified: '#718096'
+  };
+  var label = status.status || 'unknown';
+  var color = colors[label] || '#718096';
+  var summary = status.summary ? '<div style="margin-top:0.2rem;color:#a0aec0;">' + escHtml(status.summary) + '</div>' : '';
+  var notes = status.install_notes ? '<div style="margin-top:0.2rem;color:#718096;">' + escHtml(status.install_notes) + '</div>' : '';
+  cell.innerHTML =
+    '<span style="display:inline-block;padding:0.12rem 0.45rem;border-radius:999px;' +
+    'background:' + color + '22;color:' + color + ';font-weight:700;font-size:0.72rem;text-transform:uppercase;">' +
+    escHtml(label) + '</span>' +
+    summary + notes;
+}
+
+function applyToolStatus(statuses) {
+  (statuses || []).forEach(function(status){
+    _toolStatusById[status.id] = status;
+    renderToolStatus(status.id, status);
+  });
+}
+
+function runToolChecks(scope) {
+  showToast('Testing ' + (scope === 'all' ? 'all tools' : 'enabled tools') + '...', true);
+  fetch('/api/settings/tools/test', {
+    method: 'POST',
+    headers: {'X-CSRFToken': _csrfToken, 'Content-Type': 'application/json'},
+    body: JSON.stringify({scope: scope || 'enabled'})
+  })
+  .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, data:d}; }); })
+  .then(function(res){
+    if (!res.ok) {
+      showToast('Failed to test tools: ' + (res.data.error || 'unknown error'), false);
+      return;
+    }
+    applyToolStatus(res.data.statuses || []);
+    showToast('Tool check complete for ' + (res.data.checked_count || 0) + ' tool(s)', true);
+  })
+  .catch(function(e){ showToast('Network error: ' + e, false); });
+}
+
+function runSingleToolCheck(toolId) {
+  fetch('/api/settings/tools/test', {
+    method: 'POST',
+    headers: {'X-CSRFToken': _csrfToken, 'Content-Type': 'application/json'},
+    body: JSON.stringify({tool_id: toolId})
+  })
+  .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, data:d}; }); })
+  .then(function(res){
+    if (!res.ok) {
+      showToast('Failed to test tool: ' + (res.data.error || 'unknown error'), false);
+      return;
+    }
+    applyToolStatus(res.data.statuses || []);
+    showToast('Checked ' + toolId, true);
+  })
+  .catch(function(e){ showToast('Network error: ' + e, false); });
+}
+
+function installToolRuntime(toolId) {
+  if (!confirm('Install and enable ' + toolId + ' on this dashboard host?')) return;
+  showToast('Installing ' + toolId + '...', true);
+  fetch('/api/settings/tools/install/' + encodeURIComponent(toolId), {
+    method: 'POST',
+    headers: {'X-CSRFToken': _csrfToken}
+  })
+  .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, data:d}; }); })
+  .then(function(res){
+    if (!res.ok) {
+      showToast('Failed to install tool: ' + (res.data.error || 'unknown error'), false);
+      return;
+    }
+    var checkbox = document.querySelector('input[data-tool-id="' + toolId + '"]');
+    if (checkbox) {
+      checkbox.checked = true;
+      var span = document.getElementById('toggle-span-' + toolId);
+      if (span) {
+        span.style.background = '#7c3aed';
+        var dot = span.querySelector('span');
+        if (dot) dot.style.transform = 'translateX(18px)';
+      }
+    }
+    if (res.data.tool_status) {
+      _toolStatusById[toolId] = res.data.tool_status;
+      renderToolStatus(toolId, res.data.tool_status);
+    }
+    showToast('Installed and enabled ' + toolId, true);
+  })
+  .catch(function(e){ showToast('Network error: ' + e, false); });
 }
 
 function toggleTool(toolId, enabled) {
@@ -758,11 +872,17 @@ function applyToolPreset(presetId) {
       <h2 style="font-size:1.1rem;margin:0 0 0.25rem;color:#f0f0f0;">Tools &amp; Runtimes</h2>
       <p style="color:#a0aec0;font-size:0.85rem;margin:0;">
         Enable the tools your bots need. Disabled tools are not passed to any bot regardless of bot configuration.
-        Changes take effect on the next task run — no restart required.
+        Changes take effect on the next task run. Runtime checks and installs apply to the dashboard host machine.
       </p>
     </div>
-    <div id="tool-preset-buttons" style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;">
-      <span style="color:#a0aec0;font-size:0.8rem;">Presets:</span>
+    <div style="display:flex;gap:0.75rem;flex-wrap:wrap;align-items:flex-start;justify-content:flex-end;">
+      <div id="tool-preset-buttons" style="display:flex;gap:0.5rem;flex-wrap:wrap;align-items:center;">
+        <span style="color:#a0aec0;font-size:0.8rem;">Presets:</span>
+      </div>
+      <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+        <button class="btn" type="button" onclick="runToolChecks('enabled')">Test Enabled Tools</button>
+        <button class="btn" type="button" onclick="runToolChecks('all')">Test All Tools</button>
+      </div>
     </div>
   </div>
 
@@ -774,6 +894,8 @@ function applyToolPreset(presetId) {
         <tr style="border-bottom:2px solid #2d3045;">
           <th style="text-align:left;padding:0.5rem 0.75rem;color:#a0aec0;font-weight:600;width:25%;">Tool</th>
           <th style="text-align:left;padding:0.5rem 0.75rem;color:#a0aec0;font-weight:600;">Description</th>
+          <th style="text-align:left;padding:0.5rem 0.75rem;color:#a0aec0;font-weight:600;width:24%;">Status</th>
+          <th style="text-align:left;padding:0.5rem 0.75rem;color:#a0aec0;font-weight:600;width:160px;">Actions</th>
           <th style="text-align:center;padding:0.5rem 0.75rem;color:#a0aec0;font-weight:600;width:70px;">Enabled</th>
         </tr>
       </thead>

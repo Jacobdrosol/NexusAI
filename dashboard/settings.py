@@ -15,6 +15,10 @@ from __future__ import annotations
 
 import json
 import logging
+import platform
+import subprocess
+import sys
+from datetime import datetime, timezone
 from typing import Any, Dict
 
 import yaml
@@ -79,6 +83,160 @@ def _require_admin() -> None:
     """Abort with 403 if the current user is not an admin."""
     if not current_user.is_authenticated or current_user.role != "admin":
         abort(403)
+
+
+_TOOL_CHECK_TIMEOUT_SECONDS = 20
+_TOOL_INSTALL_TIMEOUT_SECONDS = 1800
+_WINGET_FLAGS = [
+    "--accept-package-agreements",
+    "--accept-source-agreements",
+    "--silent",
+]
+
+
+def _load_enabled_tool_ids() -> list[str]:
+    from shared.tool_catalog import default_enabled_tools
+
+    mgr = _get_mgr()
+    raw = mgr.get("enabled_tools")
+    try:
+        return json.loads(raw) if isinstance(raw, str) and raw else default_enabled_tools()
+    except Exception:
+        return default_enabled_tools()
+
+
+def _save_enabled_tool_ids(enabled_ids: list[str]) -> None:
+    mgr = _get_mgr()
+    changed_by = getattr(current_user, "email", "api")
+    mgr.set("enabled_tools", json.dumps(enabled_ids), changed_by)
+
+
+def _tool_install_plan(tool_id: str) -> dict[str, Any] | None:
+    is_windows = platform.system().lower().startswith("win")
+    if is_windows:
+        winget = {
+            "code_exec_python": {
+                "label": "Install Python 3.12",
+                "notes": "Uses winget to install Python 3.12 on this machine.",
+                "commands": [["winget", "install", "--id", "Python.Python.3.12", "-e", *_WINGET_FLAGS]],
+            },
+            "code_exec_dotnet": {
+                "label": "Install .NET SDK 8",
+                "notes": "Uses winget to install the .NET SDK required for C# build and test tasks.",
+                "commands": [["winget", "install", "--id", "Microsoft.DotNet.SDK.8", "-e", *_WINGET_FLAGS]],
+            },
+            "test_runner_dotnet_test": {
+                "label": "Install .NET SDK 8",
+                "notes": "dotnet test is included with the .NET SDK.",
+                "commands": [["winget", "install", "--id", "Microsoft.DotNet.SDK.8", "-e", *_WINGET_FLAGS]],
+            },
+            "code_exec_node": {
+                "label": "Install Node.js LTS",
+                "notes": "Uses winget to install the Node.js LTS runtime.",
+                "commands": [["winget", "install", "--id", "OpenJS.NodeJS.LTS", "-e", *_WINGET_FLAGS]],
+            },
+            "devops_git": {
+                "label": "Install Git",
+                "notes": "Uses winget to install Git for Windows.",
+                "commands": [["winget", "install", "--id", "Git.Git", "-e", *_WINGET_FLAGS]],
+            },
+            "code_exec_go": {
+                "label": "Install Go",
+                "notes": "Uses winget to install the Go toolchain.",
+                "commands": [["winget", "install", "--id", "GoLang.Go", "-e", *_WINGET_FLAGS]],
+            },
+            "code_exec_rust": {
+                "label": "Install Rust",
+                "notes": "Uses winget to install rustup and the Rust toolchain.",
+                "commands": [["winget", "install", "--id", "Rustlang.Rustup", "-e", *_WINGET_FLAGS]],
+            },
+            "test_runner_cargo_test": {
+                "label": "Install Rust",
+                "notes": "cargo test is included with the Rust toolchain.",
+                "commands": [["winget", "install", "--id", "Rustlang.Rustup", "-e", *_WINGET_FLAGS]],
+            },
+            "code_exec_java": {
+                "label": "Install Temurin JDK 17",
+                "notes": "Uses winget to install the JDK required for JVM tasks.",
+                "commands": [["winget", "install", "--id", "EclipseAdoptium.Temurin.17.JDK", "-e", *_WINGET_FLAGS]],
+            },
+            "test_runner_junit": {
+                "label": "Install Temurin JDK 17",
+                "notes": "JUnit tasks require a JDK. Build tooling remains project-specific.",
+                "commands": [["winget", "install", "--id", "EclipseAdoptium.Temurin.17.JDK", "-e", *_WINGET_FLAGS]],
+            },
+        }
+        if tool_id in winget:
+            return winget[tool_id]
+
+    pip_tools = {
+        "test_runner_pytest": {
+            "label": "Install pytest",
+            "notes": "Installs pytest into the Python environment used by the dashboard host.",
+            "commands": [[sys.executable, "-m", "pip", "install", "pytest"]],
+        }
+    }
+    return pip_tools.get(tool_id)
+
+
+def _classify_check_failure(output: str) -> str:
+    lowered = output.lower()
+    missing_markers = [
+        "not recognized as an internal or external command",
+        "command not found",
+        "not found",
+        "no such file",
+        "is not recognized",
+    ]
+    if any(marker in lowered for marker in missing_markers):
+        return "missing"
+    return "error"
+
+
+def _check_tool_availability(check_command: str | None) -> dict[str, Any]:
+    if not check_command:
+        return {
+            "status": "unverified",
+            "ok": None,
+            "summary": "No automatic check is defined for this tool.",
+            "output": "",
+        }
+    try:
+        completed = subprocess.run(
+            check_command,
+            capture_output=True,
+            text=True,
+            shell=True,
+            timeout=_TOOL_CHECK_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "status": "error",
+            "ok": False,
+            "summary": f"Check timed out after {_TOOL_CHECK_TIMEOUT_SECONDS} seconds.",
+            "output": "",
+        }
+    output = (completed.stdout or "") + ("\n" if completed.stdout and completed.stderr else "") + (completed.stderr or "")
+    output = output.strip()
+    if completed.returncode == 0:
+        summary = output.splitlines()[0] if output else "Command succeeded."
+        return {"status": "installed", "ok": True, "summary": summary, "output": output}
+    status = _classify_check_failure(output)
+    summary = output.splitlines()[0] if output else "Command exited with a non-zero status."
+    return {"status": status, "ok": False, "summary": summary, "output": output}
+
+
+def _tool_runtime_status(tool: Any) -> dict[str, Any]:
+    plan = _tool_install_plan(tool.id)
+    check = _check_tool_availability(tool.check_command)
+    return {
+        **check,
+        "install_supported": plan is not None,
+        "install_label": plan["label"] if plan else None,
+        "install_notes": plan["notes"] if plan else None,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -337,18 +495,9 @@ def list_tools():
         TOOL_CATALOG,
         TOOL_CATEGORIES,
         TOOL_PRESETS,
-        default_enabled_tools,
     )
 
-    mgr = _get_mgr()
-    raw = mgr.get("enabled_tools")
-    if raw is None:
-        enabled_ids = set(default_enabled_tools())
-    else:
-        try:
-            enabled_ids = set(json.loads(raw) if isinstance(raw, str) else raw)
-        except Exception:
-            enabled_ids = set(default_enabled_tools())
+    enabled_ids = set(_load_enabled_tool_ids())
 
     tools_out = [
         {
@@ -361,6 +510,7 @@ def list_tools():
             "install_hint": t.install_hint,
             "default_enabled": t.default_enabled,
             "enabled": t.id in enabled_ids,
+            "install_supported": _tool_install_plan(t.id) is not None,
             "presets": t.presets,
         }
         for t in TOOL_CATALOG
@@ -396,9 +546,7 @@ def update_tools_bulk():
     if not isinstance(raw_ids, list):
         return jsonify({"error": "'enabled_tools' must be a list of tool ID strings."}), 400
     valid_ids = [i for i in raw_ids if isinstance(i, str) and i in TOOL_CATALOG_BY_ID]
-    mgr = _get_mgr()
-    changed_by = getattr(current_user, "email", "api")
-    mgr.set("enabled_tools", json.dumps(valid_ids), changed_by)
+    _save_enabled_tool_ids(valid_ids)
     return jsonify({"status": "ok", "enabled_tools": valid_ids})
 
 
@@ -407,26 +555,20 @@ def update_tools_bulk():
 def update_tool(tool_id: str):
     """Toggle a single tool on or off: body ``{\"enabled\": true|false}``."""
     _require_admin()
-    from shared.tool_catalog import TOOL_CATALOG_BY_ID, default_enabled_tools
+    from shared.tool_catalog import TOOL_CATALOG_BY_ID
 
     if tool_id not in TOOL_CATALOG_BY_ID:
         return jsonify({"error": f"Unknown tool ID '{tool_id}'."}), 404
     body = request.get_json(silent=True)
     if not isinstance(body, dict) or "enabled" not in body:
         return jsonify({"error": "Body must contain an 'enabled' boolean."}), 400
-    mgr = _get_mgr()
-    raw = mgr.get("enabled_tools")
-    try:
-        enabled_ids: list[str] = json.loads(raw) if isinstance(raw, str) and raw else default_enabled_tools()
-    except Exception:
-        enabled_ids = default_enabled_tools()
+    enabled_ids = _load_enabled_tool_ids()
     if body["enabled"]:
         if tool_id not in enabled_ids:
             enabled_ids.append(tool_id)
     else:
         enabled_ids = [i for i in enabled_ids if i != tool_id]
-    changed_by = getattr(current_user, "email", "api")
-    mgr.set("enabled_tools", json.dumps(enabled_ids), changed_by)
+    _save_enabled_tool_ids(enabled_ids)
     return jsonify({"status": "ok", "tool_id": tool_id, "enabled": bool(body["enabled"])})
 
 
@@ -440,10 +582,148 @@ def apply_tool_preset(preset_id: str):
     if preset_id not in TOOL_PRESETS:
         return jsonify({"error": f"Unknown preset '{preset_id}'."}), 404
     tool_ids = tools_for_preset(preset_id)
-    mgr = _get_mgr()
-    changed_by = getattr(current_user, "email", "api")
-    mgr.set("enabled_tools", json.dumps(tool_ids), changed_by)
+    _save_enabled_tool_ids(tool_ids)
     return jsonify({"status": "ok", "preset": preset_id, "enabled_tools": tool_ids})
+
+
+@bp.post("/api/settings/tools/test")
+@login_required
+def test_tools():
+    """Run availability checks for enabled tools, or all tools when requested."""
+    _require_admin()
+    from shared.tool_catalog import TOOL_CATALOG, TOOL_CATALOG_BY_ID
+
+    body = request.get_json(silent=True) or {}
+    scope = str(body.get("scope") or "enabled").strip().lower()
+    tool_id = str(body.get("tool_id") or "").strip()
+    enabled_ids = set(_load_enabled_tool_ids())
+    if tool_id:
+        tool = TOOL_CATALOG_BY_ID.get(tool_id)
+        if tool is None:
+            return jsonify({"error": f"Unknown tool ID '{tool_id}'."}), 404
+        selected_tools = [tool]
+        scope = "single"
+    elif scope == "all":
+        selected_tools = TOOL_CATALOG
+    else:
+        selected_tools = [tool for tool in TOOL_CATALOG if tool.id in enabled_ids]
+    statuses = []
+    for tool in selected_tools:
+        statuses.append(
+            {
+                "id": tool.id,
+                "enabled": tool.id in enabled_ids,
+                "check_command": tool.check_command,
+                **_tool_runtime_status(tool),
+            }
+        )
+    if scope == "enabled" and not statuses:
+        for tool in TOOL_CATALOG_BY_ID.values():
+            statuses.append(
+                {
+                    "id": tool.id,
+                    "enabled": False,
+                    "check_command": tool.check_command,
+                    **_tool_runtime_status(tool),
+                }
+            )
+        scope = "all"
+    return jsonify(
+        {
+            "scope": scope,
+            "statuses": statuses,
+            "checked_count": len(statuses),
+        }
+    )
+
+
+@bp.post("/api/settings/tools/install/<tool_id>")
+@login_required
+def install_tool(tool_id: str):
+    """Install a supported tool runtime on the dashboard host and enable it."""
+    _require_admin()
+    from shared.tool_catalog import TOOL_CATALOG_BY_ID
+
+    tool = TOOL_CATALOG_BY_ID.get(tool_id)
+    if tool is None:
+        return jsonify({"error": f"Unknown tool ID '{tool_id}'."}), 404
+    plan = _tool_install_plan(tool_id)
+    if plan is None:
+        return (
+            jsonify(
+                {
+                    "error": f"No curated installer is available for '{tool_id}'.",
+                    "install_hint": tool.install_hint,
+                }
+            ),
+            400,
+        )
+    command_log: list[dict[str, Any]] = []
+    for command in plan["commands"]:
+        try:
+            completed = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=_TOOL_INSTALL_TIMEOUT_SECONDS,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return (
+                jsonify(
+                    {
+                        "error": f"Installer timed out for '{tool_id}'.",
+                        "tool_id": tool_id,
+                        "command_log": command_log,
+                    }
+                ),
+                504,
+            )
+        output = (completed.stdout or "") + ("\n" if completed.stdout and completed.stderr else "") + (completed.stderr or "")
+        command_log.append(
+            {
+                "command": command,
+                "returncode": completed.returncode,
+                "output": output.strip(),
+            }
+        )
+        if completed.returncode != 0:
+            return (
+                jsonify(
+                    {
+                        "error": f"Installer command failed for '{tool_id}'.",
+                        "tool_id": tool_id,
+                        "command_log": command_log,
+                    }
+                ),
+                502,
+            )
+    status = _tool_runtime_status(tool)
+    if status["status"] != "installed":
+        return (
+            jsonify(
+                {
+                    "error": f"Installation finished but '{tool_id}' still does not appear installed.",
+                    "tool_id": tool_id,
+                    "command_log": command_log,
+                    "status": status,
+                }
+            ),
+            502,
+        )
+    enabled_ids = _load_enabled_tool_ids()
+    if tool_id not in enabled_ids:
+        enabled_ids.append(tool_id)
+        _save_enabled_tool_ids(enabled_ids)
+    return jsonify(
+        {
+            "status": "ok",
+            "tool_id": tool_id,
+            "enabled": True,
+            "command_log": command_log,
+            "tool_status": status,
+        }
+    )
 
 
 @bp.get("/api/settings/<key>")
