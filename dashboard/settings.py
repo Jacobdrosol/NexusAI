@@ -19,6 +19,8 @@ import os
 import platform
 import subprocess
 import sys
+import threading
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
@@ -371,6 +373,118 @@ def _tool_runtime_status(tool: Any) -> dict[str, Any]:
         "install_notes": plan["notes"] if plan else None,
         "checked_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+class ToolInstallManager:
+    """Runs curated tool installs asynchronously and exposes pollable status."""
+
+    _instance: "ToolInstallManager | None" = None
+    _instance_lock = threading.Lock()
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._jobs: dict[str, dict[str, Any]] = {}
+        self._tool_runs: dict[str, str] = {}
+
+    @classmethod
+    def instance(cls) -> "ToolInstallManager":
+        with cls._instance_lock:
+            if cls._instance is None:
+                cls._instance = cls()
+            return cls._instance
+
+    def _job_snapshot(self, run_id: str) -> dict[str, Any] | None:
+        job = self._jobs.get(run_id)
+        return dict(job) if job else None
+
+    def latest_for_tool(self, tool_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            run_id = self._tool_runs.get(tool_id)
+            return self._job_snapshot(run_id) if run_id else None
+
+    def status(self, run_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            return self._job_snapshot(run_id)
+
+    def start(self, tool: Any, plan: dict[str, Any], enable_callback) -> tuple[bool, dict[str, Any]]:
+        with self._lock:
+            existing_id = self._tool_runs.get(tool.id)
+            if existing_id:
+                existing = self._jobs.get(existing_id)
+                if existing and existing.get("state") == "running":
+                    return False, dict(existing)
+            run_id = str(uuid.uuid4())
+            job = {
+                "run_id": run_id,
+                "tool_id": tool.id,
+                "tool_name": tool.name,
+                "state": "running",
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "finished_at": None,
+                "current_step": 0,
+                "total_steps": len(plan["commands"]),
+                "command_log": [],
+                "last_error": None,
+                "tool_status": None,
+                "enabled": False,
+            }
+            self._jobs[run_id] = job
+            self._tool_runs[tool.id] = run_id
+            thread = threading.Thread(
+                target=self._run_install,
+                args=(run_id, tool, plan, enable_callback),
+                daemon=True,
+                name=f"tool-install-{tool.id}",
+            )
+            thread.start()
+            return True, dict(job)
+
+    def _run_install(self, run_id: str, tool: Any, plan: dict[str, Any], enable_callback) -> None:
+        try:
+            for index, command in enumerate(plan["commands"], start=1):
+                with self._lock:
+                    job = self._jobs[run_id]
+                    job["current_step"] = index
+                completed = subprocess.run(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    timeout=_TOOL_INSTALL_TIMEOUT_SECONDS,
+                    check=False,
+                )
+                output = (completed.stdout or "") + ("\n" if completed.stdout and completed.stderr else "") + (completed.stderr or "")
+                with self._lock:
+                    self._jobs[run_id]["command_log"].append(
+                        {
+                            "command": command,
+                            "returncode": completed.returncode,
+                            "output": output.strip(),
+                        }
+                    )
+                if completed.returncode != 0:
+                    raise RuntimeError("Installer command failed.")
+            status = _tool_runtime_status(tool)
+            if status["status"] != "installed":
+                raise RuntimeError("Installation finished but the tool still appears unavailable.")
+            enable_callback(tool.id)
+            with self._lock:
+                job = self._jobs[run_id]
+                job["state"] = "succeeded"
+                job["finished_at"] = datetime.now(timezone.utc).isoformat()
+                job["tool_status"] = status
+                job["enabled"] = True
+        except subprocess.TimeoutExpired:
+            with self._lock:
+                job = self._jobs[run_id]
+                job["state"] = "failed"
+                job["finished_at"] = datetime.now(timezone.utc).isoformat()
+                job["last_error"] = f"Installer timed out after {_TOOL_INSTALL_TIMEOUT_SECONDS} seconds."
+        except Exception as exc:
+            with self._lock:
+                job = self._jobs[run_id]
+                job["state"] = "failed"
+                job["finished_at"] = datetime.now(timezone.utc).isoformat()
+                job["last_error"] = str(exc)
 
 
 # ---------------------------------------------------------------------------
@@ -774,7 +888,7 @@ def test_tools():
 @bp.post("/api/settings/tools/install/<tool_id>")
 @login_required
 def install_tool(tool_id: str):
-    """Install a supported tool runtime on the dashboard host and enable it."""
+    """Queue a supported tool install on the dashboard host and return immediately."""
     _require_admin()
     from shared.tool_catalog import TOOL_CATALOG_BY_ID
 
@@ -792,72 +906,27 @@ def install_tool(tool_id: str):
             ),
             400,
         )
-    command_log: list[dict[str, Any]] = []
-    for command in plan["commands"]:
-        try:
-            completed = subprocess.run(
-                command,
-                capture_output=True,
-                text=True,
-                timeout=_TOOL_INSTALL_TIMEOUT_SECONDS,
-                check=False,
-            )
-        except subprocess.TimeoutExpired:
-            return (
-                jsonify(
-                    {
-                        "error": f"Installer timed out for '{tool_id}'.",
-                        "tool_id": tool_id,
-                        "command_log": command_log,
-                    }
-                ),
-                504,
-            )
-        output = (completed.stdout or "") + ("\n" if completed.stdout and completed.stderr else "") + (completed.stderr or "")
-        command_log.append(
-            {
-                "command": command,
-                "returncode": completed.returncode,
-                "output": output.strip(),
-            }
-        )
-        if completed.returncode != 0:
-            return (
-                jsonify(
-                    {
-                        "error": f"Installer command failed for '{tool_id}'.",
-                        "tool_id": tool_id,
-                        "command_log": command_log,
-                    }
-                ),
-                502,
-            )
-    status = _tool_runtime_status(tool)
-    if status["status"] != "installed":
-        return (
-            jsonify(
-                {
-                    "error": f"Installation finished but '{tool_id}' still does not appear installed.",
-                    "tool_id": tool_id,
-                    "command_log": command_log,
-                    "status": status,
-                }
-            ),
-            502,
-        )
-    enabled_ids = _load_enabled_tool_ids()
-    if tool_id not in enabled_ids:
-        enabled_ids.append(tool_id)
-        _save_enabled_tool_ids(enabled_ids)
-    return jsonify(
-        {
-            "status": "ok",
-            "tool_id": tool_id,
-            "enabled": True,
-            "command_log": command_log,
-            "tool_status": status,
-        }
-    )
+    def _enable(tool_name: str) -> None:
+        enabled_ids = _load_enabled_tool_ids()
+        if tool_name not in enabled_ids:
+            enabled_ids.append(tool_name)
+            _save_enabled_tool_ids(enabled_ids)
+
+    started, job = ToolInstallManager.instance().start(tool, plan, _enable)
+    if not started:
+        return jsonify(job), 202
+    return jsonify(job), 202
+
+
+@bp.get("/api/settings/tools/install/<tool_id>/status")
+@login_required
+def tool_install_status(tool_id: str):
+    """Return the most recent install status for a given tool, if any."""
+    _require_admin()
+    job = ToolInstallManager.instance().latest_for_tool(tool_id)
+    if job is None:
+        return jsonify({"error": f"No install job found for '{tool_id}'."}), 404
+    return jsonify(job)
 
 
 @bp.get("/api/settings/<key>")

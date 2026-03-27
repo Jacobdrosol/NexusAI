@@ -646,6 +646,7 @@ setInterval(function() {
 var _toolsLoaded = false;
 var _toolData = { tools: [], categories: [], presets: [] };
 var _toolStatusById = {};
+var _toolInstallPollers = {};
 
 function loadToolCatalog() {
   if (_toolsLoaded) return;
@@ -736,7 +737,10 @@ function renderToolStatus(toolId, status) {
     installed: '#10b981',
     missing: '#f59e0b',
     error: '#ef4444',
-    unverified: '#718096'
+    unverified: '#718096',
+    running: '#60a5fa',
+    failed: '#ef4444',
+    succeeded: '#10b981'
   };
   var label = status.status || 'unknown';
   var color = colors[label] || '#718096';
@@ -817,23 +821,83 @@ function installToolRuntime(toolId) {
       }
       return;
     }
-    var checkbox = document.querySelector('input[data-tool-id="' + toolId + '"]');
-    if (checkbox) {
-      checkbox.checked = true;
-      var span = document.getElementById('toggle-span-' + toolId);
-      if (span) {
-        span.style.background = '#7c3aed';
-        var dot = span.querySelector('span');
-        if (dot) dot.style.transform = 'translateX(18px)';
-      }
-    }
-    if (res.data.tool_status) {
-      _toolStatusById[toolId] = res.data.tool_status;
-      renderToolStatus(toolId, res.data.tool_status);
-    }
-    showToast('Installed and enabled ' + toolId, true);
+    _toolStatusById[toolId] = {
+      status: res.data.state || 'running',
+      summary: 'Install in progress (' + (res.data.current_step || 0) + '/' + (res.data.total_steps || 0) + ')',
+      install_notes: '',
+    };
+    renderToolStatus(toolId, _toolStatusById[toolId]);
+    pollToolInstallStatus(toolId);
+    showToast('Started install for ' + toolId, true);
   })
   .catch(function(e){ showToast('Network error: ' + e, false); });
+}
+
+function pollToolInstallStatus(toolId) {
+  if (_toolInstallPollers[toolId]) {
+    clearInterval(_toolInstallPollers[toolId]);
+  }
+  _toolInstallPollers[toolId] = setInterval(function() {
+    fetch('/api/settings/tools/install/' + encodeURIComponent(toolId) + '/status', {
+      headers: {'X-CSRFToken': _csrfToken}
+    })
+    .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, data:d}; }); })
+    .then(function(res){
+      if (!res.ok) {
+        clearInterval(_toolInstallPollers[toolId]);
+        delete _toolInstallPollers[toolId];
+        return;
+      }
+      var state = res.data.state || 'running';
+      var summary = 'Install in progress (' + (res.data.current_step || 0) + '/' + (res.data.total_steps || 0) + ')';
+      if (state === 'failed') {
+        summary = res.data.last_error || 'Install failed.';
+      } else if (state === 'succeeded') {
+        summary = (res.data.tool_status && res.data.tool_status.summary) || 'Install completed.';
+      }
+      _toolStatusById[toolId] = {
+        status: state,
+        summary: summary,
+        install_notes: '',
+      };
+      if (state === 'succeeded' && res.data.tool_status) {
+        _toolStatusById[toolId] = res.data.tool_status;
+      }
+      renderToolStatus(toolId, _toolStatusById[toolId]);
+      if (state === 'succeeded') {
+        var checkbox = document.querySelector('input[data-tool-id="' + toolId + '"]');
+        if (checkbox) {
+          checkbox.checked = true;
+          var span = document.getElementById('toggle-span-' + toolId);
+          if (span) {
+            span.style.background = '#7c3aed';
+            var dot = span.querySelector('span');
+            if (dot) dot.style.transform = 'translateX(18px)';
+          }
+        }
+        clearInterval(_toolInstallPollers[toolId]);
+        delete _toolInstallPollers[toolId];
+        showToast('Installed and enabled ' + toolId, true);
+      } else if (state === 'failed') {
+        clearInterval(_toolInstallPollers[toolId]);
+        delete _toolInstallPollers[toolId];
+        var detail = '';
+        if (res.data.command_log && res.data.command_log.length) {
+          var last = res.data.command_log[res.data.command_log.length - 1];
+          detail = '\n\nLast command:\n' + (Array.isArray(last.command) ? last.command.join(' ') : String(last.command || '')) +
+            '\n\nOutput:\n' + String(last.output || '').trim();
+        }
+        showToast('Failed to install tool: ' + (res.data.last_error || 'unknown error'), false);
+        if (detail) {
+          alert('Tool install failed for ' + toolId + detail);
+        }
+      }
+    })
+    .catch(function(){
+      clearInterval(_toolInstallPollers[toolId]);
+      delete _toolInstallPollers[toolId];
+    });
+  }, 2000);
 }
 
 function toggleTool(toolId, enabled) {

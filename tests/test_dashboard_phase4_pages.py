@@ -1953,26 +1953,46 @@ def test_settings_tool_install_enables_tool_after_success(dashboard_client):
     _login_admin(dashboard_client)
     dashboard_client.put("/api/settings/tools", json={"enabled_tools": []})
 
-    def _fake_run(command, capture_output=None, text=None, timeout=None, check=None, shell=None, env=None):
-        class Result:
-            def __init__(self, returncode, stdout="", stderr=""):
-                self.returncode = returncode
-                self.stdout = stdout
-                self.stderr = stderr
+    class FakeInstallManager:
+        def __init__(self):
+            self.started = False
 
-        if isinstance(command, list) and command[:4] == ["winget", "install", "--id", "Microsoft.DotNet.SDK.8"]:
-            return Result(0, "Installed\n", "")
-        if command == "dotnet --version":
-            return Result(0, "8.0.203\n", "")
-        raise AssertionError(f"Unexpected install command: {command}")
+        def start(self, tool, plan, enable_callback):
+            self.started = True
+            enable_callback(tool.id)
+            return True, {
+                "run_id": "run-1",
+                "tool_id": tool.id,
+                "state": "running",
+                "current_step": 0,
+                "total_steps": 1,
+                "command_log": [],
+            }
+
+        def latest_for_tool(self, tool_id):
+            return {
+                "run_id": "run-1",
+                "tool_id": tool_id,
+                "state": "succeeded",
+                "current_step": 1,
+                "total_steps": 1,
+                "command_log": [],
+                "tool_status": {"status": "installed", "summary": "8.0.203"},
+                "enabled": True,
+            }
+
+    fake_manager = FakeInstallManager()
 
     with patch("dashboard.settings.platform.system", return_value="Windows"), \
-         patch("dashboard.settings.subprocess.run", side_effect=_fake_run):
+         patch("dashboard.settings.ToolInstallManager.instance", return_value=fake_manager):
         resp = dashboard_client.post("/api/settings/tools/install/code_exec_dotnet")
+        status_resp = dashboard_client.get("/api/settings/tools/install/code_exec_dotnet/status")
 
-    assert resp.status_code == 200
+    assert resp.status_code == 202
     data = resp.get_json()
-    assert data["tool_status"]["status"] == "installed"
+    assert data["state"] == "running"
+    assert status_resp.status_code == 200
+    assert status_resp.get_json()["state"] == "succeeded"
 
     list_resp = dashboard_client.get("/api/settings/tools")
     assert list_resp.status_code == 200
