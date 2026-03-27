@@ -135,6 +135,24 @@ def _tool_install_plan(tool_id: str) -> dict[str, Any] | None:
         "elif command -v wget >/dev/null 2>&1; then wget -qO {dest} {url}; "
         "else echo 'curl or wget is required to download installer assets.'; exit 1; fi"
     )
+    python_download_commands = {
+        "dotnet": [
+            sys.executable,
+            "-c",
+            (
+                "import urllib.request; "
+                "urllib.request.urlretrieve('https://dot.net/v1/dotnet-install.sh', '/tmp/dotnet-install.sh')"
+            ),
+        ],
+        "rustup": [
+            sys.executable,
+            "-c",
+            (
+                "import urllib.request; "
+                "urllib.request.urlretrieve('https://sh.rustup.rs', '/tmp/rustup-init.sh')"
+            ),
+        ],
+    }
     if is_windows:
         winget = {
             "code_exec_python": {
@@ -235,20 +253,18 @@ def _tool_install_plan(tool_id: str) -> dict[str, Any] | None:
             "code_exec_rust": {
                 "label": "Install Rust",
                 "notes": "Uses rustup to install the Rust toolchain into the current user profile.",
-                "commands": [[
-                    "bash",
-                    "-lc",
-                    "set -e; " + linux_fetch_script.format(url="https://sh.rustup.rs", dest="/tmp/rustup-init.sh") + " && sh /tmp/rustup-init.sh -y --profile minimal",
-                ]],
+                "commands": [
+                    python_download_commands["rustup"],
+                    ["bash", "-lc", "set -e; sh /tmp/rustup-init.sh -y --profile minimal"],
+                ],
             },
             "test_runner_cargo_test": {
                 "label": "Install Rust",
                 "notes": "cargo test is included with the Rust toolchain.",
-                "commands": [[
-                    "bash",
-                    "-lc",
-                    "set -e; " + linux_fetch_script.format(url="https://sh.rustup.rs", dest="/tmp/rustup-init.sh") + " && sh /tmp/rustup-init.sh -y --profile minimal",
-                ]],
+                "commands": [
+                    python_download_commands["rustup"],
+                    ["bash", "-lc", "set -e; sh /tmp/rustup-init.sh -y --profile minimal"],
+                ],
             },
             "code_exec_java": {
                 "label": "Install OpenJDK 17",
@@ -271,26 +287,18 @@ def _tool_install_plan(tool_id: str) -> dict[str, Any] | None:
             "code_exec_dotnet": {
                 "label": "Install .NET SDK 8",
                 "notes": "Uses the official dotnet-install script to install the SDK into the current user profile.",
-                "commands": [[
-                    "bash",
-                    "-lc",
-                    "set -e; mkdir -p \"$HOME/.dotnet\"; "
-                    + linux_fetch_script.format(url="https://dot.net/v1/dotnet-install.sh", dest="/tmp/dotnet-install.sh")
-                    + "; "
-                    "bash /tmp/dotnet-install.sh --channel 8.0 --install-dir \"$HOME/.dotnet\"",
-                ]],
+                "commands": [
+                    python_download_commands["dotnet"],
+                    ["bash", "-lc", "set -e; mkdir -p \"$HOME/.dotnet\"; bash /tmp/dotnet-install.sh --channel 8.0 --install-dir \"$HOME/.dotnet\""],
+                ],
             },
             "test_runner_dotnet_test": {
                 "label": "Install .NET SDK 8",
                 "notes": "dotnet test is included with the .NET SDK.",
-                "commands": [[
-                    "bash",
-                    "-lc",
-                    "set -e; mkdir -p \"$HOME/.dotnet\"; "
-                    + linux_fetch_script.format(url="https://dot.net/v1/dotnet-install.sh", dest="/tmp/dotnet-install.sh")
-                    + "; "
-                    "bash /tmp/dotnet-install.sh --channel 8.0 --install-dir \"$HOME/.dotnet\"",
-                ]],
+                "commands": [
+                    python_download_commands["dotnet"],
+                    ["bash", "-lc", "set -e; mkdir -p \"$HOME/.dotnet\"; bash /tmp/dotnet-install.sh --channel 8.0 --install-dir \"$HOME/.dotnet\""],
+                ],
             },
         }
         if tool_id in linux:
@@ -385,6 +393,26 @@ class ToolInstallManager:
         self._lock = threading.Lock()
         self._jobs: dict[str, dict[str, Any]] = {}
         self._tool_runs: dict[str, str] = {}
+        self._data_dir = Path(__file__).resolve().parent.parent / "data" / "tool_installs"
+        self._data_dir.mkdir(parents=True, exist_ok=True)
+
+    def _job_path(self, tool_id: str) -> Path:
+        safe_tool_id = tool_id.replace("/", "_")
+        return self._data_dir / f"{safe_tool_id}.json"
+
+    def _save_job(self, job: dict[str, Any]) -> None:
+        path = self._job_path(job["tool_id"])
+        path.write_text(json.dumps(job, indent=2, sort_keys=True), encoding="utf-8")
+
+    def _load_job_for_tool(self, tool_id: str) -> dict[str, Any] | None:
+        path = self._job_path(tool_id)
+        if not path.exists():
+            return None
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            return raw if isinstance(raw, dict) else None
+        except Exception:
+            return None
 
     @classmethod
     def instance(cls) -> "ToolInstallManager":
@@ -400,7 +428,11 @@ class ToolInstallManager:
     def latest_for_tool(self, tool_id: str) -> dict[str, Any] | None:
         with self._lock:
             run_id = self._tool_runs.get(tool_id)
-            return self._job_snapshot(run_id) if run_id else None
+            if run_id:
+                snap = self._job_snapshot(run_id)
+                if snap is not None:
+                    return snap
+            return self._load_job_for_tool(tool_id)
 
     def status(self, run_id: str) -> dict[str, Any] | None:
         with self._lock:
@@ -430,6 +462,7 @@ class ToolInstallManager:
             }
             self._jobs[run_id] = job
             self._tool_runs[tool.id] = run_id
+            self._save_job(job)
             thread = threading.Thread(
                 target=self._run_install,
                 args=(run_id, tool, plan, enable_callback),
@@ -445,6 +478,7 @@ class ToolInstallManager:
                 with self._lock:
                     job = self._jobs[run_id]
                     job["current_step"] = index
+                    self._save_job(job)
                 completed = subprocess.run(
                     command,
                     capture_output=True,
@@ -454,13 +488,15 @@ class ToolInstallManager:
                 )
                 output = (completed.stdout or "") + ("\n" if completed.stdout and completed.stderr else "") + (completed.stderr or "")
                 with self._lock:
-                    self._jobs[run_id]["command_log"].append(
+                    job = self._jobs[run_id]
+                    job["command_log"].append(
                         {
                             "command": command,
                             "returncode": completed.returncode,
                             "output": output.strip(),
                         }
                     )
+                    self._save_job(job)
                 if completed.returncode != 0:
                     raise RuntimeError("Installer command failed.")
             status = _tool_runtime_status(tool)
@@ -473,18 +509,21 @@ class ToolInstallManager:
                 job["finished_at"] = datetime.now(timezone.utc).isoformat()
                 job["tool_status"] = status
                 job["enabled"] = True
+                self._save_job(job)
         except subprocess.TimeoutExpired:
             with self._lock:
                 job = self._jobs[run_id]
                 job["state"] = "failed"
                 job["finished_at"] = datetime.now(timezone.utc).isoformat()
                 job["last_error"] = f"Installer timed out after {_TOOL_INSTALL_TIMEOUT_SECONDS} seconds."
+                self._save_job(job)
         except Exception as exc:
             with self._lock:
                 job = self._jobs[run_id]
                 job["state"] = "failed"
                 job["finished_at"] = datetime.now(timezone.utc).isoformat()
                 job["last_error"] = str(exc)
+                self._save_job(job)
 
 
 # ---------------------------------------------------------------------------
