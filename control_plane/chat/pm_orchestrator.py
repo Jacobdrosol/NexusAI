@@ -259,6 +259,83 @@ class PMOrchestrator:
             normalized.append(value)
         return normalized
 
+    def _instruction_explicitly_excludes_database(self, instruction: str) -> bool:
+        text = str(instruction or "").lower()
+        exclusion_patterns = (
+            "not affect database",
+            "not affect the database",
+            "no database",
+            "no db ",
+            "no db.",
+            "without database",
+            "without db",
+            "exclude database",
+            "exclude db",
+            "database not allowed",
+            "db not allowed",
+            "skip database",
+            "skip db",
+            "omit database",
+            "omit db",
+            "skip pm-database-engineer",
+            "omit pm-database-engineer",
+            "do not run database engineer",
+            "do not run db engineer",
+        )
+        return any(pattern in text for pattern in exclusion_patterns)
+
+    def _instruction_explicitly_excludes_ui(self, instruction: str) -> bool:
+        text = str(instruction or "").lower()
+        exclusion_patterns = (
+            "not affect ui",
+            "not affect the ui",
+            "no ui",
+            "no frontend",
+            "no front-end",
+            "without ui",
+            "without frontend",
+            "exclude ui",
+            "exclude frontend",
+            "ui not allowed",
+            "frontend not allowed",
+            "skip ui",
+            "skip frontend",
+            "omit ui",
+            "omit frontend",
+            "not affect the site",
+            "not affect site",
+            "skip pm-ui-tester",
+            "omit pm-ui-tester",
+            "skip the ui tester",
+            "omit the ui tester",
+            "do not run ui tester",
+            "don't run ui tester",
+            "do not run the ui tester",
+            "don't run the ui tester",
+            "skip ui test",
+            "skip ui tests",
+            "skip playwright",
+            "playwright not configured",
+            "admin side is not currently setup",
+            "user side is not currently setup",
+        )
+        return any(pattern in text for pattern in exclusion_patterns)
+
+    def _assignment_stage_exclusion_scope(self, instruction: str, *, docs_only: bool) -> Dict[str, str]:
+        text = str(instruction or "").strip()
+        excluded: Dict[str, str] = {}
+        if docs_only:
+            if not self._instruction_mentions_database(text):
+                excluded["pm-database-engineer"] = "docs_only_no_database_scope"
+            if not self._instruction_mentions_ui(text):
+                excluded["pm-ui-tester"] = "docs_only_no_ui_scope"
+            return excluded
+        if self._instruction_explicitly_excludes_database(text):
+            excluded["pm-database-engineer"] = "assignment_excludes_database_stage"
+        if self._instruction_explicitly_excludes_ui(text):
+            excluded["pm-ui-tester"] = "assignment_excludes_ui_stage"
+        return excluded
+
     def _extract_assignment_scope(
         self,
         instruction: str,
@@ -276,6 +353,7 @@ class PMOrchestrator:
         combined_text = "\n".join(part for part in (prior_context, request_text, transcript) if part).strip()
         lowered = combined_text.lower()
         docs_only = self._instruction_requests_docs_only_outputs(request_text)
+        explicit_stage_exclusions = self._assignment_stage_exclusion_scope(request_text, docs_only=docs_only)
         scope: Dict[str, Any] = {
             "request_text": request_text,
             "conversation_brief": prior_context,
@@ -291,6 +369,8 @@ class PMOrchestrator:
             "requested_output_paths": self._requested_output_paths(request_text),
             "requested_output_extensions": [".md"] if docs_only else [],
             "forbidden_change_domains": ["code", "tests", "database", "ui"] if docs_only else [],
+            "explicit_stage_exclusions": list(explicit_stage_exclusions.keys()),
+            "explicit_stage_exclusion_reasons": explicit_stage_exclusions,
             "prefer_in_house": any(
                 marker in lowered
                 for marker in (
@@ -722,27 +802,42 @@ class PMOrchestrator:
                 original_instruction = instr
                 break
         docs_only_scope = self._instruction_requests_docs_only_outputs(original_instruction)
-        needs_database = self._instruction_mentions_database(original_instruction)
-        needs_ui = self._instruction_mentions_ui(original_instruction)
+        explicit_stage_exclusion_reasons: Dict[str, str] = {}
+        for task in final_tasks:
+            payload = task.payload if isinstance(task.payload, dict) else {}
+            scope = payload.get("assignment_scope")
+            if isinstance(scope, dict):
+                raw_reasons = scope.get("explicit_stage_exclusion_reasons")
+                if isinstance(raw_reasons, dict):
+                    explicit_stage_exclusion_reasons = {
+                        str(key).strip(): str(value).strip()
+                        for key, value in raw_reasons.items()
+                        if str(key).strip()
+                    }
+                    break
+                raw_exclusions = scope.get("explicit_stage_exclusions")
+                if isinstance(raw_exclusions, list):
+                    explicit_stage_exclusion_reasons = {
+                        str(item).strip(): "assignment_scope_exclusion"
+                        for item in raw_exclusions
+                        if str(item).strip()
+                    }
+                    break
+        if not explicit_stage_exclusion_reasons:
+            explicit_stage_exclusion_reasons = self._assignment_stage_exclusion_scope(
+                original_instruction,
+                docs_only=docs_only_scope,
+            )
         intentionally_excluded_stages: List[str] = []
         intentionally_skipped_stages: List[str] = []
-        if docs_only_scope:
-            # Handle missing stages that are intentionally excluded (never ran)
-            for stage_id in list(missing_stages):
-                if stage_id == "pm-database-engineer" and not needs_database:
-                    intentionally_excluded_stages.append(stage_id)
-                    missing_stages.remove(stage_id)
-                elif stage_id == "pm-ui-tester" and not needs_ui:
-                    intentionally_excluded_stages.append(stage_id)
-                    missing_stages.remove(stage_id)
-            # Handle skipped stages that are intentional pass-throughs (ran but returned skip/no-op)
-            for stage_id in list(skipped_stages):
-                if stage_id == "pm-database-engineer" and not needs_database:
-                    intentionally_skipped_stages.append(stage_id)
-                    skipped_stages.remove(stage_id)
-                elif stage_id == "pm-ui-tester" and not needs_ui:
-                    intentionally_skipped_stages.append(stage_id)
-                    skipped_stages.remove(stage_id)
+        for stage_id in list(missing_stages):
+            if stage_id in explicit_stage_exclusion_reasons:
+                intentionally_excluded_stages.append(stage_id)
+                missing_stages.remove(stage_id)
+        for stage_id in list(skipped_stages):
+            if stage_id in explicit_stage_exclusion_reasons:
+                intentionally_skipped_stages.append(stage_id)
+                skipped_stages.remove(stage_id)
         workflow_policy_codes: List[str] = []
         if all_terminal and not workflow_complete:
             lines.extend(
@@ -769,11 +864,17 @@ class PMOrchestrator:
             lines.append(f"Skipped stages: {', '.join(skipped_stages)}")
             workflow_policy_codes.extend(f"skipped_downstream_stage:{stage_id}" for stage_id in skipped_stages)
         if intentionally_excluded_stages:
-            lines.append(f"Intentionally excluded stages (docs-only scope): {', '.join(intentionally_excluded_stages)}")
-            workflow_policy_codes.extend(f"excluded_downstream_stage:{stage_id}" for stage_id in intentionally_excluded_stages)
+            lines.append(f"Intentionally excluded stages (assignment scope): {', '.join(intentionally_excluded_stages)}")
+            workflow_policy_codes.extend(
+                f"excluded_downstream_stage:{stage_id}:{explicit_stage_exclusion_reasons.get(stage_id, 'assignment_scope_exclusion')}"
+                for stage_id in intentionally_excluded_stages
+            )
         if intentionally_skipped_stages:
-            lines.append(f"Intentionally skipped pass-through stages (docs-only scope): {', '.join(intentionally_skipped_stages)}")
-            workflow_policy_codes.extend(f"skipped_pass_through_stage:{stage_id}" for stage_id in intentionally_skipped_stages)
+            lines.append(f"Intentionally skipped pass-through stages (assignment scope): {', '.join(intentionally_skipped_stages)}")
+            workflow_policy_codes.extend(
+                f"skipped_pass_through_stage:{stage_id}:{explicit_stage_exclusion_reasons.get(stage_id, 'assignment_scope_exclusion')}"
+                for stage_id in intentionally_skipped_stages
+            )
         if missing_deliverables:
             lines.append(
                 "Missing latest-cycle deliverables: "
@@ -869,9 +970,9 @@ class PMOrchestrator:
         if skipped_stages:
             lines.append("Skipped stages: " + ", ".join(skipped_stages))
         if intentionally_excluded_stages:
-            lines.append("Intentionally excluded stages (docs-only scope): " + ", ".join(intentionally_excluded_stages))
+            lines.append("Intentionally excluded stages (assignment scope): " + ", ".join(intentionally_excluded_stages))
         if intentionally_skipped_stages:
-            lines.append("Intentionally skipped pass-through stages (docs-only scope): " + ", ".join(intentionally_skipped_stages))
+            lines.append("Intentionally skipped pass-through stages (assignment scope): " + ", ".join(intentionally_skipped_stages))
         expected_deliverables = [str(item) for item in (completion.get("expected_deliverables") or []) if str(item)]
         produced_deliverables = [str(item) for item in (completion.get("produced_deliverables") or []) if str(item)]
         if expected_deliverables:
@@ -2563,25 +2664,7 @@ class PMOrchestrator:
 
     def _instruction_mentions_database(self, instruction: str) -> bool:
         text = str(instruction or "").lower()
-        # Negative exclusion patterns - if these are present, DB scope is explicitly excluded
-        exclusion_patterns = (
-            "not affect database",
-            "not affect the database",
-            "no database",
-            "no db ",
-            "no db.",
-            "without database",
-            "without db",
-            "exclude database",
-            "exclude db",
-            "database not allowed",
-            "db not allowed",
-            "skip database",
-            "skip db",
-            "omit database",
-            "omit db",
-        )
-        if any(pattern in text for pattern in exclusion_patterns):
+        if self._instruction_explicitly_excludes_database(text):
             return False
         # Handle disjunction patterns like "not affect the site, ui, or database"
         if "not affect" in text and "database" in text:
@@ -2613,27 +2696,7 @@ class PMOrchestrator:
 
     def _instruction_mentions_ui(self, instruction: str) -> bool:
         text = str(instruction or "").lower()
-        # Negative exclusion patterns - if these are present, UI scope is explicitly excluded
-        exclusion_patterns = (
-            "not affect ui",
-            "not affect the ui",
-            "no ui",
-            "no frontend",
-            "no front-end",
-            "without ui",
-            "without frontend",
-            "exclude ui",
-            "exclude frontend",
-            "ui not allowed",
-            "frontend not allowed",
-            "skip ui",
-            "skip frontend",
-            "omit ui",
-            "omit frontend",
-            "not affect the site",
-            "not affect site",
-        )
-        if any(pattern in text for pattern in exclusion_patterns):
+        if self._instruction_explicitly_excludes_ui(text):
             return False
         keywords = (
             "frontend",

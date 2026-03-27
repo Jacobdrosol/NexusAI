@@ -198,6 +198,8 @@ def _assignment_scope_prompt_suffix(payload: Any) -> str:
     focus_topics = scope.get("focus_topics")
     requested_artifact_hints = scope.get("requested_artifact_hints")
     constraint_hints = scope.get("constraint_hints")
+    explicit_stage_exclusions = scope.get("explicit_stage_exclusions")
+    explicit_stage_exclusion_reasons = scope.get("explicit_stage_exclusion_reasons")
     if (
         not docs_only
         and not request_text
@@ -213,6 +215,7 @@ def _assignment_scope_prompt_suffix(payload: Any) -> str:
         and not focus_topics
         and not requested_artifact_hints
         and not constraint_hints
+        and not explicit_stage_exclusions
     ):
         return ""
 
@@ -275,6 +278,26 @@ def _assignment_scope_prompt_suffix(payload: Any) -> str:
         if normalized_constraints:
             parts.append("Interpreted scope constraints:")
             parts.extend(f"- {item}" for item in normalized_constraints[:12])
+    if isinstance(explicit_stage_exclusions, list):
+        normalized_exclusions = [str(item).strip() for item in explicit_stage_exclusions if str(item).strip()]
+        if normalized_exclusions:
+            parts.append("Explicitly excluded downstream stages for this run: " + ", ".join(normalized_exclusions[:8]))
+            parts.append(
+                "Do not invent deliverables, blockers, or required evidence for explicitly excluded stages. "
+                "If an excluded stage is still invoked by workflow routing, return a skip/not_applicable outcome tied to assignment scope."
+            )
+            parts.append(
+                "Final QC and other downstream validation stages must treat explicitly excluded stages as intentional omissions, "
+                "not as missing verification, when the remaining required evidence is present."
+            )
+            if isinstance(explicit_stage_exclusion_reasons, dict):
+                normalized_reasons = [
+                    f"{str(stage).strip()}={str(reason).strip()}"
+                    for stage, reason in explicit_stage_exclusion_reasons.items()
+                    if str(stage).strip()
+                ]
+                if normalized_reasons:
+                    parts.append("Excluded stage reasons: " + ", ".join(normalized_reasons[:8]))
     if docs_only:
         parts.append(
             "This is a documentation-only run. Allowed committed outputs are documentation files only, preferably markdown. "

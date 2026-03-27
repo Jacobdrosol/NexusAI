@@ -1900,9 +1900,9 @@ async def test_wait_for_completion_tracks_intentionally_excluded_stages_for_docs
     assert "pm-ui-tester" not in completion["missing_stages"]
     assert "pm-database-engineer" in completion["intentionally_excluded_stages"]
     assert "pm-ui-tester" in completion["intentionally_excluded_stages"]
-    assert "excluded_downstream_stage:pm-database-engineer" in completion["workflow_policy_codes"]
-    assert "excluded_downstream_stage:pm-ui-tester" in completion["workflow_policy_codes"]
-    assert "Intentionally excluded stages (docs-only scope)" in completion["summary_text"]
+    assert "excluded_downstream_stage:pm-database-engineer:docs_only_no_database_scope" in completion["workflow_policy_codes"]
+    assert "excluded_downstream_stage:pm-ui-tester:docs_only_no_ui_scope" in completion["workflow_policy_codes"]
+    assert "Intentionally excluded stages (assignment scope)" in completion["summary_text"]
 
 
 @pytest.mark.anyio
@@ -2057,9 +2057,161 @@ async def test_wait_for_completion_tracks_intentionally_skipped_pass_through_sta
     assert "pm-ui-tester" not in completion["skipped_stages"]
     assert "pm-database-engineer" in completion["intentionally_skipped_stages"]
     assert "pm-ui-tester" in completion["intentionally_skipped_stages"]
-    assert "skipped_pass_through_stage:pm-database-engineer" in completion["workflow_policy_codes"]
-    assert "skipped_pass_through_stage:pm-ui-tester" in completion["workflow_policy_codes"]
-    assert "Intentionally skipped pass-through stages (docs-only scope)" in completion["summary_text"]
+    assert "skipped_pass_through_stage:pm-database-engineer:docs_only_no_database_scope" in completion["workflow_policy_codes"]
+    assert "skipped_pass_through_stage:pm-ui-tester:docs_only_no_ui_scope" in completion["workflow_policy_codes"]
+    assert "Intentionally skipped pass-through stages (assignment scope)" in completion["summary_text"]
+
+
+@pytest.mark.anyio
+async def test_wait_for_completion_tracks_intentionally_excluded_ui_stage_from_assignment_scope() -> None:
+    pm_bot = Bot(
+        id="pm-orchestrator",
+        name="PM Orchestrator",
+        role="pm",
+        backends=[],
+        enabled=True,
+        workflow={
+            "reference_graph": {
+                "graph_id": "pm-graph",
+                "entry_bot_id": "pm-orchestrator",
+                "current_bot_id": "pm-orchestrator",
+                "nodes": [
+                    {"bot_id": "pm-orchestrator", "title": "PM Orchestrator"},
+                    {"bot_id": "pm-research-analyst", "title": "PM Research Analyst"},
+                    {"bot_id": "pm-engineer", "title": "PM Engineer"},
+                    {"bot_id": "pm-coder", "title": "PM Coder"},
+                    {"bot_id": "pm-tester", "title": "PM Tester"},
+                    {"bot_id": "pm-security-reviewer", "title": "PM Security Reviewer"},
+                    {"bot_id": "pm-database-engineer", "title": "PM Database Engineer"},
+                    {"bot_id": "pm-ui-tester", "title": "PM UI Tester"},
+                    {"bot_id": "pm-final-qc", "title": "PM Final QC"},
+                ],
+                "edges": [],
+            },
+            "triggers": [],
+        },
+    )
+    root_task = Task(
+        id="task-pm-coder",
+        bot_id="pm-orchestrator",
+        payload={
+            "title": "PM assignment intake",
+            "instruction": (
+                "Implement the AI project grading feature. "
+                "Skip the UI tester for now because Playwright is not configured yet, "
+                "but still run the database engineer and all other tests."
+            ),
+            "assignment_scope": {
+                "explicit_stage_exclusions": ["pm-ui-tester"],
+                "explicit_stage_exclusion_reasons": {
+                    "pm-ui-tester": "assignment_excludes_ui_stage",
+                },
+            },
+        },
+        metadata=TaskMetadata(source="chat_assign", orchestration_id="orch-skip-ui"),
+        status="completed",
+        created_at="2026-03-27T00:00:00+00:00",
+        updated_at="2026-03-27T00:00:01+00:00",
+        result={"status": "complete"},
+    )
+    coder_task = Task(
+        id="task-coder",
+        bot_id="pm-coder",
+        payload={"title": "Implement feature", "deliverables": ["GlobeIQ.Server/Controllers/Api/UserSubmissionsController.cs"]},
+        metadata=TaskMetadata(source="bot_trigger", orchestration_id="orch-skip-ui", parent_task_id="task-pm-coder"),
+        status="completed",
+        created_at="2026-03-27T00:00:02+00:00",
+        updated_at="2026-03-27T00:00:03+00:00",
+        result={
+            "artifacts": [
+                {
+                    "path": "GlobeIQ.Server/Controllers/Api/UserSubmissionsController.cs",
+                    "content": "// change",
+                    "status": "modified",
+                }
+            ]
+        },
+    )
+    tester_task = Task(
+        id="task-tester",
+        bot_id="pm-tester",
+        payload={"title": "Run tests"},
+        metadata=TaskMetadata(source="bot_trigger", orchestration_id="orch-skip-ui", parent_task_id="task-coder"),
+        status="completed",
+        created_at="2026-03-27T00:00:04+00:00",
+        updated_at="2026-03-27T00:00:05+00:00",
+        result={"status": "pass"},
+    )
+    reviewer_task = Task(
+        id="task-review",
+        bot_id="pm-security-reviewer",
+        payload={"title": "Security review"},
+        metadata=TaskMetadata(source="bot_trigger", orchestration_id="orch-skip-ui", parent_task_id="task-tester"),
+        status="completed",
+        created_at="2026-03-27T00:00:06+00:00",
+        updated_at="2026-03-27T00:00:07+00:00",
+        result={"status": "pass"},
+    )
+    db_task = Task(
+        id="task-db",
+        bot_id="pm-database-engineer",
+        payload={"title": "DB review"},
+        metadata=TaskMetadata(source="bot_trigger", orchestration_id="orch-skip-ui", parent_task_id="task-review"),
+        status="completed",
+        created_at="2026-03-27T00:00:08+00:00",
+        updated_at="2026-03-27T00:00:09+00:00",
+        result={"status": "pass"},
+    )
+    final_qc = Task(
+        id="task-final",
+        bot_id="pm-final-qc",
+        payload={"title": "Final QC"},
+        metadata=TaskMetadata(source="bot_trigger", orchestration_id="orch-skip-ui", parent_task_id="task-db"),
+        status="completed",
+        created_at="2026-03-27T00:00:10+00:00",
+        updated_at="2026-03-27T00:00:11+00:00",
+        result={"status": "pass"},
+    )
+    task_manager = type(
+        "TaskManager",
+        (),
+        {
+            "list_tasks": AsyncMock(return_value=[root_task, coder_task, tester_task, reviewer_task, db_task, final_qc]),
+            "get_task": AsyncMock(
+                side_effect=lambda task_id: {
+                    "task-pm-coder": root_task,
+                    "task-coder": coder_task,
+                    "task-tester": tester_task,
+                    "task-review": reviewer_task,
+                    "task-db": db_task,
+                    "task-final": final_qc,
+                }[task_id]
+            ),
+        },
+    )()
+    bot_registry = type("BotRegistry", (), {"get": AsyncMock(return_value=pm_bot)})()
+    orchestrator = PMOrchestrator(
+        bot_registry=bot_registry,
+        scheduler=None,
+        task_manager=task_manager,
+        chat_manager=None,
+    )
+
+    completion = await orchestrator.wait_for_completion(
+        {
+            "orchestration_id": "orch-skip-ui",
+            "pm_bot_id": "pm-orchestrator",
+            "tasks": [{"id": "task-pm-coder"}],
+        },
+        poll_interval_seconds=0.0,
+        max_wait_seconds=0.01,
+    )
+
+    assert completion["workflow_complete"] is True
+    assert "pm-ui-tester" not in completion["missing_stages"]
+    assert "pm-ui-tester" in completion["intentionally_excluded_stages"]
+    assert "excluded_downstream_stage:pm-ui-tester:assignment_excludes_ui_stage" in completion["workflow_policy_codes"]
+    assert "Intentionally excluded stages (assignment scope): pm-ui-tester" in completion["summary_text"]
 
 
 @pytest.mark.anyio
@@ -2503,4 +2655,53 @@ async def test_bootstrap_via_pm_workflow_persists_conversation_brief_and_scope_c
     assert scope["assignment_memory_hits"][0]["role"] == "user"
     assert "algebra" in scope["focus_topics"]
     assert "roadmap" in scope["requested_artifact_hints"]
+
+
+@pytest.mark.anyio
+async def test_bootstrap_via_pm_workflow_persists_explicit_ui_stage_exclusion() -> None:
+    created_task = Task(
+        id="pm-entry-task",
+        bot_id="pm-orchestrator",
+        payload={},
+        status="queued",
+        created_at="2026-01-01T00:00:00+00:00",
+        updated_at="2026-01-01T00:00:00+00:00",
+    )
+    task_manager = type(
+        "TaskManager",
+        (),
+        {"create_task": AsyncMock(return_value=created_task)},
+    )()
+    orchestrator = PMOrchestrator(
+        bot_registry=None,
+        scheduler=None,
+        task_manager=task_manager,
+        chat_manager=None,
+    )
+    pm_bot = Bot(
+        id="pm-orchestrator",
+        name="PM Orchestrator",
+        role="project_manager",
+        backends=[],
+        routing_rules={"workflow": {"triggers": []}},
+    )
+
+    await orchestrator._bootstrap_assignment_via_pm_workflow(
+        conversation_id="conv-1",
+        instruction=(
+            "Implement the AI project grading feature. "
+            "Skip the UI tester for now because Playwright is not configured yet, "
+            "but still run the database engineer and all other tests."
+        ),
+        pm_bot=pm_bot,
+        context_items=[],
+        project_id="proj-1",
+        bots=[pm_bot],
+    )
+
+    payload = task_manager.create_task.await_args.kwargs["payload"]
+    scope = payload["assignment_scope"]
+    assert scope["docs_only"] is False
+    assert scope["explicit_stage_exclusions"] == ["pm-ui-tester"]
+    assert scope["explicit_stage_exclusion_reasons"]["pm-ui-tester"] == "assignment_excludes_ui_stage"
 

@@ -1286,6 +1286,54 @@ async def test_scheduler_appends_docs_only_upstream_artifact_guidance_to_system_
 
 
 @pytest.mark.anyio
+async def test_scheduler_appends_explicit_stage_exclusion_guidance_to_system_prompt():
+    from control_plane.scheduler.scheduler import Scheduler
+
+    bot_registry = AsyncMock()
+    bot_registry.get.return_value = Bot(
+        id="pm-final-qc",
+        name="PM Final QC",
+        role="final-qc",
+        system_prompt="Perform the final evidence-backed QC pass.",
+        backends=[BackendConfig(type="cloud_api", provider="openai", model="gpt-4o-mini")],
+    )
+    scheduler = Scheduler(bot_registry=bot_registry, worker_registry=AsyncMock())
+    task = Task(
+        id="task-final-qc-skip-ui",
+        bot_id="pm-final-qc",
+        payload={
+            "instruction": "Verify the AI project grading feature branch.",
+            "assignment_request": (
+                "Implement the AI project grading feature. "
+                "Skip the UI tester for now because Playwright is not configured yet, "
+                "but still run the database engineer and all other tests."
+            ),
+            "assignment_scope": {
+                "explicit_stage_exclusions": ["pm-ui-tester"],
+                "explicit_stage_exclusion_reasons": {
+                    "pm-ui-tester": "assignment_excludes_ui_stage",
+                },
+            },
+        },
+        status="queued",
+        created_at="now",
+        updated_at="now",
+    )
+
+    async def fake_dispatch(backend, payload, task=None):
+        return {"payload": payload}
+
+    scheduler._dispatch_backend = fake_dispatch  # type: ignore[method-assign]
+    result = await scheduler.schedule(task)
+
+    system_message = result["payload"][0]["content"]
+    assert "Explicitly excluded downstream stages for this run: pm-ui-tester" in system_message
+    assert "return a skip/not_applicable outcome tied to assignment scope" in system_message
+    assert "treat explicitly excluded stages as intentional omissions" in system_message
+    assert "Excluded stage reasons: pm-ui-tester=assignment_excludes_ui_stage" in system_message
+
+
+@pytest.mark.anyio
 async def test_scheduler_appends_repo_output_deny_policy_to_system_prompt():
     from control_plane.scheduler.scheduler import Scheduler
 
