@@ -725,7 +725,9 @@ class PMOrchestrator:
         needs_database = self._instruction_mentions_database(original_instruction)
         needs_ui = self._instruction_mentions_ui(original_instruction)
         intentionally_excluded_stages: List[str] = []
+        intentionally_skipped_stages: List[str] = []
         if docs_only_scope:
+            # Handle missing stages that are intentionally excluded (never ran)
             for stage_id in list(missing_stages):
                 if stage_id == "pm-database-engineer" and not needs_database:
                     intentionally_excluded_stages.append(stage_id)
@@ -733,6 +735,14 @@ class PMOrchestrator:
                 elif stage_id == "pm-ui-tester" and not needs_ui:
                     intentionally_excluded_stages.append(stage_id)
                     missing_stages.remove(stage_id)
+            # Handle skipped stages that are intentional pass-throughs (ran but returned skip/no-op)
+            for stage_id in list(skipped_stages):
+                if stage_id == "pm-database-engineer" and not needs_database:
+                    intentionally_skipped_stages.append(stage_id)
+                    skipped_stages.remove(stage_id)
+                elif stage_id == "pm-ui-tester" and not needs_ui:
+                    intentionally_skipped_stages.append(stage_id)
+                    skipped_stages.remove(stage_id)
         workflow_policy_codes: List[str] = []
         if all_terminal and not workflow_complete:
             lines.extend(
@@ -761,6 +771,9 @@ class PMOrchestrator:
         if intentionally_excluded_stages:
             lines.append(f"Intentionally excluded stages (docs-only scope): {', '.join(intentionally_excluded_stages)}")
             workflow_policy_codes.extend(f"excluded_downstream_stage:{stage_id}" for stage_id in intentionally_excluded_stages)
+        if intentionally_skipped_stages:
+            lines.append(f"Intentionally skipped pass-through stages (docs-only scope): {', '.join(intentionally_skipped_stages)}")
+            workflow_policy_codes.extend(f"skipped_pass_through_stage:{stage_id}" for stage_id in intentionally_skipped_stages)
         if missing_deliverables:
             lines.append(
                 "Missing latest-cycle deliverables: "
@@ -799,6 +812,7 @@ class PMOrchestrator:
             "missing_stages": missing_stages,
             "skipped_stages": skipped_stages,
             "intentionally_excluded_stages": intentionally_excluded_stages,
+            "intentionally_skipped_stages": intentionally_skipped_stages,
             "workflow_policy_codes": workflow_policy_codes,
             "latest_cycle_task_count": len(latest_cycle_tasks),
             "latest_cycle_entry_task_id": str(latest_cycle_anchor.id or "") if latest_cycle_anchor is not None else "",
@@ -848,6 +862,7 @@ class PMOrchestrator:
         missing_stages = [str(item) for item in (completion.get("missing_stages") or []) if str(item)]
         skipped_stages = [str(item) for item in (completion.get("skipped_stages") or []) if str(item)]
         intentionally_excluded_stages = [str(item) for item in (completion.get("intentionally_excluded_stages") or []) if str(item)]
+        intentionally_skipped_stages = [str(item) for item in (completion.get("intentionally_skipped_stages") or []) if str(item)]
         workflow_policy_codes = [str(item) for item in (completion.get("workflow_policy_codes") or []) if str(item)]
         if missing_stages:
             lines.append("Missing stages: " + ", ".join(missing_stages))
@@ -855,6 +870,8 @@ class PMOrchestrator:
             lines.append("Skipped stages: " + ", ".join(skipped_stages))
         if intentionally_excluded_stages:
             lines.append("Intentionally excluded stages (docs-only scope): " + ", ".join(intentionally_excluded_stages))
+        if intentionally_skipped_stages:
+            lines.append("Intentionally skipped pass-through stages (docs-only scope): " + ", ".join(intentionally_skipped_stages))
         expected_deliverables = [str(item) for item in (completion.get("expected_deliverables") or []) if str(item)]
         produced_deliverables = [str(item) for item in (completion.get("produced_deliverables") or []) if str(item)]
         if expected_deliverables:
@@ -916,6 +933,8 @@ class PMOrchestrator:
                 "missing_deliverables": list(completion.get("missing_deliverables") or []),
                 "missing_stages": missing_stages,
                 "skipped_stages": skipped_stages,
+                "intentionally_excluded_stages": intentionally_excluded_stages,
+                "intentionally_skipped_stages": intentionally_skipped_stages,
                 "workflow_policy_codes": workflow_policy_codes,
                 "failed_task_summaries": failed_task_summaries,
                 "full_summary_text": str(completion.get("summary_text") or ""),

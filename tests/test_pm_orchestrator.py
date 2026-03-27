@@ -1906,6 +1906,163 @@ async def test_wait_for_completion_tracks_intentionally_excluded_stages_for_docs
 
 
 @pytest.mark.anyio
+async def test_wait_for_completion_tracks_intentionally_skipped_pass_through_stages_for_docs_only() -> None:
+    """For docs-only requests, DB and UI stages that execute but return skip/no-op outcomes
+    should appear in intentionally_skipped_stages, not skipped_stages."""
+    pm_bot = Bot(
+        id="pm-orchestrator",
+        name="PM Orchestrator",
+        role="pm",
+        backends=[],
+        enabled=True,
+        workflow={
+            "reference_graph": {
+                "graph_id": "pm-graph",
+                "entry_bot_id": "pm-orchestrator",
+                "current_bot_id": "pm-orchestrator",
+                "nodes": [
+                    {"bot_id": "pm-orchestrator", "title": "PM Orchestrator"},
+                    {"bot_id": "pm-research-analyst", "title": "PM Research Analyst"},
+                    {"bot_id": "pm-engineer", "title": "PM Engineer"},
+                    {"bot_id": "pm-coder", "title": "PM Coder"},
+                    {"bot_id": "pm-tester", "title": "PM Tester"},
+                    {"bot_id": "pm-security-reviewer", "title": "PM Security Reviewer"},
+                    {"bot_id": "pm-database-engineer", "title": "PM Database Engineer"},
+                    {"bot_id": "pm-ui-tester", "title": "PM UI Tester"},
+                    {"bot_id": "pm-final-qc", "title": "PM Final QC"},
+                ],
+                "edges": [],
+            },
+            "triggers": [],
+        },
+    )
+    root_task = Task(
+        id="task-pm-docs",
+        bot_id="pm-orchestrator",
+        payload={
+            "title": "PM assignment intake",
+            "instruction": (
+                "Build documentation only for the mathematics blocks in docs/blocks. "
+                "Only markdown documents are allowed and this should not affect the site, ui, or database."
+            ),
+        },
+        metadata=TaskMetadata(source="chat_assign", orchestration_id="orch-docs-only-skip"),
+        status="completed",
+        created_at="2026-03-20T00:00:00+00:00",
+        updated_at="2026-03-20T00:00:01+00:00",
+        result={"status": "complete"},
+    )
+    coder_task = Task(
+        id="task-coder-docs",
+        bot_id="pm-coder",
+        payload={"title": "Write docs", "deliverables": ["docs/blocks/guide.md"]},
+        metadata=TaskMetadata(
+            source="bot_trigger",
+            orchestration_id="orch-docs-only-skip",
+            parent_task_id="task-pm-docs",
+        ),
+        status="completed",
+        created_at="2026-03-20T00:00:02+00:00",
+        updated_at="2026-03-20T00:00:03+00:00",
+        result={
+            "output": "Created docs/blocks/guide.md",
+            "artifacts": [
+                {
+                    "path": "docs/blocks/guide.md",
+                    "content": "# Mathematics Blocks Guide",
+                    "status": "created",
+                }
+            ],
+        },
+    )
+    db_task = Task(
+        id="task-db-docs",
+        bot_id="pm-database-engineer",
+        payload={"title": "DB pass-through"},
+        metadata=TaskMetadata(
+            source="bot_trigger",
+            orchestration_id="orch-docs-only-skip",
+            parent_task_id="task-coder-docs",
+        ),
+        status="completed",
+        created_at="2026-03-20T00:00:04+00:00",
+        updated_at="2026-03-20T00:00:05+00:00",
+        result={"outcome": "skip", "failure_type": "not_applicable"},
+    )
+    ui_task = Task(
+        id="task-ui-docs",
+        bot_id="pm-ui-tester",
+        payload={"title": "UI pass-through"},
+        metadata=TaskMetadata(
+            source="bot_trigger",
+            orchestration_id="orch-docs-only-skip",
+            parent_task_id="task-db-docs",
+        ),
+        status="completed",
+        created_at="2026-03-20T00:00:06+00:00",
+        updated_at="2026-03-20T00:00:07+00:00",
+        result={"outcome": "skip", "failure_type": "not_applicable"},
+    )
+    final_qc = Task(
+        id="task-final-docs",
+        bot_id="pm-final-qc",
+        payload={"title": "Final QC"},
+        metadata=TaskMetadata(
+            source="bot_trigger",
+            orchestration_id="orch-docs-only-skip",
+            parent_task_id="task-ui-docs",
+        ),
+        status="completed",
+        created_at="2026-03-20T00:00:08+00:00",
+        updated_at="2026-03-20T00:00:09+00:00",
+        result={"status": "pass"},
+    )
+    task_manager = type(
+        "TaskManager",
+        (),
+        {
+            "list_tasks": AsyncMock(return_value=[root_task, coder_task, db_task, ui_task, final_qc]),
+            "get_task": AsyncMock(
+                side_effect=lambda task_id: {
+                    "task-pm-docs": root_task,
+                    "task-coder-docs": coder_task,
+                    "task-db-docs": db_task,
+                    "task-ui-docs": ui_task,
+                    "task-final-docs": final_qc,
+                }[task_id]
+            ),
+        },
+    )()
+    bot_registry = type("BotRegistry", (), {"get": AsyncMock(return_value=pm_bot)})()
+    orchestrator = PMOrchestrator(
+        bot_registry=bot_registry,
+        scheduler=None,
+        task_manager=task_manager,
+        chat_manager=None,
+    )
+
+    completion = await orchestrator.wait_for_completion(
+        {
+            "orchestration_id": "orch-docs-only-skip",
+            "pm_bot_id": "pm-orchestrator",
+            "tasks": [{"id": "task-pm-docs"}],
+        },
+        poll_interval_seconds=0.0,
+        max_wait_seconds=0.01,
+    )
+
+    # DB and UI stages should be intentionally skipped (pass-through), not generic skipped
+    assert completion["workflow_complete"] is True
+    assert "pm-database-engineer" not in completion["skipped_stages"]
+    assert "pm-ui-tester" not in completion["skipped_stages"]
+    assert "pm-database-engineer" in completion["intentionally_skipped_stages"]
+    assert "pm-ui-tester" in completion["intentionally_skipped_stages"]
+    assert "skipped_pass_through_stage:pm-database-engineer" in completion["workflow_policy_codes"]
+    assert "skipped_pass_through_stage:pm-ui-tester" in completion["workflow_policy_codes"]
+    assert "Intentionally skipped pass-through stages (docs-only scope)" in completion["summary_text"]
+
+
+@pytest.mark.anyio
 async def test_persist_summary_message_requires_latest_cycle_deliverables_for_pass() -> None:
     updated_message = type("UpdatedMessage", (), {"id": "msg-report"})()
     chat_manager = type(
