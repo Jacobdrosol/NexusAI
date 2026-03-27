@@ -1,0 +1,24 @@
+{
+  "command_log": [],
+  "configured_toolchains": [
+    "dotnet",
+    "node",
+    "playwright"
+  ],
+  "current_step": 1,
+  "deploy_required": true,
+  "enabled": true,
+  "finished_at": "2026-03-27T21:28:04.654873+00:00",
+  "last_error": null,
+  "run_id": "5b1a97ef-f98c-4688-98bf-d97c62a14462",
+  "started_at": "2026-03-27T21:28:04.654873+00:00",
+  "state": "configured",
+  "tool_id": "ui_browser",
+  "tool_name": "Browser Automation (Playwright / Puppeteer)",
+  "tool_status": {
+    "install_notes": "This tool is baked into the control_plane image, not installed in the dashboard container.",
+    "status": "configured",
+    "summary": "Configured persistent control_plane runtime toolchains. Redeploy to rebuild the runtime image."
+  },
+  "total_steps": 1
+}

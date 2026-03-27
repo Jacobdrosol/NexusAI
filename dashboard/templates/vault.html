@@ -115,9 +115,102 @@
     </div>
   </div>
 </div>
+
+<div id="modal-premium" class="modal" style="display:none;">
+  <div class="modal-content modal-premium">
+    <div class="premium-message">
+      <h3>Premium Feature</h3>
+      <p>This feature requires a Premium subscription</p>
+      <button class="btn btn-primary" onclick="hideModal('modal-premium')">Close</button>
+    </div>
+  </div>
+</div>
 {% endblock %}
 {% block scripts %}
+<script src="{{ url_for('static', filename='components/UploadComponent.js') }}"></script>
+<script src="{{ url_for('static', filename='components/GradeView.js') }}"></script>
 <script>
+// Get premium status from server (can be set via template context)
+const USER_IS_PREMIUM = {{ 'true' if current_user and current_user.is_premium else 'false' }};
+
+// Initialize UploadComponent with validation
+const uploadComponent = new UploadComponent({
+  allowedTypes: ['*'], // All types allowed by default
+  maxFileSize: 10 * 1024 * 1024, // 10MB
+  maxTotalSize: 50 * 1024 * 1024, // 50MB
+  isPremium: USER_IS_PREMIUM,
+  csrfToken: getCsrf(),
+  apiEndpoint: '/api/vault/upload',
+  onUploadStart: function(data) {
+    setLoading(true);
+    console.log('Upload started:', data.fileCount, 'files');
+  },
+  onUploadProgress: function(data) {
+    console.log('Upload progress:', data);
+  },
+  onUploadComplete: function(result) {
+    setLoading(false);
+    hideModal('modal-upload');
+    location.reload();
+  },
+  onUploadError: function(error) {
+    setLoading(false);
+    if (error.type === 'validation') {
+      alert('Validation errors:\n' + error.errors.join('\n'));
+    } else if (error.type === 'server') {
+      alert('Upload failed: ' + error.error);
+    } else {
+      alert('Network error: ' + error.error);
+    }
+  },
+  onPremiumRequired: function(info) {
+    showPremiumModal(info);
+  }
+});
+
+// Initialize GradeView (for potential grading features)
+let gradeView = null;
+
+function initGradeView(containerId, gradingData) {
+  const container = document.getElementById(containerId);
+  if (container) {
+    gradeView = new GradeView({
+      container: container,
+      isPremium: USER_IS_PREMIUM,
+      csrfToken: getCsrf(),
+      onPremiumRequired: function(info) {
+        showPremiumModal(info);
+      },
+      onExportRequested: function(format) {
+        console.log('Export requested:', format);
+      },
+      onExpandRequested: function(sectionId, isExpanded) {
+        console.log('Section toggled:', sectionId, isExpanded);
+      }
+    });
+    if (gradingData) {
+      gradeView.setGradingData(gradingData);
+    }
+  }
+}
+
+function showPremiumModal(info) {
+  const modal = document.getElementById('modal-premium');
+  if (modal) {
+    const content = modal.querySelector('.premium-message');
+    if (content) {
+      content.innerHTML = `
+        <h3>🌟 Premium Feature</h3>
+        <p>${info.message || 'This feature requires a Premium subscription'}</p>
+        <button class="btn btn-primary" onclick="hideModal('modal-premium')">Close</button>
+      `;
+    }
+    modal.style.display = 'flex';
+  } else {
+    alert('Premium Feature: ' + (info.message || 'This feature requires a Premium subscription'));
+  }
+}
+
 function getCsrf() {
   return document.querySelector('input[name=csrf_token]')?.value || '';
 }
@@ -140,18 +233,28 @@ function switchUploadMode(btn, mode) {
 
 document.getElementById('form-upload').addEventListener('submit', async function(e) {
   e.preventDefault();
-  setLoading(true);
-  const fd = new FormData(this);
-  const res = await fetch('/api/vault/upload', {
-    method: 'POST',
-    headers: {'X-CSRFToken': getCsrf()},
-    body: fd,
-  });
-  setLoading(false);
-  if (res.ok) location.reload();
-  else {
-    const data = await res.json().catch(() => ({}));
-    alert(data.error || 'Upload failed');
+  const fileInput = document.querySelector('#upload-file-fields input[type="file"]');
+  if (fileInput && fileInput.files.length > 0) {
+    // Use UploadComponent for file upload with validation
+    await uploadComponent.upload(fileInput.files, {
+      namespace: this.namespace.value,
+      targetPath: ''
+    });
+  } else {
+    // Fall back to original behavior for paste/url modes
+    setLoading(true);
+    const fd = new FormData(this);
+    const res = await fetch('/api/vault/upload', {
+      method: 'POST',
+      headers: {'X-CSRFToken': getCsrf()},
+      body: fd,
+    });
+    setLoading(false);
+    if (res.ok) location.reload();
+    else {
+      const data = await res.json().catch(() => ({}));
+      alert(data.error || 'Upload failed');
+    }
   }
 });
 
