@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from control_plane.api import audit, bots, chat, keys, models_catalog, projects, tasks, vault, workers
+from control_plane.api import audit, bots, chat, database, keys, models_catalog, projects, tasks, vault, workers
 from control_plane.audit.audit_log import AuditLog
 from control_plane.chat.chat_manager import ChatManager
 from control_plane.chat.pm_orchestrator import PMOrchestrator
@@ -169,6 +169,7 @@ def create_app() -> FastAPI:
     app.include_router(chat.router)
     app.include_router(vault.router)
     app.include_router(audit.router)
+    app.include_router(database.router)
 
     @app.middleware("http")
     async def control_plane_auth_middleware(request: Request, call_next):
