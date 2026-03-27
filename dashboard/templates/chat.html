@@ -130,6 +130,12 @@
 .chat-message-tools-toggle {
   margin: 0;
 }
+.chat-conversation-toolbar {
+  margin-bottom: 0.8rem;
+}
+.chat-project-filter {
+  width: 100%;
+}
 .chat-attachment-trigger-label {
   position: absolute;
   width: 1px;
@@ -198,9 +204,24 @@
 <div class="split-grid chat-split-grid">
   <section class="panel chat-panel-side">
     <h2 class="panel-title">Conversations</h2>
+    <div class="chat-conversation-toolbar">
+      <label for="chat-project-filter" class="mini-note">Filter by project</label>
+      <select id="chat-project-filter" class="form-control chat-project-filter">
+        <option value="">All projects</option>
+        <option value="__none__">Unscoped chats</option>
+        {% for p in projects if p.enabled %}
+        <option value="{{ p.id }}">{{ p.name }} ({{ p.id }})</option>
+        {% endfor %}
+      </select>
+    </div>
     <div class="list">
       {% for c in conversations %}
-      <div class="list-item chat-conversation-row {% if selected_conversation and selected_conversation.id == c.id %}active{% endif %}">
+      <div
+        class="list-item chat-conversation-row {% if selected_conversation and selected_conversation.id == c.id %}active{% endif %}"
+        data-filterable="true"
+        data-project-id="{{ c.project_id or '' }}"
+        data-bridge-project-ids="{{ (c.bridge_project_ids or [])|join(',') }}"
+      >
         <a href="{{ url_for('chat.chat_page') }}?conversation_id={{ c.id }}" class="chat-conversation-link">
           <div>{{ c.title }}</div>
           <small>{{ (c.updated_at[:19] if c.updated_at else '') | replace('T', ' ') }}</small>
@@ -215,6 +236,7 @@
       {% else %}
       <div class="empty">No conversations yet</div>
       {% endfor %}
+      <div class="empty chat-filter-empty" data-filter-empty="active" hidden>No conversations match this project.</div>
     </div>
 
     <hr class="chat-divider">
@@ -222,7 +244,12 @@
       <summary class="chat-summary">Archived Conversations ({{ archived_conversations|length }})</summary>
       <div class="list chat-archived-list">
         {% for c in archived_conversations %}
-        <div class="list-item chat-conversation-row {% if selected_conversation and selected_conversation.id == c.id %}active{% endif %}">
+        <div
+          class="list-item chat-conversation-row {% if selected_conversation and selected_conversation.id == c.id %}active{% endif %}"
+          data-filterable="true"
+          data-project-id="{{ c.project_id or '' }}"
+          data-bridge-project-ids="{{ (c.bridge_project_ids or [])|join(',') }}"
+        >
           <a href="{{ url_for('chat.chat_page') }}?conversation_id={{ c.id }}" class="chat-conversation-link">
             <div>{{ c.title }}</div>
             <small>Archived {{ (c.archived_at[:19] if c.archived_at else '') | replace('T', ' ') }}</small>
@@ -240,6 +267,7 @@
         {% else %}
         <div class="empty">No archived conversations</div>
         {% endfor %}
+        <div class="empty chat-filter-empty" data-filter-empty="archived" hidden>No archived conversations match this project.</div>
       </div>
     </details>
 
@@ -650,6 +678,7 @@
 <script>
 const selectedConversationId = {{ (selected_conversation.id if selected_conversation else "")|tojson }};
 const selectedConversationProjectId = {{ (selected_conversation.project_id if selected_conversation and selected_conversation.project_id else "")|tojson }};
+const availableProjects = {{ projects|tojson }};
 const initialMessages = {{ messages|tojson }};
 const availableBots = {{ bots|tojson }};
 const availableModels = {{ model_catalog|tojson }};
@@ -664,6 +693,51 @@ let refreshTimer = null;
 let activeDagGraph = null;
 let activeDagSelectedNodeId = '';
 let lastAssignmentReviewResult = null;
+
+function scrollMessagesToLatest() {
+  const container = document.getElementById('messages');
+  if (!container) return;
+  container.scrollTop = container.scrollHeight;
+}
+
+function conversationMatchesProjectFilter(row, projectFilter) {
+  if (!row) return false;
+  if (!projectFilter) return true;
+  const projectId = String(row.dataset.projectId || '').trim();
+  const bridgeProjectIds = String(row.dataset.bridgeProjectIds || '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+  if (projectFilter === '__none__') {
+    return !projectId && bridgeProjectIds.length === 0;
+  }
+  return projectId === projectFilter || bridgeProjectIds.includes(projectFilter);
+}
+
+function applyConversationProjectFilter() {
+  const filterEl = document.getElementById('chat-project-filter');
+  const projectFilter = String(filterEl?.value || '').trim();
+  const rows = Array.from(document.querySelectorAll('.chat-conversation-row[data-filterable="true"]'));
+  let activeVisible = 0;
+  let archivedVisible = 0;
+  rows.forEach((row) => {
+    const matches = conversationMatchesProjectFilter(row, projectFilter);
+    row.hidden = !matches;
+    const archived = !!row.closest('.chat-archived-list');
+    if (matches) {
+      if (archived) archivedVisible += 1;
+      else activeVisible += 1;
+    }
+  });
+  document.querySelectorAll('.chat-filter-empty').forEach((emptyEl) => {
+    const kind = String(emptyEl.dataset.filterEmpty || '').trim();
+    if (kind === 'archived') {
+      emptyEl.hidden = archivedVisible > 0 || !projectFilter;
+    } else {
+      emptyEl.hidden = activeVisible > 0 || !projectFilter;
+    }
+  });
+}
 
 async function refreshMessagesUntilSettled(maxAttempts = 6, delayMs = 600) {
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
@@ -2603,6 +2677,7 @@ async function openDagViewer(orchestrationId) {
 }
 
 bindConversationActions();
+document.getElementById('chat-project-filter')?.addEventListener('change', applyConversationProjectFilter);
 document.getElementById('create-convo-scope')?.addEventListener('change', syncConversationScopeFields);
 document.getElementById('create-convo-tool-enabled')?.addEventListener('change', syncCreateConversationToolFields);
 document.getElementById('chat-tool-enabled')?.addEventListener('change', syncConversationToolAccessEditor);
@@ -2625,6 +2700,8 @@ document.querySelectorAll('#messages .message').forEach((messageEl) => {
   if (!bodyEl) return;
   renderMessageBody(bodyEl, messageEl.dataset.content || bodyEl.dataset.rawContent || bodyEl.textContent || '');
 });
+applyConversationProjectFilter();
+window.requestAnimationFrame(scrollMessagesToLatest);
 </script>
 {% endblock %}
 

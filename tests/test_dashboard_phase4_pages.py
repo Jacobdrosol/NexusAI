@@ -257,12 +257,14 @@ def test_chat_page_loads_when_logged_in(dashboard_client):
     assert resp.status_code == 200
     assert b"Chat" in resp.data
     assert b"New Conversation" in resp.data
+    assert b"chat-project-filter" in resp.data
     assert b"create-convo-scope" in resp.data
     assert b"create-convo-project-id" in resp.data
     assert b"create-convo-bridge-project-ids" in resp.data
     assert b"Apply Files to Repo" in resp.data
     assert b"CHAT_ATTACHMENT_MAX_FILES" in resp.data
     assert b"CHAT_ATTACHMENT_MAX_TOTAL_BYTES" in resp.data
+    assert b"scrollMessagesToLatest" in resp.data
 
 
 def test_chat_page_handles_legacy_selected_conversation_shapes(dashboard_client):
@@ -325,6 +327,46 @@ def test_chat_page_handles_legacy_selected_conversation_shapes(dashboard_client)
     assert resp.status_code == 200
     assert b"Legacy Active" in resp.data
     assert b"No vault items available" in resp.data
+
+
+def test_chat_page_renders_project_filter_metadata_on_conversations(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_conversations(self, archived="all", project_id=None):
+            return [
+                {
+                    "id": "c-proj",
+                    "title": "Project Chat",
+                    "project_id": "globeiq",
+                    "bridge_project_ids": ["bridge-a", "bridge-b"],
+                    "updated_at": "2026-03-12T00:00:00+00:00",
+                    "archived_at": None,
+                    "tool_access_enabled": False,
+                    "tool_access_filesystem": False,
+                    "tool_access_repo_search": False,
+                }
+            ]
+
+        def list_messages(self, conversation_id, limit=None):
+            return []
+
+        def list_bots(self):
+            return []
+
+        def list_projects(self):
+            return [{"id": "globeiq", "name": "GlobeIQ", "enabled": True}]
+
+        def list_vault_items(self, **kwargs):
+            return []
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/chat?conversation_id=c-proj")
+
+    assert resp.status_code == 200
+    assert b'data-project-id="globeiq"' in resp.data
+    assert b'data-bridge-project-ids="bridge-a,bridge-b"' in resp.data
+    assert b"Unscoped chats" in resp.data
 
 
 def test_chat_page_handles_conversation_list_error_gracefully(dashboard_client):
