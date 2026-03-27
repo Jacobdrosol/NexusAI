@@ -97,6 +97,112 @@ _WINGET_FLAGS = [
     "--silent",
 ]
 
+_PERSISTENT_RUNTIME_TOOLCHAINS: dict[str, list[str]] = {
+    "code_exec_dotnet": ["dotnet"],
+    "test_runner_dotnet_test": ["dotnet"],
+    "code_exec_node": ["node"],
+    "test_runner_jest": ["node"],
+    "ui_browser": ["node", "playwright"],
+    "code_exec_go": ["go"],
+    "code_exec_rust": ["rust"],
+    "test_runner_cargo_test": ["rust"],
+    "code_exec_cpp": ["cpp"],
+}
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
+def _env_file_path() -> Path:
+    return _repo_root() / ".env"
+
+
+def _compose_core_args() -> list[str]:
+    project_name = (os.environ.get("NEXUSAI_COMPOSE_PROJECT_NAME") or "nexusai").strip() or "nexusai"
+    return [
+        "docker",
+        "compose",
+        "-p",
+        project_name,
+        "-f",
+        "docker-compose.yml",
+    ]
+
+
+def _persistent_toolchains_for_tool(tool_id: str) -> list[str]:
+    if not platform.system().lower().startswith("linux"):
+        return []
+    return list(_PERSISTENT_RUNTIME_TOOLCHAINS.get(tool_id, []))
+
+
+def _configured_runtime_toolchains() -> list[str]:
+    env_path = _env_file_path()
+    raw = os.environ.get("NEXUSAI_REPO_RUNTIME_TOOLCHAINS", "").strip()
+    if env_path.exists():
+        try:
+            for line in env_path.read_text(encoding="utf-8").splitlines():
+                if line.startswith("NEXUSAI_REPO_RUNTIME_TOOLCHAINS="):
+                    raw = line.split("=", 1)[1].strip()
+                    break
+        except Exception:
+            pass
+    if not raw:
+        return []
+    return [token.strip().lower() for token in raw.split(",") if token.strip()]
+
+
+def _write_env_key(key: str, value: str) -> None:
+    env_path = _env_file_path()
+    lines: list[str] = []
+    if env_path.exists():
+        lines = env_path.read_text(encoding="utf-8").splitlines()
+    replaced = False
+    new_lines: list[str] = []
+    for line in lines:
+        if line.startswith(f"{key}="):
+            new_lines.append(f"{key}={value}")
+            replaced = True
+        else:
+            new_lines.append(line)
+    if not replaced:
+        new_lines.append(f"{key}={value}")
+    env_path.write_text("\n".join(new_lines).rstrip() + "\n", encoding="utf-8")
+
+
+def _configure_persistent_runtime_toolchains(tool_id: str) -> list[str]:
+    configured = _configured_runtime_toolchains()
+    merged = list(configured)
+    for token in _persistent_toolchains_for_tool(tool_id):
+        if token not in merged:
+            merged.append(token)
+    _write_env_key("NEXUSAI_REPO_RUNTIME_TOOLCHAINS", ",".join(merged))
+    return merged
+
+
+def _check_control_plane_runtime(check_command: str | None) -> dict[str, Any] | None:
+    if not check_command:
+        return None
+    try:
+        completed = subprocess.run(
+            [*_compose_core_args(), "exec", "-T", "control_plane", "sh", "-lc", check_command],
+            cwd=str(_repo_root()),
+            capture_output=True,
+            text=True,
+            timeout=_TOOL_CHECK_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except Exception:
+        return None
+    output = (completed.stdout or "") + ("\n" if completed.stdout and completed.stderr else "") + (completed.stderr or "")
+    output = output.strip()
+    if completed.returncode == 0:
+        summary = output.splitlines()[0] if output else "Command succeeded."
+        return {"status": "installed", "ok": True, "summary": summary, "output": output}
+    status = _classify_check_failure(output)
+    summary = output.splitlines()[0] if output else "Command exited with a non-zero status."
+    return {"status": status, "ok": False, "summary": summary, "output": output}
+
 
 def _load_enabled_tool_ids() -> list[str]:
     from shared.tool_catalog import default_enabled_tools
@@ -375,12 +481,35 @@ def _check_tool_availability(check_command: str | None) -> dict[str, Any]:
 
 def _tool_runtime_status(tool: Any) -> dict[str, Any]:
     plan = _tool_install_plan(tool.id)
-    check = _check_tool_availability(tool.check_command)
+    persistent_toolchains = _persistent_toolchains_for_tool(tool.id)
+    if persistent_toolchains:
+        configured = _configured_runtime_toolchains()
+        check = _check_control_plane_runtime(tool.check_command)
+        if check is None:
+            missing = [token for token in persistent_toolchains if token not in configured]
+            if missing:
+                check = {
+                    "status": "missing",
+                    "ok": False,
+                    "summary": "Not configured for the control_plane runtime image.",
+                    "output": "",
+                }
+            else:
+                check = {
+                    "status": "configured",
+                    "ok": None,
+                    "summary": "Configured for the control_plane runtime image. Deploy to apply or refresh runtime status.",
+                    "output": "",
+                }
+    else:
+        check = _check_tool_availability(tool.check_command)
     return {
         **check,
         "install_supported": plan is not None,
         "install_label": plan["label"] if plan else None,
         "install_notes": plan["notes"] if plan else None,
+        "install_mode": "runtime_deploy" if persistent_toolchains else "dashboard_host",
+        "configured_toolchains": persistent_toolchains,
         "checked_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -800,6 +929,7 @@ def list_tools():
             "default_enabled": t.default_enabled,
             "enabled": t.id in enabled_ids,
             "install_supported": _tool_install_plan(t.id) is not None,
+            "install_mode": "runtime_deploy" if _persistent_toolchains_for_tool(t.id) else "dashboard_host",
             "presets": t.presets,
         }
         for t in TOOL_CATALOG
@@ -947,6 +1077,32 @@ def install_tool(tool_id: str):
             ),
             400,
         )
+    persistent_toolchains = _persistent_toolchains_for_tool(tool_id)
+    if persistent_toolchains:
+        configured = _configure_persistent_runtime_toolchains(tool_id)
+        job = {
+            "run_id": str(uuid.uuid4()),
+            "tool_id": tool_id,
+            "tool_name": tool.name,
+            "state": "configured",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+            "current_step": 1,
+            "total_steps": 1,
+            "command_log": [],
+            "last_error": None,
+            "tool_status": {
+                "status": "configured",
+                "summary": "Configured persistent control_plane runtime toolchains. Redeploy to rebuild the runtime image.",
+                "install_notes": "This tool is baked into the control_plane image, not installed in the dashboard container.",
+            },
+            "enabled": True,
+            "deploy_required": True,
+            "configured_toolchains": configured,
+        }
+        ToolInstallManager.instance()._save_job(job)
+        return jsonify(job), 202
+
     def _enable(tool_name: str) -> None:
         enabled_ids = _load_enabled_tool_ids()
         if tool_name not in enabled_ids:

@@ -2010,6 +2010,8 @@ def test_settings_tools_api_reports_linux_install_support_for_playwright(dashboa
     dotnet = next(tool for tool in data["tools"] if tool["id"] == "code_exec_dotnet")
     assert browser["install_supported"] is True
     assert dotnet["install_supported"] is True
+    assert browser["install_mode"] == "runtime_deploy"
+    assert dotnet["install_mode"] == "runtime_deploy"
 
     from dashboard import settings as settings_module
 
@@ -2020,6 +2022,28 @@ def test_settings_tools_api_reports_linux_install_support_for_playwright(dashboa
             isinstance(command, list) and "curl" in " ".join(command)
             for command in plan["commands"]
         )
+
+
+def test_settings_runtime_tool_install_configures_env_and_requires_deploy(dashboard_client, tmp_path):
+    _login_admin(dashboard_client)
+    env_path = tmp_path / ".env"
+    env_path.write_text("NEXUSAI_REPO_RUNTIME_TOOLCHAINS=node\n", encoding="utf-8")
+
+    with patch("dashboard.settings.platform.system", return_value="Linux"), \
+         patch("dashboard.settings._env_file_path", return_value=env_path):
+        resp = dashboard_client.post("/api/settings/tools/install/code_exec_dotnet")
+        status_resp = dashboard_client.get("/api/settings/tools/install/code_exec_dotnet/status")
+
+    assert resp.status_code == 202
+    data = resp.get_json()
+    assert data["state"] == "configured"
+    assert data["deploy_required"] is True
+    assert "dotnet" in data["configured_toolchains"]
+    assert "node,dotnet" in env_path.read_text(encoding="utf-8")
+
+    assert status_resp.status_code == 200
+    status_data = status_resp.get_json()
+    assert status_data["state"] == "configured"
 
 
 def test_settings_tool_status_uses_user_profile_runtime_paths(dashboard_client):

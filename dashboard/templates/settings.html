@@ -720,8 +720,9 @@ function renderToolActionsHtml(tool) {
   var html = '<button class="btn" type="button" onclick="runSingleToolCheck(\'' + escHtml(tool.id) + '\')" ' +
     'style="padding:0.25rem 0.65rem;font-size:0.78rem;">Test</button>';
   if (tool.install_supported) {
+    var label = tool.install_mode === 'runtime_deploy' ? 'Configure' : 'Install';
     html += ' <button class="btn btn-primary" type="button" onclick="installToolRuntime(\'' + escHtml(tool.id) + '\')" ' +
-      'style="padding:0.25rem 0.65rem;font-size:0.78rem;">Install</button>';
+      'style="padding:0.25rem 0.65rem;font-size:0.78rem;">' + label + '</button>';
   }
   return html;
 }
@@ -740,7 +741,8 @@ function renderToolStatus(toolId, status) {
     unverified: '#718096',
     running: '#60a5fa',
     failed: '#ef4444',
-    succeeded: '#10b981'
+    succeeded: '#10b981',
+    configured: '#f59e0b'
   };
   var label = status.status || 'unknown';
   var color = colors[label] || '#718096';
@@ -798,7 +800,7 @@ function runSingleToolCheck(toolId) {
 }
 
 function installToolRuntime(toolId) {
-  if (!confirm('Install and enable ' + toolId + ' on this dashboard host?')) return;
+  if (!confirm('Configure or install ' + toolId + ' for the active runtime environment?')) return;
   showToast('Installing ' + toolId + '...', true);
   fetch('/api/settings/tools/install/' + encodeURIComponent(toolId), {
     method: 'POST',
@@ -819,6 +821,16 @@ function installToolRuntime(toolId) {
       if (detail) {
         alert('Tool install failed for ' + toolId + detail);
       }
+      return;
+    }
+    if (res.data.state === 'configured') {
+      _toolStatusById[toolId] = res.data.tool_status || {
+        status: 'configured',
+        summary: 'Configured for runtime rebuild. Deploy required.',
+        install_notes: '',
+      };
+      renderToolStatus(toolId, _toolStatusById[toolId]);
+      showToast('Configured ' + toolId + ' for runtime rebuild. Deploy required.', true);
       return;
     }
     _toolStatusById[toolId] = {
@@ -947,7 +959,7 @@ function applyToolPreset(presetId) {
       <h2 style="font-size:1.1rem;margin:0 0 0.25rem;color:#f0f0f0;">Tools &amp; Runtimes</h2>
       <p style="color:#a0aec0;font-size:0.85rem;margin:0;">
         Enable the tools your bots need. Disabled tools are not passed to any bot regardless of bot configuration.
-        Changes take effect on the next task run. Runtime checks and installs apply to the dashboard host machine.
+        Workspace/runtime tools are checked against the active execution environment. Some runtimes are baked into the control_plane image and require a deploy after configuration.
       </p>
     </div>
     <div style="display:flex;gap:0.75rem;flex-wrap:wrap;align-items:flex-start;justify-content:flex-end;">
