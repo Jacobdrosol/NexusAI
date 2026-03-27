@@ -2046,6 +2046,30 @@ def test_settings_runtime_tool_install_configures_env_and_requires_deploy(dashbo
     assert status_data["state"] == "configured"
 
 
+def test_settings_browser_runtime_install_configures_playwright_and_requires_deploy(dashboard_client, tmp_path):
+    _login_admin(dashboard_client)
+    env_path = tmp_path / ".env"
+    env_path.write_text("NEXUSAI_REPO_RUNTIME_TOOLCHAINS=dotnet\n", encoding="utf-8")
+
+    with patch("dashboard.settings.platform.system", return_value="Linux"), \
+         patch("dashboard.settings._env_file_path", return_value=env_path):
+        resp = dashboard_client.post("/api/settings/tools/install/ui_browser")
+        status_resp = dashboard_client.get("/api/settings/tools/install/ui_browser/status")
+
+    assert resp.status_code == 202
+    data = resp.get_json()
+    assert data["state"] == "configured"
+    assert data["deploy_required"] is True
+    assert "node" in data["configured_toolchains"]
+    assert "playwright" in data["configured_toolchains"]
+    env_text = env_path.read_text(encoding="utf-8")
+    assert "dotnet,node,playwright" in env_text
+
+    assert status_resp.status_code == 200
+    status_data = status_resp.get_json()
+    assert status_data["state"] == "configured"
+
+
 def test_settings_tool_status_uses_user_profile_runtime_paths(dashboard_client):
     _login_admin(dashboard_client)
     dashboard_client.put("/api/settings/tools", json={"enabled_tools": ["code_exec_dotnet"]})

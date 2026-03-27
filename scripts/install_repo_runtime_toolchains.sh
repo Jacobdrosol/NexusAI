@@ -10,7 +10,7 @@ if [[ -z "${RAW_TOOLCHAINS// }" ]]; then
 fi
 
 if [[ "${RAW_TOOLCHAINS,,}" == "all" ]]; then
-  RAW_TOOLCHAINS="node,dotnet,go,rust,cpp"
+  RAW_TOOLCHAINS="node,dotnet,go,rust,cpp,playwright"
 fi
 
 declare -A REQUESTED=()
@@ -33,6 +33,10 @@ apt-get update
 apt-get install -y --no-install-recommends ca-certificates curl gnupg
 
 install_node() {
+  if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
+    echo "Node.js toolchain already installed."
+    return
+  fi
   echo "Installing Node.js toolchain..."
   apt-get install -y --no-install-recommends nodejs npm
   npm install -g pnpm yarn
@@ -42,6 +46,7 @@ install_dotnet() {
   echo "Installing .NET SDK ${DOTNET_CHANNEL}..."
   local version_id
   version_id="$(. /etc/os-release && echo "${VERSION_ID}")"
+  apt-get install -y --no-install-recommends libicu-dev
   curl -fsSL -o /tmp/packages-microsoft-prod.deb \
     "https://packages.microsoft.com/config/debian/${version_id}/packages-microsoft-prod.deb"
   dpkg -i /tmp/packages-microsoft-prod.deb
@@ -65,6 +70,13 @@ install_cpp() {
   apt-get install -y --no-install-recommends build-essential cmake ninja-build
 }
 
+install_playwright() {
+  echo "Installing Playwright runtime..."
+  install_node
+  npm install -g playwright
+  PLAYWRIGHT_BROWSERS_PATH=/ms-playwright npx playwright install --with-deps chromium
+}
+
 if [[ -n "${REQUESTED[node]:-}" ]]; then
   install_node
 fi
@@ -79,6 +91,9 @@ if [[ -n "${REQUESTED[rust]:-}" ]]; then
 fi
 if [[ -n "${REQUESTED[cpp]:-}" ]]; then
   install_cpp
+fi
+if [[ -n "${REQUESTED[playwright]:-}" ]]; then
+  install_playwright
 fi
 
 rm -rf /var/lib/apt/lists/*
