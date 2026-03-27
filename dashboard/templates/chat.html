@@ -1039,7 +1039,7 @@ function modelSupportsImages(provider, modelName) {
   if (providerKey === 'openai') return ['gpt-4o', 'gpt-4.1', 'gpt-5'].some((token) => lowered.includes(token));
   if (providerKey === 'claude') return ['claude-3', 'claude-4'].some((token) => lowered.includes(token));
   if (providerKey === 'ollama_cloud' || providerKey === 'ollama') {
-    return ['vision', '-vl', 'qwen2.5-vl', 'qwen-vl', 'llava'].some((token) => lowered.includes(token));
+    return ['vision', '-vl', 'qwen2.5-vl', 'qwen-vl', 'qwen3-vl', 'qwen3.5:', 'llava', 'gemma3'].some((token) => lowered.includes(token));
   }
   return false;
 }

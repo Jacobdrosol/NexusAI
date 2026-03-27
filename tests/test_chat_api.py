@@ -141,6 +141,43 @@ async def test_chat_message_includes_attachments_in_scheduler_payload(cp_app):
 
 
 @pytest.mark.anyio
+async def test_chat_message_accepts_image_attachment_for_ollama_cloud_qwen35_bot(cp_app):
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "assistant reply"})
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        create_resp = await client.post("/v1/chat/conversations", json={"title": "Chat Image Qwen"})
+        conversation_id = create_resp.json()["id"]
+
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-qwen-vision",
+                "name": "Qwen Vision Bot",
+                "role": "assistant",
+                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "qwen3.5:397b-cloud"}],
+                "enabled": True,
+            },
+        )
+
+        post_resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": "Inspect this image",
+                "bot_id": "bot-qwen-vision",
+                "attachments": [
+                    {
+                        "name": "image.png",
+                        "mime_type": "image/png",
+                        "kind": "image",
+                        "data_url": "data:image/png;base64,aGVsbG8=",
+                    }
+                ],
+            },
+        )
+
+    assert post_resp.status_code == 200
+
+
+@pytest.mark.anyio
 async def test_chat_message_rejects_more_than_15_attachments(cp_app):
     cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "assistant reply"})
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:

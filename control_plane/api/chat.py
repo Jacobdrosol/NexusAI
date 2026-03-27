@@ -321,7 +321,10 @@ async def _target_supports_image_attachments(request: Request, *, target_bot_id:
     if provider == "claude":
         return any(token in lowered_model for token in ("claude-3", "claude-4"))
     if provider in {"ollama_cloud", "ollama"}:
-        return any(token in lowered_model for token in ("vision", "-vl", "qwen2.5-vl", "qwen-vl", "llava"))
+        return any(
+            token in lowered_model
+            for token in ("vision", "-vl", "qwen2.5-vl", "qwen-vl", "qwen3-vl", "qwen3.5:", "llava", "gemma3")
+        )
     return False
 _GROUNDING_NOTE_LINE_RE = re.compile(r"^\s*grounding\s+note\s*:\s*", re.IGNORECASE)
 _PLANNING_PREAMBLE_LINE_RE = re.compile(
