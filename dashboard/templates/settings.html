@@ -803,7 +803,18 @@ function installToolRuntime(toolId) {
   .then(function(r){ return r.json().then(function(d){ return {ok:r.ok, data:d}; }); })
   .then(function(res){
     if (!res.ok) {
+      var detail = '';
+      if (res.data && res.data.command_log && res.data.command_log.length) {
+        var last = res.data.command_log[res.data.command_log.length - 1];
+        detail = '\n\nLast command:\n' + (Array.isArray(last.command) ? last.command.join(' ') : String(last.command || '')) +
+          '\n\nOutput:\n' + String(last.output || '').trim();
+      } else if (res.data && res.data.install_hint) {
+        detail = '\n\nHint:\n' + res.data.install_hint;
+      }
       showToast('Failed to install tool: ' + (res.data.error || 'unknown error'), false);
+      if (detail) {
+        alert('Tool install failed for ' + toolId + detail);
+      }
       return;
     }
     var checkbox = document.querySelector('input[data-tool-id="' + toolId + '"]');

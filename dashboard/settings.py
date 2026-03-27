@@ -116,6 +116,23 @@ def _save_enabled_tool_ids(enabled_ids: list[str]) -> None:
 def _tool_install_plan(tool_id: str) -> dict[str, Any] | None:
     is_windows = platform.system().lower().startswith("win")
     is_linux = platform.system().lower().startswith("linux")
+    linux_pkg_prefix = (
+        "if [ \"$(id -u)\" -eq 0 ]; then PKG_PREFIX=''; "
+        "elif command -v sudo >/dev/null 2>&1; then PKG_PREFIX='sudo '; "
+        "else echo 'This installer requires root or sudo on the Linux host.'; exit 1; fi; "
+    )
+    linux_pkg_install = (
+        linux_pkg_prefix +
+        "if command -v apt-get >/dev/null 2>&1; then ${{PKG_PREFIX}}apt-get update && ${{PKG_PREFIX}}apt-get install -y {apt_packages}; "
+        "elif command -v dnf >/dev/null 2>&1; then ${{PKG_PREFIX}}dnf install -y {dnf_packages}; "
+        "elif command -v yum >/dev/null 2>&1; then ${{PKG_PREFIX}}yum install -y {yum_packages}; "
+        "else echo 'No supported Linux package manager found for {label}'; exit 1; fi"
+    )
+    linux_fetch_script = (
+        "if command -v curl >/dev/null 2>&1; then curl -fsSL {url} -o {dest}; "
+        "elif command -v wget >/dev/null 2>&1; then wget -qO {dest} {url}; "
+        "else echo 'curl or wget is required to download installer assets.'; exit 1; fi"
+    )
     if is_windows:
         winget = {
             "code_exec_python": {
@@ -179,11 +196,7 @@ def _tool_install_plan(tool_id: str) -> dict[str, Any] | None:
                 "commands": [[
                     "bash",
                     "-lc",
-                    "set -e; "
-                    "if command -v apt-get >/dev/null 2>&1; then sudo apt-get update && sudo apt-get install -y nodejs npm; "
-                    "elif command -v dnf >/dev/null 2>&1; then sudo dnf install -y nodejs npm; "
-                    "elif command -v yum >/dev/null 2>&1; then sudo yum install -y nodejs npm; "
-                    "else echo 'No supported Linux package manager found for Node.js'; exit 1; fi",
+                    "set -e; " + linux_pkg_install.format(apt_packages="nodejs npm", dnf_packages="nodejs npm", yum_packages="nodejs npm", label="Node.js"),
                 ]],
             },
             "ui_browser": {
@@ -193,14 +206,10 @@ def _tool_install_plan(tool_id: str) -> dict[str, Any] | None:
                     [
                         "bash",
                         "-lc",
-                        "set -e; "
-                        "if command -v apt-get >/dev/null 2>&1; then sudo apt-get update && sudo apt-get install -y nodejs npm; "
-                        "elif command -v dnf >/dev/null 2>&1; then sudo dnf install -y nodejs npm; "
-                        "elif command -v yum >/dev/null 2>&1; then sudo yum install -y nodejs npm; "
-                        "else echo 'No supported Linux package manager found for Node.js'; exit 1; fi",
+                        "set -e; " + linux_pkg_install.format(apt_packages="nodejs npm", dnf_packages="nodejs npm", yum_packages="nodejs npm", label="Node.js"),
                     ],
-                    ["bash", "-lc", "set -e; npm install -g playwright"],
-                    ["bash", "-lc", "set -e; npx playwright install --with-deps chromium"],
+                    ["bash", "-lc", "set -e; mkdir -p /tmp/nexusai-playwright && cd /tmp/nexusai-playwright && npm init -y >/dev/null 2>&1 || true && npm install playwright"],
+                    ["bash", "-lc", "set -e; cd /tmp/nexusai-playwright && npx playwright install --with-deps chromium"],
                 ],
             },
             "devops_git": {
@@ -209,11 +218,7 @@ def _tool_install_plan(tool_id: str) -> dict[str, Any] | None:
                 "commands": [[
                     "bash",
                     "-lc",
-                    "set -e; "
-                    "if command -v apt-get >/dev/null 2>&1; then sudo apt-get update && sudo apt-get install -y git; "
-                    "elif command -v dnf >/dev/null 2>&1; then sudo dnf install -y git; "
-                    "elif command -v yum >/dev/null 2>&1; then sudo yum install -y git; "
-                    "else echo 'No supported Linux package manager found for Git'; exit 1; fi",
+                    "set -e; " + linux_pkg_install.format(apt_packages="git", dnf_packages="git", yum_packages="git", label="Git"),
                 ]],
             },
             "code_exec_go": {
@@ -222,11 +227,7 @@ def _tool_install_plan(tool_id: str) -> dict[str, Any] | None:
                 "commands": [[
                     "bash",
                     "-lc",
-                    "set -e; "
-                    "if command -v apt-get >/dev/null 2>&1; then sudo apt-get update && sudo apt-get install -y golang-go; "
-                    "elif command -v dnf >/dev/null 2>&1; then sudo dnf install -y golang; "
-                    "elif command -v yum >/dev/null 2>&1; then sudo yum install -y golang; "
-                    "else echo 'No supported Linux package manager found for Go'; exit 1; fi",
+                    "set -e; " + linux_pkg_install.format(apt_packages="golang-go", dnf_packages="golang", yum_packages="golang", label="Go"),
                 ]],
             },
             "code_exec_rust": {
@@ -235,7 +236,7 @@ def _tool_install_plan(tool_id: str) -> dict[str, Any] | None:
                 "commands": [[
                     "bash",
                     "-lc",
-                    "set -e; curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal",
+                    "set -e; " + linux_fetch_script.format(url="https://sh.rustup.rs", dest="/tmp/rustup-init.sh") + " && sh /tmp/rustup-init.sh -y --profile minimal",
                 ]],
             },
             "test_runner_cargo_test": {
@@ -244,7 +245,7 @@ def _tool_install_plan(tool_id: str) -> dict[str, Any] | None:
                 "commands": [[
                     "bash",
                     "-lc",
-                    "set -e; curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal",
+                    "set -e; " + linux_fetch_script.format(url="https://sh.rustup.rs", dest="/tmp/rustup-init.sh") + " && sh /tmp/rustup-init.sh -y --profile minimal",
                 ]],
             },
             "code_exec_java": {
@@ -253,11 +254,7 @@ def _tool_install_plan(tool_id: str) -> dict[str, Any] | None:
                 "commands": [[
                     "bash",
                     "-lc",
-                    "set -e; "
-                    "if command -v apt-get >/dev/null 2>&1; then sudo apt-get update && sudo apt-get install -y openjdk-17-jdk; "
-                    "elif command -v dnf >/dev/null 2>&1; then sudo dnf install -y java-17-openjdk-devel; "
-                    "elif command -v yum >/dev/null 2>&1; then sudo yum install -y java-17-openjdk-devel; "
-                    "else echo 'No supported Linux package manager found for Java'; exit 1; fi",
+                    "set -e; " + linux_pkg_install.format(apt_packages="openjdk-17-jdk", dnf_packages="java-17-openjdk-devel", yum_packages="java-17-openjdk-devel", label="Java"),
                 ]],
             },
             "test_runner_junit": {
@@ -266,11 +263,7 @@ def _tool_install_plan(tool_id: str) -> dict[str, Any] | None:
                 "commands": [[
                     "bash",
                     "-lc",
-                    "set -e; "
-                    "if command -v apt-get >/dev/null 2>&1; then sudo apt-get update && sudo apt-get install -y openjdk-17-jdk; "
-                    "elif command -v dnf >/dev/null 2>&1; then sudo dnf install -y java-17-openjdk-devel; "
-                    "elif command -v yum >/dev/null 2>&1; then sudo yum install -y java-17-openjdk-devel; "
-                    "else echo 'No supported Linux package manager found for Java'; exit 1; fi",
+                    "set -e; " + linux_pkg_install.format(apt_packages="openjdk-17-jdk", dnf_packages="java-17-openjdk-devel", yum_packages="java-17-openjdk-devel", label="Java"),
                 ]],
             },
             "code_exec_dotnet": {
@@ -280,7 +273,8 @@ def _tool_install_plan(tool_id: str) -> dict[str, Any] | None:
                     "bash",
                     "-lc",
                     "set -e; mkdir -p \"$HOME/.dotnet\"; "
-                    "curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh; "
+                    + linux_fetch_script.format(url="https://dot.net/v1/dotnet-install.sh", dest="/tmp/dotnet-install.sh")
+                    + "; "
                     "bash /tmp/dotnet-install.sh --channel 8.0 --install-dir \"$HOME/.dotnet\"",
                 ]],
             },
@@ -291,7 +285,8 @@ def _tool_install_plan(tool_id: str) -> dict[str, Any] | None:
                     "bash",
                     "-lc",
                     "set -e; mkdir -p \"$HOME/.dotnet\"; "
-                    "curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh; "
+                    + linux_fetch_script.format(url="https://dot.net/v1/dotnet-install.sh", dest="/tmp/dotnet-install.sh")
+                    + "; "
                     "bash /tmp/dotnet-install.sh --channel 8.0 --install-dir \"$HOME/.dotnet\"",
                 ]],
             },
