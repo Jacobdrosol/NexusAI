@@ -2744,6 +2744,172 @@ async def test_repo_grounded_output_replaces_permission_prompt_with_direct_fallb
 
 
 @pytest.mark.anyio
+async def test_repo_grounded_output_strips_workspace_access_denial_language(cp_app):
+    cp_app.state.scheduler.schedule = AsyncMock(
+        return_value={
+            "output": (
+                "I appreciate you setting that up, but I need to be transparent: I do not currently see any workspace tools or file system access active in this specific chat session.\n"
+                "This sometimes happens depending on the configuration.\n"
+                "Here are the concrete gaps I can already identify from the verified context.\n"
+                "1. Add a submission workflow status enum.\n"
+                "2. Reuse the existing user submissions controller for assignment intake.\n"
+                "3. Add premium gating before presigned upload issuance."
+            )
+        }
+    )
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-repo-access-denial-strip"
+        create_project = await client.post(
+            "/v1/projects",
+            json={
+                "id": project_id,
+                "name": "Repo Access Denial Strip",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        assert create_project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Repo Access Denial Strip Chat",
+                "project_id": project_id,
+                "tool_access_enabled": True,
+                "tool_access_repo_search": True,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-repo-access-denial-strip",
+                "name": "Repo Access Denial Strip Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        ingest = await client.post(
+            "/v1/vault/items",
+            json={
+                "title": "README.md",
+                "content": "AUTH_ACCESS_DENIAL_STRIP_TOKEN",
+                "namespace": f"project:{project_id}:repo",
+                "project_id": project_id,
+            },
+        )
+        assert ingest.status_code == 200
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": "Go through my repo and tell me what is already there.",
+                "bot_id": "bot-repo-access-denial-strip",
+            },
+        )
+        assert resp.status_code == 200
+        content = resp.json()["assistant_message"]["content"]
+        assert content.startswith("Files inspected (verified context)")
+        assert "do not currently see any workspace tools" not in content.lower()
+        assert "depending on the configuration" not in content.lower()
+        assert "submission workflow status enum" in content
+
+
+@pytest.mark.anyio
+async def test_repo_grounded_output_does_not_hard_truncate_normal_uncited_response(cp_app):
+    long_lines = [
+        f"{idx}. Detailed grounded repo finding about assignment grading and submission handling."
+        for idx in range(1, 46)
+    ]
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "\n".join(long_lines)})
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-repo-no-hard-truncate"
+        create_project = await client.post(
+            "/v1/projects",
+            json={
+                "id": project_id,
+                "name": "Repo No Hard Truncate",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        assert create_project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Repo No Hard Truncate Chat",
+                "project_id": project_id,
+                "tool_access_enabled": True,
+                "tool_access_repo_search": True,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-repo-no-hard-truncate",
+                "name": "Repo No Hard Truncate Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "repo_search": True,
+                        "filesystem": False,
+                    }
+                },
+            },
+        )
+        ingest = await client.post(
+            "/v1/vault/items",
+            json={
+                "title": "README.md",
+                "content": "AUTH_NO_HARD_TRUNCATE_TOKEN",
+                "namespace": f"project:{project_id}:repo",
+                "project_id": project_id,
+            },
+        )
+        assert ingest.status_code == 200
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": "Search the repository and summarize the current grading pipeline.",
+                "bot_id": "bot-repo-no-hard-truncate",
+            },
+        )
+        assert resp.status_code == 200
+        content = resp.json()["assistant_message"]["content"]
+        assert content.startswith("Files inspected (verified context)")
+        assert "45. Detailed grounded repo finding" in content
+        assert not content.rstrip().endswith("...")
+
+
+@pytest.mark.anyio
 async def test_repo_grounded_output_strips_model_grounding_note_only_output(cp_app):
     cp_app.state.scheduler.schedule = AsyncMock(
         return_value={"output": "Grounding note: inline [S#] citations were not generated; response kept concise."}

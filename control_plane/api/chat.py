@@ -135,6 +135,18 @@ _REQUEST_PERMISSION_LINE_RE = re.compile(
     r"let\s+me\s+know\s+which\s+files|which\s+files\s+would\s+you\s+like\s+me\s+to\s+read)\b",
     re.IGNORECASE,
 )
+_ACCESS_DENIAL_LINE_RE = re.compile(
+    r"^\s*(i\s+appreciate\s+you\s+setting\s+that\s+up|"
+    r"i\s+need\s+to\s+be\s+transparent|"
+    r"i\s+(?:cannot|can['’]?t)\s+(?:directly\s+)?(?:access|browse|read)|"
+    r"i\s+do\s+not\s+currently\s+see\s+any\s+workspace\s+tools|"
+    r"i\s+do\s+not\s+currently\s+have\s+(?:workspace|file\s*system|repo)\s+access|"
+    r"they\s+aren['’]?t\s+always\s+passed\s+through\s+to\s+the\s+model\s+instance|"
+    r"this\s+sometimes\s+happens\s+depending\s+on\s+the\s+configuration\b|"
+    r"depending\s+on\s+the\s+configuration\b|"
+    r"however,\s+given\s+your\b)",
+    re.IGNORECASE,
+)
 _IMAGE_CAPABILITY_MARKERS = {"image", "images", "vision", "multimodal"}
 
 
@@ -329,8 +341,8 @@ _TOOL_ARG_LINE_RE = re.compile(
 _CODE_FENCE_LINE_RE = re.compile(r"^\s*```[\w-]*\s*$")
 _CITATION_TAIL_RATIO = 0.75
 _CITATION_DENSITY_WINDOW = 900
-_UNCITED_MAX_LINES = 28
-_UNCITED_MAX_CHARS = 1800
+_UNCITED_MAX_LINES = 60
+_UNCITED_MAX_CHARS = 6000
 _DEFAULT_GROUNDED_FALLBACK = (
     "Actionable next steps from verified context:\n"
     "1. Build a gap list: current controllers/schemas vs required lesson-block capabilities.\n"
@@ -378,7 +390,7 @@ def _repo_intent_requested(content: str) -> bool:
         _REPO_REQUEST_CUE_RE.search(candidate)
         or candidate.endswith("?")
         or lowered_candidate.startswith(
-            ("read ", "search ", "scan ", "inspect ", "review ", "analyze ", "analyse ", "open ", "look through ", "walk through ")
+            ("read ", "search ", "scan ", "inspect ", "review ", "analyze ", "analyse ", "open ", "look through ", "walk through ", "go through ")
         )
     )
 
@@ -647,6 +659,8 @@ def _sanitize_repo_grounded_output(output: str) -> str:
             continue
         if _REQUEST_PERMISSION_LINE_RE.search(stripped):
             continue
+        if _ACCESS_DENIAL_LINE_RE.search(stripped):
+            continue
         if _GROUNDING_NOTE_LINE_RE.search(stripped):
             continue
         if _PLANNING_PREAMBLE_LINE_RE.search(stripped):
@@ -695,6 +709,8 @@ def _condense_uncited_grounded_output(text: str) -> str:
         ):
             continue
         if _REQUEST_PERMISSION_LINE_RE.search(line):
+            continue
+        if _ACCESS_DENIAL_LINE_RE.search(line):
             continue
         if _GROUNDING_NOTE_LINE_RE.search(line):
             continue
