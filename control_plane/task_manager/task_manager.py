@@ -2683,6 +2683,63 @@ class TaskManager:
         except Exception:
             pass
 
+    def _task_max_concurrency(self) -> int:
+        env_raw = os.environ.get("NEXUSAI_TASK_MAX_CONCURRENCY", "").strip()
+        if env_raw:
+            try:
+                return max(1, int(env_raw))
+            except Exception:
+                return max(1, self._max_concurrency)
+        try:
+            configured = SettingsManager.instance().get("task_max_concurrency", self._max_concurrency)
+            return max(1, int(configured))
+        except Exception:
+            return max(1, self._max_concurrency)
+
+    def _provider_concurrency_limits(self) -> dict[str, int]:
+        try:
+            raw = SettingsManager.instance().get("task_provider_concurrency_limits", {})
+        except Exception:
+            raw = {}
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except Exception:
+                raw = {}
+        if not isinstance(raw, dict):
+            return {}
+        limits: dict[str, int] = {}
+        for provider, limit in raw.items():
+            key = str(provider or "").strip().lower()
+            if not key:
+                continue
+            try:
+                parsed = int(limit)
+            except Exception:
+                continue
+            if parsed <= 0:
+                continue
+            limits[key] = parsed
+        return limits
+
+    async def _bot_provider_keys_for_tasks(self, tasks: list[Task]) -> dict[str, str]:
+        if not tasks or self._bot_registry is None:
+            return {}
+        bot_ids = {str(task.bot_id or "").strip() for task in tasks if str(task.bot_id or "").strip()}
+        providers_by_bot: dict[str, str] = {}
+        for bot_id in bot_ids:
+            try:
+                bot = await self._bot_registry.get(bot_id)
+            except Exception:
+                providers_by_bot[bot_id] = ""
+                continue
+            provider = ""
+            backends = list(getattr(bot, "backends", []) or [])
+            if backends:
+                provider = str(getattr(backends[0], "provider", "") or "").strip().lower()
+            providers_by_bot[bot_id] = provider
+        return {task.id: providers_by_bot.get(str(task.bot_id or "").strip(), "") for task in tasks}
+
     async def _ensure_db(self) -> None:
         """Lazily initialise the SQLite tasks table and load existing rows."""
         if self._db_ready:
@@ -4030,7 +4087,7 @@ class TaskManager:
         if self._is_closing:
             return
         async with self._lock:
-            available_slots = max(0, self._max_concurrency - len(self._running_task_ids))
+            available_slots = max(0, self._task_max_concurrency() - len(self._running_task_ids))
             if available_slots <= 0:
                 return
             queued = sorted(
@@ -4041,11 +4098,44 @@ class TaskManager:
                 ),
                 key=lambda item: (item.created_at or "", item.updated_at or ""),
             )
+            running_snapshot = [
+                self._tasks[task_id]
+                for task_id in self._running_task_ids
+                if task_id in self._tasks
+            ]
+        provider_limits = self._provider_concurrency_limits()
+        if provider_limits:
+            provider_keys = await self._bot_provider_keys_for_tasks([*queued, *running_snapshot])
+            provider_counts: dict[str, int] = {}
+            for task in running_snapshot:
+                provider_key = provider_keys.get(task.id, "")
+                if not provider_key:
+                    continue
+                provider_counts[provider_key] = provider_counts.get(provider_key, 0) + 1
+            selected: list[Task] = []
+            for task in queued:
+                if len(selected) >= available_slots:
+                    break
+                provider_key = provider_keys.get(task.id, "")
+                limit = provider_limits.get(provider_key)
+                if limit is not None and provider_counts.get(provider_key, 0) >= limit:
+                    continue
+                selected.append(task)
+                if provider_key:
+                    provider_counts[provider_key] = provider_counts.get(provider_key, 0) + 1
+        else:
             selected = queued[:available_slots]
-            for task in selected:
-                self._running_task_ids.add(task.id)
 
-        for task in selected:
+        async with self._lock:
+            still_selected: list[Task] = []
+            for task in selected:
+                current = self._tasks.get(task.id)
+                if current is None or current.status != "queued" or task.id in self._running_task_ids:
+                    continue
+                self._running_task_ids.add(task.id)
+                still_selected.append(current)
+
+        for task in still_selected:
             runner = asyncio.create_task(self._run_task(task.id))
             async with self._lock:
                 self._runner_tasks[task.id] = runner

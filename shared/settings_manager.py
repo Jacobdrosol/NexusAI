@@ -92,6 +92,10 @@ _DEFAULTS: List[tuple] = [
     # Advanced
     ("max_task_retries", "3", "int", "advanced", "Max Task Retries",
      "Maximum number of retry attempts for a failed task."),
+    ("task_max_concurrency", "4", "int", "advanced", "Task Max Concurrency",
+     "Maximum number of concurrently running control-plane tasks across the whole platform."),
+    ("task_provider_concurrency_limits", "{}", "json", "advanced", "Task Provider Concurrency Limits",
+     "Optional JSON object mapping provider name to max concurrent running tasks, for example {\"ollama_cloud\": 6, \"openai\": 3}. Local worker-backed models still enforce one active task per worker."),
     ("task_retry_delay", "5.0", "float", "advanced", "Task Retry Delay (s)",
      "Seconds to wait between task retry attempts."),
     ("task_retry_max_tokens_increment", "0", "int", "advanced", "Task Retry Max Tokens Increment",

@@ -625,6 +625,79 @@ async def test_task_manager_respects_max_concurrency(tmp_path, monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_task_manager_respects_provider_concurrency_limits(tmp_path, monkeypatch):
+    import asyncio
+
+    from control_plane.task_manager import task_manager as task_manager_module
+    from control_plane.task_manager.task_manager import TaskManager
+
+    active_by_provider = {"openai": 0, "ollama_cloud": 0}
+    peak_by_provider = {"openai": 0, "ollama_cloud": 0}
+
+    class StubRegistry:
+        def __init__(self):
+            self._bots = {
+                "openai-bot": Bot(
+                    id="openai-bot",
+                    name="OpenAI Bot",
+                    role="coder",
+                    backends=[{"type": "cloud_api", "provider": "openai", "model": "gpt-4.1"}],
+                ),
+                "ollama-bot": Bot(
+                    id="ollama-bot",
+                    name="Ollama Cloud Bot",
+                    role="coder",
+                    backends=[{"type": "cloud_api", "provider": "ollama_cloud", "model": "qwen3.5:397b-cloud"}],
+                ),
+            }
+
+        async def get(self, bot_id):
+            return self._bots[bot_id]
+
+    class StubScheduler:
+        async def schedule(self, task):
+            provider = "openai" if task.bot_id == "openai-bot" else "ollama_cloud"
+            active_by_provider[provider] += 1
+            peak_by_provider[provider] = max(peak_by_provider[provider], active_by_provider[provider])
+            await asyncio.sleep(0.05)
+            active_by_provider[provider] -= 1
+            return {"task": task.id, "provider": provider}
+
+    class _FakeSettings:
+        def get(self, key, default=None):
+            if key == "task_max_concurrency":
+                return 4
+            if key == "task_provider_concurrency_limits":
+                return {"openai": 1, "ollama_cloud": 2}
+            return default
+
+    monkeypatch.delenv("NEXUSAI_TASK_MAX_CONCURRENCY", raising=False)
+    monkeypatch.setattr(
+        task_manager_module.SettingsManager,
+        "instance",
+        staticmethod(lambda: _FakeSettings()),
+    )
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "provider-queue.db"), bot_registry=StubRegistry())
+    for idx in range(3):
+        await tm.create_task(bot_id="openai-bot", payload={"i": idx})
+    for idx in range(4):
+        await tm.create_task(bot_id="ollama-bot", payload={"i": idx})
+
+    for _ in range(120):
+        tasks = await tm.list_tasks()
+        if len(tasks) == 7 and all(task.status == "completed" for task in tasks):
+            break
+        await asyncio.sleep(0.05)
+
+    tasks = await tm.list_tasks()
+    assert len(tasks) == 7
+    assert all(task.status == "completed" for task in tasks)
+    assert peak_by_provider["openai"] <= 1
+    assert peak_by_provider["ollama_cloud"] <= 2
+
+
+@pytest.mark.anyio
 async def test_task_fails_on_scheduler_error():
     import asyncio
     from control_plane.task_manager.task_manager import TaskManager

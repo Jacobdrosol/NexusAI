@@ -80,6 +80,64 @@ async def test_scheduler_unpinned_backend_prefers_lower_weight_worker():
 
 
 @pytest.mark.anyio
+async def test_scheduler_unpinned_local_backend_skips_busy_worker():
+    from control_plane.scheduler.scheduler import Scheduler
+
+    worker_a = Worker(
+        id="w-a",
+        name="Worker A",
+        host="a.local",
+        port=8001,
+        capabilities=[Capability(type="llm", provider="ollama", models=["llama3"])],
+        status="online",
+        enabled=True,
+        metrics=WorkerMetrics(queue_depth=0, load=10.0, gpu_utilization=[5.0]),
+    )
+    worker_b = Worker(
+        id="w-b",
+        name="Worker B",
+        host="b.local",
+        port=8001,
+        capabilities=[Capability(type="llm", provider="ollama", models=["llama3"])],
+        status="online",
+        enabled=True,
+        metrics=WorkerMetrics(queue_depth=3, load=60.0, gpu_utilization=[50.0]),
+    )
+    worker_registry = AsyncMock()
+    worker_registry.list.return_value = [worker_a, worker_b]
+    scheduler = Scheduler(bot_registry=AsyncMock(), worker_registry=worker_registry)
+    scheduler._inflight_by_worker["w-a"] = 1
+    backend = BackendConfig(type="local_llm", provider="ollama", model="llama3")
+
+    selected = await scheduler._resolve_worker_for_llm_backend(backend)
+    assert selected.id == "w-b"
+
+
+@pytest.mark.anyio
+async def test_scheduler_pinned_local_backend_rejects_second_inflight_task():
+    from control_plane.scheduler.scheduler import BackendError, Scheduler
+
+    worker = Worker(
+        id="w-local",
+        name="Worker Local",
+        host="local.example",
+        port=8001,
+        capabilities=[Capability(type="llm", provider="ollama", models=["llama3"])],
+        status="online",
+        enabled=True,
+        metrics=WorkerMetrics(queue_depth=0),
+    )
+    worker_registry = AsyncMock()
+    worker_registry.get.return_value = worker
+    scheduler = Scheduler(bot_registry=AsyncMock(), worker_registry=worker_registry)
+    scheduler._inflight_by_worker["w-local"] = 1
+    backend = BackendConfig(type="local_llm", provider="ollama", model="llama3", worker_id="w-local")
+
+    with pytest.raises(BackendError, match="has no remaining task capacity"):
+        await scheduler._resolve_worker_for_llm_backend(backend)
+
+
+@pytest.mark.anyio
 async def test_scheduler_dispatch_tracks_latency_and_inflight():
     from control_plane.scheduler.scheduler import Scheduler
 

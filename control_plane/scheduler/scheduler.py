@@ -1181,6 +1181,16 @@ class Scheduler:
         self._latency_alpha = float(os.environ.get("NEXUSAI_WORKER_LATENCY_EMA_ALPHA", "0.30"))
         self._default_latency_ms = float(os.environ.get("NEXUSAI_WORKER_DEFAULT_LATENCY_MS", "800"))
 
+    def _worker_capacity_limit(self, worker: Worker, backend: BackendConfig) -> int:
+        if str(getattr(backend, "type", "") or "").strip().lower() == "local_llm":
+            return 1
+        return 2**31 - 1
+
+    def _worker_has_capacity(self, worker: Worker, backend: BackendConfig) -> bool:
+        limit = self._worker_capacity_limit(worker, backend)
+        inflight = int(self._inflight_by_worker.get(worker.id, 0))
+        return inflight < limit
+
     async def schedule(self, task: Task) -> Any:
         try:
             bot = await self.bot_registry.get(task.bot_id)
@@ -1858,15 +1868,23 @@ class Scheduler:
     async def _resolve_worker_for_llm_backend(self, backend: BackendConfig) -> Worker:
         if backend.worker_id:
             try:
-                return await self.worker_registry.get(backend.worker_id)
+                worker = await self.worker_registry.get(backend.worker_id)
             except Exception as e:
                 raise BackendError(f"Worker not found: {backend.worker_id}") from e
+            if not self._worker_has_capacity(worker, backend):
+                raise BackendError(
+                    f"Worker {worker.id} has no remaining task capacity for backend type {backend.type}"
+                )
+            return worker
 
         workers = await self.worker_registry.list()
         candidates = [
             w
             for w in workers
-            if w.enabled and w.status == "online" and self._worker_supports_backend(w, backend)
+            if w.enabled
+            and w.status == "online"
+            and self._worker_supports_backend(w, backend)
+            and self._worker_has_capacity(w, backend)
         ]
         if not candidates:
             raise BackendError(
