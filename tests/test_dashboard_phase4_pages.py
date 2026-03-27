@@ -1915,7 +1915,7 @@ def test_settings_tools_api_reports_install_support(dashboard_client):
     dotnet = next(tool for tool in data["tools"] if tool["id"] == "code_exec_dotnet")
     git = next(tool for tool in data["tools"] if tool["id"] == "devops_git")
     assert dotnet["install_supported"] is True
-    assert git["enabled"] is True
+    assert git["install_supported"] is True
 
 
 def test_settings_tool_status_checks_enabled_tools(dashboard_client):
@@ -1926,7 +1926,7 @@ def test_settings_tool_status_checks_enabled_tools(dashboard_client):
     )
     assert bulk_resp.status_code == 200
 
-    def _fake_run(command, capture_output=None, text=None, shell=None, timeout=None, check=None):
+    def _fake_run(command, capture_output=None, text=None, shell=None, timeout=None, check=None, env=None):
         class Result:
             def __init__(self, returncode, stdout="", stderr=""):
                 self.returncode = returncode
@@ -1953,7 +1953,7 @@ def test_settings_tool_install_enables_tool_after_success(dashboard_client):
     _login_admin(dashboard_client)
     dashboard_client.put("/api/settings/tools", json={"enabled_tools": []})
 
-    def _fake_run(command, capture_output=None, text=None, timeout=None, check=None, shell=None):
+    def _fake_run(command, capture_output=None, text=None, timeout=None, check=None, shell=None, env=None):
         class Result:
             def __init__(self, returncode, stdout="", stderr=""):
                 self.returncode = returncode
@@ -1978,6 +1978,44 @@ def test_settings_tool_install_enables_tool_after_success(dashboard_client):
     assert list_resp.status_code == 200
     tools = {tool["id"]: tool for tool in list_resp.get_json()["tools"]}
     assert tools["code_exec_dotnet"]["enabled"] is True
+
+
+def test_settings_tools_api_reports_linux_install_support_for_playwright(dashboard_client):
+    _login_admin(dashboard_client)
+    with patch("dashboard.settings.platform.system", return_value="Linux"):
+        resp = dashboard_client.get("/api/settings/tools")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    browser = next(tool for tool in data["tools"] if tool["id"] == "ui_browser")
+    dotnet = next(tool for tool in data["tools"] if tool["id"] == "code_exec_dotnet")
+    assert browser["install_supported"] is True
+    assert dotnet["install_supported"] is True
+
+
+def test_settings_tool_status_uses_user_profile_runtime_paths(dashboard_client):
+    _login_admin(dashboard_client)
+    dashboard_client.put("/api/settings/tools", json={"enabled_tools": ["code_exec_dotnet"]})
+
+    captured = {}
+
+    def _fake_run(command, capture_output=None, text=None, shell=None, timeout=None, check=None, env=None):
+        captured["path"] = env.get("PATH", "")
+
+        class Result:
+            def __init__(self):
+                self.returncode = 0
+                self.stdout = "8.0.203\n"
+                self.stderr = ""
+
+        return Result()
+
+    with patch("dashboard.settings.subprocess.run", side_effect=_fake_run):
+        resp = dashboard_client.post("/api/settings/tools/test", json={"tool_id": "code_exec_dotnet"})
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["statuses"][0]["status"] == "installed"
+    assert ".dotnet" in captured["path"]
 
 
 def test_bots_page_supports_multi_file_import(dashboard_client):

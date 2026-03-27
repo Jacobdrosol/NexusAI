@@ -15,10 +15,12 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import platform
 import subprocess
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict
 
 import yaml
@@ -113,6 +115,7 @@ def _save_enabled_tool_ids(enabled_ids: list[str]) -> None:
 
 def _tool_install_plan(tool_id: str) -> dict[str, Any] | None:
     is_windows = platform.system().lower().startswith("win")
+    is_linux = platform.system().lower().startswith("linux")
     if is_windows:
         winget = {
             "code_exec_python": {
@@ -168,6 +171,133 @@ def _tool_install_plan(tool_id: str) -> dict[str, Any] | None:
         }
         if tool_id in winget:
             return winget[tool_id]
+    if is_linux:
+        linux = {
+            "code_exec_node": {
+                "label": "Install Node.js and npm",
+                "notes": "Uses the system package manager to install Node.js and npm on this Linux host.",
+                "commands": [[
+                    "bash",
+                    "-lc",
+                    "set -e; "
+                    "if command -v apt-get >/dev/null 2>&1; then sudo apt-get update && sudo apt-get install -y nodejs npm; "
+                    "elif command -v dnf >/dev/null 2>&1; then sudo dnf install -y nodejs npm; "
+                    "elif command -v yum >/dev/null 2>&1; then sudo yum install -y nodejs npm; "
+                    "else echo 'No supported Linux package manager found for Node.js'; exit 1; fi",
+                ]],
+            },
+            "ui_browser": {
+                "label": "Install Playwright runtime",
+                "notes": "Installs Node.js if needed, then installs Playwright globally and downloads browser dependencies.",
+                "commands": [
+                    [
+                        "bash",
+                        "-lc",
+                        "set -e; "
+                        "if command -v apt-get >/dev/null 2>&1; then sudo apt-get update && sudo apt-get install -y nodejs npm; "
+                        "elif command -v dnf >/dev/null 2>&1; then sudo dnf install -y nodejs npm; "
+                        "elif command -v yum >/dev/null 2>&1; then sudo yum install -y nodejs npm; "
+                        "else echo 'No supported Linux package manager found for Node.js'; exit 1; fi",
+                    ],
+                    ["bash", "-lc", "set -e; npm install -g playwright"],
+                    ["bash", "-lc", "set -e; npx playwright install --with-deps chromium"],
+                ],
+            },
+            "devops_git": {
+                "label": "Install Git",
+                "notes": "Uses the system package manager to install Git on this Linux host.",
+                "commands": [[
+                    "bash",
+                    "-lc",
+                    "set -e; "
+                    "if command -v apt-get >/dev/null 2>&1; then sudo apt-get update && sudo apt-get install -y git; "
+                    "elif command -v dnf >/dev/null 2>&1; then sudo dnf install -y git; "
+                    "elif command -v yum >/dev/null 2>&1; then sudo yum install -y git; "
+                    "else echo 'No supported Linux package manager found for Git'; exit 1; fi",
+                ]],
+            },
+            "code_exec_go": {
+                "label": "Install Go",
+                "notes": "Uses the system package manager to install Go on this Linux host.",
+                "commands": [[
+                    "bash",
+                    "-lc",
+                    "set -e; "
+                    "if command -v apt-get >/dev/null 2>&1; then sudo apt-get update && sudo apt-get install -y golang-go; "
+                    "elif command -v dnf >/dev/null 2>&1; then sudo dnf install -y golang; "
+                    "elif command -v yum >/dev/null 2>&1; then sudo yum install -y golang; "
+                    "else echo 'No supported Linux package manager found for Go'; exit 1; fi",
+                ]],
+            },
+            "code_exec_rust": {
+                "label": "Install Rust",
+                "notes": "Uses rustup to install the Rust toolchain into the current user profile.",
+                "commands": [[
+                    "bash",
+                    "-lc",
+                    "set -e; curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal",
+                ]],
+            },
+            "test_runner_cargo_test": {
+                "label": "Install Rust",
+                "notes": "cargo test is included with the Rust toolchain.",
+                "commands": [[
+                    "bash",
+                    "-lc",
+                    "set -e; curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal",
+                ]],
+            },
+            "code_exec_java": {
+                "label": "Install OpenJDK 17",
+                "notes": "Uses the system package manager to install a JDK on this Linux host.",
+                "commands": [[
+                    "bash",
+                    "-lc",
+                    "set -e; "
+                    "if command -v apt-get >/dev/null 2>&1; then sudo apt-get update && sudo apt-get install -y openjdk-17-jdk; "
+                    "elif command -v dnf >/dev/null 2>&1; then sudo dnf install -y java-17-openjdk-devel; "
+                    "elif command -v yum >/dev/null 2>&1; then sudo yum install -y java-17-openjdk-devel; "
+                    "else echo 'No supported Linux package manager found for Java'; exit 1; fi",
+                ]],
+            },
+            "test_runner_junit": {
+                "label": "Install OpenJDK 17",
+                "notes": "JUnit tasks require a JDK. Build tooling remains project-specific.",
+                "commands": [[
+                    "bash",
+                    "-lc",
+                    "set -e; "
+                    "if command -v apt-get >/dev/null 2>&1; then sudo apt-get update && sudo apt-get install -y openjdk-17-jdk; "
+                    "elif command -v dnf >/dev/null 2>&1; then sudo dnf install -y java-17-openjdk-devel; "
+                    "elif command -v yum >/dev/null 2>&1; then sudo yum install -y java-17-openjdk-devel; "
+                    "else echo 'No supported Linux package manager found for Java'; exit 1; fi",
+                ]],
+            },
+            "code_exec_dotnet": {
+                "label": "Install .NET SDK 8",
+                "notes": "Uses the official dotnet-install script to install the SDK into the current user profile.",
+                "commands": [[
+                    "bash",
+                    "-lc",
+                    "set -e; mkdir -p \"$HOME/.dotnet\"; "
+                    "curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh; "
+                    "bash /tmp/dotnet-install.sh --channel 8.0 --install-dir \"$HOME/.dotnet\"",
+                ]],
+            },
+            "test_runner_dotnet_test": {
+                "label": "Install .NET SDK 8",
+                "notes": "dotnet test is included with the .NET SDK.",
+                "commands": [[
+                    "bash",
+                    "-lc",
+                    "set -e; mkdir -p \"$HOME/.dotnet\"; "
+                    "curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh; "
+                    "bash /tmp/dotnet-install.sh --channel 8.0 --install-dir \"$HOME/.dotnet\"",
+                ]],
+            },
+        }
+        if tool_id in linux:
+            return linux[tool_id]
 
     pip_tools = {
         "test_runner_pytest": {
@@ -202,11 +332,20 @@ def _check_tool_availability(check_command: str | None) -> dict[str, Any]:
             "output": "",
         }
     try:
+        env = os.environ.copy()
+        home = Path.home()
+        extra_paths = [
+            str(home / ".dotnet"),
+            str(home / ".cargo" / "bin"),
+            str(home / ".local" / "bin"),
+        ]
+        env["PATH"] = os.pathsep.join([*extra_paths, env.get("PATH", "")])
         completed = subprocess.run(
             check_command,
             capture_output=True,
             text=True,
             shell=True,
+            env=env,
             timeout=_TOOL_CHECK_TIMEOUT_SECONDS,
             check=False,
         )
