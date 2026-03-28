@@ -56,22 +56,36 @@ class DeployManager:
             "last_error": None,
             "last_run_by": None,
             "log_tail": [],
+            "log_cleared_at": None,
         }
+
+    def _normalize_state(self, raw: Any) -> dict[str, Any]:
+        if not isinstance(raw, dict):
+            return self._default_state()
+        merged = self._default_state()
+        merged.update(raw)
+        if not isinstance(merged.get("log_tail"), list):
+            merged["log_tail"] = []
+        return merged
 
     def _load_state(self) -> dict[str, Any]:
         if not self._status_path.exists():
             return self._default_state()
         try:
             raw = json.loads(self._status_path.read_text(encoding="utf-8"))
-            if not isinstance(raw, dict):
-                return self._default_state()
-            merged = self._default_state()
-            merged.update(raw)
-            if not isinstance(merged.get("log_tail"), list):
-                merged["log_tail"] = []
-            return merged
+            return self._normalize_state(raw)
         except Exception:
             return self._default_state()
+
+    def _refresh_state_from_disk(self) -> None:
+        if not self._status_path.exists():
+            self._state = self._default_state()
+            return
+        try:
+            raw = json.loads(self._status_path.read_text(encoding="utf-8"))
+            self._state = self._normalize_state(raw)
+        except Exception:
+            self._state = self._default_state()
 
     def _save_state(self) -> None:
         self._status_path.write_text(
@@ -89,8 +103,10 @@ class DeployManager:
 
     def clear_log(self) -> None:
         with self._lock:
+            self._refresh_state_from_disk()
             self._state["log_tail"] = []
             self._state["log_updated_at"] = _utc_now()
+            self._state["log_cleared_at"] = self._state["log_updated_at"]
             self._save_state()
 
     def _run_git(self, args: list[str]) -> tuple[str | None, str | None]:
@@ -152,6 +168,7 @@ class DeployManager:
 
     def status(self, refresh_remote: bool = False) -> dict[str, Any]:
         with self._lock:
+            self._refresh_state_from_disk()
             local_commit = self._current_commit()
             remote_commit, remote_error = self._origin_main_commit(refresh_remote)
             deployed_commit = self._state.get("deployed_commit")
@@ -181,6 +198,7 @@ class DeployManager:
 
     def start(self, requested_by: str) -> tuple[bool, str]:
         with self._lock:
+            self._refresh_state_from_disk()
             if self._thread and self._thread.is_alive():
                 return False, "Deploy already running."
             gate = self._deploy_gate()
@@ -198,6 +216,7 @@ class DeployManager:
     def _run_deploy(self, requested_by: str) -> None:
         run_cmd = os.environ.get("NEXUSAI_DEPLOY_RUN_CMD", "").strip()
         with self._lock:
+            self._refresh_state_from_disk()
             self._state["state"] = "running"
             self._state["run_id"] = str(uuid.uuid4())
             self._state["started_at"] = _utc_now()
@@ -205,6 +224,8 @@ class DeployManager:
             self._state["last_error"] = None
             self._state["last_run_by"] = requested_by
             self._state["log_tail"] = []
+            self._state["log_cleared_at"] = None
+            self._save_state()
             self._append_log(f"deploy: started run_id={self._state['run_id']}")
             self._append_log(f"deploy: requested_by={requested_by}")
             self._append_log("deploy: strategy=bluegreen")

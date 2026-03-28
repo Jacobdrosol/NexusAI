@@ -64,6 +64,22 @@ run_switch_command() {
   fi
 }
 
+remove_legacy_dashboard_bindings() {
+  if [ -f "docker-compose.yml" ]; then
+    LEGACY_DASHBOARD_ID="$(docker compose $CORE_COMPOSE_ARGS ps -q dashboard 2>/dev/null || true)"
+    if [ -n "$LEGACY_DASHBOARD_ID" ]; then
+      echo "[deploy] removing legacy dashboard service that binds port 5000"
+      docker compose $CORE_COMPOSE_ARGS rm -sf dashboard || true
+    fi
+  fi
+
+  EXISTING_GATEWAY_ID="$(docker ps -aq -f name=^nexus-dashboard-gateway$ 2>/dev/null || true)"
+  if [ -n "$EXISTING_GATEWAY_ID" ]; then
+    echo "[deploy] removing existing dashboard gateway container"
+    docker rm -f nexus-dashboard-gateway >/dev/null 2>&1 || true
+  fi
+}
+
 rollback_on_error() {
   RC=$?
   if [ "$RC" -ne 0 ]; then
@@ -133,6 +149,7 @@ echo "[deploy] current color: $CURRENT_COLOR"
 echo "[deploy] candidate color: $NEXT_COLOR"
 
 if [ "$GATEWAY_RECREATE" = "1" ]; then
+  remove_legacy_dashboard_bindings
   echo "[deploy] recreating dashboard gateway"
   docker compose $COMPOSE_ARGS up -d --force-recreate dashboard_gateway
 else

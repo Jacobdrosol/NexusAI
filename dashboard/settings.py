@@ -919,8 +919,9 @@ def deploy_run():
 @login_required
 def deploy_log_clear():
     _require_admin()
-    DeployManager.instance().clear_log()
-    return jsonify({"status": "ok"})
+    manager = DeployManager.instance()
+    manager.clear_log()
+    return jsonify({"status": "ok", "deploy_status": manager.status(refresh_remote=False)})
 
 
 # ---------------------------------------------------------------------------

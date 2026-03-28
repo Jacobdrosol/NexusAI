@@ -41,6 +41,22 @@ def test_deploy_status_endpoint_returns_payload(dashboard_client):
     assert "log_updated_at" in data
 
 
+def test_deploy_status_endpoint_reloads_latest_log_from_disk(dashboard_client):
+    from dashboard.deploy_manager import DeployManager
+
+    _login_admin(dashboard_client)
+    manager = DeployManager.instance()
+    with manager._lock:
+        manager._state["log_tail"] = ["persisted deploy log"]
+        manager._save_state()
+        manager._state["log_tail"] = []
+
+    resp = dashboard_client.get("/api/settings/deploy/status")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["log_tail"] == ["persisted deploy log"]
+
+
 def test_deploy_run_endpoint_blocked_without_explicit_enable(dashboard_client):
     _login_admin(dashboard_client)
     resp = dashboard_client.post("/api/settings/deploy/run")
@@ -51,8 +67,16 @@ def test_deploy_run_endpoint_blocked_without_explicit_enable(dashboard_client):
 
 
 def test_deploy_log_clear_endpoint_returns_ok(dashboard_client):
+    from dashboard.deploy_manager import DeployManager
+
     _login_admin(dashboard_client)
+    manager = DeployManager.instance()
+    with manager._lock:
+        manager._state["log_tail"] = ["stale deploy log"]
+        manager._save_state()
+
     resp = dashboard_client.post("/api/settings/deploy/log/clear")
     assert resp.status_code == 200
     data = resp.get_json()
     assert data["status"] == "ok"
+    assert data["deploy_status"]["log_tail"] == []

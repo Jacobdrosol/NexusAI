@@ -622,8 +622,12 @@ function clearDeployLog() {
       showToast('Failed to clear deploy log', false);
       return;
     }
-    document.getElementById('deploy-log').textContent = 'No deploy activity yet.';
-    document.getElementById('deploy-log-updated').textContent = 'just now';
+    if (res.data.deploy_status) {
+      renderDeployStatus(res.data.deploy_status);
+    } else {
+      document.getElementById('deploy-log').textContent = 'No deploy activity yet.';
+      document.getElementById('deploy-log-updated').textContent = 'just now';
+    }
     showToast('Deploy log cleared', true);
   })
   .catch(function(e){ showToast('Network error: ' + e, false); });

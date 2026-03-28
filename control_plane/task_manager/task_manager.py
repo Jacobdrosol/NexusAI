@@ -1832,24 +1832,24 @@ def _generated_assignment_languages(paths: List[str]) -> List[str]:
     return languages
 
 
-def _filter_assignment_languages_to_repo_runtime(languages: List[str], root: Path) -> List[str]:
-    repo_languages = _assignment_repo_runtime_languages(root)
+def _filter_assignment_languages_to_repo_runtime(languages: List[str], root: Path, *, allowed_extra: List[str] | None = None) -> List[str]:
+    repo_languages = _assignment_repo_runtime_languages(root, allowed_extra=allowed_extra)
     if not repo_languages:
         return languages
     return [language for language in languages if language in repo_languages]
 
 
-def _assignment_execution_language(*, applied_paths: List[str], test_files: List[str], root: Path) -> str:
-    languages = _assignment_execution_languages(applied_paths=applied_paths, test_files=test_files, root=root)
+def _assignment_execution_language(*, applied_paths: List[str], test_files: List[str], root: Path, allowed_extra: List[str] | None = None) -> str:
+    languages = _assignment_execution_languages(applied_paths=applied_paths, test_files=test_files, root=root, allowed_extra=allowed_extra)
     if languages:
         return languages[0]
-    repo_languages = _assignment_repo_runtime_languages(root)
+    repo_languages = _assignment_repo_runtime_languages(root, allowed_extra=allowed_extra)
     if repo_languages:
         return repo_languages[0]
     return "python"
 
 
-def _assignment_execution_languages(*, applied_paths: List[str], test_files: List[str], root: Path) -> List[str]:
+def _assignment_execution_languages(*, applied_paths: List[str], test_files: List[str], root: Path, allowed_extra: List[str] | None = None) -> List[str]:
     # Language detection prioritises test files so that a single-language test suite is not
     # overridden by source files written in a different language from the same workspace
     # (e.g. .cs source files should not push Python test files onto dotnet test).
@@ -1875,8 +1875,8 @@ def _assignment_execution_languages(*, applied_paths: List[str], test_files: Lis
     if any(p.endswith((".cpp", ".cc", ".cxx", ".hpp", ".h")) for p in primary):
         languages.append("cpp")
     if languages:
-        return _filter_assignment_languages_to_repo_runtime(languages, root=root)
-    repo_languages = _assignment_repo_runtime_languages(root)
+        return _filter_assignment_languages_to_repo_runtime(languages, root=root, allowed_extra=allowed_extra)
+    repo_languages = _assignment_repo_runtime_languages(root, allowed_extra=allowed_extra)
     if repo_languages:
         return repo_languages
     return ["python"]
@@ -4267,10 +4267,27 @@ class TaskManager:
 
         usage_parts: List[Dict[str, Any]] = []
         command_results: List[Dict[str, Any]] = []
+        # Allow additional runtimes from context (e.g., TypeScript for multi-language content)
+        allowed_extra: List[str] = []
+        context_items = payload.get("context_items") or []
+        if isinstance(context_items, list):
+            for item in context_items:
+                item_text = str(item or "").lower()
+                # Detect runtime hints from context
+                if "typescript" in item_text or "node" in item_text:
+                    if "node" not in allowed_extra:
+                        allowed_extra.append("node")
+                if "javascript" in item_text:
+                    if "node" not in allowed_extra:
+                        allowed_extra.append("node")
+                if "python" in item_text:
+                    if "python" not in allowed_extra:
+                        allowed_extra.append("python")
         languages = _assignment_execution_languages(
             applied_paths=applied_paths,
             test_files=test_files,
             root=root,
+            allowed_extra=allowed_extra or None,
         )
         if not languages:
             raise _TaskExecutionFailure(
