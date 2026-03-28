@@ -10,6 +10,7 @@ data/*.log
 data/*.db
 data/active_color.txt
 data/deploy_status.json
+data/tool_installs/
 data/nginx/
 data.backup.*/
 .venv/
