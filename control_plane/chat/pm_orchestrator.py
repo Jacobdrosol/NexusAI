@@ -736,11 +736,62 @@ class PMOrchestrator:
         ]
         latest_cycle_anchor = max(cycle_entry_tasks, key=_task_cycle_token) if cycle_entry_tasks else None
         latest_cycle_anchor_token = _task_cycle_token(latest_cycle_anchor) if latest_cycle_anchor is not None else None
-        latest_cycle_tasks = [
+
+        # Compute initial latest_cycle_tasks using timestamp-based anchor.
+        initial_latest_cycle_tasks = [
             task
             for task in final_tasks
             if latest_cycle_anchor_token is None or _task_cycle_token(task) >= latest_cycle_anchor_token
         ]
+
+        # Identify downstream stages that require explicit join triggers.
+        downstream_stage_ids = {"pm-database-engineer", "pm-ui-tester", "pm-final-qc"}
+
+        # Collect tasks from earlier cycles that are downstream stages and terminal,
+        # but ONLY if they are from the same workflow attempt (not a new forward cycle).
+        # This handles the case where a backward trigger (e.g., tester fail → coder retry)
+        # causes the latest_cycle_anchor to shift forward, but downstream tasks from the
+        # same workflow branch should still count.
+        #
+        # We exclude tasks from forward-triggered new cycles (e.g., QC pass → PM rerun)
+        # because those validate different deliverables. A forward cycle is identified by:
+        # - The latest cycle anchor has a parent_task_id pointing to a COMPLETED task
+        #   (meaning it was triggered forward from a completed upstream, not as a retry)
+        #
+        # For backward-triggered retries, the parent_task_id points to a FAILED task,
+        # and earlier downstream tasks should count toward stage completion.
+
+        def _is_forward_cycle_anchor(anchor_task: Task) -> bool:
+            """Check if this anchor started a new forward cycle (not a retry)."""
+            if anchor_task.metadata is None:
+                return False
+            parent_id = anchor_task.metadata.parent_task_id
+            if not parent_id:
+                return False
+            # Find the parent task
+            parent_task = next((t for t in final_tasks if t.id == parent_id), None)
+            if parent_task is None:
+                return False
+            # If parent completed successfully, this is a forward-triggered new cycle
+            return str(parent_task.status or "").strip().lower() == "completed"
+
+        include_earlier_downstream = True
+        if latest_cycle_anchor is not None:
+            include_earlier_downstream = not _is_forward_cycle_anchor(latest_cycle_anchor)
+
+        earlier_cycle_downstream_tasks: List[Task] = []
+        if include_earlier_downstream:
+            for task in final_tasks:
+                if task in initial_latest_cycle_tasks:
+                    continue
+                bot_id = str(task.bot_id or "").strip()
+                if bot_id not in downstream_stage_ids:
+                    continue
+                if str(task.status or "").strip().lower() not in self._TERMINAL_TASK_STATUSES:
+                    continue
+                earlier_cycle_downstream_tasks.append(task)
+
+        latest_cycle_tasks = list(initial_latest_cycle_tasks) + earlier_cycle_downstream_tasks
         latest_cycle_observed_bot_ids: List[str] = []
         for task in latest_cycle_tasks:
             bot_id = str(task.bot_id or "").strip()
@@ -786,11 +837,29 @@ class PMOrchestrator:
             )
         ]
         workflow_complete = ((not terminal_stage_id) or terminal_stage_terminal) and deliverables_complete
+
+        # Compute all observed bot IDs across ALL tasks (not just latest cycle)
+        all_observed_bot_ids: List[str] = []
+        for task in final_tasks:
+            bot_id = str(task.bot_id or "").strip()
+            if bot_id and bot_id not in all_observed_bot_ids:
+                all_observed_bot_ids.append(bot_id)
+
         missing_stages = [
             stage_id
             for stage_id in stage_order
             if stage_id and stage_id not in latest_cycle_observed_bot_ids
         ]
+
+        # Classify missing stages: never triggered vs from earlier cycle
+        never_triggered_stages: List[str] = []
+        from_earlier_cycle_stages: List[str] = []
+        for stage_id in missing_stages:
+            if stage_id in all_observed_bot_ids:
+                from_earlier_cycle_stages.append(stage_id)
+            else:
+                never_triggered_stages.append(stage_id)
+
         # For docs-only runs, distinguish intentionally excluded stages from truly missing ones.
         # DB and UI stages are legitimately omitted when the request has no DB/UI scope.
         # Detect docs-only and DB/UI scope from the original instruction in task payloads.
@@ -859,6 +928,10 @@ class PMOrchestrator:
                 f"{', '.join(latest_cycle_observed_bot_ids) if latest_cycle_observed_bot_ids else 'none'}"
             )
             lines.append(f"Missing stages: {', '.join(missing_stages)}")
+            if never_triggered_stages:
+                lines.append(f"  Never triggered: {', '.join(never_triggered_stages)}")
+            if from_earlier_cycle_stages:
+                lines.append(f"  From earlier cycle (before re-plan): {', '.join(from_earlier_cycle_stages)}")
             workflow_policy_codes.extend(f"missing_downstream_stage:{stage_id}" for stage_id in missing_stages)
         if skipped_stages:
             lines.append(f"Skipped stages: {', '.join(skipped_stages)}")
@@ -910,7 +983,10 @@ class PMOrchestrator:
             "produced_deliverables": produced_repo_files,
             "missing_deliverables": missing_deliverables,
             "observed_bot_ids": latest_cycle_observed_bot_ids,
+            "all_observed_bot_ids": all_observed_bot_ids,
             "missing_stages": missing_stages,
+            "never_triggered_stages": never_triggered_stages,
+            "from_earlier_cycle_stages": from_earlier_cycle_stages,
             "skipped_stages": skipped_stages,
             "intentionally_excluded_stages": intentionally_excluded_stages,
             "intentionally_skipped_stages": intentionally_skipped_stages,
