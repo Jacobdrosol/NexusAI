@@ -241,7 +241,10 @@ def create_app() -> Flask:
 
         secret_key = (os.environ.get("NEXUSAI_SECRET_KEY", "") or "").strip()
         cp_token = (os.environ.get("CONTROL_PLANE_API_TOKEN", "") or "").strip()
-        cp_url = (os.environ.get("CONTROL_PLANE_URL", "") or "").strip()
+        cp_url = (
+            str(getattr(cp, "base_url", "") or "").strip()
+            or (os.environ.get("CONTROL_PLANE_URL", "") or "").strip()
+        )
         dashboard_secret_ok = bool(secret_key and secret_key != "dev-secret-change-in-production")
         cp_token_ok = bool(cp_token)
         dashboard_cloud_policy = (os.environ.get("NEXUSAI_CLOUD_CONTEXT_POLICY", "") or "").strip().lower()

@@ -3,6 +3,7 @@ set -eu
 
 echo "[deploy] starting blue/green deploy runner"
 COMPOSE_PROJECT_NAME="${NEXUSAI_COMPOSE_PROJECT_NAME:-nexusai}"
+export COMPOSE_PROJECT_NAME
 COMPOSE_ARGS="-p $COMPOSE_PROJECT_NAME -f docker-compose.bluegreen.yml"
 CORE_COMPOSE_ARGS="-p $COMPOSE_PROJECT_NAME -f docker-compose.yml"
 STOP_PREVIOUS_COLOR="${NEXUSAI_STOP_PREVIOUS_COLOR:-0}"
@@ -126,6 +127,23 @@ wait_for_control_plane_health() {
   done
 }
 
+wait_for_dashboard_control_plane_health() {
+  DASHBOARD_SERVICE="$1"
+  ATTEMPTS=0
+  while true; do
+    if docker compose $COMPOSE_ARGS exec -T "$DASHBOARD_SERVICE" sh -lc "python -c \"import os, urllib.request; base=(os.environ.get('CONTROL_PLANE_URL') or 'http://control_plane:8000').rstrip('/'); resp=urllib.request.urlopen(base + '/health', timeout=5); body=resp.read().decode('utf-8', 'ignore'); import sys; sys.exit(0 if 'ok' in body else 1)\""; then
+      return 0
+    fi
+    ATTEMPTS=$((ATTEMPTS + 1))
+    if [ "$ATTEMPTS" -ge 30 ]; then
+      echo "[deploy] $DASHBOARD_SERVICE cannot reach the control plane"
+      docker compose $COMPOSE_ARGS logs --tail=120 "$DASHBOARD_SERVICE" || true
+      exit 7
+    fi
+    sleep 2
+  done
+}
+
 echo "[deploy] fetching latest main"
 git fetch origin main
 git checkout main
@@ -180,6 +198,9 @@ until docker compose $COMPOSE_ARGS exec -T dashboard_gateway sh -lc "wget -q -O 
   sleep 2
 done
 echo "[deploy] candidate dashboard_$NEXT_COLOR is healthy"
+
+echo "[deploy] verifying candidate dashboard can reach control plane"
+wait_for_dashboard_control_plane_health "dashboard_$NEXT_COLOR"
 
 export NEXUSAI_TARGET_COLOR="$NEXT_COLOR"
 export NEXUSAI_PREVIOUS_COLOR="$CURRENT_COLOR"

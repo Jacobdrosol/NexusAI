@@ -1,6 +1,9 @@
 networks:
   nexus-bluegreen:
     driver: bridge
+  nexus-net:
+    external: true
+    name: ${COMPOSE_PROJECT_NAME:-nexusai}_nexus-net
 
 services:
   dashboard_gateway:
@@ -24,12 +27,15 @@ services:
       context: .
       dockerfile: dashboard/Dockerfile
     env_file: .env
+    environment:
+      CONTROL_PLANE_URL: ${CONTROL_PLANE_URL:-http://control_plane:8000}
     volumes:
       - ./data:/app/data
       - ./.git:/app/.git
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - nexus-bluegreen
+      - nexus-net
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
       interval: 30s
@@ -43,12 +49,15 @@ services:
       context: .
       dockerfile: dashboard/Dockerfile
     env_file: .env
+    environment:
+      CONTROL_PLANE_URL: ${CONTROL_PLANE_URL:-http://control_plane:8000}
     volumes:
       - ./data:/app/data
       - ./.git:/app/.git
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - nexus-bluegreen
+      - nexus-net
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
       interval: 30s
