@@ -346,6 +346,7 @@ _CITATION_TAIL_RATIO = 0.75
 _CITATION_DENSITY_WINDOW = 900
 _UNCITED_MAX_LINES = 60
 _UNCITED_MAX_CHARS = 6000
+_UNCITED_MAX_LINE_CHARS = 1800
 _DEFAULT_GROUNDED_FALLBACK = (
     "Actionable next steps from verified context:\n"
     "1. Build a gap list: current controllers/schemas vs required lesson-block capabilities.\n"
@@ -721,6 +722,8 @@ def _condense_uncited_grounded_output(text: str) -> str:
             continue
         if _TOOL_ARG_LINE_RE.search(line) and any(token in line for token in ("*", "/", "\\", ".cs", ".razor", ".py", ".ts")):
             continue
+        if len(line) > _UNCITED_MAX_LINE_CHARS:
+            line = line[:_UNCITED_MAX_LINE_CHARS].rstrip() + "..."
         kept.append(line)
         if len(kept) >= _UNCITED_MAX_LINES:
             break
@@ -1425,6 +1428,69 @@ def _filter_assignment_context_messages(
     ]
 
 
+def _assignment_transcript_middle_priority(role: str, content: str) -> int:
+    lowered = str(content or "").lower()
+    score = 0
+    if role == "user":
+        score += 5
+    elif role == "assistant":
+        score += 2
+    if any(marker in lowered for marker in ("must", "should", "need", "avoid", "do not", "don't", "prefer", "required", "deliver")):
+        score += 2
+    if any(marker in lowered for marker in ("docs/", ".md", "desmos", "api", "in house", "in-house", "scope", "constraint", "roadmap", "plan")):
+        score += 2
+    if any(marker in lowered for marker in ("because", "risk", "evidence", "repo", "workspace", "research")):
+        score += 1
+    return score
+
+
+def _select_assignment_transcript_excerpt(
+    rendered_entries: List[str],
+    transcript_entries: List[tuple[str, str]],
+    *,
+    max_messages: int,
+    max_chars: int,
+    head_messages: int,
+) -> List[str]:
+    if not rendered_entries:
+        return []
+
+    tail_messages = min(6, max(2, max_messages // 5))
+    kept_indices: List[int] = []
+    kept_index_set: set[int] = set()
+
+    def _keep(index: int) -> None:
+        if index < 0 or index >= len(rendered_entries) or index in kept_index_set:
+            return
+        kept_index_set.add(index)
+        kept_indices.append(index)
+
+    for index in range(min(head_messages, len(rendered_entries))):
+        _keep(index)
+    for index in range(max(0, len(rendered_entries) - tail_messages), len(rendered_entries)):
+        _keep(index)
+
+    ranked: List[tuple[int, int]] = []
+    for index, (role, content) in enumerate(transcript_entries):
+        if index in kept_index_set:
+            continue
+        score = _assignment_transcript_middle_priority(role, content)
+        if score > 0:
+            ranked.append((score, index))
+    ranked.sort(key=lambda item: (-item[0], item[1]))
+
+    for _, index in ranked:
+        if len(kept_indices) >= max_messages:
+            break
+        candidate_indices = sorted([*kept_indices, index])
+        candidate_lines = [rendered_entries[item] for item in candidate_indices]
+        if len("\n".join(candidate_lines)) > max_chars:
+            continue
+        _keep(index)
+
+    return [rendered_entries[index] for index in sorted(kept_indices)]
+
+
 def _build_assignment_conversation_transcript(
     messages: List[ChatMessage],
     *,
@@ -1462,25 +1528,22 @@ def _build_assignment_conversation_transcript(
             "conversation_transcript_strategy": "full",
         }
 
-    kept: List[str] = []
-    for item in rendered_entries[:head_messages]:
-        kept.append(item)
+    kept = _select_assignment_transcript_excerpt(
+        rendered_entries,
+        transcript_entries,
+        max_messages=max_messages,
+        max_chars=max_chars,
+        head_messages=head_messages,
+    )
     omitted_count = max(0, len(rendered_entries) - len(kept))
-    tail: List[str] = []
-    used_chars = sum(len(item) + 1 for item in kept)
-    for item in reversed(rendered_entries[head_messages:]):
-        item_cost = len(item) + 1
-        if len(kept) + len(tail) >= max_messages or used_chars + item_cost > max_chars:
-            break
-        tail.append(item)
-        used_chars += item_cost
-    tail.reverse()
-    omitted_count = max(0, len(rendered_entries) - len(kept) - len(tail))
     if omitted_count > 0:
-        kept.append(f"... ({omitted_count} earlier chat message(s) omitted for size) ...")
-    kept.extend(tail)
+        insert_at = min(head_messages, len(kept))
+        kept.insert(insert_at, f"... ({omitted_count} earlier chat message(s) omitted for size) ...")
+    compacted = "\n".join(kept)
+    if len(compacted) > max_chars:
+        compacted = compacted[: max(0, max_chars - 32)].rstrip() + "\n... [TRUNCATED]"
     return {
-        "conversation_transcript": "\n".join(kept),
+        "conversation_transcript": compacted,
         "conversation_message_count": len(transcript_entries),
         "conversation_transcript_strategy": "excerpt",
     }

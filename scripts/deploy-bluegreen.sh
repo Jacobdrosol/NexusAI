@@ -127,6 +127,24 @@ wait_for_control_plane_health() {
   done
 }
 
+ensure_active_dashboard_available() {
+  ACTIVE_SERVICE="dashboard_$CURRENT_COLOR"
+  echo "[deploy] ensuring active dashboard backend is available: $ACTIVE_SERVICE"
+  docker compose $COMPOSE_ARGS --profile "$CURRENT_COLOR" up -d "$ACTIVE_SERVICE"
+
+  ATTEMPTS=0
+  TARGET_HOST="nexus-dashboard-$CURRENT_COLOR"
+  until docker run --rm --network "${COMPOSE_PROJECT_NAME}_nexus-bluegreen" alpine:latest sh -lc "wget -q -O - http://$TARGET_HOST:5000/health | grep -q '\"status\"'"; do
+    ATTEMPTS=$((ATTEMPTS + 1))
+    if [ "$ATTEMPTS" -ge 30 ]; then
+      echo "[deploy] active dashboard backend $ACTIVE_SERVICE failed health check"
+      docker compose $COMPOSE_ARGS logs --tail=120 "$ACTIVE_SERVICE" || true
+      exit 8
+    fi
+    sleep 2
+  done
+}
+
 wait_for_dashboard_control_plane_health() {
   DASHBOARD_SERVICE="$1"
   ATTEMPTS=0
@@ -165,6 +183,8 @@ fi
 
 echo "[deploy] current color: $CURRENT_COLOR"
 echo "[deploy] candidate color: $NEXT_COLOR"
+
+ensure_active_dashboard_available
 
 if [ "$GATEWAY_RECREATE" = "1" ]; then
   remove_legacy_dashboard_bindings

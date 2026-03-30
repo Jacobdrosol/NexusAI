@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import json
 import logging
 import os
@@ -15,6 +16,12 @@ from shared.models import BackendConfig, BackendParams, Task, Worker
 from shared.settings_manager import SettingsManager
 
 logger = logging.getLogger(__name__)
+
+_PAYLOAD_CONTEXT_REDUCTION_TARGET_CHARS = 48000
+_ASSIGNMENT_TRANSCRIPT_REDUCTION_CHARS = 6000
+_ARTIFACT_CONTENT_REDUCTION_CHARS = 1800
+_LONG_STRING_REDUCTION_CHARS = 1200
+_JOIN_RESULT_LIST_MAX_ITEMS = 12
 
 
 def _backend_failure_message(task_id: str, last_error: Exception, attempts: list[str] | None = None) -> str:
@@ -158,6 +165,10 @@ def _inject_system_prompt(system_prompt: str | None, payload: Any) -> Any:
         existing = str(messages[0].get("content") or "").strip()
         if existing == prompt:
             return messages
+        if existing and existing in prompt:
+            updated = [dict(message) for message in messages]
+            updated[0]["content"] = prompt
+            return updated
     return [{"role": "system", "content": prompt}, *messages]
 
 
@@ -673,6 +684,394 @@ def _truncate_text(value: str, limit: int) -> str:
     return text[:limit].rstrip() + "\n...[TRUNCATED]"
 
 
+def _serialized_payload_chars(value: Any) -> int:
+    try:
+        return len(json.dumps(value, ensure_ascii=False))
+    except Exception:
+        return len(str(value or ""))
+
+
+def _compact_text_with_edges(
+    value: Any,
+    *,
+    limit: int,
+    head_chars: int | None = None,
+    tail_chars: int | None = None,
+) -> str:
+    text = str(value or "").strip()
+    if limit <= 0 or len(text) <= limit:
+        return text
+    if head_chars is None:
+        head_chars = max(120, int(limit * 0.65))
+    if tail_chars is None:
+        tail_chars = max(80, limit - head_chars - 64)
+    head_chars = max(40, head_chars)
+    tail_chars = max(24, tail_chars)
+    if head_chars + tail_chars >= max(0, limit - 32):
+        tail_chars = max(24, limit - head_chars - 32)
+    omitted_chars = max(0, len(text) - head_chars - tail_chars)
+    head = text[:head_chars].rstrip()
+    tail = text[-tail_chars:].lstrip() if tail_chars > 0 else ""
+    omission = f"\n...[{omitted_chars} chars omitted for context]...\n"
+    compacted = head + omission + tail
+    if len(compacted) <= limit + 64:
+        return compacted
+    return compacted[: limit + 64].rstrip()
+
+
+def _assignment_transcript_priority_terms(scope: dict[str, Any], payload: dict[str, Any]) -> list[str]:
+    raw_terms: list[str] = []
+    for item in (
+        scope.get("request_text"),
+        payload.get("assignment_request"),
+        scope.get("conversation_brief"),
+    ):
+        raw_terms.extend(re.findall(r"[A-Za-z0-9][A-Za-z0-9_.:/-]{3,}", str(item or "").lower()))
+    focus_topics = scope.get("focus_topics")
+    if isinstance(focus_topics, list):
+        raw_terms.extend(str(item or "").strip().lower() for item in focus_topics if str(item or "").strip())
+    ordered: list[str] = []
+    seen: set[str] = set()
+    stop_words = {
+        "assignment",
+        "build",
+        "chat",
+        "docs",
+        "documentation",
+        "feature",
+        "help",
+        "implementation",
+        "math",
+        "message",
+        "messages",
+        "plan",
+        "please",
+        "project",
+        "task",
+        "that",
+        "this",
+        "user",
+        "with",
+    }
+    for item in raw_terms:
+        normalized = str(item or "").strip().lower()
+        if len(normalized) < 4 or normalized in stop_words or normalized in seen:
+            continue
+        seen.add(normalized)
+        ordered.append(normalized)
+        if len(ordered) >= 18:
+            break
+    return ordered
+
+
+def _reduce_assignment_transcript_for_context(
+    transcript: Any,
+    *,
+    scope: dict[str, Any],
+    payload: dict[str, Any],
+    max_chars: int = _ASSIGNMENT_TRANSCRIPT_REDUCTION_CHARS,
+    max_lines: int = 24,
+    head_lines: int = 4,
+    tail_lines: int = 4,
+) -> tuple[str, str]:
+    text = str(transcript or "").strip()
+    if not text:
+        return "", ""
+    if len(text) <= max_chars:
+        return text, ""
+
+    rendered_lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not rendered_lines:
+        return _compact_text_with_edges(text, limit=max_chars), "assignment_scope.conversation_transcript"
+
+    priority_terms = _assignment_transcript_priority_terms(scope, payload)
+    kept_indices: list[int] = []
+    kept_index_set: set[int] = set()
+
+    def _keep(index: int) -> None:
+        if index < 0 or index >= len(rendered_lines) or index in kept_index_set:
+            return
+        kept_index_set.add(index)
+        kept_indices.append(index)
+
+    for index in range(min(head_lines, len(rendered_lines))):
+        _keep(index)
+    for index in range(max(0, len(rendered_lines) - tail_lines), len(rendered_lines)):
+        _keep(index)
+
+    ranked: list[tuple[int, int]] = []
+    for index, line in enumerate(rendered_lines):
+        if index in kept_index_set:
+            continue
+        lowered = line.lower()
+        score = 0
+        if lowered.startswith("user:"):
+            score += 5
+        elif lowered.startswith("assistant:"):
+            score += 2
+        if any(marker in lowered for marker in ("must", "should", "need", "avoid", "do not", "don't", "prefer", "required", "deliver")):
+            score += 2
+        score += min(4, sum(1 for term in priority_terms if term and term in lowered))
+        if score > 0:
+            ranked.append((score, index))
+
+    ranked.sort(key=lambda item: (-item[0], item[1]))
+    for _, index in ranked:
+        if len(kept_indices) >= max_lines:
+            break
+        projected = [rendered_lines[item] for item in sorted([*kept_indices, index])]
+        candidate = "\n".join(projected)
+        if len(candidate) > max_chars:
+            continue
+        _keep(index)
+
+    compacted_lines = [rendered_lines[index] for index in sorted(kept_indices)]
+    omitted_count = max(0, len(rendered_lines) - len(compacted_lines))
+    if omitted_count > 0:
+        insert_at = min(head_lines, len(compacted_lines))
+        compacted_lines.insert(insert_at, f"... ({omitted_count} chat line(s) omitted for context) ...")
+    compacted = "\n".join(compacted_lines)
+    if len(compacted) > max_chars:
+        compacted = _compact_text_with_edges(compacted, limit=max_chars)
+    return compacted, "assignment_scope.conversation_transcript"
+
+
+def _compact_string_fields_for_context(value: Any, *, string_limit: int = _LONG_STRING_REDUCTION_CHARS) -> Any:
+    if isinstance(value, str):
+        return _compact_text_with_edges(value, limit=string_limit)
+    if isinstance(value, list):
+        return [_compact_string_fields_for_context(item, string_limit=string_limit) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _compact_string_fields_for_context(item, string_limit=string_limit)
+            for key, item in value.items()
+        }
+    return value
+
+
+def _reduce_artifact_entry_for_context(item: Any) -> Any:
+    if not isinstance(item, dict):
+        return _compact_string_fields_for_context(item, string_limit=_LONG_STRING_REDUCTION_CHARS)
+    reduced = dict(item)
+    content = reduced.get("content")
+    if content is not None:
+        reduced["content"] = _compact_text_with_edges(
+            content,
+            limit=_ARTIFACT_CONTENT_REDUCTION_CHARS,
+            head_chars=1100,
+            tail_chars=400,
+        )
+        if str(content or "").strip() != str(reduced["content"] or "").strip():
+            reduced["content_truncated_for_context"] = True
+    for key, value in list(reduced.items()):
+        if key == "content":
+            continue
+        reduced[key] = _compact_string_fields_for_context(value, string_limit=400)
+    return reduced
+
+
+def _reduce_artifact_list_for_context(value: Any) -> tuple[Any, bool]:
+    if not isinstance(value, list):
+        return value, False
+    reduced = [_reduce_artifact_entry_for_context(item) for item in value]
+    return reduced, reduced != value
+
+
+def _summarize_result_dict_for_context(result: dict[str, Any]) -> dict[str, Any]:
+    preferred_keys = [
+        "status",
+        "outcome",
+        "failure_type",
+        "summary",
+        "findings",
+        "evidence",
+        "implementation_plan",
+        "implementation_workstreams",
+        "artifacts",
+        "handoff_notes",
+        "risks",
+        "recommendations",
+        "questions",
+        "notes",
+    ]
+    reduced: dict[str, Any] = {}
+    for key in preferred_keys:
+        if key not in result:
+            continue
+        value = result.get(key)
+        if key == "artifacts":
+            reduced[key], _ = _reduce_artifact_list_for_context(value)
+            continue
+        if isinstance(value, list):
+            items = value[:_JOIN_RESULT_LIST_MAX_ITEMS]
+            reduced[key] = [_compact_string_fields_for_context(item, string_limit=500) for item in items]
+            continue
+        if isinstance(value, dict):
+            reduced[key] = _compact_string_fields_for_context(value, string_limit=600)
+            continue
+        reduced[key] = _compact_string_fields_for_context(value, string_limit=600)
+    if not reduced:
+        return _compact_string_fields_for_context(result, string_limit=500)
+    return reduced
+
+
+def _looks_like_join_branch_payload(item: Any) -> bool:
+    if not isinstance(item, dict):
+        return False
+    return any(
+        key in item
+        for key in (
+            "source_result",
+            "source_task_id",
+            "title",
+            "instruction",
+            "deliverables",
+            "upstream_artifacts",
+            "fanout_branch_key",
+        )
+    )
+
+
+def _summarize_join_branch_payload_for_context(item: Any) -> Any:
+    if not isinstance(item, dict):
+        return _compact_string_fields_for_context(item, string_limit=500)
+    preferred_keys = [
+        "source_task_id",
+        "source_bot_id",
+        "title",
+        "instruction",
+        "role_hint",
+        "step_kind",
+        "path",
+        "deliverables",
+        "acceptance_criteria",
+        "quality_gates",
+        "evidence_requirements",
+        "upstream_failure_type",
+        "upstream_handoff_notes",
+        "upstream_artifacts",
+        "workstream",
+        "fanout_branch_key",
+        "source_result",
+    ]
+    reduced: dict[str, Any] = {}
+    for key in preferred_keys:
+        if key not in item:
+            continue
+        value = item.get(key)
+        if key in {"upstream_artifacts"}:
+            reduced[key], _ = _reduce_artifact_list_for_context(value)
+            continue
+        if key == "source_result" and isinstance(value, dict):
+            reduced[key] = _summarize_result_dict_for_context(value)
+            continue
+        if isinstance(value, list):
+            reduced[key] = [_compact_string_fields_for_context(entry, string_limit=400) for entry in value[:12]]
+            continue
+        if isinstance(value, dict):
+            reduced[key] = _compact_string_fields_for_context(value, string_limit=450)
+            continue
+        reduced[key] = _compact_string_fields_for_context(value, string_limit=500)
+    return reduced or _compact_string_fields_for_context(item, string_limit=500)
+
+
+def _reduce_join_payload_fields_for_context(payload: dict[str, Any]) -> list[str]:
+    reductions: list[str] = []
+    join_count = int(payload.get("join_count") or 0)
+    for key, value in list(payload.items()):
+        if not isinstance(value, list) or not value:
+            continue
+        if key == "join_results":
+            reduced = [
+                _summarize_result_dict_for_context(item)
+                if isinstance(item, dict)
+                else _compact_string_fields_for_context(item, string_limit=500)
+                for item in value[: max(_JOIN_RESULT_LIST_MAX_ITEMS, join_count)]
+            ]
+            if reduced != value:
+                payload[key] = reduced
+                reductions.append(key)
+            continue
+        if key == "join_task_ids":
+            continue
+        if join_count > 1 and len(value) == join_count and any(_looks_like_join_branch_payload(item) for item in value):
+            reduced = [_summarize_join_branch_payload_for_context(item) for item in value]
+            if reduced != value:
+                payload[key] = reduced
+                reductions.append(key)
+    return reductions
+
+
+def _looks_like_join_context_payload(payload: dict[str, Any]) -> bool:
+    join_count = int(payload.get("join_count") or 0)
+    if join_count > 1:
+        return True
+    for key in ("research_payloads", "research_branches", "join_results", "upstream_artifacts"):
+        value = payload.get(key)
+        if isinstance(value, list) and len(value) > 1:
+            if key == "upstream_artifacts":
+                return True
+            if any(_looks_like_join_branch_payload(item) or isinstance(item, dict) for item in value):
+                return True
+    return False
+
+
+def _reduce_payload_for_context_limits(payload: Any) -> Any:
+    if not isinstance(payload, dict):
+        return payload
+    if not _looks_like_join_context_payload(payload):
+        return payload
+
+    original_chars = _serialized_payload_chars(payload)
+    if original_chars <= _PAYLOAD_CONTEXT_REDUCTION_TARGET_CHARS:
+        return payload
+
+    reduced_payload = copy.deepcopy(payload)
+    reduced_fields: list[str] = []
+
+    scope = reduced_payload.get("assignment_scope")
+    if isinstance(scope, dict):
+        reduced_transcript, transcript_field = _reduce_assignment_transcript_for_context(
+            scope.get("conversation_transcript"),
+            scope=scope,
+            payload=reduced_payload,
+        )
+        if transcript_field and reduced_transcript != scope.get("conversation_transcript"):
+            scope["conversation_transcript"] = reduced_transcript
+            strategy = str(scope.get("conversation_transcript_strategy") or "").strip().lower()
+            if strategy in {"", "full"}:
+                scope["conversation_transcript_strategy"] = "context_reduced_excerpt"
+            else:
+                scope["conversation_transcript_strategy"] = f"{strategy}+context_reduced"
+            reduced_fields.append(transcript_field)
+
+    upstream_artifacts, upstream_changed = _reduce_artifact_list_for_context(reduced_payload.get("upstream_artifacts"))
+    if upstream_changed:
+        reduced_payload["upstream_artifacts"] = upstream_artifacts
+        reduced_fields.append("upstream_artifacts")
+
+    source_result = reduced_payload.get("source_result")
+    if isinstance(source_result, dict) and "artifacts" in source_result:
+        reduced_artifacts, changed = _reduce_artifact_list_for_context(source_result.get("artifacts"))
+        if changed:
+            source_result["artifacts"] = reduced_artifacts
+            reduced_fields.append("source_result.artifacts")
+
+    reduced_fields.extend(_reduce_join_payload_fields_for_context(reduced_payload))
+
+    final_chars = _serialized_payload_chars(reduced_payload)
+    if final_chars >= original_chars:
+        return payload
+
+    reduced_payload["context_reduction"] = {
+        "applied": True,
+        "original_payload_chars": original_chars,
+        "reduced_payload_chars": _serialized_payload_chars(reduced_payload),
+        "reduced_fields": reduced_fields,
+    }
+    return reduced_payload
+
+
 def _static_connection_context_prompt(rows: list[Any], config: dict[str, Any]) -> str:
     if not rows:
         return ""
@@ -1053,6 +1452,7 @@ def _repo_output_policy_prompt_suffix(bot: Any, payload: Any = None) -> str:
 def _prepare_payload_for_backend(bot: Any, backend: BackendConfig, payload: Any, *, task: Task | None = None) -> Any:
     if backend.type == "custom":
         return payload
+    payload = _reduce_payload_for_context_limits(payload)
     return _inject_system_prompt(
         _prepare_system_prompt(bot, bot_id=getattr(task, "bot_id", None), payload=payload, task=task),
         payload,

@@ -203,7 +203,11 @@ async def test_scheduler_injects_bot_system_prompt_into_payload():
     result = await scheduler.schedule(task)
 
     assert isinstance(result["payload"], list)
-    assert result["payload"][0] == {"role": "system", "content": "Return only strict JSON."}
+    system_message = result["payload"][0]
+    assert system_message["role"] == "system"
+    assert system_message["content"].startswith("Return only strict JSON.")
+    assert "Execution policy:" in system_message["content"]
+    assert "validation-only or planning-only" in system_message["content"]
     assert result["payload"][1]["role"] == "user"
     assert '"instruction": "build outline"' in result["payload"][1]["content"]
 
@@ -544,10 +548,11 @@ async def test_scheduler_does_not_duplicate_existing_system_prompt():
     scheduler._dispatch_backend = fake_dispatch  # type: ignore[method-assign]
     result = await scheduler.schedule(task)
 
-    assert result["payload"] == [
-        {"role": "system", "content": "Return only strict JSON."},
-        {"role": "user", "content": "build outline"},
-    ]
+    assert result["payload"][0]["role"] == "system"
+    assert result["payload"][0]["content"].startswith("Return only strict JSON.")
+    assert result["payload"][0]["content"].count("Return only strict JSON.") == 1
+    assert "Execution policy:" in result["payload"][0]["content"]
+    assert result["payload"][1] == {"role": "user", "content": "build outline"}
 
 
 @pytest.mark.anyio
@@ -668,7 +673,9 @@ async def test_scheduler_applies_bot_input_transform_before_system_prompt():
     scheduler._dispatch_backend = fake_dispatch  # type: ignore[method-assign]
     result = await scheduler.schedule(task)
 
-    assert result["payload"][0] == {"role": "system", "content": "Return only strict JSON."}
+    assert result["payload"][0]["role"] == "system"
+    assert result["payload"][0]["content"].startswith("Return only strict JSON.")
+    assert "Execution policy:" in result["payload"][0]["content"]
     transformed = json.loads(result["payload"][1]["content"])
     assert transformed == {
         "instruction": "Build outline",
@@ -781,7 +788,12 @@ async def test_scheduler_input_transform_can_render_nested_templates():
     scheduler._dispatch_backend = fake_dispatch  # type: ignore[method-assign]
     result = await scheduler.schedule(task)
 
-    assert result["payload"] == {
+    assert isinstance(result["payload"], list)
+    assert result["payload"][0]["role"] == "system"
+    assert "Execution policy:" in result["payload"][0]["content"]
+    assert "repo file artifacts" in result["payload"][0]["content"]
+    transformed = json.loads(result["payload"][1]["content"])
+    assert transformed == {
         "connection_actions": [
             {
                 "operation_id": "createCourse",
@@ -1232,6 +1244,135 @@ async def test_scheduler_appends_docs_only_assignment_scope_to_system_prompt():
     assert "Requested output shape: a roadmap" in system_message
     assert "only cross-link to markdown docs that actually exist" in system_message
     assert "Every downstream stage must validate its output against the original assignment scope" in system_message
+
+
+def test_prepare_payload_for_backend_reduces_oversized_join_payload_deterministically():
+    from control_plane.scheduler.scheduler import _prepare_payload_for_backend
+
+    bot = Bot(
+        id="pm-engineer",
+        name="PM Engineer",
+        role="engineer",
+        system_prompt="Plan the implementation workstreams.",
+        backends=[BackendConfig(type="cloud_api", provider="openai", model="gpt-4o-mini")],
+    )
+    backend = bot.backends[0]
+    long_research = (
+        "# Research Summary\n\n"
+        "Keep the implementation in house and avoid the Desmos API.\n\n"
+        + ("Evidence line about docs/blocks and research synthesis.\n" * 120)
+    )
+    payload = {
+        "title": "Engineer join",
+        "instruction": "Synthesize the joined research outputs into implementation workstreams.",
+        "assignment_request": "Build documentation only in docs/blocks for the mathematics blocks and avoid external APIs.",
+        "join_count": 3,
+        "assignment_scope": {
+            "request_text": "Build documentation only in docs/blocks for the mathematics blocks and avoid external APIs.",
+            "conversation_brief": "Prior user intent 1: Build as much as possible in house.",
+            "conversation_transcript": "\n".join(
+                [
+                    "user: Help me plan the mathematics blocks from algebra through multivariable calculus.",
+                    "assistant: I will outline the research threads.",
+                    "user: Build as much as possible in house and avoid the Desmos API.",
+                ]
+                + [
+                    f"assistant: Filler planning context {index} " + ("detail " * 80)
+                    for index in range(80)
+                ]
+            ),
+            "conversation_transcript_strategy": "full",
+            "focus_topics": ["algebra", "multivariable calculus", "desmos"],
+        },
+        "research_payloads": [
+            {
+                "source_task_id": f"research-{index}",
+                "title": f"Research branch {index}",
+                "instruction": "Inspect the repository and identify documentation requirements.",
+                "deliverables": [f"docs/blocks/research-{index}.md"],
+                "source_result": {
+                    "status": "complete",
+                    "findings": [f"Finding {index}: keep the stack in house."],
+                    "evidence": [long_research],
+                    "artifacts": [
+                        {
+                            "path": f"docs/blocks/research-{index}.md",
+                            "content": long_research,
+                        }
+                    ],
+                    "handoff_notes": "Use these findings for the pm-engineer synthesis.",
+                },
+            }
+            for index in range(3)
+        ],
+        "join_results": [
+            {
+                "status": "complete",
+                "findings": [f"Finding {index}: avoid the Desmos API."],
+                "evidence": [long_research],
+                "artifacts": [
+                    {
+                        "path": f"docs/blocks/research-{index}.md",
+                        "content": long_research,
+                    }
+                ],
+            }
+            for index in range(3)
+        ],
+        "upstream_artifacts": [
+            {
+                "path": f"docs/blocks/research-{index}.md",
+                "content": long_research,
+            }
+            for index in range(3)
+        ],
+    }
+
+    prepared = _prepare_payload_for_backend(bot, backend, payload)
+
+    assert isinstance(prepared, list)
+    reduced_payload = json.loads(prepared[1]["content"])
+    assert reduced_payload["join_count"] == 3
+    assert len(reduced_payload["research_payloads"]) == 3
+    assert len(reduced_payload["join_results"]) == 3
+    assert len(reduced_payload["upstream_artifacts"]) == 3
+    assert reduced_payload["context_reduction"]["applied"] is True
+    assert "assignment_scope.conversation_transcript" in reduced_payload["context_reduction"]["reduced_fields"]
+    assert "upstream_artifacts" in reduced_payload["context_reduction"]["reduced_fields"]
+    assert "research_payloads" in reduced_payload["context_reduction"]["reduced_fields"]
+    assert reduced_payload["assignment_scope"]["conversation_transcript_strategy"] == "context_reduced_excerpt"
+    assert "multivariable calculus" in reduced_payload["assignment_scope"]["conversation_transcript"].lower()
+    assert "desmos" in reduced_payload["assignment_scope"]["conversation_transcript"].lower()
+    assert all(item.get("content_truncated_for_context") is True for item in reduced_payload["upstream_artifacts"])
+    assert len(prepared[1]["content"]) < len(json.dumps(payload, ensure_ascii=False))
+
+
+def test_prepare_payload_for_backend_preserves_small_non_join_payload():
+    from control_plane.scheduler.scheduler import _prepare_payload_for_backend
+
+    bot = Bot(
+        id="pm-engineer",
+        name="PM Engineer",
+        role="engineer",
+        system_prompt="Plan the implementation workstreams.",
+        backends=[BackendConfig(type="cloud_api", provider="openai", model="gpt-4o-mini")],
+    )
+    backend = bot.backends[0]
+    payload = {
+        "instruction": "Summarize the assignment.",
+        "assignment_request": "Write a short plan.",
+        "assignment_scope": {
+            "conversation_transcript": "user: Write a short plan.\nassistant: I can do that.",
+            "conversation_transcript_strategy": "full",
+        },
+        "upstream_artifacts": [{"path": "docs/summary.md", "content": "# Summary"}],
+    }
+
+    prepared = _prepare_payload_for_backend(bot, backend, payload)
+
+    assert isinstance(prepared, list)
+    parsed_payload = json.loads(prepared[1]["content"])
+    assert parsed_payload == payload
 
 
 @pytest.mark.anyio

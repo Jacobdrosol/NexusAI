@@ -530,8 +530,9 @@ async def test_assign_message_creates_task_graph_and_summary(cp_app):
             await asyncio.sleep(0.05)
 
         run_report = next(message for message in messages if str((message.get("metadata") or {}).get("mode") or "") == "pm_run_report")
-        assert "PM run passed." in str(run_report.get("content") or "")
-        assert run_report["metadata"]["run_status"] == "passed"
+        assert "PM run failed." in str(run_report.get("content") or "")
+        assert "missing_downstream_stage:pm-database-engineer" in str(run_report.get("content") or "")
+        assert run_report["metadata"]["run_status"] == "failed"
 
 
 @pytest.mark.anyio
@@ -873,6 +874,74 @@ async def test_assign_message_excludes_pm_workflow_messages_from_context_count(c
     )
     metadata = assign_message.metadata or {}
     assert int(metadata.get("assignment_context_message_count") or 0) == 2
+
+
+def test_build_assignment_conversation_transcript_prioritizes_user_intent_when_excerpting():
+    from control_plane.api.chat import _build_assignment_conversation_transcript
+    from shared.models import ChatMessage
+
+    messages = [
+        ChatMessage(
+            id="m-1",
+            conversation_id="conv-1",
+            role="user",
+            content="Help me plan the mathematics blocks from algebra through multivariable calculus.",
+            created_at="2026-03-29T00:00:00Z",
+        ),
+        ChatMessage(
+            id="m-2",
+            conversation_id="conv-1",
+            role="assistant",
+            content="I will outline the available research paths.",
+            created_at="2026-03-29T00:00:01Z",
+        ),
+    ]
+    for index in range(18):
+        messages.append(
+            ChatMessage(
+                id=f"filler-{index}",
+                conversation_id="conv-1",
+                role="assistant" if index % 2 else "user",
+                content=(
+                    f"Filler planning note {index}: "
+                    + ("editorial detail " * 50)
+                ),
+                created_at=f"2026-03-29T00:00:{index + 2:02d}Z",
+            )
+        )
+    messages.extend(
+        [
+            ChatMessage(
+                id="m-constraints",
+                conversation_id="conv-1",
+                role="user",
+                content="Build as much as possible in house, avoid the Desmos API, and keep the docs under docs/blocks.",
+                created_at="2026-03-29T00:01:00Z",
+            ),
+            ChatMessage(
+                id="m-last",
+                conversation_id="conv-1",
+                role="assistant",
+                content="Understood. I will preserve those constraints in the assignment context.",
+                created_at="2026-03-29T00:01:01Z",
+            ),
+        ]
+    )
+
+    transcript = _build_assignment_conversation_transcript(
+        messages,
+        max_messages=8,
+        max_chars=900,
+        head_messages=1,
+    )
+
+    rendered = str(transcript.get("conversation_transcript") or "").lower()
+    assert transcript.get("conversation_transcript_strategy") == "excerpt"
+    assert "multivariable calculus" in rendered
+    assert "desmos api" in rendered
+    assert "docs/blocks" in rendered
+    assert "omitted for size" in rendered
+    assert rendered.count("filler planning note") < 6
 
 
 @pytest.mark.anyio
