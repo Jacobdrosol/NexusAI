@@ -1181,6 +1181,81 @@ def test_pm_workstream_route_classifier_preserves_docs_only_lane_even_with_datab
     assert route["target_bot_id"] == "pm-coder"
 
 
+def test_pm_assignment_workstream_budget_caps_oversized_engineer_plan_and_preserves_key_lanes():
+    from control_plane.task_manager.task_manager import TaskManager
+
+    tm = TaskManager(scheduler=object(), db_path=":memory:")
+
+    payloads = [
+        {"title": "API submission endpoint", "instruction": "Extend the API controller for presigned URL submission."},
+        {"title": "Security scanning layer", "instruction": "Add virus scanning and file validation."},
+        {"title": "AI grading worker", "instruction": "Build the background worker and queue polling flow."},
+        {"title": "Webhook scheduler trigger", "instruction": "Create webhook and scheduler trigger handling."},
+        {"title": "Metrics and alerts", "instruction": "Add monitoring, metrics, and alert coverage."},
+        {"title": "Fallback operational logging", "instruction": "Add extra logging and follow-up diagnostics."},
+        {"title": "Second generic backend branch", "instruction": "Implement another backend branch for the same feature."},
+    ]
+    routes = [{"route_kind": "generic_coder"} for _ in payloads]
+
+    trimmed_payloads, trimmed_routes, budget = tm._pm_assignment_workstream_budget(payloads, routes)
+
+    assert len(trimmed_payloads) == 5
+    assert len(trimmed_routes) == 5
+    assert [payload["title"] for payload in trimmed_payloads] == [
+        "API submission endpoint",
+        "Security scanning layer",
+        "AI grading worker",
+        "Webhook scheduler trigger",
+        "Metrics and alerts",
+    ]
+    assert budget["reason"] == "pm_assignment_workstream_cap"
+    assert budget["original_count"] == 7
+    assert budget["kept_count"] == 5
+    assert budget["preserved_lanes"] == ["api", "security", "worker", "trigger", "operations"]
+
+
+def test_pm_assignment_workstream_budget_preserves_specialist_routes():
+    from control_plane.task_manager.task_manager import TaskManager
+
+    tm = TaskManager(scheduler=object(), db_path=":memory:")
+
+    payloads = [
+        {"title": "Database migration", "instruction": "Create the migration."},
+        {"title": "Backend API extension", "instruction": "Extend the API controller."},
+        {"title": "Frontend admin page", "instruction": "Build the Razor admin page."},
+        {"title": "Webhook scheduler trigger", "instruction": "Create the callback and scheduler."},
+        {"title": "Security scanning layer", "instruction": "Add virus scanning and file validation."},
+        {"title": "AI grading worker", "instruction": "Build the worker."},
+    ]
+    routes = [
+        {"route_kind": "database_specialist"},
+        {"route_kind": "generic_coder"},
+        {"route_kind": "ui_coder_validation"},
+        {"route_kind": "generic_coder"},
+        {"route_kind": "generic_coder"},
+        {"route_kind": "generic_coder"},
+    ]
+
+    trimmed_payloads, trimmed_routes, budget = tm._pm_assignment_workstream_budget(payloads, routes)
+
+    assert len(trimmed_payloads) == 5
+    assert [route["route_kind"] for route in trimmed_routes] == [
+        "database_specialist",
+        "generic_coder",
+        "ui_coder_validation",
+        "generic_coder",
+        "generic_coder",
+    ]
+    assert [payload["title"] for payload in trimmed_payloads] == [
+        "Database migration",
+        "Backend API extension",
+        "Frontend admin page",
+        "Webhook scheduler trigger",
+        "Security scanning layer",
+    ]
+    assert budget["preserved_lanes"][:4] == ["database", "api", "ui", "trigger"]
+
+
 @pytest.mark.anyio
 async def test_pm_assignment_research_fanout_is_capped_to_three_by_default(tmp_path):
     from control_plane.task_manager.task_manager import TaskManager

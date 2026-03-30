@@ -796,9 +796,62 @@ _PM_WORKSTREAM_UI_KEYWORDS = (
     "user interface",
     "user-facing",
 )
+_PM_WORKSTREAM_API_KEYWORDS = (
+    "api",
+    "endpoint",
+    "controller",
+    "route",
+    "swagger",
+    "openapi",
+    "presigned url",
+)
+_PM_WORKSTREAM_SECURITY_KEYWORDS = (
+    "virus",
+    "scan",
+    "scanner",
+    "security",
+    "validation",
+    "mime",
+    "file type",
+    "file-size",
+    "file size",
+    "quarantine",
+)
+_PM_WORKSTREAM_WORKER_KEYWORDS = (
+    "worker",
+    "queue",
+    "grading",
+    "poll",
+    "polling",
+    "consumer",
+    "background service",
+    "processor",
+)
+_PM_WORKSTREAM_TRIGGER_KEYWORDS = (
+    "webhook",
+    "scheduler",
+    "schedule",
+    "cron",
+    "callback",
+    "trigger",
+)
+_PM_WORKSTREAM_OPERATIONS_KEYWORDS = (
+    "monitor",
+    "monitoring",
+    "metrics",
+    "telemetry",
+    "instrumentation",
+    "observability",
+    "alert",
+    "alerts",
+    "logging",
+    "log",
+)
 
 _PM_ASSIGNMENT_RESEARCH_STEP_CAP = 3
 _PM_ASSIGNMENT_RESEARCH_STEP_SPLIT_CAP = 6
+_PM_ASSIGNMENT_WORKSTREAM_STEP_CAP = 5
+_PM_ASSIGNMENT_WORKSTREAM_STEP_SPLIT_CAP = 6
 _PM_ASSIGNMENT_RESEARCH_REPO_LANE_KEYWORDS = (
     "repo",
     "repository",
@@ -840,6 +893,18 @@ _PM_ASSIGNMENT_RESEARCH_SPLIT_MARKERS = (
     "slice ",
     "continuation",
     "follow-up",
+    "overflow",
+    "1/",
+    "2/",
+    "3/",
+)
+_PM_ASSIGNMENT_WORKSTREAM_SPLIT_MARKERS = (
+    "part ",
+    "chunk ",
+    "batch ",
+    "shard ",
+    "segment ",
+    "slice ",
     "overflow",
     "1/",
     "2/",
@@ -5150,7 +5215,7 @@ class TaskManager:
                     branch_metadata = base_child_metadata
                     if isinstance(payload, dict):
                         if str(metadata.run_class or "").strip().lower() == "pm_assignment":
-                            repeat_limit = max(1, _settings_int("workflow_route_repeat_limit", 6))
+                            repeat_limit = max(1, _settings_int("workflow_route_repeat_limit", 3))
                             repeat_count = await self._workflow_route_repeat_count(task, payload_target_bot_id, payload)
                             if repeat_count >= repeat_limit:
                                 logger.warning(
@@ -5504,6 +5569,83 @@ class TaskManager:
                     parts.append(item)
         return "\n".join(parts).strip().lower()
 
+    def _pm_assignment_workstream_fanout_cap(self) -> Tuple[int, int]:
+        base_cap = max(1, _settings_int("pm_assignment_workstream_fanout_limit", _PM_ASSIGNMENT_WORKSTREAM_STEP_CAP))
+        split_cap = max(base_cap, _settings_int("pm_assignment_workstream_fanout_split_limit", _PM_ASSIGNMENT_WORKSTREAM_STEP_SPLIT_CAP))
+        return base_cap, split_cap
+
+    def _pm_assignment_workstream_is_split(self, payload: Dict[str, Any]) -> bool:
+        haystack = self._pm_workstream_routing_text(payload)
+        if any(marker in haystack for marker in _PM_ASSIGNMENT_WORKSTREAM_SPLIT_MARKERS):
+            return True
+        return re.search(r"\b(?:part|chunk|batch|shard|segment|slice)\s+\d+\b", haystack) is not None
+
+    def _pm_assignment_workstream_lane(self, payload: Dict[str, Any], route: Dict[str, Any]) -> str:
+        route_kind = str(route.get("route_kind") or "").strip()
+        if route_kind == "database_specialist":
+            return "database"
+        if route_kind == "ui_coder_validation":
+            return "ui"
+        haystack = self._pm_workstream_routing_text(payload)
+        if any(keyword in haystack for keyword in _PM_WORKSTREAM_API_KEYWORDS):
+            return "api"
+        if any(keyword in haystack for keyword in _PM_WORKSTREAM_SECURITY_KEYWORDS):
+            return "security"
+        if any(keyword in haystack for keyword in _PM_WORKSTREAM_WORKER_KEYWORDS):
+            return "worker"
+        if any(keyword in haystack for keyword in _PM_WORKSTREAM_TRIGGER_KEYWORDS):
+            return "trigger"
+        if any(keyword in haystack for keyword in _PM_WORKSTREAM_OPERATIONS_KEYWORDS):
+            return "operations"
+        return "generic"
+
+    def _pm_assignment_workstream_budget(
+        self,
+        payloads: List[Dict[str, Any]],
+        routes: List[Dict[str, Any]],
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], Optional[Dict[str, Any]]]:
+        original_count = len(payloads)
+        base_cap, split_cap = self._pm_assignment_workstream_fanout_cap()
+        if original_count <= base_cap:
+            return payloads, routes, None
+
+        split_required = any(self._pm_assignment_workstream_is_split(payload) for payload in payloads[base_cap:])
+        budget = split_cap if split_required else base_cap
+        if original_count <= budget:
+            return payloads, routes, None
+
+        selected_indexes: List[int] = []
+        seen_lanes: Set[str] = set()
+        preserved_lanes: List[str] = []
+        for index, (payload, route) in enumerate(zip(payloads, routes)):
+            lane = self._pm_assignment_workstream_lane(payload, route)
+            if lane == "generic" or lane in seen_lanes:
+                continue
+            selected_indexes.append(index)
+            seen_lanes.add(lane)
+            preserved_lanes.append(lane)
+            if len(selected_indexes) >= budget:
+                break
+        if len(selected_indexes) < budget:
+            for index in range(original_count):
+                if index in selected_indexes:
+                    continue
+                selected_indexes.append(index)
+                if len(selected_indexes) >= budget:
+                    break
+
+        selected_indexes.sort()
+        trimmed_payloads = [payloads[index] for index in selected_indexes]
+        trimmed_routes = [routes[index] for index in selected_indexes]
+        return trimmed_payloads, trimmed_routes, {
+            "applied": True,
+            "reason": "pm_assignment_workstream_cap",
+            "original_count": original_count,
+            "kept_count": len(trimmed_payloads),
+            "split_required": split_required,
+            "preserved_lanes": preserved_lanes,
+        }
+
     def _classify_pm_workstream_route(
         self,
         payload: Dict[str, Any],
@@ -5574,7 +5716,17 @@ class TaskManager:
             for payload in payloads
             if isinstance(payload, dict)
         ]
+        payloads, routes, workstream_budget = self._pm_assignment_workstream_budget(payloads, routes)
         if not routes or all(str(route.get("route_kind") or "") == "generic_coder" for route in routes):
+            if workstream_budget:
+                for payload in payloads:
+                    if not isinstance(payload, dict):
+                        continue
+                    payload["fanout_count"] = len(payloads)
+                    existing_budget = payload.get("pm_fanout_budget") if isinstance(payload.get("pm_fanout_budget"), dict) else {}
+                    merged_budget = dict(existing_budget)
+                    merged_budget.update(workstream_budget)
+                    payload["pm_fanout_budget"] = merged_budget
             return payloads
 
         global_tokens: List[str] = []
@@ -5616,6 +5768,12 @@ class TaskManager:
         for payload, route, branch_spec in zip(payloads, routes, branch_specs):
             if not isinstance(payload, dict):
                 continue
+            payload["fanout_count"] = len(payloads)
+            if workstream_budget:
+                existing_budget = payload.get("pm_fanout_budget") if isinstance(payload.get("pm_fanout_budget"), dict) else {}
+                merged_budget = dict(existing_budget)
+                merged_budget.update(workstream_budget)
+                payload["pm_fanout_budget"] = merged_budget
             payload["pm_routing_context"] = {
                 "dynamic": True,
                 "fanout_id": str(payload.get("fanout_id") or "").strip(),
