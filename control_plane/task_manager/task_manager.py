@@ -759,6 +759,94 @@ def _trigger_target_step_kind(bot_id: str) -> str:
     return mapping.get(normalized, "")
 
 
+_PM_WORKSTREAM_DATABASE_KEYWORDS = (
+    "database",
+    "db ",
+    " db",
+    "schema",
+    "migration",
+    "sql",
+    "table",
+    "query",
+    "index",
+    "postgres",
+    "postgresql",
+    "sqlite",
+    "mysql",
+    "entity framework",
+    "ef core",
+)
+
+_PM_WORKSTREAM_UI_KEYWORDS = (
+    "frontend",
+    "front-end",
+    "react",
+    "razor",
+    ".razor",
+    ".tsx",
+    ".jsx",
+    "blazor",
+    "component",
+    "page",
+    "screen",
+    "layout",
+    "view",
+    "ui ",
+    " ui",
+    "user interface",
+    "user-facing",
+)
+
+_PM_ASSIGNMENT_RESEARCH_STEP_CAP = 3
+_PM_ASSIGNMENT_RESEARCH_STEP_SPLIT_CAP = 6
+_PM_ASSIGNMENT_RESEARCH_REPO_LANE_KEYWORDS = (
+    "repo",
+    "repository",
+    "code",
+    "file",
+    "files",
+    "implementation",
+    "stack",
+    "runtime",
+)
+_PM_ASSIGNMENT_RESEARCH_DATA_LANE_KEYWORDS = (
+    "data",
+    "requirement",
+    "requirements",
+    "schema",
+    "database",
+    "state",
+    "context",
+    "acceptance",
+)
+_PM_ASSIGNMENT_RESEARCH_ONLINE_LANE_KEYWORDS = (
+    "online",
+    "external",
+    "docs",
+    "documentation",
+    "reference",
+    "references",
+    "standard",
+    "standards",
+    "current",
+    "latest",
+)
+_PM_ASSIGNMENT_RESEARCH_SPLIT_MARKERS = (
+    "part ",
+    "chunk ",
+    "batch ",
+    "shard ",
+    "segment ",
+    "slice ",
+    "continuation",
+    "follow-up",
+    "overflow",
+    "1/",
+    "2/",
+    "3/",
+)
+
+
 def _is_probable_test_file(value: str) -> bool:
     normalized = str(value or "").strip().replace("\\", "/")
     if not normalized:
@@ -4767,6 +4855,36 @@ class TaskManager:
             repeat_count += 1
         return repeat_count
 
+    async def _workflow_route_target_bot_repeat_count(
+        self,
+        source_task: Task,
+        target_bot_id: str,
+        payload: Any,
+    ) -> int:
+        metadata = source_task.metadata or TaskMetadata()
+        root_id = metadata.workflow_root_task_id or source_task.id
+        orchestration_id = str(metadata.orchestration_id or "").strip()
+        branch_identity = self._workflow_route_branch_identity(source_task, payload)
+
+        async with self._lock:
+            tasks = list(self._tasks.values())
+
+        repeat_count = 0
+        for candidate in tasks:
+            if candidate.bot_id != target_bot_id:
+                continue
+            candidate_meta = candidate.metadata or TaskMetadata()
+            if str(candidate_meta.source or "").strip().lower() != "bot_trigger":
+                continue
+            if (candidate_meta.workflow_root_task_id or candidate.id) != root_id:
+                continue
+            if str(candidate_meta.orchestration_id or "").strip() != orchestration_id:
+                continue
+            if self._workflow_route_branch_identity(candidate, candidate.payload) != branch_identity:
+                continue
+            repeat_count += 1
+        return repeat_count
+
     async def _record_workflow_loop_guard_stop(
         self,
         source_task: Task,
@@ -4901,6 +5019,14 @@ class TaskManager:
                 if not target_bot_id:
                     logger.warning("[TRIGGER] SKIP trigger=%s task=%s reason=target_bot_unresolved configured_target=%s", trigger.id, task.id, trigger.target_bot_id)
                     continue
+                if self._should_skip_dynamic_pm_trigger(task, target_bot_id=target_bot_id):
+                    logger.debug(
+                        "[TRIGGER] SKIP trigger=%s task=%s reason=dynamic_pm_stage_managed target=%s",
+                        trigger.id,
+                        task.id,
+                        target_bot_id,
+                    )
+                    continue
                 allowed_bot_ids = [
                     str(item).strip()
                     for item in (metadata.allowed_bot_ids or [])
@@ -4932,6 +5058,12 @@ class TaskManager:
                         )
                         continue
                 payloads = self._build_trigger_payloads(task, trigger)
+                payloads = await self._apply_dynamic_pm_workstream_routing(
+                    task,
+                    trigger,
+                    payloads,
+                    default_target_bot_id=target_bot_id,
+                )
                 if not payloads:
                     logger.warning("[TRIGGER] SKIP trigger=%s task=%s reason=no_payloads target=%s", trigger.id, task.id, target_bot_id)
                     await self._record_trigger_dispatch_skip(
@@ -4941,23 +5073,11 @@ class TaskManager:
                         details=self._describe_trigger_payload_skip(task, trigger),
                     )
                     continue
-                next_metadata = TaskMetadata(
-                    user_id=metadata.user_id if trigger.inherit_metadata else None,
-                    project_id=metadata.project_id if trigger.inherit_metadata else None,
-                    source="bot_trigger",
-                    priority=metadata.priority if trigger.inherit_metadata else None,
-                    conversation_id=metadata.conversation_id if trigger.inherit_metadata else None,
-                    orchestration_id=metadata.orchestration_id if trigger.inherit_metadata else None,
-                    pipeline_name=metadata.pipeline_name if trigger.inherit_metadata else None,
-                    pipeline_entry_bot_id=metadata.pipeline_entry_bot_id if trigger.inherit_metadata else None,
+                base_child_metadata = self._trigger_child_metadata(
+                    metadata,
                     parent_task_id=task.id,
                     trigger_rule_id=trigger.id,
-                    trigger_depth=trigger_depth + 1,
-                    workflow_root_task_id=metadata.workflow_root_task_id or task.id,
-                    root_pm_bot_id=metadata.root_pm_bot_id,
-                    allowed_bot_ids=list(allowed_bot_ids),
-                    workflow_graph_id=metadata.workflow_graph_id,
-                    run_class=metadata.run_class,
+                    inherit_metadata=bool(trigger.inherit_metadata),
                 )
                 is_fanout = bool(str(getattr(trigger, "fan_out_field", "") or "").strip())
                 is_join = self._trigger_uses_join(trigger)
@@ -4982,28 +5102,68 @@ class TaskManager:
                         trigger,
                         target_bot_id,
                         payloads,
-                        next_metadata,
+                        base_child_metadata,
                         compatible_join_triggers=compatible_join_triggers,
                     )
                     continue
                 for payload in payloads:
-                    branch_metadata = next_metadata
+                    payload_target_bot_id = (
+                        self._dynamic_pm_target_bot_id(payload, target_bot_id)
+                        if task.bot_id == "pm-engineer"
+                        else target_bot_id
+                    )
+                    if allowed_bot_ids and payload_target_bot_id not in allowed_bot_ids:
+                        message = (
+                            f"trigger target '{payload_target_bot_id}' is outside the orchestration allowlist for "
+                            f"workflow '{metadata.workflow_graph_id or metadata.orchestration_id or 'unknown'}'"
+                        )
+                        logger.warning(
+                            "[TRIGGER] SKIP trigger=%s task=%s reason=target_not_allowed target=%s",
+                            trigger.id,
+                            task.id,
+                            payload_target_bot_id,
+                        )
+                        await self._record_trigger_dispatch_error(
+                            source_task=task,
+                            trigger_id=str(getattr(trigger, "id", "") or ""),
+                            target_bot_id=str(payload_target_bot_id or ""),
+                            message=message,
+                        )
+                        continue
+                    if self._bot_registry is not None:
+                        try:
+                            await self._bot_registry.get(payload_target_bot_id)
+                        except Exception:
+                            logger.warning(
+                                "[TRIGGER] SKIP trigger=%s task=%s reason=target_bot_missing target=%s",
+                                trigger.id,
+                                task.id,
+                                payload_target_bot_id,
+                            )
+                            await self._record_trigger_dispatch_error(
+                                source_task=task,
+                                trigger_id=str(getattr(trigger, "id", "") or ""),
+                                target_bot_id=str(payload_target_bot_id or ""),
+                                message=f"trigger target bot '{payload_target_bot_id}' does not exist or is unavailable",
+                            )
+                            continue
+                    branch_metadata = base_child_metadata
                     if isinstance(payload, dict):
                         if str(metadata.run_class or "").strip().lower() == "pm_assignment":
                             repeat_limit = max(1, _settings_int("workflow_route_repeat_limit", 6))
-                            repeat_count = await self._workflow_route_repeat_count(task, target_bot_id, payload)
+                            repeat_count = await self._workflow_route_repeat_count(task, payload_target_bot_id, payload)
                             if repeat_count >= repeat_limit:
                                 logger.warning(
                                     "[TRIGGER] SKIP trigger=%s task=%s reason=workflow_loop_guard target=%s repeat_count=%s",
                                     trigger.id,
                                     task.id,
-                                    target_bot_id,
+                                    payload_target_bot_id,
                                     repeat_count,
                                 )
                                 await self._record_workflow_loop_guard_stop(
                                     source_task=task,
                                     trigger_id=str(getattr(trigger, "id", "") or ""),
-                                    target_bot_id=str(target_bot_id or ""),
+                                    target_bot_id=str(payload_target_bot_id or ""),
                                     branch_identity=self._workflow_route_branch_identity(task, payload),
                                     failure_type=self._workflow_route_failure_type(task),
                                     repeat_count=repeat_count,
@@ -5011,13 +5171,37 @@ class TaskManager:
                                     reason="route_repeat_limit",
                                 )
                                 continue
+                            target_repeat_count = await self._workflow_route_target_bot_repeat_count(
+                                task,
+                                payload_target_bot_id,
+                                payload,
+                            )
+                            if target_repeat_count >= repeat_limit:
+                                logger.warning(
+                                    "[TRIGGER] SKIP trigger=%s task=%s reason=workflow_target_repeat_limit target=%s repeat_count=%s",
+                                    trigger.id,
+                                    task.id,
+                                    payload_target_bot_id,
+                                    target_repeat_count,
+                                )
+                                await self._record_workflow_loop_guard_stop(
+                                    source_task=task,
+                                    trigger_id=str(getattr(trigger, "id", "") or ""),
+                                    target_bot_id=str(payload_target_bot_id or ""),
+                                    branch_identity=self._workflow_route_branch_identity(task, payload),
+                                    failure_type=self._workflow_route_failure_type(task),
+                                    repeat_count=target_repeat_count,
+                                    repeat_limit=repeat_limit,
+                                    reason="target_bot_repeat_limit",
+                                )
+                                continue
                         branch_step_id = self._fanout_step_id(task, trigger, payload)
                         if branch_step_id:
-                            existing = await self._find_task_by_step_id(branch_step_id, target_bot_id)
+                            existing = await self._find_task_by_step_id(branch_step_id, payload_target_bot_id)
                             if existing is not None and existing.status in {"queued", "running", "blocked", "completed"}:
                                 logger.debug("[TRIGGER] SKIP trigger=%s branch_step_id=%s reason=already_exists status=%s", trigger.id, branch_step_id, existing.status)
                                 continue
-                            branch_metadata = next_metadata.model_copy(update={"step_id": branch_step_id})
+                            branch_metadata = base_child_metadata.model_copy(update={"step_id": branch_step_id})
                         fanout_id = payload.get("fanout_id") if isinstance(payload, dict) else None
                         fanout_idx = payload.get("fanout_index") if isinstance(payload, dict) else None
                         if fanout_id is not None:
@@ -5027,10 +5211,10 @@ class TaskManager:
                                 task.id,
                                 fanout_id,
                                 fanout_idx,
-                                target_bot_id,
+                                payload_target_bot_id,
                             )
                     await self.create_task(
-                        bot_id=target_bot_id,
+                        bot_id=payload_target_bot_id,
                         payload=payload,
                         metadata=branch_metadata,
                     )
@@ -5047,6 +5231,16 @@ class TaskManager:
                     target_bot_id=str(getattr(trigger, "target_bot_id", "") or ""),
                     message=str(exc),
                 )
+        try:
+            await self._dispatch_dynamic_pm_supplemental_tasks(task)
+        except Exception as exc:
+            logger.exception("Dynamic PM supplemental dispatch failed for task %s", task.id)
+            await self._record_trigger_dispatch_error(
+                source_task=task,
+                trigger_id="pm-dynamic-supplemental",
+                target_bot_id="",
+                message=str(exc),
+            )
 
     def _bot_workflow(self, bot: Any) -> Any:
         workflow = getattr(bot, "workflow", None)
@@ -5177,9 +5371,41 @@ class TaskManager:
             )
         )
 
-    def _build_trigger_payload(self, task: Task, trigger: Any) -> Any:
-        payload_template = trigger.payload_template
-        target_bot_id = str(getattr(trigger, "target_bot_id", "") or "").strip()
+    def _trigger_child_metadata(
+        self,
+        metadata: TaskMetadata,
+        *,
+        parent_task_id: str,
+        trigger_rule_id: str,
+        step_id: str = "",
+        inherit_metadata: bool = True,
+    ) -> TaskMetadata:
+        allowed_bot_ids = [
+            str(item).strip()
+            for item in (metadata.allowed_bot_ids or [])
+            if str(item).strip()
+        ]
+        return TaskMetadata(
+            user_id=metadata.user_id if inherit_metadata else None,
+            project_id=metadata.project_id if inherit_metadata else None,
+            source="bot_trigger",
+            priority=metadata.priority if inherit_metadata else None,
+            conversation_id=metadata.conversation_id if inherit_metadata else None,
+            orchestration_id=metadata.orchestration_id if inherit_metadata else None,
+            pipeline_name=metadata.pipeline_name if inherit_metadata else None,
+            pipeline_entry_bot_id=metadata.pipeline_entry_bot_id if inherit_metadata else None,
+            parent_task_id=parent_task_id,
+            trigger_rule_id=trigger_rule_id,
+            trigger_depth=int(metadata.trigger_depth or 0) + 1,
+            workflow_root_task_id=metadata.workflow_root_task_id or parent_task_id,
+            root_pm_bot_id=metadata.root_pm_bot_id,
+            allowed_bot_ids=allowed_bot_ids,
+            workflow_graph_id=metadata.workflow_graph_id,
+            run_class=metadata.run_class,
+            step_id=step_id or None,
+        )
+
+    def _build_default_trigger_payload(self, task: Task, target_bot_id: str) -> Dict[str, Any]:
         target_role_hint = _trigger_target_role_hint(target_bot_id)
         target_step_kind = _trigger_target_step_kind(target_bot_id)
         base_payload: Dict[str, Any] = {
@@ -5195,6 +5421,413 @@ class TaskManager:
             base_payload["role_hint"] = target_role_hint
         if target_step_kind:
             base_payload["step_kind"] = target_step_kind
+        if isinstance(task.payload, dict):
+            upstream_payload = task.payload.get("source_payload")
+            if isinstance(upstream_payload, dict):
+                self._promote_trigger_context_fields(base_payload, upstream_payload)
+            self._promote_trigger_context_fields(base_payload, task.payload)
+            current_context_fields = (
+                "workstream",
+                "workstream_index",
+                "fanout_count",
+                "fanout_id",
+                "fanout_branch_key",
+                "fanout_expected_branch_keys",
+                "pm_routing_context",
+                "depends_on_steps",
+                "context_items",
+                "assignment_request",
+                "assignment_scope",
+                "global_acceptance_criteria",
+                "global_quality_gates",
+                "global_risks",
+                "project_id",
+                "conversation_id",
+                "orchestration_id",
+            )
+            for field in current_context_fields:
+                value = task.payload.get(field)
+                if _is_empty_contract_value(value):
+                    continue
+                base_payload[field] = value
+        if isinstance(task.result, dict):
+            self._promote_trigger_result_fields(base_payload, task.result)
+        return base_payload
+
+    def _payload_pm_routing_context(self, payload: Any) -> Dict[str, Any]:
+        if not isinstance(payload, dict):
+            return {}
+        for node in self._payload_source_chain(payload):
+            context = node.get("pm_routing_context")
+            if isinstance(context, dict):
+                return context
+        return {}
+
+    def _pm_dynamic_completion_token(self, branch_key: str, bot_id: str) -> str:
+        return f"{self._normalize_branch_token(branch_key, fallback='branch')}:{str(bot_id or '').strip()}"
+
+    def _pm_dynamic_progress_result(self, result: Any) -> bool:
+        if not isinstance(result, dict):
+            return False
+        outcome = str(result.get("outcome") or result.get("status") or "").strip().lower()
+        return outcome in {"pass", "skip", "completed", "complete"}
+
+    async def _load_pm_workstream_routing_policy(self, metadata: TaskMetadata) -> Dict[str, Any]:
+        policy: Dict[str, Any] = {
+            "root_pm_bot_id": str(metadata.root_pm_bot_id or "").strip(),
+            "consulted_root_system_prompt": False,
+        }
+        root_pm_bot_id = policy["root_pm_bot_id"]
+        if not root_pm_bot_id or self._bot_registry is None:
+            return policy
+        try:
+            root_pm_bot = await self._bot_registry.get(root_pm_bot_id)
+        except Exception:
+            return policy
+        prompt = str(getattr(root_pm_bot, "system_prompt", None) or "").strip().lower()
+        if prompt:
+            policy["consulted_root_system_prompt"] = True
+        return policy
+
+    def _pm_workstream_routing_text(self, payload: Dict[str, Any]) -> str:
+        parts: List[str] = []
+        workstream = payload.get("workstream")
+        for source in (payload, workstream if isinstance(workstream, dict) else None):
+            if not isinstance(source, dict):
+                continue
+            for field in ("title", "instruction", "test_strategy", "path"):
+                value = str(source.get(field) or "").strip()
+                if value:
+                    parts.append(value)
+            for field in ("scope", "deliverables", "acceptance_criteria"):
+                for item in _normalize_string_list(source.get(field)):
+                    parts.append(item)
+        return "\n".join(parts).strip().lower()
+
+    def _classify_pm_workstream_route(
+        self,
+        payload: Dict[str, Any],
+        *,
+        default_target_bot_id: str,
+        policy: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        if _payload_is_docs_only_request(payload):
+            return {
+                "route_kind": "generic_coder",
+                "target_bot_id": default_target_bot_id,
+                "branch_completion_bot_ids": ["pm-tester"],
+                "route_reason": "docs_only_passthrough",
+            }
+
+        haystack = self._pm_workstream_routing_text(payload)
+        consulted_prompt = bool(policy.get("consulted_root_system_prompt"))
+        if any(keyword in haystack for keyword in _PM_WORKSTREAM_DATABASE_KEYWORDS):
+            return {
+                "route_kind": "database_specialist",
+                "target_bot_id": "pm-database-engineer",
+                "branch_completion_bot_ids": ["pm-database-engineer"],
+                "route_reason": "system_prompt+keyword" if consulted_prompt else "keyword",
+            }
+        if any(keyword in haystack for keyword in _PM_WORKSTREAM_UI_KEYWORDS):
+            return {
+                "route_kind": "ui_coder_validation",
+                "target_bot_id": default_target_bot_id,
+                "branch_completion_bot_ids": ["pm-tester", "pm-ui-tester"],
+                "route_reason": "system_prompt+keyword" if consulted_prompt else "keyword",
+            }
+        return {
+            "route_kind": "generic_coder",
+            "target_bot_id": default_target_bot_id,
+            "branch_completion_bot_ids": ["pm-tester"],
+            "route_reason": "default",
+        }
+
+    async def _apply_dynamic_pm_workstream_routing(
+        self,
+        task: Task,
+        trigger: Any,
+        payloads: List[Any],
+        *,
+        default_target_bot_id: str,
+    ) -> List[Any]:
+        metadata = task.metadata or TaskMetadata()
+        if task.bot_id != "pm-engineer":
+            return payloads
+        if default_target_bot_id != "pm-coder":
+            return payloads
+        if not str(getattr(trigger, "fan_out_field", "") or "").strip():
+            return payloads
+        if str(metadata.run_class or "").strip().lower() != "pm_assignment" and not str(metadata.root_pm_bot_id or "").strip():
+            return payloads
+        if not payloads or not all(isinstance(payload, dict) for payload in payloads):
+            return payloads
+        if any(_payload_is_docs_only_request(payload) for payload in payloads if isinstance(payload, dict)):
+            return payloads
+
+        policy = await self._load_pm_workstream_routing_policy(metadata)
+        routes = [
+            self._classify_pm_workstream_route(
+                payload,
+                default_target_bot_id=default_target_bot_id,
+                policy=policy,
+            )
+            for payload in payloads
+            if isinstance(payload, dict)
+        ]
+        if not routes or all(str(route.get("route_kind") or "") == "generic_coder" for route in routes):
+            return payloads
+
+        global_tokens: List[str] = []
+        branch_specs: List[Dict[str, Any]] = []
+        for index, (payload, route) in enumerate(zip(payloads, routes)):
+            if not isinstance(payload, dict):
+                continue
+            branch_key = (
+                str(payload.get("fanout_branch_key") or "").strip()
+                or self._resolve_join_branch_key(payload)
+                or self._normalize_branch_token(index, fallback=f"branch-{index}")
+            )
+            completion_bot_ids = [
+                str(bot_id).strip()
+                for bot_id in (route.get("branch_completion_bot_ids") or [])
+                if str(bot_id).strip()
+            ]
+            completion_tokens = [
+                self._pm_dynamic_completion_token(branch_key, bot_id)
+                for bot_id in completion_bot_ids
+            ]
+            global_tokens.extend(completion_tokens)
+            branch_specs.append(
+                {
+                    "branch_key": branch_key,
+                    "completion_bot_ids": completion_bot_ids,
+                    "completion_tokens": completion_tokens,
+                }
+            )
+
+        deduped_global_tokens: List[str] = []
+        seen_tokens: Set[str] = set()
+        for token in global_tokens:
+            if token in seen_tokens:
+                continue
+            seen_tokens.add(token)
+            deduped_global_tokens.append(token)
+
+        for payload, route, branch_spec in zip(payloads, routes, branch_specs):
+            if not isinstance(payload, dict):
+                continue
+            payload["pm_routing_context"] = {
+                "dynamic": True,
+                "fanout_id": str(payload.get("fanout_id") or "").strip(),
+                "branch_key": branch_spec["branch_key"],
+                "route_kind": str(route.get("route_kind") or "").strip(),
+                "target_bot_id": str(route.get("target_bot_id") or default_target_bot_id).strip(),
+                "route_reason": str(route.get("route_reason") or "").strip(),
+                "branch_completion_bot_ids": list(branch_spec["completion_bot_ids"]),
+                "branch_completion_tokens": list(branch_spec["completion_tokens"]),
+                "global_completion_tokens": list(deduped_global_tokens),
+                "security_bot_id": "pm-security-reviewer",
+                "final_qc_bot_id": "pm-final-qc",
+                "consulted_root_system_prompt": bool(policy.get("consulted_root_system_prompt")),
+                "root_pm_bot_id": str(metadata.root_pm_bot_id or "").strip(),
+            }
+        return payloads
+
+    def _dynamic_pm_target_bot_id(self, payload: Any, default_target_bot_id: str) -> str:
+        context = self._payload_pm_routing_context(payload)
+        target_bot_id = str(context.get("target_bot_id") or "").strip()
+        return target_bot_id or default_target_bot_id
+
+    def _should_skip_dynamic_pm_trigger(self, task: Task, *, target_bot_id: str) -> bool:
+        context = self._payload_pm_routing_context(task.payload)
+        if not bool(context.get("dynamic")):
+            return False
+        global_stage = str(context.get("global_stage") or "").strip()
+        if task.bot_id == "pm-tester" and target_bot_id == "pm-security-reviewer":
+            return True
+        if task.bot_id == "pm-database-engineer" and target_bot_id == "pm-ui-tester":
+            return True
+        if task.bot_id == "pm-ui-tester" and target_bot_id == "pm-final-qc":
+            return True
+        if global_stage == "security_review" and task.bot_id == "pm-security-reviewer" and target_bot_id == "pm-database-engineer":
+            return True
+        return False
+
+    async def _collect_dynamic_pm_completion_task_map(
+        self,
+        task: Task,
+        context: Dict[str, Any],
+    ) -> Dict[str, Task]:
+        metadata = task.metadata or TaskMetadata()
+        root_id = metadata.workflow_root_task_id or task.id
+        fanout_id = str(context.get("fanout_id") or "").strip()
+        expected_tokens = {
+            str(token).strip()
+            for token in (context.get("global_completion_tokens") or [])
+            if str(token).strip()
+        }
+        matched: Dict[str, Task] = {}
+        for candidate in self._tasks.values():
+            candidate_meta = candidate.metadata or TaskMetadata()
+            if (candidate_meta.workflow_root_task_id or candidate.id) != root_id:
+                continue
+            if metadata.orchestration_id != candidate_meta.orchestration_id:
+                continue
+            if metadata.project_id != candidate_meta.project_id:
+                continue
+            if candidate.status != "completed" or not isinstance(candidate.payload, dict):
+                continue
+            candidate_context = self._payload_pm_routing_context(candidate.payload)
+            if not bool(candidate_context.get("dynamic")):
+                continue
+            if str(candidate_context.get("fanout_id") or "").strip() != fanout_id:
+                continue
+            if not self._pm_dynamic_progress_result(candidate.result):
+                continue
+            branch_key = str(candidate_context.get("branch_key") or "").strip()
+            if not branch_key:
+                continue
+            token = self._pm_dynamic_completion_token(branch_key, candidate.bot_id)
+            if token not in expected_tokens:
+                continue
+            existing = matched.get(token)
+            if existing is None or self._task_order_token(candidate) >= self._task_order_token(existing):
+                matched[token] = candidate
+        return matched
+
+    async def _create_dynamic_pm_ui_validation_task(self, task: Task, context: Dict[str, Any]) -> None:
+        metadata = task.metadata or TaskMetadata()
+        fanout_id = str(context.get("fanout_id") or "").strip()
+        branch_key = str(context.get("branch_key") or "").strip()
+        if not fanout_id or not branch_key:
+            return
+        step_id = f"pm-dynamic-ui:{fanout_id}:{branch_key}"
+        existing = await self._find_task_by_step_id(step_id, "pm-ui-tester")
+        if existing is not None and existing.status in {"queued", "blocked", "running", "completed"}:
+            return
+        payload = self._build_default_trigger_payload(task, "pm-ui-tester")
+        payload["title"] = str(payload.get("title") or f"Validate UI workstream {branch_key}")
+        payload["instruction"] = "Validate the completed UI workstream with user-facing UI checks."
+        payload["pm_routing_context"] = dict(context)
+        child_metadata = self._trigger_child_metadata(
+            metadata,
+            parent_task_id=task.id,
+            trigger_rule_id="pm-dynamic-ui-validation",
+            step_id=step_id,
+        )
+        await self.create_task(
+            bot_id="pm-ui-tester",
+            payload=payload,
+            metadata=child_metadata,
+        )
+
+    async def _maybe_create_dynamic_pm_global_security_task(
+        self,
+        task: Task,
+        context: Dict[str, Any],
+    ) -> None:
+        metadata = task.metadata or TaskMetadata()
+        expected_tokens = [
+            str(token).strip()
+            for token in (context.get("global_completion_tokens") or [])
+            if str(token).strip()
+        ]
+        fanout_id = str(context.get("fanout_id") or "").strip()
+        security_bot_id = str(context.get("security_bot_id") or "pm-security-reviewer").strip()
+        if not expected_tokens or not fanout_id or not security_bot_id:
+            return
+        matched_tasks = await self._collect_dynamic_pm_completion_task_map(task, context)
+        if any(token not in matched_tasks for token in expected_tokens):
+            return
+        step_id = f"pm-dynamic-security:{fanout_id}"
+        existing = await self._find_task_by_step_id(step_id, security_bot_id)
+        if existing is not None and existing.status in {"queued", "blocked", "running", "completed"}:
+            return
+        payload = self._build_default_trigger_payload(task, security_bot_id)
+        ordered_tasks = [matched_tasks[token] for token in expected_tokens]
+        payload["title"] = "Global security review"
+        payload["instruction"] = "Review all completed implementation and specialist branches before final QC."
+        payload["join_task_ids"] = [matched.id for matched in ordered_tasks]
+        payload["join_results"] = [matched.result for matched in ordered_tasks]
+        payload["join_items"] = [
+            {
+                "source_task_id": matched.id,
+                "source_bot_id": matched.bot_id,
+                "source_payload": matched.payload,
+                "source_result": matched.result,
+                "completion_token": token,
+            }
+            for token, matched in zip(expected_tokens, ordered_tasks)
+        ]
+        security_context = dict(context)
+        security_context["global_stage"] = "security_review"
+        payload["pm_routing_context"] = security_context
+        child_metadata = self._trigger_child_metadata(
+            metadata,
+            parent_task_id=task.id,
+            trigger_rule_id="pm-dynamic-security-gate",
+            step_id=step_id,
+        )
+        await self.create_task(
+            bot_id=security_bot_id,
+            payload=payload,
+            metadata=child_metadata,
+        )
+
+    async def _create_dynamic_pm_final_qc_task(self, task: Task, context: Dict[str, Any]) -> None:
+        metadata = task.metadata or TaskMetadata()
+        fanout_id = str(context.get("fanout_id") or "").strip()
+        final_qc_bot_id = str(context.get("final_qc_bot_id") or "pm-final-qc").strip()
+        if not fanout_id or not final_qc_bot_id:
+            return
+        step_id = f"pm-dynamic-final-qc:{fanout_id}"
+        existing = await self._find_task_by_step_id(step_id, final_qc_bot_id)
+        if existing is not None and existing.status in {"queued", "blocked", "running", "completed"}:
+            return
+        payload = self._build_default_trigger_payload(task, final_qc_bot_id)
+        payload["title"] = "Final quality control"
+        payload["instruction"] = "Perform the terminal final QC pass after implementation and security review are complete."
+        final_context = dict(context)
+        final_context["global_stage"] = "final_qc"
+        payload["pm_routing_context"] = final_context
+        child_metadata = self._trigger_child_metadata(
+            metadata,
+            parent_task_id=task.id,
+            trigger_rule_id="pm-dynamic-final-qc",
+            step_id=step_id,
+        )
+        await self.create_task(
+            bot_id=final_qc_bot_id,
+            payload=payload,
+            metadata=child_metadata,
+        )
+
+    async def _dispatch_dynamic_pm_supplemental_tasks(self, task: Task) -> None:
+        if task.status != "completed" or not isinstance(task.payload, dict):
+            return
+        context = self._payload_pm_routing_context(task.payload)
+        if not bool(context.get("dynamic")):
+            return
+        if not self._pm_dynamic_progress_result(task.result):
+            return
+        route_kind = str(context.get("route_kind") or "").strip()
+        global_stage = str(context.get("global_stage") or "").strip()
+        branch_completion_bot_ids = {
+            str(bot_id).strip()
+            for bot_id in (context.get("branch_completion_bot_ids") or [])
+            if str(bot_id).strip()
+        }
+        if task.bot_id == "pm-coder" and route_kind == "ui_coder_validation":
+            await self._create_dynamic_pm_ui_validation_task(task, context)
+        if task.bot_id in branch_completion_bot_ids:
+            await self._maybe_create_dynamic_pm_global_security_task(task, context)
+        if global_stage == "security_review" and task.bot_id == str(context.get("security_bot_id") or "pm-security-reviewer").strip():
+            await self._create_dynamic_pm_final_qc_task(task, context)
+
+    def _build_trigger_payload(self, task: Task, trigger: Any) -> Any:
+        payload_template = trigger.payload_template
+        target_bot_id = str(getattr(trigger, "target_bot_id", "") or "").strip()
+        base_payload = self._build_default_trigger_payload(task, target_bot_id)
         if isinstance(payload_template, dict):
             notes: list[str] = []
             transformed = _transform_template_value(payload_template, base_payload, notes)
@@ -5235,39 +5868,93 @@ class TaskManager:
             if notes and isinstance(transformed, dict):
                 transformed["trigger_template_notes"] = notes
             return transformed
-        if isinstance(task.payload, dict):
-            upstream_payload = task.payload.get("source_payload")
-            if isinstance(upstream_payload, dict):
-                self._promote_trigger_context_fields(base_payload, upstream_payload)
-            self._promote_trigger_context_fields(base_payload, task.payload)
-            # The current task's branch metadata must override inherited source_payload
-            # context so nested fan-out/join stages stay scoped to the active branch.
-            current_context_fields = (
-                "workstream",
-                "workstream_index",
-                "fanout_count",
-                "fanout_id",
-                "fanout_branch_key",
-                "fanout_expected_branch_keys",
-                "depends_on_steps",
-                "context_items",
-                "assignment_request",
-                "assignment_scope",
-                "global_acceptance_criteria",
-                "global_quality_gates",
-                "global_risks",
-                "project_id",
-                "conversation_id",
-                "orchestration_id",
-            )
-            for field in current_context_fields:
-                value = task.payload.get(field)
-                if _is_empty_contract_value(value):
-                    continue
-                base_payload[field] = value
-        if isinstance(task.result, dict):
-            self._promote_trigger_result_fields(base_payload, task.result)
         return base_payload
+
+    def _pm_assignment_research_fanout_cap(self) -> Tuple[int, int]:
+        base_cap = max(1, _settings_int("pm_assignment_research_fanout_limit", _PM_ASSIGNMENT_RESEARCH_STEP_CAP))
+        split_cap = max(base_cap, _settings_int("pm_assignment_research_fanout_split_limit", _PM_ASSIGNMENT_RESEARCH_STEP_SPLIT_CAP))
+        return base_cap, split_cap
+
+    def _pm_assignment_research_step_text(self, item: Dict[str, Any]) -> str:
+        parts = [
+            str(item.get("id") or "").strip(),
+            str(item.get("title") or "").strip(),
+            str(item.get("instruction") or "").strip(),
+        ]
+        return "\n".join(part for part in parts if part).lower()
+
+    def _pm_assignment_research_lane(self, item: Dict[str, Any]) -> str:
+        haystack = self._pm_assignment_research_step_text(item)
+        if any(keyword in haystack for keyword in _PM_ASSIGNMENT_RESEARCH_REPO_LANE_KEYWORDS):
+            return "repo"
+        if any(keyword in haystack for keyword in _PM_ASSIGNMENT_RESEARCH_DATA_LANE_KEYWORDS):
+            return "data"
+        if any(keyword in haystack for keyword in _PM_ASSIGNMENT_RESEARCH_ONLINE_LANE_KEYWORDS):
+            return "online"
+        return "generic"
+
+    def _pm_assignment_research_step_is_split(self, item: Dict[str, Any]) -> bool:
+        haystack = self._pm_assignment_research_step_text(item)
+        if any(marker in haystack for marker in _PM_ASSIGNMENT_RESEARCH_SPLIT_MARKERS):
+            return True
+        return re.search(r"\b(?:part|chunk|batch|shard|segment|slice)\s+\d+\b", haystack) is not None
+
+    def _pm_assignment_research_fanout_budget(
+        self,
+        task: Task,
+        trigger: Any,
+        items: List[Any],
+    ) -> Tuple[List[Any], Optional[Dict[str, Any]]]:
+        metadata = task.metadata or TaskMetadata()
+        if task.bot_id != "pm-orchestrator":
+            return items, None
+        if str(metadata.run_class or "").strip().lower() != "pm_assignment":
+            return items, None
+        if str(getattr(trigger, "target_bot_id", "") or "").strip() != "pm-research-analyst":
+            return items, None
+        if not items or not all(isinstance(item, dict) for item in items):
+            return items, None
+        if not all(str(item.get("bot_id") or "").strip() == "pm-research-analyst" for item in items):
+            return items, None
+
+        original_count = len(items)
+        base_cap, split_cap = self._pm_assignment_research_fanout_cap()
+        if original_count <= base_cap:
+            return items, None
+
+        split_required = any(self._pm_assignment_research_step_is_split(item) for item in items[base_cap:])
+        budget = split_cap if split_required else base_cap
+        if original_count <= budget:
+            return items, None
+
+        trimmed: List[Any] = []
+        if split_required:
+            trimmed = list(items[:budget])
+        else:
+            seen_lanes: Set[str] = set()
+            for item in items:
+                lane = self._pm_assignment_research_lane(item)
+                if lane == "generic" or lane in seen_lanes:
+                    continue
+                trimmed.append(item)
+                seen_lanes.add(lane)
+                if len(trimmed) >= budget:
+                    break
+            if len(trimmed) < budget:
+                for item in items:
+                    if item in trimmed:
+                        continue
+                    trimmed.append(item)
+                    if len(trimmed) >= budget:
+                        break
+
+        return trimmed[:budget], {
+            "applied": True,
+            "reason": "pm_assignment_research_fanout_cap",
+            "original_count": original_count,
+            "kept_count": min(original_count, budget),
+            "split_required": split_required,
+        }
 
     def _build_trigger_payloads(self, task: Task, trigger: Any) -> List[Any]:
         payload = self._build_trigger_payload(task, trigger)
@@ -5279,6 +5966,7 @@ class TaskManager:
         items = self._resolve_fan_out_items(payload, task, fan_out_field)
         if not isinstance(items, list):
             return []
+        items, fanout_budget = self._pm_assignment_research_fanout_budget(task, trigger, items)
         alias = str(getattr(trigger, "fan_out_alias", "") or "").strip() or "item"
         index_alias = str(getattr(trigger, "fan_out_index_alias", "") or "").strip() or "item_index"
         total = len(items)
@@ -5294,6 +5982,8 @@ class TaskManager:
             next_payload["fanout_count"] = total
             if fanout_id:
                 next_payload["fanout_id"] = fanout_id
+            if fanout_budget:
+                next_payload["pm_fanout_budget"] = dict(fanout_budget)
             branch_key = self._fanout_branch_key(trigger, next_payload)
             if branch_key:
                 next_payload["fanout_branch_key"] = branch_key
@@ -5350,6 +6040,7 @@ class TaskManager:
             "fanout_id",
             "fanout_branch_key",
             "fanout_expected_branch_keys",
+            "pm_routing_context",
             "depends_on_steps",
             "context_items",
             "assignment_request",

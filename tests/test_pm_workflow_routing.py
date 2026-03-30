@@ -450,6 +450,28 @@ async def _wait_for_terminal(tm, terminal_bot_id: str, expected_total: int, *, t
     return await tm.list_tasks()
 
 
+async def _wait_for_quiescent(tm, *, timeout: int = 240, stable_rounds: int = 5) -> list:
+    last_signature = None
+    stable = 0
+    for _ in range(timeout):
+        tasks = await tm.list_tasks()
+        if any(task.status in {"queued", "running", "blocked"} for task in tasks):
+            stable = 0
+            last_signature = None
+            await asyncio.sleep(0.1)
+            continue
+        signature = tuple(sorted((task.id, task.bot_id, task.status) for task in tasks))
+        if signature == last_signature:
+            stable += 1
+        else:
+            last_signature = signature
+            stable = 1
+        if stable >= stable_rounds:
+            return tasks
+        await asyncio.sleep(0.1)
+    return await tm.list_tasks()
+
+
 def _counts(tasks) -> dict:
     c: dict = {}
     for t in tasks:
@@ -1039,3 +1061,380 @@ async def test_pm_workflow_mixed_security_pass_and_skip_still_joins_to_db(tmp_pa
     assert c.get("pm-database-engineer", 0) == 1
     assert c.get("pm-ui-tester", 0) == 1
     assert c.get("pm-final-qc", 0) == 1
+
+
+@pytest.mark.anyio
+async def test_pm_assignment_dynamic_routing_sends_database_to_db_and_ui_to_ui_validation(tmp_path):
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot, TaskMetadata
+
+    class StubScheduler:
+        async def schedule(self, task):
+            if task.bot_id == "pm-engineer":
+                return _engineer_result(
+                    "Database Schema Migration",
+                    "React Frontend Settings Page",
+                )
+            if task.bot_id == "pm-coder":
+                return _CODER_PASS
+            if task.bot_id == "pm-tester":
+                return _TESTER_PASS
+            if task.bot_id == "pm-database-engineer":
+                return _DB_PASS
+            if task.bot_id == "pm-ui-tester":
+                return _UI_PASS
+            if task.bot_id == "pm-security-reviewer":
+                return _SECURITY_PASS
+            if task.bot_id == "pm-final-qc":
+                return _QC_PASS
+            return {"status": "pass"}
+
+    bot_registry = await _make_bot_registry(tmp_path, "-dynamic-routing")
+    await bot_registry.register(Bot(
+        id="pm-orchestrator",
+        name="PM Orchestrator",
+        role="pm",
+        backends=[],
+        system_prompt=(
+            "Route database, schema, and migration workstreams to pm-database-engineer. "
+            "Route real frontend React or Razor implementation through pm-coder and validate it with pm-ui-tester. "
+            "After specialist work is complete, run pm-security-reviewer and pm-final-qc."
+        ),
+    ))
+    tm = TaskManager(
+        StubScheduler(),
+        db_path=str(tmp_path / "pm-routing-dynamic.db"),
+        bot_registry=bot_registry,
+    )
+
+    await tm.create_task(
+        bot_id="pm-engineer",
+        payload={"instruction": "implement the mixed database and frontend workstreams"},
+        metadata=TaskMetadata(
+            source="bot_trigger",
+            orchestration_id="orch-dynamic-routing",
+            root_pm_bot_id="pm-orchestrator",
+            run_class="pm_assignment",
+        ),
+    )
+
+    expected_total = 7
+    tasks = await _wait_for_terminal(tm, "pm-final-qc", expected_total)
+
+    assert len(tasks) == expected_total, f"Expected {expected_total} tasks, got {len(tasks)}: {_counts(tasks)}"
+    assert all(t.status == "completed" for t in tasks)
+
+    c = _counts(tasks)
+    assert c.get("pm-engineer", 0) == 1
+    assert c.get("pm-database-engineer", 0) == 1
+    assert c.get("pm-coder", 0) == 1
+    assert c.get("pm-tester", 0) == 1
+    assert c.get("pm-ui-tester", 0) == 1
+    assert c.get("pm-security-reviewer", 0) == 1
+    assert c.get("pm-final-qc", 0) == 1
+
+    db_task = next(task for task in tasks if task.bot_id == "pm-database-engineer")
+    coder_task = next(task for task in tasks if task.bot_id == "pm-coder")
+    ui_task = next(task for task in tasks if task.bot_id == "pm-ui-tester")
+    assert "Database Schema Migration" in str(db_task.payload.get("title") or "")
+    assert "React Frontend Settings Page" in str(coder_task.payload.get("title") or "")
+    assert ui_task.metadata.parent_task_id == coder_task.id
+
+
+def test_pm_workstream_route_classifier_falls_back_to_keyword_matching_without_root_prompt():
+    from control_plane.task_manager.task_manager import TaskManager
+
+    tm = TaskManager(scheduler=object(), db_path=":memory:")
+
+    route = tm._classify_pm_workstream_route(
+        {
+            "title": "Database Schema Migration",
+            "instruction": "Apply the migration and update the SQL schema.",
+        },
+        default_target_bot_id="pm-coder",
+        policy={"consulted_root_system_prompt": False},
+    )
+
+    assert route["route_kind"] == "database_specialist"
+    assert route["target_bot_id"] == "pm-database-engineer"
+
+
+def test_pm_workstream_route_classifier_preserves_docs_only_lane_even_with_database_keywords():
+    from control_plane.task_manager.task_manager import TaskManager
+
+    tm = TaskManager(scheduler=object(), db_path=":memory:")
+
+    route = tm._classify_pm_workstream_route(
+        {
+            "title": "Database Schema Migration Guide",
+            "instruction": "Write only markdown documentation in docs/database and do not edit code.",
+            "assignment_scope": {
+                "docs_only": True,
+                "requested_output_paths": ["docs/database"],
+            },
+        },
+        default_target_bot_id="pm-coder",
+        policy={"consulted_root_system_prompt": True},
+    )
+
+    assert route["route_kind"] == "generic_coder"
+    assert route["target_bot_id"] == "pm-coder"
+
+
+@pytest.mark.anyio
+async def test_pm_assignment_research_fanout_is_capped_to_three_by_default(tmp_path):
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot, TaskMetadata
+
+    class StubScheduler:
+        async def schedule(self, task):
+            if task.bot_id == "pm-orchestrator":
+                steps = []
+                for idx, title in enumerate(
+                    [
+                        "Repository implementation patterns",
+                        "Requirements and data context",
+                        "External docs and standards",
+                        "Additional repo search",
+                        "Follow-on code scan",
+                        "Extra docs review",
+                        "Risk sweep",
+                        "Constraint recap",
+                    ],
+                    start=1,
+                ):
+                    steps.append(
+                        {
+                            "id": f"step_1_{idx}",
+                            "title": title,
+                            "instruction": f"Research {title.lower()}",
+                            "bot_id": "pm-research-analyst",
+                            "role_hint": "researcher",
+                            "step_kind": "specification",
+                        }
+                    )
+                return {"status": "pass", "steps": steps}
+            return {"status": "pass"}
+
+    bot_registry = await _make_bot_registry(tmp_path, "-research-cap-default")
+    await bot_registry.register(
+        Bot(
+            id="pm-orchestrator",
+            name="PM Orchestrator",
+            role="pm",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "pm-to-research",
+                        "event": "task_completed",
+                        "target_bot_id": "pm-research-analyst",
+                        "condition": "has_result",
+                        "fan_out_field": "source_result.steps",
+                    }
+                ]
+            },
+        )
+    )
+    await bot_registry.register(
+        Bot(id="pm-research-analyst", name="PM Research Analyst", role="researcher", backends=[])
+    )
+    tm = TaskManager(
+        StubScheduler(),
+        db_path=str(tmp_path / "pm-routing-research-cap-default.db"),
+        bot_registry=bot_registry,
+    )
+
+    await tm.create_task(
+        bot_id="pm-orchestrator",
+        payload={"instruction": "plan the assignment"},
+        metadata=TaskMetadata(
+            source="chat_assign",
+            orchestration_id="orch-research-cap-default",
+            run_class="pm_assignment",
+            root_pm_bot_id="pm-orchestrator",
+        ),
+    )
+
+    tasks = await _wait_for_quiescent(tm)
+    c = _counts(tasks)
+    assert c.get("pm-orchestrator", 0) == 1
+    assert c.get("pm-research-analyst", 0) == 3
+    research_tasks = [task for task in tasks if task.bot_id == "pm-research-analyst"]
+    assert sorted(str(task.payload.get("title") or "") for task in research_tasks) == sorted([
+        "Repository implementation patterns",
+        "Requirements and data context",
+        "External docs and standards",
+    ])
+    assert all((task.payload.get("pm_fanout_budget") or {}).get("original_count") == 8 for task in research_tasks)
+    await tm.close()
+
+
+@pytest.mark.anyio
+async def test_pm_assignment_research_fanout_allows_sharded_steps_up_to_six(tmp_path):
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot, TaskMetadata
+
+    class StubScheduler:
+        async def schedule(self, task):
+            if task.bot_id == "pm-orchestrator":
+                return {
+                    "status": "pass",
+                    "steps": [
+                        {
+                            "id": "step_1_code_part_1",
+                            "title": "Repo search part 1",
+                            "instruction": "Inspect repo files batch 1",
+                            "bot_id": "pm-research-analyst",
+                            "role_hint": "researcher",
+                            "step_kind": "specification",
+                        },
+                        {
+                            "id": "step_1_code_part_2",
+                            "title": "Repo search part 2",
+                            "instruction": "Inspect repo files batch 2",
+                            "bot_id": "pm-research-analyst",
+                            "role_hint": "researcher",
+                            "step_kind": "specification",
+                        },
+                        {
+                            "id": "step_1_data_part_1",
+                            "title": "Requirements batch 1",
+                            "instruction": "Collect requirements chunk 1",
+                            "bot_id": "pm-research-analyst",
+                            "role_hint": "researcher",
+                            "step_kind": "specification",
+                        },
+                        {
+                            "id": "step_1_data_part_2",
+                            "title": "Requirements batch 2",
+                            "instruction": "Collect requirements chunk 2",
+                            "bot_id": "pm-research-analyst",
+                            "role_hint": "researcher",
+                            "step_kind": "specification",
+                        },
+                        {
+                            "id": "step_1_online_part_1",
+                            "title": "External docs part 1",
+                            "instruction": "Review current docs segment 1",
+                            "bot_id": "pm-research-analyst",
+                            "role_hint": "researcher",
+                            "step_kind": "specification",
+                        },
+                        {
+                            "id": "step_1_online_part_2",
+                            "title": "External docs part 2",
+                            "instruction": "Review current docs segment 2",
+                            "bot_id": "pm-research-analyst",
+                            "role_hint": "researcher",
+                            "step_kind": "specification",
+                        },
+                        {
+                            "id": "step_1_online_part_3",
+                            "title": "External docs part 3",
+                            "instruction": "Review current docs segment 3",
+                            "bot_id": "pm-research-analyst",
+                            "role_hint": "researcher",
+                            "step_kind": "specification",
+                        },
+                    ],
+                }
+            return {"status": "pass"}
+
+    bot_registry = await _make_bot_registry(tmp_path, "-research-cap-split")
+    await bot_registry.register(
+        Bot(
+            id="pm-orchestrator",
+            name="PM Orchestrator",
+            role="pm",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "pm-to-research",
+                        "event": "task_completed",
+                        "target_bot_id": "pm-research-analyst",
+                        "condition": "has_result",
+                        "fan_out_field": "source_result.steps",
+                    }
+                ]
+            },
+        )
+    )
+    await bot_registry.register(
+        Bot(id="pm-research-analyst", name="PM Research Analyst", role="researcher", backends=[])
+    )
+    tm = TaskManager(
+        StubScheduler(),
+        db_path=str(tmp_path / "pm-routing-research-cap-split.db"),
+        bot_registry=bot_registry,
+    )
+
+    await tm.create_task(
+        bot_id="pm-orchestrator",
+        payload={"instruction": "plan the assignment"},
+        metadata=TaskMetadata(
+            source="chat_assign",
+            orchestration_id="orch-research-cap-split",
+            run_class="pm_assignment",
+            root_pm_bot_id="pm-orchestrator",
+        ),
+    )
+
+    tasks = await _wait_for_quiescent(tm)
+    research_tasks = [task for task in tasks if task.bot_id == "pm-research-analyst"]
+    assert len(research_tasks) == 6
+    assert all((task.payload.get("pm_fanout_budget") or {}).get("split_required") is True for task in research_tasks)
+    await tm.close()
+
+
+@pytest.mark.anyio
+async def test_pm_assignment_loop_guard_stops_retargeting_same_bot_forever(tmp_path, monkeypatch):
+    import control_plane.task_manager.task_manager as task_manager_module
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import TaskMetadata
+
+    original_settings_int = task_manager_module._settings_int
+
+    def _settings_int(name: str, default: int) -> int:
+        if name == "workflow_route_repeat_limit":
+            return 3
+        return original_settings_int(name, default)
+
+    monkeypatch.setattr(task_manager_module, "_settings_int", _settings_int)
+
+    class StubScheduler:
+        async def schedule(self, task):
+            if task.bot_id == "pm-engineer":
+                return _engineer_result("WS1: looping branch")
+            if task.bot_id == "pm-coder":
+                return _CODER_PASS
+            if task.bot_id == "pm-tester":
+                return _TESTER_FAIL
+            return {"status": "pass"}
+
+    bot_registry = await _make_bot_registry(tmp_path, "-repeat-guard")
+    tm = TaskManager(
+        StubScheduler(),
+        db_path=str(tmp_path / "pm-routing-repeat-guard.db"),
+        bot_registry=bot_registry,
+    )
+
+    await tm.create_task(
+        bot_id="pm-engineer",
+        payload={"instruction": "keep retrying forever"},
+        metadata=TaskMetadata(
+            source="chat_assign",
+            orchestration_id="orch-repeat-guard",
+            run_class="pm_assignment",
+        ),
+    )
+
+    tasks = await _wait_for_quiescent(tm)
+    c = _counts(tasks)
+    assert c.get("pm-engineer", 0) == 1
+    assert c.get("pm-coder", 0) == 3
+    assert c.get("pm-tester", 0) == 3
+    assert c.get("pm-security-reviewer", 0) == 0
+    assert c.get("pm-final-qc", 0) == 0
+    await tm.close()
