@@ -5899,6 +5899,41 @@ class TaskManager:
             return True
         return re.search(r"\b(?:part|chunk|batch|shard|segment|slice)\s+\d+\b", haystack) is not None
 
+    def _pm_assignment_research_trigger_items(
+        self,
+        task: Task,
+        trigger: Any,
+        items: List[Any],
+    ) -> Tuple[List[Any], Optional[Dict[str, Any]]]:
+        metadata = task.metadata or TaskMetadata()
+        if task.bot_id != "pm-orchestrator":
+            return items, None
+        if str(metadata.run_class or "").strip().lower() != "pm_assignment":
+            return items, None
+        if str(getattr(trigger, "target_bot_id", "") or "").strip() != "pm-research-analyst":
+            return items, None
+        if not items or not all(isinstance(item, dict) for item in items):
+            return items, None
+
+        tagged_items = [item for item in items if str(item.get("bot_id") or "").strip()]
+        if not tagged_items:
+            return items, None
+
+        filtered = [
+            item
+            for item in items
+            if str(item.get("bot_id") or "").strip() == "pm-research-analyst"
+        ]
+        if not filtered or len(filtered) == len(items):
+            return items, None
+
+        return filtered, {
+            "applied": True,
+            "reason": "pm_assignment_research_trigger_filter",
+            "original_count": len(items),
+            "kept_count": len(filtered),
+        }
+
     def _pm_assignment_research_fanout_budget(
         self,
         task: Task,
@@ -5966,6 +6001,7 @@ class TaskManager:
         items = self._resolve_fan_out_items(payload, task, fan_out_field)
         if not isinstance(items, list):
             return []
+        items, trigger_filter = self._pm_assignment_research_trigger_items(task, trigger, items)
         items, fanout_budget = self._pm_assignment_research_fanout_budget(task, trigger, items)
         alias = str(getattr(trigger, "fan_out_alias", "") or "").strip() or "item"
         index_alias = str(getattr(trigger, "fan_out_index_alias", "") or "").strip() or "item_index"
@@ -5982,8 +6018,13 @@ class TaskManager:
             next_payload["fanout_count"] = total
             if fanout_id:
                 next_payload["fanout_id"] = fanout_id
+            pm_fanout_budget: Dict[str, Any] = {}
+            if trigger_filter:
+                pm_fanout_budget.update(trigger_filter)
             if fanout_budget:
-                next_payload["pm_fanout_budget"] = dict(fanout_budget)
+                pm_fanout_budget.update(fanout_budget)
+            if pm_fanout_budget:
+                next_payload["pm_fanout_budget"] = pm_fanout_budget
             branch_key = self._fanout_branch_key(trigger, next_payload)
             if branch_key:
                 next_payload["fanout_branch_key"] = branch_key

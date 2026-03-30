@@ -632,6 +632,8 @@
       </aside>
     </div>
     <div class="modal-actions">
+      <button id="dag-download-json" class="btn" type="button" onclick="downloadDagJson()" style="display:none;">Download DAG JSON</button>
+      <button id="dag-download-svg" class="btn" type="button" onclick="downloadDagSvg()" style="display:none;">Download DAG SVG</button>
       <button class="btn" onclick="hideModal('modal-dag')">Close</button>
     </div>
   </div>
@@ -669,6 +671,7 @@
     <div id="assign-recap-state" class="state-info" style="margin-bottom:0.75rem;">No recap loaded yet.</div>
     <pre id="assign-recap-pre" style="max-height:65vh;overflow:auto;white-space:pre-wrap;"></pre>
     <div class="modal-actions">
+      <button id="assign-recap-download" class="btn" type="button" onclick="downloadAssignmentRecapText()" style="display:none;">Download Recap TXT</button>
       <button class="btn" type="button" onclick="hideModal('modal-assign-recap')">Close</button>
     </div>
   </div>
@@ -692,7 +695,10 @@ const messageMap = new Map((initialMessages || []).map((m) => [String(m.id), m])
 let refreshTimer = null;
 let activeDagGraph = null;
 let activeDagSelectedNodeId = '';
+let activeDagOrchestrationId = '';
 let lastAssignmentReviewResult = null;
+let lastAssignmentRecapText = '';
+let lastAssignmentRecapOrchestrationId = '';
 
 function scrollMessagesToLatest() {
   const container = document.getElementById('messages');
@@ -2246,6 +2252,53 @@ function downloadAssignmentReviewJson() {
   URL.revokeObjectURL(url);
 }
 
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function downloadAssignmentRecapText() {
+  if (!lastAssignmentRecapText) {
+    alert('No assignment recap is loaded.');
+    return;
+  }
+  const orchestrationId = String(lastAssignmentRecapOrchestrationId || 'assignment-recap').trim() || 'assignment-recap';
+  downloadBlob(new Blob([lastAssignmentRecapText], {type: 'text/plain;charset=utf-8'}), `${orchestrationId}-full-recap.txt`);
+}
+
+function downloadDagJson() {
+  if (!activeDagGraph) {
+    alert('No DAG graph is loaded.');
+    return;
+  }
+  const orchestrationId = String(activeDagOrchestrationId || activeDagGraph?.orchestration_id || 'dag').trim() || 'dag';
+  downloadBlob(new Blob([JSON.stringify(activeDagGraph, null, 2)], {type: 'application/json'}), `${orchestrationId}-dag.json`);
+}
+
+function downloadDagSvg() {
+  const svg = document.querySelector('#dag-wrap svg');
+  if (!svg) {
+    alert('No DAG SVG is available.');
+    return;
+  }
+  const orchestrationId = String(activeDagOrchestrationId || activeDagGraph?.orchestration_id || 'dag').trim() || 'dag';
+  const serializer = new XMLSerializer();
+  let source = serializer.serializeToString(svg);
+  if (!source.includes('xmlns=')) {
+    source = source.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"');
+  }
+  if (!source.includes('xmlns:xlink=')) {
+    source = source.replace('<svg', '<svg xmlns:xlink="http://www.w3.org/1999/xlink"');
+  }
+  downloadBlob(new Blob([source], {type: 'image/svg+xml;charset=utf-8'}), `${orchestrationId}-dag.svg`);
+}
+
 async function reviewAssignmentFiles(orchestrationId, buttonEl) {
   if (!selectedConversationProjectId) {
     alert('This conversation is not attached to a project repo workspace.');
@@ -2354,7 +2407,11 @@ async function openAssignmentRecap(orchestrationId) {
     state.className = 'state-loading';
     state.textContent = 'Loading full recap...';
   }
+  lastAssignmentRecapText = '';
+  lastAssignmentRecapOrchestrationId = String(orchestrationId || '').trim();
   if (pre) pre.textContent = '';
+  const downloadBtn = document.getElementById('assign-recap-download');
+  if (downloadBtn) downloadBtn.style.display = 'none';
   if (modal) modal.style.display = 'flex';
   try {
     const res = await fetch('/api/chat/orchestrations/' + encodeURIComponent(orchestrationId) + '/recap');
@@ -2366,7 +2423,9 @@ async function openAssignmentRecap(orchestrationId) {
       state.className = 'state-info';
       state.textContent = 'Full assignment recap loaded.';
     }
-    if (pre) pre.textContent = String(data.recap || '');
+    lastAssignmentRecapText = String(data.recap || '');
+    if (pre) pre.textContent = lastAssignmentRecapText;
+    if (downloadBtn) downloadBtn.style.display = lastAssignmentRecapText ? 'inline-block' : 'none';
   } catch (error) {
     if (state) {
       state.className = 'state-error';
@@ -2663,6 +2722,11 @@ async function openDagViewer(orchestrationId) {
   wrap.innerHTML = '';
   activeDagGraph = null;
   activeDagSelectedNodeId = '';
+  activeDagOrchestrationId = String(orchestrationId || '').trim();
+  const dagJsonBtn = document.getElementById('dag-download-json');
+  const dagSvgBtn = document.getElementById('dag-download-svg');
+  if (dagJsonBtn) dagJsonBtn.style.display = 'none';
+  if (dagSvgBtn) dagSvgBtn.style.display = 'none';
   renderDagDetail(null, null);
   state.className = 'state-loading';
   state.textContent = 'Loading graph...';
@@ -2674,6 +2738,8 @@ async function openDagViewer(orchestrationId) {
   }
   const graph = await res.json();
   renderDagGraph(graph);
+  if (dagJsonBtn) dagJsonBtn.style.display = 'inline-block';
+  if (dagSvgBtn) dagSvgBtn.style.display = 'inline-block';
 }
 
 bindConversationActions();
