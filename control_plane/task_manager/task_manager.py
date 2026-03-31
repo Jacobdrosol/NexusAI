@@ -5896,7 +5896,7 @@ class TaskManager:
             }
         if any(candidate in {"pm-coder", "frontend_developer", "ui", "ui_tester"} for candidate in candidates):
             haystack = self._pm_workstream_routing_text(payload)
-            if any(keyword in haystack for keyword in _PM_WORKSTREAM_UI_KEYWORDS):
+            if self._pm_workstream_matches_any_keyword(haystack, _PM_WORKSTREAM_UI_KEYWORDS):
                 return {
                     "route_kind": "ui_coder_validation",
                     "target_bot_id": "pm-coder",
@@ -5951,6 +5951,22 @@ class TaskManager:
                     parts.append(item)
         return "\n".join(parts).strip().lower()
 
+    def _pm_workstream_matches_any_keyword(self, haystack: str, keywords: Tuple[str, ...]) -> bool:
+        text = str(haystack or "").strip().lower()
+        if not text:
+            return False
+        for keyword in keywords:
+            token = str(keyword or "").strip().lower()
+            if not token:
+                continue
+            if token.startswith("."):
+                if token in text:
+                    return True
+                continue
+            if re.search(rf"(?<!\w){re.escape(token)}(?!\w)", text):
+                return True
+        return False
+
     def _pm_assignment_workstream_fanout_cap(self) -> Tuple[int, int]:
         base_cap = max(1, _settings_int("pm_assignment_workstream_fanout_limit", _PM_ASSIGNMENT_WORKSTREAM_STEP_CAP))
         split_cap = max(base_cap, _settings_int("pm_assignment_workstream_fanout_split_limit", _PM_ASSIGNMENT_WORKSTREAM_STEP_SPLIT_CAP))
@@ -5969,15 +5985,15 @@ class TaskManager:
         if route_kind == "ui_coder_validation":
             return "ui"
         haystack = self._pm_workstream_routing_text(payload)
-        if any(keyword in haystack for keyword in _PM_WORKSTREAM_API_KEYWORDS):
+        if self._pm_workstream_matches_any_keyword(haystack, _PM_WORKSTREAM_API_KEYWORDS):
             return "api"
-        if any(keyword in haystack for keyword in _PM_WORKSTREAM_SECURITY_KEYWORDS):
+        if self._pm_workstream_matches_any_keyword(haystack, _PM_WORKSTREAM_SECURITY_KEYWORDS):
             return "security"
-        if any(keyword in haystack for keyword in _PM_WORKSTREAM_WORKER_KEYWORDS):
+        if self._pm_workstream_matches_any_keyword(haystack, _PM_WORKSTREAM_WORKER_KEYWORDS):
             return "worker"
-        if any(keyword in haystack for keyword in _PM_WORKSTREAM_TRIGGER_KEYWORDS):
+        if self._pm_workstream_matches_any_keyword(haystack, _PM_WORKSTREAM_TRIGGER_KEYWORDS):
             return "trigger"
-        if any(keyword in haystack for keyword in _PM_WORKSTREAM_OPERATIONS_KEYWORDS):
+        if self._pm_workstream_matches_any_keyword(haystack, _PM_WORKSTREAM_OPERATIONS_KEYWORDS):
             return "operations"
         return "generic"
 
@@ -6050,14 +6066,14 @@ class TaskManager:
         haystack = self._pm_workstream_routing_text(payload)
         consulted_prompt = bool(policy.get("consulted_root_system_prompt"))
         deterministic_signals = policy.get("deterministic_signals") if isinstance(policy.get("deterministic_signals"), dict) else {}
-        if any(keyword in haystack for keyword in _PM_WORKSTREAM_DATABASE_KEYWORDS):
+        if self._pm_workstream_matches_any_keyword(haystack, _PM_WORKSTREAM_DATABASE_KEYWORDS):
             return {
                 "route_kind": "database_specialist",
                 "target_bot_id": "pm-database-engineer",
                 "branch_completion_bot_ids": ["pm-database-engineer"],
                 "route_reason": "system_prompt+keyword" if consulted_prompt else "keyword",
             }
-        if any(keyword in haystack for keyword in _PM_WORKSTREAM_UI_KEYWORDS):
+        if self._pm_workstream_matches_any_keyword(haystack, _PM_WORKSTREAM_UI_KEYWORDS):
             return {
                 "route_kind": "ui_coder_validation",
                 "target_bot_id": default_target_bot_id,
@@ -6341,7 +6357,7 @@ class TaskManager:
             return
         step_id = f"pm-dynamic-security:{fanout_id}"
         existing = await self._find_task_by_step_id(step_id, security_bot_id)
-        if existing is not None and existing.status in {"queued", "blocked", "running", "completed"}:
+        if self._dynamic_pm_stage_blocks_creation(existing):
             return
         payload = self._build_default_trigger_payload(task, security_bot_id)
         ordered_tasks = [matched_tasks[token] for token in expected_tokens]
@@ -6384,7 +6400,7 @@ class TaskManager:
             return
         step_id = f"pm-dynamic-final-qc:{fanout_id}"
         existing = await self._find_task_by_step_id(step_id, final_qc_bot_id)
-        if existing is not None and existing.status in {"queued", "blocked", "running", "completed"}:
+        if self._dynamic_pm_stage_blocks_creation(existing):
             return
         payload = self._build_default_trigger_payload(task, final_qc_bot_id)
         payload["title"] = "Final quality control"
@@ -6429,6 +6445,15 @@ class TaskManager:
             await self._maybe_create_dynamic_pm_global_security_task(task, context)
         if global_stage == "security_review" and task.bot_id == str(context.get("security_bot_id") or "pm-security-reviewer").strip():
             await self._create_dynamic_pm_final_qc_task(task, context)
+
+    def _dynamic_pm_stage_blocks_creation(self, task: Optional[Task]) -> bool:
+        if task is None:
+            return False
+        if task.status in {"queued", "blocked", "running"}:
+            return True
+        if task.status == "completed" and self._pm_dynamic_progress_result(task.result):
+            return True
+        return False
 
     def _build_trigger_payload(self, task: Task, trigger: Any) -> Any:
         payload_template = trigger.payload_template
@@ -7325,14 +7350,16 @@ class TaskManager:
 
     async def _find_task_by_step_id(self, step_id: str, bot_id: str) -> Optional[Task]:
         await self._ensure_db()
+        latest_match: Optional[Task] = None
         async with self._lock:
             for task in self._tasks.values():
                 if task.bot_id != bot_id:
                     continue
                 metadata = task.metadata or TaskMetadata()
                 if metadata.step_id == step_id:
-                    return task
-        return None
+                    if latest_match is None or self._task_order_token(task) >= self._task_order_token(latest_match):
+                        latest_match = task
+        return latest_match
 
     def _sortable_join_value(self, value: Any) -> Any:
         if isinstance(value, (int, float, str)):

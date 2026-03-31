@@ -1276,6 +1276,128 @@ async def test_pm_assignment_ui_data_issue_retries_db_then_ui_without_duplicate_
     assert db_task.id in parent_task_ids
 
 
+@pytest.mark.anyio
+async def test_pm_assignment_security_retry_reruns_single_global_security_stage(tmp_path):
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import TaskMetadata
+
+    security_runs = {"count": 0}
+
+    class StubScheduler:
+        async def schedule(self, task):
+            if task.bot_id == "pm-engineer":
+                return _engineer_result("Backend API Extension")
+            if task.bot_id == "pm-coder":
+                return _CODER_PASS
+            if task.bot_id == "pm-tester":
+                return _TESTER_PASS
+            if task.bot_id == "pm-security-reviewer":
+                security_runs["count"] += 1
+                return _SECURITY_FAIL if security_runs["count"] == 1 else _SECURITY_PASS
+            if task.bot_id == "pm-final-qc":
+                return _QC_PASS
+            return {"status": "pass"}
+
+    bot_registry = await _make_bot_registry(tmp_path, "-dynamic-security-retry")
+    tm = TaskManager(
+        StubScheduler(),
+        db_path=str(tmp_path / "pm-routing-dynamic-security-retry.db"),
+        bot_registry=bot_registry,
+    )
+
+    await tm.create_task(
+        bot_id="pm-engineer",
+        payload={"instruction": "implement the backend API extension"},
+        metadata=TaskMetadata(
+            source="chat_assign",
+            orchestration_id="orch-dynamic-security-retry",
+            run_class="pm_assignment",
+        ),
+    )
+
+    expected_total = 8
+    tasks = await _wait_for_terminal(tm, "pm-final-qc", expected_total)
+
+    assert len(tasks) == expected_total, f"Expected {expected_total} tasks, got {len(tasks)}: {_counts(tasks)}"
+    assert all(t.status == "completed" for t in tasks)
+
+    c = _counts(tasks)
+    assert c.get("pm-engineer", 0) == 1
+    assert c.get("pm-coder", 0) == 2
+    assert c.get("pm-tester", 0) == 2
+    assert c.get("pm-security-reviewer", 0) == 2
+    assert c.get("pm-final-qc", 0) == 1
+    assert c.get("pm-database-engineer", 0) == 0
+    assert c.get("pm-ui-tester", 0) == 0
+
+    security_tasks = [task for task in tasks if task.bot_id == "pm-security-reviewer"]
+    assert sorted(str(task.result.get("status") or "") for task in security_tasks if isinstance(task.result, dict)) == [
+        "fail",
+        "pass",
+    ]
+
+
+@pytest.mark.anyio
+async def test_pm_assignment_final_qc_retry_reruns_terminal_stage_once(tmp_path):
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import TaskMetadata
+
+    qc_runs = {"count": 0}
+
+    class StubScheduler:
+        async def schedule(self, task):
+            if task.bot_id == "pm-engineer":
+                return _engineer_result("Backend API Extension")
+            if task.bot_id == "pm-coder":
+                return _CODER_PASS
+            if task.bot_id == "pm-tester":
+                return _TESTER_PASS
+            if task.bot_id == "pm-security-reviewer":
+                return _SECURITY_PASS
+            if task.bot_id == "pm-final-qc":
+                qc_runs["count"] += 1
+                return _QC_FAIL if qc_runs["count"] == 1 else _QC_PASS
+            return {"status": "pass"}
+
+    bot_registry = await _make_bot_registry(tmp_path, "-dynamic-final-qc-retry")
+    tm = TaskManager(
+        StubScheduler(),
+        db_path=str(tmp_path / "pm-routing-dynamic-final-qc-retry.db"),
+        bot_registry=bot_registry,
+    )
+
+    await tm.create_task(
+        bot_id="pm-engineer",
+        payload={"instruction": "implement the backend API extension"},
+        metadata=TaskMetadata(
+            source="chat_assign",
+            orchestration_id="orch-dynamic-final-qc-retry",
+            run_class="pm_assignment",
+        ),
+    )
+
+    expected_total = 10
+    tasks = await _wait_for_terminal(tm, "pm-final-qc", expected_total)
+
+    assert len(tasks) == expected_total, f"Expected {expected_total} tasks, got {len(tasks)}: {_counts(tasks)}"
+    assert all(t.status == "completed" for t in tasks)
+
+    c = _counts(tasks)
+    assert c.get("pm-engineer", 0) == 2
+    assert c.get("pm-coder", 0) == 2
+    assert c.get("pm-tester", 0) == 2
+    assert c.get("pm-security-reviewer", 0) == 2
+    assert c.get("pm-final-qc", 0) == 2
+    assert c.get("pm-database-engineer", 0) == 0
+    assert c.get("pm-ui-tester", 0) == 0
+
+    qc_tasks = [task for task in tasks if task.bot_id == "pm-final-qc"]
+    assert sorted(str(task.result.get("status") or "") for task in qc_tasks if isinstance(task.result, dict)) == [
+        "fail",
+        "pass",
+    ]
+
+
 def test_pm_workstream_route_classifier_falls_back_to_keyword_matching_without_root_prompt():
     from control_plane.task_manager.task_manager import TaskManager
 
