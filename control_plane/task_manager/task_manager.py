@@ -2787,6 +2787,7 @@ class TaskManager:
         self._retry_tasks: Set[asyncio.Task[Any]] = set()
         self._watchdog_task: Optional[asyncio.Task[Any]] = None
         self._watchdog_state: Dict[str, Dict[str, Any]] = {}
+        self._trigger_dispatch_pending: Set[str] = set()
         self._is_closing = False
         self._max_concurrency = max(1, int(os.environ.get("NEXUSAI_TASK_MAX_CONCURRENCY", "4")))
         if db_path is not None:
@@ -2820,6 +2821,7 @@ class TaskManager:
             self._retry_tasks.clear()
             self._running_task_ids.clear()
             self._watchdog_state.clear()
+            self._trigger_dispatch_pending.clear()
             self._watchdog_task = None
 
     def __del__(self) -> None:
@@ -3228,6 +3230,39 @@ class TaskManager:
             await db.commit()
 
     async def _record_artifacts_for_task(self, task: Task) -> None:
+        # SCOPE ENFORCEMENT
+        payload = task.payload if isinstance(task.payload, dict) else {}
+        assignment_scope = _payload_assignment_scope(payload)
+        if assignment_scope:
+            scope_lock = assignment_scope.get("scope_lock")
+            if isinstance(scope_lock, dict):
+                allowed_artifacts = scope_lock.get("allowed_artifacts") or []
+                forbidden_keywords = scope_lock.get("forbidden_keywords") or []
+                
+                if allowed_artifacts or forbidden_keywords:
+                    for candidate in extract_file_candidates(task.result):
+                        path = str(candidate.get("path") or "").strip().lower()
+                        if not path:
+                            continue
+                        
+                        # Check against forbidden keywords
+                        if forbidden_keywords and any(keyword in path for keyword in forbidden_keywords):
+                            raise _TaskPolicyViolation(
+                                f"Artifact '{path}' violates scope lock: contains forbidden keyword.",
+                                code="scope_violation_forbidden",
+                                details={"path": path, "scope_lock": scope_lock}
+                            )
+
+                        # Check against allowed artifact patterns (glob matching)
+                        if allowed_artifacts:
+                            import fnmatch
+                            if not any(fnmatch.fnmatch(path, pattern) for pattern in allowed_artifacts):
+                                raise _TaskPolicyViolation(
+                                    f"Artifact '{path}' violates scope lock: not in allowed artifact patterns.",
+                                    code="scope_violation_not_allowed",
+                                    details={"path": path, "scope_lock": scope_lock}
+                                )
+
         now = datetime.now(timezone.utc).isoformat()
         artifacts: List[BotRunArtifact] = [
             BotRunArtifact(
@@ -3517,6 +3552,15 @@ class TaskManager:
         await self._ensure_db()
         async with self._lock:
             tasks = list(self._tasks.values())
+            pending_dispatch = set(self._trigger_dispatch_pending)
+        if pending_dispatch:
+            visible_tasks: List[Task] = []
+            for task in tasks:
+                if task.id in pending_dispatch and task.status in {"completed", "failed"}:
+                    visible_tasks.append(task.model_copy(update={"status": "running"}))
+                    continue
+                visible_tasks.append(task)
+            tasks = visible_tasks
         if orchestration_id:
             tasks = [
                 t
@@ -3896,6 +3940,7 @@ class TaskManager:
         error: Optional[TaskError] = None,
     ) -> None:
         await self._ensure_db()
+        should_track_trigger_dispatch = status in {"completed", "failed"}
         async with self._lock:
             if task_id not in self._tasks:
                 raise TaskNotFoundError(f"Task not found: {task_id}")
@@ -3921,13 +3966,22 @@ class TaskManager:
                 }
             else:
                 self._watchdog_state.pop(task_id, None)
+            if should_track_trigger_dispatch:
+                self._trigger_dispatch_pending.add(task_id)
+            else:
+                self._trigger_dispatch_pending.discard(task_id)
         await self._persist_task(updated_task)
         await self._upsert_bot_run(updated_task)
-        if status in {"completed", "failed", "cancelled", "retried"}:
-            await self._record_artifacts_for_task(updated_task)
-            if status in {"completed", "failed"}:
-                await self._dispatch_triggers(updated_task)
-            await self._try_unblock_tasks()
+        try:
+            if status in {"completed", "failed", "cancelled", "retried"}:
+                await self._record_artifacts_for_task(updated_task)
+                if status in {"completed", "failed"}:
+                    await self._dispatch_triggers(updated_task)
+                await self._try_unblock_tasks()
+        finally:
+            if should_track_trigger_dispatch:
+                async with self._lock:
+                    self._trigger_dispatch_pending.discard(task_id)
         if status == "failed":
             await self._cleanup_failed_orchestration_workspace(updated_task)
 
@@ -5499,6 +5553,8 @@ class TaskManager:
                 "fanout_branch_key",
                 "fanout_expected_branch_keys",
                 "pm_routing_context",
+                "root_pm_bot_id",
+                "deterministic_signals",
                 "depends_on_steps",
                 "context_items",
                 "assignment_request",
@@ -5528,6 +5584,216 @@ class TaskManager:
                 return context
         return {}
 
+    def _payload_chain_field(self, payload: Any, field_name: str) -> Any:
+        if not isinstance(payload, dict):
+            return None
+        for node in self._payload_source_chain(payload):
+            if field_name not in node:
+                continue
+            value = node.get(field_name)
+            if _is_empty_contract_value(value):
+                continue
+            return value
+        return None
+
+    def _pm_assignment_requested_output_paths(self, payload: Dict[str, Any]) -> Set[str]:
+        requested: Set[str] = set()
+        for node in self._payload_source_chain(payload):
+            if not isinstance(node, dict):
+                continue
+            scope = node.get("assignment_scope")
+            if isinstance(scope, dict):
+                for item in _normalize_string_list(scope.get("requested_output_paths")):
+                    normalized = str(item or "").strip().replace("\\", "/").strip("`")
+                    if normalized:
+                        requested.add(normalized)
+            for item in _normalize_string_list(node.get("deliverables")):
+                normalized = str(item or "").strip().replace("\\", "/").strip("`")
+                if _looks_like_repo_file(normalized):
+                    requested.add(normalized)
+            explicit_path = str(node.get("path") or "").strip().replace("\\", "/").strip("`")
+            if _looks_like_repo_file(explicit_path):
+                requested.add(explicit_path)
+        return requested
+
+    def _pm_assignment_path_is_requested(self, path: str, requested_paths: Set[str]) -> bool:
+        normalized = str(path or "").strip().replace("\\", "/").strip("`")
+        if not normalized:
+            return False
+        for requested in requested_paths:
+            candidate = str(requested or "").strip().replace("\\", "/").strip("`")
+            if not candidate:
+                continue
+            if normalized == candidate:
+                return True
+            if "/" not in candidate:
+                continue
+            if "." not in candidate.rsplit("/", 1)[-1] and normalized.startswith(candidate.rstrip("/") + "/"):
+                return True
+        return False
+
+    def _pm_assignment_sql_variant_key(self, path: str) -> str:
+        normalized = str(path or "").strip().replace("\\", "/").lower()
+        if not normalized.endswith(".sql"):
+            return ""
+        leaf = normalized.rsplit("/", 1)[-1]
+        if not any(token in normalized for token in ("migration", "schema", "ddl", "seed")):
+            return ""
+        return leaf
+
+    def _pm_assignment_path_rank(self, path: str, requested_paths: Set[str]) -> Tuple[int, int, int, str]:
+        normalized = str(path or "").strip().replace("\\", "/").lower()
+        explicitly_requested = 0 if self._pm_assignment_path_is_requested(path, requested_paths) else 1
+        temp_like = 1 if any(
+            segment in normalized
+            for segment in ("temp/", "/temp/", "tmp/", "/tmp/", "scratch/", "/scratch/", "/sql/tmp", "/sql/temp")
+        ) else 0
+        specialist_hint = 0 if any(
+            marker in normalized
+            for marker in ("/migrations/", "/migration/", "/database/", "/db/", "/schema/", "/sql/")
+        ) else 1
+        return (explicitly_requested, temp_like, specialist_hint, normalized)
+
+    def _sanitize_pm_assignment_repo_paths(self, entries: List[str], payload: Dict[str, Any]) -> List[str]:
+        requested_paths = self._pm_assignment_requested_output_paths(payload)
+        kept: List[str] = []
+        seen: Set[str] = set()
+        sql_variants: Dict[str, str] = {}
+        for raw_entry in entries:
+            entry = str(raw_entry or "").strip().replace("\\", "/").strip("`")
+            if not entry:
+                continue
+            if not _looks_like_repo_file(entry):
+                if entry not in seen:
+                    seen.add(entry)
+                    kept.append(entry)
+                continue
+            if (
+                not self._pm_assignment_path_is_requested(entry, requested_paths)
+                and (
+                    _is_assignment_execution_artifact_file(entry)
+                    or "/" not in entry
+                )
+            ):
+                continue
+            sql_variant_key = self._pm_assignment_sql_variant_key(entry)
+            if sql_variant_key:
+                current = sql_variants.get(sql_variant_key)
+                if current is None or self._pm_assignment_path_rank(entry, requested_paths) < self._pm_assignment_path_rank(current, requested_paths):
+                    sql_variants[sql_variant_key] = entry
+                continue
+            if entry in seen:
+                continue
+            seen.add(entry)
+            kept.append(entry)
+        for entry in sorted(
+            sql_variants.values(),
+            key=lambda item: self._pm_assignment_path_rank(item, requested_paths),
+        ):
+            if entry in seen:
+                continue
+            seen.add(entry)
+            kept.append(entry)
+        return kept
+
+    def _sanitize_pm_assignment_branch_payload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        normalized = dict(payload)
+        deliverables = normalized.get("deliverables")
+        if isinstance(deliverables, list):
+            normalized["deliverables"] = self._sanitize_pm_assignment_repo_paths(
+                _normalize_string_list(deliverables),
+                normalized,
+            )
+        explicit_path = str(normalized.get("path") or "").strip().replace("\\", "/").strip("`")
+        if explicit_path and _looks_like_repo_file(explicit_path):
+            sanitized_paths = self._sanitize_pm_assignment_repo_paths([explicit_path], normalized)
+            normalized["path"] = sanitized_paths[0] if sanitized_paths else ""
+        workstream = normalized.get("workstream")
+        if isinstance(workstream, dict):
+            workstream_copy = dict(workstream)
+            workstream_deliverables = workstream_copy.get("deliverables")
+            if isinstance(workstream_deliverables, list):
+                workstream_copy["deliverables"] = self._sanitize_pm_assignment_repo_paths(
+                    _normalize_string_list(workstream_deliverables),
+                    normalized,
+                )
+            workstream_path = str(workstream_copy.get("path") or "").strip().replace("\\", "/").strip("`")
+            if workstream_path and _looks_like_repo_file(workstream_path):
+                sanitized_paths = self._sanitize_pm_assignment_repo_paths([workstream_path], normalized)
+                workstream_copy["path"] = sanitized_paths[0] if sanitized_paths else ""
+            normalized["workstream"] = workstream_copy
+        return normalized
+
+    def _dedupe_pm_assignment_workstream_payloads(
+        self,
+        payloads: List[Any],
+    ) -> Tuple[List[Any], Optional[Dict[str, Any]]]:
+        if not payloads or not all(isinstance(payload, dict) for payload in payloads):
+            return payloads, None
+        deduped: List[Any] = []
+        seen: Set[str] = set()
+        for payload in payloads:
+            fingerprint_payload = {
+                "title": str(payload.get("title") or "").strip().lower(),
+                "instruction": str(payload.get("instruction") or "").strip().lower(),
+                "path": str(payload.get("path") or "").strip().replace("\\", "/").lower(),
+                "deliverables": sorted(
+                    str(item or "").strip().replace("\\", "/").lower()
+                    for item in _normalize_string_list(payload.get("deliverables"))
+                    if str(item or "").strip()
+                ),
+                "target_bot_id": str(payload.get("target_bot_id") or "").strip().lower(),
+                "role_hint": str(payload.get("role_hint") or "").strip().lower(),
+            }
+            fingerprint = json.dumps(fingerprint_payload, sort_keys=True)
+            if fingerprint in seen:
+                continue
+            seen.add(fingerprint)
+            deduped.append(payload)
+        if len(deduped) == len(payloads):
+            return payloads, None
+        return deduped, {
+            "applied": True,
+            "reason": "pm_assignment_workstream_dedupe",
+            "original_count": len(payloads),
+            "kept_count": len(deduped),
+        }
+
+    def _pm_workstream_explicit_route(self, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        candidates = [
+            str(payload.get("bot_id") or "").strip().lower(),
+            str(payload.get("target_bot_id") or "").strip().lower(),
+            str(payload.get("assigned_bot_id") or "").strip().lower(),
+            str(payload.get("role_hint") or "").strip().lower(),
+        ]
+        workstream = payload.get("workstream")
+        if isinstance(workstream, dict):
+            candidates.extend(
+                [
+                    str(workstream.get("bot_id") or "").strip().lower(),
+                    str(workstream.get("target_bot_id") or "").strip().lower(),
+                    str(workstream.get("assigned_bot_id") or "").strip().lower(),
+                    str(workstream.get("role_hint") or "").strip().lower(),
+                ]
+            )
+        if any(candidate in {"pm-database-engineer", "database_engineer", "dba", "dba-sql"} for candidate in candidates):
+            return {
+                "route_kind": "database_specialist",
+                "target_bot_id": "pm-database-engineer",
+                "branch_completion_bot_ids": ["pm-database-engineer"],
+                "route_reason": "explicit_workstream_route",
+            }
+        if any(candidate in {"pm-coder", "frontend_developer", "ui", "ui_tester"} for candidate in candidates):
+            haystack = self._pm_workstream_routing_text(payload)
+            if any(keyword in haystack for keyword in _PM_WORKSTREAM_UI_KEYWORDS):
+                return {
+                    "route_kind": "ui_coder_validation",
+                    "target_bot_id": "pm-coder",
+                    "branch_completion_bot_ids": ["pm-tester", "pm-ui-tester"],
+                    "route_reason": "explicit_workstream_route",
+                }
+        return None
+
     def _pm_dynamic_completion_token(self, branch_key: str, bot_id: str) -> str:
         return f"{self._normalize_branch_token(branch_key, fallback='branch')}:{str(bot_id or '').strip()}"
 
@@ -5537,11 +5803,16 @@ class TaskManager:
         outcome = str(result.get("outcome") or result.get("status") or "").strip().lower()
         return outcome in {"pass", "skip", "completed", "complete"}
 
-    async def _load_pm_workstream_routing_policy(self, metadata: TaskMetadata) -> Dict[str, Any]:
+    async def _load_pm_workstream_routing_policy(self, task: Task) -> Dict[str, Any]:
+        metadata = task.metadata or TaskMetadata()
+        payload_root_pm_bot_id = str(self._payload_chain_field(task.payload, "root_pm_bot_id") or "").strip()
+        deterministic_signals = self._payload_chain_field(task.payload, "deterministic_signals")
         policy: Dict[str, Any] = {
-            "root_pm_bot_id": str(metadata.root_pm_bot_id or "").strip(),
+            "root_pm_bot_id": str(metadata.root_pm_bot_id or payload_root_pm_bot_id or "").strip(),
             "consulted_root_system_prompt": False,
         }
+        if isinstance(deterministic_signals, dict):
+            policy["deterministic_signals"] = deterministic_signals
         root_pm_bot_id = policy["root_pm_bot_id"]
         if not root_pm_bot_id or self._bot_registry is None:
             return policy
@@ -5661,8 +5932,13 @@ class TaskManager:
                 "route_reason": "docs_only_passthrough",
             }
 
+        explicit_route = self._pm_workstream_explicit_route(payload)
+        if explicit_route is not None:
+            return explicit_route
+
         haystack = self._pm_workstream_routing_text(payload)
         consulted_prompt = bool(policy.get("consulted_root_system_prompt"))
+        deterministic_signals = policy.get("deterministic_signals") if isinstance(policy.get("deterministic_signals"), dict) else {}
         if any(keyword in haystack for keyword in _PM_WORKSTREAM_DATABASE_KEYWORDS):
             return {
                 "route_kind": "database_specialist",
@@ -5676,6 +5952,20 @@ class TaskManager:
                 "target_bot_id": default_target_bot_id,
                 "branch_completion_bot_ids": ["pm-tester", "pm-ui-tester"],
                 "route_reason": "system_prompt+keyword" if consulted_prompt else "keyword",
+            }
+        if bool(deterministic_signals.get("missing_downstream_stage_db")):
+            return {
+                "route_kind": "database_specialist",
+                "target_bot_id": "pm-database-engineer",
+                "branch_completion_bot_ids": ["pm-database-engineer"],
+                "route_reason": "deterministic_signal_db",
+            }
+        if bool(deterministic_signals.get("missing_downstream_stage_ui")):
+            return {
+                "route_kind": "ui_coder_validation",
+                "target_bot_id": default_target_bot_id,
+                "branch_completion_bot_ids": ["pm-tester", "pm-ui-tester"],
+                "route_reason": "deterministic_signal_ui",
             }
         return {
             "route_kind": "generic_coder",
@@ -5699,14 +5989,15 @@ class TaskManager:
             return payloads
         if not str(getattr(trigger, "fan_out_field", "") or "").strip():
             return payloads
-        if str(metadata.run_class or "").strip().lower() != "pm_assignment" and not str(metadata.root_pm_bot_id or "").strip():
+        payload_root_pm_bot_id = str(self._payload_chain_field(task.payload, "root_pm_bot_id") or "").strip()
+        if str(metadata.run_class or "").strip().lower() != "pm_assignment" and not str(metadata.root_pm_bot_id or payload_root_pm_bot_id or "").strip():
             return payloads
         if not payloads or not all(isinstance(payload, dict) for payload in payloads):
             return payloads
-        if any(_payload_is_docs_only_request(payload) for payload in payloads if isinstance(payload, dict)):
-            return payloads
 
-        policy = await self._load_pm_workstream_routing_policy(metadata)
+        payloads = [self._sanitize_pm_assignment_branch_payload(payload) for payload in payloads]
+        payloads, dedupe_budget = self._dedupe_pm_assignment_workstream_payloads(payloads)
+        policy = await self._load_pm_workstream_routing_policy(task)
         routes = [
             self._classify_pm_workstream_route(
                 payload,
@@ -5717,15 +6008,22 @@ class TaskManager:
             if isinstance(payload, dict)
         ]
         payloads, routes, workstream_budget = self._pm_assignment_workstream_budget(payloads, routes)
-        if not routes or all(str(route.get("route_kind") or "") == "generic_coder" for route in routes):
+        combined_budget = None
+        if dedupe_budget or workstream_budget:
+            combined_budget = {}
+            if dedupe_budget:
+                combined_budget.update(dedupe_budget)
             if workstream_budget:
+                combined_budget.update(workstream_budget)
+        if not routes or all(str(route.get("route_kind") or "") == "generic_coder" for route in routes):
+            if combined_budget:
                 for payload in payloads:
                     if not isinstance(payload, dict):
                         continue
                     payload["fanout_count"] = len(payloads)
                     existing_budget = payload.get("pm_fanout_budget") if isinstance(payload.get("pm_fanout_budget"), dict) else {}
                     merged_budget = dict(existing_budget)
-                    merged_budget.update(workstream_budget)
+                    merged_budget.update(combined_budget)
                     payload["pm_fanout_budget"] = merged_budget
             return payloads
 
@@ -5769,10 +6067,10 @@ class TaskManager:
             if not isinstance(payload, dict):
                 continue
             payload["fanout_count"] = len(payloads)
-            if workstream_budget:
+            if combined_budget:
                 existing_budget = payload.get("pm_fanout_budget") if isinstance(payload.get("pm_fanout_budget"), dict) else {}
                 merged_budget = dict(existing_budget)
-                merged_budget.update(workstream_budget)
+                merged_budget.update(combined_budget)
                 payload["pm_fanout_budget"] = merged_budget
             payload["pm_routing_context"] = {
                 "dynamic": True,
@@ -5787,7 +6085,8 @@ class TaskManager:
                 "security_bot_id": "pm-security-reviewer",
                 "final_qc_bot_id": "pm-final-qc",
                 "consulted_root_system_prompt": bool(policy.get("consulted_root_system_prompt")),
-                "root_pm_bot_id": str(metadata.root_pm_bot_id or "").strip(),
+                "root_pm_bot_id": str(policy.get("root_pm_bot_id") or metadata.root_pm_bot_id or "").strip(),
+                "deterministic_signals": dict(policy.get("deterministic_signals") or {}),
             }
         return payloads
 
@@ -6169,10 +6468,10 @@ class TaskManager:
         branch_keys: List[str] = []
         for idx, item in enumerate(items):
             next_payload = dict(payload)
-            next_payload[alias] = item
+            next_payload[alias] = dict(item) if isinstance(item, dict) else item
             next_payload[index_alias] = idx
-            if isinstance(item, dict):
-                self._promote_fanout_item_fields(next_payload, item)
+            if isinstance(next_payload.get(alias), dict):
+                self._promote_fanout_item_fields(next_payload, next_payload[alias])
             next_payload["fanout_count"] = total
             if fanout_id:
                 next_payload["fanout_id"] = fanout_id
@@ -6240,6 +6539,8 @@ class TaskManager:
             "fanout_branch_key",
             "fanout_expected_branch_keys",
             "pm_routing_context",
+            "root_pm_bot_id",
+            "deterministic_signals",
             "depends_on_steps",
             "context_items",
             "assignment_request",

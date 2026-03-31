@@ -29,8 +29,13 @@ class PMOrchestrator:
     """Creates dependency-ordered tasks from a high-level chat assignment."""
 
     PM_SYSTEM_PROMPT = (
-        "You are the NexusAI Project Manager bot. Break the user's request into a deterministic "
-        "implementation workflow with explicit quality controls. Return JSON only with this shape: "
+        "You are the NexusAI Project Manager bot. Your primary function is to prevent scope drift. "
+        "You will receive an 'assignment_scope' in the payload. Inside is a 'scope_lock' object. "
+        "This 'scope_lock' is a non-negotiable directive that dictates the boundaries of the entire workflow. "
+        "You MUST generate a plan that STRICTLY adheres to this scope_lock. "
+        "If a step deviates from the domains, artifact types, or violates forbidden keywords in the scope_lock, you must reject it. "
+        "Your generated plan is the single source of truth for the entire execution graph. Get it right. "
+        "Return JSON only with this shape: "
         '{"global_acceptance_criteria":["..."],"global_quality_gates":["..."],"risks":["..."],'
         '"steps":[{"id":"step_1_code","title":"...","instruction":"...","bot_id":"pm-research-analyst","role_hint":"researcher",'
         '"step_kind":"specification","evidence_requirements":["..."],"depends_on":[],"acceptance_criteria":["..."],'
@@ -51,17 +56,14 @@ class PMOrchestrator:
         "(7) ONE UI tester step (step_7), bot_id=pm-ui-tester, depends_on=[step_6]. OMIT if no UI deliverables. "
         "(8) ONE final QC step (step_8), bot_id=pm-final-qc, depends_on=[step_7] or [step_6] when UI is omitted. "
         "RULES: "
+        "Scope: Adhere to the 'scope_lock'. If the scope_lock says 'domains: [math]', do not create plans for 'programming'. "
+        "If scope_lock says 'forbidden_keywords: [.py]', do not create steps that produce Python files. This is not a suggestion. "
         "Never start with pm-coder, pm-tester, pm-security-reviewer, pm-database-engineer, pm-ui-tester, or pm-final-qc. "
         "Always start with three parallel pm-research-analyst steps followed by pm-engineer. "
         "pm-ui-tester: only when the request includes real UI deliverables or user-facing behavior changes. "
         "pm-final-qc: terminal delivery gate only — never use as a branch retry step. "
         "No operator-owned actions: no CI/CD, commits, PRs, merges, releases unless explicitly requested. "
-        "Tester steps: test creation, execution, and behavior validation only — real execution evidence required. "
-        "Reviewer steps: concrete findings and final verification only — no merges, tags, or deploys. "
-        "Scope: implement exactly what the user asked for — nothing more, nothing less. "
-        "Prefer proposed file artifacts over claiming already-committed files. "
         "Use repo context as the source of truth for language, framework, and file extensions. "
-        "Match nearby existing files (.razor, .cs, .ts, .py, .cpp) instead of defaulting to Python."
     )
 
     def __init__(
@@ -354,8 +356,13 @@ class PMOrchestrator:
         lowered = combined_text.lower()
         docs_only = self._instruction_requests_docs_only_outputs(request_text)
         explicit_stage_exclusions = self._assignment_stage_exclusion_scope(request_text, docs_only=docs_only)
+        
+        # NEW: Scope Lock Extraction
+        scope_lock = self._extract_scope_lock(request_text)
+
         scope: Dict[str, Any] = {
             "request_text": request_text,
+            "scope_lock": scope_lock,  # Embed the scope lock here
             "conversation_brief": prior_context,
             "conversation_transcript": transcript,
             "conversation_message_count": max(0, int(conversation_message_count or 0)),
@@ -436,6 +443,55 @@ class PMOrchestrator:
             "constraint_hints": self._extract_constraint_hints(combined_text, docs_only=docs_only),
         }
         return scope
+
+    def _extract_scope_lock(self, instruction: str) -> Dict[str, Any]:
+        """
+        Parses the user instruction to create a strict 'scope lock' that all
+        downstream bots must adhere to. This is the primary mechanism for
+        preventing scope drift.
+        """
+        text = str(instruction or "").lower().strip()
+        scope_lock = {
+            "domains": [],
+            "allowed_artifacts": [],
+            "forbidden_keywords": [],
+            "raw_instruction": instruction,
+        }
+
+        # Domain Extraction
+        domain_keywords = {
+            "math": ["math", "mathematics", "algebra", "trigonometry", "statistics", "calculus"],
+            "geometry": ["geometry", "coordinate planes", "graphing"],
+            "programming": ["programming", "code", "coding", "software", "script"],
+        }
+        for domain, keywords in domain_keywords.items():
+            if any(keyword in text for keyword in keywords):
+                if domain not in scope_lock["domains"]:
+                    scope_lock["domains"].append(domain)
+
+        # Artifact & Exclusion Extraction
+        if "only" in text and "blocks" in text:
+            # More precise targeting for "only X blocks"
+            if "math" in text or "geometry" in text or "calculus" in text:
+                scope_lock["allowed_artifacts"].append("*-block.md")
+                scope_lock["forbidden_keywords"].extend(["programming", "code", "editor", "test", "peer-review"])
+
+        if self._instruction_requests_docs_only_outputs(text):
+            scope_lock["allowed_artifacts"].append("*.md")
+            scope_lock["forbidden_keywords"].extend([".py", ".json", ".js", "test", "validate", "peer-review"])
+
+        # If no specific domain is found, try to infer from common terms
+        if not scope_lock["domains"]:
+            if "block" in text and "programming" not in text:
+                # Assume non-programming blocks if not specified
+                scope_lock["domains"].append("general_content")
+
+        # Fallback if still empty
+        if not scope_lock["domains"] and not scope_lock["allowed_artifacts"] and not scope_lock["forbidden_keywords"]:
+             # No specific lock found, create a generic one based on the instruction
+             scope_lock["domains"].append("general")
+        
+        return scope_lock
 
     async def orchestrate_assignment(
         self,
