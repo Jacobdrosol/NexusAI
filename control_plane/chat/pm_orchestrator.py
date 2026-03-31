@@ -300,28 +300,41 @@ class PMOrchestrator:
             "exclude frontend",
             "ui not allowed",
             "frontend not allowed",
-            "skip ui",
-            "skip frontend",
             "omit ui",
             "omit frontend",
             "not affect the site",
             "not affect site",
             "skip pm-ui-tester",
             "omit pm-ui-tester",
+            "exclude pm-ui-tester",
+            "remove pm-ui-tester",
+            "do not involve pm-ui-tester",
+            "do not include pm-ui-tester",
+        )
+        return any(pattern in text for pattern in exclusion_patterns)
+
+    def _instruction_requests_build_only_ui(self, instruction: str) -> bool:
+        text = str(instruction or "").lower()
+        build_only_patterns = (
             "skip the ui tester",
             "omit the ui tester",
             "do not run ui tester",
             "don't run ui tester",
             "do not run the ui tester",
             "don't run the ui tester",
+            "skip ui",
+            "skip frontend",
             "skip ui test",
             "skip ui tests",
+            "no ui testing",
+            "no ui tests",
             "skip playwright",
+            "playwright is not configured",
             "playwright not configured",
             "admin side is not currently setup",
             "user side is not currently setup",
         )
-        return any(pattern in text for pattern in exclusion_patterns)
+        return any(pattern in text for pattern in build_only_patterns)
 
     def _assignment_stage_exclusion_scope(self, instruction: str, *, docs_only: bool) -> Dict[str, str]:
         text = str(instruction or "").strip()
@@ -356,6 +369,7 @@ class PMOrchestrator:
         lowered = combined_text.lower()
         docs_only = self._instruction_requests_docs_only_outputs(request_text)
         explicit_stage_exclusions = self._assignment_stage_exclusion_scope(request_text, docs_only=docs_only)
+        ui_test_mode = "build_only" if (not docs_only and self._instruction_requests_build_only_ui(request_text)) else ""
         
         # NEW: Scope Lock Extraction
         scope_lock = self._extract_scope_lock(request_text)
@@ -378,6 +392,7 @@ class PMOrchestrator:
             "forbidden_change_domains": ["code", "tests", "database", "ui"] if docs_only else [],
             "explicit_stage_exclusions": list(explicit_stage_exclusions.keys()),
             "explicit_stage_exclusion_reasons": explicit_stage_exclusions,
+            "ui_test_mode": ui_test_mode,
             "prefer_in_house": any(
                 marker in lowered
                 for marker in (

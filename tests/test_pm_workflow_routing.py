@@ -1064,7 +1064,7 @@ async def test_pm_workflow_mixed_security_pass_and_skip_still_joins_to_db(tmp_pa
 
 
 @pytest.mark.anyio
-async def test_pm_assignment_dynamic_routing_sends_database_to_db_and_ui_to_ui_validation(tmp_path):
+async def test_pm_assignment_dynamic_routing_routes_database_workstreams_through_coder_then_joined_db(tmp_path):
     from control_plane.task_manager.task_manager import TaskManager
     from shared.models import Bot, TaskMetadata
 
@@ -1096,9 +1096,10 @@ async def test_pm_assignment_dynamic_routing_sends_database_to_db_and_ui_to_ui_v
         role="pm",
         backends=[],
         system_prompt=(
-            "Route database, schema, and migration workstreams to pm-database-engineer. "
-            "Route real frontend React or Razor implementation through pm-coder and validate it with pm-ui-tester. "
-            "After specialist work is complete, run pm-security-reviewer and pm-final-qc."
+            "Create exactly three research branches by default, then join into one pm-engineer. "
+            "Route every implementation workstream through pm-coder first, including database/schema/migration work. "
+            "Every coder branch must go through pm-tester and pm-security-reviewer before a single joined "
+            "pm-database-engineer, then one pm-ui-tester, then one terminal pm-final-qc."
         ),
     ))
     tm = TaskManager(
@@ -1118,7 +1119,7 @@ async def test_pm_assignment_dynamic_routing_sends_database_to_db_and_ui_to_ui_v
         ),
     )
 
-    expected_total = 7
+    expected_total = 10
     tasks = await _wait_for_terminal(tm, "pm-final-qc", expected_total)
 
     assert len(tasks) == expected_total, f"Expected {expected_total} tasks, got {len(tasks)}: {_counts(tasks)}"
@@ -1126,23 +1127,25 @@ async def test_pm_assignment_dynamic_routing_sends_database_to_db_and_ui_to_ui_v
 
     c = _counts(tasks)
     assert c.get("pm-engineer", 0) == 1
+    assert c.get("pm-coder", 0) == 2
+    assert c.get("pm-tester", 0) == 2
+    assert c.get("pm-security-reviewer", 0) == 2
     assert c.get("pm-database-engineer", 0) == 1
-    assert c.get("pm-coder", 0) == 1
-    assert c.get("pm-tester", 0) == 1
     assert c.get("pm-ui-tester", 0) == 1
-    assert c.get("pm-security-reviewer", 0) == 1
     assert c.get("pm-final-qc", 0) == 1
 
     db_task = next(task for task in tasks if task.bot_id == "pm-database-engineer")
-    coder_task = next(task for task in tasks if task.bot_id == "pm-coder")
+    coder_tasks = [task for task in tasks if task.bot_id == "pm-coder"]
     ui_task = next(task for task in tasks if task.bot_id == "pm-ui-tester")
-    assert "Database Schema Migration" in str(db_task.payload.get("title") or "")
-    assert "React Frontend Settings Page" in str(coder_task.payload.get("title") or "")
-    assert ui_task.metadata.parent_task_id == coder_task.id
+    coder_titles = {str(task.payload.get("title") or "") for task in coder_tasks}
+    assert "Database Schema Migration" in coder_titles
+    assert "React Frontend Settings Page" in coder_titles
+    assert db_task.payload.get("join_count") == 2
+    assert ui_task.metadata.parent_task_id == db_task.id
 
 
 @pytest.mark.anyio
-async def test_pm_assignment_generic_workstreams_use_single_global_security_and_final_qc(tmp_path):
+async def test_pm_assignment_generic_workstreams_join_to_single_db_ui_and_final_qc(tmp_path):
     from control_plane.task_manager.task_manager import TaskManager
     from shared.models import TaskMetadata
 
@@ -1159,6 +1162,10 @@ async def test_pm_assignment_generic_workstreams_use_single_global_security_and_
                 return _TESTER_PASS
             if task.bot_id == "pm-security-reviewer":
                 return _SECURITY_PASS
+            if task.bot_id == "pm-database-engineer":
+                return _DB_PASS
+            if task.bot_id == "pm-ui-tester":
+                return _UI_SKIP
             if task.bot_id == "pm-final-qc":
                 return _QC_PASS
             return {"status": "pass"}
@@ -1180,7 +1187,7 @@ async def test_pm_assignment_generic_workstreams_use_single_global_security_and_
         ),
     )
 
-    expected_total = 7
+    expected_total = 10
     tasks = await _wait_for_terminal(tm, "pm-final-qc", expected_total)
 
     assert len(tasks) == expected_total, f"Expected {expected_total} tasks, got {len(tasks)}: {_counts(tasks)}"
@@ -1190,10 +1197,10 @@ async def test_pm_assignment_generic_workstreams_use_single_global_security_and_
     assert c.get("pm-engineer", 0) == 1
     assert c.get("pm-coder", 0) == 2
     assert c.get("pm-tester", 0) == 2
-    assert c.get("pm-security-reviewer", 0) == 1
+    assert c.get("pm-security-reviewer", 0) == 2
+    assert c.get("pm-database-engineer", 0) == 1
+    assert c.get("pm-ui-tester", 0) == 1
     assert c.get("pm-final-qc", 0) == 1
-    assert c.get("pm-database-engineer", 0) == 0
-    assert c.get("pm-ui-tester", 0) == 0
 
 
 @pytest.mark.anyio
@@ -1253,7 +1260,7 @@ async def test_pm_assignment_ui_data_issue_retries_db_then_ui_without_duplicate_
         ),
     )
 
-    expected_total = 8
+    expected_total = 9
     tasks = await _wait_for_terminal(tm, "pm-final-qc", expected_total)
 
     assert len(tasks) == expected_total, f"Expected {expected_total} tasks, got {len(tasks)}: {_counts(tasks)}"
@@ -1263,21 +1270,20 @@ async def test_pm_assignment_ui_data_issue_retries_db_then_ui_without_duplicate_
     assert c.get("pm-engineer", 0) == 1
     assert c.get("pm-coder", 0) == 1
     assert c.get("pm-tester", 0) == 1
-    assert c.get("pm-database-engineer", 0) == 1
+    assert c.get("pm-database-engineer", 0) == 2
     assert c.get("pm-ui-tester", 0) == 2
     assert c.get("pm-security-reviewer", 0) == 1
     assert c.get("pm-final-qc", 0) == 1
 
     ui_tasks = [task for task in tasks if task.bot_id == "pm-ui-tester"]
-    coder_task = next(task for task in tasks if task.bot_id == "pm-coder")
-    db_task = next(task for task in tasks if task.bot_id == "pm-database-engineer")
+    db_tasks = [task for task in tasks if task.bot_id == "pm-database-engineer"]
     parent_task_ids = {task.metadata.parent_task_id for task in ui_tasks}
-    assert coder_task.id in parent_task_ids
-    assert db_task.id in parent_task_ids
+    assert len(db_tasks) == 2
+    assert {task.id for task in db_tasks}.issubset(parent_task_ids)
 
 
 @pytest.mark.anyio
-async def test_pm_assignment_security_retry_reruns_single_global_security_stage(tmp_path):
+async def test_pm_assignment_security_retry_still_converges_to_db_ui_and_final_qc(tmp_path):
     from control_plane.task_manager.task_manager import TaskManager
     from shared.models import TaskMetadata
 
@@ -1294,6 +1300,10 @@ async def test_pm_assignment_security_retry_reruns_single_global_security_stage(
             if task.bot_id == "pm-security-reviewer":
                 security_runs["count"] += 1
                 return _SECURITY_FAIL if security_runs["count"] == 1 else _SECURITY_PASS
+            if task.bot_id == "pm-database-engineer":
+                return _DB_PASS
+            if task.bot_id == "pm-ui-tester":
+                return _UI_SKIP
             if task.bot_id == "pm-final-qc":
                 return _QC_PASS
             return {"status": "pass"}
@@ -1315,7 +1325,7 @@ async def test_pm_assignment_security_retry_reruns_single_global_security_stage(
         ),
     )
 
-    expected_total = 8
+    expected_total = 10
     tasks = await _wait_for_terminal(tm, "pm-final-qc", expected_total)
 
     assert len(tasks) == expected_total, f"Expected {expected_total} tasks, got {len(tasks)}: {_counts(tasks)}"
@@ -1326,9 +1336,9 @@ async def test_pm_assignment_security_retry_reruns_single_global_security_stage(
     assert c.get("pm-coder", 0) == 2
     assert c.get("pm-tester", 0) == 2
     assert c.get("pm-security-reviewer", 0) == 2
+    assert c.get("pm-database-engineer", 0) == 1
+    assert c.get("pm-ui-tester", 0) == 1
     assert c.get("pm-final-qc", 0) == 1
-    assert c.get("pm-database-engineer", 0) == 0
-    assert c.get("pm-ui-tester", 0) == 0
 
     security_tasks = [task for task in tasks if task.bot_id == "pm-security-reviewer"]
     assert sorted(str(task.result.get("status") or "") for task in security_tasks if isinstance(task.result, dict)) == [
@@ -1354,6 +1364,10 @@ async def test_pm_assignment_final_qc_retry_reruns_terminal_stage_once(tmp_path)
                 return _TESTER_PASS
             if task.bot_id == "pm-security-reviewer":
                 return _SECURITY_PASS
+            if task.bot_id == "pm-database-engineer":
+                return _DB_PASS
+            if task.bot_id == "pm-ui-tester":
+                return _UI_SKIP
             if task.bot_id == "pm-final-qc":
                 qc_runs["count"] += 1
                 return _QC_FAIL if qc_runs["count"] == 1 else _QC_PASS
@@ -1376,7 +1390,7 @@ async def test_pm_assignment_final_qc_retry_reruns_terminal_stage_once(tmp_path)
         ),
     )
 
-    expected_total = 10
+    expected_total = 14
     tasks = await _wait_for_terminal(tm, "pm-final-qc", expected_total)
 
     assert len(tasks) == expected_total, f"Expected {expected_total} tasks, got {len(tasks)}: {_counts(tasks)}"
@@ -1387,9 +1401,9 @@ async def test_pm_assignment_final_qc_retry_reruns_terminal_stage_once(tmp_path)
     assert c.get("pm-coder", 0) == 2
     assert c.get("pm-tester", 0) == 2
     assert c.get("pm-security-reviewer", 0) == 2
+    assert c.get("pm-database-engineer", 0) == 2
+    assert c.get("pm-ui-tester", 0) == 2
     assert c.get("pm-final-qc", 0) == 2
-    assert c.get("pm-database-engineer", 0) == 0
-    assert c.get("pm-ui-tester", 0) == 0
 
     qc_tasks = [task for task in tasks if task.bot_id == "pm-final-qc"]
     assert sorted(str(task.result.get("status") or "") for task in qc_tasks if isinstance(task.result, dict)) == [
@@ -1412,8 +1426,8 @@ def test_pm_workstream_route_classifier_falls_back_to_keyword_matching_without_r
         policy={"consulted_root_system_prompt": False},
     )
 
-    assert route["route_kind"] == "database_specialist"
-    assert route["target_bot_id"] == "pm-database-engineer"
+    assert route["route_kind"] == "database_coder_branch"
+    assert route["target_bot_id"] == "pm-coder"
 
 
 def test_pm_workstream_route_classifier_preserves_docs_only_lane_even_with_database_keywords():
@@ -1485,7 +1499,7 @@ def test_pm_assignment_workstream_budget_preserves_specialist_routes():
         {"title": "AI grading worker", "instruction": "Build the worker."},
     ]
     routes = [
-        {"route_kind": "database_specialist"},
+        {"route_kind": "database_coder_branch"},
         {"route_kind": "generic_coder"},
         {"route_kind": "ui_coder_validation"},
         {"route_kind": "generic_coder"},
@@ -1497,7 +1511,7 @@ def test_pm_assignment_workstream_budget_preserves_specialist_routes():
 
     assert len(trimmed_payloads) == 5
     assert [route["route_kind"] for route in trimmed_routes] == [
-        "database_specialist",
+        "database_coder_branch",
         "generic_coder",
         "ui_coder_validation",
         "generic_coder",
@@ -2043,9 +2057,9 @@ async def test_pm_assignment_loop_guard_stops_retargeting_same_bot_forever(tmp_p
 
     tasks = await _wait_for_quiescent(tm)
     c = _counts(tasks)
-    assert c.get("pm-engineer", 0) == 1
-    assert c.get("pm-coder", 0) == 3
-    assert c.get("pm-tester", 0) == 3
+    assert c.get("pm-engineer", 0) == 2
+    assert c.get("pm-coder", 0) == 6
+    assert c.get("pm-tester", 0) == 6
     assert c.get("pm-security-reviewer", 0) == 0
     assert c.get("pm-final-qc", 0) == 0
     await tm.close()

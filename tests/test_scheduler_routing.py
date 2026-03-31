@@ -1450,10 +1450,7 @@ async def test_scheduler_appends_explicit_stage_exclusion_guidance_to_system_pro
                 "but still run the database engineer and all other tests."
             ),
             "assignment_scope": {
-                "explicit_stage_exclusions": ["pm-ui-tester"],
-                "explicit_stage_exclusion_reasons": {
-                    "pm-ui-tester": "assignment_excludes_ui_stage",
-                },
+                "ui_test_mode": "build_only",
             },
         },
         status="queued",
@@ -1468,10 +1465,9 @@ async def test_scheduler_appends_explicit_stage_exclusion_guidance_to_system_pro
     result = await scheduler.schedule(task)
 
     system_message = result["payload"][0]["content"]
-    assert "Explicitly excluded downstream stages for this run: pm-ui-tester" in system_message
-    assert "return a skip/not_applicable outcome tied to assignment scope" in system_message
-    assert "treat explicitly excluded stages as intentional omissions" in system_message
-    assert "Excluded stage reasons: pm-ui-tester=assignment_excludes_ui_stage" in system_message
+    assert "UI validation mode: build_only." in system_message
+    assert "Do not skip the pm-ui-tester stage." in system_message
+    assert "Final QC must treat build_only UI validation as the intended validation mode" in system_message
 
 
 @pytest.mark.anyio

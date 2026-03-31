@@ -1635,6 +1635,35 @@ def _result_explicit_artifacts(result: Any) -> List[Dict[str, Any]]:
     return [item for item in artifacts if isinstance(item, dict)]
 
 
+def _contains_destructive_sql(text: str) -> bool:
+    normalized = str(text or "").strip()
+    if not normalized:
+        return False
+    return bool(re.search(r"(?im)\b(delete|drop|truncate)\b", normalized))
+
+
+def _database_result_contains_destructive_sql(result: Any) -> bool:
+    if not isinstance(result, dict):
+        return False
+    explicit_artifacts = _result_explicit_artifacts(result)
+    for item in explicit_artifacts:
+        content = str(item.get("content") or "")
+        path = str(item.get("path") or "").strip().lower()
+        if _contains_destructive_sql(content):
+            return True
+        if path.endswith(".sql") and _contains_destructive_sql(content):
+            return True
+    for candidate in extract_file_candidates(result):
+        path = str(candidate.get("path") or "").strip().lower()
+        content = str(candidate.get("content") or "")
+        if path.endswith(".sql") and _contains_destructive_sql(content):
+            return True
+    raw_text = str(result.get("raw_text") or result.get("content") or "").strip()
+    if _contains_destructive_sql(raw_text):
+        return True
+    return False
+
+
 def _strip_repo_output_claims_for_deny_policy(result: Any) -> Any:
     if not isinstance(result, dict):
         return result
@@ -4162,6 +4191,16 @@ class TaskManager:
                     },
                     result=result,
                 )
+            if task.bot_id == "pm-database-engineer" and _database_result_contains_destructive_sql(result):
+                raise _TaskPolicyViolation(
+                    "pm-database-engineer returned destructive SQL content; DELETE, DROP, and TRUNCATE are forbidden.",
+                    code="database_destructive_sql_forbidden",
+                    details={
+                        "bot_id": task.bot_id,
+                        "reason_code": "database_destructive_sql_forbidden",
+                    },
+                    result=result,
+                )
             if bot is not None and not bot_allows_repo_output(bot):
                 repo_output_paths = _result_repo_output_candidate_paths(result)
                 if repo_output_paths:
@@ -5348,6 +5387,15 @@ class TaskManager:
                                     payload_target_bot_id,
                                     repeat_count,
                                 )
+                                await self._create_pm_assignment_loop_escalation_task(
+                                    source_task=task,
+                                    target_bot_id=str(payload_target_bot_id or ""),
+                                    trigger_id=str(getattr(trigger, "id", "") or ""),
+                                    payload=payload,
+                                    repeat_count=repeat_count,
+                                    repeat_limit=repeat_limit,
+                                    reason="route_repeat_limit",
+                                )
                                 await self._record_workflow_loop_guard_stop(
                                     source_task=task,
                                     trigger_id=str(getattr(trigger, "id", "") or ""),
@@ -5371,6 +5419,15 @@ class TaskManager:
                                     task.id,
                                     payload_target_bot_id,
                                     target_repeat_count,
+                                )
+                                await self._create_pm_assignment_loop_escalation_task(
+                                    source_task=task,
+                                    target_bot_id=str(payload_target_bot_id or ""),
+                                    trigger_id=str(getattr(trigger, "id", "") or ""),
+                                    payload=payload,
+                                    repeat_count=target_repeat_count,
+                                    repeat_limit=repeat_limit,
+                                    reason="target_bot_repeat_limit",
                                 )
                                 await self._record_workflow_loop_guard_stop(
                                     source_task=task,
@@ -6064,10 +6121,10 @@ class TaskManager:
             )
         if any(candidate in {"pm-database-engineer", "database_engineer", "dba", "dba-sql"} for candidate in candidates):
             return {
-                "route_kind": "database_specialist",
-                "target_bot_id": "pm-database-engineer",
-                "branch_completion_bot_ids": ["pm-database-engineer"],
-                "route_reason": "explicit_workstream_route",
+                "route_kind": "database_coder_branch",
+                "target_bot_id": "pm-coder",
+                "branch_completion_bot_ids": ["pm-security-reviewer"],
+                "route_reason": "explicit_workstream_route_coerced_to_coder",
             }
         if any(candidate in {"pm-coder", "frontend_developer", "ui", "ui_tester"} for candidate in candidates):
             haystack = self._pm_workstream_routing_text(payload)
@@ -6075,7 +6132,7 @@ class TaskManager:
                 return {
                     "route_kind": "ui_coder_validation",
                     "target_bot_id": "pm-coder",
-                    "branch_completion_bot_ids": ["pm-tester", "pm-ui-tester"],
+                    "branch_completion_bot_ids": ["pm-security-reviewer"],
                     "route_reason": "explicit_workstream_route",
                 }
         return None
@@ -6172,7 +6229,7 @@ class TaskManager:
 
     def _pm_assignment_workstream_lane(self, payload: Dict[str, Any], route: Dict[str, Any]) -> str:
         route_kind = str(route.get("route_kind") or "").strip()
-        if route_kind == "database_specialist":
+        if route_kind == "database_coder_branch":
             return "database"
         if route_kind == "ui_coder_validation":
             return "ui"
@@ -6282,41 +6339,41 @@ class TaskManager:
             return {
                 "route_kind": "ui_coder_validation",
                 "target_bot_id": default_target_bot_id,
-                "branch_completion_bot_ids": ["pm-tester", "pm-ui-tester"],
+                "branch_completion_bot_ids": ["pm-security-reviewer"],
                 "route_reason": "system_prompt+keyword" if consulted_prompt else "keyword",
             }
         if database_match:
             return {
-                "route_kind": "database_specialist",
-                "target_bot_id": "pm-database-engineer",
-                "branch_completion_bot_ids": ["pm-database-engineer"],
-                "route_reason": "system_prompt+keyword" if consulted_prompt else "keyword",
+                "route_kind": "database_coder_branch",
+                "target_bot_id": default_target_bot_id,
+                "branch_completion_bot_ids": ["pm-security-reviewer"],
+                "route_reason": "system_prompt+keyword_db_via_coder" if consulted_prompt else "keyword_db_via_coder",
             }
         if ui_match:
             return {
                 "route_kind": "ui_coder_validation",
                 "target_bot_id": default_target_bot_id,
-                "branch_completion_bot_ids": ["pm-tester", "pm-ui-tester"],
+                "branch_completion_bot_ids": ["pm-security-reviewer"],
                 "route_reason": "system_prompt+keyword" if consulted_prompt else "keyword",
             }
         if bool(deterministic_signals.get("missing_downstream_stage_db")):
             return {
-                "route_kind": "database_specialist",
-                "target_bot_id": "pm-database-engineer",
-                "branch_completion_bot_ids": ["pm-database-engineer"],
-                "route_reason": "deterministic_signal_db",
+                "route_kind": "database_coder_branch",
+                "target_bot_id": default_target_bot_id,
+                "branch_completion_bot_ids": ["pm-security-reviewer"],
+                "route_reason": "deterministic_signal_db_via_coder",
             }
         if bool(deterministic_signals.get("missing_downstream_stage_ui")):
             return {
                 "route_kind": "ui_coder_validation",
                 "target_bot_id": default_target_bot_id,
-                "branch_completion_bot_ids": ["pm-tester", "pm-ui-tester"],
+                "branch_completion_bot_ids": ["pm-security-reviewer"],
                 "route_reason": "deterministic_signal_ui",
             }
         return {
             "route_kind": "generic_coder",
             "target_bot_id": default_target_bot_id,
-            "branch_completion_bot_ids": ["pm-tester"],
+            "branch_completion_bot_ids": ["pm-security-reviewer"],
             "route_reason": "default",
         }
 
@@ -6473,19 +6530,6 @@ class TaskManager:
         return normalized
 
     def _should_skip_dynamic_pm_trigger(self, task: Task, *, target_bot_id: str) -> bool:
-        context = self._payload_pm_routing_context(task.payload)
-        if not bool(context.get("dynamic")):
-            return False
-        global_stage = str(context.get("global_stage") or "").strip()
-        route_kind = str(context.get("route_kind") or "").strip()
-        if task.bot_id == "pm-tester" and target_bot_id == "pm-security-reviewer":
-            return True
-        if task.bot_id == "pm-database-engineer" and target_bot_id == "pm-ui-tester":
-            return route_kind != "ui_coder_validation"
-        if task.bot_id == "pm-ui-tester" and target_bot_id == "pm-final-qc":
-            return True
-        if global_stage == "security_review" and task.bot_id == "pm-security-reviewer" and target_bot_id == "pm-database-engineer":
-            return True
         return False
 
     async def _collect_dynamic_pm_completion_task_map(
@@ -6642,28 +6686,68 @@ class TaskManager:
         )
 
     async def _dispatch_dynamic_pm_supplemental_tasks(self, task: Task) -> None:
-        if task.status != "completed" or not isinstance(task.payload, dict):
+        return
+
+    async def _create_pm_assignment_loop_escalation_task(
+        self,
+        *,
+        source_task: Task,
+        target_bot_id: str,
+        trigger_id: str,
+        payload: Dict[str, Any],
+        repeat_count: int,
+        repeat_limit: int,
+        reason: str,
+    ) -> None:
+        metadata = source_task.metadata or TaskMetadata()
+        if str(metadata.run_class or "").strip().lower() != "pm_assignment":
             return
-        context = self._payload_pm_routing_context(task.payload)
-        if not bool(context.get("dynamic")):
+        if source_task.bot_id not in {"pm-tester", "pm-security-reviewer"}:
             return
-        if not self._pm_dynamic_progress_result(task.result):
+        if target_bot_id != "pm-coder":
             return
-        route_kind = str(context.get("route_kind") or "").strip()
-        global_stage = str(context.get("global_stage") or "").strip()
-        branch_completion_bot_ids = {
-            str(bot_id).strip()
-            for bot_id in (context.get("branch_completion_bot_ids") or [])
-            if str(bot_id).strip()
+        fanout_id = str(payload.get("fanout_id") or self._resolve_fanout_id(payload) or "").strip()
+        branch_key = str(payload.get("fanout_branch_key") or self._resolve_join_branch_key(payload) or "").strip()
+        if not branch_key:
+            branch_key = self._workflow_route_branch_identity(source_task, payload)
+        workflow_root_id = str(metadata.workflow_root_task_id or source_task.id).strip() or "root"
+        step_id = f"pm-loop-escalation:{workflow_root_id}:{self._normalize_branch_token(branch_key, fallback='branch')}"
+        existing = await self._find_task_by_step_id(step_id, "pm-engineer")
+        if existing is not None and existing.status in {"queued", "blocked", "running", "completed"}:
+            return
+        escalation_payload = self._build_default_trigger_payload(source_task, "pm-engineer")
+        escalation_payload["title"] = "Escalated PM branch remediation"
+        escalation_payload["instruction"] = (
+            "A branch exceeded the PM feedback loop retry limit. Reassess the branch architecture, "
+            "adjust the plan or workstream contract, and restart remediation forward from engineering."
+        )
+        escalation_payload["failure_type"] = "escalation_required"
+        escalation_payload["fanout_id"] = fanout_id
+        escalation_payload["fanout_branch_key"] = branch_key
+        escalation_payload["loop_guard"] = {
+            "reason": reason,
+            "source_bot_id": source_task.bot_id,
+            "target_bot_id": target_bot_id,
+            "repeat_count": repeat_count,
+            "repeat_limit": repeat_limit,
+            "trigger_id": trigger_id,
         }
-        if task.bot_id == "pm-coder" and route_kind == "ui_coder_validation":
-            await self._create_dynamic_pm_ui_validation_task(task, context)
-        if task.bot_id == "pm-database-engineer" and route_kind == "ui_coder_validation":
-            await self._create_dynamic_pm_ui_validation_task(task, context)
-        if task.bot_id in branch_completion_bot_ids:
-            await self._maybe_create_dynamic_pm_global_security_task(task, context)
-        if global_stage == "security_review" and task.bot_id == str(context.get("security_bot_id") or "pm-security-reviewer").strip():
-            await self._create_dynamic_pm_final_qc_task(task, context)
+        escalation_payload["upstream_failure_type"] = self._workflow_route_failure_type(source_task)
+        if isinstance(source_task.result, dict):
+            escalation_payload["upstream_findings"] = source_task.result.get("findings")
+            escalation_payload["upstream_evidence"] = source_task.result.get("evidence")
+            escalation_payload["upstream_handoff_notes"] = source_task.result.get("handoff_notes")
+        child_metadata = self._trigger_child_metadata(
+            metadata,
+            parent_task_id=source_task.id,
+            trigger_rule_id="pm-loop-escalation",
+            step_id=step_id,
+        )
+        await self.create_task(
+            bot_id="pm-engineer",
+            payload=escalation_payload,
+            metadata=child_metadata,
+        )
 
     def _dynamic_pm_stage_blocks_creation(self, task: Optional[Task]) -> bool:
         if task is None:

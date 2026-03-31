@@ -211,6 +211,7 @@ def _assignment_scope_prompt_suffix(payload: Any) -> str:
     constraint_hints = scope.get("constraint_hints")
     explicit_stage_exclusions = scope.get("explicit_stage_exclusions")
     explicit_stage_exclusion_reasons = scope.get("explicit_stage_exclusion_reasons")
+    ui_test_mode = str(scope.get("ui_test_mode") or "").strip().lower()
     if (
         not docs_only
         and not request_text
@@ -227,6 +228,7 @@ def _assignment_scope_prompt_suffix(payload: Any) -> str:
         and not requested_artifact_hints
         and not constraint_hints
         and not explicit_stage_exclusions
+        and not ui_test_mode
     ):
         return ""
 
@@ -309,6 +311,14 @@ def _assignment_scope_prompt_suffix(payload: Any) -> str:
                 ]
                 if normalized_reasons:
                     parts.append("Excluded stage reasons: " + ", ".join(normalized_reasons[:8]))
+    if ui_test_mode == "build_only":
+        parts.append(
+            "UI validation mode: build_only. Do not skip the pm-ui-tester stage. "
+            "Run install/build/runtime validation and inspect startup or runtime errors, but do not require interactive browser automation."
+        )
+        parts.append(
+            "Final QC must treat build_only UI validation as the intended validation mode for this run, not as a missing stage."
+        )
     if docs_only:
         parts.append(
             "This is a documentation-only run. Allowed committed outputs are documentation files only, preferably markdown. "

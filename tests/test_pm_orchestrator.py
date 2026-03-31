@@ -2102,10 +2102,7 @@ async def test_wait_for_completion_tracks_intentionally_excluded_ui_stage_from_a
                 "but still run the database engineer and all other tests."
             ),
             "assignment_scope": {
-                "explicit_stage_exclusions": ["pm-ui-tester"],
-                "explicit_stage_exclusion_reasons": {
-                    "pm-ui-tester": "assignment_excludes_ui_stage",
-                },
+                "ui_test_mode": "build_only",
             },
         },
         metadata=TaskMetadata(source="chat_assign", orchestration_id="orch-skip-ui"),
@@ -2162,21 +2159,31 @@ async def test_wait_for_completion_tracks_intentionally_excluded_ui_stage_from_a
         updated_at="2026-03-27T00:00:09+00:00",
         result={"status": "pass"},
     )
+    ui_task = Task(
+        id="task-ui",
+        bot_id="pm-ui-tester",
+        payload={"title": "Build-only UI validation"},
+        metadata=TaskMetadata(source="bot_trigger", orchestration_id="orch-skip-ui", parent_task_id="task-db"),
+        status="completed",
+        created_at="2026-03-27T00:00:09+00:00",
+        updated_at="2026-03-27T00:00:10+00:00",
+        result={"status": "skip", "outcome": "skip", "failure_type": "skip"},
+    )
     final_qc = Task(
         id="task-final",
         bot_id="pm-final-qc",
         payload={"title": "Final QC"},
-        metadata=TaskMetadata(source="bot_trigger", orchestration_id="orch-skip-ui", parent_task_id="task-db"),
+        metadata=TaskMetadata(source="bot_trigger", orchestration_id="orch-skip-ui", parent_task_id="task-ui"),
         status="completed",
-        created_at="2026-03-27T00:00:10+00:00",
-        updated_at="2026-03-27T00:00:11+00:00",
+        created_at="2026-03-27T00:00:11+00:00",
+        updated_at="2026-03-27T00:00:12+00:00",
         result={"status": "pass"},
     )
     task_manager = type(
         "TaskManager",
         (),
         {
-            "list_tasks": AsyncMock(return_value=[root_task, coder_task, tester_task, reviewer_task, db_task, final_qc]),
+            "list_tasks": AsyncMock(return_value=[root_task, coder_task, tester_task, reviewer_task, db_task, ui_task, final_qc]),
             "get_task": AsyncMock(
                 side_effect=lambda task_id: {
                     "task-pm-coder": root_task,
@@ -2184,6 +2191,7 @@ async def test_wait_for_completion_tracks_intentionally_excluded_ui_stage_from_a
                     "task-tester": tester_task,
                     "task-review": reviewer_task,
                     "task-db": db_task,
+                    "task-ui": ui_task,
                     "task-final": final_qc,
                 }[task_id]
             ),
@@ -2209,9 +2217,11 @@ async def test_wait_for_completion_tracks_intentionally_excluded_ui_stage_from_a
 
     assert completion["workflow_complete"] is True
     assert "pm-ui-tester" not in completion["missing_stages"]
-    assert "pm-ui-tester" in completion["intentionally_excluded_stages"]
-    assert "excluded_downstream_stage:pm-ui-tester:assignment_excludes_ui_stage" in completion["workflow_policy_codes"]
-    assert "Intentionally excluded stages (assignment scope): pm-ui-tester" in completion["summary_text"]
+    assert "pm-ui-tester" not in completion["intentionally_excluded_stages"]
+    assert not any(
+        code.startswith("excluded_downstream_stage:pm-ui-tester")
+        for code in completion["workflow_policy_codes"]
+    )
 
 
 @pytest.mark.anyio
@@ -2702,6 +2712,6 @@ async def test_bootstrap_via_pm_workflow_persists_explicit_ui_stage_exclusion() 
     payload = task_manager.create_task.await_args.kwargs["payload"]
     scope = payload["assignment_scope"]
     assert scope["docs_only"] is False
-    assert scope["explicit_stage_exclusions"] == ["pm-ui-tester"]
-    assert scope["explicit_stage_exclusion_reasons"]["pm-ui-tester"] == "assignment_excludes_ui_stage"
+    assert scope["explicit_stage_exclusions"] == []
+    assert scope["ui_test_mode"] == "build_only"
 
