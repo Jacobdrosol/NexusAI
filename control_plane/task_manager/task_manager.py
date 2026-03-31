@@ -5667,7 +5667,7 @@ class TaskManager:
 
     def _pm_assignment_requested_output_paths(self, payload: Dict[str, Any]) -> Set[str]:
         requested: Set[str] = set()
-        for node in self._payload_source_chain(payload):
+        for index, node in enumerate(self._payload_source_chain(payload)):
             if not isinstance(node, dict):
                 continue
             scope = node.get("assignment_scope")
@@ -5676,6 +5676,12 @@ class TaskManager:
                     normalized = str(item or "").strip().replace("\\", "/").strip("`")
                     if normalized:
                         requested.add(normalized)
+            # Only upstream assignment context should authorize repo outputs. The
+            # current PM-generated branch payload may itself contain stray paths
+            # (top-level files, temp SQL variants, test_logs outputs), and using
+            # those generated paths as "requested" would defeat sanitization.
+            if index == 0:
+                continue
             for item in _normalize_string_list(node.get("deliverables")):
                 normalized = str(item or "").strip().replace("\\", "/").strip("`")
                 if _looks_like_repo_file(normalized):
@@ -5814,6 +5820,21 @@ class TaskManager:
                 repo_paths.append(normalized)
         return repo_paths
 
+    def _pm_assignment_payload_repo_tokens(self, payload: Dict[str, Any]) -> List[str]:
+        tokens: List[str] = []
+        seen: Set[str] = set()
+        for path in self._pm_assignment_payload_repo_paths(payload):
+            normalized = str(path or "").strip().replace("\\", "/").lower()
+            if not normalized:
+                continue
+            sql_variant_key = self._pm_assignment_sql_variant_key(normalized)
+            token = f"sql_variant:{sql_variant_key}" if sql_variant_key else normalized
+            if token in seen:
+                continue
+            seen.add(token)
+            tokens.append(token)
+        return tokens
+
     def _prune_pm_assignment_workstream_payloads(
         self,
         payloads: List[Any],
@@ -5923,6 +5944,56 @@ class TaskManager:
         capped_payloads, _, budget = self._pm_assignment_workstream_budget(payloads, routes)
         return capped_payloads, budget
 
+    def _pm_assignment_workstream_trigger_items(
+        self,
+        task: Task,
+        trigger: Any,
+        items: List[Any],
+    ) -> Tuple[List[Any], Optional[Dict[str, Any]]]:
+        metadata = task.metadata or TaskMetadata()
+        if task.bot_id != "pm-engineer":
+            return items, None
+        if str(getattr(trigger, "target_bot_id", "") or "").strip() != "pm-coder":
+            return items, None
+        if str(metadata.run_class or "").strip().lower() != "pm_assignment":
+            return items, None
+        if not items or not all(isinstance(item, dict) for item in items):
+            return items, None
+
+        payloads, path_filter_budget = self._prune_pm_assignment_workstream_payloads(items)
+        payloads = [self._sanitize_pm_assignment_branch_payload(payload) for payload in payloads if isinstance(payload, dict)]
+        payloads, dedupe_budget = self._dedupe_pm_assignment_workstream_payloads(payloads)
+        policy: Dict[str, Any] = {
+            "consulted_root_system_prompt": False,
+        }
+        payload_root_pm_bot_id = str(self._payload_chain_field(task.payload, "root_pm_bot_id") or "").strip()
+        root_pm_bot_id = str((metadata.root_pm_bot_id or payload_root_pm_bot_id or "")).strip()
+        if root_pm_bot_id:
+            policy["root_pm_bot_id"] = root_pm_bot_id
+        deterministic_signals = self._payload_chain_field(task.payload, "deterministic_signals")
+        if isinstance(deterministic_signals, dict):
+            policy["deterministic_signals"] = deterministic_signals
+        routes = [
+            self._classify_pm_workstream_route(
+                payload,
+                default_target_bot_id="pm-coder",
+                policy=policy,
+            )
+            for payload in payloads
+        ]
+        payloads, _, workstream_budget = self._pm_assignment_workstream_budget(payloads, routes)
+
+        combined_budget = None
+        if path_filter_budget or dedupe_budget or workstream_budget:
+            combined_budget = {}
+            if path_filter_budget:
+                combined_budget.update(path_filter_budget)
+            if dedupe_budget:
+                combined_budget.update(dedupe_budget)
+            if workstream_budget:
+                combined_budget.update(workstream_budget)
+        return payloads, combined_budget
+
     def _dedupe_pm_assignment_workstream_payloads(
         self,
         payloads: List[Any],
@@ -5948,11 +6019,7 @@ class TaskManager:
             fingerprint = json.dumps(fingerprint_payload, sort_keys=True)
             if fingerprint in seen:
                 continue
-            repo_paths = [
-                str(path).strip().replace("\\", "/").lower()
-                for path in self._pm_assignment_payload_repo_paths(payload)
-                if str(path).strip()
-            ]
+            repo_paths = self._pm_assignment_payload_repo_tokens(payload)
             repo_fingerprint = ""
             if repo_paths:
                 repo_fingerprint = json.dumps(
@@ -6815,6 +6882,7 @@ class TaskManager:
             return []
         items, trigger_filter = self._pm_assignment_research_trigger_items(task, trigger, items)
         items, fanout_budget = self._pm_assignment_research_fanout_budget(task, trigger, items)
+        items, implementation_budget = self._pm_assignment_workstream_trigger_items(task, trigger, items)
         alias = str(getattr(trigger, "fan_out_alias", "") or "").strip() or "item"
         index_alias = str(getattr(trigger, "fan_out_index_alias", "") or "").strip() or "item_index"
         total = len(items)
@@ -6835,6 +6903,8 @@ class TaskManager:
                 pm_fanout_budget.update(trigger_filter)
             if fanout_budget:
                 pm_fanout_budget.update(fanout_budget)
+            if implementation_budget:
+                pm_fanout_budget.update(implementation_budget)
             if pm_fanout_budget:
                 next_payload["pm_fanout_budget"] = pm_fanout_budget
             branch_key = self._fanout_branch_key(trigger, next_payload)
