@@ -1348,6 +1348,169 @@ async def test_pm_assignment_security_retry_still_converges_to_db_ui_and_final_q
 
 
 @pytest.mark.anyio
+async def test_pm_assignment_missing_downstream_stage_signals_synthesize_db_ui_and_final_qc(tmp_path):
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot, TaskMetadata
+
+    class StubScheduler:
+        async def schedule(self, task):
+            if task.bot_id == "pm-engineer":
+                return _engineer_result("Backend API Extension", "React Frontend Settings Page")
+            if task.bot_id == "pm-coder":
+                return _CODER_PASS
+            if task.bot_id == "pm-tester":
+                return _TESTER_PASS
+            if task.bot_id == "pm-security-reviewer":
+                return _SECURITY_PASS
+            if task.bot_id == "pm-database-engineer":
+                return _DB_PASS
+            if task.bot_id == "pm-ui-tester":
+                return _UI_SKIP
+            if task.bot_id == "pm-final-qc":
+                return _QC_PASS
+            return {"status": "pass"}
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "pm-bots-missing-downstream.db"))
+
+    await bot_registry.register(Bot(
+        id="pm-engineer",
+        name="PM Code Engineer",
+        role="engineer",
+        backends=[],
+        workflow={
+            "triggers": [
+                {
+                    "id": "fanout-to-coders",
+                    "event": "task_completed",
+                    "target_bot_id": "pm-coder",
+                    "condition": "has_result",
+                    "result_field": "status",
+                    "result_equals": "pass",
+                    "fan_out_field": "implementation_workstreams",
+                    "fan_out_alias": "workstream",
+                },
+            ]
+        },
+    ))
+    await bot_registry.register(Bot(
+        id="pm-coder",
+        name="PM Coder",
+        role="coder",
+        backends=[],
+        workflow={
+            "triggers": [
+                {
+                    "id": "pass-to-tester",
+                    "event": "task_completed",
+                    "target_bot_id": "pm-tester",
+                    "condition": "has_result",
+                    "result_field": "status",
+                    "result_equals": "pass",
+                },
+            ]
+        },
+    ))
+    await bot_registry.register(Bot(
+        id="pm-tester",
+        name="PM Tester",
+        role="tester",
+        backends=[],
+        workflow={
+            "triggers": [
+                {
+                    "id": "pass-to-security",
+                    "event": "task_completed",
+                    "target_bot_id": "pm-security-reviewer",
+                    "condition": "has_result",
+                    "result_field": "status",
+                    "result_equals": "pass",
+                },
+            ]
+        },
+    ))
+    await bot_registry.register(Bot(
+        id="pm-security-reviewer",
+        name="PM Security Reviewer",
+        role="security-reviewer",
+        backends=[],
+        workflow={"triggers": []},
+    ))
+    await bot_registry.register(Bot(
+        id="pm-database-engineer",
+        name="PM Database Engineer",
+        role="dba-sql",
+        backends=[],
+        workflow={"triggers": []},
+    ))
+    await bot_registry.register(Bot(
+        id="pm-ui-tester",
+        name="PM UI Tester",
+        role="ui-tester",
+        backends=[],
+        workflow={"triggers": []},
+    ))
+    await bot_registry.register(Bot(
+        id="pm-final-qc",
+        name="PM Final QC",
+        role="final-qc",
+        backends=[],
+        workflow={"triggers": []},
+    ))
+
+    tm = TaskManager(
+        StubScheduler(),
+        db_path=str(tmp_path / "pm-routing-missing-downstream.db"),
+        bot_registry=bot_registry,
+    )
+
+    await tm.create_task(
+        bot_id="pm-engineer",
+        payload={
+            "instruction": "implement the backend API extension and frontend settings page",
+            "root_pm_bot_id": "pm-orchestrator",
+            "deterministic_signals": {
+                "missing_downstream_stage_db": True,
+                "missing_downstream_stage_ui": True,
+                "missing_downstream_stage_final_qc": True,
+            },
+            "assignment_scope": {
+                "ui_test_mode": "build_only",
+            },
+        },
+        metadata=TaskMetadata(
+            source="chat_assign",
+            orchestration_id="orch-missing-downstream",
+            root_pm_bot_id="pm-orchestrator",
+            run_class="pm_assignment",
+        ),
+    )
+
+    expected_total = 10
+    tasks = await _wait_for_terminal(tm, "pm-final-qc", expected_total)
+
+    assert len(tasks) == expected_total, f"Expected {expected_total} tasks, got {len(tasks)}: {_counts(tasks)}"
+    assert all(t.status == "completed" for t in tasks)
+
+    c = _counts(tasks)
+    assert c.get("pm-engineer", 0) == 1
+    assert c.get("pm-coder", 0) == 2
+    assert c.get("pm-tester", 0) == 2
+    assert c.get("pm-security-reviewer", 0) == 2
+    assert c.get("pm-database-engineer", 0) == 1
+    assert c.get("pm-ui-tester", 0) == 1
+    assert c.get("pm-final-qc", 0) == 1
+
+    db_task = next(task for task in tasks if task.bot_id == "pm-database-engineer")
+    ui_task = next(task for task in tasks if task.bot_id == "pm-ui-tester")
+    final_task = next(task for task in tasks if task.bot_id == "pm-final-qc")
+
+    assert db_task.metadata.trigger_rule_id == "pm-dynamic-database-gate"
+    assert ui_task.metadata.trigger_rule_id == "pm-dynamic-ui-gate"
+    assert final_task.metadata.trigger_rule_id == "pm-dynamic-final-qc"
+
+
+@pytest.mark.anyio
 async def test_pm_assignment_final_qc_retry_reruns_terminal_stage_once(tmp_path):
     from control_plane.task_manager.task_manager import TaskManager
     from shared.models import TaskMetadata

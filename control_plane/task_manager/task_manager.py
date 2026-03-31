@@ -5366,8 +5366,7 @@ class TaskManager:
         except Exception:
             return
         workflow = self._bot_workflow(bot)
-        if workflow is None or not workflow.triggers:
-            return
+        triggers = getattr(workflow, "triggers", None) or []
 
         metadata = task.metadata or TaskMetadata()
 
@@ -5408,7 +5407,7 @@ class TaskManager:
             event,
             trigger_depth,
         )
-        for trigger in workflow.triggers:
+        for trigger in triggers:
             try:
                 if not trigger.enabled or trigger.event != event:
                     continue
@@ -6062,6 +6061,20 @@ class TaskManager:
         workstream = normalized.get("workstream")
         if isinstance(workstream, dict):
             workstream_copy = dict(workstream)
+            for field_name in ("bot_id", "target_bot_id", "assigned_bot_id"):
+                raw_value = str(workstream_copy.get(field_name) or "").strip()
+                if not raw_value or raw_value == "pm-coder":
+                    continue
+                workstream_copy[field_name] = "pm-coder"
+                contract_bot_changed = True
+            workstream_role_hint = str(workstream_copy.get("role_hint") or "").strip().lower()
+            if workstream_role_hint and workstream_role_hint not in {"coder", "developer", "engineer", "implementation"}:
+                workstream_copy["role_hint"] = "coder"
+                contract_bot_changed = True
+            workstream_step_kind = str(workstream_copy.get("step_kind") or "").strip().lower()
+            if workstream_step_kind in {"planning", "specification", "analysis", "review", "validation", "test_execution"}:
+                workstream_copy["step_kind"] = "repo_change"
+                contract_bot_changed = True
             workstream_deliverables = workstream_copy.get("deliverables")
             if isinstance(workstream_deliverables, list):
                 workstream_copy["deliverables"] = self._sanitize_pm_assignment_repo_paths(
@@ -6754,12 +6767,20 @@ class TaskManager:
             return normalized
         normalized["global_stage"] = stage_name
         normalized["branch_key"] = f"global:{stage_name}"
-        if stage_name == "security_review":
+        if stage_name == "database":
+            normalized["route_kind"] = "global_database_stage"
+            normalized["branch_completion_bot_ids"] = []
+            normalized["branch_completion_tokens"] = []
+        elif stage_name == "security_review":
             normalized["route_kind"] = "global_security_review"
             normalized["branch_completion_bot_ids"] = ["pm-tester"]
             normalized["branch_completion_tokens"] = [
                 self._pm_dynamic_completion_token(normalized["branch_key"], "pm-tester")
             ]
+        elif stage_name == "ui_validation":
+            normalized["route_kind"] = "global_ui_validation"
+            normalized["branch_completion_bot_ids"] = []
+            normalized["branch_completion_tokens"] = []
         elif stage_name == "final_qc":
             normalized["route_kind"] = "global_final_qc"
             normalized["branch_completion_bot_ids"] = []
@@ -6767,7 +6788,196 @@ class TaskManager:
         return normalized
 
     def _should_skip_dynamic_pm_trigger(self, task: Task, *, target_bot_id: str) -> bool:
-        return False
+        if not self._pm_assignment_dynamic_management_enabled(task):
+            return False
+        if not isinstance(task.payload, dict):
+            return False
+        signal_by_stage = {
+            "pm-database-engineer": "missing_downstream_stage_db",
+            "pm-ui-tester": "missing_downstream_stage_ui",
+            "pm-final-qc": "missing_downstream_stage_final_qc",
+        }
+        signal_name = signal_by_stage.get(str(target_bot_id or "").strip())
+        if not signal_name:
+            return False
+        context = self._payload_pm_routing_context(task.payload)
+        deterministic_signals = (
+            context.get("deterministic_signals")
+            if isinstance(context.get("deterministic_signals"), dict)
+            else self._payload_chain_field(task.payload, "deterministic_signals")
+        )
+        if not isinstance(deterministic_signals, dict):
+            return False
+        return bool(deterministic_signals.get(signal_name))
+
+    def _pm_assignment_stage_exclusion_reasons(self, payload: Any) -> Dict[str, str]:
+        if not isinstance(payload, dict):
+            return {}
+        scope = _payload_assignment_scope(payload)
+        raw_reasons = scope.get("explicit_stage_exclusion_reasons")
+        if isinstance(raw_reasons, dict):
+            return {
+                str(stage_id).strip(): str(reason).strip()
+                for stage_id, reason in raw_reasons.items()
+                if str(stage_id).strip()
+            }
+        raw_exclusions = scope.get("explicit_stage_exclusions")
+        if not isinstance(raw_exclusions, list):
+            return {}
+        return {
+            str(stage_id).strip(): "assignment_scope_exclusion"
+            for stage_id in raw_exclusions
+            if str(stage_id).strip()
+        }
+
+    def _pm_assignment_stage_is_excluded(self, payload: Any, stage_id: str) -> bool:
+        return str(stage_id or "").strip() in self._pm_assignment_stage_exclusion_reasons(payload)
+
+    def _pm_dynamic_context(self, task: Task) -> Dict[str, Any]:
+        if not isinstance(task.payload, dict):
+            return {}
+        context = dict(self._payload_pm_routing_context(task.payload))
+        if "dynamic" not in context:
+            context["dynamic"] = bool(context)
+        if not context.get("fanout_id"):
+            context["fanout_id"] = str(self._resolve_fanout_id(task.payload) or "").strip()
+        deterministic_signals = context.get("deterministic_signals")
+        if not isinstance(deterministic_signals, dict):
+            deterministic_signals = self._payload_chain_field(task.payload, "deterministic_signals")
+        if isinstance(deterministic_signals, dict):
+            context["deterministic_signals"] = dict(deterministic_signals)
+        if not context.get("root_pm_bot_id"):
+            payload_root_pm_bot_id = str(self._payload_chain_field(task.payload, "root_pm_bot_id") or "").strip()
+            metadata = task.metadata or TaskMetadata()
+            context["root_pm_bot_id"] = str(metadata.root_pm_bot_id or payload_root_pm_bot_id or "").strip()
+        return context
+
+    async def _find_dynamic_pm_stage_task(
+        self,
+        task: Task,
+        *,
+        bot_id: str,
+        fanout_id: str,
+        global_stage: str,
+    ) -> Optional[Task]:
+        metadata = task.metadata or TaskMetadata()
+        root_id = metadata.workflow_root_task_id or task.id
+        orchestration_id = str(metadata.orchestration_id or "").strip()
+        project_id = str(metadata.project_id or "").strip()
+        best_match: Optional[Task] = None
+        for candidate in self._tasks.values():
+            candidate_meta = candidate.metadata or TaskMetadata()
+            if str(candidate.bot_id or "").strip() != str(bot_id or "").strip():
+                continue
+            if (candidate_meta.workflow_root_task_id or candidate.id) != root_id:
+                continue
+            if str(candidate_meta.orchestration_id or "").strip() != orchestration_id:
+                continue
+            if str(candidate_meta.project_id or "").strip() != project_id:
+                continue
+            candidate_context = self._payload_pm_routing_context(candidate.payload)
+            candidate_global_stage = str(candidate_context.get("global_stage") or "").strip()
+            if candidate_global_stage and candidate_global_stage != global_stage:
+                continue
+            candidate_fanout_id = (
+                str(candidate_context.get("fanout_id") or "").strip()
+                or (
+                    str(self._resolve_fanout_id(candidate.payload) or "").strip()
+                    if isinstance(candidate.payload, dict)
+                    else ""
+                )
+            )
+            if fanout_id and candidate_fanout_id != fanout_id:
+                continue
+            if best_match is None or self._task_order_token(candidate) >= self._task_order_token(best_match):
+                best_match = candidate
+        return best_match
+
+    async def _create_dynamic_pm_database_task(self, task: Task, context: Dict[str, Any]) -> None:
+        metadata = task.metadata or TaskMetadata()
+        expected_tokens = [
+            str(token).strip()
+            for token in (context.get("global_completion_tokens") or [])
+            if str(token).strip()
+        ]
+        fanout_id = str(context.get("fanout_id") or "").strip()
+        if not expected_tokens or not fanout_id:
+            return
+        matched_tasks = await self._collect_dynamic_pm_completion_task_map(task, context)
+        if any(token not in matched_tasks for token in expected_tokens):
+            return
+        existing = await self._find_dynamic_pm_stage_task(
+            task,
+            bot_id="pm-database-engineer",
+            fanout_id=fanout_id,
+            global_stage="database",
+        )
+        if self._dynamic_pm_stage_blocks_creation(existing):
+            return
+        payload = self._build_default_trigger_payload(task, "pm-database-engineer")
+        ordered_tasks = [matched_tasks[token] for token in expected_tokens]
+        payload["title"] = "Database migration and validation"
+        payload["instruction"] = (
+            "After all required implementation security branches pass or skip, produce the single canonical "
+            "database migration or schema validation result for the assignment. Return skip/not_applicable when no "
+            "database change is required."
+        )
+        payload["join_task_ids"] = [matched.id for matched in ordered_tasks]
+        payload["join_results"] = [matched.result for matched in ordered_tasks]
+        payload["join_items"] = [
+            {
+                "source_task_id": matched.id,
+                "source_bot_id": matched.bot_id,
+                "source_payload": matched.payload,
+                "source_result": matched.result,
+                "completion_token": token,
+            }
+            for token, matched in zip(expected_tokens, ordered_tasks)
+        ]
+        payload["pm_routing_context"] = self._pm_dynamic_global_stage_context(context, global_stage="database")
+        child_metadata = self._trigger_child_metadata(
+            metadata,
+            parent_task_id=task.id,
+            trigger_rule_id="pm-dynamic-database-gate",
+            step_id=f"pm-dynamic-db:{fanout_id}",
+        )
+        await self.create_task(
+            bot_id="pm-database-engineer",
+            payload=payload,
+            metadata=child_metadata,
+        )
+
+    async def _create_dynamic_pm_global_ui_validation_task(self, task: Task, context: Dict[str, Any]) -> None:
+        metadata = task.metadata or TaskMetadata()
+        fanout_id = str(context.get("fanout_id") or "").strip()
+        if not fanout_id:
+            return
+        existing = await self._find_dynamic_pm_stage_task(
+            task,
+            bot_id="pm-ui-tester",
+            fanout_id=fanout_id,
+            global_stage="ui_validation",
+        )
+        if self._dynamic_pm_stage_blocks_creation(existing):
+            return
+        payload = self._build_default_trigger_payload(task, "pm-ui-tester")
+        payload["title"] = "UI validation"
+        payload["instruction"] = (
+            "Run the single UI validation stage after database work is complete. Preserve build_only mode when UI "
+            "browser automation is unavailable or intentionally disabled for this run."
+        )
+        payload["pm_routing_context"] = self._pm_dynamic_global_stage_context(context, global_stage="ui_validation")
+        child_metadata = self._trigger_child_metadata(
+            metadata,
+            parent_task_id=task.id,
+            trigger_rule_id="pm-dynamic-ui-gate",
+            step_id=f"pm-dynamic-ui:{fanout_id}",
+        )
+        await self.create_task(
+            bot_id="pm-ui-tester",
+            payload=payload,
+            metadata=child_metadata,
+        )
 
     async def _collect_dynamic_pm_completion_task_map(
         self,
@@ -6899,7 +7109,12 @@ class TaskManager:
         if not fanout_id or not final_qc_bot_id:
             return
         step_id = f"pm-dynamic-final-qc:{fanout_id}"
-        existing = await self._find_task_by_step_id(step_id, final_qc_bot_id)
+        existing = await self._find_dynamic_pm_stage_task(
+            task,
+            bot_id=final_qc_bot_id,
+            fanout_id=fanout_id,
+            global_stage="final_qc",
+        )
         if self._dynamic_pm_stage_blocks_creation(existing):
             return
         payload = self._build_default_trigger_payload(task, final_qc_bot_id)
@@ -6923,7 +7138,62 @@ class TaskManager:
         )
 
     async def _dispatch_dynamic_pm_supplemental_tasks(self, task: Task) -> None:
-        return
+        if str(task.status or "").strip().lower() != "completed":
+            return
+        if not self._pm_assignment_dynamic_management_enabled(task):
+            return
+        if not self._pm_dynamic_progress_result(task.result):
+            return
+        if not isinstance(task.payload, dict):
+            return
+        context = self._pm_dynamic_context(task)
+        if not context:
+            return
+        deterministic_signals = context.get("deterministic_signals")
+        if not isinstance(deterministic_signals, dict):
+            return
+        if not any(
+            bool(deterministic_signals.get(signal_name))
+            for signal_name in (
+                "missing_downstream_stage_db",
+                "missing_downstream_stage_ui",
+                "missing_downstream_stage_final_qc",
+            )
+        ):
+            return
+
+        db_excluded = self._pm_assignment_stage_is_excluded(task.payload, "pm-database-engineer")
+        ui_excluded = self._pm_assignment_stage_is_excluded(task.payload, "pm-ui-tester")
+
+        if task.bot_id == "pm-security-reviewer":
+            if bool(deterministic_signals.get("missing_downstream_stage_db")) and not db_excluded:
+                await self._create_dynamic_pm_database_task(task, context)
+                return
+            if (
+                bool(deterministic_signals.get("missing_downstream_stage_ui"))
+                and db_excluded
+                and not ui_excluded
+            ):
+                await self._create_dynamic_pm_global_ui_validation_task(task, context)
+                return
+            if (
+                bool(deterministic_signals.get("missing_downstream_stage_final_qc"))
+                and db_excluded
+                and ui_excluded
+            ):
+                await self._create_dynamic_pm_final_qc_task(task, context)
+                return
+
+        if task.bot_id == "pm-database-engineer":
+            if bool(deterministic_signals.get("missing_downstream_stage_ui")) and not ui_excluded:
+                await self._create_dynamic_pm_global_ui_validation_task(task, context)
+                return
+            if bool(deterministic_signals.get("missing_downstream_stage_final_qc")) and ui_excluded:
+                await self._create_dynamic_pm_final_qc_task(task, context)
+                return
+
+        if task.bot_id == "pm-ui-tester" and bool(deterministic_signals.get("missing_downstream_stage_final_qc")):
+            await self._create_dynamic_pm_final_qc_task(task, context)
 
     async def _create_pm_assignment_loop_escalation_task(
         self,

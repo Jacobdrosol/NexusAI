@@ -8003,6 +8003,58 @@ def test_sanitize_pm_assignment_result_coerces_workstreams_back_to_pm_coder_cont
     assert "contract-first pm-coder branches" in " ".join(normalized.get("normalization_notes") or [])
 
 
+def test_sanitize_pm_assignment_result_coerces_nested_workstream_contract_fields():
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Task, TaskMetadata
+
+    tm = TaskManager(scheduler=object(), db_path=":memory:")
+    task = Task(
+        id="pm-engineer-nested-contract-fix",
+        bot_id="pm-engineer",
+        payload={
+            "instruction": "Plan a PM assignment with nested workstream metadata.",
+            "assignment_scope": {"requested_output_paths": ["migrations"]},
+        },
+        metadata=TaskMetadata(
+            source="chat_assign",
+            orchestration_id="orch-nested-contract-fix",
+            run_class="pm_assignment",
+        ),
+        status="completed",
+        created_at="2026-03-31T00:00:00+00:00",
+        updated_at="2026-03-31T00:00:00+00:00",
+    )
+    result = {
+        "implementation_workstreams": [
+            {
+                "title": "Database migration",
+                "instruction": "Create the migration.",
+                "workstream": {
+                    "bot_id": "pm-database-engineer",
+                    "target_bot_id": "pm-security-reviewer",
+                    "assigned_bot_id": "pm-tester",
+                    "role_hint": "database_engineer",
+                    "step_kind": "review",
+                    "deliverables": [
+                        "migrations/20260331_feature.sql",
+                        "test_logs/db-plan.log",
+                    ],
+                },
+            }
+        ]
+    }
+
+    normalized = tm._sanitize_pm_assignment_result(task, result)
+    nested = normalized["implementation_workstreams"][0]["workstream"]
+
+    assert nested["bot_id"] == "pm-coder"
+    assert nested["target_bot_id"] == "pm-coder"
+    assert nested["assigned_bot_id"] == "pm-coder"
+    assert nested["role_hint"] == "coder"
+    assert nested["step_kind"] == "repo_change"
+    assert nested["deliverables"] == ["migrations/20260331_feature.sql"]
+
+
 def test_assignment_validation_rejects_database_engineer_duplicate_sql_artifacts():
     from control_plane.task_manager.task_manager import _assignment_validation_error
     from shared.models import Task, TaskMetadata
