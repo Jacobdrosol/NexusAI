@@ -6611,6 +6611,16 @@ class TaskManager:
         return re.search(r"\b(?:part|chunk|batch|shard|segment|slice)\s+\d+\b", haystack) is not None
 
     def _pm_assignment_research_step_is_research(self, item: Dict[str, Any]) -> bool:
+        step_kind = str(item.get("step_kind") or "").strip().lower()
+        if step_kind in _PM_ASSIGNMENT_RESEARCH_EXCLUDED_STEP_KINDS:
+            return False
+        if step_kind in _PM_ASSIGNMENT_RESEARCH_INCLUDED_STEP_KINDS:
+            return True
+
+        haystack = self._pm_assignment_research_step_text(item)
+        if any(marker in haystack for marker in ("final qc", "quality check", "sign-off", "sign off")):
+            return False
+
         bot_id = str(item.get("bot_id") or "").strip().lower()
         if bot_id == "pm-research-analyst":
             return True
@@ -6619,20 +6629,9 @@ class TaskManager:
         if role_hint in {"researcher", "research_analyst", "pm-research-analyst", "analyst"}:
             return True
 
-        step_kind = str(item.get("step_kind") or "").strip().lower()
-        if step_kind in _PM_ASSIGNMENT_RESEARCH_INCLUDED_STEP_KINDS:
-            return True
-        if step_kind in _PM_ASSIGNMENT_RESEARCH_EXCLUDED_STEP_KINDS:
-            return False
-
-        haystack = self._pm_assignment_research_step_text(item)
         if any(
             marker in haystack
             for marker in (
-                "final qc",
-                "quality check",
-                "sign-off",
-                "sign off",
                 "implementation",
                 "migrate",
                 "migration",
@@ -6691,8 +6690,6 @@ class TaskManager:
         if str(getattr(trigger, "target_bot_id", "") or "").strip() != "pm-research-analyst":
             return items, None
         if not items or not all(isinstance(item, dict) for item in items):
-            return items, None
-        if not all(str(item.get("bot_id") or "").strip() == "pm-research-analyst" for item in items):
             return items, None
 
         original_count = len(items)

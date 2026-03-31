@@ -1819,6 +1819,187 @@ async def test_pm_assignment_research_trigger_filters_mixed_plan_steps_to_resear
 
 
 @pytest.mark.anyio
+async def test_pm_assignment_research_trigger_filters_orchestration_finalization_even_if_labeled_research(tmp_path):
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot, TaskMetadata
+
+    class StubScheduler:
+        async def schedule(self, task):
+            if task.bot_id == "pm-orchestrator":
+                return {
+                    "status": "pass",
+                    "steps": [
+                        {
+                            "id": "step_1",
+                            "title": "Repository implementation patterns",
+                            "instruction": "Review the repository structure and implementation patterns.",
+                            "bot_id": "pm-research-analyst",
+                            "role_hint": "researcher",
+                            "step_kind": "specification",
+                        },
+                        {
+                            "id": "step_2",
+                            "title": "Requirements and data context",
+                            "instruction": "Collect requirements and data assumptions.",
+                            "bot_id": "pm-research-analyst",
+                            "role_hint": "researcher",
+                            "step_kind": "analysis",
+                        },
+                        {
+                            "id": "step_3",
+                            "title": "External docs and standards",
+                            "instruction": "Review external docs and current standards.",
+                            "bot_id": "pm-research-analyst",
+                            "role_hint": "researcher",
+                            "step_kind": "specification",
+                        },
+                        {
+                            "id": "step_4",
+                            "title": "Final quality check and sign-off",
+                            "instruction": "Perform orchestration finalization and sign-off.",
+                            "bot_id": "pm-research-analyst",
+                            "role_hint": "researcher",
+                            "step_kind": "orchestration_finalization",
+                        },
+                    ],
+                }
+            return {"status": "pass"}
+
+    bot_registry = await _make_bot_registry(tmp_path, "-research-filter-finalization")
+    await bot_registry.register(
+        Bot(
+            id="pm-orchestrator",
+            name="PM Orchestrator",
+            role="pm",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "pm-to-research",
+                        "event": "task_completed",
+                        "target_bot_id": "pm-research-analyst",
+                        "condition": "has_result",
+                        "fan_out_field": "source_result.steps",
+                    }
+                ]
+            },
+        )
+    )
+    await bot_registry.register(
+        Bot(id="pm-research-analyst", name="PM Research Analyst", role="researcher", backends=[])
+    )
+    tm = TaskManager(
+        StubScheduler(),
+        db_path=str(tmp_path / "pm-routing-research-filter-finalization.db"),
+        bot_registry=bot_registry,
+    )
+
+    await tm.create_task(
+        bot_id="pm-orchestrator",
+        payload={"instruction": "plan the assignment"},
+        metadata=TaskMetadata(
+            source="chat_assign",
+            orchestration_id="orch-research-filter-finalization",
+            run_class="pm_assignment",
+            root_pm_bot_id="pm-orchestrator",
+        ),
+    )
+
+    tasks = await _wait_for_quiescent(tm)
+    research_tasks = [task for task in tasks if task.bot_id == "pm-research-analyst"]
+    assert len(research_tasks) == 3
+    assert sorted(str(task.payload.get("title") or "") for task in research_tasks) == sorted([
+        "External docs and standards",
+        "Repository implementation patterns",
+        "Requirements and data context",
+    ])
+    budget = research_tasks[0].payload.get("pm_fanout_budget") or {}
+    assert budget.get("reason") == "pm_assignment_research_trigger_filter"
+    assert budget.get("original_count") == 4
+    assert budget.get("kept_count") == 3
+    await tm.close()
+
+
+@pytest.mark.anyio
+async def test_pm_assignment_research_fanout_cap_applies_when_steps_use_role_hints_without_bot_ids(tmp_path):
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot, TaskMetadata
+
+    class StubScheduler:
+        async def schedule(self, task):
+            if task.bot_id == "pm-orchestrator":
+                steps = []
+                for idx, title in enumerate(
+                    [
+                        "Repository implementation patterns",
+                        "Requirements and data context",
+                        "External docs and standards",
+                        "Additional repo search",
+                        "Follow-on code scan",
+                        "Extra docs review",
+                    ],
+                    start=1,
+                ):
+                    steps.append(
+                        {
+                            "id": f"step_1_{idx}",
+                            "title": title,
+                            "instruction": f"Research {title.lower()}",
+                            "role_hint": "researcher",
+                            "step_kind": "specification",
+                        }
+                    )
+                return {"status": "pass", "steps": steps}
+            return {"status": "pass"}
+
+    bot_registry = await _make_bot_registry(tmp_path, "-research-cap-role-hints")
+    await bot_registry.register(
+        Bot(
+            id="pm-orchestrator",
+            name="PM Orchestrator",
+            role="pm",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "pm-to-research",
+                        "event": "task_completed",
+                        "target_bot_id": "pm-research-analyst",
+                        "condition": "has_result",
+                        "fan_out_field": "source_result.steps",
+                    }
+                ]
+            },
+        )
+    )
+    await bot_registry.register(
+        Bot(id="pm-research-analyst", name="PM Research Analyst", role="researcher", backends=[])
+    )
+    tm = TaskManager(
+        StubScheduler(),
+        db_path=str(tmp_path / "pm-routing-research-cap-role-hints.db"),
+        bot_registry=bot_registry,
+    )
+
+    await tm.create_task(
+        bot_id="pm-orchestrator",
+        payload={"instruction": "plan the assignment"},
+        metadata=TaskMetadata(
+            source="chat_assign",
+            orchestration_id="orch-research-cap-role-hints",
+            run_class="pm_assignment",
+            root_pm_bot_id="pm-orchestrator",
+        ),
+    )
+
+    tasks = await _wait_for_quiescent(tm)
+    research_tasks = [task for task in tasks if task.bot_id == "pm-research-analyst"]
+    assert len(research_tasks) == 3
+    assert all((task.payload.get("pm_fanout_budget") or {}).get("original_count") == 6 for task in research_tasks)
+    await tm.close()
+
+
+@pytest.mark.anyio
 async def test_pm_assignment_loop_guard_stops_retargeting_same_bot_forever(tmp_path, monkeypatch):
     import control_plane.task_manager.task_manager as task_manager_module
     from control_plane.task_manager.task_manager import TaskManager
