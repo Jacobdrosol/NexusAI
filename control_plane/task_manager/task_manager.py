@@ -918,6 +918,73 @@ _PM_ASSIGNMENT_RESEARCH_EXCLUDED_STEP_KINDS = (
     "orchestration_finalization",
     "orchestration_finalisation",
 )
+_PM_ASSIGNMENT_DEFAULT_RESEARCH_STEP_SPECS = (
+    {
+        "lane": "repo",
+        "id": "step_1_code",
+        "title": "Repository implementation patterns",
+        "instruction": (
+            "Inspect the repository directly for stack, runtime constraints, nearby implementations, existing "
+            "components, file-structure expectations, and coding/test patterns relevant to the request."
+        ),
+        "acceptance_criteria": [
+            "Repo implementation patterns and runtime constraints are identified from concrete files",
+            "Code and test conventions are grounded in the actual repository",
+        ],
+        "deliverables": [
+            "Repo/runtime constraints summary",
+            "Existing implementation inventory",
+        ],
+        "evidence_requirements": [
+            "Concrete repo-profile or existing-file evidence",
+            "Relevant file/path inventory tied to the requested work",
+        ],
+        "quality_gates": ["No unsupported stack or runtime assumptions are introduced"],
+    },
+    {
+        "lane": "data",
+        "id": "step_1_data",
+        "title": "Requirements and data context",
+        "instruction": (
+            "Use the assignment request, project context, vault knowledge, and available data context to extract "
+            "requirements, acceptance criteria, dependencies, prior decisions, and schema/state considerations."
+        ),
+        "acceptance_criteria": [
+            "Requirements and prior project constraints are captured clearly",
+            "Relevant data, schema, or state-management concerns are identified when applicable",
+        ],
+        "deliverables": [
+            "Requirements summary artifact",
+            "Project and data-context summary",
+        ],
+        "evidence_requirements": [
+            "Requirements artifact with acceptance criteria",
+            "Concrete project, vault, or data-context evidence",
+        ],
+        "quality_gates": ["No prior project or data constraints are ignored or contradicted"],
+    },
+    {
+        "lane": "online",
+        "id": "step_1_online",
+        "title": "External docs and standards",
+        "instruction": (
+            "Research external documentation, standards, or online references only when the assignment requires it. "
+            "If no external research is needed, state that explicitly instead of inventing it."
+        ),
+        "acceptance_criteria": [
+            "External references are used only when necessary",
+            "Any online research is relevant, current, and tied back to the requested work",
+        ],
+        "deliverables": [
+            "External research summary or explicit no-external-research note",
+        ],
+        "evidence_requirements": [
+            "Current external reference evidence when used",
+            "Explicit statement when external research is not required",
+        ],
+        "quality_gates": ["No unnecessary or unsupported external assumptions are introduced"],
+    },
+)
 _PM_ASSIGNMENT_WORKSTREAM_SPLIT_MARKERS = (
     "part ",
     "chunk ",
@@ -5202,6 +5269,7 @@ class TaskManager:
             tasks = list(self._tasks.values())
 
         repeat_count = 0
+        pair_repeat_count = 0
         for candidate in tasks:
             if candidate.bot_id != target_bot_id:
                 continue
@@ -5218,12 +5286,12 @@ class TaskManager:
             parent_task = next((item for item in tasks if item.id == parent_task_id), None)
             if parent_task is None or parent_task.bot_id != source_task.bot_id:
                 continue
-            if self._workflow_route_failure_type(parent_task) != failure_type:
-                continue
             if self._workflow_route_repeat_identity(parent_task, target_bot_id, candidate.payload) != branch_identity:
                 continue
-            repeat_count += 1
-        return repeat_count
+            pair_repeat_count += 1
+            if self._workflow_route_failure_type(parent_task) == failure_type:
+                repeat_count += 1
+        return max(repeat_count, pair_repeat_count)
 
     async def _workflow_route_target_bot_repeat_count(
         self,
@@ -6893,6 +6961,23 @@ class TaskManager:
         escalation_payload["failure_type"] = "escalation_required"
         escalation_payload["fanout_id"] = fanout_id
         escalation_payload["fanout_branch_key"] = branch_key
+        for field_name in (
+            "workstream",
+            "workstream_index",
+            "fanout_count",
+            "fanout_expected_branch_keys",
+            "assignment_request",
+            "assignment_scope",
+            "root_pm_bot_id",
+            "deterministic_signals",
+            "pm_routing_context",
+        ):
+            if field_name in escalation_payload and not _is_empty_contract_value(escalation_payload.get(field_name)):
+                continue
+            value = payload.get(field_name)
+            if _is_empty_contract_value(value):
+                continue
+            escalation_payload[field_name] = value
         escalation_payload["loop_guard"] = {
             "reason": reason,
             "source_bot_id": source_task.bot_id,
@@ -7068,6 +7153,96 @@ class TaskManager:
             "kept_count": len(filtered),
         }
 
+    def _pm_assignment_default_research_item_for_lane(self, lane: str) -> Dict[str, Any]:
+        lane_key = str(lane or "").strip().lower()
+        for spec in _PM_ASSIGNMENT_DEFAULT_RESEARCH_STEP_SPECS:
+            if str(spec.get("lane") or "").strip().lower() != lane_key:
+                continue
+            return {
+                "id": spec["id"],
+                "title": spec["title"],
+                "instruction": spec["instruction"],
+                "bot_id": "pm-research-analyst",
+                "role_hint": "researcher",
+                "step_kind": "specification",
+                "depends_on": [],
+                "acceptance_criteria": list(spec["acceptance_criteria"]),
+                "deliverables": list(spec["deliverables"]),
+                "evidence_requirements": list(spec["evidence_requirements"]),
+                "quality_gates": list(spec["quality_gates"]),
+            }
+        return {
+            "id": f"step_1_{lane_key or 'research'}",
+            "title": "Research task",
+            "instruction": "Research the assignment and return concrete evidence.",
+            "bot_id": "pm-research-analyst",
+            "role_hint": "researcher",
+            "step_kind": "specification",
+            "depends_on": [],
+        }
+
+    def _pm_assignment_enforce_default_research_items(
+        self,
+        task: Task,
+        trigger: Any,
+        items: Optional[List[Any]],
+    ) -> Tuple[List[Any], Optional[Dict[str, Any]]]:
+        metadata = task.metadata or TaskMetadata()
+        if task.bot_id != "pm-orchestrator":
+            return list(items or []), None
+        if str(metadata.run_class or "").strip().lower() != "pm_assignment":
+            return list(items or []), None
+        if str(getattr(trigger, "target_bot_id", "") or "").strip() != "pm-research-analyst":
+            return list(items or []), None
+
+        normalized_items = [item for item in (items or []) if isinstance(item, dict)]
+        split_required = any(
+            self._pm_assignment_research_step_is_split(item)
+            for item in normalized_items
+        )
+        if split_required and len(normalized_items) > _PM_ASSIGNMENT_RESEARCH_STEP_CAP:
+            return normalized_items, None
+
+        selected_by_lane: Dict[str, Dict[str, Any]] = {}
+        for item in normalized_items:
+            lane = self._pm_assignment_research_lane(item)
+            if lane in {"repo", "data", "online"} and lane not in selected_by_lane:
+                selected_by_lane[lane] = dict(item)
+
+        required_lanes = ("repo", "data", "online")
+        enforced_items: List[Dict[str, Any]] = []
+        defaulted = False
+        for lane in required_lanes:
+            item = selected_by_lane.get(lane)
+            default_item = self._pm_assignment_default_research_item_for_lane(lane)
+            if item is None:
+                item = default_item
+                defaulted = True
+            else:
+                item = dict(item)
+                item["id"] = default_item["id"]
+                item["title"] = default_item["title"]
+                item.setdefault("bot_id", "pm-research-analyst")
+                item.setdefault("role_hint", "researcher")
+                item.setdefault("step_kind", "specification")
+                item.setdefault("depends_on", [])
+            enforced_items.append(item)
+
+        if (
+            not defaulted
+            and len(normalized_items) == len(required_lanes)
+            and all(self._pm_assignment_research_lane(item) in {"repo", "data", "online"} for item in normalized_items)
+        ):
+            return normalized_items, None
+
+        return enforced_items, {
+            "applied": True,
+            "reason": "pm_assignment_research_default_three",
+            "original_count": len(normalized_items),
+            "kept_count": len(enforced_items),
+            "split_required": split_required,
+        }
+
     def _pm_assignment_research_fanout_budget(
         self,
         task: Task,
@@ -7131,9 +7306,21 @@ class TaskManager:
         if not isinstance(payload, dict):
             return [payload]
         items = self._resolve_fan_out_items(payload, task, fan_out_field)
+        research_default_budget = None
         if not isinstance(items, list):
-            return []
+            items, research_default_budget = self._pm_assignment_enforce_default_research_items(
+                task,
+                trigger,
+                [],
+            )
+            if not items:
+                return []
         items, trigger_filter = self._pm_assignment_research_trigger_items(task, trigger, items)
+        items, research_default_budget = self._pm_assignment_enforce_default_research_items(
+            task,
+            trigger,
+            items,
+        )
         items, fanout_budget = self._pm_assignment_research_fanout_budget(task, trigger, items)
         items, implementation_budget = self._pm_assignment_workstream_trigger_items(task, trigger, items)
         alias = str(getattr(trigger, "fan_out_alias", "") or "").strip() or "item"
@@ -7154,6 +7341,8 @@ class TaskManager:
             pm_fanout_budget: Dict[str, Any] = {}
             if trigger_filter:
                 pm_fanout_budget.update(trigger_filter)
+            if research_default_budget:
+                pm_fanout_budget.update(research_default_budget)
             if fanout_budget:
                 pm_fanout_budget.update(fanout_budget)
             if implementation_budget:

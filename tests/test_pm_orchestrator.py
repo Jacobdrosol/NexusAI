@@ -219,11 +219,12 @@ def test_parse_plan_json_preserves_explicit_bot_id() -> None:
     assert parsed["steps"][0]["bot_id"] == "pm-coder"
 
 
-def test_heuristic_plan_prefers_standard_pm_bot_ids_when_present() -> None:
+def test_heuristic_plan_uses_deterministic_pm_contract_when_core_pm_bots_are_present() -> None:
     orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
     bots = [
         _bot(bot_id="pm-orchestrator", name="PM Orchestrator", role="pm", priority=100),
         _bot(bot_id="pm-research-analyst", name="PM Research Analyst", role="researcher", priority=70),
+        _bot(bot_id="pm-engineer", name="PM Engineer", role="engineer", priority=82),
         _bot(bot_id="pm-coder", name="PM Coder", role="coder", priority=85),
         _bot(bot_id="pm-tester", name="PM Tester", role="tester", priority=80),
         _bot(bot_id="pm-security-reviewer", name="PM Security Reviewer", role="security-reviewer", priority=78),
@@ -231,10 +232,19 @@ def test_heuristic_plan_prefers_standard_pm_bot_ids_when_present() -> None:
 
     plan = orchestrator._heuristic_plan("Implement a feature", bots)
 
-    assert plan["steps"][0]["bot_id"] == "pm-research-analyst"
-    assert plan["steps"][1]["bot_id"] == "pm-coder"
-    assert plan["steps"][2]["bot_id"] == "pm-tester"
-    assert plan["steps"][3]["bot_id"] == "pm-security-reviewer"
+    assert [step["bot_id"] for step in plan["steps"]] == [
+        "pm-research-analyst",
+        "pm-research-analyst",
+        "pm-research-analyst",
+        "pm-engineer",
+    ]
+    assert [step["id"] for step in plan["steps"]] == [
+        "step_1_code",
+        "step_1_data",
+        "step_1_online",
+        "step_2",
+    ]
+    assert plan["steps"][3]["depends_on"] == ["step_1_code", "step_1_data", "step_1_online"]
 
 
 @pytest.mark.anyio

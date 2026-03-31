@@ -1573,6 +1573,15 @@ class PMOrchestrator:
             return None
 
     def _heuristic_plan(self, instruction: str, bots: List[Bot]) -> Dict[str, Any]:
+        enabled_ids = {str(bot.id).strip().lower() for bot in bots if getattr(bot, "enabled", False)}
+        pm_contract_core_ids = {
+            "pm-research-analyst",
+            "pm-engineer",
+            "pm-coder",
+        }
+        if pm_contract_core_ids.issubset(enabled_ids):
+            return self._deterministic_pm_pack_plan(instruction, bots)
+
         role_set = {str(b.role).lower() for b in bots}
         has_tester = any("test" in r for r in role_set)
         has_reviewer = any("review" in r or "audit" in r or "security" in r for r in role_set)

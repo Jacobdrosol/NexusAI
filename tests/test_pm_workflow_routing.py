@@ -1823,12 +1823,16 @@ async def test_pm_assignment_research_trigger_filters_mixed_plan_steps_to_resear
 
     tasks = await _wait_for_quiescent(tm)
     research_tasks = [task for task in tasks if task.bot_id == "pm-research-analyst"]
-    assert len(research_tasks) == 1
-    assert str(research_tasks[0].payload.get("title") or "") == "Specification & Gap Analysis"
+    assert len(research_tasks) == 3
+    assert sorted(str(task.payload.get("title") or "") for task in research_tasks) == sorted([
+        "External docs and standards",
+        "Repository implementation patterns",
+        "Requirements and data context",
+    ])
     budget = research_tasks[0].payload.get("pm_fanout_budget") or {}
-    assert budget.get("reason") == "pm_assignment_research_trigger_filter"
-    assert budget.get("original_count") == 4
-    assert budget.get("kept_count") == 1
+    assert budget.get("reason") == "pm_assignment_research_default_three"
+    assert budget.get("original_count") == 1
+    assert budget.get("kept_count") == 3
     await tm.close()
 
 
@@ -2062,4 +2066,13 @@ async def test_pm_assignment_loop_guard_stops_retargeting_same_bot_forever(tmp_p
     assert c.get("pm-tester", 0) == 5
     assert c.get("pm-security-reviewer", 0) == 0
     assert c.get("pm-final-qc", 0) == 0
+    escalation_engineer = next(
+        task
+        for task in tasks
+        if task.bot_id == "pm-engineer" and str((task.payload or {}).get("failure_type") or "") == "escalation_required"
+    )
+    assert escalation_engineer.payload.get("loop_guard", {}).get("reason") in {
+        "route_repeat_limit",
+        "target_bot_repeat_limit",
+    }
     await tm.close()
