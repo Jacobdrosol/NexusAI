@@ -1141,6 +1141,141 @@ async def test_pm_assignment_dynamic_routing_sends_database_to_db_and_ui_to_ui_v
     assert ui_task.metadata.parent_task_id == coder_task.id
 
 
+@pytest.mark.anyio
+async def test_pm_assignment_generic_workstreams_use_single_global_security_and_final_qc(tmp_path):
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import TaskMetadata
+
+    class StubScheduler:
+        async def schedule(self, task):
+            if task.bot_id == "pm-engineer":
+                return _engineer_result(
+                    "Backend API Extension",
+                    "Webhook Scheduler Trigger",
+                )
+            if task.bot_id == "pm-coder":
+                return _CODER_PASS
+            if task.bot_id == "pm-tester":
+                return _TESTER_PASS
+            if task.bot_id == "pm-security-reviewer":
+                return _SECURITY_PASS
+            if task.bot_id == "pm-final-qc":
+                return _QC_PASS
+            return {"status": "pass"}
+
+    bot_registry = await _make_bot_registry(tmp_path, "-global-stages")
+    tm = TaskManager(
+        StubScheduler(),
+        db_path=str(tmp_path / "pm-routing-global-stages.db"),
+        bot_registry=bot_registry,
+    )
+
+    await tm.create_task(
+        bot_id="pm-engineer",
+        payload={"instruction": "implement two generic backend workstreams"},
+        metadata=TaskMetadata(
+            source="chat_assign",
+            orchestration_id="orch-global-stages",
+            run_class="pm_assignment",
+        ),
+    )
+
+    expected_total = 7
+    tasks = await _wait_for_terminal(tm, "pm-final-qc", expected_total)
+
+    assert len(tasks) == expected_total, f"Expected {expected_total} tasks, got {len(tasks)}: {_counts(tasks)}"
+    assert all(t.status == "completed" for t in tasks)
+
+    c = _counts(tasks)
+    assert c.get("pm-engineer", 0) == 1
+    assert c.get("pm-coder", 0) == 2
+    assert c.get("pm-tester", 0) == 2
+    assert c.get("pm-security-reviewer", 0) == 1
+    assert c.get("pm-final-qc", 0) == 1
+    assert c.get("pm-database-engineer", 0) == 0
+    assert c.get("pm-ui-tester", 0) == 0
+
+
+@pytest.mark.anyio
+async def test_pm_assignment_ui_data_issue_retries_db_then_ui_without_duplicate_global_stages(tmp_path):
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import TaskMetadata
+
+    class StubScheduler:
+        def __init__(self):
+            self._ui_runs = 0
+
+        async def schedule(self, task):
+            if task.bot_id == "pm-engineer":
+                return _engineer_result("React Frontend Settings Page")
+            if task.bot_id == "pm-coder":
+                return _CODER_PASS
+            if task.bot_id == "pm-tester":
+                return _TESTER_PASS
+            if task.bot_id == "pm-database-engineer":
+                return _DB_PASS
+            if task.bot_id == "pm-ui-tester":
+                self._ui_runs += 1
+                if self._ui_runs == 1:
+                    return {
+                        "status": "fail",
+                        "failure_type": "ui_data_issue",
+                        "change_summary": "UI needs corrected data",
+                        "files_touched": [],
+                        "findings": ["ui_data_issue: branch needs database repair"],
+                        "evidence": [],
+                        "artifacts": [],
+                        "risks": [],
+                        "handoff_notes": "Fix the underlying data path and validate again.",
+                    }
+                return _UI_PASS
+            if task.bot_id == "pm-security-reviewer":
+                return _SECURITY_PASS
+            if task.bot_id == "pm-final-qc":
+                return _QC_PASS
+            return {"status": "pass"}
+
+    bot_registry = await _make_bot_registry(tmp_path, "-ui-repair")
+    tm = TaskManager(
+        StubScheduler(),
+        db_path=str(tmp_path / "pm-routing-ui-repair.db"),
+        bot_registry=bot_registry,
+    )
+
+    await tm.create_task(
+        bot_id="pm-engineer",
+        payload={"instruction": "implement the frontend settings page"},
+        metadata=TaskMetadata(
+            source="bot_trigger",
+            orchestration_id="orch-ui-repair",
+            root_pm_bot_id="pm-orchestrator",
+            run_class="pm_assignment",
+        ),
+    )
+
+    expected_total = 8
+    tasks = await _wait_for_terminal(tm, "pm-final-qc", expected_total)
+
+    assert len(tasks) == expected_total, f"Expected {expected_total} tasks, got {len(tasks)}: {_counts(tasks)}"
+    assert all(t.status == "completed" for t in tasks)
+
+    c = _counts(tasks)
+    assert c.get("pm-engineer", 0) == 1
+    assert c.get("pm-coder", 0) == 1
+    assert c.get("pm-tester", 0) == 1
+    assert c.get("pm-database-engineer", 0) == 1
+    assert c.get("pm-ui-tester", 0) == 2
+    assert c.get("pm-security-reviewer", 0) == 1
+    assert c.get("pm-final-qc", 0) == 1
+
+    ui_tasks = [task for task in tasks if task.bot_id == "pm-ui-tester"]
+    coder_task = next(task for task in tasks if task.bot_id == "pm-coder")
+    db_task = next(task for task in tasks if task.bot_id == "pm-database-engineer")
+    parent_task_ids = {task.metadata.parent_task_id for task in ui_tasks}
+    assert coder_task.id in parent_task_ids
+    assert db_task.id in parent_task_ids
+
+
 def test_pm_workstream_route_classifier_falls_back_to_keyword_matching_without_root_prompt():
     from control_plane.task_manager.task_manager import TaskManager
 

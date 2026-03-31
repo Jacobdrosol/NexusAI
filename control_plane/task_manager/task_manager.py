@@ -4098,6 +4098,7 @@ class TaskManager:
             result = await self._normalize_task_result(task, raw_result)
             if bot is not None and not bot_allows_repo_output(bot):
                 result = _strip_repo_output_claims_for_deny_policy(result)
+            result = self._sanitize_pm_assignment_result(task, result)
             if _prefers_truncation_retry(task) and _looks_like_truncated_result(raw_result):
                 task_error = TaskError(
                     message=(
@@ -4926,6 +4927,22 @@ class TaskManager:
     def _workflow_route_branch_identity(self, task: Task, payload: Any) -> str:
         metadata = task.metadata or TaskMetadata()
         if isinstance(payload, dict):
+            context = self._payload_pm_routing_context(payload)
+            context_fanout_id = str(context.get("fanout_id") or "").strip()
+            context_branch_key = str(context.get("branch_key") or "").strip()
+            context_global_stage = str(context.get("global_stage") or "").strip()
+            if context_fanout_id or context_branch_key or context_global_stage:
+                context_parts = [
+                    part
+                    for part in (
+                        context_fanout_id,
+                        context_global_stage,
+                        context_branch_key,
+                    )
+                    if part
+                ]
+                if context_parts:
+                    return "|".join(context_parts)
             fanout_id = str(self._resolve_fanout_id(payload) or "").strip()
             branch_key = str(self._resolve_join_branch_key(payload) or "").strip()
             if fanout_id or branch_key:
@@ -5724,6 +5741,100 @@ class TaskManager:
             normalized["workstream"] = workstream_copy
         return normalized
 
+    def _pm_assignment_payload_repo_paths(self, payload: Dict[str, Any]) -> List[str]:
+        repo_paths: List[str] = []
+        seen: Set[str] = set()
+        for source in (
+            payload,
+            payload.get("workstream") if isinstance(payload.get("workstream"), dict) else None,
+        ):
+            if not isinstance(source, dict):
+                continue
+            explicit_path = str(source.get("path") or "").strip().replace("\\", "/").strip("`")
+            if explicit_path and _looks_like_repo_file(explicit_path) and explicit_path not in seen:
+                seen.add(explicit_path)
+                repo_paths.append(explicit_path)
+            for item in _normalize_string_list(source.get("deliverables")):
+                normalized = str(item or "").strip().replace("\\", "/").strip("`")
+                if not normalized or normalized in seen or not _looks_like_repo_file(normalized):
+                    continue
+                seen.add(normalized)
+                repo_paths.append(normalized)
+        return repo_paths
+
+    def _prune_pm_assignment_workstream_payloads(
+        self,
+        payloads: List[Any],
+    ) -> Tuple[List[Any], Optional[Dict[str, Any]]]:
+        if not payloads or not all(isinstance(payload, dict) for payload in payloads):
+            return payloads, None
+        kept: List[Any] = []
+        dropped = 0
+        for payload in payloads:
+            original_paths = self._pm_assignment_payload_repo_paths(payload)
+            if not original_paths:
+                kept.append(payload)
+                continue
+            sanitized_payload = self._sanitize_pm_assignment_branch_payload(payload)
+            sanitized_paths = self._pm_assignment_payload_repo_paths(sanitized_payload)
+            if sanitized_paths:
+                kept.append(sanitized_payload)
+                continue
+            if all(
+                _is_assignment_execution_artifact_file(path)
+                or "/" not in path
+                or bool(self._pm_assignment_sql_variant_key(path))
+                for path in original_paths
+            ):
+                dropped += 1
+                continue
+            kept.append(sanitized_payload)
+        if dropped == 0:
+            return payloads, None
+        return kept, {
+            "applied": True,
+            "reason": "pm_assignment_workstream_path_filter",
+            "original_count": len(payloads),
+            "kept_count": len(kept),
+            "dropped_count": dropped,
+        }
+
+    def _sanitize_pm_assignment_result(self, task: Task, result: Any) -> Any:
+        if not isinstance(result, dict):
+            return result
+        if task.bot_id != "pm-engineer":
+            return result
+        if not self._pm_assignment_dynamic_management_enabled(task):
+            return result
+        workstreams = result.get("implementation_workstreams")
+        if not isinstance(workstreams, list) or not all(isinstance(item, dict) for item in workstreams):
+            return result
+
+        normalized = dict(result)
+        sanitized_workstreams, path_filter_budget = self._prune_pm_assignment_workstream_payloads(workstreams)
+        sanitized_workstreams = [
+            self._sanitize_pm_assignment_branch_payload(item)
+            for item in sanitized_workstreams
+            if isinstance(item, dict)
+        ]
+        sanitized_workstreams, dedupe_budget = self._dedupe_pm_assignment_workstream_payloads(sanitized_workstreams)
+        normalized["implementation_workstreams"] = sanitized_workstreams
+
+        normalization_notes = normalized.get("normalization_notes")
+        if not isinstance(normalization_notes, list):
+            normalization_notes = []
+        if path_filter_budget:
+            normalization_notes.append(
+                "Filtered PM assignment implementation_workstreams to drop artifact-only or stray-path branches."
+            )
+        if dedupe_budget:
+            normalization_notes.append(
+                "Deduplicated PM assignment implementation_workstreams before downstream routing."
+            )
+        if normalization_notes:
+            normalized["normalization_notes"] = normalization_notes
+        return normalized
+
     def _dedupe_pm_assignment_workstream_payloads(
         self,
         payloads: List[Any],
@@ -5974,6 +6085,25 @@ class TaskManager:
             "route_reason": "default",
         }
 
+    def _pm_assignment_dynamic_management_enabled(self, task: Task) -> bool:
+        metadata = task.metadata or TaskMetadata()
+        if str(metadata.run_class or "").strip().lower() == "pm_assignment":
+            return True
+        payload_root_pm_bot_id = str(self._payload_chain_field(task.payload, "root_pm_bot_id") or "").strip()
+        if str(metadata.root_pm_bot_id or payload_root_pm_bot_id or "").strip():
+            return True
+        deterministic_signals = self._payload_chain_field(task.payload, "deterministic_signals")
+        if not isinstance(deterministic_signals, dict):
+            return False
+        return any(
+            bool(deterministic_signals.get(signal_name))
+            for signal_name in (
+                "missing_downstream_stage_db",
+                "missing_downstream_stage_ui",
+                "missing_downstream_stage_final_qc",
+            )
+        )
+
     async def _apply_dynamic_pm_workstream_routing(
         self,
         task: Task,
@@ -5989,12 +6119,14 @@ class TaskManager:
             return payloads
         if not str(getattr(trigger, "fan_out_field", "") or "").strip():
             return payloads
-        payload_root_pm_bot_id = str(self._payload_chain_field(task.payload, "root_pm_bot_id") or "").strip()
-        if str(metadata.run_class or "").strip().lower() != "pm_assignment" and not str(metadata.root_pm_bot_id or payload_root_pm_bot_id or "").strip():
+        if not self._pm_assignment_dynamic_management_enabled(task):
             return payloads
         if not payloads or not all(isinstance(payload, dict) for payload in payloads):
             return payloads
 
+        payloads, path_filter_budget = self._prune_pm_assignment_workstream_payloads(payloads)
+        if not payloads:
+            return []
         payloads = [self._sanitize_pm_assignment_branch_payload(payload) for payload in payloads]
         payloads, dedupe_budget = self._dedupe_pm_assignment_workstream_payloads(payloads)
         policy = await self._load_pm_workstream_routing_policy(task)
@@ -6009,23 +6141,14 @@ class TaskManager:
         ]
         payloads, routes, workstream_budget = self._pm_assignment_workstream_budget(payloads, routes)
         combined_budget = None
-        if dedupe_budget or workstream_budget:
+        if path_filter_budget or dedupe_budget or workstream_budget:
             combined_budget = {}
+            if path_filter_budget:
+                combined_budget.update(path_filter_budget)
             if dedupe_budget:
                 combined_budget.update(dedupe_budget)
             if workstream_budget:
                 combined_budget.update(workstream_budget)
-        if not routes or all(str(route.get("route_kind") or "") == "generic_coder" for route in routes):
-            if combined_budget:
-                for payload in payloads:
-                    if not isinstance(payload, dict):
-                        continue
-                    payload["fanout_count"] = len(payloads)
-                    existing_budget = payload.get("pm_fanout_budget") if isinstance(payload.get("pm_fanout_budget"), dict) else {}
-                    merged_budget = dict(existing_budget)
-                    merged_budget.update(combined_budget)
-                    payload["pm_fanout_budget"] = merged_budget
-            return payloads
 
         global_tokens: List[str] = []
         branch_specs: List[Dict[str, Any]] = []
@@ -6095,15 +6218,35 @@ class TaskManager:
         target_bot_id = str(context.get("target_bot_id") or "").strip()
         return target_bot_id or default_target_bot_id
 
+    def _pm_dynamic_global_stage_context(self, context: Dict[str, Any], *, global_stage: str) -> Dict[str, Any]:
+        normalized = dict(context)
+        stage_name = str(global_stage or "").strip()
+        if not stage_name:
+            return normalized
+        normalized["global_stage"] = stage_name
+        normalized["branch_key"] = f"global:{stage_name}"
+        if stage_name == "security_review":
+            normalized["route_kind"] = "global_security_review"
+            normalized["branch_completion_bot_ids"] = ["pm-tester"]
+            normalized["branch_completion_tokens"] = [
+                self._pm_dynamic_completion_token(normalized["branch_key"], "pm-tester")
+            ]
+        elif stage_name == "final_qc":
+            normalized["route_kind"] = "global_final_qc"
+            normalized["branch_completion_bot_ids"] = []
+            normalized["branch_completion_tokens"] = []
+        return normalized
+
     def _should_skip_dynamic_pm_trigger(self, task: Task, *, target_bot_id: str) -> bool:
         context = self._payload_pm_routing_context(task.payload)
         if not bool(context.get("dynamic")):
             return False
         global_stage = str(context.get("global_stage") or "").strip()
+        route_kind = str(context.get("route_kind") or "").strip()
         if task.bot_id == "pm-tester" and target_bot_id == "pm-security-reviewer":
             return True
         if task.bot_id == "pm-database-engineer" and target_bot_id == "pm-ui-tester":
-            return True
+            return route_kind != "ui_coder_validation"
         if task.bot_id == "pm-ui-tester" and target_bot_id == "pm-final-qc":
             return True
         if global_stage == "security_review" and task.bot_id == "pm-security-reviewer" and target_bot_id == "pm-database-engineer":
@@ -6216,8 +6359,10 @@ class TaskManager:
             }
             for token, matched in zip(expected_tokens, ordered_tasks)
         ]
-        security_context = dict(context)
-        security_context["global_stage"] = "security_review"
+        security_context = self._pm_dynamic_global_stage_context(
+            context,
+            global_stage="security_review",
+        )
         payload["pm_routing_context"] = security_context
         child_metadata = self._trigger_child_metadata(
             metadata,
@@ -6244,8 +6389,10 @@ class TaskManager:
         payload = self._build_default_trigger_payload(task, final_qc_bot_id)
         payload["title"] = "Final quality control"
         payload["instruction"] = "Perform the terminal final QC pass after implementation and security review are complete."
-        final_context = dict(context)
-        final_context["global_stage"] = "final_qc"
+        final_context = self._pm_dynamic_global_stage_context(
+            context,
+            global_stage="final_qc",
+        )
         payload["pm_routing_context"] = final_context
         child_metadata = self._trigger_child_metadata(
             metadata,
@@ -6275,6 +6422,8 @@ class TaskManager:
             if str(bot_id).strip()
         }
         if task.bot_id == "pm-coder" and route_kind == "ui_coder_validation":
+            await self._create_dynamic_pm_ui_validation_task(task, context)
+        if task.bot_id == "pm-database-engineer" and route_kind == "ui_coder_validation":
             await self._create_dynamic_pm_ui_validation_task(task, context)
         if task.bot_id in branch_completion_bot_ids:
             await self._maybe_create_dynamic_pm_global_security_task(task, context)
