@@ -4984,6 +4984,24 @@ class TaskManager:
             workstream_index = str(payload.get("workstream_index") or "").strip()
             if workstream_index:
                 return workstream_index
+            workstream = payload.get("workstream")
+            if isinstance(workstream, dict):
+                workstream_identity = {
+                    "title": str(workstream.get("title") or "").strip().lower(),
+                    "instruction": str(workstream.get("instruction") or "").strip().lower(),
+                    "path": str(workstream.get("path") or "").strip().replace("\\", "/").lower(),
+                    "deliverables": sorted(
+                        str(item or "").strip().replace("\\", "/").lower()
+                        for item in _normalize_string_list(workstream.get("deliverables"))
+                        if str(item or "").strip()
+                    ),
+                }
+                if any(
+                    value
+                    for key, value in workstream_identity.items()
+                    if key != "deliverables"
+                ) or workstream_identity["deliverables"]:
+                    return self._normalize_branch_token(workstream_identity, fallback="workstream")
         return str(metadata.step_id or metadata.original_task_id or task.id).strip() or task.id
 
     async def _workflow_route_repeat_count(
@@ -5852,6 +5870,10 @@ class TaskManager:
             if isinstance(item, dict)
         ]
         sanitized_workstreams, dedupe_budget = self._dedupe_pm_assignment_workstream_payloads(sanitized_workstreams)
+        sanitized_workstreams, workstream_budget = self._sanitize_pm_assignment_result_workstream_budget(
+            task,
+            sanitized_workstreams,
+        )
         normalized["implementation_workstreams"] = sanitized_workstreams
 
         normalization_notes = normalized.get("normalization_notes")
@@ -5865,9 +5887,41 @@ class TaskManager:
             normalization_notes.append(
                 "Deduplicated PM assignment implementation_workstreams before downstream routing."
             )
+        if workstream_budget:
+            normalization_notes.append(
+                "Capped PM assignment implementation_workstreams to the bounded downstream branch budget."
+            )
         if normalization_notes:
             normalized["normalization_notes"] = normalization_notes
         return normalized
+
+    def _sanitize_pm_assignment_result_workstream_budget(
+        self,
+        task: Task,
+        payloads: List[Dict[str, Any]],
+    ) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]]]:
+        if not payloads:
+            return payloads, None
+        policy: Dict[str, Any] = {
+            "consulted_root_system_prompt": False,
+        }
+        payload_root_pm_bot_id = str(self._payload_chain_field(task.payload, "root_pm_bot_id") or "").strip()
+        root_pm_bot_id = str((task.metadata or TaskMetadata()).root_pm_bot_id or payload_root_pm_bot_id or "").strip()
+        if root_pm_bot_id:
+            policy["root_pm_bot_id"] = root_pm_bot_id
+        deterministic_signals = self._payload_chain_field(task.payload, "deterministic_signals")
+        if isinstance(deterministic_signals, dict):
+            policy["deterministic_signals"] = deterministic_signals
+        routes = [
+            self._classify_pm_workstream_route(
+                payload,
+                default_target_bot_id="pm-coder",
+                policy=policy,
+            )
+            for payload in payloads
+        ]
+        capped_payloads, _, budget = self._pm_assignment_workstream_budget(payloads, routes)
+        return capped_payloads, budget
 
     def _dedupe_pm_assignment_workstream_payloads(
         self,
@@ -6115,6 +6169,24 @@ class TaskManager:
             "preserved_lanes": preserved_lanes,
         }
 
+    def _refresh_fanout_payload_metadata(self, payloads: List[Any]) -> List[Any]:
+        if not payloads or not all(isinstance(payload, dict) for payload in payloads):
+            return payloads
+        normalized_payloads = [dict(payload) for payload in payloads]
+        branch_keys: List[str] = []
+        seen_branch_keys: Set[str] = set()
+        for payload in normalized_payloads:
+            branch_key = self._resolve_join_branch_key(payload)
+            if not branch_key or branch_key in seen_branch_keys:
+                continue
+            seen_branch_keys.add(branch_key)
+            branch_keys.append(branch_key)
+        for payload in normalized_payloads:
+            payload["fanout_count"] = len(normalized_payloads)
+            if branch_keys:
+                payload["fanout_expected_branch_keys"] = list(branch_keys)
+        return normalized_payloads
+
     def _classify_pm_workstream_route(
         self,
         payload: Dict[str, Any],
@@ -6236,6 +6308,7 @@ class TaskManager:
             if isinstance(payload, dict)
         ]
         payloads, routes, workstream_budget = self._pm_assignment_workstream_budget(payloads, routes)
+        payloads = self._refresh_fanout_payload_metadata(payloads)
         combined_budget = None
         if path_filter_budget or dedupe_budget or workstream_budget:
             combined_budget = {}
@@ -6285,7 +6358,6 @@ class TaskManager:
         for payload, route, branch_spec in zip(payloads, routes, branch_specs):
             if not isinstance(payload, dict):
                 continue
-            payload["fanout_count"] = len(payloads)
             if combined_budget:
                 existing_budget = payload.get("pm_fanout_budget") if isinstance(payload.get("pm_fanout_budget"), dict) else {}
                 merged_budget = dict(existing_budget)

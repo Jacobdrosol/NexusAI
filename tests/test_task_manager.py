@@ -7907,6 +7907,84 @@ async def test_plan_managed_fanout_forward_trigger_is_allowed(tmp_path):
     assert all(task.metadata and task.metadata.source == "bot_trigger" for task in child_tasks)
 
 
+def test_sanitize_pm_assignment_result_caps_saved_workstreams_before_dispatch_budget():
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Task, TaskMetadata
+
+    tm = TaskManager(scheduler=object(), db_path=":memory:")
+    task = Task(
+        id="pm-engineer-root",
+        bot_id="pm-engineer",
+        payload={"instruction": "Plan a large PM assignment."},
+        metadata=TaskMetadata(
+            source="chat_assign",
+            orchestration_id="orch-sanitize-cap",
+            run_class="pm_assignment",
+        ),
+        status="completed",
+        created_at="2026-03-31T00:00:00+00:00",
+        updated_at="2026-03-31T00:00:00+00:00",
+    )
+    result = {
+        "implementation_workstreams": [
+            {"title": "Database migration", "instruction": "Apply the schema migration."},
+            {"title": "Backend API extension", "instruction": "Extend the API controller."},
+            {"title": "Frontend admin page", "instruction": "Build the React admin page."},
+            {"title": "Webhook scheduler trigger", "instruction": "Create the webhook trigger."},
+            {"title": "Security scanning layer", "instruction": "Add security scanning."},
+            {"title": "Metrics and alerts", "instruction": "Add metrics and alerting."},
+            {"title": "Second generic backend branch", "instruction": "Implement another backend branch."},
+        ]
+    }
+
+    normalized = tm._sanitize_pm_assignment_result(task, result)
+    workstreams = normalized["implementation_workstreams"]
+
+    assert len(workstreams) == 5
+    assert [payload["title"] for payload in workstreams] == [
+        "Database migration",
+        "Backend API extension",
+        "Frontend admin page",
+        "Webhook scheduler trigger",
+        "Security scanning layer",
+    ]
+    assert "bounded downstream branch budget" in " ".join(normalized.get("normalization_notes") or [])
+
+
+def test_refresh_fanout_payload_metadata_updates_expected_branch_keys_after_pm_trim():
+    from control_plane.task_manager.task_manager import TaskManager
+
+    tm = TaskManager(scheduler=object(), db_path=":memory:")
+    payloads = [
+        {
+            "title": "Database migration",
+            "fanout_id": "fanout:test",
+            "fanout_branch_key": "0",
+            "fanout_count": 7,
+            "fanout_expected_branch_keys": ["0", "1", "2", "3", "4", "5", "6"],
+        },
+        {
+            "title": "Frontend admin page",
+            "fanout_id": "fanout:test",
+            "fanout_branch_key": "2",
+            "fanout_count": 7,
+            "fanout_expected_branch_keys": ["0", "1", "2", "3", "4", "5", "6"],
+        },
+        {
+            "title": "Webhook scheduler trigger",
+            "fanout_id": "fanout:test",
+            "fanout_branch_key": "4",
+            "fanout_count": 7,
+            "fanout_expected_branch_keys": ["0", "1", "2", "3", "4", "5", "6"],
+        },
+    ]
+
+    refreshed = tm._refresh_fanout_payload_metadata(payloads)
+
+    assert all(payload["fanout_count"] == 3 for payload in refreshed)
+    assert all(payload["fanout_expected_branch_keys"] == ["0", "2", "4"] for payload in refreshed)
+
+
 def test_assignment_test_source_files_recognize_dotnet_test_projects() -> None:
     from control_plane.task_manager.task_manager import _assignment_test_source_files
 
