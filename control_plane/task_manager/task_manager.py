@@ -898,6 +898,26 @@ _PM_ASSIGNMENT_RESEARCH_SPLIT_MARKERS = (
     "2/",
     "3/",
 )
+_PM_ASSIGNMENT_RESEARCH_INCLUDED_STEP_KINDS = (
+    "specification",
+    "research",
+    "analysis",
+    "discovery",
+    "investigation",
+)
+_PM_ASSIGNMENT_RESEARCH_EXCLUDED_STEP_KINDS = (
+    "implementation",
+    "repo_change",
+    "coding",
+    "execution",
+    "validation",
+    "review",
+    "qa",
+    "test_execution",
+    "finalization",
+    "orchestration_finalization",
+    "orchestration_finalisation",
+)
 _PM_ASSIGNMENT_WORKSTREAM_SPLIT_MARKERS = (
     "part ",
     "chunk ",
@@ -909,6 +929,20 @@ _PM_ASSIGNMENT_WORKSTREAM_SPLIT_MARKERS = (
     "1/",
     "2/",
     "3/",
+)
+_PM_WORKSTREAM_UI_PATH_HINTS = (
+    ".tsx",
+    ".jsx",
+    ".razor",
+    ".cshtml",
+    "/components/",
+    "/component/",
+    "/pages/",
+    "/page/",
+    "/views/",
+    "/view/",
+    "/frontend/",
+    "/ui/",
 )
 
 
@@ -5843,6 +5877,7 @@ class TaskManager:
             return payloads, None
         deduped: List[Any] = []
         seen: Set[str] = set()
+        seen_repo_fingerprints: Set[str] = set()
         for payload in payloads:
             fingerprint_payload = {
                 "title": str(payload.get("title") or "").strip().lower(),
@@ -5859,7 +5894,26 @@ class TaskManager:
             fingerprint = json.dumps(fingerprint_payload, sort_keys=True)
             if fingerprint in seen:
                 continue
+            repo_paths = [
+                str(path).strip().replace("\\", "/").lower()
+                for path in self._pm_assignment_payload_repo_paths(payload)
+                if str(path).strip()
+            ]
+            repo_fingerprint = ""
+            if repo_paths:
+                repo_fingerprint = json.dumps(
+                    {
+                        "repo_paths": repo_paths,
+                        "target_bot_id": str(payload.get("target_bot_id") or "").strip().lower(),
+                        "role_hint": str(payload.get("role_hint") or "").strip().lower(),
+                    },
+                    sort_keys=True,
+                )
+                if repo_fingerprint in seen_repo_fingerprints:
+                    continue
             seen.add(fingerprint)
+            if repo_fingerprint:
+                seen_repo_fingerprints.add(repo_fingerprint)
             deduped.append(payload)
         if len(deduped) == len(payloads):
             return payloads, None
@@ -5967,6 +6021,23 @@ class TaskManager:
                 return True
         return False
 
+    def _pm_workstream_has_ui_repo_hint(self, payload: Dict[str, Any]) -> bool:
+        for source in (
+            payload,
+            payload.get("workstream") if isinstance(payload.get("workstream"), dict) else None,
+        ):
+            if not isinstance(source, dict):
+                continue
+            candidates = [str(source.get("path") or "").strip()]
+            candidates.extend(_normalize_string_list(source.get("deliverables")))
+            for candidate in candidates:
+                normalized = str(candidate or "").strip().replace("\\", "/").lower()
+                if not normalized:
+                    continue
+                if any(hint in normalized for hint in _PM_WORKSTREAM_UI_PATH_HINTS):
+                    return True
+        return False
+
     def _pm_assignment_workstream_fanout_cap(self) -> Tuple[int, int]:
         base_cap = max(1, _settings_int("pm_assignment_workstream_fanout_limit", _PM_ASSIGNMENT_WORKSTREAM_STEP_CAP))
         split_cap = max(base_cap, _settings_int("pm_assignment_workstream_fanout_split_limit", _PM_ASSIGNMENT_WORKSTREAM_STEP_SPLIT_CAP))
@@ -6066,14 +6137,23 @@ class TaskManager:
         haystack = self._pm_workstream_routing_text(payload)
         consulted_prompt = bool(policy.get("consulted_root_system_prompt"))
         deterministic_signals = policy.get("deterministic_signals") if isinstance(policy.get("deterministic_signals"), dict) else {}
-        if self._pm_workstream_matches_any_keyword(haystack, _PM_WORKSTREAM_DATABASE_KEYWORDS):
+        database_match = self._pm_workstream_matches_any_keyword(haystack, _PM_WORKSTREAM_DATABASE_KEYWORDS)
+        ui_match = self._pm_workstream_matches_any_keyword(haystack, _PM_WORKSTREAM_UI_KEYWORDS)
+        if ui_match and (not database_match or self._pm_workstream_has_ui_repo_hint(payload)):
+            return {
+                "route_kind": "ui_coder_validation",
+                "target_bot_id": default_target_bot_id,
+                "branch_completion_bot_ids": ["pm-tester", "pm-ui-tester"],
+                "route_reason": "system_prompt+keyword" if consulted_prompt else "keyword",
+            }
+        if database_match:
             return {
                 "route_kind": "database_specialist",
                 "target_bot_id": "pm-database-engineer",
                 "branch_completion_bot_ids": ["pm-database-engineer"],
                 "route_reason": "system_prompt+keyword" if consulted_prompt else "keyword",
             }
-        if self._pm_workstream_matches_any_keyword(haystack, _PM_WORKSTREAM_UI_KEYWORDS):
+        if ui_match:
             return {
                 "route_kind": "ui_coder_validation",
                 "target_bot_id": default_target_bot_id,
@@ -6530,6 +6610,42 @@ class TaskManager:
             return True
         return re.search(r"\b(?:part|chunk|batch|shard|segment|slice)\s+\d+\b", haystack) is not None
 
+    def _pm_assignment_research_step_is_research(self, item: Dict[str, Any]) -> bool:
+        bot_id = str(item.get("bot_id") or "").strip().lower()
+        if bot_id == "pm-research-analyst":
+            return True
+
+        role_hint = str(item.get("role_hint") or "").strip().lower()
+        if role_hint in {"researcher", "research_analyst", "pm-research-analyst", "analyst"}:
+            return True
+
+        step_kind = str(item.get("step_kind") or "").strip().lower()
+        if step_kind in _PM_ASSIGNMENT_RESEARCH_INCLUDED_STEP_KINDS:
+            return True
+        if step_kind in _PM_ASSIGNMENT_RESEARCH_EXCLUDED_STEP_KINDS:
+            return False
+
+        haystack = self._pm_assignment_research_step_text(item)
+        if any(
+            marker in haystack
+            for marker in (
+                "final qc",
+                "quality check",
+                "sign-off",
+                "sign off",
+                "implementation",
+                "migrate",
+                "migration",
+                "schema",
+                "build ",
+                "deploy ",
+                "test ",
+                "validate ",
+            )
+        ):
+            return False
+        return self._pm_assignment_research_lane(item) != "generic"
+
     def _pm_assignment_research_trigger_items(
         self,
         task: Task,
@@ -6546,14 +6662,10 @@ class TaskManager:
         if not items or not all(isinstance(item, dict) for item in items):
             return items, None
 
-        tagged_items = [item for item in items if str(item.get("bot_id") or "").strip()]
-        if not tagged_items:
-            return items, None
-
         filtered = [
             item
             for item in items
-            if str(item.get("bot_id") or "").strip() == "pm-research-analyst"
+            if self._pm_assignment_research_step_is_research(item)
         ]
         if not filtered or len(filtered) == len(items):
             return items, None
