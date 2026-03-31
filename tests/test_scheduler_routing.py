@@ -1471,6 +1471,42 @@ async def test_scheduler_appends_explicit_stage_exclusion_guidance_to_system_pro
 
 
 @pytest.mark.anyio
+async def test_scheduler_appends_database_stage_contract_guidance_to_system_prompt():
+    from control_plane.scheduler.scheduler import Scheduler
+
+    bot_registry = AsyncMock()
+    bot_registry.get.return_value = Bot(
+        id="pm-database-engineer",
+        name="PM Database Engineer",
+        role="dba-sql",
+        system_prompt="Produce the database migration.",
+        backends=[BackendConfig(type="cloud_api", provider="openai", model="gpt-4o-mini")],
+    )
+    scheduler = Scheduler(bot_registry=bot_registry, worker_registry=AsyncMock())
+    task = Task(
+        id="task-db-stage",
+        bot_id="pm-database-engineer",
+        payload={
+            "instruction": "Create the canonical migration script.",
+        },
+        status="queued",
+        created_at="now",
+        updated_at="now",
+    )
+
+    async def fake_dispatch(backend, payload, task=None):
+        return {"payload": payload}
+
+    scheduler._dispatch_backend = fake_dispatch  # type: ignore[method-assign]
+    result = await scheduler.schedule(task)
+
+    system_message = result["payload"][0]["content"]
+    assert "Database stage contract:" in system_message
+    assert "exactly one canonical SQL migration script artifact" in system_message
+    assert "DELETE, DROP, TRUNCATE, and destructive ALTER TABLE" in system_message
+
+
+@pytest.mark.anyio
 async def test_scheduler_appends_repo_output_deny_policy_to_system_prompt():
     from control_plane.scheduler.scheduler import Scheduler
 

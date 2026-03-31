@@ -7951,6 +7951,129 @@ def test_sanitize_pm_assignment_result_caps_saved_workstreams_before_dispatch_bu
     assert "bounded downstream branch budget" in " ".join(normalized.get("normalization_notes") or [])
 
 
+def test_sanitize_pm_assignment_result_coerces_workstreams_back_to_pm_coder_contract():
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Task, TaskMetadata
+
+    tm = TaskManager(scheduler=object(), db_path=":memory:")
+    task = Task(
+        id="pm-engineer-contract-fix",
+        bot_id="pm-engineer",
+        payload={
+            "instruction": "Plan a PM assignment with mixed workstreams.",
+            "assignment_scope": {"requested_output_paths": ["migrations"]},
+        },
+        metadata=TaskMetadata(
+            source="chat_assign",
+            orchestration_id="orch-contract-fix",
+            run_class="pm_assignment",
+        ),
+        status="completed",
+        created_at="2026-03-31T00:00:00+00:00",
+        updated_at="2026-03-31T00:00:00+00:00",
+    )
+    result = {
+        "implementation_workstreams": [
+            {
+                "title": "Database migration",
+                "instruction": "Create the migration.",
+                "bot_id": "pm-database-engineer",
+                "target_bot_id": "pm-security-reviewer",
+                "assigned_bot_id": "pm-tester",
+                "role_hint": "database_engineer",
+                "step_kind": "review",
+                "deliverables": [
+                    "migrations/20260331_feature.sql",
+                    "sql/tmp/20260331_feature_variant.sql",
+                    "test_logs/db-plan.log",
+                ],
+            }
+        ]
+    }
+
+    normalized = tm._sanitize_pm_assignment_result(task, result)
+    workstream = normalized["implementation_workstreams"][0]
+
+    assert workstream["bot_id"] == "pm-coder"
+    assert workstream["target_bot_id"] == "pm-coder"
+    assert workstream["assigned_bot_id"] == "pm-coder"
+    assert workstream["role_hint"] == "coder"
+    assert workstream["step_kind"] == "repo_change"
+    assert workstream["deliverables"] == ["migrations/20260331_feature.sql"]
+    assert "contract-first pm-coder branches" in " ".join(normalized.get("normalization_notes") or [])
+
+
+def test_assignment_validation_rejects_database_engineer_duplicate_sql_artifacts():
+    from control_plane.task_manager.task_manager import _assignment_validation_error
+    from shared.models import Task, TaskMetadata
+
+    task = Task(
+        id="task-db-duplicate-sql",
+        bot_id="pm-database-engineer",
+        payload={
+            "instruction": "Create the canonical migration script.",
+            "step_kind": "review",
+        },
+        metadata=TaskMetadata(source="bot_trigger", orchestration_id="orch-db-duplicate-sql"),
+        created_at="2026-03-31T00:00:00+00:00",
+        updated_at="2026-03-31T00:00:00+00:00",
+    )
+
+    result = {
+        "artifacts": [
+            {"path": "migrations/20260331_feature.sql", "content": "CREATE TABLE widgets(id INT);"},
+            {"path": "migrations/20260331_feature_v2.sql", "content": "CREATE TABLE widgets(id INT);"},
+        ]
+    }
+
+    error = _assignment_validation_error(task, result)
+
+    assert "multiple SQL migration artifacts" in error
+
+
+def test_assignment_validation_rejects_database_engineer_unexpected_repo_outputs():
+    from control_plane.task_manager.task_manager import _assignment_validation_error
+    from shared.models import Task, TaskMetadata
+
+    task = Task(
+        id="task-db-unexpected-outputs",
+        bot_id="pm-database-engineer",
+        payload={
+            "instruction": "Create the canonical migration script.",
+            "step_kind": "review",
+        },
+        metadata=TaskMetadata(source="bot_trigger", orchestration_id="orch-db-unexpected-outputs"),
+        created_at="2026-03-31T00:00:00+00:00",
+        updated_at="2026-03-31T00:00:00+00:00",
+    )
+
+    result = {
+        "artifacts": [
+            {"path": "migrations/20260331_feature.sql", "content": "CREATE TABLE widgets(id INT);"},
+            {"path": "test_logs/db-plan.log", "content": "done"},
+        ]
+    }
+
+    error = _assignment_validation_error(task, result)
+
+    assert "unexpected repo outputs" in error
+
+
+def test_database_result_contains_destructive_alter_table_sql():
+    from control_plane.task_manager.task_manager import _database_result_contains_destructive_sql
+
+    result = {
+        "artifacts": [
+            {
+                "path": "migrations/20260331_feature.sql",
+                "content": "ALTER TABLE widgets DROP COLUMN legacy_value;",
+            }
+        ]
+    }
+
+    assert _database_result_contains_destructive_sql(result) is True
+
+
 def test_refresh_fanout_payload_metadata_updates_expected_branch_keys_after_pm_trim():
     from control_plane.task_manager.task_manager import TaskManager
 

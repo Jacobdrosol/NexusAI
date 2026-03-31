@@ -1639,14 +1639,101 @@ def _contains_destructive_sql(text: str) -> bool:
     normalized = str(text or "").strip()
     if not normalized:
         return False
-    return bool(re.search(r"(?im)\b(delete|drop|truncate)\b", normalized))
+    if re.search(r"(?im)\b(delete|drop|truncate)\b", normalized):
+        return True
+    return bool(
+        re.search(
+            r"(?ims)\balter\s+table\b.*?\b(drop\s+(?:column|constraint)|alter\s+column\b.*?\btype\b)",
+            normalized,
+        )
+    )
+
+
+def _database_result_repo_candidates(result: Any) -> List[Dict[str, str]]:
+    candidates: List[Dict[str, str]] = []
+    seen: Set[Tuple[str, str]] = set()
+    for item in _result_explicit_artifacts(result):
+        path = str(item.get("path") or "").strip().replace("\\", "/").strip("`")
+        content = str(item.get("content") or "")
+        if not path or not _looks_like_repo_file(path):
+            continue
+        key = (path, content)
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append({"path": path, "content": content})
+    for item in extract_file_candidates(result):
+        path = str(item.get("path") or "").strip().replace("\\", "/").strip("`")
+        content = str(item.get("content") or "")
+        if not path or not _looks_like_repo_file(path):
+            continue
+        key = (path, content)
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append({"path": path, "content": content})
+    return candidates
+
+
+def _database_result_contract_failure(result: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(result, dict):
+        return None
+    repo_candidates = _database_result_repo_candidates(result)
+    raw_text = str(result.get("raw_text") or result.get("content") or result.get("output") or "").strip()
+    sql_candidates = [
+        item
+        for item in repo_candidates
+        if str(item.get("path") or "").strip().lower().endswith(".sql")
+    ]
+    unexpected_repo_paths = [
+        str(item.get("path") or "").strip()
+        for item in repo_candidates
+        if not str(item.get("path") or "").strip().lower().endswith(".sql")
+    ]
+    if unexpected_repo_paths:
+        preview = ", ".join(unexpected_repo_paths[:5])
+        return {
+            "code": "database_stage_unexpected_repo_outputs",
+            "message": (
+                "pm-database-engineer must emit only one canonical SQL migration script; "
+                f"unexpected repo outputs were returned: {preview}."
+            ),
+            "details": {
+                "reason_code": "database_stage_unexpected_repo_outputs",
+                "paths": unexpected_repo_paths,
+            },
+        }
+    if len(sql_candidates) > 1:
+        preview = ", ".join(str(item.get("path") or "").strip() for item in sql_candidates[:5])
+        return {
+            "code": "database_stage_duplicate_sql_artifacts",
+            "message": (
+                "pm-database-engineer returned multiple SQL migration artifacts. "
+                f"Return exactly one canonical SQL script: {preview}."
+            ),
+            "details": {
+                "reason_code": "database_stage_duplicate_sql_artifacts",
+                "paths": [str(item.get("path") or "").strip() for item in sql_candidates],
+            },
+        }
+    if not sql_candidates and re.search(r"(?im)\b(create|alter|insert|update|delete|drop|truncate)\b", raw_text):
+        return {
+            "code": "database_stage_missing_canonical_sql_artifact",
+            "message": (
+                "pm-database-engineer emitted SQL content without a canonical `.sql` migration artifact. "
+                "Return exactly one SQL script artifact."
+            ),
+            "details": {
+                "reason_code": "database_stage_missing_canonical_sql_artifact",
+            },
+        }
+    return None
 
 
 def _database_result_contains_destructive_sql(result: Any) -> bool:
     if not isinstance(result, dict):
         return False
-    explicit_artifacts = _result_explicit_artifacts(result)
-    for item in explicit_artifacts:
+    for item in _database_result_repo_candidates(result):
         content = str(item.get("content") or "")
         path = str(item.get("path") or "").strip().lower()
         if _contains_destructive_sql(content):
@@ -2489,6 +2576,22 @@ def _assignment_validation_failure(task: Task, result: Any) -> Optional[Dict[str
                 "reason_code": "assignment_scope_mismatch",
             },
         }
+
+    if task.bot_id == "pm-database-engineer" and not _assignment_result_is_skip(result):
+        database_contract_failure = _database_result_contract_failure(result)
+        if database_contract_failure:
+            return {
+                "code": str(database_contract_failure.get("code") or "database_stage_contract_violation"),
+                "message": str(database_contract_failure.get("message") or "Database stage contract violated."),
+                "details": {
+                    "step_kind": step_kind,
+                    **(
+                        dict(database_contract_failure.get("details"))
+                        if isinstance(database_contract_failure.get("details"), dict)
+                        else {}
+                    ),
+                },
+            }
 
     if not text:
         return None
@@ -4193,7 +4296,7 @@ class TaskManager:
                 )
             if task.bot_id == "pm-database-engineer" and _database_result_contains_destructive_sql(result):
                 raise _TaskPolicyViolation(
-                    "pm-database-engineer returned destructive SQL content; DELETE, DROP, and TRUNCATE are forbidden.",
+                    "pm-database-engineer returned destructive SQL content; DELETE, DROP, TRUNCATE, and destructive ALTER TABLE statements are forbidden.",
                     code="database_destructive_sql_forbidden",
                     details={
                         "bot_id": task.bot_id,
@@ -5043,6 +5146,46 @@ class TaskManager:
                     return self._normalize_branch_token(workstream_identity, fallback="workstream")
         return str(metadata.step_id or metadata.original_task_id or task.id).strip() or task.id
 
+    def _pm_assignment_stable_branch_identity(self, payload: Any) -> str:
+        if not isinstance(payload, dict):
+            return ""
+        workstream = payload.get("workstream") if isinstance(payload.get("workstream"), dict) else payload
+        if not isinstance(workstream, dict):
+            return ""
+        identity = {
+            "title": str(workstream.get("title") or payload.get("title") or "").strip().lower(),
+            "instruction": str(workstream.get("instruction") or payload.get("instruction") or "").strip().lower(),
+            "path": str(workstream.get("path") or payload.get("path") or "").strip().replace("\\", "/").lower(),
+            "deliverables": sorted(
+                str(item or "").strip().replace("\\", "/").lower()
+                for item in (
+                    _normalize_string_list(workstream.get("deliverables"))
+                    or _normalize_string_list(payload.get("deliverables"))
+                )
+                if str(item or "").strip()
+            ),
+        }
+        if not any(value for key, value in identity.items() if key != "deliverables") and not identity["deliverables"]:
+            return ""
+        return self._normalize_branch_token(identity, fallback="workstream")
+
+    def _workflow_route_repeat_identity(
+        self,
+        source_task: Task,
+        target_bot_id: str,
+        payload: Any,
+    ) -> str:
+        metadata = source_task.metadata or TaskMetadata()
+        if (
+            str(metadata.run_class or "").strip().lower() == "pm_assignment"
+            and str(target_bot_id or "").strip() == "pm-coder"
+            and str(source_task.bot_id or "").strip() in {"pm-tester", "pm-security-reviewer"}
+        ):
+            stable_identity = self._pm_assignment_stable_branch_identity(payload)
+            if stable_identity:
+                return stable_identity
+        return self._workflow_route_branch_identity(source_task, payload)
+
     async def _workflow_route_repeat_count(
         self,
         source_task: Task,
@@ -5052,7 +5195,7 @@ class TaskManager:
         metadata = source_task.metadata or TaskMetadata()
         root_id = metadata.workflow_root_task_id or source_task.id
         orchestration_id = str(metadata.orchestration_id or "").strip()
-        branch_identity = self._workflow_route_branch_identity(source_task, payload)
+        branch_identity = self._workflow_route_repeat_identity(source_task, target_bot_id, payload)
         failure_type = self._workflow_route_failure_type(source_task)
 
         async with self._lock:
@@ -5077,7 +5220,7 @@ class TaskManager:
                 continue
             if self._workflow_route_failure_type(parent_task) != failure_type:
                 continue
-            if self._workflow_route_branch_identity(parent_task, candidate.payload) != branch_identity:
+            if self._workflow_route_repeat_identity(parent_task, target_bot_id, candidate.payload) != branch_identity:
                 continue
             repeat_count += 1
         return repeat_count
@@ -5790,7 +5933,7 @@ class TaskManager:
         requested_paths = self._pm_assignment_requested_output_paths(payload)
         kept: List[str] = []
         seen: Set[str] = set()
-        sql_variants: Dict[str, str] = {}
+        canonical_sql_path = ""
         for raw_entry in entries:
             entry = str(raw_entry or "").strip().replace("\\", "/").strip("`")
             if not entry:
@@ -5808,28 +5951,36 @@ class TaskManager:
                 )
             ):
                 continue
-            sql_variant_key = self._pm_assignment_sql_variant_key(entry)
-            if sql_variant_key:
-                current = sql_variants.get(sql_variant_key)
-                if current is None or self._pm_assignment_path_rank(entry, requested_paths) < self._pm_assignment_path_rank(current, requested_paths):
-                    sql_variants[sql_variant_key] = entry
+            if entry.lower().endswith(".sql"):
+                if not canonical_sql_path or self._pm_assignment_path_rank(entry, requested_paths) < self._pm_assignment_path_rank(canonical_sql_path, requested_paths):
+                    canonical_sql_path = entry
                 continue
             if entry in seen:
                 continue
             seen.add(entry)
             kept.append(entry)
-        for entry in sorted(
-            sql_variants.values(),
-            key=lambda item: self._pm_assignment_path_rank(item, requested_paths),
-        ):
-            if entry in seen:
-                continue
-            seen.add(entry)
-            kept.append(entry)
+        if canonical_sql_path and canonical_sql_path not in seen:
+            seen.add(canonical_sql_path)
+            kept.append(canonical_sql_path)
         return kept
 
     def _sanitize_pm_assignment_branch_payload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         normalized = dict(payload)
+        contract_bot_changed = False
+        for field_name in ("bot_id", "target_bot_id", "assigned_bot_id"):
+            raw_value = str(normalized.get(field_name) or "").strip()
+            if not raw_value or raw_value == "pm-coder":
+                continue
+            normalized[field_name] = "pm-coder"
+            contract_bot_changed = True
+        role_hint = str(normalized.get("role_hint") or "").strip().lower()
+        if role_hint and role_hint not in {"coder", "developer", "engineer", "implementation"}:
+            normalized["role_hint"] = "coder"
+            contract_bot_changed = True
+        step_kind = str(normalized.get("step_kind") or "").strip().lower()
+        if step_kind in {"planning", "specification", "analysis", "review", "validation", "test_execution"}:
+            normalized["step_kind"] = "repo_change"
+            contract_bot_changed = True
         deliverables = normalized.get("deliverables")
         if isinstance(deliverables, list):
             normalized["deliverables"] = self._sanitize_pm_assignment_repo_paths(
@@ -5854,6 +6005,12 @@ class TaskManager:
                 sanitized_paths = self._sanitize_pm_assignment_repo_paths([workstream_path], normalized)
                 workstream_copy["path"] = sanitized_paths[0] if sanitized_paths else ""
             normalized["workstream"] = workstream_copy
+        if contract_bot_changed:
+            existing_notes = normalized.get("normalization_notes")
+            if not isinstance(existing_notes, list):
+                existing_notes = []
+            existing_notes.append("Coerced PM assignment workstream metadata to the contract-first pm-coder branch shape.")
+            normalized["normalization_notes"] = existing_notes
         return normalized
 
     def _pm_assignment_payload_repo_paths(self, payload: Dict[str, Any]) -> List[str]:
@@ -5968,6 +6125,18 @@ class TaskManager:
         if workstream_budget:
             normalization_notes.append(
                 "Capped PM assignment implementation_workstreams to the bounded downstream branch budget."
+            )
+        if any(
+            "contract-first pm-coder branch shape" in str(item)
+            for payload in sanitized_workstreams
+            for item in (
+                payload.get("normalization_notes")
+                if isinstance(payload.get("normalization_notes"), list)
+                else []
+            )
+        ):
+            normalization_notes.append(
+                "Coerced PM assignment implementation_workstreams to contract-first pm-coder branches."
             )
         if normalization_notes:
             normalized["normalization_notes"] = normalization_notes

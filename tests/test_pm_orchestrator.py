@@ -2715,3 +2715,14 @@ async def test_bootstrap_via_pm_workflow_persists_explicit_ui_stage_exclusion() 
     assert scope["explicit_stage_exclusions"] == []
     assert scope["ui_test_mode"] == "build_only"
 
+
+def test_assignment_stage_exclusion_scope_preserves_ui_stage_for_build_only_requests() -> None:
+    orchestrator = PMOrchestrator(bot_registry=None, scheduler=None, task_manager=None, chat_manager=None)
+
+    excluded = orchestrator._assignment_stage_exclusion_scope(
+        "Implement the feature, skip UI testing for now because Playwright is not configured.",
+        docs_only=False,
+    )
+
+    assert "pm-ui-tester" not in excluded
+

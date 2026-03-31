@@ -2058,8 +2058,8 @@ async def test_pm_assignment_loop_guard_stops_retargeting_same_bot_forever(tmp_p
     tasks = await _wait_for_quiescent(tm)
     c = _counts(tasks)
     assert c.get("pm-engineer", 0) == 2
-    assert c.get("pm-coder", 0) == 6
-    assert c.get("pm-tester", 0) == 6
+    assert c.get("pm-coder", 0) == 5
+    assert c.get("pm-tester", 0) == 5
     assert c.get("pm-security-reviewer", 0) == 0
     assert c.get("pm-final-qc", 0) == 0
     await tm.close()

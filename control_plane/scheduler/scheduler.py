@@ -363,6 +363,18 @@ def _assignment_scope_prompt_suffix(payload: Any) -> str:
     return "\n\n" + "\n".join(parts)
 
 
+def _pm_database_contract_prompt_suffix(bot_id: str | None, payload: Any) -> str:
+    if str(bot_id or "").strip().lower() != "pm-database-engineer":
+        return ""
+    return (
+        "\n\nDatabase stage contract:\n"
+        "Return exactly one canonical SQL migration script artifact for this stage.\n"
+        "Do not emit duplicate migration variants, alternate SQL files, test_logs outputs, or unrelated top-level repo artifacts.\n"
+        "Reject destructive SQL. Forbidden statements include DELETE, DROP, TRUNCATE, and destructive ALTER TABLE forms such as DROP COLUMN or DROP CONSTRAINT.\n"
+        "If the branch has no applicable database change, return a structured skip/not_applicable outcome instead of inventing SQL."
+    )
+
+
 def _lookup_payload_path(payload: Any, path: str) -> Any:
     current: Any = payload
     for part in str(path or "").split("."):
@@ -1406,6 +1418,9 @@ def _prepare_system_prompt(bot: Any, *, bot_id: str | None = None, payload: Any 
     assignment_scope_suffix = _assignment_scope_prompt_suffix(payload).strip()
     if assignment_scope_suffix:
         suffix_parts.append(assignment_scope_suffix)
+    database_contract_suffix = _pm_database_contract_prompt_suffix(bot_id, payload).strip()
+    if database_contract_suffix:
+        suffix_parts.append(database_contract_suffix)
     if bot_id:
         connection_suffix = _connection_context_prompt_suffix(bot_id, bot, payload).strip()
         if connection_suffix:

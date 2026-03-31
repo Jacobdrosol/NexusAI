@@ -44,23 +44,27 @@ class PMOrchestrator:
         "Available bot IDs: pm-research-analyst, pm-engineer, pm-coder, pm-tester, "
         "pm-security-reviewer, pm-database-engineer, pm-ui-tester, pm-final-qc. "
         "REQUIRED WORKFLOW ORDER — always follow this topology: "
-        "(1) THREE parallel research steps (ids: step_1_code, step_1_data, step_1_online), each bot_id=pm-research-analyst, depends_on=[]: "
+        "(1) EXACTLY THREE bounded parallel research steps by default (ids: step_1_code, step_1_data, step_1_online), each bot_id=pm-research-analyst, depends_on=[]: "
         "step_1_code=repo/codebase research, step_1_data=requirements/vault/data context, step_1_online=external references only when needed. "
+        "Only expand beyond three research branches when the assignment explicitly requires sharded research batches. "
         "(2) ONE engineering plan step (id: step_2), bot_id=pm-engineer, depends_on=[step_1_code,step_1_data,step_1_online]: "
         "synthesizes research into a concrete plan; MUST produce an implementation_workstreams array for coder fan-out. "
+        "Those workstreams are contract-first coder workstreams only; do not assign implementation directly to pm-tester, pm-security-reviewer, pm-database-engineer, pm-ui-tester, or pm-final-qc. "
         "(3) ONE OR MORE coder steps (ids: step_3 or step_3_1...step_3_N), bot_id=pm-coder, depends_on=[step_2]: "
         "one step per independent workstream; small tasks use one coder step, large tasks use multiple parallel coder steps. "
+        "Database/schema/migration implementation is still a pm-coder workstream first. "
         "(4) Tester steps (step_4 or step_4_N), bot_id=pm-tester, each depends_on its paired coder step. "
         "(5) Security reviewer steps (step_5 or step_5_N), bot_id=pm-security-reviewer, each depends_on its paired tester step. "
         "(6) ONE DB engineer step (step_6), bot_id=pm-database-engineer, depends_on all security reviewer steps. "
-        "(7) ONE UI tester step (step_7), bot_id=pm-ui-tester, depends_on=[step_6]. OMIT if no UI deliverables. "
-        "(8) ONE final QC step (step_8), bot_id=pm-final-qc, depends_on=[step_7] or [step_6] when UI is omitted. "
+        "(7) ONE UI tester step (step_7), bot_id=pm-ui-tester, depends_on=[step_6]. "
+        "Do not remove this stage because UI interaction is skipped; when browser automation is unavailable, preserve the stage and set ui_test_mode=build_only. "
+        "(8) ONE final QC step (step_8), bot_id=pm-final-qc, depends_on=[step_7]. "
         "RULES: "
         "Scope: Adhere to the 'scope_lock'. If the scope_lock says 'domains: [math]', do not create plans for 'programming'. "
         "If scope_lock says 'forbidden_keywords: [.py]', do not create steps that produce Python files. This is not a suggestion. "
         "Never start with pm-coder, pm-tester, pm-security-reviewer, pm-database-engineer, pm-ui-tester, or pm-final-qc. "
         "Always start with three parallel pm-research-analyst steps followed by pm-engineer. "
-        "pm-ui-tester: only when the request includes real UI deliverables or user-facing behavior changes. "
+        "pm-ui-tester remains in the workflow even when the assignment asks to skip interactive UI testing; use build_only validation mode instead of omitting the stage. "
         "pm-final-qc: terminal delivery gate only — never use as a branch retry step. "
         "No operator-owned actions: no CI/CD, commits, PRs, merges, releases unless explicitly requested. "
         "Use repo context as the source of truth for language, framework, and file extensions. "
@@ -347,7 +351,7 @@ class PMOrchestrator:
             return excluded
         if self._instruction_explicitly_excludes_database(text):
             excluded["pm-database-engineer"] = "assignment_excludes_database_stage"
-        if self._instruction_explicitly_excludes_ui(text):
+        if self._instruction_explicitly_excludes_ui(text) and not self._instruction_requests_build_only_ui(text):
             excluded["pm-ui-tester"] = "assignment_excludes_ui_stage"
         return excluded
 
@@ -1467,16 +1471,19 @@ class PMOrchestrator:
                     "The implementation plan matches the repo stack and existing architecture",
                     "Impacted files, test strategy, and validation stages are clear",
                     "Implementation workstreams are explicit and ready for coder fan-out",
+                    "Implementation workstreams target pm-coder contracts only, including database and schema work",
                 ],
                 "deliverables": [
                     "Implementation plan artifact",
                     "Implementation workstream list for coder fan-out",
+                    "Contract-first coder workstream list",
                     "Impacted areas summary",
                     "Validation strategy summary",
                 ],
                 "evidence_requirements": [
                     "Concrete implementation plan tied to repo structure",
                     "Structured implementation_workstreams list for downstream coder fan-out",
+                    "No direct implementation routing to validation or specialist-only bots",
                     "Risk and dependency notes",
                 ],
                 "quality_gates": ["No plan item introduces an unsupported runtime or framework"],
@@ -1492,6 +1499,7 @@ class PMOrchestrator:
             "global_quality_gates": [
                 "No unsupported runtime is introduced unless explicitly authorized by the user",
                 "All required validation stages complete before final QC",
+                "UI validation stays present and uses build_only mode when interactive automation is unavailable",
             ],
             "risks": [],
         }
