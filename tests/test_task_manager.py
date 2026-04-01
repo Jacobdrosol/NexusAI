@@ -1609,6 +1609,145 @@ async def test_trigger_dispatch_failure_does_not_fail_parent_task(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_required_output_fields_missing_fails_task_and_halts_trigger_dispatch(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot, TaskMetadata
+
+    class StubScheduler:
+        async def schedule(self, task):
+            if task.bot_id == "bot-a":
+                return {"review_summary": "done"}
+            return {"answer": "child"}
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "required-output-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="bot-a",
+            name="Bot A",
+            role="assistant",
+            backends=[],
+            workflow={
+                "required_output_fields": ["approval.decision"],
+                "triggers": [
+                    {
+                        "id": "handoff",
+                        "event": "task_completed",
+                        "target_bot_id": "bot-b",
+                        "condition": "has_result",
+                        "result_field": "approval.decision",
+                        "result_equals": "approved",
+                    }
+                ],
+            },
+        )
+    )
+    await bot_registry.register(Bot(id="bot-b", name="Bot B", role="assistant", backends=[]))
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "required-output-tasks.db"), bot_registry=bot_registry)
+    root = await tm.create_task(
+        bot_id="bot-a",
+        payload={"instruction": "start"},
+        metadata=TaskMetadata(orchestration_id="orch-required-output", source="api"),
+    )
+
+    for _ in range(50):
+        updated = await tm.get_task(root.id)
+        if updated.status == "failed":
+            break
+        await asyncio.sleep(0.1)
+
+    updated = await tm.get_task(root.id)
+    assert updated.status == "failed"
+    assert updated.result == {"review_summary": "done"}
+    assert updated.error is not None
+    assert updated.error.code == "validation_error"
+    assert updated.error.details["reason_code"] == "trigger_output_field_missing"
+    assert updated.error.details["issue_tag"] == "trigger_output_field_missing"
+    validation_error = updated.error.details["validation_error"]
+    assert validation_error["annotation"] == "validation_error"
+    assert validation_error["missing_fields"] == ["approval.decision"]
+    assert validation_error["required_fields"] == ["approval.decision"]
+    assert validation_error["orchestration_id"] == "orch-required-output"
+
+    tasks = await tm.list_tasks(orchestration_id="orch-required-output")
+    assert len(tasks) == 1
+    assert tasks[0].id == root.id
+
+    artifacts = await tm.list_bot_run_artifacts("bot-a", task_id=root.id)
+    trigger_errors = [artifact for artifact in artifacts if artifact.label == "Trigger Dispatch Error"]
+    assert len(trigger_errors) == 1
+    assert "approval.decision" in (trigger_errors[0].content or "")
+
+
+@pytest.mark.anyio
+async def test_required_output_fields_allow_trigger_dispatch_when_present(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot
+
+    class StubScheduler:
+        async def schedule(self, task):
+            if task.bot_id == "bot-a":
+                return {
+                    "approval": {"decision": "approved"},
+                    "review_summary": "done",
+                    "extra_context": {"score": 0.99},
+                }
+            return {"answer": f"done:{task.bot_id}"}
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "required-output-pass-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="bot-a",
+            name="Bot A",
+            role="assistant",
+            backends=[],
+            workflow={
+                "required_output_fields": ["approval.decision"],
+                "triggers": [
+                    {
+                        "id": "handoff",
+                        "event": "task_completed",
+                        "target_bot_id": "bot-b",
+                        "condition": "has_result",
+                        "result_field": "approval.decision",
+                        "result_equals": "approved",
+                    }
+                ],
+            },
+        )
+    )
+    await bot_registry.register(Bot(id="bot-b", name="Bot B", role="assistant", backends=[]))
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "required-output-pass-tasks.db"), bot_registry=bot_registry)
+    root = await tm.create_task(bot_id="bot-a", payload={"instruction": "start"})
+
+    for _ in range(50):
+        tasks = await tm.list_tasks()
+        if len(tasks) >= 2 and any(task.bot_id == "bot-b" for task in tasks):
+            break
+        await asyncio.sleep(0.1)
+
+    updated = await tm.get_task(root.id)
+    assert updated.status == "completed"
+    assert updated.error is None
+
+    tasks = await tm.list_tasks()
+    assert len(tasks) == 2
+    bot_b_task = next(task for task in tasks if task.bot_id == "bot-b")
+    assert bot_b_task.metadata is not None
+    assert bot_b_task.metadata.parent_task_id == root.id
+
+    artifacts = await tm.list_bot_run_artifacts("bot-a", task_id=root.id)
+    assert not any(artifact.label == "Trigger Dispatch Error" for artifact in artifacts)
+
+
+@pytest.mark.anyio
 async def test_trigger_skip_records_diagnostics_when_fan_out_produces_no_payloads(tmp_path):
     import asyncio
 

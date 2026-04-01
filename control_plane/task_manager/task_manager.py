@@ -5391,6 +5391,69 @@ class TaskManager:
             )
         )
 
+    def _workflow_required_output_fields(self, workflow: Any) -> List[str]:
+        return [
+            str(field).strip()
+            for field in (getattr(workflow, "required_output_fields", None) or [])
+            if str(field).strip()
+        ]
+
+    async def _halt_task_for_missing_required_output_fields(
+        self,
+        task: Task,
+        required_fields: List[str],
+        missing_fields: List[str],
+    ) -> None:
+        metadata = task.metadata or TaskMetadata()
+        result_keys = (
+            sorted(str(key) for key in task.result.keys())
+            if isinstance(task.result, dict)
+            else []
+        )
+        message = (
+            "Bot output validation failed before trigger dispatch: missing required output fields: "
+            + ", ".join(missing_fields)
+        )
+        validation_error = {
+            "annotation": "validation_error",
+            "task_id": task.id,
+            "bot_id": task.bot_id,
+            "orchestration_id": metadata.orchestration_id,
+            "reason": "required_output_fields_missing",
+            "reason_code": "trigger_output_field_missing",
+            "issue_tag": "trigger_output_field_missing",
+            "required_fields": list(required_fields),
+            "missing_fields": list(missing_fields),
+            "result_keys": result_keys,
+            "message": message,
+        }
+        safe_validation_error = json.loads(json.dumps(validation_error, default=str))
+        logger.error(
+            "[TRIGGER] REQUIRED_OUTPUT_VALIDATION_FAILED %s",
+            json.dumps(safe_validation_error, sort_keys=True),
+        )
+        await self._record_trigger_dispatch_error(
+            source_task=task,
+            trigger_id="required-output-check",
+            target_bot_id="",
+            message=message,
+        )
+        await self.update_status(
+            task.id,
+            "failed",
+            result=task.result,
+            error=TaskError(
+                message=message,
+                code="validation_error",
+                details={
+                    "reason": "required_output_fields_missing",
+                    "reason_code": "trigger_output_field_missing",
+                    "issue_tag": "trigger_output_field_missing",
+                    "validation_error": safe_validation_error,
+                },
+            ),
+        )
+
     async def _dispatch_triggers(self, task: Task) -> None:
         if self._bot_registry is None:
             return
@@ -5442,33 +5505,17 @@ class TaskManager:
         )
 
         # Pre-validate required_output_fields declared on the bot's workflow.
-        # Missing fields here almost always cause downstream triggers to silently skip.
-        _required_output_fields = list(getattr(workflow, "required_output_fields", None) or [])
+        # Missing fields here should halt the orchestration visibly instead of silently.
+        _required_output_fields = self._workflow_required_output_fields(workflow)
         if _required_output_fields and task.status == "completed":
-            _missing_required = (
-                [f for f in _required_output_fields if self._lookup_result_field(task.result, f) is None]
-                if isinstance(task.result, dict)
-                else list(_required_output_fields)
-            )
+            _missing_required = _missing_payload_fields(task.result, _required_output_fields)
             if _missing_required:
-                logger.warning(
-                    "[TRIGGER] REQUIRED_OUTPUT_MISSING task=%s bot=%s missing=%s result_keys=%s",
-                    task.id,
-                    task.bot_id,
-                    _missing_required,
-                    list(task.result.keys()) if isinstance(task.result, dict) else None,
+                await self._halt_task_for_missing_required_output_fields(
+                    task,
+                    required_fields=_required_output_fields,
+                    missing_fields=_missing_required,
                 )
-                await self._record_trigger_dispatch_skip(
-                    source_task=task,
-                    trigger_id="required-output-check",
-                    target_bot_id="",
-                    details={
-                        "reason": "required_output_fields_missing",
-                        "missing_fields": _missing_required,
-                        "required_fields": _required_output_fields,
-                        "result_keys": list(task.result.keys()) if isinstance(task.result, dict) else None,
-                    },
-                )
+                return
 
         _result_mismatch_skipped: list = []
         for trigger in triggers:

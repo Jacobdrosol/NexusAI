@@ -147,8 +147,9 @@ class BotWorkflow(BaseModel):
     triggers: List[BotWorkflowTrigger] = Field(default_factory=list)
     notes: Optional[str] = None
     reference_graph: Optional[WorkflowReferenceGraph] = None
-    # Fields the bot MUST produce in its result for downstream triggers to fire correctly.
-    # When set, the task manager will warn and record an artifact if any are absent.
+    # Fields the bot MUST produce in its result before downstream triggers are evaluated.
+    # Missing required fields cause the task manager to mark the task as a visible
+    # validation failure instead of allowing the orchestration to halt silently.
     required_output_fields: List[str] = Field(default_factory=list)
 
 
