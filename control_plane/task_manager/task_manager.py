@@ -3734,7 +3734,7 @@ class TaskManager:
             metadata=next_metadata,
             depends_on=[],
         )
-        if original.status != "failed":
+        if original.status not in {"completed", "failed", "cancelled"}:
             return retried_task
 
         now = datetime.now(timezone.utc).isoformat()
@@ -5302,6 +5302,8 @@ class TaskManager:
         for candidate in tasks:
             if candidate.bot_id != target_bot_id:
                 continue
+            if str(candidate.status or "").strip().lower() == "retried":
+                continue
             candidate_meta = candidate.metadata or TaskMetadata()
             if str(candidate_meta.source or "").strip().lower() != "bot_trigger":
                 continue
@@ -5339,6 +5341,8 @@ class TaskManager:
         repeat_count = 0
         for candidate in tasks:
             if candidate.bot_id != target_bot_id:
+                continue
+            if str(candidate.status or "").strip().lower() == "retried":
                 continue
             candidate_meta = candidate.metadata or TaskMetadata()
             if str(candidate_meta.source or "").strip().lower() != "bot_trigger":
