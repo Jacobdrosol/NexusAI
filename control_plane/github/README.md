@@ -1,83 +1,193 @@
-# GitHub Integration
+# GitHub — `control_plane/github/`
 
-The GitHub integration provides webhook ingestion, per-project PAT management, and repository context sync into the vault.
-
----
-
-## GitHubWebhookStore (`webhook_store.py`)
-
-### SQLite Table: `github_webhook_events`
-
-| Column | Description |
-|--------|-------------|
-| `id` | UUID |
-| `project_id` | Owning project |
-| `delivery_id` | GitHub `X-GitHub-Delivery` header (for deduplication) |
-| `event_type` | `push`, `pull_request`, `issues`, etc. |
-| `action` | Sub-action (e.g., `opened`, `closed`, `synchronize`) |
-| `repository_full_name` | `owner/repo` |
-| `payload` | Full webhook JSON payload |
-| `created_at` | ISO 8601 UTC |
-
-### Key Methods
-
-| Method | Description |
-|--------|-------------|
-| `store_event(project_id, delivery_id, event_type, action, repo, payload)` | Persists a webhook event; deduplicates by `delivery_id` |
-| `list_events(project_id, event_type, limit)` | Filtered listing |
-| `get_event(event_id)` | By UUID |
-
-### Deduplication
-
-GitHub may redeliver webhooks on failure. The store deduplicates by `delivery_id` — a duplicate delivery is silently ignored.
+Persistent storage layer for incoming GitHub webhook events. Handles
+idempotent deduplication, schema migration, retention pruning, and per-project
+event listing.
 
 ---
 
-## Webhook Processing (in `api/projects.py`)
+## Files
 
-`POST /v1/projects/{id}/github/webhook` handles incoming webhooks:
-
-1. **Signature verification**: validates `X-Hub-Signature-256` HMAC against the project's stored webhook secret. Returns 401 if signature is invalid or secret is not set.
-2. **Delivery-ID deduplication**: checks `X-GitHub-Delivery` header; ignores if already stored.
-3. **Timestamp skew check**: rejects webhooks with a timestamp more than 5 minutes in the past (using `Date` header).
-4. **Storage**: calls `GitHubWebhookStore.store_event()`.
-5. **PR review task**: if a PR review bot is configured and the event is `pull_request` with action `opened` or `synchronize`, spawns a bot task.
+| File | Purpose |
+|---|---|
+| `webhook_store.py` | `GitHubWebhookStore` class — SQLite storage for GitHub webhook payloads |
 
 ---
 
-## GitHub PAT Integration
+## SQLite Schema
 
-`POST /v1/projects/{id}/github/connect` stores a GitHub PAT in `KeyVault` under the name `github_pat:<project_id>`. The PAT is used for:
-- Authenticated GitHub API calls during repo sync
-- Clone/push operations in the repo workspace
+Table: **`github_webhook_events`** (in `data/nexusai.db` by default)
 
-`DELETE /v1/projects/{id}/github/disconnect` removes the stored PAT.
+| Column | Type | Nullable | Description |
+|---|---|---|---|
+| `id` | `TEXT PRIMARY KEY` | No | UUID v4 generated at ingest time |
+| `project_id` | `TEXT NOT NULL` | No | NexusAI project that owns this webhook |
+| `delivery_id` | `TEXT` | Yes | GitHub `X-GitHub-Delivery` header value |
+| `event_type` | `TEXT NOT NULL` | No | GitHub event name (e.g. `push`, `pull_request`) |
+| `action` | `TEXT` | Yes | Webhook action sub-type (e.g. `opened`, `closed`) |
+| `repository_full_name` | `TEXT` | Yes | `owner/repo` from the webhook payload |
+| `payload` | `TEXT NOT NULL` | No | Full JSON-serialised webhook payload |
+| `created_at` | `TEXT NOT NULL` | No | UTC ISO-8601 ingest timestamp |
+
+### Indexes
+
+| Index | Columns | Purpose |
+|---|---|---|
+| `idx_github_webhook_events_project_created` | `(project_id, created_at DESC)` | Fast per-project listing newest-first |
+| `idx_github_webhook_events_project_delivery` | `(project_id, delivery_id)` | Idempotency check by delivery ID |
 
 ---
 
-## Repo Context Sync
+## Schema Migration
 
-`POST /v1/projects/{id}/github/sync` synchronises repo content into the vault:
+`_ensure_schema` is called every time the database is initialised. It uses
+`PRAGMA table_info` to inspect the live schema and applies `ALTER TABLE ADD COLUMN`
+migrations for any missing columns. This supports upgrading existing databases
+without data loss.
 
-| `sync_mode` | Behaviour |
-|-------------|-----------|
-| `full` | Clears existing vault items in the repo namespace, then ingests all files, commits, PRs, issues |
-| `update` | Only ingests changed/newer items since the last successful sync |
+Migration history handled by `_ensure_schema`:
 
-Content is ingested under namespace `project:<id>:repo`.
-
-Long-running syncs execute as background tasks and report status back to the project record.
+- `payload` column — added if missing; data is migrated from legacy
+  `payload_json` column if it exists.
+- `delivery_id`, `action`, `repository_full_name` — nullable columns added if
+  absent.
+- `project_id`, `event_type`, `created_at` — required columns added with
+  `NOT NULL DEFAULT ''` if absent.
 
 ---
 
-## PR Review Task Workflow
+## `webhook_store.py` — `GitHubWebhookStore` class
 
-When `POST /v1/projects/{id}/github/pr-review` configures a PR review bot, incoming `pull_request.opened` or `pull_request.synchronize` webhooks spawn a task for that bot with the PR diff and metadata as payload.
+### Constructor
+
+```python
+GitHubWebhookStore(db_path: Optional[str] = None)
+```
+
+Resolves `db_path` in priority order:
+
+1. Explicit argument
+2. `DATABASE_URL` env var (must start with `sqlite:///`)
+3. Default `<repo_root>/data/nexusai.db`
+
+### Methods
+
+#### `async _ensure_db() → None`
+
+Lazily creates the table, runs `_ensure_schema`, and creates indexes on first
+use. Uses double-checked locking with `_init_lock`.
+
+#### `async _ensure_schema(db: aiosqlite.Connection) → None`
+
+Inspects live schema via `PRAGMA table_info` and applies additive migrations.
+Called inside `_ensure_db` before the initial `db.commit()`.
+
+#### `async record_event(project_id, event_type, payload, ...) → Dict[str, Any]`
+
+```python
+async def record_event(
+    project_id: str,
+    event_type: str,
+    payload: Dict[str, Any],
+    delivery_id: Optional[str] = None,
+    action: Optional[str] = None,
+    repository_full_name: Optional[str] = None,
+) -> Dict[str, Any]
+```
+
+Inserts a new webhook event row. The `payload` dict is serialised with
+`json.dumps` before storage. Returns a dict of the stored row (with `payload`
+still as a dict, not the JSON string).
+
+#### `async has_delivery_id(project_id, delivery_id) → bool`
+
+```python
+async def has_delivery_id(project_id: str, delivery_id: str) -> bool
+```
+
+Returns `True` if a row with this `(project_id, delivery_id)` pair already
+exists — used for idempotency. Returns `False` if `delivery_id` is empty.
+
+#### `async prune_older_than(cutoff_iso: str) → int`
+
+```python
+async def prune_older_than(cutoff_iso: str) -> int
+```
+
+Deletes all rows where `created_at < cutoff_iso`. Returns the number of rows
+deleted. The caller is responsible for computing the cutoff timestamp.
+
+Example:
+
+```python
+from datetime import datetime, timedelta, timezone
+cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+deleted = await store.prune_older_than(cutoff)
+```
+
+#### `async list_events(project_id, limit) → List[Dict[str, Any]]`
+
+```python
+async def list_events(project_id: str, limit: int = 50) -> List[Dict[str, Any]]
+```
+
+Returns up to `limit` events for the given project, ordered newest-first.
+The stored `payload` JSON string is parsed back to a dict before returning.
+
+---
+
+## Webhook Events Processed
+
+`GitHubWebhookStore` is event-type agnostic — it stores whatever `event_type`
+string the control plane passes in. The following GitHub event types are
+handled by the webhook ingestion route:
+
+| Event Type | Common Actions | Typical Trigger |
+|---|---|---|
+| `push` | — | Commits pushed to a branch |
+| `pull_request` | `opened`, `closed`, `synchronize`, `reopened` | PR lifecycle |
+| `pull_request_review` | `submitted`, `dismissed` | PR review submitted |
+| `issues` | `opened`, `closed`, `labeled` | Issue lifecycle |
+| `issue_comment` | `created` | Comment on issue or PR |
+| `create` | — | Branch or tag created |
+| `delete` | — | Branch or tag deleted |
+| `workflow_run` | `completed`, `requested` | GitHub Actions workflow |
+| `release` | `published` | Release published |
+| `ping` | — | Webhook registration confirmation |
+
+(Exact event routing is defined in the control plane webhook route handler,
+not in `webhook_store.py`.)
+
+---
+
+## How Webhooks Trigger Tasks or Bot Workflows
+
+1. GitHub sends an HTTP POST to the control plane webhook endpoint (typically
+   `/api/projects/{project_id}/github/webhook`).
+2. The route handler validates the `X-Hub-Signature-256` HMAC signature using
+   the project's configured webhook secret.
+3. `has_delivery_id` is called with the `X-GitHub-Delivery` header to check
+   for duplicate delivery — if already seen, a `200 OK` is returned immediately.
+4. `record_event` stores the raw payload.
+5. The route handler inspects `event_type` and `action`, then creates a NexusAI
+   task or fires a bot workflow trigger based on the project's GitHub integration
+   settings (e.g. auto-create a task for every opened PR).
+6. The task is dispatched through the normal control-plane scheduling path.
 
 ---
 
 ## Known Issues
 
-- Webhook secret is stored via `KeyVault` (Fernet encrypted), but PATs are also stored via `KeyVault`. There is no distinction between webhook secret type and PAT type beyond the key name prefix.
-- The timestamp skew check uses the HTTP `Date` header, which can be spoofed. Real protection comes from HMAC signature verification.
-- Long-running sync background tasks do not have cancellation support.
+- **No limit parameter on `prune_older_than`** — the prune deletes all matching
+  rows in one statement, which can lock the database for an extended period on
+  large tables.
+- **No server-side payload size limit** — very large webhook payloads (e.g.
+  bulk push with many commits) are stored verbatim. Callers should enforce a
+  body-size limit via `enforce_body_size` before calling `record_event`.
+- **Single-process write lock** — `_lock` is an `asyncio.Lock`; multiple
+  control-plane processes sharing the same SQLite file are not protected beyond
+  SQLite file-level locking.
+- **No index on `event_type`** — filtering by event type requires a full table
+  scan if the `project_id` index is not selective enough.
+- **`list_events` limit is not clamped** — unlike `AuditLog.list_events`, the
+  `limit` parameter is not validated, so arbitrarily large values are accepted.
