@@ -38,7 +38,7 @@
         <td>{{ (pipeline.updated_at[:19] if pipeline.updated_at else "") | replace('T', ' ') }}</td>
         <td class="actions" style="display:flex;gap:0.5rem;flex-wrap:wrap;">
           <a class="btn btn-sm" href="{{ url_for('pipelines.pipeline_detail_page', orchestration_id=pipeline.id) }}">Open</a>
-          <button class="btn btn-sm" type="button" onclick="openPipelineTestModal({{ pipeline.id|tojson }})">Test</button>
+          <button class="btn btn-sm" type="button" onclick="openPipelineTestModal({{ pipeline.pipeline_key|tojson }})">Test</button>
         </td>
       </tr>
       {% else %}
@@ -80,21 +80,22 @@
 {% block scripts %}
 <script>
 const PIPELINES = {{ pipelines|tojson }};
-let PIPELINE_TEST_SESSION = null;
+const PIPELINE_CATALOG = {{ pipeline_catalog|default([], true)|tojson }};
+let PIPELINE_TEST_CONTEXT = null;
 
 function getCsrf() {
   const el = document.querySelector('input[name=csrf_token]');
   return el ? el.value : '';
 }
 
-function pipelineById(pipelineId) {
-  return PIPELINES.find((item) => String(item.id) === String(pipelineId)) || null;
+function pipelineByKey(pipelineKey) {
+  return PIPELINE_CATALOG.find((item) => String(item.pipeline_key || '') === String(pipelineKey || '')) || null;
 }
 
 function formatPipelineOption(pipeline) {
-  const name = String(pipeline?.name || pipeline?.id || 'Pipeline');
-  const status = String(pipeline?.status || '').trim();
-  return status ? `${name} [${status}]` : name;
+  const name = String(pipeline?.name || pipeline?.pipeline_key || 'Pipeline');
+  const runs = Number(pipeline?.run_count || 0);
+  return runs > 0 ? `${name} (${runs} run${runs === 1 ? '' : 's'})` : name;
 }
 
 function closePipelineTestModal() {
@@ -115,7 +116,7 @@ function setPipelineTestOutput(value) {
   pre.textContent = String(value || '').trim();
 }
 
-function selectedPipelineId() {
+function selectedPipelineKey() {
   const select = document.getElementById('pipeline-test-pipeline');
   return String(select?.value || '').trim();
 }
@@ -125,23 +126,23 @@ function selectedSuiteId() {
   return String(select?.value || '').trim();
 }
 
-function populatePipelinePicker(preferredPipelineId) {
+function populatePipelinePicker(preferredPipelineKey) {
   const select = document.getElementById('pipeline-test-pipeline');
   if (!select) return;
   const options = [];
-  for (const pipeline of PIPELINES) {
-    options.push(`<option value="${String(pipeline.id)}">${formatPipelineOption(pipeline)}</option>`);
+  for (const pipeline of PIPELINE_CATALOG) {
+    options.push(`<option value="${String(pipeline.pipeline_key || '')}">${formatPipelineOption(pipeline)}</option>`);
   }
   if (!options.length) {
     select.innerHTML = '<option value="">No pipelines available</option>';
     return;
   }
   select.innerHTML = options.join('');
-  const preferred = String(preferredPipelineId || '').trim();
-  if (preferred && PIPELINES.some((item) => String(item.id) === preferred)) {
+  const preferred = String(preferredPipelineKey || '').trim();
+  if (preferred && PIPELINE_CATALOG.some((item) => String(item.pipeline_key || '') === preferred)) {
     select.value = preferred;
   } else {
-    select.value = String(PIPELINES[0].id || '');
+    select.value = String(PIPELINE_CATALOG[0].pipeline_key || '');
   }
 }
 
@@ -162,17 +163,17 @@ function populateSuitePicker(suites) {
 }
 
 async function refreshPipelineTestSuites() {
-  const pipelineId = selectedPipelineId();
-  if (!pipelineId) {
+  const pipelineKey = selectedPipelineKey();
+  if (!pipelineKey) {
     setPipelineTestStatus('Select a pipeline first.', true);
     return;
   }
   setPipelineTestStatus('Loading stored tests...', false);
   try {
-    const res = await fetch('/api/pipelines/' + encodeURIComponent(pipelineId) + '/tests');
+    const res = await fetch('/api/pipelines/tests/target?pipeline_key=' + encodeURIComponent(pipelineKey));
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || 'Failed to load stored pipeline tests');
-    PIPELINE_TEST_SESSION = data.session || null;
+    PIPELINE_TEST_CONTEXT = data;
     const suites = Array.isArray(data.suites) ? data.suites : [];
     populateSuitePicker(suites);
     if (suites.length) {
@@ -188,18 +189,18 @@ async function refreshPipelineTestSuites() {
 }
 
 async function designPipelineStoredTests() {
-  const pipelineId = selectedPipelineId();
-  if (!pipelineId) {
+  const pipelineKey = selectedPipelineKey();
+  if (!pipelineKey) {
     setPipelineTestStatus('Select a pipeline first.', true);
     return;
   }
   const suiteName = String(document.getElementById('pipeline-test-suite-name')?.value || '').trim() || 'Pipeline Stored Quality Suite';
   setPipelineTestStatus('Designing stored suite...', false);
   try {
-    const res = await fetch('/api/pipelines/' + encodeURIComponent(pipelineId) + '/tests/design', {
+    const res = await fetch('/api/pipelines/tests/target/design', {
       method: 'POST',
       headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
-      body: JSON.stringify({name: suiteName, include_default_tests: true}),
+      body: JSON.stringify({pipeline_key: pipelineKey, name: suiteName, include_default_tests: true}),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || 'Failed to create stored test suite');
@@ -217,18 +218,22 @@ async function designPipelineStoredTests() {
 }
 
 async function runPipelineStoredTests() {
-  const pipelineId = selectedPipelineId();
-  if (!pipelineId) {
+  const pipelineKey = selectedPipelineKey();
+  if (!pipelineKey) {
     setPipelineTestStatus('Select a pipeline first.', true);
     return;
   }
   const suiteId = selectedSuiteId();
   setPipelineTestStatus('Running stored tests in isolated mode...', false);
   try {
-    const res = await fetch('/api/pipelines/' + encodeURIComponent(pipelineId) + '/tests/run', {
+    const res = await fetch('/api/pipelines/tests/target/run', {
       method: 'POST',
       headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
-      body: JSON.stringify({suite_id: suiteId || undefined}),
+      body: JSON.stringify({
+        pipeline_key: pipelineKey,
+        suite_id: suiteId || undefined,
+        orchestration_id: String(PIPELINE_TEST_CONTEXT?.pipeline?.latest_orchestration_id || ''),
+      }),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || 'Stored pipeline tests failed to run');
@@ -241,10 +246,10 @@ async function runPipelineStoredTests() {
   }
 }
 
-async function openPipelineTestModal(preferredPipelineId) {
+async function openPipelineTestModal(preferredPipelineKey) {
   const modal = document.getElementById('modal-pipeline-test');
   if (!modal) return;
-  populatePipelinePicker(preferredPipelineId);
+  populatePipelinePicker(preferredPipelineKey);
   modal.style.display = 'flex';
   await refreshPipelineTestSuites();
 }
@@ -259,11 +264,11 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   if (suiteSelect) {
     suiteSelect.addEventListener('change', async () => {
-      const pipelineId = selectedPipelineId();
       const suiteId = selectedSuiteId();
-      if (!pipelineId || !suiteId) return;
+      const pipelineKey = selectedPipelineKey();
+      if (!pipelineKey || !suiteId) return;
       try {
-        const res = await fetch('/api/pipelines/' + encodeURIComponent(pipelineId) + '/tests');
+        const res = await fetch('/api/pipelines/tests/target?pipeline_key=' + encodeURIComponent(pipelineKey));
         const data = await res.json().catch(() => ({}));
         if (!res.ok) return;
         const suites = Array.isArray(data.suites) ? data.suites : [];

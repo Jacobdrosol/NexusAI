@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% set active_page = "platform_ai" %}
+{% block title %}Platform AI{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Platform AI</h1>
+  <div style="display:flex;gap:0.5rem;">
+    <a class="btn" href="{{ url_for('pipelines.pipelines_page') }}">Open Pipelines</a>
+  </div>
+</div>
+{% if error %}
+<div class="alert alert-error">{{ error }}</div>
+{% endif %}
+
+<section class="panel" style="margin-bottom:1rem;">
+  <div class="page-header" style="margin-bottom:0.75rem;">
+    <h2 class="panel-title">Sessions</h2>
+    <div class="mini-note">{{ sessions|length }} total</div>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>Mode</th><th>Status</th><th>Assignment</th><th>Orchestration</th><th>Operator</th><th>Updated</th><th>Metadata</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for session in sessions %}
+      <tr>
+        <td>{{ session.mode }}</td>
+        <td><span class="badge badge-{{ session.status }}">{{ session.status }}</span></td>
+        <td><code>{{ session.assignment_id or "—" }}</code></td>
+        <td><code>{{ session.orchestration_id or "—" }}</code></td>
+        <td>{{ session.operator_id or "—" }}</td>
+        <td>{{ (session.updated_at[:19] if session.updated_at else "") | replace('T', ' ') }}</td>
+        <td><code>{{ (session.metadata or {}) | tojson }}</code></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="empty">No Platform AI sessions yet</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="panel">
+  <div class="page-header" style="margin-bottom:0.75rem;">
+    <h2 class="panel-title">Stored Test Suites</h2>
+    <div class="mini-note">{{ suites|length }} total</div>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th><th>Session</th><th>Assignment</th><th>Orchestration</th><th>Updated</th><th>Metadata</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for suite in suites %}
+      <tr>
+        <td>{{ suite.name }}</td>
+        <td><code>{{ suite.session_id }}</code></td>
+        <td><code>{{ suite.assignment_id or "—" }}</code></td>
+        <td><code>{{ suite.orchestration_id or "—" }}</code></td>
+        <td>{{ (suite.updated_at[:19] if suite.updated_at else "") | replace('T', ' ') }}</td>
+        <td><code>{{ (suite.metadata or {}) | tojson }}</code></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="6" class="empty">No stored Platform AI test suites yet</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}
