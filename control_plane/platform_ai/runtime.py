@@ -71,8 +71,19 @@ class PlatformAISessionRuntime:
             },
         )
         session = await self._store.get_session(session_id)
-        if session is not None and str(session.get("status") or "").strip().lower() == "active":
+        status = str((session or {}).get("status") or "").strip().lower()
+        if session is not None and status == "active":
             await self.ensure_session_loop(session_id)
+        elif str(role or "").strip().lower() == "operator":
+            await self._store.append_message(
+                session_id,
+                role="assistant",
+                content=(
+                    "Message received. Session is not active right now. "
+                    "Resume/start the session to execute actions from this instruction."
+                ),
+                metadata={"source": "session_state_ack", "session_status": status or "unknown"},
+            )
         return message
 
     async def start_deploy_run(self, session_id: str, *, requested_by: str) -> Dict[str, Any]:
@@ -87,6 +98,12 @@ class PlatformAISessionRuntime:
 
     async def _session_loop(self, session_id: str) -> None:
         phases = ["observe", "diagnose", "tune", "verify"]
+        action_cycle = [
+            {"action": "analyze_context", "kind": "decision", "tool": None, "detail": "Inspect assignment and pipeline state."},
+            {"action": "select_tool", "kind": "tool", "tool": "task_graph_inspector", "detail": "Scan graph and branch/join outcomes."},
+            {"action": "evaluate_quality", "kind": "decision", "tool": None, "detail": "Evaluate output quality signals and gaps."},
+            {"action": "propose_change", "kind": "outcome", "tool": None, "detail": "Prepare tuning or control recommendations."},
+        ]
         phase_index = 0
         tick = 0
         await self._store.append_event(
@@ -113,14 +130,19 @@ class PlatformAISessionRuntime:
 
                 tick += 1
                 phase = phases[phase_index % len(phases)]
+                step = action_cycle[(tick - 1) % len(action_cycle)]
                 phase_index += 1
 
                 await self._process_operator_messages(session_id)
+                last_tool = str(step.get("tool") or "").strip() or None
+                active_action = str(step.get("action") or "").strip() or "runtime_tick"
                 await self._store.update_session(
                     session_id,
                     metadata={
                         "runtime_tick": tick,
                         "current_phase": phase,
+                        "active_action": active_action,
+                        "last_tool_call": last_tool,
                         "last_heartbeat_at": _now(),
                     },
                 )
@@ -131,6 +153,10 @@ class PlatformAISessionRuntime:
                         "action": "runtime_tick",
                         "phase": phase,
                         "tick": tick,
+                        "kind": str(step.get("kind") or "decision"),
+                        "active_action": active_action,
+                        "tool": last_tool,
+                        "detail": str(step.get("detail") or ""),
                     },
                 )
                 await asyncio.sleep(2.0)
@@ -164,6 +190,7 @@ class PlatformAISessionRuntime:
                     "action": "operator_message_received",
                     "message_id": mid,
                     "content_preview": content[:280],
+                    "kind": "decision",
                 },
             )
             await self._store.append_message(
@@ -171,6 +198,16 @@ class PlatformAISessionRuntime:
                 role="assistant",
                 content=f"Acknowledged. Applying operator direction: {content[:500]}",
                 metadata={"source": "runtime_ack", "operator_message_id": mid},
+            )
+            await self._store.append_event(
+                session_id,
+                "action_trace",
+                {
+                    "action": "operator_message_acknowledged",
+                    "message_id": mid,
+                    "kind": "outcome",
+                    "detail": "Operator instruction has been accepted into session workflow.",
+                },
             )
 
     async def _deploy_loop(self, session_id: str, *, requested_by: str) -> None:

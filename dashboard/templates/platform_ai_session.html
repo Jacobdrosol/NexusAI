@@ -112,6 +112,44 @@
   <div id="backend-update-status" class="mini-note" style="margin-top:0.75rem;"></div>
 </section>
 
+<section class="panel" style="margin-bottom:1rem;">
+  <div class="page-header" style="margin-bottom:0.75rem;">
+    <h2 class="panel-title">Context Files (Large Sample Packs)</h2>
+    <div class="mini-note" id="context-files-count">{{ context_files|length }} files</div>
+  </div>
+  <div class="split-grid" style="grid-template-columns:2fr 1fr;gap:0.75rem;">
+    <div>
+      <input id="context-files-input" class="form-control" type="file" multiple>
+      <div class="mini-note" style="margin-top:0.35rem;">Attach sample outputs/spec files so Platform AI can tune toward expected quality and structure.</div>
+    </div>
+    <div style="display:flex;align-items:flex-end;">
+      <button class="btn btn-primary" type="button" onclick="uploadContextFiles()">Upload Files</button>
+    </div>
+  </div>
+  <div id="context-files-status" class="mini-note" style="margin-top:0.75rem;"></div>
+  <div id="context-files-list" style="margin-top:0.75rem;max-height:24vh;overflow:auto;border:1px solid #1f2937;border-radius:10px;padding:0.6rem;">
+    {% for row in context_files %}
+    <div style="padding:0.35rem 0;border-bottom:1px solid rgba(148,163,184,0.15);">
+      <strong>{{ row.name }}</strong>
+      <div class="mini-note">{{ row.size_bytes }} bytes • {{ row.content_type or "unknown" }} • {{ (row.uploaded_at[:19] if row.uploaded_at else "") | replace('T',' ') }}</div>
+      <div class="mini-note"><code>{{ row.path }}</code></div>
+    </div>
+    {% else %}
+    <div class="empty">No context files attached yet</div>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="panel" style="margin-bottom:1rem;">
+  <div class="page-header" style="margin-bottom:0.75rem;">
+    <h2 class="panel-title">Conversation Timeline</h2>
+    <div class="mini-note">Messages + action/tool/decision/outcome stream</div>
+  </div>
+  <div id="session-timeline-log" style="max-height:56vh;overflow:auto;border:1px solid #1f2937;border-radius:10px;padding:0.6rem;">
+    <div class="empty">Timeline loading...</div>
+  </div>
+</section>
+
 <div class="split-grid" style="grid-template-columns:1fr 1fr;gap:1rem;">
   <section class="panel">
     <div class="page-header" style="margin-bottom:0.75rem;">
@@ -181,7 +219,8 @@
     </div>
     <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
       <button class="btn" type="button" onclick="loadPipelineSuites()">Refresh Suites</button>
-      <button class="btn" type="button" onclick="designPipelineSuite()">Design Suite</button>
+      <button class="btn" type="button" onclick="designPipelineSuite('operator_manual')">Design My Suite</button>
+      <button class="btn" type="button" onclick="designPipelineSuite('platform_ai_auto')">Generate AI Suite</button>
       <button class="btn btn-primary" type="button" onclick="runPipelineSuite()">Run Suite</button>
     </div>
     <div id="suite-status" class="mini-note" style="margin-top:0.75rem;"></div>
@@ -222,6 +261,9 @@ const SESSION_ID = {{ (session.id if session else '') | tojson }};
 let EVENTS_CURSOR = 0;
 let MESSAGES_CURSOR = 0;
 let AUTO_POLL_HANDLE = null;
+let LAST_MESSAGES = [];
+let LAST_EVENTS = [];
+let LAST_CONTEXT_FILES = {{ context_files|default([], true)|tojson }};
 
 function getCsrf() {
   const el = document.querySelector('input[name=csrf_token]');
@@ -243,6 +285,10 @@ function parseJsonSafe(text, fallback) {
   } catch (error) {
     throw new Error('Invalid JSON payload');
   }
+}
+
+function htmlEscape(value) {
+  return String(value || '').replace(/[<>&]/g, (ch) => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[ch]));
 }
 
 function reloadWorkspace() {
@@ -346,38 +392,104 @@ async function refreshSessionHeader() {
   if (orch) orch.textContent = String(data.orchestration_id || '—');
   const updated = document.getElementById('session-updated');
   if (updated) updated.textContent = String((data.updated_at || '').replace('T', ' ').slice(0, 19));
+  const metadata = data && typeof data.metadata === 'object' ? data.metadata : {};
+  LAST_CONTEXT_FILES = Array.isArray(metadata.context_files) ? metadata.context_files : [];
+  renderContextFiles();
 }
 
 function renderMessages(messages) {
   const root = document.getElementById('operator-chat-log');
   if (!root) return;
   const rows = Array.isArray(messages) ? messages : [];
+  LAST_MESSAGES = rows;
   if (!rows.length) {
     root.innerHTML = '<div class="empty">No messages yet</div>';
+    renderTimeline();
     return;
   }
   root.innerHTML = rows.map((message) => {
     const role = String(message.role || 'assistant');
     const created = String(message.created_at || '').replace('T', ' ').slice(0, 19);
-    const content = String(message.content || '').replace(/[<>&]/g, (ch) => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[ch]));
+    const content = htmlEscape(message.content || '');
     return `<div style="padding:0.4rem 0;border-bottom:1px solid rgba(148,163,184,0.15);"><div class="mini-note"><strong>${role}</strong> • ${created}</div><div style="white-space:pre-wrap;">${content}</div></div>`;
   }).join('');
   root.scrollTop = root.scrollHeight;
+  renderTimeline();
 }
 
 function renderEvents(events) {
   const root = document.getElementById('action-trace-log');
   if (!root) return;
   const rows = Array.isArray(events) ? events : [];
+  LAST_EVENTS = rows;
   if (!rows.length) {
     root.innerHTML = '<div class="empty">No action trace events yet</div>';
+    renderTimeline();
     return;
   }
   root.innerHTML = rows.map((event) => {
     const kind = String(event.event_type || 'event');
     const created = String(event.created_at || '').replace('T', ' ').slice(0, 19);
-    const payload = JSON.stringify(event.payload || {}, null, 2).replace(/[<>&]/g, (ch) => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[ch]));
+    const payload = htmlEscape(JSON.stringify(event.payload || {}, null, 2));
     return `<div style="padding:0.4rem 0;border-bottom:1px solid rgba(148,163,184,0.15);"><div class="mini-note"><strong>${kind}</strong> • ${created}</div><pre style="white-space:pre-wrap;margin:0;">${payload}</pre></div>`;
+  }).join('');
+  root.scrollTop = root.scrollHeight;
+  renderTimeline();
+}
+
+function renderTimeline() {
+  const root = document.getElementById('session-timeline-log');
+  if (!root) return;
+  const rows = [];
+  for (const message of LAST_MESSAGES) {
+    const role = String(message.role || 'assistant').toLowerCase();
+    rows.push({
+      created_at: String(message.created_at || ''),
+      type: 'message',
+      role: role,
+      title: role === 'operator' ? 'Operator Message' : (role === 'assistant' ? 'Platform AI Message' : 'Message'),
+      body: String(message.content || ''),
+      meta: message.metadata || {},
+    });
+  }
+  for (const event of LAST_EVENTS) {
+    const payload = event && typeof event.payload === 'object' ? event.payload : {};
+    const kind = String(payload.kind || 'action').trim();
+    const label = String(payload.action || event.event_type || 'event').trim();
+    rows.push({
+      created_at: String(event.created_at || ''),
+      type: 'event',
+      role: kind,
+      title: `Trace: ${label}`,
+      body: String(payload.detail || payload.content_preview || ''),
+      meta: payload,
+    });
+  }
+  rows.sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')));
+  if (!rows.length) {
+    root.innerHTML = '<div class="empty">No timeline events yet</div>';
+    return;
+  }
+  root.innerHTML = rows.map((row) => {
+    const when = String(row.created_at || '').replace('T', ' ').slice(0, 19);
+    const tone = row.type === 'message'
+      ? (row.role === 'operator' ? '#22d3ee' : '#10b981')
+      : '#93c5fd';
+    const body = htmlEscape(row.body || '');
+    const meta = htmlEscape(JSON.stringify(row.meta || {}, null, 2));
+    return `
+      <div style="padding:0.55rem;border:1px solid rgba(148,163,184,0.15);border-radius:10px;margin-bottom:0.55rem;">
+        <div style="display:flex;gap:0.5rem;align-items:center;justify-content:space-between;">
+          <strong style="color:${tone};">${htmlEscape(row.title)}</strong>
+          <span class="mini-note">${when}</span>
+        </div>
+        ${body ? `<div style="white-space:pre-wrap;margin-top:0.35rem;">${body}</div>` : ''}
+        <details style="margin-top:0.35rem;">
+          <summary class="mini-note">Details</summary>
+          <pre style="white-space:pre-wrap;margin:0.35rem 0 0 0;">${meta}</pre>
+        </details>
+      </div>
+    `;
   }).join('');
   root.scrollTop = root.scrollHeight;
 }
@@ -455,7 +567,10 @@ function setSuiteOptions(suites) {
     const id = String(suite.id || '');
     const name = String(suite.name || id || 'Suite');
     const ts = String(suite.updated_at || suite.created_at || '').replace('T', ' ').slice(0, 19);
-    return `<option value="${id}">${name}${ts ? ' (' + ts + ')' : ''}</option>`;
+    const metadata = suite && typeof suite.metadata === 'object' ? suite.metadata : {};
+    const gen = String(metadata.generator || '').trim();
+    const prefix = gen === 'platform_ai_auto' ? '[AI] ' : '[Mine] ';
+    return `<option value="${id}">${prefix}${name}${ts ? ' (' + ts + ')' : ''}</option>`;
   }).join('');
 }
 
@@ -478,14 +593,16 @@ async function loadPipelineSuites() {
   }
 }
 
-async function designPipelineSuite() {
+async function designPipelineSuite(generator) {
   const pipelineBotId = activePipelineBotId();
   if (!pipelineBotId) {
     setStatus('suite-status', 'pipeline_bot_id is required', true);
     return;
   }
   const name = String(document.getElementById('suite-name')?.value || '').trim();
-  setStatus('suite-status', 'Designing suite...', false);
+  const mode = String(generator || 'operator_manual');
+  const modeLabel = mode === 'platform_ai_auto' ? 'AI suite' : 'manual suite';
+  setStatus('suite-status', `Designing ${modeLabel}...`, false);
   try {
     const res = await fetch('/api/platform-ai/pipelines/' + encodeURIComponent(pipelineBotId) + '/test-suites/design', {
       method: 'POST',
@@ -494,11 +611,12 @@ async function designPipelineSuite() {
         name: name || undefined,
         include_default_tests: true,
         set_default: true,
+        metadata: {generator: mode, source: 'platform_ai_workspace'},
       }),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || 'Failed to design suite');
-    setStatus('suite-status', 'Suite designed: ' + String((data.suite || {}).name || (data.suite || {}).id || 'unknown'), false);
+    setStatus('suite-status', `${modeLabel} designed: ` + String((data.suite || {}).name || (data.suite || {}).id || 'unknown'), false);
     await loadPipelineSuites();
     await refreshEvents(true);
   } catch (error) {
@@ -560,6 +678,55 @@ async function renderRecentRuns() {
   }
 }
 
+function renderContextFiles() {
+  const root = document.getElementById('context-files-list');
+  const count = document.getElementById('context-files-count');
+  if (count) count.textContent = `${Array.isArray(LAST_CONTEXT_FILES) ? LAST_CONTEXT_FILES.length : 0} files`;
+  if (!root) return;
+  const rows = Array.isArray(LAST_CONTEXT_FILES) ? LAST_CONTEXT_FILES : [];
+  if (!rows.length) {
+    root.innerHTML = '<div class="empty">No context files attached yet</div>';
+    return;
+  }
+  root.innerHTML = rows.map((row) => {
+    const name = htmlEscape(row.name || row.path || 'file');
+    const size = Number(row.size_bytes || 0);
+    const type = htmlEscape(row.content_type || 'unknown');
+    const when = htmlEscape(String(row.uploaded_at || '').replace('T', ' ').slice(0, 19));
+    const path = htmlEscape(row.path || '');
+    return `<div style="padding:0.35rem 0;border-bottom:1px solid rgba(148,163,184,0.15);"><strong>${name}</strong><div class="mini-note">${size} bytes • ${type} • ${when}</div><div class="mini-note"><code>${path}</code></div></div>`;
+  }).join('');
+}
+
+async function uploadContextFiles() {
+  if (!SESSION_ID) return;
+  const input = document.getElementById('context-files-input');
+  const files = input && input.files ? Array.from(input.files) : [];
+  if (!files.length) {
+    setStatus('context-files-status', 'Select one or more files first.', true);
+    return;
+  }
+  const form = new FormData();
+  for (const file of files) form.append('files', file);
+  setStatus('context-files-status', `Uploading ${files.length} file(s)...`, false);
+  try {
+    const res = await fetch('/api/platform-ai/sessions/' + encodeURIComponent(SESSION_ID) + '/context-files', {
+      method: 'POST',
+      headers: {'X-CSRFToken': getCsrf()},
+      body: form,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Failed to upload context files');
+    setStatus('context-files-status', `Uploaded ${Number(data.files?.length || 0)} file(s).`, false);
+    if (input) input.value = '';
+    await refreshSessionHeader();
+    await refreshMessages(true);
+    await refreshEvents(true);
+  } catch (error) {
+    setStatus('context-files-status', error.message || 'Failed to upload context files', true);
+  }
+}
+
 async function pollWorkspace() {
   await refreshMessages(false);
   await refreshEvents(false);
@@ -568,6 +735,7 @@ async function pollWorkspace() {
 
 document.addEventListener('DOMContentLoaded', async () => {
   if (!SESSION_ID) return;
+  renderContextFiles();
   await refreshMessages(true);
   await refreshEvents(true);
   AUTO_POLL_HANDLE = setInterval(pollWorkspace, 4000);

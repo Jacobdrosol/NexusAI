@@ -81,6 +81,8 @@ class AssignmentCapabilities(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     is_project_manager: bool = False
     is_pipeline_entry: bool = False
+    pipeline: bool = False
+    pipeline_name: Optional[str] = None
 
 
 class DBActionPolicy(BaseModel):

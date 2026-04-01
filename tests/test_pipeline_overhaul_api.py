@@ -241,6 +241,7 @@ async def test_platform_ai_pipeline_entry_suite_catalog_and_run(cp_client):
         json={"name": "Pipeline Entry Suite", "set_default": True},
     )
     assert design_resp.status_code == 200
+    assert str((design_resp.json().get("session") or {}).get("status") or "") == "paused"
     suite = design_resp.json().get("suite") or {}
     suite_id = str(suite.get("id") or "")
     assert suite_id
@@ -260,6 +261,48 @@ async def test_platform_ai_pipeline_entry_suite_catalog_and_run(cp_client):
     test_run = run_resp.json().get("test_run") or {}
     assert str(test_run.get("id") or "")
     assert str(test_run.get("status") or "") in {"passed", "failed"}
+
+
+@pytest.mark.anyio
+async def test_platform_catalog_includes_project_manager_pipeline_fallback(cp_client):
+    bot_id = "pm-catalog-fallback"
+    created_bot = await cp_client.post(
+        "/v1/bots",
+        json={
+            "id": bot_id,
+            "name": "PM Catalog Fallback",
+            "role": "project_manager",
+            "enabled": True,
+            "backends": [],
+            "assignment_capabilities": {"is_project_manager": True, "pipeline": True, "pipeline_name": "pm"},
+            "workflow": {
+                "triggers": [
+                    {
+                        "id": "disabled-noop",
+                        "event": "task_completed",
+                        "target_bot_id": bot_id,
+                        "enabled": False,
+                        "condition": "always",
+                    }
+                ],
+                "reference_graph": {
+                    "graph_id": f"{bot_id}-graph",
+                    "entry_bot_id": bot_id,
+                    "current_bot_id": bot_id,
+                    "nodes": [{"bot_id": bot_id, "title": "PM Intake", "stage_kind": "planning"}],
+                    "edges": [{"source_bot_id": bot_id, "target_bot_id": bot_id, "route_kind": "forward"}],
+                },
+            },
+        },
+    )
+    assert created_bot.status_code == 200
+
+    pipelines_resp = await cp_client.get("/v1/platform-ai/pipelines")
+    assert pipelines_resp.status_code == 200
+    pipelines = pipelines_resp.json().get("pipelines") or []
+    target = next((item for item in pipelines if str(item.get("pipeline_bot_id") or "") == bot_id), None)
+    assert target is not None
+    assert str(target.get("name") or "").strip().lower() == "pm"
 
 
 @pytest.mark.anyio

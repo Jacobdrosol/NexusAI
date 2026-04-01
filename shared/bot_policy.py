@@ -19,7 +19,11 @@ def bot_is_project_manager(bot: Bot) -> bool:
 
 def bot_is_pipeline_entry(bot: Bot) -> bool:
     capabilities = getattr(bot, "assignment_capabilities", None)
-    if capabilities is not None and bool(getattr(capabilities, "is_pipeline_entry", False)):
+    if capabilities is not None and (
+        bool(getattr(capabilities, "is_pipeline_entry", False))
+        or bool(getattr(capabilities, "pipeline", False))
+        or bool(getattr(capabilities, "is_project_manager", False))
+    ):
         return True
     routing = getattr(bot, "routing_rules", None)
     if not isinstance(routing, dict):

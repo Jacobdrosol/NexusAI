@@ -130,6 +130,7 @@ class PlatformAISessionStore:
         if self._ready:
             return
         Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
+        now = _now()
         async with open_sqlite(self._db_path) as db:
             await db.execute(_CREATE_SESSIONS)
             await db.execute(_CREATE_EVENTS)
@@ -138,6 +139,23 @@ class PlatformAISessionStore:
             await db.execute(_CREATE_TEST_RUNS)
             await self._ensure_column(db, "platform_ai_test_suites", "pipeline_bot_id", "TEXT")
             await self._ensure_column(db, "platform_ai_test_runs", "pipeline_bot_id", "TEXT")
+            # Auto-managed pipeline test sessions should not stay active across restarts.
+            await db.execute(
+                """
+                UPDATE platform_ai_sessions
+                SET status = 'paused', updated_at = ?
+                WHERE mode = 'pipeline_tuner'
+                  AND status = 'active'
+                  AND (operator_id IS NULL OR TRIM(operator_id) = '')
+                  AND (
+                    metadata_json LIKE '%"source":"pipeline_test_modal"%'
+                    OR metadata_json LIKE '%"source": "pipeline_test_modal"%'
+                    OR metadata_json LIKE '%"source":"pipeline_suite_api"%'
+                    OR metadata_json LIKE '%"source": "pipeline_suite_api"%'
+                  )
+                """,
+                (now,),
+            )
             for statement in _CREATE_INDEXES:
                 await db.execute(statement)
             await db.commit()

@@ -23,7 +23,7 @@
       <div><strong>Priority:</strong> {{ bot.priority }}</div>
       <div><strong>Enabled:</strong> {{ 'yes' if bot.enabled else 'no' }}</div>
       <div><strong>Project Manager:</strong> {{ 'yes' if bot.assignment_capabilities and bot.assignment_capabilities.is_project_manager else 'no' }}</div>
-      <div><strong>Pipeline Entry:</strong> {{ 'yes' if (bot.assignment_capabilities and bot.assignment_capabilities.is_pipeline_entry) or (bot.launch_profile and bot.launch_profile.is_pipeline) else 'no' }}</div>
+      <div><strong>Pipeline Entry:</strong> {{ 'yes' if (bot.assignment_capabilities and (bot.assignment_capabilities.is_pipeline_entry or bot.assignment_capabilities.pipeline)) or (bot.launch_profile and bot.launch_profile.is_pipeline) else 'no' }}</div>
       <div><strong>Repo Output:</strong> {{ (bot.execution_policy.repo_output_mode if bot.execution_policy else 'deny') or 'deny' }}</div>
       <div><strong>DB Actions:</strong> {{ 'allowed' if bot.execution_policy and bot.execution_policy.can_apply_db_actions else 'blocked' }}</div>
       <div><strong>Run Result Ingest:</strong> {{ 'allowed' if not bot.execution_policy or bot.execution_policy.allow_run_result_ingest else 'blocked' }}</div>
@@ -1015,6 +1015,8 @@ function normalizedAssignmentCapabilities() {
     : {};
   const profile = normalizedLaunchProfile();
   capabilities.is_pipeline_entry = profile.is_pipeline === true;
+  capabilities.pipeline = profile.is_pipeline === true;
+  capabilities.pipeline_name = String(profile.pipeline_name || profile.label || BOT.name || BOT.id || '').trim() || null;
   return capabilities;
 }
 
@@ -1480,7 +1482,8 @@ function loadLaunchProfileEditor() {
   const capabilities = BOT.assignment_capabilities && typeof BOT.assignment_capabilities === 'object'
     ? BOT.assignment_capabilities
     : {};
-  const pipelineChecked = profile.is_pipeline === true || capabilities.is_pipeline_entry === true;
+  const pipelineChecked = profile.is_pipeline === true || capabilities.is_pipeline_entry === true || capabilities.pipeline === true;
+  const capabilityPipelineName = String(capabilities.pipeline_name || '').trim();
   document.getElementById('launch-profile-enabled').checked = profile.enabled !== false;
   document.getElementById('launch-profile-label').value = profile.label || '';
   document.getElementById('launch-profile-description').value = profile.description || '';
@@ -1489,7 +1492,7 @@ function loadLaunchProfileEditor() {
   document.getElementById('launch-profile-show-overview').checked = profile.show_on_overview !== false;
   document.getElementById('launch-profile-show-tasks').checked = profile.show_on_tasks !== false;
   document.getElementById('launch-profile-is-pipeline').checked = pipelineChecked;
-  document.getElementById('launch-profile-pipeline-name').value = profile.pipeline_name || profile.label || '';
+  document.getElementById('launch-profile-pipeline-name').value = capabilityPipelineName || profile.pipeline_name || profile.label || '';
   document.getElementById('launch-profile-payload').value = JSON.stringify(profile.payload || {}, null, 2);
 }
 
@@ -1523,6 +1526,8 @@ function saveLaunchProfile() {
     ? Object.assign({}, BOT.assignment_capabilities)
     : {};
   BOT.assignment_capabilities.is_pipeline_entry = BOT.launch_profile.is_pipeline === true;
+  BOT.assignment_capabilities.pipeline = BOT.launch_profile.is_pipeline === true;
+  BOT.assignment_capabilities.pipeline_name = String(BOT.launch_profile.pipeline_name || BOT.launch_profile.label || BOT.name || BOT.id || '').trim() || null;
   persistBot('Launch profile saved.');
 }
 

@@ -64,17 +64,19 @@ def _bot_routing_rules(bot: Any) -> Dict[str, Any]:
 
 def _bot_is_pipeline_entry(bot: Any) -> bool:
     capabilities = _bot_assignment_capabilities(bot)
-    if bool(capabilities.get("is_pipeline_entry")):
+    if bool(capabilities.get("is_pipeline_entry")) or bool(capabilities.get("pipeline")) or bool(capabilities.get("is_project_manager")):
         return True
     launch_profile = _bot_routing_rules(bot).get("launch_profile")
     return isinstance(launch_profile, dict) and bool(launch_profile.get("is_pipeline"))
 
 
 def _pipeline_name_for_bot(bot: Any) -> str:
+    capabilities = _bot_assignment_capabilities(bot)
     routing = _bot_routing_rules(bot)
     launch_profile = routing.get("launch_profile") if isinstance(routing.get("launch_profile"), dict) else {}
     return str(
-        launch_profile.get("pipeline_name")
+        capabilities.get("pipeline_name")
+        or launch_profile.get("pipeline_name")
         or launch_profile.get("label")
         or getattr(bot, "name", None)
         or getattr(bot, "id", "")
@@ -82,6 +84,7 @@ def _pipeline_name_for_bot(bot: Any) -> str:
 
 
 def _pipeline_entry_payload(bot: Any) -> Dict[str, Any]:
+    capabilities = _bot_assignment_capabilities(bot)
     routing = _bot_routing_rules(bot)
     launch_profile = routing.get("launch_profile") if isinstance(routing.get("launch_profile"), dict) else {}
     testing = routing.get("platform_ai_testing") if isinstance(routing.get("platform_ai_testing"), dict) else {}
@@ -91,6 +94,8 @@ def _pipeline_entry_payload(bot: Any) -> Dict[str, Any]:
         "bot_name": str(getattr(bot, "name", "") or "").strip(),
         "enabled": bool(getattr(bot, "enabled", True)),
         "has_launch_profile": isinstance(launch_profile, dict) and bool(launch_profile),
+        "pipeline": bool(capabilities.get("pipeline") or capabilities.get("is_pipeline_entry")),
+        "pipeline_name": str(capabilities.get("pipeline_name") or "").strip() or None,
         "default_suite_id": str(testing.get("default_suite_id") or "").strip() or None,
     }
 
@@ -594,16 +599,27 @@ async def _find_or_create_pipeline_session(request: Request, *, pipeline_bot_id:
     sessions = await store.list_sessions(mode="pipeline_tuner", limit=500)
     for session in sessions:
         metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
-        if str(metadata.get("pipeline_bot_id") or "").strip() == pipeline_bot_id:
+        existing_pipeline_bot_id = str(
+            metadata.get("pipeline_bot_id")
+            or metadata.get("entry_bot_id")
+            or ""
+        ).strip()
+        if existing_pipeline_bot_id == pipeline_bot_id:
+            if str(session.get("status") or "").strip().lower() == "active" and str(metadata.get("source") or "").strip() in {"pipeline_test_modal", "pipeline_suite_api"}:
+                paused = await store.update_session(
+                    str(session.get("id") or ""),
+                    status="paused",
+                    metadata={"auto_managed": True},
+                )
+                if paused is not None:
+                    return paused
             return session
     created = await store.create_session(
         mode="pipeline_tuner",
-        metadata={"source": "pipeline_suite_api", "pipeline_bot_id": pipeline_bot_id},
+        metadata={"source": "pipeline_suite_api", "pipeline_bot_id": pipeline_bot_id, "auto_managed": True},
     )
-    runtime = getattr(request.app.state, "platform_ai_runtime", None)
-    if runtime is not None:
-        await runtime.ensure_session_loop(created.get("id") or "")
-    return created
+    paused = await store.update_session(str(created.get("id") or ""), status="paused")
+    return paused or created
 
 
 @router.post("/sessions")
