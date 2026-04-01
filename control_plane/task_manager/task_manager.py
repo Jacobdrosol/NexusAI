@@ -5405,6 +5405,8 @@ class TaskManager:
         task: Task,
         required_fields: List[str],
         missing_fields: List[str],
+        *,
+        blocked_triggers: Optional[List[Dict[str, str]]] = None,
     ) -> None:
         metadata = task.metadata or TaskMetadata()
         result_keys = (
@@ -5412,8 +5414,16 @@ class TaskManager:
             if isinstance(task.result, dict)
             else []
         )
+        blocked_triggers = [
+            {
+                "trigger_id": str(item.get("trigger_id") or "").strip(),
+                "target_bot_id": str(item.get("target_bot_id") or "").strip(),
+            }
+            for item in (blocked_triggers or [])
+            if str(item.get("trigger_id") or "").strip() or str(item.get("target_bot_id") or "").strip()
+        ]
         message = (
-            "Bot output validation failed before trigger dispatch: missing required output fields: "
+            "Bot output validation failed before trigger dispatch: missing or empty required output fields: "
             + ", ".join(missing_fields)
         )
         validation_error = {
@@ -5426,20 +5436,47 @@ class TaskManager:
             "issue_tag": "trigger_output_field_missing",
             "required_fields": list(required_fields),
             "missing_fields": list(missing_fields),
+            "blocked_triggers": blocked_triggers,
+            "trigger_ids": [
+                trigger["trigger_id"]
+                for trigger in blocked_triggers
+                if trigger.get("trigger_id")
+            ],
             "result_keys": result_keys,
             "message": message,
         }
         safe_validation_error = json.loads(json.dumps(validation_error, default=str))
-        logger.error(
-            "[TRIGGER] REQUIRED_OUTPUT_VALIDATION_FAILED %s",
-            json.dumps(safe_validation_error, sort_keys=True),
-        )
-        await self._record_trigger_dispatch_error(
-            source_task=task,
-            trigger_id="required-output-check",
-            target_bot_id="",
-            message=message,
-        )
+        if blocked_triggers:
+            for blocked_trigger in blocked_triggers:
+                structured_error = {
+                    "bot_id": task.bot_id,
+                    "trigger_id": blocked_trigger.get("trigger_id") or "required-output-check",
+                    "target_bot_id": blocked_trigger.get("target_bot_id") or "",
+                    "missing_fields": list(missing_fields),
+                    "task_id": task.id,
+                    "orchestration_id": metadata.orchestration_id,
+                }
+                logger.error(
+                    "[TRIGGER] REQUIRED_OUTPUT_VALIDATION_FAILED %s",
+                    json.dumps(structured_error, sort_keys=True),
+                )
+                await self._record_trigger_dispatch_error(
+                    source_task=task,
+                    trigger_id=structured_error["trigger_id"],
+                    target_bot_id=structured_error["target_bot_id"],
+                    message=message,
+                )
+        else:
+            logger.error(
+                "[TRIGGER] REQUIRED_OUTPUT_VALIDATION_FAILED %s",
+                json.dumps(safe_validation_error, sort_keys=True),
+            )
+            await self._record_trigger_dispatch_error(
+                source_task=task,
+                trigger_id="required-output-check",
+                target_bot_id="",
+                message=message,
+            )
         await self.update_status(
             task.id,
             "failed",
@@ -5510,12 +5547,24 @@ class TaskManager:
         # Missing fields here should halt the orchestration visibly instead of silently.
         _required_output_fields = self._workflow_required_output_fields(workflow)
         if _required_output_fields and task.status == "completed":
-            _missing_required = _missing_payload_fields(task.result, _required_output_fields)
+            _missing_required = sorted(
+                set(_missing_payload_fields(task.result, _required_output_fields))
+                | set(_empty_payload_fields(task.result, _required_output_fields))
+            )
             if _missing_required:
+                _blocked_triggers = [
+                    {
+                        "trigger_id": str(getattr(trigger, "id", "") or "").strip(),
+                        "target_bot_id": str(getattr(trigger, "target_bot_id", "") or "").strip(),
+                    }
+                    for trigger in triggers
+                    if bool(getattr(trigger, "enabled", False)) and getattr(trigger, "event", None) == event
+                ]
                 await self._halt_task_for_missing_required_output_fields(
                     task,
                     required_fields=_required_output_fields,
                     missing_fields=_missing_required,
+                    blocked_triggers=_blocked_triggers,
                 )
                 return
 

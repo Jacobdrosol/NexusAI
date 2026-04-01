@@ -1671,6 +1671,10 @@ async def test_required_output_fields_missing_fails_task_and_halts_trigger_dispa
     assert validation_error["missing_fields"] == ["approval.decision"]
     assert validation_error["required_fields"] == ["approval.decision"]
     assert validation_error["orchestration_id"] == "orch-required-output"
+    assert validation_error["trigger_ids"] == ["handoff"]
+    assert validation_error["blocked_triggers"] == [
+        {"trigger_id": "handoff", "target_bot_id": "bot-b"}
+    ]
 
     tasks = await tm.list_tasks(orchestration_id="orch-required-output")
     assert len(tasks) == 1
@@ -1680,6 +1684,93 @@ async def test_required_output_fields_missing_fails_task_and_halts_trigger_dispa
     trigger_errors = [artifact for artifact in artifacts if artifact.label == "Trigger Dispatch Error"]
     assert len(trigger_errors) == 1
     assert "approval.decision" in (trigger_errors[0].content or "")
+    assert "\"trigger_id\": \"handoff\"" in (trigger_errors[0].content or "")
+
+
+@pytest.mark.anyio
+async def test_required_output_fields_empty_value_fails_task_and_surfaces_blocked_trigger(tmp_path, caplog):
+    import asyncio
+    import logging
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot, TaskMetadata
+
+    class StubScheduler:
+        async def schedule(self, task):
+            if task.bot_id == "pm-security-reviewer":
+                return {"failure_type": "", "outcome": "fail", "findings": ["missing contract value"]}
+            return {"answer": "child"}
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "required-output-empty-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="pm-security-reviewer",
+            name="PM Security Reviewer",
+            role="security-reviewer",
+            backends=[],
+            workflow={
+                "required_output_fields": ["failure_type"],
+                "triggers": [
+                    {
+                        "id": "route-pass",
+                        "event": "task_completed",
+                        "target_bot_id": "pm-final-qc",
+                        "condition": "has_result",
+                        "result_field": "failure_type",
+                        "result_equals": "pass",
+                    }
+                ],
+            },
+        )
+    )
+    await bot_registry.register(Bot(id="pm-final-qc", name="PM Final QC", role="reviewer", backends=[]))
+
+    tm = TaskManager(
+        StubScheduler(),
+        db_path=str(tmp_path / "required-output-empty-tasks.db"),
+        bot_registry=bot_registry,
+    )
+    with caplog.at_level(logging.ERROR):
+        root = await tm.create_task(
+            bot_id="pm-security-reviewer",
+            payload={"instruction": "review"},
+            metadata=TaskMetadata(orchestration_id="orch-empty-required-output", source="chat_assign"),
+        )
+
+        for _ in range(50):
+            updated = await tm.get_task(root.id)
+            if updated.status == "failed":
+                break
+            await asyncio.sleep(0.1)
+
+    updated = await tm.get_task(root.id)
+    assert updated.status == "failed"
+    assert updated.error is not None
+    assert updated.error.code == "validation_error"
+    assert updated.error.details["reason_code"] == "trigger_output_field_missing"
+    validation_error = updated.error.details["validation_error"]
+    assert validation_error["missing_fields"] == ["failure_type"]
+    assert validation_error["trigger_ids"] == ["route-pass"]
+    assert validation_error["blocked_triggers"] == [
+        {"trigger_id": "route-pass", "target_bot_id": "pm-final-qc"}
+    ]
+
+    tasks = []
+    for _ in range(30):
+        tasks = await tm.list_tasks(orchestration_id="orch-empty-required-output")
+        if len(tasks) == 1 and tasks[0].status == "failed":
+            break
+        await asyncio.sleep(0.05)
+    assert len(tasks) == 1
+    assert tasks[0].status == "failed"
+    assert "missing or empty required output fields: failure_type" in tasks[0].error.message
+
+    error_logs = [record.message for record in caplog.records if "REQUIRED_OUTPUT_VALIDATION_FAILED" in record.message]
+    assert error_logs
+    assert '"bot_id": "pm-security-reviewer"' in error_logs[-1]
+    assert '"trigger_id": "route-pass"' in error_logs[-1]
+    assert '"missing_fields": ["failure_type"]' in error_logs[-1]
 
 
 @pytest.mark.anyio
