@@ -113,6 +113,8 @@ class CPClient:
                 resp = requests.post(url, json=json, timeout=req_timeout, headers=self._headers())
             elif method == "PUT":
                 resp = requests.put(url, json=json, timeout=req_timeout, headers=self._headers())
+            elif method == "PATCH":
+                resp = requests.patch(url, json=json, timeout=req_timeout, headers=self._headers())
             elif method == "DELETE":
                 resp = requests.delete(url, timeout=req_timeout, headers=self._headers())
             else:
@@ -150,6 +152,9 @@ class CPClient:
     def _delete(self, path: str) -> bool:
         result = self._request("DELETE", path)
         return result is not None
+
+    def _patch(self, path: str, json: Any) -> Optional[Any]:
+        return self._request("PATCH", path, json=json)
 
     def health(self) -> bool:
         result = self._get("/health")
@@ -614,6 +619,113 @@ class CPClient:
 
     def post_message(self, conversation_id: str, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return self._post(f"/v1/chat/conversations/{conversation_id}/messages", body, timeout=_CHAT_TIMEOUT)
+
+    # Assignments
+    def preview_assignment(self, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        return self._post("/v1/assignments/preview", body, timeout=_CHAT_TIMEOUT)
+
+    def create_assignment(self, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        return self._post("/v1/assignments", body, timeout=_CHAT_TIMEOUT)
+
+    def get_assignment_graph(self, assignment_id: str) -> Optional[Dict[str, Any]]:
+        return self._get(f"/v1/assignments/{assignment_id}/graph")
+
+    def splice_assignment(self, assignment_id: str, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        return self._post(f"/v1/assignments/{assignment_id}/splice", body, timeout=_CHAT_TIMEOUT)
+
+    def rerun_assignment_node(self, assignment_id: str, node_id: str, payload: Any = None) -> Optional[Dict[str, Any]]:
+        body: Dict[str, Any] = {}
+        if payload is not None:
+            body["payload"] = payload
+        return self._post(
+            f"/v1/assignments/{assignment_id}/nodes/{node_id}/rerun",
+            body,
+            timeout=_CHAT_TIMEOUT,
+        )
+
+    def list_assignment_lineage(self, assignment_id: str) -> Optional[Dict[str, Any]]:
+        return self._get(f"/v1/assignments/{assignment_id}/lineage")
+
+    # Platform AI
+    def create_platform_ai_session(self, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        return self._post("/v1/platform-ai/sessions", body, timeout=_CHAT_TIMEOUT)
+
+    def list_platform_ai_sessions(
+        self,
+        *,
+        assignment_id: Optional[str] = None,
+        orchestration_id: Optional[str] = None,
+        mode: Optional[str] = None,
+        limit: int = 100,
+    ) -> Optional[Dict[str, Any]]:
+        parts = [f"limit={max(1, int(limit))}"]
+        if assignment_id:
+            parts.append(f"assignment_id={requests.utils.quote(str(assignment_id), safe='')}")
+        if orchestration_id:
+            parts.append(f"orchestration_id={requests.utils.quote(str(orchestration_id), safe='')}")
+        if mode:
+            parts.append(f"mode={requests.utils.quote(str(mode), safe='')}")
+        return self._get("/v1/platform-ai/sessions?" + "&".join(parts))
+
+    def control_platform_ai_session(self, session_id: str, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        return self._post(f"/v1/platform-ai/sessions/{session_id}/control", body, timeout=_CHAT_TIMEOUT)
+
+    def get_platform_ai_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+        return self._get(f"/v1/platform-ai/sessions/{session_id}")
+
+    def list_platform_ai_events(self, session_id: str, limit: int = 200) -> Optional[Dict[str, Any]]:
+        return self._get(f"/v1/platform-ai/sessions/{session_id}/events?limit={max(1, int(limit))}")
+
+    def design_platform_ai_quality_suite(self, session_id: str, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        return self._post(f"/v1/platform-ai/sessions/{session_id}/test-suites/design", body, timeout=_CHAT_TIMEOUT)
+
+    def list_platform_ai_quality_suites(self, session_id: str, limit: int = 100) -> Optional[Dict[str, Any]]:
+        return self._get(f"/v1/platform-ai/sessions/{session_id}/test-suites?limit={max(1, int(limit))}")
+
+    def list_platform_ai_quality_suites_global(
+        self,
+        *,
+        session_id: Optional[str] = None,
+        assignment_id: Optional[str] = None,
+        orchestration_id: Optional[str] = None,
+        limit: int = 200,
+    ) -> Optional[Dict[str, Any]]:
+        parts = [f"limit={max(1, int(limit))}"]
+        if session_id:
+            parts.append(f"session_id={requests.utils.quote(str(session_id), safe='')}")
+        if assignment_id:
+            parts.append(f"assignment_id={requests.utils.quote(str(assignment_id), safe='')}")
+        if orchestration_id:
+            parts.append(f"orchestration_id={requests.utils.quote(str(orchestration_id), safe='')}")
+        return self._get("/v1/platform-ai/test-suites?" + "&".join(parts))
+
+    def get_platform_ai_quality_suite(self, suite_id: str) -> Optional[Dict[str, Any]]:
+        return self._get(f"/v1/platform-ai/test-suites/{suite_id}")
+
+    def run_platform_ai_quality_suite(self, suite_id: str, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        return self._post(f"/v1/platform-ai/test-suites/{suite_id}/run", body, timeout=_CHAT_TIMEOUT)
+
+    def list_platform_ai_quality_suite_runs(self, suite_id: str, limit: int = 100) -> Optional[Dict[str, Any]]:
+        return self._get(f"/v1/platform-ai/test-suites/{suite_id}/runs?limit={max(1, int(limit))}")
+
+    def get_platform_ai_quality_run(self, run_id: str) -> Optional[Dict[str, Any]]:
+        return self._get(f"/v1/platform-ai/test-runs/{run_id}")
+
+    # Agent schedules
+    def create_schedule(self, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        return self._post("/v1/schedules", body)
+
+    def update_schedule(self, schedule_id: str, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        return self._patch(f"/v1/schedules/{schedule_id}", body)
+
+    def get_schedule(self, schedule_id: str) -> Optional[Dict[str, Any]]:
+        return self._get(f"/v1/schedules/{schedule_id}")
+
+    def trigger_schedule(self, schedule_id: str) -> Optional[Dict[str, Any]]:
+        return self._post(f"/v1/schedules/{schedule_id}/trigger", {})
+
+    def list_schedule_runs(self, schedule_id: str, limit: int = 50) -> Optional[Dict[str, Any]]:
+        return self._get(f"/v1/schedules/{schedule_id}/runs?limit={max(1, int(limit))}")
 
     def mark_pm_run_failed(self, conversation_id: str, orchestration_id: str) -> Optional[Dict[str, Any]]:
         return self._post(

@@ -27,10 +27,28 @@ async def cp_app(tmp_path):
     from control_plane.task_manager.task_manager import TaskManager
     from control_plane.vault.mcp_broker import MCPBroker
     from control_plane.vault.vault_manager import VaultManager
+    from control_plane.connections.resolver import ConnectionResolver
+    from control_plane.orchestration.assignment_service import AssignmentService
+    from control_plane.orchestration.run_store import OrchestrationRunStore
+    from control_plane.platform_ai.session_store import PlatformAISessionStore
+    from control_plane.agent_scheduler.engine import AgentScheduleEngine
     from control_plane.observability import install_observability
     from control_plane.orchestration_workspace_store import OrchestrationWorkspaceStore
     from fastapi import FastAPI
-    from control_plane.api import audit, bots, chat, keys, models_catalog, projects, tasks, vault, workers as workers_api
+    from control_plane.api import (
+        assignments,
+        audit,
+        bots,
+        chat,
+        keys,
+        models_catalog,
+        platform_ai,
+        projects,
+        schedules,
+        tasks,
+        vault,
+        workers as workers_api,
+    )
 
     app = FastAPI(title="NexusAI Control Plane Test")
     install_observability(app)
@@ -41,6 +59,9 @@ async def cp_app(tmp_path):
     app.include_router(keys.router)
     app.include_router(models_catalog.router)
     app.include_router(chat.router)
+    app.include_router(assignments.router)
+    app.include_router(platform_ai.router)
+    app.include_router(schedules.router)
     app.include_router(vault.router)
     app.include_router(audit.router)
 
@@ -55,17 +76,20 @@ async def cp_app(tmp_path):
     github_webhook_store = GitHubWebhookStore(db_path=str(tmp_path / "github_webhooks.db"))
     audit_log = AuditLog(db_path=str(tmp_path / "audit.db"))
     orchestration_workspace_store = OrchestrationWorkspaceStore()
+    connection_resolver = ConnectionResolver(db_path=str(tmp_path / "dashboard.db"))
     scheduler = Scheduler(
         bot_registry,
         worker_registry,
         key_vault=key_vault,
         model_registry=model_registry,
         project_registry=project_registry,
+        connection_resolver=connection_resolver,
     )
     task_manager = TaskManager(
         scheduler,
         db_path=str(tmp_path / "tasks.db"),
         orchestration_workspace_store=orchestration_workspace_store,
+        connection_resolver=connection_resolver,
     )
     pm_orchestrator = PMOrchestrator(
         bot_registry=bot_registry,
@@ -73,6 +97,21 @@ async def cp_app(tmp_path):
         task_manager=task_manager,
         chat_manager=chat_manager,
         orchestration_workspace_store=orchestration_workspace_store,
+    )
+    orchestration_run_store = OrchestrationRunStore(db_path=str(tmp_path / "orchestration.db"))
+    assignment_service = AssignmentService(
+        chat_manager=chat_manager,
+        bot_registry=bot_registry,
+        task_manager=task_manager,
+        pm_orchestrator=pm_orchestrator,
+        run_store=orchestration_run_store,
+        connection_resolver=connection_resolver,
+    )
+    platform_ai_session_store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+    agent_schedule_engine = AgentScheduleEngine(
+        assignment_service=assignment_service,
+        task_manager=task_manager,
+        db_path=str(tmp_path / "schedule.db"),
     )
 
     app.state.worker_registry = worker_registry
@@ -89,6 +128,11 @@ async def cp_app(tmp_path):
     app.state.scheduler = scheduler
     app.state.task_manager = task_manager
     app.state.pm_orchestrator = pm_orchestrator
+    app.state.connection_resolver = connection_resolver
+    app.state.orchestration_run_store = orchestration_run_store
+    app.state.assignment_service = assignment_service
+    app.state.platform_ai_session_store = platform_ai_session_store
+    app.state.agent_schedule_engine = agent_schedule_engine
     app.state.control_plane_api_token = ""
 
     @app.middleware("http")

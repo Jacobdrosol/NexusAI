@@ -158,7 +158,7 @@
     <div class="form-group">
       <label>Provider</label>
       <input class="form-control" name="provider" list="api-key-provider-options"
-             placeholder="openai | ollama_cloud | claude | gemini"
+             placeholder="openai | ollama_cloud | claude | gemini | vertex"
              autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false"
              data-lpignore="true" data-1p-ignore="true" required>
       <datalist id="api-key-provider-options">
@@ -166,8 +166,12 @@
         <option value="ollama_cloud"></option>
         <option value="claude"></option>
         <option value="gemini"></option>
+        <option value="vertex"></option>
         <option value="github"></option>
       </datalist>
+      <p style="font-size:0.78rem;color:#718096;margin-top:0.3rem;">
+        For <code>vertex</code>, paste a full Google service-account JSON in Key Value.
+      </p>
     </div>
     <div class="form-group">
       <label>Key Value</label>

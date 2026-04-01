@@ -582,6 +582,114 @@ def api_send_message():
     return jsonify(resp)
 
 
+@bp.post("/api/chat/assignments/preview")
+@login_required
+def api_assignment_preview():
+    data: dict[str, Any] = request.get_json(force=True) or {}
+    conversation_id = str(data.get("conversation_id") or "").strip()
+    instruction = str(data.get("instruction") or "").strip()
+    pm_bot_id = str(data.get("pm_bot_id") or data.get("bot_id") or "").strip()
+    if not conversation_id:
+        return jsonify({"error": "conversation_id is required"}), 400
+    if not instruction:
+        return jsonify({"error": "instruction is required"}), 400
+    if not pm_bot_id:
+        return jsonify({"error": "pm_bot_id is required"}), 400
+    cp = get_cp_client()
+    preview = cp.preview_assignment(
+        {
+            "conversation_id": conversation_id,
+            "instruction": instruction,
+            "pm_bot_id": pm_bot_id,
+            "node_overrides": data.get("node_overrides") if isinstance(data.get("node_overrides"), dict) else {},
+        }
+    )
+    if preview is None:
+        return _cp_error_response(cp, "assignment preview failed")
+    return jsonify(preview)
+
+
+@bp.post("/api/chat/assignments")
+@login_required
+def api_create_assignment():
+    data: dict[str, Any] = request.get_json(force=True) or {}
+    conversation_id = str(data.get("conversation_id") or "").strip()
+    instruction = str(data.get("instruction") or "").strip()
+    pm_bot_id = str(data.get("pm_bot_id") or data.get("bot_id") or "").strip()
+    if not conversation_id:
+        return jsonify({"error": "conversation_id is required"}), 400
+    if not instruction:
+        return jsonify({"error": "instruction is required"}), 400
+    if not pm_bot_id:
+        return jsonify({"error": "pm_bot_id is required"}), 400
+    cp = get_cp_client()
+    created = cp.create_assignment(
+        {
+            "conversation_id": conversation_id,
+            "instruction": instruction,
+            "pm_bot_id": pm_bot_id,
+            "run_id": data.get("run_id"),
+            "node_overrides": data.get("node_overrides") if isinstance(data.get("node_overrides"), dict) else {},
+            "context_items": data.get("context_items") if isinstance(data.get("context_items"), list) else [],
+        }
+    )
+    if created is None:
+        return _cp_error_response(cp, "assignment create failed")
+    return jsonify(created)
+
+
+@bp.get("/api/chat/assignments/<assignment_id>/graph")
+@login_required
+def api_assignment_graph(assignment_id: str):
+    cp = get_cp_client()
+    graph = cp.get_assignment_graph(assignment_id)
+    if graph is None:
+        return _cp_error_response(cp, "assignment graph failed")
+    return jsonify(graph)
+
+
+@bp.post("/api/chat/assignments/<assignment_id>/splice")
+@login_required
+def api_assignment_splice(assignment_id: str):
+    data: dict[str, Any] = request.get_json(force=True) or {}
+    from_node_id = str(data.get("from_node_id") or "").strip()
+    if not from_node_id:
+        return jsonify({"error": "from_node_id is required"}), 400
+    cp = get_cp_client()
+    result = cp.splice_assignment(
+        assignment_id,
+        {
+            "from_node_id": from_node_id,
+            "node_overrides": data.get("node_overrides") if isinstance(data.get("node_overrides"), dict) else {},
+            "context_items": data.get("context_items") if isinstance(data.get("context_items"), list) else [],
+        },
+    )
+    if result is None:
+        return _cp_error_response(cp, "assignment splice failed")
+    return jsonify(result)
+
+
+@bp.post("/api/chat/assignments/<assignment_id>/nodes/<node_id>/rerun")
+@login_required
+def api_assignment_rerun_node(assignment_id: str, node_id: str):
+    data: dict[str, Any] = request.get_json(force=True) or {}
+    cp = get_cp_client()
+    result = cp.rerun_assignment_node(assignment_id, node_id, payload=data.get("payload"))
+    if result is None:
+        return _cp_error_response(cp, "assignment node rerun failed")
+    return jsonify(result)
+
+
+@bp.get("/api/chat/assignments/<assignment_id>/lineage")
+@login_required
+def api_assignment_lineage(assignment_id: str):
+    cp = get_cp_client()
+    result = cp.list_assignment_lineage(assignment_id)
+    if result is None:
+        return _cp_error_response(cp, "assignment lineage unavailable")
+    return jsonify(result)
+
+
 @bp.post("/api/chat/assignments/apply")
 @login_required
 def api_apply_assignment_files():

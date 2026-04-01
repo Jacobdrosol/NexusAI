@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any
 
-from flask import Blueprint, jsonify, render_template
+from flask import Blueprint, jsonify, render_template, request
 from flask_login import login_required
 
 from dashboard.cp_client import get_cp_client
@@ -16,6 +16,18 @@ def _cp_list_tasks_safe(cp, **kwargs):
         return cp.list_tasks(**kwargs)
     except TypeError:
         return cp.list_tasks()
+
+
+def _cp_error_response(cp, fallback: str = "control plane unavailable"):
+    err = cp.last_error() if hasattr(cp, "last_error") else {}
+    detail = ""
+    status_code = None
+    if isinstance(err, dict):
+        detail = str(err.get("detail") or "").strip()
+        raw_code = err.get("status_code")
+        if isinstance(raw_code, int) and 400 <= raw_code <= 599:
+            status_code = raw_code
+    return jsonify({"error": detail or fallback}), (status_code or 502)
 
 
 def _task_sort_key(task: dict[str, Any]) -> tuple[str, str]:
@@ -137,6 +149,33 @@ def _pipeline_detail(cp, orchestration_id: str) -> dict[str, Any] | None:
     }
 
 
+def _latest_row(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+    ordered = sorted(
+        [row for row in rows if isinstance(row, dict)],
+        key=lambda row: (str(row.get("updated_at") or ""), str(row.get("created_at") or "")),
+        reverse=True,
+    )
+    return ordered[0] if ordered else None
+
+
+def _get_or_create_pipeline_test_session(cp: Any, orchestration_id: str) -> dict[str, Any] | None:
+    listed = cp.list_platform_ai_sessions(orchestration_id=orchestration_id, mode="pipeline_tuner", limit=25)
+    sessions = listed.get("sessions") if isinstance(listed, dict) and isinstance(listed.get("sessions"), list) else []
+    current = _latest_row(sessions)
+    if current is not None:
+        return current
+    created = cp.create_platform_ai_session(
+        {
+            "mode": "pipeline_tuner",
+            "orchestration_id": orchestration_id,
+            "metadata": {"source": "pipeline_test_modal"},
+        }
+    )
+    if not isinstance(created, dict):
+        return None
+    return created
+
+
 @bp.get("/pipelines")
 @login_required
 def pipelines_page() -> str:
@@ -175,3 +214,92 @@ def api_get_pipeline(orchestration_id: str):
     if detail is None:
         return jsonify({"error": "pipeline not found"}), 404
     return jsonify(detail)
+
+
+@bp.get("/api/pipelines/<orchestration_id>/tests")
+@login_required
+def api_list_pipeline_tests(orchestration_id: str):
+    cp = get_cp_client()
+    session = _get_or_create_pipeline_test_session(cp, orchestration_id)
+    if session is None:
+        return _cp_error_response(cp, "unable to initialize pipeline testing session")
+    session_id = str(session.get("id") or "").strip()
+    if not session_id:
+        return jsonify({"error": "invalid pipeline test session"}), 502
+    suites_resp = cp.list_platform_ai_quality_suites_global(orchestration_id=orchestration_id, limit=200)
+    if suites_resp is None:
+        return _cp_error_response(cp, "unable to list pipeline test suites")
+    suites = suites_resp.get("suites") if isinstance(suites_resp.get("suites"), list) else []
+    filtered = [suite for suite in suites if str(suite.get("session_id") or "").strip() == session_id]
+    return jsonify({"session": session, "suites": filtered})
+
+
+@bp.post("/api/pipelines/<orchestration_id>/tests/design")
+@login_required
+def api_design_pipeline_tests(orchestration_id: str):
+    cp = get_cp_client()
+    session = _get_or_create_pipeline_test_session(cp, orchestration_id)
+    if session is None:
+        return _cp_error_response(cp, "unable to initialize pipeline testing session")
+    session_id = str(session.get("id") or "").strip()
+    if not session_id:
+        return jsonify({"error": "invalid pipeline test session"}), 502
+    data = request.get_json(silent=True) or {}
+    quality_expectations = data.get("quality_expectations") if isinstance(data.get("quality_expectations"), list) else []
+    designed = cp.design_platform_ai_quality_suite(
+        session_id,
+        {
+            "name": str(data.get("name") or "Pipeline Stored Quality Suite").strip() or "Pipeline Stored Quality Suite",
+            "orchestration_id": orchestration_id,
+            "include_default_tests": bool(data.get("include_default_tests", True)),
+            "suite_pass_threshold": float(data.get("suite_pass_threshold") or 0.8),
+            "quality_expectations": quality_expectations,
+            "metadata": {"source": "pipeline_test_modal"},
+        },
+    )
+    if designed is None:
+        return _cp_error_response(cp, "unable to design pipeline test suite")
+    return jsonify(designed)
+
+
+@bp.post("/api/pipelines/<orchestration_id>/tests/run")
+@login_required
+def api_run_pipeline_tests(orchestration_id: str):
+    cp = get_cp_client()
+    data = request.get_json(silent=True) or {}
+    suite_id = str(data.get("suite_id") or "").strip()
+    if not suite_id:
+        suites_resp = cp.list_platform_ai_quality_suites_global(orchestration_id=orchestration_id, limit=200)
+        suites = suites_resp.get("suites") if isinstance(suites_resp, dict) and isinstance(suites_resp.get("suites"), list) else []
+        latest = _latest_row(suites)
+        suite_id = str((latest or {}).get("id") or "").strip()
+    if not suite_id:
+        return jsonify({"error": "no stored test suite found for this pipeline; generate one first"}), 400
+    run = cp.run_platform_ai_quality_suite(
+        suite_id,
+        {
+            "orchestration_id": orchestration_id,
+            "metadata": {"source": "pipeline_test_modal"},
+        },
+    )
+    if run is None:
+        return _cp_error_response(cp, "unable to run pipeline test suite")
+    return jsonify(run)
+
+
+@bp.get("/api/pipelines/<orchestration_id>/tests/runs")
+@login_required
+def api_list_pipeline_test_runs(orchestration_id: str):
+    cp = get_cp_client()
+    suite_id = str(request.args.get("suite_id") or "").strip()
+    if not suite_id:
+        suites_resp = cp.list_platform_ai_quality_suites_global(orchestration_id=orchestration_id, limit=200)
+        suites = suites_resp.get("suites") if isinstance(suites_resp, dict) and isinstance(suites_resp.get("suites"), list) else []
+        latest = _latest_row(suites)
+        suite_id = str((latest or {}).get("id") or "").strip()
+    if not suite_id:
+        return jsonify({"runs": []})
+    runs = cp.list_platform_ai_quality_suite_runs(suite_id, limit=100)
+    if runs is None:
+        return _cp_error_response(cp, "unable to list pipeline test runs")
+    return jsonify(runs)

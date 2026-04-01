@@ -4,10 +4,14 @@
 {% block content %}
 <div class="page-header">
   <h1>Pipelines</h1>
+  <div style="display:flex;gap:0.5rem;">
+    <button class="btn" type="button" onclick="openPipelineTestModal('')">Pipeline Test</button>
+  </div>
 </div>
 {% if error %}
 <div class="alert alert-error">{{ error }}</div>
 {% endif %}
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
 <section class="panel">
   <div class="page-header" style="margin-bottom:0.75rem;">
@@ -32,7 +36,10 @@
         <td>{{ pipeline.task_count }}</td>
         <td>{{ pipeline.bot_count }}</td>
         <td>{{ (pipeline.updated_at[:19] if pipeline.updated_at else "") | replace('T', ' ') }}</td>
-        <td><a class="btn btn-sm" href="{{ url_for('pipelines.pipeline_detail_page', orchestration_id=pipeline.id) }}">Open</a></td>
+        <td class="actions" style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+          <a class="btn btn-sm" href="{{ url_for('pipelines.pipeline_detail_page', orchestration_id=pipeline.id) }}">Open</a>
+          <button class="btn btn-sm" type="button" onclick="openPipelineTestModal({{ pipeline.id|tojson }})">Test</button>
+        </td>
       </tr>
       {% else %}
       <tr><td colspan="7" class="empty">No pipeline runs recorded yet</td></tr>
@@ -40,4 +47,235 @@
     </tbody>
   </table>
 </section>
+
+<div id="modal-pipeline-test" class="modal" style="display:none;">
+  <div class="modal-content">
+    <h2>Pipeline Test</h2>
+    <div class="split-grid" style="grid-template-columns:1fr 1fr;gap:0.75rem;margin-bottom:0.75rem;">
+      <div>
+        <label for="pipeline-test-pipeline">Pipeline</label>
+        <select id="pipeline-test-pipeline" class="form-control"></select>
+      </div>
+      <div>
+        <label for="pipeline-test-suite">Stored Test Suite</label>
+        <select id="pipeline-test-suite" class="form-control"></select>
+      </div>
+    </div>
+    <div style="margin-bottom:0.75rem;">
+      <label for="pipeline-test-suite-name">Suite Name (for create/update)</label>
+      <input id="pipeline-test-suite-name" class="form-control" placeholder="Pipeline Stored Quality Suite">
+    </div>
+    <div id="pipeline-test-status" class="mini-note" style="margin-bottom:0.75rem;">Select a pipeline to load stored tests.</div>
+    <pre id="pipeline-test-output" style="max-height:42vh;overflow:auto;white-space:pre-wrap;"></pre>
+    <div class="modal-actions">
+      <button class="btn" type="button" onclick="refreshPipelineTestSuites()">Refresh</button>
+      <button class="btn" type="button" onclick="designPipelineStoredTests()">Create/Update Stored Test</button>
+      <button class="btn btn-primary" type="button" onclick="runPipelineStoredTests()">Run Stored Test</button>
+      <button class="btn" type="button" onclick="closePipelineTestModal()">Close</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const PIPELINES = {{ pipelines|tojson }};
+let PIPELINE_TEST_SESSION = null;
+
+function getCsrf() {
+  const el = document.querySelector('input[name=csrf_token]');
+  return el ? el.value : '';
+}
+
+function pipelineById(pipelineId) {
+  return PIPELINES.find((item) => String(item.id) === String(pipelineId)) || null;
+}
+
+function formatPipelineOption(pipeline) {
+  const name = String(pipeline?.name || pipeline?.id || 'Pipeline');
+  const status = String(pipeline?.status || '').trim();
+  return status ? `${name} [${status}]` : name;
+}
+
+function closePipelineTestModal() {
+  const modal = document.getElementById('modal-pipeline-test');
+  if (modal) modal.style.display = 'none';
+}
+
+function setPipelineTestStatus(message, isError) {
+  const el = document.getElementById('pipeline-test-status');
+  if (!el) return;
+  el.textContent = message;
+  el.style.color = isError ? '#fca5a5' : '#a0aec0';
+}
+
+function setPipelineTestOutput(value) {
+  const pre = document.getElementById('pipeline-test-output');
+  if (!pre) return;
+  pre.textContent = String(value || '').trim();
+}
+
+function selectedPipelineId() {
+  const select = document.getElementById('pipeline-test-pipeline');
+  return String(select?.value || '').trim();
+}
+
+function selectedSuiteId() {
+  const select = document.getElementById('pipeline-test-suite');
+  return String(select?.value || '').trim();
+}
+
+function populatePipelinePicker(preferredPipelineId) {
+  const select = document.getElementById('pipeline-test-pipeline');
+  if (!select) return;
+  const options = [];
+  for (const pipeline of PIPELINES) {
+    options.push(`<option value="${String(pipeline.id)}">${formatPipelineOption(pipeline)}</option>`);
+  }
+  if (!options.length) {
+    select.innerHTML = '<option value="">No pipelines available</option>';
+    return;
+  }
+  select.innerHTML = options.join('');
+  const preferred = String(preferredPipelineId || '').trim();
+  if (preferred && PIPELINES.some((item) => String(item.id) === preferred)) {
+    select.value = preferred;
+  } else {
+    select.value = String(PIPELINES[0].id || '');
+  }
+}
+
+function populateSuitePicker(suites) {
+  const select = document.getElementById('pipeline-test-suite');
+  if (!select) return;
+  const rows = Array.isArray(suites) ? suites : [];
+  if (!rows.length) {
+    select.innerHTML = '<option value="">No stored tests found</option>';
+    return;
+  }
+  select.innerHTML = rows.map((suite) => {
+    const suiteId = String(suite?.id || '');
+    const suiteName = String(suite?.name || suiteId || 'Stored Suite');
+    const updated = String(suite?.updated_at || suite?.created_at || '').replace('T', ' ').slice(0, 19);
+    return `<option value="${suiteId}">${suiteName}${updated ? ' (' + updated + ')' : ''}</option>`;
+  }).join('');
+}
+
+async function refreshPipelineTestSuites() {
+  const pipelineId = selectedPipelineId();
+  if (!pipelineId) {
+    setPipelineTestStatus('Select a pipeline first.', true);
+    return;
+  }
+  setPipelineTestStatus('Loading stored tests...', false);
+  try {
+    const res = await fetch('/api/pipelines/' + encodeURIComponent(pipelineId) + '/tests');
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Failed to load stored pipeline tests');
+    PIPELINE_TEST_SESSION = data.session || null;
+    const suites = Array.isArray(data.suites) ? data.suites : [];
+    populateSuitePicker(suites);
+    if (suites.length) {
+      setPipelineTestStatus(`Loaded ${suites.length} stored suite(s) for this pipeline.`, false);
+      setPipelineTestOutput(JSON.stringify(suites[0]?.suite || {}, null, 2));
+    } else {
+      setPipelineTestStatus('No stored suite yet. Use "Create/Update Stored Test".', false);
+      setPipelineTestOutput('');
+    }
+  } catch (error) {
+    setPipelineTestStatus(error.message || 'Failed to load stored pipeline tests', true);
+  }
+}
+
+async function designPipelineStoredTests() {
+  const pipelineId = selectedPipelineId();
+  if (!pipelineId) {
+    setPipelineTestStatus('Select a pipeline first.', true);
+    return;
+  }
+  const suiteName = String(document.getElementById('pipeline-test-suite-name')?.value || '').trim() || 'Pipeline Stored Quality Suite';
+  setPipelineTestStatus('Designing stored suite...', false);
+  try {
+    const res = await fetch('/api/pipelines/' + encodeURIComponent(pipelineId) + '/tests/design', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
+      body: JSON.stringify({name: suiteName, include_default_tests: true}),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Failed to create stored test suite');
+    const suite = data.suite || {};
+    setPipelineTestStatus('Stored suite ready: ' + (suite.name || suite.id || 'unknown'), false);
+    setPipelineTestOutput(JSON.stringify(suite.suite || {}, null, 2));
+    await refreshPipelineTestSuites();
+    if (suite.id) {
+      const suiteSelect = document.getElementById('pipeline-test-suite');
+      if (suiteSelect) suiteSelect.value = String(suite.id);
+    }
+  } catch (error) {
+    setPipelineTestStatus(error.message || 'Failed to create stored test suite', true);
+  }
+}
+
+async function runPipelineStoredTests() {
+  const pipelineId = selectedPipelineId();
+  if (!pipelineId) {
+    setPipelineTestStatus('Select a pipeline first.', true);
+    return;
+  }
+  const suiteId = selectedSuiteId();
+  setPipelineTestStatus('Running stored tests in isolated mode...', false);
+  try {
+    const res = await fetch('/api/pipelines/' + encodeURIComponent(pipelineId) + '/tests/run', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
+      body: JSON.stringify({suite_id: suiteId || undefined}),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Stored pipeline tests failed to run');
+    const testRun = data.test_run || {};
+    const score = Number(testRun.score || 0).toFixed(3);
+    setPipelineTestStatus(`Run complete: ${testRun.status || 'unknown'} (score ${score})`, testRun.status !== 'passed');
+    setPipelineTestOutput(JSON.stringify(testRun.result || data, null, 2));
+  } catch (error) {
+    setPipelineTestStatus(error.message || 'Stored pipeline tests failed to run', true);
+  }
+}
+
+async function openPipelineTestModal(preferredPipelineId) {
+  const modal = document.getElementById('modal-pipeline-test');
+  if (!modal) return;
+  populatePipelinePicker(preferredPipelineId);
+  modal.style.display = 'flex';
+  await refreshPipelineTestSuites();
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const pipelineSelect = document.getElementById('pipeline-test-pipeline');
+  const suiteSelect = document.getElementById('pipeline-test-suite');
+  if (pipelineSelect) {
+    pipelineSelect.addEventListener('change', () => {
+      refreshPipelineTestSuites();
+    });
+  }
+  if (suiteSelect) {
+    suiteSelect.addEventListener('change', async () => {
+      const pipelineId = selectedPipelineId();
+      const suiteId = selectedSuiteId();
+      if (!pipelineId || !suiteId) return;
+      try {
+        const res = await fetch('/api/pipelines/' + encodeURIComponent(pipelineId) + '/tests');
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) return;
+        const suites = Array.isArray(data.suites) ? data.suites : [];
+        const suite = suites.find((item) => String(item.id) === suiteId);
+        if (suite) {
+          setPipelineTestOutput(JSON.stringify(suite.suite || {}, null, 2));
+        }
+      } catch (error) {
+        // keep current output
+      }
+    });
+  }
+});
+</script>
 {% endblock %}

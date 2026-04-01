@@ -154,6 +154,8 @@
           <button class="btn btn-sm" id="task-retry-btn" type="button">Retry Failed Branch</button>
           <button class="btn btn-sm" id="task-rerun-btn" type="button">Rerun as New</button>
           <button class="btn btn-sm" id="task-edit-rerun-btn" type="button">Edit Payload &amp; Rerun</button>
+          <button class="btn btn-sm" id="task-assignment-rerun-btn" type="button">Rerun Node (Assignment)</button>
+          <button class="btn btn-sm" id="task-assignment-splice-btn" type="button">Splice From Node</button>
           <button class="btn btn-sm btn-danger" id="task-cancel-btn" type="button">Stop Task</button>
         </div>
         <div id="task-detail-grid" style="display:grid;gap:0.75rem;margin-top:0.75rem;"></div>
@@ -270,6 +272,8 @@ function renderTaskDetail(task) {
   const retryBtn = document.getElementById('task-retry-btn');
   const rerunBtn = document.getElementById('task-rerun-btn');
   const editRerunBtn = document.getElementById('task-edit-rerun-btn');
+  const assignmentRerunBtn = document.getElementById('task-assignment-rerun-btn');
+  const assignmentSpliceBtn = document.getElementById('task-assignment-splice-btn');
   const cancelBtn = document.getElementById('task-cancel-btn');
   if (!statusEl || !summaryEl || !gridEl) return;
   if (!task) {
@@ -296,6 +300,14 @@ function renderTaskDetail(task) {
   if (editRerunBtn) {
     editRerunBtn.style.display = ['completed', 'failed', 'retried'].includes(task.status) ? 'inline-flex' : 'none';
     editRerunBtn.onclick = () => openTaskRerunModal(task);
+  }
+  if (assignmentRerunBtn) {
+    assignmentRerunBtn.style.display = ['completed', 'failed', 'retried'].includes(task.status) ? 'inline-flex' : 'none';
+    assignmentRerunBtn.onclick = () => rerunAssignmentNode(task);
+  }
+  if (assignmentSpliceBtn) {
+    assignmentSpliceBtn.style.display = ['completed', 'failed', 'retried'].includes(task.status) ? 'inline-flex' : 'none';
+    assignmentSpliceBtn.onclick = () => spliceAssignmentFromTask(task);
   }
   if (cancelBtn) {
     cancelBtn.style.display = ['queued', 'blocked', 'running'].includes(task.status) ? 'inline-flex' : 'none';
@@ -374,6 +386,63 @@ function cancelTask(taskId) {
   .catch((error) => alert(error.message || 'Task cancel failed'));
 }
 
+async function loadTaskPayload(taskId) {
+  const response = await fetch('/api/tasks/' + encodeURIComponent(taskId) + '?section=payload');
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || 'Task payload load failed');
+  return data.content ?? {};
+}
+
+async function resolveAssignmentNodeContext(task) {
+  const payload = await loadTaskPayload(task.id);
+  const assignmentId = String(payload?.assignment_id || '').trim();
+  const nodeId = String(task?.metadata?.step_id || task?.bot_id || '').trim();
+  if (!assignmentId) throw new Error('This task does not include assignment_id metadata.');
+  if (!nodeId) throw new Error('Could not determine node id for this task.');
+  return {assignmentId, nodeId, payload};
+}
+
+async function rerunAssignmentNode(task) {
+  try {
+    const ctx = await resolveAssignmentNodeContext(task);
+    const response = await fetch(
+      '/api/chat/assignments/' + encodeURIComponent(ctx.assignmentId) + '/nodes/' + encodeURIComponent(ctx.nodeId) + '/rerun',
+      {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
+        body: JSON.stringify({}),
+      }
+    );
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Assignment node rerun failed');
+    alert('Assignment node rerun queued: ' + (data.task?.id || 'ok'));
+    location.reload();
+  } catch (error) {
+    alert(error.message || 'Assignment node rerun failed');
+  }
+}
+
+async function spliceAssignmentFromTask(task) {
+  try {
+    const ctx = await resolveAssignmentNodeContext(task);
+    const response = await fetch(
+      '/api/chat/assignments/' + encodeURIComponent(ctx.assignmentId) + '/splice',
+      {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
+        body: JSON.stringify({from_node_id: ctx.nodeId, node_overrides: {}}),
+      }
+    );
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Assignment splice failed');
+    const orchestrationId = data?.assignment?.orchestration_id || data?.child_run?.orchestration_id || 'unknown';
+    alert('Assignment splice queued: ' + orchestrationId);
+    location.reload();
+  } catch (error) {
+    alert(error.message || 'Assignment splice failed');
+  }
+}
+
 async function openTaskRerunModal(task) {
   const textarea = document.getElementById('task-rerun-payload');
   const submitBtn = document.getElementById('task-rerun-submit-btn');
@@ -381,10 +450,7 @@ async function openTaskRerunModal(task) {
   if (!textarea || !submitBtn || !modal) return;
   let payload = {};
   try {
-    const response = await fetch('/api/tasks/' + encodeURIComponent(task.id) + '?section=payload');
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || 'Task payload load failed');
-    payload = data.content ?? {};
+    payload = await loadTaskPayload(task.id);
   } catch (error) {
     alert(error.message || 'Task payload load failed');
     return;

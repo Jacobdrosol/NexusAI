@@ -614,10 +614,23 @@
         </select>
       </div>
       <div class="modal-actions">
-        <button type="submit" class="btn btn-primary">Assign</button>
+        <button type="submit" class="btn btn-primary">Next</button>
         <button type="button" class="btn" onclick="hideModal('modal-assign')">Cancel</button>
       </div>
     </form>
+  </div>
+</div>
+
+<div id="modal-assign-config" class="modal" style="display:none;">
+  <div class="modal-content" style="max-width:1100px;">
+    <h2>Assignment Configuration</h2>
+    <div id="assign-config-state" class="state-info" style="margin-bottom:0.75rem;">Loading DAG preview...</div>
+    <div id="assign-config-summary" class="mini-note" style="margin-bottom:0.75rem;"></div>
+    <div id="assign-config-nodes" style="display:grid;gap:0.75rem;max-height:60vh;overflow:auto;"></div>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-primary" id="assign-config-submit">Queue Assignment</button>
+      <button type="button" class="btn" onclick="closeAssignConfigModal()">Back</button>
+    </div>
   </div>
 </div>
 
@@ -699,6 +712,7 @@ let activeDagOrchestrationId = '';
 let lastAssignmentReviewResult = null;
 let lastAssignmentRecapText = '';
 let lastAssignmentRecapOrchestrationId = '';
+let activeAssignmentPreview = null;
 
 function scrollMessagesToLatest() {
   const container = document.getElementById('messages');
@@ -819,6 +833,99 @@ function closeAssignModal() {
   hideModal('modal-assign');
   const form = document.getElementById('form-assign');
   if (form) form.reset();
+}
+
+function closeAssignConfigModal() {
+  hideModal('modal-assign-config');
+  const state = document.getElementById('assign-config-state');
+  const summary = document.getElementById('assign-config-summary');
+  const nodes = document.getElementById('assign-config-nodes');
+  if (state) state.textContent = 'Loading DAG preview...';
+  if (summary) summary.textContent = '';
+  if (nodes) nodes.innerHTML = '';
+  activeAssignmentPreview = null;
+  document.getElementById('modal-assign').style.display = 'flex';
+}
+
+function renderAssignmentConfig(preview) {
+  activeAssignmentPreview = preview || null;
+  const state = document.getElementById('assign-config-state');
+  const summary = document.getElementById('assign-config-summary');
+  const nodesWrap = document.getElementById('assign-config-nodes');
+  if (!state || !summary || !nodesWrap) return;
+  const graph = preview?.graph || {};
+  const nodes = Array.isArray(graph.nodes) ? graph.nodes : [];
+  const projectConnections = Array.isArray(preview?.project_connections) ? preview.project_connections : [];
+  state.textContent = 'Configure per-node directives before queueing this assignment.';
+  summary.textContent = 'Stages: ' + nodes.length + ' · Project connections: ' + projectConnections.length;
+  nodesWrap.innerHTML = nodes.map((node) => {
+    const nodeId = String(node?.id || '').trim();
+    const title = String(node?.title || node?.bot_id || nodeId || 'stage');
+    const connectionOptions = ['<option value="">(none)</option>']
+      .concat(projectConnections.map((conn) => {
+        const id = String(conn?.id || '').trim();
+        const label = String(conn?.name || id || 'connection');
+        return `<option value="${escapeHtml(id)}">${escapeHtml(label)}</option>`;
+      }))
+      .join('');
+    return `
+      <section class="panel" style="margin:0;">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;">
+          <h3 style="margin:0;">${escapeHtml(title)}</h3>
+          <code>${escapeHtml(nodeId)}</code>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:0.5rem;margin-top:0.5rem;">
+          <label class="context-item">
+            <input type="checkbox" data-node-id="${escapeHtml(nodeId)}" data-field="skip">
+            <span>Skip This Node</span>
+          </label>
+          <label>
+            <span class="mini-note">Execution Mode</span>
+            <input class="form-control" data-node-id="${escapeHtml(nodeId)}" data-field="execution_mode" placeholder="e.g. code_runner">
+          </label>
+          <label>
+            <span class="mini-note">Connection Binding</span>
+            <select class="form-control" data-node-id="${escapeHtml(nodeId)}" data-field="project_connection_id">
+              ${connectionOptions}
+            </select>
+          </label>
+        </div>
+        <label style="display:block;margin-top:0.5rem;">
+          <span class="mini-note">Extra Instructions</span>
+          <textarea class="form-control" rows="3" data-node-id="${escapeHtml(nodeId)}" data-field="instructions" placeholder="Optional per-node directive..."></textarea>
+        </label>
+      </section>
+    `;
+  }).join('');
+  document.getElementById('modal-assign').style.display = 'none';
+  document.getElementById('modal-assign-config').style.display = 'flex';
+}
+
+function collectAssignmentNodeOverrides() {
+  const result = {};
+  if (!activeAssignmentPreview?.graph?.nodes) return result;
+  (activeAssignmentPreview.graph.nodes || []).forEach((node) => {
+    const nodeId = String(node?.id || '').trim();
+    if (!nodeId) return;
+    const skip = !!document.querySelector(`[data-node-id="${CSS.escape(nodeId)}"][data-field="skip"]`)?.checked;
+    const executionMode = String(document.querySelector(`[data-node-id="${CSS.escape(nodeId)}"][data-field="execution_mode"]`)?.value || '').trim();
+    const instructions = String(document.querySelector(`[data-node-id="${CSS.escape(nodeId)}"][data-field="instructions"]`)?.value || '').trim();
+    const projectConnectionId = String(document.querySelector(`[data-node-id="${CSS.escape(nodeId)}"][data-field="project_connection_id"]`)?.value || '').trim();
+    const override = {
+      skip,
+      execution_mode: executionMode,
+      instructions,
+      connection_bindings: [],
+      policy_overrides: {}
+    };
+    if (projectConnectionId) {
+      override.connection_bindings.push({slot: 'primary', project_connection_id: projectConnectionId});
+    }
+    if (skip || executionMode || instructions || override.connection_bindings.length) {
+      result[nodeId] = override;
+    }
+  });
+  return result;
 }
 
 function syncConversationScopeFields() {
@@ -2001,34 +2108,64 @@ document.getElementById('form-assign')?.addEventListener('submit', async functio
   e.preventDefault();
   const fd = new FormData(this);
   const instruction = (fd.get('instruction') || '').toString().trim();
-  const botId = (fd.get('bot_id') || '').toString().trim();
+  const pmBotId = (fd.get('bot_id') || '').toString().trim();
   if (!instruction) return;
-  if (!botId) {
+  if (!pmBotId) {
     alert('Select an explicit project manager bot.');
     return;
   }
-  const includeProjectContext = document.getElementById('include-project-context');
-  const res = await fetch('/api/chat/messages', {
+  const res = await fetch('/api/chat/assignments/preview', {
     method: 'POST',
     headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
     body: JSON.stringify({
       conversation_id: fd.get('conversation_id'),
-      content: '@assign ' + instruction,
-      bot_id: botId,
-      include_project_context: includeProjectContext ? includeProjectContext.checked : false,
-      use_workspace_tools: !!document.getElementById('use-workspace-tools-message')?.checked
+      instruction,
+      pm_bot_id: pmBotId
     }),
   });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
-    alert(data.error || 'Assign failed');
+    alert(data.error || 'Assignment preview failed');
+    return;
+  }
+  const preview = await res.json();
+  renderAssignmentConfig(preview);
+});
+
+document.getElementById('assign-config-submit')?.addEventListener('click', async function() {
+  if (!activeAssignmentPreview) {
+    alert('No assignment preview is loaded.');
+    return;
+  }
+  const nodeOverrides = collectAssignmentNodeOverrides();
+  const includeProjectContext = document.getElementById('include-project-context');
+  const payload = {
+    conversation_id: activeAssignmentPreview.conversation_id,
+    instruction: activeAssignmentPreview.instruction,
+    pm_bot_id: activeAssignmentPreview.pm_bot_id,
+    run_id: activeAssignmentPreview.run_id,
+    node_overrides: nodeOverrides,
+    context_items: [],
+    include_project_context: includeProjectContext ? includeProjectContext.checked : false,
+    use_workspace_tools: !!document.getElementById('use-workspace-tools-message')?.checked
+  };
+  const res = await fetch('/api/chat/assignments', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    alert(data.error || 'Assignment create failed');
     return;
   }
   const data = await res.json();
   const orchestrationId = data.assignment?.orchestration_id || 'unknown';
   if (data.user_message) upsertMessage(data.user_message);
   if (data.assistant_message) upsertMessage(data.assistant_message);
+  hideModal('modal-assign-config');
   closeAssignModal();
+  activeAssignmentPreview = null;
   alert('Assignment queued: ' + orchestrationId);
   refreshMessages().catch(() => {});
   pollForAssignmentSummary(orchestrationId).catch(() => {});

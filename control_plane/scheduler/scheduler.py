@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import copy
 import json
 import logging
@@ -6,10 +7,13 @@ import os
 import re
 import time
 from pathlib import PurePosixPath
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, Dict
 
 import httpx
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding
 
+from control_plane.connections.resolver import ConnectionResolver
 from shared.bot_policy import bot_allows_repo_output
 from shared.exceptions import BackendError, BotNotFoundError, NoViableBackendError
 from shared.models import BackendConfig, BackendParams, Task, Worker
@@ -622,28 +626,11 @@ def _connection_context_config(bot: Any) -> dict[str, Any]:
 
 def _load_attached_connection_rows(bot_id: str) -> list[Any]:
     try:
-        from dashboard.db import get_db
-        from dashboard.models import BotConnection, Connection
-    except Exception:
-        return []
-
-    db = get_db()
-    try:
-        links = db.query(BotConnection).filter(BotConnection.bot_ref == str(bot_id)).all()
-        connection_ids = [int(link.connection_id) for link in links]
-        if not connection_ids:
-            return []
-        return (
-            db.query(Connection)
-            .filter(Connection.id.in_(connection_ids), Connection.enabled.is_(True))
-            .order_by(Connection.name.asc())
-            .all()
-        )
+        resolver = ConnectionResolver()
+        return resolver.list_bot_connections(str(bot_id))
     except Exception as exc:
         logger.warning("Failed to load attached bot connections for %s: %s", bot_id, exc)
         return []
-    finally:
-        db.close()
 
 
 def _resolve_attached_connection(
@@ -653,12 +640,24 @@ def _resolve_attached_connection(
     requested_id: str | None = None,
 ) -> Any | None:
     if requested_id:
-        match = next((row for row in rows if str(getattr(row, "id", "")) == str(requested_id)), None)
+        match = next(
+            (
+                row
+                for row in rows
+                if str((row.get("id") if isinstance(row, dict) else getattr(row, "id", "")) or "") == str(requested_id)
+            ),
+            None,
+        )
         if match is not None:
             return match
     if requested_name:
         match = next(
-            (row for row in rows if str(getattr(row, "name", "")).strip().lower() == str(requested_name).strip().lower()),
+            (
+                row
+                for row in rows
+                if str((row.get("name") if isinstance(row, dict) else getattr(row, "name", "")) or "").strip().lower()
+                == str(requested_name).strip().lower()
+            ),
             None,
         )
         if match is not None:
@@ -666,6 +665,12 @@ def _resolve_attached_connection(
     if len(rows) == 1:
         return rows[0]
     return None
+
+
+def _connection_row_value(row: Any, key: str, default: Any = "") -> Any:
+    if isinstance(row, dict):
+        return row.get(key, default)
+    return getattr(row, key, default)
 
 
 def _normalize_payload_path(path: str) -> str:
@@ -1125,26 +1130,33 @@ def _static_connection_context_prompt(rows: list[Any], config: dict[str, Any]) -
     remaining_chars = max_total_chars
 
     for row in target_rows:
-        section: list[str] = [f"Connection: {str(getattr(row, 'name', '') or '').strip() or getattr(row, 'id', '')} ({str(getattr(row, 'kind', '') or '').strip() or 'unknown'})"]
-        description = str(getattr(row, "description", "") or "").strip()
+        row_name = str(_connection_row_value(row, "name", "") or "").strip()
+        row_id = str(_connection_row_value(row, "id", "") or "").strip()
+        row_kind = str(_connection_row_value(row, "kind", "") or "").strip().lower()
+        section: list[str] = [f"Connection: {row_name or row_id} ({row_kind or 'unknown'})"]
+        description = str(_connection_row_value(row, "description", "") or "").strip()
         if description:
             section.append(f"Description: {description}")
 
-        try:
-            connection_config = json.loads(getattr(row, "config_json", "{}") or "{}")
-        except Exception:
-            connection_config = {}
+        raw_config = _connection_row_value(row, "config", None)
+        if isinstance(raw_config, dict):
+            connection_config = raw_config
+        else:
+            try:
+                connection_config = json.loads(str(_connection_row_value(row, "config_json", "{}") or "{}"))
+            except Exception:
+                connection_config = {}
         if isinstance(connection_config, dict):
-            if str(getattr(row, "kind", "") or "").strip().lower() == "http":
+            if row_kind == "http":
                 base_url = str(connection_config.get("base_url") or "").strip()
                 if base_url:
                     section.append(f"Base URL: {base_url}")
-            if str(getattr(row, "kind", "") or "").strip().lower() == "database":
+            if row_kind == "database":
                 readonly = bool(connection_config.get("readonly", False))
                 section.append(f"Readonly: {'true' if readonly else 'false'}")
 
-        schema_text = str(getattr(row, "schema_text", "") or "").strip()
-        if include_actions and parse_openapi_actions and str(getattr(row, "kind", "") or "").strip().lower() == "http" and schema_text:
+        schema_text = str(_connection_row_value(row, "schema_text", "") or "").strip()
+        if include_actions and parse_openapi_actions and row_kind == "http" and schema_text:
             try:
                 actions = parse_openapi_actions(schema_text)
             except Exception:
@@ -1199,15 +1211,23 @@ def _dynamic_connection_fetch_prompt(rows: list[Any], config: dict[str, Any], pa
     except Exception:
         return ""
 
-    try:
-        connection_config = json.loads(getattr(connection, "config_json", "{}") or "{}")
-    except Exception:
-        connection_config = {}
-    try:
-        auth_payload = resolve_auth_payload(json.loads(getattr(connection, "auth_json", "{}") or "{}"))
-    except Exception:
-        auth_payload = {}
-    schema_text = str(getattr(connection, "schema_text", "") or "")
+    raw_config = _connection_row_value(connection, "config", None)
+    if isinstance(raw_config, dict):
+        connection_config = raw_config
+    else:
+        try:
+            connection_config = json.loads(str(_connection_row_value(connection, "config_json", "{}") or "{}"))
+        except Exception:
+            connection_config = {}
+    raw_auth = _connection_row_value(connection, "auth", None)
+    if isinstance(raw_auth, dict):
+        auth_payload = resolve_auth_payload(raw_auth)
+    else:
+        try:
+            auth_payload = resolve_auth_payload(json.loads(str(_connection_row_value(connection, "auth_json", "{}") or "{}")))
+        except Exception:
+            auth_payload = {}
+    schema_text = str(_connection_row_value(connection, "schema_text", "") or "")
 
     allow_mutating_fetch = bool(config.get("allow_mutating_fetch", False))
     response_chars = max(500, int(config.get("fetch_response_chars") or 5000))
@@ -1618,16 +1638,19 @@ class Scheduler:
         key_vault: Any = None,
         model_registry: Any = None,
         project_registry: Any = None,
+        connection_resolver: Any = None,
     ) -> None:
         self.bot_registry = bot_registry
         self.worker_registry = worker_registry
         self.key_vault = key_vault
         self.model_registry = model_registry
         self.project_registry = project_registry
+        self._connection_resolver = connection_resolver or ConnectionResolver()
         self._inflight_by_worker: dict[str, int] = {}
         self._latency_ema_ms: dict[str, float] = {}
         self._latency_alpha = float(os.environ.get("NEXUSAI_WORKER_LATENCY_EMA_ALPHA", "0.30"))
         self._default_latency_ms = float(os.environ.get("NEXUSAI_WORKER_DEFAULT_LATENCY_MS", "800"))
+        self._vertex_token_cache: dict[str, tuple[str, float]] = {}
 
     def _worker_capacity_limit(self, worker: Worker, backend: BackendConfig) -> int:
         if str(getattr(backend, "type", "") or "").strip().lower() == "local_llm":
@@ -1729,6 +1752,8 @@ class Scheduler:
                 return await self._call_claude(backend, safe_payload)
             elif backend.provider == "gemini":
                 return await self._call_gemini(backend, safe_payload)
+            elif backend.provider == "vertex":
+                return await self._call_vertex(backend, safe_payload)
             else:
                 raise BackendError(f"Unknown cloud_api provider: {backend.provider}")
         elif backend.type == "cli":
@@ -1764,8 +1789,6 @@ class Scheduler:
 
     def _run_http_connection_backend_sync(self, payload: dict[str, Any], bot_id: str) -> dict[str, Any]:
         from dashboard.connections_service import resolve_auth_payload, test_http_connection
-        from dashboard.db import get_db
-        from dashboard.models import BotConnection, Connection
 
         connection_ref = payload.get("connection") if isinstance(payload.get("connection"), dict) else {}
         requested_name = str(connection_ref.get("name") or payload.get("connection_name") or "").strip()
@@ -1783,32 +1806,22 @@ class Scheduler:
             actions = []
         if not actions:
             raise BackendError("http_connection backend requires at least one connection action")
+        connection = self._connection_resolver.find_bot_connection(
+            str(bot_id),
+            requested_name=requested_name or None,
+            requested_id=requested_id or None,
+        )
+        if connection is None:
+            raise BackendError(
+                "Requested bot connection was not found or multiple connections are attached "
+                "without an explicit connection.id/name selector"
+            )
+        if str(connection.get("kind") or "").strip().lower() != "http":
+            raise BackendError("http_connection backend only supports HTTP connections")
 
-        db = get_db()
-        try:
-            links = db.query(BotConnection).filter(BotConnection.bot_ref == str(bot_id)).all()
-            connection_ids = [int(link.connection_id) for link in links]
-            if not connection_ids:
-                raise BackendError(f"Bot {bot_id} has no attached connections")
-            rows = db.query(Connection).filter(Connection.id.in_(connection_ids)).all()
-            if requested_id:
-                connection = next((row for row in rows if str(row.id) == requested_id), None)
-            elif requested_name:
-                connection = next((row for row in rows if str(row.name) == requested_name), None)
-            elif len(rows) == 1:
-                connection = rows[0]
-            else:
-                raise BackendError("Multiple bot connections are attached; specify connection.name or connection.id")
-            if connection is None:
-                raise BackendError("Requested bot connection was not found")
-            if str(connection.kind or "").strip().lower() != "http":
-                raise BackendError("http_connection backend only supports HTTP connections")
-
-            config = json.loads(connection.config_json or "{}")
-            auth = resolve_auth_payload(json.loads(connection.auth_json or "{}"))
-            schema_text = str(connection.schema_text or "")
-        finally:
-            db.close()
+        config = connection.get("config") if isinstance(connection.get("config"), dict) else {}
+        auth = resolve_auth_payload(connection.get("auth") if isinstance(connection.get("auth"), dict) else {})
+        schema_text = str(connection.get("schema_text") or "")
 
         action_results: list[dict[str, Any]] = []
         warnings: list[str] = []
@@ -1841,8 +1854,8 @@ class Scheduler:
 
         return {
             "import_status": "success" if not failed_actions else "failed",
-            "connection_name": str(connection.name),
-            "connection_id": int(connection.id),
+            "connection_name": str(connection.get("name") or ""),
+            "connection_id": int(connection.get("id") or 0),
             "completed_actions": completed_actions,
             "failed_actions": failed_actions,
             "action_results": action_results,
@@ -2281,6 +2294,145 @@ class Scheduler:
             if finish_reason:
                 result["finish_reason"] = finish_reason
             return result
+
+    def _service_account_jwt(self, service_account: Dict[str, Any], *, scope: str) -> str:
+        def _b64url(data: bytes) -> str:
+            return base64.urlsafe_b64encode(data).rstrip(b"=").decode("utf-8")
+
+        private_key_pem = str(service_account.get("private_key") or "").strip()
+        client_email = str(service_account.get("client_email") or "").strip()
+        token_uri = str(service_account.get("token_uri") or "https://oauth2.googleapis.com/token").strip()
+        if not private_key_pem or not client_email:
+            raise BackendError("Vertex service account JSON must include private_key and client_email")
+        now = int(time.time())
+        header = {"alg": "RS256", "typ": "JWT"}
+        claims = {
+            "iss": client_email,
+            "scope": scope,
+            "aud": token_uri,
+            "iat": now,
+            "exp": now + 3600,
+        }
+        header_raw = _b64url(json.dumps(header, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+        claims_raw = _b64url(json.dumps(claims, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+        signing_input = f"{header_raw}.{claims_raw}".encode("utf-8")
+        try:
+            private_key = serialization.load_pem_private_key(private_key_pem.encode("utf-8"), password=None)
+        except Exception as exc:
+            raise BackendError(f"Failed to parse Vertex service account private key: {exc}") from exc
+        signature = private_key.sign(signing_input, padding.PKCS1v15(), hashes.SHA256())
+        return f"{header_raw}.{claims_raw}.{_b64url(signature)}"
+
+    async def _vertex_access_token(self, service_account: Dict[str, Any]) -> str:
+        client_email = str(service_account.get("client_email") or "").strip().lower()
+        cached = self._vertex_token_cache.get(client_email)
+        if cached and cached[1] > time.time() + 60:
+            return cached[0]
+
+        token_uri = str(service_account.get("token_uri") or "https://oauth2.googleapis.com/token").strip()
+        assertion = self._service_account_jwt(
+            service_account,
+            scope="https://www.googleapis.com/auth/cloud-platform",
+        )
+        async with httpx.AsyncClient(timeout=_cloud_timeout()) as client:
+            response = await client.post(
+                token_uri,
+                data={
+                    "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+                    "assertion": assertion,
+                },
+                headers={"content-type": "application/x-www-form-urlencoded"},
+            )
+            response.raise_for_status()
+            data = response.json()
+        token = str(data.get("access_token") or "").strip()
+        if not token:
+            raise BackendError("Vertex token exchange returned no access_token")
+        expires_in = int(data.get("expires_in") or 3600)
+        if client_email:
+            self._vertex_token_cache[client_email] = (token, time.time() + max(120, expires_in - 30))
+        return token
+
+    async def _call_vertex(self, backend: BackendConfig, payload: Any) -> Any:
+        credential_ref = backend.api_key_ref or "VERTEX_SERVICE_ACCOUNT_JSON"
+        credential_blob = await self._resolve_api_key(credential_ref, "VERTEX_SERVICE_ACCOUNT_JSON")
+        if not credential_blob:
+            raise BackendError(
+                f"Vertex credentials not found. Set '{credential_ref}' in key vault or environment to a service-account JSON."
+            )
+        service_account: Dict[str, Any] = {}
+        parsed_ok = False
+        try:
+            candidate = json.loads(credential_blob)
+            if isinstance(candidate, dict):
+                service_account = candidate
+                parsed_ok = True
+        except Exception:
+            parsed_ok = False
+        if not parsed_ok:
+            try:
+                with open(credential_blob, "r", encoding="utf-8") as handle:
+                    candidate = json.load(handle)
+                if isinstance(candidate, dict):
+                    service_account = candidate
+                    parsed_ok = True
+            except Exception:
+                parsed_ok = False
+        if not parsed_ok:
+            raise BackendError("Vertex credential must be a service-account JSON string or path to a JSON file")
+
+        access_token = await self._vertex_access_token(service_account)
+        project_id = (
+            str(service_account.get("project_id") or "").strip()
+            or str(os.environ.get("VERTEX_PROJECT_ID", "") or "").strip()
+        )
+        if isinstance(payload, dict):
+            project_id = str(payload.get("vertex_project_id") or project_id).strip()
+        if not project_id:
+            raise BackendError("Vertex project_id is required (service-account project_id or VERTEX_PROJECT_ID)")
+
+        location = str(os.environ.get("VERTEX_LOCATION", "us-central1") or "us-central1").strip()
+        if isinstance(payload, dict):
+            location = str(payload.get("vertex_location") or location).strip() or "us-central1"
+
+        model_ref = str(backend.model or "").strip()
+        if not model_ref:
+            raise BackendError("Vertex backend model is required")
+        if model_ref.startswith("projects/"):
+            path = f"{model_ref}:generateContent"
+        elif model_ref.startswith("publishers/"):
+            path = f"projects/{project_id}/locations/{location}/{model_ref}:generateContent"
+        else:
+            path = f"projects/{project_id}/locations/{location}/publishers/google/models/{model_ref}:generateContent"
+
+        messages = payload if isinstance(payload, list) else [{"role": "user", "content": str(payload)}]
+        body: Dict[str, Any] = {"contents": _gemini_contents(messages)}
+        params_dict = backend.params.model_dump(exclude_none=True) if backend.params else {}
+        if params_dict:
+            body["generationConfig"] = params_dict
+        url = f"https://{location}-aiplatform.googleapis.com/v1/{path}"
+        async with httpx.AsyncClient(timeout=_cloud_timeout()) as client:
+            response = await client.post(
+                url,
+                headers={"Authorization": f"Bearer {access_token}"},
+                json=body,
+            )
+            response.raise_for_status()
+            data = response.json()
+        output = ""
+        try:
+            output = str((data.get("candidates") or [{}])[0]["content"]["parts"][0].get("text") or "")
+        except Exception:
+            output = ""
+        finish_reason = ""
+        try:
+            finish_reason = str((data.get("candidates") or [{}])[0].get("finishReason") or "").strip()
+        except Exception:
+            finish_reason = ""
+        result = {"output": output, "usage": data.get("usageMetadata", {})}
+        if finish_reason:
+            result["finish_reason"] = finish_reason
+        return result
 
     async def _resolve_api_key(self, api_key_ref: str, default_env_var: str) -> str:
         if self.key_vault and api_key_ref:

@@ -8,14 +8,33 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from control_plane.api import audit, bots, chat, database, keys, models_catalog, projects, tasks, vault, workers
+from control_plane.agent_scheduler.engine import AgentScheduleEngine
+from control_plane.api import (
+    assignments,
+    audit,
+    bots,
+    chat,
+    database,
+    keys,
+    models_catalog,
+    platform_ai,
+    projects,
+    schedules,
+    tasks,
+    vault,
+    workers,
+)
 from control_plane.audit.audit_log import AuditLog
 from control_plane.chat.chat_manager import ChatManager
 from control_plane.chat.pm_orchestrator import PMOrchestrator
+from control_plane.connections.resolver import ConnectionResolver
 from control_plane.github.webhook_store import GitHubWebhookStore
 from control_plane.keys.key_vault import KeyVault
 from control_plane.observability import install_observability
+from control_plane.orchestration.assignment_service import AssignmentService
+from control_plane.orchestration.run_store import OrchestrationRunStore
 from control_plane.orchestration_workspace_store import OrchestrationWorkspaceStore
+from control_plane.platform_ai.session_store import PlatformAISessionStore
 from control_plane.registry.bot_registry import BotRegistry
 from control_plane.registry.model_registry import ModelRegistry
 from control_plane.registry.project_registry import ProjectRegistry
@@ -73,17 +92,20 @@ async def lifespan(app: FastAPI):
         await bot_registry.seed_from_configs(bot_configs, worker_ids, force=force_seed)
 
     # Initialize scheduler and task manager
+    connection_resolver = ConnectionResolver()
     scheduler = Scheduler(
         bot_registry,
         worker_registry,
         key_vault=key_vault,
         model_registry=model_registry,
         project_registry=project_registry,
+        connection_resolver=connection_resolver,
     )
     task_manager = TaskManager(
         scheduler,
         bot_registry=bot_registry,
         orchestration_workspace_store=orchestration_workspace_store,
+        connection_resolver=connection_resolver,
     )
     pm_orchestrator = PMOrchestrator(
         bot_registry=bot_registry,
@@ -91,6 +113,20 @@ async def lifespan(app: FastAPI):
         task_manager=task_manager,
         chat_manager=chat_manager,
         orchestration_workspace_store=orchestration_workspace_store,
+    )
+    orchestration_run_store = OrchestrationRunStore()
+    assignment_service = AssignmentService(
+        chat_manager=chat_manager,
+        bot_registry=bot_registry,
+        task_manager=task_manager,
+        pm_orchestrator=pm_orchestrator,
+        run_store=orchestration_run_store,
+        connection_resolver=connection_resolver,
+    )
+    platform_ai_session_store = PlatformAISessionStore()
+    agent_schedule_engine = AgentScheduleEngine(
+        assignment_service=assignment_service,
+        task_manager=task_manager,
     )
 
     # Store on app state
@@ -109,6 +145,11 @@ async def lifespan(app: FastAPI):
     app.state.scheduler = scheduler
     app.state.task_manager = task_manager
     app.state.pm_orchestrator = pm_orchestrator
+    app.state.connection_resolver = connection_resolver
+    app.state.orchestration_run_store = orchestration_run_store
+    app.state.assignment_service = assignment_service
+    app.state.platform_ai_session_store = platform_ai_session_store
+    app.state.agent_schedule_engine = agent_schedule_engine
     app.state.config = config
     app.state.control_plane_api_token = os.environ.get("CONTROL_PLANE_API_TOKEN", "").strip()
 
@@ -117,13 +158,22 @@ async def lifespan(app: FastAPI):
     heartbeat_task = asyncio.create_task(
         _heartbeat_checker(worker_registry, heartbeat_timeout)
     )
+    schedule_tick_seconds = max(2, int(cp_cfg.get("agent_schedule_tick_seconds", 10)))
+    schedule_task = asyncio.create_task(
+        _agent_schedule_loop(agent_schedule_engine, tick_seconds=schedule_tick_seconds)
+    )
 
     logger.info("NexusAI Control Plane started")
     yield
 
     heartbeat_task.cancel()
+    schedule_task.cancel()
     try:
         await heartbeat_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await schedule_task
     except asyncio.CancelledError:
         pass
     logger.info("NexusAI Control Plane stopped")
@@ -151,6 +201,15 @@ async def _heartbeat_checker(worker_registry: WorkerRegistry, timeout_seconds: i
             logger.error("Heartbeat checker error: %s", e)
 
 
+async def _agent_schedule_loop(agent_schedule_engine: AgentScheduleEngine, *, tick_seconds: int) -> None:
+    while True:
+        await asyncio.sleep(max(2, int(tick_seconds)))
+        try:
+            await agent_schedule_engine.tick_once()
+        except Exception as e:
+            logger.error("Agent schedule tick error: %s", e)
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title="NexusAI Control Plane",
@@ -167,6 +226,9 @@ def create_app() -> FastAPI:
     app.include_router(keys.router)
     app.include_router(models_catalog.router)
     app.include_router(chat.router)
+    app.include_router(assignments.router)
+    app.include_router(platform_ai.router)
+    app.include_router(schedules.router)
     app.include_router(vault.router)
     app.include_router(audit.router)
     app.include_router(database.router)

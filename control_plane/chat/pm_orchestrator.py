@@ -369,6 +369,7 @@ class PMOrchestrator:
         conversation_transcript_strategy: str = "",
         assignment_memory_hits: Optional[List[Dict[str, Any]]] = None,
         assignment_memory_hit_count: int = 0,
+        node_overrides: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         request_text = str(instruction or "").strip()
         prior_context = str(conversation_brief or "").strip()
@@ -394,6 +395,7 @@ class PMOrchestrator:
                 int(assignment_memory_hit_count or 0),
                 len(list(assignment_memory_hits or [])),
             ),
+            "node_overrides": node_overrides if isinstance(node_overrides, dict) else {},
             "docs_only": docs_only,
             "requested_output_paths": self._requested_output_paths(request_text),
             "requested_output_extensions": [".md"] if docs_only else [],
@@ -529,6 +531,9 @@ class PMOrchestrator:
         assignment_memory_hits: Optional[List[Dict[str, Any]]] = None,
         assignment_memory_hit_count: int = 0,
         project_id: Optional[str] = None,
+        node_overrides: Optional[Dict[str, Any]] = None,
+        orchestration_run_id: Optional[str] = None,
+        assignment_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         requested_pm_bot_id = str(requested_pm_bot_id or "").strip()
         if not requested_pm_bot_id:
@@ -555,6 +560,9 @@ class PMOrchestrator:
             assignment_memory_hit_count=assignment_memory_hit_count,
             project_id=project_id,
             bots=bots,
+            node_overrides=node_overrides,
+            orchestration_run_id=orchestration_run_id,
+            assignment_id=assignment_id,
         )
 
     def _should_bootstrap_assignment_via_pm_workflow(self, pm_bot: Bot) -> bool:
@@ -579,6 +587,9 @@ class PMOrchestrator:
         assignment_memory_hit_count: int = 0,
         project_id: Optional[str],
         bots: List[Bot],
+        node_overrides: Optional[Dict[str, Any]] = None,
+        orchestration_run_id: Optional[str] = None,
+        assignment_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         orchestration_id = str(uuid.uuid4())
         if project_id and self._orchestration_workspace_store is not None:
@@ -610,6 +621,7 @@ class PMOrchestrator:
             conversation_transcript_strategy=conversation_transcript_strategy,
             assignment_memory_hits=assignment_memory_hits,
             assignment_memory_hit_count=assignment_memory_hit_count,
+            node_overrides=node_overrides,
         )
         pm_task = await self._task_manager.create_task(
             bot_id=pm_bot.id,
@@ -638,6 +650,9 @@ class PMOrchestrator:
                 "run_class": "pm_assignment",
                 "pipeline_name": pipeline_name,
                 "pipeline_entry_bot_id": pm_bot.id,
+                "node_overrides": node_overrides if isinstance(node_overrides, dict) else {},
+                "orchestration_run_id": str(orchestration_run_id or "").strip(),
+                "assignment_id": str(assignment_id or "").strip(),
             },
             metadata=TaskMetadata(
                 source="chat_assign",
@@ -655,6 +670,8 @@ class PMOrchestrator:
         )
         return {
             "orchestration_id": orchestration_id,
+            "orchestration_run_id": str(orchestration_run_id or "").strip() or None,
+            "assignment_id": str(assignment_id or "").strip() or None,
             "pm_bot_id": pm_bot.id,
             "instruction": instruction,
             "plan": {
@@ -681,6 +698,7 @@ class PMOrchestrator:
             "allowed_bot_ids": allowed_bot_ids,
             "workflow_graph_id": workflow_graph_id,
             "pipeline_name": pipeline_name,
+            "node_overrides": node_overrides if isinstance(node_overrides, dict) else {},
         }
 
     async def wait_for_completion(

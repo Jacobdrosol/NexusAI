@@ -1512,6 +1512,15 @@ def _assignment_scope_alignment_error(payload: Dict[str, Any], result: Any) -> s
 
 
 def _looks_like_assignment_test_execution_payload(payload: Dict[str, Any]) -> bool:
+    execution_mode = str(payload.get("execution_mode") or "").strip().lower()
+    if execution_mode in {
+        "code_runner",
+        "build_only",
+        "build_test_package",
+        "build_and_package",
+        "compile_and_test",
+    }:
+        return True
     # Role hint takes precedence - if explicitly tester/qa, treat as test execution
     role_hint = str(payload.get("role_hint") or "").strip().lower()
     if role_hint in {"tester", "qa"}:
@@ -3009,6 +3018,51 @@ def _task_report_markdown(task: Task) -> str:
     return "\n".join(lines).strip() + "\n"
 
 
+def _payload_node_overrides(payload: Any) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    if isinstance(payload.get("node_overrides"), dict):
+        return payload.get("node_overrides") or {}
+    scope = payload.get("assignment_scope")
+    if isinstance(scope, dict) and isinstance(scope.get("node_overrides"), dict):
+        return scope.get("node_overrides") or {}
+    return {}
+
+
+def _normalize_node_override(value: Any) -> Dict[str, Any]:
+    raw = value if isinstance(value, dict) else {}
+    bindings: List[Dict[str, str]] = []
+    if isinstance(raw.get("connection_bindings"), list):
+        for item in raw.get("connection_bindings") or []:
+            if not isinstance(item, dict):
+                continue
+            slot = str(item.get("slot") or "").strip()
+            connection_id = str(item.get("project_connection_id") or "").strip()
+            if slot and connection_id:
+                bindings.append({"slot": slot, "project_connection_id": connection_id})
+    return {
+        "skip": bool(raw.get("skip", False)),
+        "instructions": str(raw.get("instructions") or "").strip(),
+        "connection_bindings": bindings,
+        "execution_mode": str(raw.get("execution_mode") or "").strip(),
+        "policy_overrides": raw.get("policy_overrides") if isinstance(raw.get("policy_overrides"), dict) else {},
+    }
+
+
+def _select_task_node_override(task: Task, payload: Any) -> Dict[str, Any]:
+    overrides = _payload_node_overrides(payload)
+    if not overrides:
+        return {}
+    step_id = str(task.metadata.step_id if task.metadata else "").strip()
+    bot_id = str(task.bot_id or "").strip()
+    for key in (step_id, bot_id, "default"):
+        if not key:
+            continue
+        if key in overrides:
+            return _normalize_node_override(overrides.get(key))
+    return {}
+
+
 class TaskManager:
     _TERMINAL_TASK_STATUSES = {"completed", "failed", "retried", "cancelled"}
 
@@ -3018,6 +3072,7 @@ class TaskManager:
         db_path: Optional[str] = None,
         bot_registry: Optional[Any] = None,
         orchestration_workspace_store: Optional[Any] = None,
+        connection_resolver: Optional[Any] = None,
     ) -> None:
         if orchestration_workspace_store is None:
             from control_plane.orchestration_workspace_store import OrchestrationWorkspaceStore
@@ -3028,6 +3083,7 @@ class TaskManager:
         self._init_lock = asyncio.Lock()
         self._scheduler = scheduler
         self._bot_registry = bot_registry
+        self._connection_resolver = connection_resolver
         self._project_registry = getattr(scheduler, "project_registry", None)
         self._orchestration_workspace_store = orchestration_workspace_store
         self._db_ready = False
@@ -3280,7 +3336,7 @@ class TaskManager:
             _settings_float("running_task_watchdog_progress_grace_seconds", 300.0),
         )
         now_monotonic = time.monotonic()
-        to_retry: List[Tuple[str, str, float, float]] = []
+        to_retry: List[Tuple[str, str, float, float, str]] = []
 
         async with self._lock:
             running_ids = set()
@@ -3313,8 +3369,14 @@ class TaskManager:
                     0.0,
                     now_monotonic - float(state.get("last_progress_monotonic") or now_monotonic),
                 )
+                if elapsed_since_progress < progress_grace_seconds:
+                    state["next_deadline_monotonic"] = now_monotonic + max(
+                        0.05,
+                        progress_grace_seconds - elapsed_since_progress,
+                    )
+                    continue
                 if runner is None or runner.done():
-                    to_retry.append((task_id, "runner_inactive", next_deadline, elapsed_since_progress))
+                    to_retry.append((task_id, "runner_inactive", next_deadline, elapsed_since_progress, current_updated_at))
                     continue
                 if not bool(state.get("grace_issued")):
                     state["grace_issued"] = True
@@ -3325,14 +3387,19 @@ class TaskManager:
                         progress_grace_seconds,
                     )
                     continue
-                to_retry.append((task_id, "no_progress_after_live_check", next_deadline, elapsed_since_progress))
+                to_retry.append((task_id, "no_progress_after_live_check", next_deadline, elapsed_since_progress, current_updated_at))
 
             for task_id in list(self._watchdog_state.keys()):
                 if task_id not in running_ids:
                     self._watchdog_state.pop(task_id, None)
 
-        for task_id, reason, _, elapsed_since_progress in to_retry:
-            await self._retry_stuck_task(task_id, reason=reason, stagnant_seconds=elapsed_since_progress)
+        for task_id, reason, _, elapsed_since_progress, expected_updated_at in to_retry:
+            await self._retry_stuck_task(
+                task_id,
+                reason=reason,
+                stagnant_seconds=elapsed_since_progress,
+                expected_updated_at=expected_updated_at,
+            )
 
     async def _migrate_tasks_table(self, db: aiosqlite.Connection) -> None:
         """Ensure new table columns exist for upgraded installations."""
@@ -3805,7 +3872,7 @@ class TaskManager:
         if pending_dispatch:
             visible_tasks: List[Task] = []
             for task in tasks:
-                if task.id in pending_dispatch and task.status in {"completed", "failed"}:
+                if task.id in pending_dispatch and task.status == "completed":
                     visible_tasks.append(task.model_copy(update={"status": "running"}))
                     continue
                 visible_tasks.append(task)
@@ -4263,7 +4330,14 @@ class TaskManager:
         if status == "failed":
             await self._cleanup_failed_orchestration_workspace(updated_task)
 
-    async def _retry_stuck_task(self, task_id: str, *, reason: str, stagnant_seconds: float) -> None:
+    async def _retry_stuck_task(
+        self,
+        task_id: str,
+        *,
+        reason: str,
+        stagnant_seconds: float,
+        expected_updated_at: str = "",
+    ) -> None:
         await self._ensure_db()
         task: Optional[Task] = None
         runner: Optional[asyncio.Task[Any]] = None
@@ -4271,6 +4345,17 @@ class TaskManager:
             task = self._tasks.get(task_id)
             if task is None or task.status != "running":
                 self._watchdog_state.pop(task_id, None)
+                return
+            if expected_updated_at and str(task.updated_at or "") != str(expected_updated_at):
+                self._watchdog_state[task_id] = {
+                    "last_updated_at": str(task.updated_at or ""),
+                    "last_progress_monotonic": time.monotonic(),
+                    "next_deadline_monotonic": time.monotonic() + max(
+                        0.1,
+                        _settings_float("running_task_watchdog_progress_grace_seconds", 300.0),
+                    ),
+                    "grace_issued": False,
+                }
                 return
             runner = self._runner_tasks.get(task_id)
             self._watchdog_state.pop(task_id, None)
@@ -4343,16 +4428,87 @@ class TaskManager:
                 except Exception:
                     bot = None
             payload = task.payload if isinstance(task.payload, dict) else {}
+            runtime_payload = copy.deepcopy(payload)
+            node_override = _select_task_node_override(task, payload)
+            if node_override:
+                deterministic = {
+                    "node_override_applied": True,
+                    "node_override": node_override,
+                    "task_id": task.id,
+                    "bot_id": task.bot_id,
+                    "step_id": str(task.metadata.step_id if task.metadata else "").strip(),
+                }
+                if bool(node_override.get("skip")):
+                    skip_result = {
+                        "outcome": "skip",
+                        "status": "skip",
+                        "failure_type": "skip",
+                        "deterministic_signals": deterministic,
+                        "handoff_notes": "Task skipped by deterministic assignment override before agent dispatch.",
+                    }
+                    await self.update_status(task_id, "completed", result=skip_result)
+                    return
+                instructions = str(node_override.get("instructions") or "").strip()
+                if instructions:
+                    existing_instruction = str(runtime_payload.get("instruction") or "").strip()
+                    runtime_payload["instruction"] = (
+                        f"{existing_instruction}\n\n[Assignment Override]\n{instructions}".strip()
+                        if existing_instruction
+                        else instructions
+                    )
+                execution_mode = str(node_override.get("execution_mode") or "").strip()
+                if execution_mode:
+                    runtime_payload["execution_mode"] = execution_mode
+                if isinstance(node_override.get("policy_overrides"), dict) and node_override.get("policy_overrides"):
+                    runtime_payload["policy_overrides"] = node_override.get("policy_overrides")
+                if isinstance(node_override.get("connection_bindings"), list) and node_override.get("connection_bindings"):
+                    project_id = str(task.metadata.project_id if task.metadata else "").strip()
+                    scoped_connections: List[Dict[str, Any]] = []
+                    resolver = self._connection_resolver
+                    if resolver is None:
+                        raise _TaskExecutionFailure("project connection bindings were requested but connection resolver is unavailable")
+                    for binding in node_override.get("connection_bindings") or []:
+                        slot = str(binding.get("slot") or "").strip()
+                        connection_id = str(binding.get("project_connection_id") or "").strip()
+                        if not slot or not connection_id:
+                            continue
+                        try:
+                            resolved = resolver.get_project_connection(project_id, int(connection_id))
+                        except Exception:
+                            resolved = None
+                        if resolved is None:
+                            raise _TaskExecutionFailure(
+                                f"project-scoped connection binding '{connection_id}' is unavailable for project '{project_id}'"
+                            )
+                        scoped_connections.append(
+                            {
+                                "slot": slot,
+                                "connection_id": resolved.get("id"),
+                                "name": resolved.get("name"),
+                                "kind": resolved.get("kind"),
+                                "config": resolved.get("config"),
+                                "auth": resolved.get("auth"),
+                                "schema_text": resolved.get("schema_text"),
+                            }
+                        )
+                    if scoped_connections:
+                        runtime_payload["scoped_connections"] = scoped_connections
+                if isinstance(runtime_payload.get("deterministic_signals"), dict):
+                    runtime_payload["deterministic_signals"].update(deterministic)
+                else:
+                    runtime_payload["deterministic_signals"] = deterministic
+            task_for_execution = task.model_copy(update={"payload": runtime_payload})
             bot_allows_repo_output_for_task = bool(bot is not None and self._bot_allows_repo_output_for_task(task, bot))
             if bot is not None and not bot_allows_repo_output_for_task:
                 # Inject bot role as role_hint if not already present in payload
-                if "role_hint" not in payload and bot.role:
-                    payload = dict(payload)
-                    payload["role_hint"] = str(bot.role).strip().lower()
-                assigned_repo_deliverables = _non_writer_step_repo_deliverables(payload)
+                if "role_hint" not in runtime_payload and bot.role:
+                    runtime_payload = dict(runtime_payload)
+                    runtime_payload["role_hint"] = str(bot.role).strip().lower()
+                    task_for_execution = task_for_execution.model_copy(update={"payload": runtime_payload})
+                assigned_repo_deliverables = _non_writer_step_repo_deliverables(runtime_payload)
                 if assigned_repo_deliverables:
                     preview = ", ".join(assigned_repo_deliverables[:5])
-                    step_kind = _assignment_step_kind(payload) or "non_writer"
+                    step_kind = _assignment_step_kind(runtime_payload) or "non_writer"
                     raise _TaskPolicyViolation(
                         (
                             f"Bot '{task.bot_id}' is not allowed to own repo deliverables for "
@@ -4367,17 +4523,17 @@ class TaskManager:
                         },
                     )
             mode = await self._bot_output_contract_mode(task.bot_id)
-            internal_result = await self._maybe_run_internal_assignment_step(task)
+            internal_result = await self._maybe_run_internal_assignment_step(task_for_execution)
             if internal_result is not None:
                 raw_result = internal_result
             elif mode == "payload_transform":
                 raw_result = {"deterministic_transform": True}
             else:
-                raw_result = await self._scheduler.schedule(task)
-            result = await self._normalize_task_result(task, copy.deepcopy(raw_result))
+                raw_result = await self._scheduler.schedule(task_for_execution)
+            result = await self._normalize_task_result(task_for_execution, copy.deepcopy(raw_result))
             if bot is not None and not bot_allows_repo_output_for_task:
                 result = _strip_repo_output_claims_for_deny_policy(result)
-            result = self._sanitize_pm_assignment_result(task, result)
+            result = self._sanitize_pm_assignment_result(task_for_execution, result)
             if _prefers_truncation_retry(task) and _looks_like_truncated_result(raw_result):
                 task_error = TaskError(
                     message=(

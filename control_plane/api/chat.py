@@ -1961,6 +1961,7 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
     chat_manager = request.app.state.chat_manager
     scheduler = request.app.state.scheduler
     pm_orchestrator = request.app.state.pm_orchestrator
+    assignment_service = getattr(request.app.state, "assignment_service", None)
     try:
         conversation = await chat_manager.get_conversation(conversation_id)
         target_bot_id = body.bot_id or conversation.default_bot_id
@@ -2023,19 +2024,34 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                 assign_instruction=assign_instruction,
                 current_assign_message_id=user_message.id,
             )
-            assignment = await pm_orchestrator.orchestrate_assignment(
-                conversation_id=conversation_id,
-                instruction=assign_instruction,
-                requested_pm_bot_id=body.bot_id,
-                context_items=resolved_context,
-                conversation_brief=str(context_snapshot.get("conversation_brief") or ""),
-                conversation_transcript=str(context_snapshot.get("conversation_transcript") or ""),
-                conversation_message_count=int(context_snapshot.get("conversation_message_count") or 0),
-                conversation_transcript_strategy=str(context_snapshot.get("conversation_transcript_strategy") or ""),
-                assignment_memory_hits=list(context_snapshot.get("assignment_memory_hits") or []),
-                assignment_memory_hit_count=int(context_snapshot.get("assignment_memory_hit_count") or 0),
-                project_id=conversation.project_id,
-            )
+            if assignment_service is not None:
+                assignment = await assignment_service.create_assignment(
+                    conversation_id=conversation_id,
+                    instruction=assign_instruction,
+                    pm_bot_id=assign_bot_id,
+                    context_items=resolved_context,
+                    node_overrides={},
+                    conversation_brief=str(context_snapshot.get("conversation_brief") or ""),
+                    conversation_transcript=str(context_snapshot.get("conversation_transcript") or ""),
+                    conversation_message_count=int(context_snapshot.get("conversation_message_count") or 0),
+                    conversation_transcript_strategy=str(context_snapshot.get("conversation_transcript_strategy") or ""),
+                    assignment_memory_hits=list(context_snapshot.get("assignment_memory_hits") or []),
+                    assignment_memory_hit_count=int(context_snapshot.get("assignment_memory_hit_count") or 0),
+                )
+            else:
+                assignment = await pm_orchestrator.orchestrate_assignment(
+                    conversation_id=conversation_id,
+                    instruction=assign_instruction,
+                    requested_pm_bot_id=body.bot_id,
+                    context_items=resolved_context,
+                    conversation_brief=str(context_snapshot.get("conversation_brief") or ""),
+                    conversation_transcript=str(context_snapshot.get("conversation_transcript") or ""),
+                    conversation_message_count=int(context_snapshot.get("conversation_message_count") or 0),
+                    conversation_transcript_strategy=str(context_snapshot.get("conversation_transcript_strategy") or ""),
+                    assignment_memory_hits=list(context_snapshot.get("assignment_memory_hits") or []),
+                    assignment_memory_hit_count=int(context_snapshot.get("assignment_memory_hit_count") or 0),
+                    project_id=conversation.project_id,
+                )
             context_meta = _assignment_context_message_metadata(context_snapshot)
             user_message = await chat_manager.update_message(
                 user_message.id,
@@ -2044,6 +2060,8 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                     "requested_pm_bot_id": assign_bot_id,
                     "assigned_pm_bot_id": str(assignment.get("pm_bot_id") or assign_bot_id or ""),
                     "orchestration_id": assignment.get("orchestration_id"),
+                    "assignment_id": assignment.get("assignment_id"),
+                    "run_id": assignment.get("run_id") or assignment.get("orchestration_run_id"),
                     **context_meta,
                 },
             )
@@ -2060,6 +2078,8 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                 metadata={
                     "mode": "assign_pending",
                     "orchestration_id": assignment.get("orchestration_id"),
+                    "assignment_id": assignment.get("assignment_id"),
+                    "run_id": assignment.get("run_id") or assignment.get("orchestration_run_id"),
                     "task_count": len(assignment.get("tasks", [])),
                     "assigned_pm_bot_id": str(assignment.get("pm_bot_id") or assign_bot_id or ""),
                     **context_meta,
@@ -2196,6 +2216,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
     scheduler = request.app.state.scheduler
     task_manager = request.app.state.task_manager
     pm_orchestrator = request.app.state.pm_orchestrator
+    assignment_service = getattr(request.app.state, "assignment_service", None)
 
     async def event_gen() -> AsyncGenerator[str, None]:
         try:
@@ -2281,19 +2302,34 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                     assign_instruction=assign_instruction,
                     current_assign_message_id=user_message.id,
                 )
-                assignment = await pm_orchestrator.orchestrate_assignment(
-                    conversation_id=conversation_id,
-                    instruction=assign_instruction,
-                    requested_pm_bot_id=body.bot_id,
-                    context_items=resolved_context,
-                    conversation_brief=str(context_snapshot.get("conversation_brief") or ""),
-                    conversation_transcript=str(context_snapshot.get("conversation_transcript") or ""),
-                    conversation_message_count=int(context_snapshot.get("conversation_message_count") or 0),
-                    conversation_transcript_strategy=str(context_snapshot.get("conversation_transcript_strategy") or ""),
-                    assignment_memory_hits=list(context_snapshot.get("assignment_memory_hits") or []),
-                    assignment_memory_hit_count=int(context_snapshot.get("assignment_memory_hit_count") or 0),
-                    project_id=conversation.project_id,
-                )
+                if assignment_service is not None:
+                    assignment = await assignment_service.create_assignment(
+                        conversation_id=conversation_id,
+                        instruction=assign_instruction,
+                        pm_bot_id=assign_bot_id,
+                        context_items=resolved_context,
+                        node_overrides={},
+                        conversation_brief=str(context_snapshot.get("conversation_brief") or ""),
+                        conversation_transcript=str(context_snapshot.get("conversation_transcript") or ""),
+                        conversation_message_count=int(context_snapshot.get("conversation_message_count") or 0),
+                        conversation_transcript_strategy=str(context_snapshot.get("conversation_transcript_strategy") or ""),
+                        assignment_memory_hits=list(context_snapshot.get("assignment_memory_hits") or []),
+                        assignment_memory_hit_count=int(context_snapshot.get("assignment_memory_hit_count") or 0),
+                    )
+                else:
+                    assignment = await pm_orchestrator.orchestrate_assignment(
+                        conversation_id=conversation_id,
+                        instruction=assign_instruction,
+                        requested_pm_bot_id=body.bot_id,
+                        context_items=resolved_context,
+                        conversation_brief=str(context_snapshot.get("conversation_brief") or ""),
+                        conversation_transcript=str(context_snapshot.get("conversation_transcript") or ""),
+                        conversation_message_count=int(context_snapshot.get("conversation_message_count") or 0),
+                        conversation_transcript_strategy=str(context_snapshot.get("conversation_transcript_strategy") or ""),
+                        assignment_memory_hits=list(context_snapshot.get("assignment_memory_hits") or []),
+                        assignment_memory_hit_count=int(context_snapshot.get("assignment_memory_hit_count") or 0),
+                        project_id=conversation.project_id,
+                    )
                 context_meta = _assignment_context_message_metadata(context_snapshot)
                 user_message = await chat_manager.update_message(
                     user_message.id,
@@ -2302,6 +2338,8 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                         "requested_pm_bot_id": assign_bot_id,
                         "assigned_pm_bot_id": str(assignment.get("pm_bot_id") or assign_bot_id or ""),
                         "orchestration_id": assignment.get("orchestration_id"),
+                        "assignment_id": assignment.get("assignment_id"),
+                        "run_id": assignment.get("run_id") or assignment.get("orchestration_run_id"),
                         **context_meta,
                     },
                 )
