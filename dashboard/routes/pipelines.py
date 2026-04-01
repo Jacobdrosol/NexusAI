@@ -19,6 +19,15 @@ def _cp_list_tasks_safe(cp, **kwargs):
         return cp.list_tasks()
 
 
+def _cp_list_platform_ai_pipelines_safe(cp):
+    if hasattr(cp, "list_platform_ai_pipelines"):
+        try:
+            return cp.list_platform_ai_pipelines()
+        except Exception:
+            return None
+    return None
+
+
 def _cp_error_response(cp, fallback: str = "control plane unavailable"):
     err = cp.last_error() if hasattr(cp, "last_error") else {}
     detail = ""
@@ -264,11 +273,18 @@ def _get_or_create_pipeline_test_session(
 def pipelines_page() -> str:
     cp = get_cp_client()
     runs, catalog = _pipeline_inventory(cp)
+    pipeline_entries_resp = _cp_list_platform_ai_pipelines_safe(cp) or {}
+    pipeline_entries = (
+        pipeline_entries_resp.get("pipelines")
+        if isinstance(pipeline_entries_resp.get("pipelines"), list)
+        else []
+    )
     if not runs and not catalog:
         return render_template(
             "pipelines.html",
             pipelines=[],
             pipeline_catalog=[],
+            pipeline_entries=pipeline_entries,
             error=("Control plane unavailable" if _cp_list_tasks_safe(cp, limit=1, include_content=False) is None else None),
             active_page="pipelines",
         )
@@ -276,6 +292,7 @@ def pipelines_page() -> str:
         "pipelines.html",
         pipelines=runs,
         pipeline_catalog=catalog,
+        pipeline_entries=pipeline_entries,
         error=None,
         active_page="pipelines",
     )
@@ -318,23 +335,13 @@ def api_list_pipeline_tests(orchestration_id: str):
     detail = _pipeline_detail(cp, orchestration_id)
     if detail is None:
         return jsonify({"error": "pipeline not found"}), 404
-    session = _get_or_create_pipeline_test_session(
-        cp,
-        pipeline_key=str(detail.get("pipeline_key") or ""),
-        pipeline_name=str(detail.get("name") or ""),
-        entry_bot_id=str(detail.get("entry_bot_id") or ""),
-        orchestration_id=orchestration_id,
-    )
-    if session is None:
-        return _cp_error_response(cp, "unable to initialize pipeline testing session")
-    session_id = str(session.get("id") or "").strip()
-    if not session_id:
-        return jsonify({"error": "invalid pipeline test session"}), 502
-    suites_resp = cp.list_platform_ai_quality_suites(session_id, limit=200)
+    pipeline_bot_id = str(detail.get("entry_bot_id") or "").strip()
+    if not pipeline_bot_id:
+        return jsonify({"error": "pipeline entry bot is missing"}), 400
+    suites_resp = cp.list_platform_ai_pipeline_test_suites(pipeline_bot_id, limit=200)
     if suites_resp is None:
         return _cp_error_response(cp, "unable to list pipeline test suites")
-    suites = suites_resp.get("suites") if isinstance(suites_resp.get("suites"), list) else []
-    return jsonify({"session": session, "suites": suites, "pipeline": detail})
+    return jsonify({"pipeline_run": detail, **suites_resp})
 
 
 @bp.post("/api/pipelines/<orchestration_id>/tests/design")
@@ -344,39 +351,24 @@ def api_design_pipeline_tests(orchestration_id: str):
     detail = _pipeline_detail(cp, orchestration_id)
     if detail is None:
         return jsonify({"error": "pipeline not found"}), 404
-    session = _get_or_create_pipeline_test_session(
-        cp,
-        pipeline_key=str(detail.get("pipeline_key") or ""),
-        pipeline_name=str(detail.get("name") or ""),
-        entry_bot_id=str(detail.get("entry_bot_id") or ""),
-        orchestration_id=orchestration_id,
-    )
-    if session is None:
-        return _cp_error_response(cp, "unable to initialize pipeline testing session")
-    session_id = str(session.get("id") or "").strip()
-    if not session_id:
-        return jsonify({"error": "invalid pipeline test session"}), 502
+    pipeline_bot_id = str(detail.get("entry_bot_id") or "").strip()
+    if not pipeline_bot_id:
+        return jsonify({"error": "pipeline entry bot is missing"}), 400
     data = request.get_json(silent=True) or {}
-    quality_expectations = data.get("quality_expectations") if isinstance(data.get("quality_expectations"), list) else []
-    designed = cp.design_platform_ai_quality_suite(
-        session_id,
+    designed = cp.design_platform_ai_pipeline_test_suite(
+        pipeline_bot_id,
         {
             "name": str(data.get("name") or "Pipeline Stored Quality Suite").strip() or "Pipeline Stored Quality Suite",
-            "orchestration_id": orchestration_id,
             "include_default_tests": bool(data.get("include_default_tests", True)),
             "suite_pass_threshold": float(data.get("suite_pass_threshold") or 0.8),
-            "quality_expectations": quality_expectations,
-            "metadata": {
-                "source": "pipeline_test_modal",
-                "pipeline_key": str(detail.get("pipeline_key") or ""),
-                "pipeline_name": str(detail.get("name") or ""),
-                "entry_bot_id": str(detail.get("entry_bot_id") or ""),
-            },
+            "quality_expectations": data.get("quality_expectations") if isinstance(data.get("quality_expectations"), list) else [],
+            "set_default": bool(data.get("set_default", True)),
+            "metadata": {"source": "pipeline_test_modal"},
         },
     )
     if designed is None:
         return _cp_error_response(cp, "unable to design pipeline test suite")
-    return jsonify(designed)
+    return jsonify({"pipeline_run": detail, **designed})
 
 
 @bp.post("/api/pipelines/<orchestration_id>/tests/run")
@@ -384,38 +376,26 @@ def api_design_pipeline_tests(orchestration_id: str):
 def api_run_pipeline_tests(orchestration_id: str):
     cp = get_cp_client()
     data = request.get_json(silent=True) or {}
+    detail = _pipeline_detail(cp, orchestration_id)
+    if detail is None:
+        return jsonify({"error": "pipeline not found"}), 404
+    pipeline_bot_id = str(detail.get("entry_bot_id") or "").strip()
+    if not pipeline_bot_id:
+        return jsonify({"error": "pipeline entry bot is missing"}), 400
     suite_id = str(data.get("suite_id") or "").strip()
-    if not suite_id:
-        detail = _pipeline_detail(cp, orchestration_id)
-        if detail is None:
-            return jsonify({"error": "pipeline not found"}), 404
-        session = _get_or_create_pipeline_test_session(
-            cp,
-            pipeline_key=str(detail.get("pipeline_key") or ""),
-            pipeline_name=str(detail.get("name") or ""),
-            entry_bot_id=str(detail.get("entry_bot_id") or ""),
-            orchestration_id=orchestration_id,
-        )
-        if session is None:
-            return _cp_error_response(cp, "unable to initialize pipeline testing session")
-        session_id = str(session.get("id") or "").strip()
-        suites_resp = cp.list_platform_ai_quality_suites(session_id, limit=200)
-        suites = suites_resp.get("suites") if isinstance(suites_resp, dict) and isinstance(suites_resp.get("suites"), list) else []
-        latest = _latest_row(suites)
-        suite_id = str((latest or {}).get("id") or "").strip()
-    if not suite_id:
-        return jsonify({"error": "no stored test suite found for this pipeline; generate one first"}), 400
-    run = cp.run_platform_ai_quality_suite(
-        suite_id,
+    run = cp.run_platform_ai_pipeline_test_suite(
+        pipeline_bot_id,
         {
-            "orchestration_id": orchestration_id,
-            "wait_for_terminal": True,
+            "suite_id": suite_id or None,
+            "wait_for_terminal": bool(data.get("wait_for_terminal", True)),
+            "poll_interval_seconds": float(data.get("poll_interval_seconds") or 1.0),
+            "max_wait_seconds": float(data.get("max_wait_seconds") or 900.0),
             "metadata": {"source": "pipeline_test_modal"},
         },
     )
     if run is None:
         return _cp_error_response(cp, "unable to run pipeline test suite")
-    return jsonify(run)
+    return jsonify({"pipeline_run": detail, **run})
 
 
 @bp.get("/api/pipelines/<orchestration_id>/tests/runs")
@@ -427,17 +407,10 @@ def api_list_pipeline_test_runs(orchestration_id: str):
         detail = _pipeline_detail(cp, orchestration_id)
         if detail is None:
             return jsonify({"error": "pipeline not found"}), 404
-        session = _get_or_create_pipeline_test_session(
-            cp,
-            pipeline_key=str(detail.get("pipeline_key") or ""),
-            pipeline_name=str(detail.get("name") or ""),
-            entry_bot_id=str(detail.get("entry_bot_id") or ""),
-            orchestration_id=orchestration_id,
-        )
-        if session is None:
-            return _cp_error_response(cp, "unable to initialize pipeline testing session")
-        session_id = str(session.get("id") or "").strip()
-        suites_resp = cp.list_platform_ai_quality_suites(session_id, limit=200)
+        pipeline_bot_id = str(detail.get("entry_bot_id") or "").strip()
+        if not pipeline_bot_id:
+            return jsonify({"error": "pipeline entry bot is missing"}), 400
+        suites_resp = cp.list_platform_ai_pipeline_test_suites(pipeline_bot_id, limit=200)
         suites = suites_resp.get("suites") if isinstance(suites_resp, dict) and isinstance(suites_resp.get("suites"), list) else []
         latest = _latest_row(suites)
         suite_id = str((latest or {}).get("id") or "").strip()
@@ -453,39 +426,42 @@ def api_list_pipeline_test_runs(orchestration_id: str):
 @login_required
 def api_pipeline_test_catalog():
     cp = get_cp_client()
-    runs, catalog = _pipeline_inventory(cp)
-    if not runs and not catalog and _cp_list_tasks_safe(cp, limit=1, include_content=False) is None:
-        return _cp_error_response(cp, "control plane unavailable")
-    return jsonify({"pipelines": catalog})
+    resp = _cp_list_platform_ai_pipelines_safe(cp)
+    if resp is None:
+        _, catalog = _pipeline_inventory(cp)
+        pipelines = []
+        for row in catalog:
+            if not isinstance(row, dict):
+                continue
+            entry_bot_id = str(row.get("entry_bot_id") or "").strip()
+            if not entry_bot_id:
+                continue
+            pipelines.append(
+                {
+                    "pipeline_bot_id": entry_bot_id,
+                    "name": str(row.get("name") or entry_bot_id),
+                    "bot_name": str(row.get("name") or entry_bot_id),
+                    "enabled": True,
+                    "has_launch_profile": True,
+                    "default_suite_id": None,
+                }
+            )
+    else:
+        pipelines = resp.get("pipelines") if isinstance(resp.get("pipelines"), list) else []
+    return jsonify({"pipelines": pipelines})
 
 
 @bp.get("/api/pipelines/tests/target")
 @login_required
 def api_pipeline_target_tests():
     cp = get_cp_client()
-    pipeline_key = str(request.args.get("pipeline_key") or "").strip()
-    if not pipeline_key:
-        return jsonify({"error": "pipeline_key is required"}), 400
-    _, catalog = _pipeline_inventory(cp)
-    pipeline = _catalog_entry(catalog, pipeline_key)
-    if pipeline is None:
-        return jsonify({"error": "pipeline not found"}), 404
-    orchestration_id = str(pipeline.get("latest_orchestration_id") or "").strip()
-    session = _get_or_create_pipeline_test_session(
-        cp,
-        pipeline_key=pipeline_key,
-        pipeline_name=str(pipeline.get("name") or ""),
-        entry_bot_id=str(pipeline.get("entry_bot_id") or ""),
-        orchestration_id=orchestration_id,
-    )
-    if session is None:
-        return _cp_error_response(cp, "unable to initialize pipeline testing session")
-    session_id = str(session.get("id") or "").strip()
-    suites_resp = cp.list_platform_ai_quality_suites(session_id, limit=200)
+    pipeline_bot_id = str(request.args.get("pipeline_bot_id") or "").strip()
+    if not pipeline_bot_id:
+        return jsonify({"error": "pipeline_bot_id is required"}), 400
+    suites_resp = cp.list_platform_ai_pipeline_test_suites(pipeline_bot_id, limit=200)
     if suites_resp is None:
         return _cp_error_response(cp, "unable to list pipeline test suites")
-    suites = suites_resp.get("suites") if isinstance(suites_resp.get("suites"), list) else []
-    return jsonify({"pipeline": pipeline, "session": session, "suites": suites})
+    return jsonify(suites_resp)
 
 
 @bp.post("/api/pipelines/tests/target/design")
@@ -493,44 +469,23 @@ def api_pipeline_target_tests():
 def api_pipeline_target_design_tests():
     cp = get_cp_client()
     data = request.get_json(silent=True) or {}
-    pipeline_key = str(data.get("pipeline_key") or "").strip()
-    if not pipeline_key:
-        return jsonify({"error": "pipeline_key is required"}), 400
-    _, catalog = _pipeline_inventory(cp)
-    pipeline = _catalog_entry(catalog, pipeline_key)
-    if pipeline is None:
-        return jsonify({"error": "pipeline not found"}), 404
-    orchestration_id = str(pipeline.get("latest_orchestration_id") or "").strip()
-    session = _get_or_create_pipeline_test_session(
-        cp,
-        pipeline_key=pipeline_key,
-        pipeline_name=str(pipeline.get("name") or ""),
-        entry_bot_id=str(pipeline.get("entry_bot_id") or ""),
-        orchestration_id=orchestration_id,
-    )
-    if session is None:
-        return _cp_error_response(cp, "unable to initialize pipeline testing session")
-    session_id = str(session.get("id") or "").strip()
-    quality_expectations = data.get("quality_expectations") if isinstance(data.get("quality_expectations"), list) else []
-    designed = cp.design_platform_ai_quality_suite(
-        session_id,
+    pipeline_bot_id = str(data.get("pipeline_bot_id") or "").strip()
+    if not pipeline_bot_id:
+        return jsonify({"error": "pipeline_bot_id is required"}), 400
+    designed = cp.design_platform_ai_pipeline_test_suite(
+        pipeline_bot_id,
         {
             "name": str(data.get("name") or "Pipeline Stored Quality Suite").strip() or "Pipeline Stored Quality Suite",
-            "orchestration_id": orchestration_id,
             "include_default_tests": bool(data.get("include_default_tests", True)),
             "suite_pass_threshold": float(data.get("suite_pass_threshold") or 0.8),
-            "quality_expectations": quality_expectations,
-            "metadata": {
-                "source": "pipeline_test_modal",
-                "pipeline_key": pipeline_key,
-                "pipeline_name": str(pipeline.get("name") or ""),
-                "entry_bot_id": str(pipeline.get("entry_bot_id") or ""),
-            },
+            "quality_expectations": data.get("quality_expectations") if isinstance(data.get("quality_expectations"), list) else [],
+            "set_default": bool(data.get("set_default", True)),
+            "metadata": {"source": "pipeline_test_modal"},
         },
     )
     if designed is None:
         return _cp_error_response(cp, "unable to design pipeline test suite")
-    return jsonify({"pipeline": pipeline, **designed})
+    return jsonify(designed)
 
 
 @bp.post("/api/pipelines/tests/target/run")
@@ -538,40 +493,20 @@ def api_pipeline_target_design_tests():
 def api_pipeline_target_run_tests():
     cp = get_cp_client()
     data = request.get_json(silent=True) or {}
-    pipeline_key = str(data.get("pipeline_key") or "").strip()
+    pipeline_bot_id = str(data.get("pipeline_bot_id") or "").strip()
     suite_id = str(data.get("suite_id") or "").strip()
-    if not pipeline_key:
-        return jsonify({"error": "pipeline_key is required"}), 400
-    _, catalog = _pipeline_inventory(cp)
-    pipeline = _catalog_entry(catalog, pipeline_key)
-    if pipeline is None:
-        return jsonify({"error": "pipeline not found"}), 404
-    orchestration_id = str(data.get("orchestration_id") or pipeline.get("latest_orchestration_id") or "").strip()
-    if not suite_id:
-        session = _get_or_create_pipeline_test_session(
-            cp,
-            pipeline_key=pipeline_key,
-            pipeline_name=str(pipeline.get("name") or ""),
-            entry_bot_id=str(pipeline.get("entry_bot_id") or ""),
-            orchestration_id=orchestration_id,
-        )
-        if session is None:
-            return _cp_error_response(cp, "unable to initialize pipeline testing session")
-        session_id = str(session.get("id") or "").strip()
-        suites_resp = cp.list_platform_ai_quality_suites(session_id, limit=200)
-        suites = suites_resp.get("suites") if isinstance(suites_resp, dict) and isinstance(suites_resp.get("suites"), list) else []
-        latest = _latest_row(suites)
-        suite_id = str((latest or {}).get("id") or "").strip()
-    if not suite_id:
-        return jsonify({"error": "no stored test suite found for this pipeline; generate one first"}), 400
-    run = cp.run_platform_ai_quality_suite(
-        suite_id,
+    if not pipeline_bot_id:
+        return jsonify({"error": "pipeline_bot_id is required"}), 400
+    run = cp.run_platform_ai_pipeline_test_suite(
+        pipeline_bot_id,
         {
-            "orchestration_id": orchestration_id,
-            "wait_for_terminal": True,
-            "metadata": {"source": "pipeline_test_modal", "pipeline_key": pipeline_key},
+            "suite_id": suite_id or None,
+            "wait_for_terminal": bool(data.get("wait_for_terminal", True)),
+            "poll_interval_seconds": float(data.get("poll_interval_seconds") or 1.0),
+            "max_wait_seconds": float(data.get("max_wait_seconds") or 900.0),
+            "metadata": {"source": "pipeline_test_modal"},
         },
     )
     if run is None:
         return _cp_error_response(cp, "unable to run pipeline test suite")
-    return jsonify({"pipeline": pipeline, **run})
+    return jsonify(run)

@@ -1,0 +1,582 @@
+{% extends "base.html" %}
+{% set active_page = "platform_ai" %}
+{% block title %}Platform AI Session{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Platform AI Session</h1>
+  <div style="display:flex;gap:0.5rem;">
+    <a class="btn" href="{{ url_for('platform_ai.platform_ai_page') }}">Back to Platform AI</a>
+    {% if session %}
+    <button class="btn" type="button" onclick="reloadWorkspace()">Refresh</button>
+    {% endif %}
+  </div>
+</div>
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+{% if error %}
+<div class="alert alert-error">{{ error }}</div>
+{% elif session %}
+<section class="panel" style="margin-bottom:1rem;">
+  <div class="page-header" style="margin-bottom:0.75rem;">
+    <h2 class="panel-title">Session State and Controls</h2>
+    <div class="mini-note"><code id="session-id">{{ session.id }}</code></div>
+  </div>
+  <div class="split-grid" style="grid-template-columns:1fr 1fr 1fr;gap:0.75rem;">
+    <div><strong>Mode:</strong> <span id="session-mode">{{ session.mode }}</span></div>
+    <div><strong>Status:</strong> <span class="badge badge-{{ session.status }}" id="session-status">{{ session.status }}</span></div>
+    <div><strong>Operator:</strong> <span id="session-operator">{{ session.operator_id or "—" }}</span></div>
+    <div><strong>Assignment:</strong> <code id="session-assignment">{{ session.assignment_id or "—" }}</code></div>
+    <div><strong>Orchestration:</strong> <code id="session-orchestration">{{ session.orchestration_id or "—" }}</code></div>
+    <div><strong>Updated:</strong> <span id="session-updated">{{ (session.updated_at[:19] if session.updated_at else "") | replace('T',' ') }}</span></div>
+  </div>
+  <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-top:0.75rem;">
+    <button class="btn btn-primary" type="button" onclick="controlSession('start')">Start</button>
+    <button class="btn" type="button" onclick="controlSession('pause')">Pause</button>
+    <button class="btn" type="button" onclick="controlSession('resume')">Resume</button>
+    <button class="btn btn-danger" type="button" onclick="controlSession('stop')">Stop</button>
+    <button class="btn" type="button" onclick="controlSession('deploy')">Deploy</button>
+    <button class="btn" type="button" onclick="controlSession('code_edit')">Enable Repo Edit Path</button>
+  </div>
+  <div class="split-grid" style="grid-template-columns:1fr 1fr;gap:0.75rem;margin-top:0.75rem;">
+    <div>
+      <label for="control-assignment-id">Attach Assignment</label>
+      <div style="display:flex;gap:0.5rem;">
+        <input id="control-assignment-id" class="form-control" placeholder="assignment id">
+        <button class="btn" type="button" onclick="attachAssignment()">Attach</button>
+      </div>
+    </div>
+    <div>
+      <label for="control-orchestration-id">Attach Orchestration</label>
+      <div style="display:flex;gap:0.5rem;">
+        <input id="control-orchestration-id" class="form-control" placeholder="orchestration id">
+        <button class="btn" type="button" onclick="attachOrchestration()">Attach</button>
+      </div>
+    </div>
+  </div>
+  <div class="split-grid" style="grid-template-columns:1fr 1fr;gap:0.75rem;margin-top:0.75rem;">
+    <div>
+      <label for="control-splice-node">Splice From Node</label>
+      <div style="display:flex;gap:0.5rem;">
+        <input id="control-splice-node" class="form-control" placeholder="node id">
+        <button class="btn" type="button" onclick="spliceSession()">Splice</button>
+      </div>
+    </div>
+    <div>
+      <label for="control-rerun-node">Rerun Node</label>
+      <div style="display:flex;gap:0.5rem;">
+        <input id="control-rerun-node" class="form-control" placeholder="node id">
+        <button class="btn" type="button" onclick="rerunNode()">Rerun</button>
+      </div>
+    </div>
+  </div>
+  <div id="session-control-status" class="mini-note" style="margin-top:0.75rem;"></div>
+</section>
+
+<section class="panel" style="margin-bottom:1rem;">
+  <div class="page-header" style="margin-bottom:0.75rem;">
+    <h2 class="panel-title">Target Context and Backend</h2>
+  </div>
+  <div class="split-grid" style="grid-template-columns:1fr 1fr 1fr;gap:0.75rem;">
+    <div>
+      <label for="session-provider">Provider</label>
+      <input id="session-provider" class="form-control" value="{{ ((session.metadata or {}).get('backend') or {}).get('provider') or '' }}">
+    </div>
+    <div>
+      <label for="session-model">Model</label>
+      <input id="session-model" class="form-control" value="{{ ((session.metadata or {}).get('backend') or {}).get('model') or '' }}">
+    </div>
+    <div>
+      <label for="session-backend-type">Backend Type</label>
+      <input id="session-backend-type" class="form-control" value="{{ ((session.metadata or {}).get('backend') or {}).get('backend_type') or '' }}">
+    </div>
+    <div>
+      <label for="session-credential-ref">Credential Ref</label>
+      <input id="session-credential-ref" class="form-control" value="{{ ((session.metadata or {}).get('backend') or {}).get('credential_ref') or '' }}">
+    </div>
+    <div>
+      <label for="session-vertex-project">Vertex Project ID</label>
+      <input id="session-vertex-project" class="form-control" value="{{ ((session.metadata or {}).get('backend') or {}).get('vertex_project_id') or '' }}">
+    </div>
+    <div>
+      <label for="session-vertex-location">Vertex Location</label>
+      <input id="session-vertex-location" class="form-control" value="{{ ((session.metadata or {}).get('backend') or {}).get('vertex_location') or '' }}">
+    </div>
+  </div>
+  <div style="margin-top:0.75rem;">
+    <label for="session-backend-params">Backend Params JSON</label>
+    <textarea id="session-backend-params" class="form-control" rows="4">{{ (((session.metadata or {}).get('backend') or {}).get('params') or {}) | tojson }}</textarea>
+  </div>
+  <div style="display:flex;gap:0.5rem;margin-top:0.75rem;">
+    <button class="btn" type="button" onclick="updateBackendConfig()">Update Backend Config</button>
+  </div>
+  <div id="backend-update-status" class="mini-note" style="margin-top:0.75rem;"></div>
+</section>
+
+<div class="split-grid" style="grid-template-columns:1fr 1fr;gap:1rem;">
+  <section class="panel">
+    <div class="page-header" style="margin-bottom:0.75rem;">
+      <h2 class="panel-title">Operator Chat</h2>
+      <div class="mini-note">{{ messages|length }} messages</div>
+    </div>
+    <div id="operator-chat-log" style="max-height:44vh;overflow:auto;border:1px solid #1f2937;border-radius:10px;padding:0.6rem;">
+      {% for message in messages %}
+      <div style="padding:0.4rem 0;border-bottom:1px solid rgba(148,163,184,0.15);">
+        <div class="mini-note"><strong>{{ message.role }}</strong> • {{ (message.created_at[:19] if message.created_at else "") | replace('T',' ') }}</div>
+        <div style="white-space:pre-wrap;">{{ message.content }}</div>
+      </div>
+      {% else %}
+      <div class="empty">No messages yet</div>
+      {% endfor %}
+    </div>
+    <div style="margin-top:0.75rem;">
+      <textarea id="operator-chat-input" class="form-control" rows="4" placeholder="Send operator message while session runs..."></textarea>
+    </div>
+    <div style="display:flex;gap:0.5rem;margin-top:0.5rem;">
+      <button class="btn btn-primary" type="button" onclick="sendOperatorMessage()">Send</button>
+    </div>
+    <div id="operator-chat-status" class="mini-note" style="margin-top:0.5rem;"></div>
+  </section>
+
+  <section class="panel">
+    <div class="page-header" style="margin-bottom:0.75rem;">
+      <h2 class="panel-title">Live Action Trace</h2>
+      <div class="mini-note">{{ events|length }} events</div>
+    </div>
+    <div id="action-trace-log" style="max-height:52vh;overflow:auto;border:1px solid #1f2937;border-radius:10px;padding:0.6rem;">
+      {% for event in events %}
+      <div style="padding:0.4rem 0;border-bottom:1px solid rgba(148,163,184,0.15);">
+        <div class="mini-note"><strong>{{ event.event_type }}</strong> • {{ (event.created_at[:19] if event.created_at else "") | replace('T',' ') }}</div>
+        <pre style="white-space:pre-wrap;margin:0;">{{ (event.payload or {}) | tojson(indent=2) }}</pre>
+      </div>
+      {% else %}
+      <div class="empty">No action trace events yet</div>
+      {% endfor %}
+    </div>
+  </section>
+</div>
+
+<div class="split-grid" style="grid-template-columns:1fr 1fr;gap:1rem;margin-top:1rem;">
+  <section class="panel">
+    <div class="page-header" style="margin-bottom:0.75rem;">
+      <h2 class="panel-title">Quality Suites</h2>
+      <div class="mini-note">{{ suites|length }} suites</div>
+    </div>
+    <div class="form-group">
+      <label for="pipeline-bot-id">Pipeline Bot ID</label>
+      <input id="pipeline-bot-id" class="form-control" value="{{ (pipeline.pipeline_bot_id if pipeline else ((session.metadata or {}).get('pipeline_bot_id') or '')) }}">
+    </div>
+    <div class="form-group">
+      <label for="suite-name">Suite Name</label>
+      <input id="suite-name" class="form-control" placeholder="Pipeline Quality Suite">
+    </div>
+    <div class="form-group">
+      <label for="suite-id">Stored Suite</label>
+      <select id="suite-id" class="form-control">
+        {% for suite in suites %}
+        <option value="{{ suite.id }}">{{ suite.name }} ({{ (suite.updated_at[:19] if suite.updated_at else "") | replace('T',' ') }})</option>
+        {% else %}
+        <option value="">No stored suites</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+      <button class="btn" type="button" onclick="loadPipelineSuites()">Refresh Suites</button>
+      <button class="btn" type="button" onclick="designPipelineSuite()">Design Suite</button>
+      <button class="btn btn-primary" type="button" onclick="runPipelineSuite()">Run Suite</button>
+    </div>
+    <div id="suite-status" class="mini-note" style="margin-top:0.75rem;"></div>
+  </section>
+
+  <section class="panel">
+    <div class="page-header" style="margin-bottom:0.75rem;">
+      <h2 class="panel-title">Recent Test Runs</h2>
+      <div class="mini-note">{{ suite_runs|length }} runs</div>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Status</th><th>Score</th><th>Created</th><th>Run</th>
+        </tr>
+      </thead>
+      <tbody id="recent-suite-runs-body">
+        {% for row in suite_runs %}
+        <tr>
+          <td><span class="badge badge-{{ row.status }}">{{ row.status }}</span></td>
+          <td>{{ row.score }}</td>
+          <td>{{ (row.created_at[:19] if row.created_at else "") | replace('T',' ') }}</td>
+          <td><code>{{ row.id }}</code></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" class="empty">No test runs yet</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+const SESSION_ID = {{ (session.id if session else '') | tojson }};
+let EVENTS_CURSOR = 0;
+let MESSAGES_CURSOR = 0;
+let AUTO_POLL_HANDLE = null;
+
+function getCsrf() {
+  const el = document.querySelector('input[name=csrf_token]');
+  return el ? el.value : '';
+}
+
+function setStatus(id, message, isError) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = String(message || '');
+  el.style.color = isError ? '#fca5a5' : '#a0aec0';
+}
+
+function parseJsonSafe(text, fallback) {
+  const raw = String(text || '').trim();
+  if (!raw) return fallback;
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    throw new Error('Invalid JSON payload');
+  }
+}
+
+function reloadWorkspace() {
+  window.location.reload();
+}
+
+async function controlSession(action, extra) {
+  if (!SESSION_ID) return;
+  const body = Object.assign({action: action}, extra || {});
+  setStatus('session-control-status', 'Applying control action: ' + action + ' ...', false);
+  try {
+    const res = await fetch('/api/platform-ai/sessions/' + encodeURIComponent(SESSION_ID) + '/control', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
+      body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Control action failed');
+    setStatus('session-control-status', 'Action applied: ' + action, false);
+    await refreshSessionHeader();
+    await refreshEvents(true);
+  } catch (error) {
+    setStatus('session-control-status', error.message || 'Control action failed', true);
+  }
+}
+
+async function attachAssignment() {
+  const assignmentId = String(document.getElementById('control-assignment-id')?.value || '').trim();
+  if (!assignmentId) {
+    setStatus('session-control-status', 'assignment_id is required', true);
+    return;
+  }
+  await controlSession('attach_assignment', {assignment_id: assignmentId});
+}
+
+async function attachOrchestration() {
+  const orchestrationId = String(document.getElementById('control-orchestration-id')?.value || '').trim();
+  if (!orchestrationId) {
+    setStatus('session-control-status', 'orchestration_id is required', true);
+    return;
+  }
+  await controlSession('attach_orchestration', {orchestration_id: orchestrationId});
+}
+
+async function spliceSession() {
+  const nodeId = String(document.getElementById('control-splice-node')?.value || '').trim();
+  if (!nodeId) {
+    setStatus('session-control-status', 'node_id is required', true);
+    return;
+  }
+  await controlSession('splice', {node_id: nodeId});
+}
+
+async function rerunNode() {
+  const nodeId = String(document.getElementById('control-rerun-node')?.value || '').trim();
+  if (!nodeId) {
+    setStatus('session-control-status', 'node_id is required', true);
+    return;
+  }
+  await controlSession('rerun_node', {node_id: nodeId});
+}
+
+async function sendOperatorMessage() {
+  if (!SESSION_ID) return;
+  const content = String(document.getElementById('operator-chat-input')?.value || '').trim();
+  if (!content) {
+    setStatus('operator-chat-status', 'Message cannot be empty', true);
+    return;
+  }
+  setStatus('operator-chat-status', 'Sending...', false);
+  try {
+    const res = await fetch('/api/platform-ai/sessions/' + encodeURIComponent(SESSION_ID) + '/messages', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
+      body: JSON.stringify({role: 'operator', content}),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Failed to send message');
+    document.getElementById('operator-chat-input').value = '';
+    setStatus('operator-chat-status', 'Message sent', false);
+    await refreshMessages(true);
+    await refreshEvents(true);
+  } catch (error) {
+    setStatus('operator-chat-status', error.message || 'Failed to send message', true);
+  }
+}
+
+async function refreshSessionHeader() {
+  const res = await fetch('/api/platform-ai/sessions/' + encodeURIComponent(SESSION_ID));
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) return;
+  const status = String(data.status || '');
+  const badge = document.getElementById('session-status');
+  if (badge) {
+    badge.textContent = status || 'unknown';
+    badge.className = 'badge badge-' + (status || 'unknown');
+  }
+  const assign = document.getElementById('session-assignment');
+  if (assign) assign.textContent = String(data.assignment_id || '—');
+  const orch = document.getElementById('session-orchestration');
+  if (orch) orch.textContent = String(data.orchestration_id || '—');
+  const updated = document.getElementById('session-updated');
+  if (updated) updated.textContent = String((data.updated_at || '').replace('T', ' ').slice(0, 19));
+}
+
+function renderMessages(messages) {
+  const root = document.getElementById('operator-chat-log');
+  if (!root) return;
+  const rows = Array.isArray(messages) ? messages : [];
+  if (!rows.length) {
+    root.innerHTML = '<div class="empty">No messages yet</div>';
+    return;
+  }
+  root.innerHTML = rows.map((message) => {
+    const role = String(message.role || 'assistant');
+    const created = String(message.created_at || '').replace('T', ' ').slice(0, 19);
+    const content = String(message.content || '').replace(/[<>&]/g, (ch) => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[ch]));
+    return `<div style="padding:0.4rem 0;border-bottom:1px solid rgba(148,163,184,0.15);"><div class="mini-note"><strong>${role}</strong> • ${created}</div><div style="white-space:pre-wrap;">${content}</div></div>`;
+  }).join('');
+  root.scrollTop = root.scrollHeight;
+}
+
+function renderEvents(events) {
+  const root = document.getElementById('action-trace-log');
+  if (!root) return;
+  const rows = Array.isArray(events) ? events : [];
+  if (!rows.length) {
+    root.innerHTML = '<div class="empty">No action trace events yet</div>';
+    return;
+  }
+  root.innerHTML = rows.map((event) => {
+    const kind = String(event.event_type || 'event');
+    const created = String(event.created_at || '').replace('T', ' ').slice(0, 19);
+    const payload = JSON.stringify(event.payload || {}, null, 2).replace(/[<>&]/g, (ch) => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[ch]));
+    return `<div style="padding:0.4rem 0;border-bottom:1px solid rgba(148,163,184,0.15);"><div class="mini-note"><strong>${kind}</strong> • ${created}</div><pre style="white-space:pre-wrap;margin:0;">${payload}</pre></div>`;
+  }).join('');
+  root.scrollTop = root.scrollHeight;
+}
+
+async function refreshMessages(force) {
+  if (!SESSION_ID) return;
+  const res = await fetch('/api/platform-ai/sessions/' + encodeURIComponent(SESSION_ID) + '/messages?limit=400');
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) return;
+  const rows = Array.isArray(data.messages) ? data.messages : [];
+  if (!force && rows.length <= MESSAGES_CURSOR) return;
+  MESSAGES_CURSOR = rows.length;
+  renderMessages(rows);
+}
+
+async function refreshEvents(force) {
+  if (!SESSION_ID) return;
+  const res = await fetch('/api/platform-ai/sessions/' + encodeURIComponent(SESSION_ID) + '/events?limit=600');
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) return;
+  const rows = Array.isArray(data.events) ? data.events : [];
+  if (!force && rows.length <= EVENTS_CURSOR) return;
+  EVENTS_CURSOR = rows.length;
+  renderEvents(rows);
+}
+
+async function updateBackendConfig() {
+  if (!SESSION_ID) return;
+  let params = {};
+  try {
+    params = parseJsonSafe(document.getElementById('session-backend-params')?.value || '', {});
+  } catch (error) {
+    setStatus('backend-update-status', error.message || 'Invalid JSON', true);
+    return;
+  }
+  const body = {
+    provider: String(document.getElementById('session-provider')?.value || '').trim() || null,
+    model: String(document.getElementById('session-model')?.value || '').trim() || null,
+    backend_type: String(document.getElementById('session-backend-type')?.value || '').trim() || null,
+    credential_ref: String(document.getElementById('session-credential-ref')?.value || '').trim() || null,
+    vertex_project_id: String(document.getElementById('session-vertex-project')?.value || '').trim() || null,
+    vertex_location: String(document.getElementById('session-vertex-location')?.value || '').trim() || null,
+    params: params,
+  };
+  setStatus('backend-update-status', 'Updating backend config...', false);
+  try {
+    const res = await fetch('/api/platform-ai/sessions/' + encodeURIComponent(SESSION_ID), {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
+      body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Failed to update backend config');
+    setStatus('backend-update-status', 'Backend config updated', false);
+    await refreshSessionHeader();
+    await refreshEvents(true);
+  } catch (error) {
+    setStatus('backend-update-status', error.message || 'Failed to update backend config', true);
+  }
+}
+
+function activePipelineBotId() {
+  return String(document.getElementById('pipeline-bot-id')?.value || '').trim();
+}
+
+function setSuiteOptions(suites) {
+  const select = document.getElementById('suite-id');
+  if (!select) return;
+  const rows = Array.isArray(suites) ? suites : [];
+  if (!rows.length) {
+    select.innerHTML = '<option value="">No stored suites</option>';
+    return;
+  }
+  select.innerHTML = rows.map((suite) => {
+    const id = String(suite.id || '');
+    const name = String(suite.name || id || 'Suite');
+    const ts = String(suite.updated_at || suite.created_at || '').replace('T', ' ').slice(0, 19);
+    return `<option value="${id}">${name}${ts ? ' (' + ts + ')' : ''}</option>`;
+  }).join('');
+}
+
+async function loadPipelineSuites() {
+  const pipelineBotId = activePipelineBotId();
+  if (!pipelineBotId) {
+    setStatus('suite-status', 'pipeline_bot_id is required', true);
+    return;
+  }
+  setStatus('suite-status', 'Loading pipeline suites...', false);
+  try {
+    const res = await fetch('/api/platform-ai/pipelines/' + encodeURIComponent(pipelineBotId) + '/test-suites?limit=200');
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Failed to load pipeline suites');
+    const suites = Array.isArray(data.suites) ? data.suites : [];
+    setSuiteOptions(suites);
+    setStatus('suite-status', `Loaded ${suites.length} suite(s)`, false);
+  } catch (error) {
+    setStatus('suite-status', error.message || 'Failed to load suites', true);
+  }
+}
+
+async function designPipelineSuite() {
+  const pipelineBotId = activePipelineBotId();
+  if (!pipelineBotId) {
+    setStatus('suite-status', 'pipeline_bot_id is required', true);
+    return;
+  }
+  const name = String(document.getElementById('suite-name')?.value || '').trim();
+  setStatus('suite-status', 'Designing suite...', false);
+  try {
+    const res = await fetch('/api/platform-ai/pipelines/' + encodeURIComponent(pipelineBotId) + '/test-suites/design', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
+      body: JSON.stringify({
+        name: name || undefined,
+        include_default_tests: true,
+        set_default: true,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Failed to design suite');
+    setStatus('suite-status', 'Suite designed: ' + String((data.suite || {}).name || (data.suite || {}).id || 'unknown'), false);
+    await loadPipelineSuites();
+    await refreshEvents(true);
+  } catch (error) {
+    setStatus('suite-status', error.message || 'Failed to design suite', true);
+  }
+}
+
+async function runPipelineSuite() {
+  const pipelineBotId = activePipelineBotId();
+  if (!pipelineBotId) {
+    setStatus('suite-status', 'pipeline_bot_id is required', true);
+    return;
+  }
+  const suiteId = String(document.getElementById('suite-id')?.value || '').trim();
+  setStatus('suite-status', 'Running suite in isolated pipeline mode...', false);
+  try {
+    const res = await fetch('/api/platform-ai/pipelines/' + encodeURIComponent(pipelineBotId) + '/test-suites/run', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
+      body: JSON.stringify({
+        suite_id: suiteId || undefined,
+        wait_for_terminal: true,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Failed to run suite');
+    const run = data.test_run || {};
+    setStatus('suite-status', `Run completed: ${run.status || 'unknown'} (score ${Number(run.score || 0).toFixed(3)})`, run.status !== 'passed');
+    await refreshEvents(true);
+    await refreshMessages(true);
+    await renderRecentRuns();
+  } catch (error) {
+    setStatus('suite-status', error.message || 'Failed to run suite', true);
+  }
+}
+
+async function renderRecentRuns() {
+  const suiteId = String(document.getElementById('suite-id')?.value || '').trim();
+  if (!suiteId) return;
+  const tbody = document.getElementById('recent-suite-runs-body');
+  if (!tbody) return;
+  try {
+    const runsRes = await fetch('/api/platform-ai/test-suites/' + encodeURIComponent(suiteId) + '/runs?limit=40');
+    const runsData = await runsRes.json().catch(() => ({}));
+    const rows = Array.isArray(runsData.runs) ? runsData.runs : [];
+    if (!rows.length) {
+      tbody.innerHTML = '<tr><td colspan="4" class="empty">No test runs yet</td></tr>';
+      return;
+    }
+    tbody.innerHTML = rows.map((row) => {
+      const status = String(row.status || 'unknown');
+      const score = Number(row.score || 0);
+      const created = String(row.created_at || '').replace('T', ' ').slice(0, 19);
+      const id = String(row.id || '');
+      return `<tr><td><span class="badge badge-${status}">${status}</span></td><td>${score.toFixed(3)}</td><td>${created}</td><td><code>${id}</code></td></tr>`;
+    }).join('');
+  } catch (error) {
+    // keep current table
+  }
+}
+
+async function pollWorkspace() {
+  await refreshMessages(false);
+  await refreshEvents(false);
+  await refreshSessionHeader();
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
+  if (!SESSION_ID) return;
+  await refreshMessages(true);
+  await refreshEvents(true);
+  AUTO_POLL_HANDLE = setInterval(pollWorkspace, 4000);
+  const suiteSelect = document.getElementById('suite-id');
+  if (suiteSelect) {
+    suiteSelect.addEventListener('change', () => {
+      renderRecentRuns();
+    });
+  }
+});
+</script>
+{% endblock %}

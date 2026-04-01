@@ -77,3 +77,34 @@ def test_project_context_sync_uses_ingest_timeout():
 
     assert post_mock.call_args.kwargs["timeout"] == _INGEST_TIMEOUT
     assert post_mock.call_args.kwargs["json"]["sync_mode"] == "full"
+
+
+def test_platform_ai_pipeline_endpoints():
+    cp = CPClient(base_url="http://example.invalid", timeout=0.1)
+
+    ok_resp = Mock()
+    ok_resp.raise_for_status.return_value = None
+    ok_resp.text = '{"pipelines":[]}'
+    ok_resp.json.return_value = {"pipelines": []}
+
+    with patch("dashboard.cp_client.requests.get", return_value=ok_resp) as get_mock:
+        cp.list_platform_ai_pipelines()
+
+    called_url = str(get_mock.call_args.args[0])
+    assert called_url.endswith("/v1/platform-ai/pipelines")
+
+
+def test_patch_platform_ai_session_uses_patch():
+    cp = CPClient(base_url="http://example.invalid", timeout=0.1)
+
+    ok_resp = Mock()
+    ok_resp.raise_for_status.return_value = None
+    ok_resp.text = '{"id":"sess-1","status":"paused"}'
+    ok_resp.json.return_value = {"id": "sess-1", "status": "paused"}
+
+    with patch("dashboard.cp_client.requests.patch", return_value=ok_resp) as patch_mock:
+        cp.patch_platform_ai_session("sess-1", {"status": "paused"})
+
+    called_url = str(patch_mock.call_args.args[0])
+    assert called_url.endswith("/v1/platform-ai/sessions/sess-1")
+    assert patch_mock.call_args.kwargs["json"]["status"] == "paused"

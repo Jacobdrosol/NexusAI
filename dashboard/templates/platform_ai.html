@@ -5,12 +5,14 @@
 <div class="page-header">
   <h1>Platform AI</h1>
   <div style="display:flex;gap:0.5rem;">
+    <button class="btn btn-primary" type="button" onclick="openCreateSessionModal()">New Session</button>
     <a class="btn" href="{{ url_for('pipelines.pipelines_page') }}">Open Pipelines</a>
   </div>
 </div>
 {% if error %}
 <div class="alert alert-error">{{ error }}</div>
 {% endif %}
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
 <section class="panel" style="margin-bottom:1rem;">
   <div class="page-header" style="margin-bottom:0.75rem;">
@@ -26,7 +28,10 @@
     <tbody>
       {% for session in sessions %}
       <tr>
-        <td>{{ session.mode }}</td>
+        <td>
+          <a href="{{ url_for('platform_ai.platform_ai_session_page', session_id=session.id) }}"><strong>{{ session.mode }}</strong></a><br>
+          <span class="mini-note"><code>{{ session.id }}</code></span>
+        </td>
         <td><span class="badge badge-{{ session.status }}">{{ session.status }}</span></td>
         <td><code>{{ session.assignment_id or "—" }}</code></td>
         <td><code>{{ session.orchestration_id or "—" }}</code></td>
@@ -43,29 +48,171 @@
 
 <section class="panel">
   <div class="page-header" style="margin-bottom:0.75rem;">
-    <h2 class="panel-title">Stored Test Suites</h2>
-    <div class="mini-note">{{ suites|length }} total</div>
+    <h2 class="panel-title">Pipeline Catalog</h2>
+    <div class="mini-note">{{ pipelines|length }} total</div>
   </div>
   <table>
     <thead>
       <tr>
-        <th>Name</th><th>Session</th><th>Assignment</th><th>Orchestration</th><th>Updated</th><th>Metadata</th>
+        <th>Pipeline</th><th>Bot</th><th>Default Suite</th><th>Enabled</th>
       </tr>
     </thead>
     <tbody>
-      {% for suite in suites %}
+      {% for pipeline in pipelines %}
       <tr>
-        <td>{{ suite.name }}</td>
-        <td><code>{{ suite.session_id }}</code></td>
-        <td><code>{{ suite.assignment_id or "—" }}</code></td>
-        <td><code>{{ suite.orchestration_id or "—" }}</code></td>
-        <td>{{ (suite.updated_at[:19] if suite.updated_at else "") | replace('T', ' ') }}</td>
-        <td><code>{{ (suite.metadata or {}) | tojson }}</code></td>
+        <td>{{ pipeline.name }}</td>
+        <td><code>{{ pipeline.pipeline_bot_id }}</code></td>
+        <td><code>{{ pipeline.default_suite_id or "—" }}</code></td>
+        <td>{{ "yes" if pipeline.enabled else "no" }}</td>
       </tr>
       {% else %}
-      <tr><td colspan="6" class="empty">No stored Platform AI test suites yet</td></tr>
+      <tr><td colspan="4" class="empty">No pipeline-entry bots found</td></tr>
       {% endfor %}
     </tbody>
   </table>
 </section>
+
+<div id="modal-create-session" class="modal" style="display:none;">
+  <div class="modal-content">
+    <h2>Create Platform AI Session</h2>
+    <div class="split-grid" style="grid-template-columns:1fr 1fr;gap:0.75rem;margin-bottom:0.75rem;">
+      <div>
+        <label for="platform-ai-session-mode">Mode</label>
+        <select id="platform-ai-session-mode" class="form-control">
+          <option value="assignment_follower">assignment_follower</option>
+          <option value="pipeline_tuner">pipeline_tuner</option>
+          <option value="pipeline_designer">pipeline_designer</option>
+        </select>
+      </div>
+      <div>
+        <label for="platform-ai-session-operator">Operator ID</label>
+        <input id="platform-ai-session-operator" class="form-control" placeholder="owner@example.com">
+      </div>
+    </div>
+    <div class="split-grid" style="grid-template-columns:1fr 1fr;gap:0.75rem;margin-bottom:0.75rem;">
+      <div>
+        <label for="platform-ai-session-assignment">Assignment ID (optional)</label>
+        <input id="platform-ai-session-assignment" class="form-control" placeholder="assignment id">
+      </div>
+      <div>
+        <label for="platform-ai-session-orchestration">Orchestration ID (optional)</label>
+        <input id="platform-ai-session-orchestration" class="form-control" placeholder="orchestration id">
+      </div>
+    </div>
+    <div class="split-grid" style="grid-template-columns:1fr 1fr 1fr;gap:0.75rem;margin-bottom:0.75rem;">
+      <div>
+        <label for="platform-ai-session-provider">Provider</label>
+        <input id="platform-ai-session-provider" class="form-control" placeholder="openai / anthropic / vertex">
+      </div>
+      <div>
+        <label for="platform-ai-session-model">Model</label>
+        <input id="platform-ai-session-model" class="form-control" placeholder="model id">
+      </div>
+      <div>
+        <label for="platform-ai-session-backend">Backend Type</label>
+        <input id="platform-ai-session-backend" class="form-control" placeholder="responses / chat / custom">
+      </div>
+    </div>
+    <div class="split-grid" style="grid-template-columns:1fr 1fr;gap:0.75rem;margin-bottom:0.75rem;">
+      <div>
+        <label for="platform-ai-session-credential">Credential Ref</label>
+        <input id="platform-ai-session-credential" class="form-control" placeholder="vault://vertex-service-account">
+      </div>
+      <div>
+        <label for="platform-ai-session-vertex-project">Vertex Project ID</label>
+        <input id="platform-ai-session-vertex-project" class="form-control" placeholder="gcp-project-id">
+      </div>
+    </div>
+    <div class="split-grid" style="grid-template-columns:1fr 1fr;gap:0.75rem;margin-bottom:0.75rem;">
+      <div>
+        <label for="platform-ai-session-vertex-location">Vertex Location</label>
+        <input id="platform-ai-session-vertex-location" class="form-control" placeholder="us-central1">
+      </div>
+      <div>
+        <label for="platform-ai-session-params">Backend Params JSON</label>
+        <input id="platform-ai-session-params" class="form-control" placeholder='{"temperature":0.1}'>
+      </div>
+    </div>
+    <div id="platform-ai-session-create-status" class="mini-note" style="margin-bottom:0.75rem;"></div>
+    <div class="modal-actions">
+      <button class="btn btn-primary" type="button" onclick="createPlatformAISession()">Create Session</button>
+      <button class="btn" type="button" onclick="closeCreateSessionModal()">Close</button>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function getCsrf() {
+  const el = document.querySelector('input[name=csrf_token]');
+  return el ? el.value : '';
+}
+
+function openCreateSessionModal() {
+  const modal = document.getElementById('modal-create-session');
+  if (modal) modal.style.display = 'flex';
+}
+
+function closeCreateSessionModal() {
+  const modal = document.getElementById('modal-create-session');
+  if (modal) modal.style.display = 'none';
+}
+
+function setCreateSessionStatus(message, isError) {
+  const el = document.getElementById('platform-ai-session-create-status');
+  if (!el) return;
+  el.textContent = String(message || '');
+  el.style.color = isError ? '#fca5a5' : '#a0aec0';
+}
+
+function parseJsonField(raw, fallback) {
+  const text = String(raw || '').trim();
+  if (!text) return fallback;
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    throw new Error('Invalid JSON in backend params.');
+  }
+}
+
+async function createPlatformAISession() {
+  let params = {};
+  try {
+    params = parseJsonField(document.getElementById('platform-ai-session-params')?.value || '', {});
+  } catch (error) {
+    setCreateSessionStatus(error.message || 'Invalid params JSON', true);
+    return;
+  }
+  const body = {
+    mode: String(document.getElementById('platform-ai-session-mode')?.value || 'assignment_follower').trim(),
+    operator_id: String(document.getElementById('platform-ai-session-operator')?.value || '').trim() || undefined,
+    assignment_id: String(document.getElementById('platform-ai-session-assignment')?.value || '').trim() || undefined,
+    orchestration_id: String(document.getElementById('platform-ai-session-orchestration')?.value || '').trim() || undefined,
+    provider: String(document.getElementById('platform-ai-session-provider')?.value || '').trim() || undefined,
+    model: String(document.getElementById('platform-ai-session-model')?.value || '').trim() || undefined,
+    backend_type: String(document.getElementById('platform-ai-session-backend')?.value || '').trim() || undefined,
+    credential_ref: String(document.getElementById('platform-ai-session-credential')?.value || '').trim() || undefined,
+    vertex_project_id: String(document.getElementById('platform-ai-session-vertex-project')?.value || '').trim() || undefined,
+    vertex_location: String(document.getElementById('platform-ai-session-vertex-location')?.value || '').trim() || undefined,
+    params: params,
+    metadata: {source: 'platform_ai_index'},
+  };
+  setCreateSessionStatus('Creating session...', false);
+  try {
+    const res = await fetch('/api/platform-ai/sessions', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
+      body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Failed to create Platform AI session');
+    const id = String(data.id || '').trim();
+    if (!id) throw new Error('Session created but response id is missing');
+    window.location.href = '/platform-ai/sessions/' + encodeURIComponent(id);
+  } catch (error) {
+    setCreateSessionStatus(error.message || 'Failed to create session', true);
+  }
+}
+</script>
 {% endblock %}

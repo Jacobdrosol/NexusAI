@@ -673,8 +673,17 @@ class CPClient:
     def get_platform_ai_session(self, session_id: str) -> Optional[Dict[str, Any]]:
         return self._get(f"/v1/platform-ai/sessions/{session_id}")
 
+    def patch_platform_ai_session(self, session_id: str, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        return self._patch(f"/v1/platform-ai/sessions/{session_id}", body)
+
     def list_platform_ai_events(self, session_id: str, limit: int = 200) -> Optional[Dict[str, Any]]:
         return self._get(f"/v1/platform-ai/sessions/{session_id}/events?limit={max(1, int(limit))}")
+
+    def list_platform_ai_messages(self, session_id: str, limit: int = 200) -> Optional[Dict[str, Any]]:
+        return self._get(f"/v1/platform-ai/sessions/{session_id}/messages?limit={max(1, int(limit))}")
+
+    def post_platform_ai_message(self, session_id: str, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        return self._post(f"/v1/platform-ai/sessions/{session_id}/messages", body, timeout=_CHAT_TIMEOUT)
 
     def design_platform_ai_quality_suite(self, session_id: str, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return self._post(f"/v1/platform-ai/sessions/{session_id}/test-suites/design", body, timeout=_CHAT_TIMEOUT)
@@ -686,6 +695,7 @@ class CPClient:
         self,
         *,
         session_id: Optional[str] = None,
+        pipeline_bot_id: Optional[str] = None,
         assignment_id: Optional[str] = None,
         orchestration_id: Optional[str] = None,
         limit: int = 200,
@@ -693,6 +703,8 @@ class CPClient:
         parts = [f"limit={max(1, int(limit))}"]
         if session_id:
             parts.append(f"session_id={requests.utils.quote(str(session_id), safe='')}")
+        if pipeline_bot_id:
+            parts.append(f"pipeline_bot_id={requests.utils.quote(str(pipeline_bot_id), safe='')}")
         if assignment_id:
             parts.append(f"assignment_id={requests.utils.quote(str(assignment_id), safe='')}")
         if orchestration_id:
@@ -710,6 +722,23 @@ class CPClient:
 
     def get_platform_ai_quality_run(self, run_id: str) -> Optional[Dict[str, Any]]:
         return self._get(f"/v1/platform-ai/test-runs/{run_id}")
+
+    def list_platform_ai_pipelines(self) -> Optional[Dict[str, Any]]:
+        return self._get("/v1/platform-ai/pipelines")
+
+    def list_platform_ai_pipeline_test_suites(self, pipeline_bot_id: str, limit: int = 200) -> Optional[Dict[str, Any]]:
+        safe_id = requests.utils.quote(str(pipeline_bot_id), safe="")
+        return self._get(f"/v1/platform-ai/pipelines/{safe_id}/test-suites?limit={max(1, int(limit))}")
+
+    def design_platform_ai_pipeline_test_suite(
+        self, pipeline_bot_id: str, body: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        safe_id = requests.utils.quote(str(pipeline_bot_id), safe="")
+        return self._post(f"/v1/platform-ai/pipelines/{safe_id}/test-suites/design", body, timeout=_CHAT_TIMEOUT)
+
+    def run_platform_ai_pipeline_test_suite(self, pipeline_bot_id: str, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        safe_id = requests.utils.quote(str(pipeline_bot_id), safe="")
+        return self._post(f"/v1/platform-ai/pipelines/{safe_id}/test-suites/run", body, timeout=_CHAT_TIMEOUT)
 
     # Agent schedules
     def create_schedule(self, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:

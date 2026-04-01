@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS platform_ai_test_suites (
     session_id TEXT NOT NULL,
     name TEXT NOT NULL,
     status TEXT NOT NULL,
+    pipeline_bot_id TEXT,
     assignment_id TEXT,
     run_id TEXT,
     orchestration_id TEXT,
@@ -60,6 +61,7 @@ CREATE TABLE IF NOT EXISTS platform_ai_test_runs (
     id TEXT PRIMARY KEY,
     suite_id TEXT NOT NULL,
     session_id TEXT,
+    pipeline_bot_id TEXT,
     status TEXT NOT NULL,
     assignment_id TEXT,
     run_id TEXT,
@@ -71,12 +73,26 @@ CREATE TABLE IF NOT EXISTS platform_ai_test_runs (
 )
 """
 
+_CREATE_MESSAGES = """
+CREATE TABLE IF NOT EXISTS platform_ai_messages (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+)
+"""
+
 _CREATE_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_platform_ai_sessions_assignment ON platform_ai_sessions(assignment_id, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_platform_ai_events_session ON platform_ai_events(session_id, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_platform_ai_messages_session ON platform_ai_messages(session_id, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_platform_ai_test_suites_session ON platform_ai_test_suites(session_id, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_platform_ai_test_suites_assignment ON platform_ai_test_suites(assignment_id, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_platform_ai_test_suites_pipeline ON platform_ai_test_suites(pipeline_bot_id, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_platform_ai_test_runs_suite ON platform_ai_test_runs(suite_id, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_platform_ai_test_runs_pipeline ON platform_ai_test_runs(pipeline_bot_id, created_at)",
 )
 
 
@@ -117,12 +133,23 @@ class PlatformAISessionStore:
         async with open_sqlite(self._db_path) as db:
             await db.execute(_CREATE_SESSIONS)
             await db.execute(_CREATE_EVENTS)
+            await db.execute(_CREATE_MESSAGES)
             await db.execute(_CREATE_TEST_SUITES)
             await db.execute(_CREATE_TEST_RUNS)
+            await self._ensure_column(db, "platform_ai_test_suites", "pipeline_bot_id", "TEXT")
+            await self._ensure_column(db, "platform_ai_test_runs", "pipeline_bot_id", "TEXT")
             for statement in _CREATE_INDEXES:
                 await db.execute(statement)
             await db.commit()
         self._ready = True
+
+    async def _ensure_column(self, db: aiosqlite.Connection, table: str, column: str, definition: str) -> None:
+        async with db.execute(f"PRAGMA table_info({table})") as cursor:
+            rows = await cursor.fetchall()
+        existing = {str(row[1]) for row in rows if len(row) >= 2}
+        if column in existing:
+            return
+        await db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
     async def create_session(
         self,
@@ -335,6 +362,69 @@ class PlatformAISessionStore:
             for row in rows
         ]
 
+    async def append_message(
+        self,
+        session_id: str,
+        *,
+        role: str,
+        content: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        await self._ensure_db()
+        message = {
+            "id": str(uuid.uuid4()),
+            "session_id": str(session_id or "").strip(),
+            "role": str(role or "operator").strip() or "operator",
+            "content": str(content or "").strip(),
+            "metadata": metadata if isinstance(metadata, dict) else {},
+            "created_at": _now(),
+        }
+        async with open_sqlite(self._db_path) as db:
+            await db.execute(
+                """
+                INSERT INTO platform_ai_messages (id, session_id, role, content, metadata_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    message["id"],
+                    message["session_id"],
+                    message["role"],
+                    message["content"],
+                    _dumps(message["metadata"]),
+                    message["created_at"],
+                ),
+            )
+            await db.commit()
+        return message
+
+    async def list_messages(self, session_id: str, *, limit: int = 200) -> List[Dict[str, Any]]:
+        await self._ensure_db()
+        safe_limit = max(1, min(int(limit), 2000))
+        async with open_sqlite(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                """
+                SELECT id, session_id, role, content, metadata_json, created_at
+                FROM platform_ai_messages
+                WHERE session_id = ?
+                ORDER BY created_at ASC
+                LIMIT ?
+                """,
+                (str(session_id or "").strip(), safe_limit),
+            ) as cursor:
+                rows = await cursor.fetchall()
+        return [
+            {
+                "id": str(row["id"]),
+                "session_id": str(row["session_id"]),
+                "role": str(row["role"] or "operator"),
+                "content": str(row["content"] or ""),
+                "metadata": _loads(row["metadata_json"], {}),
+                "created_at": str(row["created_at"] or ""),
+            }
+            for row in rows
+        ]
+
     async def create_test_suite(
         self,
         *,
@@ -342,6 +432,7 @@ class PlatformAISessionStore:
         name: str,
         suite: Dict[str, Any],
         status: str = "active",
+        pipeline_bot_id: Optional[str] = None,
         assignment_id: Optional[str] = None,
         run_id: Optional[str] = None,
         orchestration_id: Optional[str] = None,
@@ -354,15 +445,16 @@ class PlatformAISessionStore:
             await db.execute(
                 """
                 INSERT INTO platform_ai_test_suites (
-                    id, session_id, name, status, assignment_id, run_id, orchestration_id,
+                    id, session_id, name, status, pipeline_bot_id, assignment_id, run_id, orchestration_id,
                     suite_json, metadata_json, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     suite_id,
                     str(session_id or "").strip(),
                     str(name or "").strip() or "Platform AI Suite",
                     str(status or "active").strip() or "active",
+                    str(pipeline_bot_id or "").strip() or None,
                     str(assignment_id or "").strip() or None,
                     str(run_id or "").strip() or None,
                     str(orchestration_id or "").strip() or None,
@@ -396,6 +488,7 @@ class PlatformAISessionStore:
             "session_id": str(row["session_id"] or ""),
             "name": str(row["name"] or ""),
             "status": str(row["status"] or "active"),
+            "pipeline_bot_id": str(row["pipeline_bot_id"] or "") or None,
             "assignment_id": str(row["assignment_id"] or "") or None,
             "run_id": str(row["run_id"] or "") or None,
             "orchestration_id": str(row["orchestration_id"] or "") or None,
@@ -409,6 +502,7 @@ class PlatformAISessionStore:
         self,
         *,
         session_id: Optional[str] = None,
+        pipeline_bot_id: Optional[str] = None,
         assignment_id: Optional[str] = None,
         orchestration_id: Optional[str] = None,
         limit: int = 200,
@@ -420,6 +514,9 @@ class PlatformAISessionStore:
         if str(session_id or "").strip():
             clauses.append("session_id = ?")
             params.append(str(session_id or "").strip())
+        if str(pipeline_bot_id or "").strip():
+            clauses.append("pipeline_bot_id = ?")
+            params.append(str(pipeline_bot_id or "").strip())
         if str(assignment_id or "").strip():
             clauses.append("assignment_id = ?")
             params.append(str(assignment_id or "").strip())
@@ -446,6 +543,7 @@ class PlatformAISessionStore:
                 "session_id": str(row["session_id"] or ""),
                 "name": str(row["name"] or ""),
                 "status": str(row["status"] or "active"),
+                "pipeline_bot_id": str(row["pipeline_bot_id"] or "") or None,
                 "assignment_id": str(row["assignment_id"] or "") or None,
                 "run_id": str(row["run_id"] or "") or None,
                 "orchestration_id": str(row["orchestration_id"] or "") or None,
@@ -462,6 +560,7 @@ class PlatformAISessionStore:
         *,
         suite_id: str,
         session_id: Optional[str] = None,
+        pipeline_bot_id: Optional[str] = None,
         assignment_id: Optional[str] = None,
         run_id: Optional[str] = None,
         orchestration_id: Optional[str] = None,
@@ -478,14 +577,15 @@ class PlatformAISessionStore:
             await db.execute(
                 """
                 INSERT INTO platform_ai_test_runs (
-                    id, suite_id, session_id, status, assignment_id, run_id, orchestration_id,
+                    id, suite_id, session_id, pipeline_bot_id, status, assignment_id, run_id, orchestration_id,
                     score, result_json, created_at, completed_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_ref,
                     str(suite_id or "").strip(),
                     str(session_id or "").strip() or None,
+                    str(pipeline_bot_id or "").strip() or None,
                     str(status or "running").strip() or "running",
                     str(assignment_id or "").strip() or None,
                     str(run_id or "").strip() or None,
@@ -549,6 +649,7 @@ class PlatformAISessionStore:
             "id": str(row["id"]),
             "suite_id": str(row["suite_id"] or ""),
             "session_id": str(row["session_id"] or "") or None,
+            "pipeline_bot_id": str(row["pipeline_bot_id"] or "") or None,
             "status": str(row["status"] or "running"),
             "assignment_id": str(row["assignment_id"] or "") or None,
             "run_id": str(row["run_id"] or "") or None,
@@ -580,6 +681,7 @@ class PlatformAISessionStore:
                 "id": str(row["id"]),
                 "suite_id": str(row["suite_id"] or ""),
                 "session_id": str(row["session_id"] or "") or None,
+                "pipeline_bot_id": str(row["pipeline_bot_id"] or "") or None,
                 "status": str(row["status"] or "running"),
                 "assignment_id": str(row["assignment_id"] or "") or None,
                 "run_id": str(row["run_id"] or "") or None,

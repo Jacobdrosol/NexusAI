@@ -80,6 +80,7 @@ class BotWorkflowTrigger(BaseModel):
 class AssignmentCapabilities(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     is_project_manager: bool = False
+    is_pipeline_entry: bool = False
 
 
 class DBActionPolicy(BaseModel):

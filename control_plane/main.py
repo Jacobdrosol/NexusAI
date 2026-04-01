@@ -35,6 +35,7 @@ from control_plane.orchestration.assignment_service import AssignmentService
 from control_plane.orchestration.run_store import OrchestrationRunStore
 from control_plane.orchestration_workspace_store import OrchestrationWorkspaceStore
 from control_plane.platform_ai.session_store import PlatformAISessionStore
+from control_plane.platform_ai.runtime import PlatformAISessionRuntime
 from control_plane.registry.bot_registry import BotRegistry
 from control_plane.registry.model_registry import ModelRegistry
 from control_plane.registry.project_registry import ProjectRegistry
@@ -124,6 +125,7 @@ async def lifespan(app: FastAPI):
         connection_resolver=connection_resolver,
     )
     platform_ai_session_store = PlatformAISessionStore()
+    platform_ai_runtime = PlatformAISessionRuntime(platform_ai_session_store)
     agent_schedule_engine = AgentScheduleEngine(
         assignment_service=assignment_service,
         task_manager=task_manager,
@@ -149,6 +151,7 @@ async def lifespan(app: FastAPI):
     app.state.orchestration_run_store = orchestration_run_store
     app.state.assignment_service = assignment_service
     app.state.platform_ai_session_store = platform_ai_session_store
+    app.state.platform_ai_runtime = platform_ai_runtime
     app.state.agent_schedule_engine = agent_schedule_engine
     app.state.config = config
     app.state.control_plane_api_token = os.environ.get("CONTROL_PLANE_API_TOKEN", "").strip()

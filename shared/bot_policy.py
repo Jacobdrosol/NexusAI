@@ -17,6 +17,19 @@ def bot_is_project_manager(bot: Bot) -> bool:
     return bool(capabilities and capabilities.is_project_manager)
 
 
+def bot_is_pipeline_entry(bot: Bot) -> bool:
+    capabilities = getattr(bot, "assignment_capabilities", None)
+    if capabilities is not None and bool(getattr(capabilities, "is_pipeline_entry", False)):
+        return True
+    routing = getattr(bot, "routing_rules", None)
+    if not isinstance(routing, dict):
+        return False
+    launch_profile = routing.get("launch_profile")
+    if not isinstance(launch_profile, dict):
+        return False
+    return bool(launch_profile.get("is_pipeline"))
+
+
 def bot_allows_repo_output(bot: Bot) -> bool:
     return bot_execution_policy(bot).repo_output_mode == "allow"
 

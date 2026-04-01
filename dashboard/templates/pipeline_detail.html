@@ -98,7 +98,7 @@
     <h2>Pipeline Test</h2>
     <div style="margin-bottom:0.75rem;">
       <strong>Pipeline:</strong>
-      <code id="pipeline-test-pipeline-id">{{ pipeline.id }}</code>
+      <code id="pipeline-test-pipeline-id">{{ pipeline.entry_bot_id }}</code>
     </div>
     <div style="margin-bottom:0.75rem;">
       <label for="pipeline-test-suite">Stored Test Suite</label>
@@ -186,7 +186,7 @@ async function refreshPipelineTestSuites() {
   if (!id) return;
   setPipelineTestStatus('Loading stored tests...', false);
   try {
-    const res = await fetch('/api/pipelines/' + encodeURIComponent(id) + '/tests');
+    const res = await fetch('/api/pipelines/tests/target?pipeline_bot_id=' + encodeURIComponent(id));
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || 'Failed to load stored tests');
     const suites = Array.isArray(data.suites) ? data.suites : [];
@@ -209,10 +209,10 @@ async function designPipelineStoredTests() {
   const name = String(document.getElementById('pipeline-test-suite-name')?.value || '').trim() || 'Pipeline Stored Quality Suite';
   setPipelineTestStatus('Designing stored suite...', false);
   try {
-    const res = await fetch('/api/pipelines/' + encodeURIComponent(id) + '/tests/design', {
+    const res = await fetch('/api/pipelines/tests/target/design', {
       method: 'POST',
       headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
-      body: JSON.stringify({name, include_default_tests: true})
+      body: JSON.stringify({pipeline_bot_id: id, name, include_default_tests: true, set_default: true})
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || 'Failed to design stored tests');
@@ -230,10 +230,10 @@ async function runPipelineStoredTests() {
   if (!id) return;
   setPipelineTestStatus('Running stored tests in isolated mode...', false);
   try {
-    const res = await fetch('/api/pipelines/' + encodeURIComponent(id) + '/tests/run', {
+    const res = await fetch('/api/pipelines/tests/target/run', {
       method: 'POST',
       headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
-      body: JSON.stringify({suite_id: selectedSuiteId() || undefined})
+      body: JSON.stringify({pipeline_bot_id: id, suite_id: selectedSuiteId() || undefined})
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || 'Failed to run stored tests');

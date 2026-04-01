@@ -4,11 +4,13 @@ import asyncio
 import json
 import os
 import time
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
+from shared.models import TaskMetadata
 
 
 router = APIRouter(prefix="/v1/platform-ai", tags=["platform-ai"])
@@ -37,6 +39,130 @@ def _is_privileged_allowed(operator_id: str) -> bool:
         return False
     return str(operator_id or "").strip().lower() in allowlist
 
+
+def _require_feature_flag(flag: str, *, action: str) -> None:
+    if _env_enabled(flag):
+        return
+    raise HTTPException(status_code=403, detail=f"{action} is disabled ({flag} not enabled)")
+
+
+def _bot_assignment_capabilities(bot: Any) -> Dict[str, Any]:
+    capabilities = getattr(bot, "assignment_capabilities", None)
+    if capabilities is None:
+        return {}
+    if isinstance(capabilities, dict):
+        return dict(capabilities)
+    if hasattr(capabilities, "model_dump"):
+        return dict(capabilities.model_dump())
+    return {}
+
+
+def _bot_routing_rules(bot: Any) -> Dict[str, Any]:
+    routing = getattr(bot, "routing_rules", None)
+    return dict(routing) if isinstance(routing, dict) else {}
+
+
+def _bot_is_pipeline_entry(bot: Any) -> bool:
+    capabilities = _bot_assignment_capabilities(bot)
+    if bool(capabilities.get("is_pipeline_entry")):
+        return True
+    launch_profile = _bot_routing_rules(bot).get("launch_profile")
+    return isinstance(launch_profile, dict) and bool(launch_profile.get("is_pipeline"))
+
+
+def _pipeline_name_for_bot(bot: Any) -> str:
+    routing = _bot_routing_rules(bot)
+    launch_profile = routing.get("launch_profile") if isinstance(routing.get("launch_profile"), dict) else {}
+    return str(
+        launch_profile.get("pipeline_name")
+        or launch_profile.get("label")
+        or getattr(bot, "name", None)
+        or getattr(bot, "id", "")
+    ).strip() or str(getattr(bot, "id", "pipeline")).strip()
+
+
+def _pipeline_entry_payload(bot: Any) -> Dict[str, Any]:
+    routing = _bot_routing_rules(bot)
+    launch_profile = routing.get("launch_profile") if isinstance(routing.get("launch_profile"), dict) else {}
+    testing = routing.get("platform_ai_testing") if isinstance(routing.get("platform_ai_testing"), dict) else {}
+    return {
+        "pipeline_bot_id": str(getattr(bot, "id", "") or "").strip(),
+        "name": _pipeline_name_for_bot(bot),
+        "bot_name": str(getattr(bot, "name", "") or "").strip(),
+        "enabled": bool(getattr(bot, "enabled", True)),
+        "has_launch_profile": isinstance(launch_profile, dict) and bool(launch_profile),
+        "default_suite_id": str(testing.get("default_suite_id") or "").strip() or None,
+    }
+
+
+def _graph_from_bot(bot: Any) -> Dict[str, Any]:
+    workflow = getattr(bot, "workflow", None)
+    reference_graph = getattr(workflow, "reference_graph", None) if workflow is not None else None
+    if reference_graph is None:
+        bot_id = str(getattr(bot, "id", "") or "").strip()
+        return {
+            "nodes": [{"id": bot_id, "bot_id": bot_id, "title": _pipeline_name_for_bot(bot)}],
+            "edges": [],
+        }
+    nodes: List[Dict[str, Any]] = []
+    for node in getattr(reference_graph, "nodes", None) or []:
+        bot_id = str(getattr(node, "bot_id", "") or "").strip()
+        if not bot_id:
+            continue
+        nodes.append(
+            {
+                "id": bot_id,
+                "bot_id": bot_id,
+                "title": str(getattr(node, "title", "") or "").strip(),
+                "stage_kind": str(getattr(node, "stage_kind", "") or "").strip() or None,
+            }
+        )
+    edges: List[Dict[str, Any]] = []
+    for edge in getattr(reference_graph, "edges", None) or []:
+        source = str(getattr(edge, "source_bot_id", "") or "").strip()
+        target = str(getattr(edge, "target_bot_id", "") or "").strip()
+        if not source or not target:
+            continue
+        edges.append(
+            {
+                "source": source,
+                "source_bot_id": source,
+                "target": target,
+                "target_bot_id": target,
+                "route_kind": str(getattr(edge, "route_kind", "forward") or "forward"),
+                "title": str(getattr(edge, "title", "") or "").strip() or None,
+            }
+        )
+    return {"nodes": nodes, "edges": edges}
+
+
+def _default_backend_config(
+    provider: Optional[str],
+    model: Optional[str],
+    backend_type: Optional[str],
+    credential_ref: Optional[str],
+    params: Optional[Dict[str, Any]],
+    vertex_project_id: Optional[str],
+    vertex_location: Optional[str],
+) -> Dict[str, Any]:
+    return {
+        "provider": str(provider or "").strip() or None,
+        "model": str(model or "").strip() or None,
+        "backend_type": str(backend_type or "").strip() or None,
+        "credential_ref": str(credential_ref or "").strip() or None,
+        "params": dict(params or {}),
+        "vertex_project_id": str(vertex_project_id or "").strip() or None,
+        "vertex_location": str(vertex_location or "").strip() or None,
+    }
+
+
+def _validate_backend_config(config: Dict[str, Any]) -> None:
+    provider = str(config.get("provider") or "").strip().lower()
+    if provider != "vertex":
+        return
+    credential_ref = str(config.get("credential_ref") or "").strip()
+    if not credential_ref:
+        raise HTTPException(status_code=400, detail="vertex sessions require credential_ref (service-account JSON key reference)")
 
 def _task_text(task: Dict[str, Any]) -> str:
     value = task.get("result")
@@ -371,6 +497,34 @@ class CreatePlatformAISessionRequest(BaseModel):
     operator_id: Optional[str] = None
     privileged: bool = False
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    backend_type: Optional[str] = None
+    credential_ref: Optional[str] = None
+    params: Dict[str, Any] = Field(default_factory=dict)
+    vertex_project_id: Optional[str] = None
+    vertex_location: Optional[str] = None
+
+
+class UpdatePlatformAISessionRequest(BaseModel):
+    status: Optional[str] = None
+    assignment_id: Optional[str] = None
+    run_id: Optional[str] = None
+    orchestration_id: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    backend_type: Optional[str] = None
+    credential_ref: Optional[str] = None
+    params: Dict[str, Any] = Field(default_factory=dict)
+    vertex_project_id: Optional[str] = None
+    vertex_location: Optional[str] = None
+
+
+class SessionMessageRequest(BaseModel):
+    role: str = "operator"
+    content: str
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
 class ControlPlatformAISessionRequest(BaseModel):
@@ -417,6 +571,41 @@ class RunQualitySuiteRequest(BaseModel):
     max_wait_seconds: float = 900.0
 
 
+class DesignPipelineSuiteRequest(BaseModel):
+    name: Optional[str] = None
+    include_default_tests: bool = True
+    suite_pass_threshold: float = 0.8
+    quality_expectations: List[QualityExpectation] = Field(default_factory=list)
+    set_default: bool = True
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
+
+class RunPipelineSuiteRequest(BaseModel):
+    suite_id: Optional[str] = None
+    operator_id: Optional[str] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    wait_for_terminal: bool = True
+    poll_interval_seconds: float = 1.0
+    max_wait_seconds: float = 900.0
+
+
+async def _find_or_create_pipeline_session(request: Request, *, pipeline_bot_id: str) -> Dict[str, Any]:
+    store = request.app.state.platform_ai_session_store
+    sessions = await store.list_sessions(mode="pipeline_tuner", limit=500)
+    for session in sessions:
+        metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
+        if str(metadata.get("pipeline_bot_id") or "").strip() == pipeline_bot_id:
+            return session
+    created = await store.create_session(
+        mode="pipeline_tuner",
+        metadata={"source": "pipeline_suite_api", "pipeline_bot_id": pipeline_bot_id},
+    )
+    runtime = getattr(request.app.state, "platform_ai_runtime", None)
+    if runtime is not None:
+        await runtime.ensure_session_loop(created.get("id") or "")
+    return created
+
+
 @router.post("/sessions")
 async def create_session(request: Request, body: CreatePlatformAISessionRequest) -> Dict[str, Any]:
     store = request.app.state.platform_ai_session_store
@@ -424,15 +613,37 @@ async def create_session(request: Request, body: CreatePlatformAISessionRequest)
     privileged = bool(body.privileged)
     if privileged and not _is_privileged_allowed(operator_id):
         raise HTTPException(status_code=403, detail="privileged Platform AI mode is disabled or operator is not allowlisted")
-    return await store.create_session(
+    backend_cfg = _default_backend_config(
+        body.provider,
+        body.model,
+        body.backend_type,
+        body.credential_ref,
+        body.params,
+        body.vertex_project_id,
+        body.vertex_location,
+    )
+    _validate_backend_config(backend_cfg)
+    metadata = dict(body.metadata or {})
+    metadata["backend"] = backend_cfg
+    metadata.setdefault("current_phase", "observe")
+    session = await store.create_session(
         mode=body.mode,
         assignment_id=body.assignment_id,
         run_id=body.run_id,
         orchestration_id=body.orchestration_id,
         operator_id=operator_id or None,
         privileged=privileged,
-        metadata=body.metadata,
+        metadata=metadata,
     )
+    await store.append_event(
+        session["id"],
+        "action_trace",
+        {"action": "session_backend_configured", "backend": backend_cfg},
+    )
+    runtime = getattr(request.app.state, "platform_ai_runtime", None)
+    if runtime is not None and str(session.get("status") or "").strip().lower() == "active":
+        await runtime.ensure_session_loop(session["id"])
+    return session
 
 
 @router.get("/sessions")
@@ -462,6 +673,78 @@ async def get_session(session_id: str, request: Request) -> Dict[str, Any]:
     return session
 
 
+@router.patch("/sessions/{session_id}")
+async def patch_session(session_id: str, request: Request, body: UpdatePlatformAISessionRequest) -> Dict[str, Any]:
+    store = request.app.state.platform_ai_session_store
+    session = await store.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+
+    metadata = dict(body.metadata or {})
+    status = str(body.status or "").strip().lower() or None
+    current_status = str(session.get("status") or "").strip().lower()
+    wants_backend_update = any(
+        [
+            body.provider is not None,
+            body.model is not None,
+            body.backend_type is not None,
+            body.credential_ref is not None,
+            bool(body.params),
+            body.vertex_project_id is not None,
+            body.vertex_location is not None,
+        ]
+    )
+    if wants_backend_update and current_status not in {"paused", "stopped", "completed", "failed"}:
+        raise HTTPException(
+            status_code=400,
+            detail="session backend/model can only be changed when paused, stopped, or completed",
+        )
+    if wants_backend_update:
+        existing_meta = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
+        backend_cfg = existing_meta.get("backend") if isinstance(existing_meta.get("backend"), dict) else {}
+        backend_cfg = dict(backend_cfg)
+        if body.provider is not None:
+            backend_cfg["provider"] = str(body.provider or "").strip() or None
+        if body.model is not None:
+            backend_cfg["model"] = str(body.model or "").strip() or None
+        if body.backend_type is not None:
+            backend_cfg["backend_type"] = str(body.backend_type or "").strip() or None
+        if body.credential_ref is not None:
+            backend_cfg["credential_ref"] = str(body.credential_ref or "").strip() or None
+        if body.params:
+            backend_cfg["params"] = dict(body.params)
+        if body.vertex_project_id is not None:
+            backend_cfg["vertex_project_id"] = str(body.vertex_project_id or "").strip() or None
+        if body.vertex_location is not None:
+            backend_cfg["vertex_location"] = str(body.vertex_location or "").strip() or None
+        _validate_backend_config(backend_cfg)
+        metadata["backend"] = backend_cfg
+
+    updated = await store.update_session(
+        session_id,
+        status=status,
+        assignment_id=body.assignment_id,
+        run_id=body.run_id,
+        orchestration_id=body.orchestration_id,
+        metadata=metadata,
+    )
+    if updated is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    runtime = getattr(request.app.state, "platform_ai_runtime", None)
+    if runtime is not None and str(updated.get("status") or "").strip().lower() == "active":
+        await runtime.ensure_session_loop(session_id)
+    await store.append_event(
+        session_id,
+        "action_trace",
+        {
+            "action": "session_updated",
+            "status": updated.get("status"),
+            "metadata_keys": sorted((metadata or {}).keys()),
+        },
+    )
+    return updated
+
+
 @router.get("/sessions/{session_id}/events")
 async def list_session_events(session_id: str, request: Request, limit: int = 200) -> Dict[str, Any]:
     store = request.app.state.platform_ai_session_store
@@ -471,32 +754,96 @@ async def list_session_events(session_id: str, request: Request, limit: int = 20
     return {"session_id": session_id, "events": await store.list_events(session_id, limit=limit)}
 
 
+@router.get("/sessions/{session_id}/messages")
+async def list_session_messages(session_id: str, request: Request, limit: int = 200) -> Dict[str, Any]:
+    store = request.app.state.platform_ai_session_store
+    session = await store.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    return {"session_id": session_id, "messages": await store.list_messages(session_id, limit=limit)}
+
+
+@router.post("/sessions/{session_id}/messages")
+async def post_session_message(session_id: str, request: Request, body: SessionMessageRequest) -> Dict[str, Any]:
+    store = request.app.state.platform_ai_session_store
+    runtime = getattr(request.app.state, "platform_ai_runtime", None)
+    session = await store.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    content = str(body.content or "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="content is required")
+    role = str(body.role or "operator").strip().lower() or "operator"
+    if runtime is not None:
+        message = await runtime.post_message(session_id, role=role, content=content, metadata=body.metadata)
+    else:
+        message = await store.append_message(session_id, role=role, content=content, metadata=body.metadata)
+    return {"session_id": session_id, "message": message}
+
+
 @router.post("/sessions/{session_id}/control")
 async def control_session(session_id: str, request: Request, body: ControlPlatformAISessionRequest) -> Dict[str, Any]:
     store = request.app.state.platform_ai_session_store
     assignment_service = request.app.state.assignment_service
+    runtime = getattr(request.app.state, "platform_ai_runtime", None)
     session = await store.get_session(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
     operator_id = str(body.operator_id or request.headers.get("X-Nexus-Operator-ID") or session.get("operator_id") or "").strip()
     action = str(body.action or "").strip().lower()
-    privileged_requested = bool(body.privileged_action) or action in {"code_edit", "deploy", "hotfix"}
+    privileged_requested = bool(body.privileged_action) or action in {"code_edit", "deploy", "hotfix", "external_repo_edit"}
     if privileged_requested and not _is_privileged_allowed(operator_id):
         raise HTTPException(status_code=403, detail="privileged control action denied")
 
     next_status: Optional[str] = None
     result: Dict[str, Any] = {}
-    if action in {"pause", "hold"}:
-        next_status = "paused"
-        result = {"status": "paused"}
-    elif action in {"resume", "continue"}:
+    if action in {"start", "resume", "continue"}:
         next_status = "active"
         result = {"status": "active"}
+        if runtime is not None:
+            await runtime.ensure_session_loop(session_id)
+    elif action in {"pause", "hold"}:
+        next_status = "paused"
+        result = {"status": "paused"}
     elif action in {"stop", "cancel"}:
         next_status = "stopped"
         result = {"status": "stopped"}
     elif action == "follow":
         result = {"status": session.get("status"), "follow": "attached"}
+    elif action == "attach_assignment":
+        assignment_id = str(body.assignment_id or "").strip()
+        if not assignment_id:
+            raise HTTPException(status_code=400, detail="attach_assignment requires assignment_id")
+        context = await _resolve_context(request, assignment_id=assignment_id, run_id=None, orchestration_id=None)
+        session = await store.update_session(
+            session_id,
+            assignment_id=context.get("assignment_id"),
+            run_id=context.get("run_id"),
+            orchestration_id=context.get("orchestration_id"),
+            metadata=body.metadata,
+        ) or session
+        result = {
+            "assignment_id": context.get("assignment_id"),
+            "run_id": context.get("run_id"),
+            "orchestration_id": context.get("orchestration_id"),
+        }
+    elif action == "attach_orchestration":
+        orch_id = str(body.orchestration_id or "").strip()
+        if not orch_id:
+            raise HTTPException(status_code=400, detail="attach_orchestration requires orchestration_id")
+        context = await _resolve_context(request, assignment_id=None, run_id=None, orchestration_id=orch_id)
+        session = await store.update_session(
+            session_id,
+            assignment_id=context.get("assignment_id"),
+            run_id=context.get("run_id"),
+            orchestration_id=context.get("orchestration_id"),
+            metadata=body.metadata,
+        ) or session
+        result = {
+            "assignment_id": context.get("assignment_id"),
+            "run_id": context.get("run_id"),
+            "orchestration_id": context.get("orchestration_id"),
+        }
     elif action == "splice":
         run_id = str(body.run_id or session.get("run_id") or "").strip()
         node_id = str(body.node_id or "").strip()
@@ -514,12 +861,23 @@ async def control_session(session_id: str, request: Request, body: ControlPlatfo
         if not orch_id or not node_id:
             raise HTTPException(status_code=400, detail="rerun_node requires orchestration_id and node_id")
         result = await assignment_service.rerun_node(orchestration_id=orch_id, node_id=node_id, payload_override=body.payload)
+    elif action in {"code_edit", "hotfix"}:
+        _require_feature_flag("NEXUS_PLATFORM_AI_REPO_EDIT_ENABLED", action=action)
+        result = {"status": "accepted", "action": action}
+    elif action == "external_repo_edit":
+        _require_feature_flag("NEXUS_PLATFORM_AI_EXTERNAL_REPO_EDIT_ENABLED", action=action)
+        result = {"status": "accepted", "action": action}
+    elif action == "deploy":
+        _require_feature_flag("NEXUS_PLATFORM_AI_DEPLOY_ENABLED", action=action)
+        if runtime is None:
+            raise HTTPException(status_code=503, detail="platform ai runtime unavailable")
+        result = await runtime.start_deploy_run(session_id, requested_by=operator_id or "platform-ai")
     else:
         raise HTTPException(status_code=400, detail=f"unsupported control action: {action}")
 
     if next_status is not None:
         session = await store.update_session(session_id, status=next_status, metadata=body.metadata) or session
-    elif body.metadata:
+    elif body.metadata and action not in {"attach_assignment", "attach_orchestration"}:
         session = await store.update_session(session_id, metadata=body.metadata) or session
     event = await store.append_event(
         session_id,
@@ -587,6 +945,7 @@ async def list_quality_test_suites(session_id: str, request: Request, limit: int
 async def list_quality_test_suites_global(
     request: Request,
     session_id: Optional[str] = None,
+    pipeline_bot_id: Optional[str] = None,
     assignment_id: Optional[str] = None,
     orchestration_id: Optional[str] = None,
     limit: int = 200,
@@ -594,6 +953,7 @@ async def list_quality_test_suites_global(
     store = request.app.state.platform_ai_session_store
     suites = await store.list_test_suites(
         session_id=session_id,
+        pipeline_bot_id=pipeline_bot_id,
         assignment_id=assignment_id,
         orchestration_id=orchestration_id,
         limit=limit,
@@ -641,6 +1001,7 @@ async def run_quality_test_suite(suite_id: str, request: Request, body: RunQuali
     run_record = await store.create_test_run(
         suite_id=suite_id,
         session_id=suite.get("session_id"),
+        pipeline_bot_id=suite.get("pipeline_bot_id"),
         assignment_id=context.get("assignment_id"),
         run_id=context.get("run_id"),
         orchestration_id=context.get("orchestration_id"),
@@ -697,3 +1058,209 @@ async def get_quality_test_run(run_id: str, request: Request) -> Dict[str, Any]:
     if run is None:
         raise HTTPException(status_code=404, detail="test run not found")
     return run
+
+
+@router.get("/pipelines")
+async def list_pipeline_entries(request: Request) -> Dict[str, Any]:
+    bot_registry = request.app.state.bot_registry
+    bots = await bot_registry.list()
+    pipelines = [_pipeline_entry_payload(bot) for bot in bots if _bot_is_pipeline_entry(bot)]
+    pipelines.sort(key=lambda item: (str(item.get("name") or "").lower(), str(item.get("pipeline_bot_id") or "").lower()))
+    return {"pipelines": pipelines}
+
+
+@router.get("/pipelines/{pipeline_bot_id}/test-suites")
+async def list_pipeline_test_suites(pipeline_bot_id: str, request: Request, limit: int = 200) -> Dict[str, Any]:
+    store = request.app.state.platform_ai_session_store
+    bot_registry = request.app.state.bot_registry
+    safe_bot_id = str(pipeline_bot_id or "").strip()
+    if not safe_bot_id:
+        raise HTTPException(status_code=400, detail="pipeline_bot_id is required")
+    try:
+        bot = await bot_registry.get(safe_bot_id)
+    except Exception:
+        raise HTTPException(status_code=404, detail="pipeline bot not found")
+    if not _bot_is_pipeline_entry(bot):
+        raise HTTPException(status_code=400, detail="bot is not marked as a pipeline entry")
+    suites = await store.list_test_suites(pipeline_bot_id=safe_bot_id, limit=limit)
+    routing = _bot_routing_rules(bot)
+    testing = routing.get("platform_ai_testing") if isinstance(routing.get("platform_ai_testing"), dict) else {}
+    default_suite_id = str(testing.get("default_suite_id") or "").strip() or None
+    return {"pipeline": _pipeline_entry_payload(bot), "default_suite_id": default_suite_id, "suites": suites}
+
+
+@router.post("/pipelines/{pipeline_bot_id}/test-suites/design")
+async def design_pipeline_test_suite(pipeline_bot_id: str, request: Request, body: DesignPipelineSuiteRequest) -> Dict[str, Any]:
+    store = request.app.state.platform_ai_session_store
+    bot_registry = request.app.state.bot_registry
+    safe_bot_id = str(pipeline_bot_id or "").strip()
+    if not safe_bot_id:
+        raise HTTPException(status_code=400, detail="pipeline_bot_id is required")
+    try:
+        bot = await bot_registry.get(safe_bot_id)
+    except Exception:
+        raise HTTPException(status_code=404, detail="pipeline bot not found")
+    if not _bot_is_pipeline_entry(bot):
+        raise HTTPException(status_code=400, detail="bot is not marked as a pipeline entry")
+
+    session = await _find_or_create_pipeline_session(request, pipeline_bot_id=safe_bot_id)
+    graph = _graph_from_bot(bot)
+    suite_name = str(body.name or "").strip() or f"{_pipeline_name_for_bot(bot)} Quality Suite"
+    existing_suites = await store.list_test_suites(pipeline_bot_id=safe_bot_id, limit=1000)
+    max_version = 0
+    for existing in existing_suites:
+        metadata_obj = existing.get("metadata") if isinstance(existing.get("metadata"), dict) else {}
+        try:
+            version = int(metadata_obj.get("suite_version") or 0)
+        except Exception:
+            version = 0
+        if version > max_version:
+            max_version = version
+    next_version = max_version + 1
+    suite_def = _build_suite_definition(
+        suite_name=suite_name,
+        graph=graph,
+        include_default_tests=bool(body.include_default_tests),
+        quality_expectations=body.quality_expectations,
+        suite_pass_threshold=float(body.suite_pass_threshold),
+    )
+    suite_def["version"] = f"v{next_version}"
+    suite_def["pipeline_bot_id"] = safe_bot_id
+    metadata = dict(body.metadata or {})
+    metadata["pipeline_bot_id"] = safe_bot_id
+    metadata["suite_version"] = next_version
+    suite = await store.create_test_suite(
+        session_id=str(session.get("id") or ""),
+        pipeline_bot_id=safe_bot_id,
+        name=suite_name,
+        suite=suite_def,
+        metadata=metadata,
+    )
+    if body.set_default:
+        routing = _bot_routing_rules(bot)
+        testing = routing.get("platform_ai_testing") if isinstance(routing.get("platform_ai_testing"), dict) else {}
+        testing["default_suite_id"] = str(suite.get("id") or "")
+        routing["platform_ai_testing"] = testing
+        updated = bot.model_copy(update={"routing_rules": routing})
+        await bot_registry.update(safe_bot_id, updated)
+    event = await store.append_event(
+        str(session.get("id") or ""),
+        "action_trace",
+        {
+            "action": "design_pipeline_quality_suite",
+            "pipeline_bot_id": safe_bot_id,
+            "suite_id": suite.get("id"),
+            "suite_version": next_version,
+            "set_default": bool(body.set_default),
+        },
+    )
+    return {"pipeline": _pipeline_entry_payload(bot), "session": session, "suite": suite, "event": event}
+
+
+@router.post("/pipelines/{pipeline_bot_id}/test-suites/run")
+async def run_pipeline_test_suite(pipeline_bot_id: str, request: Request, body: RunPipelineSuiteRequest) -> Dict[str, Any]:
+    store = request.app.state.platform_ai_session_store
+    bot_registry = request.app.state.bot_registry
+    task_manager = request.app.state.task_manager
+    safe_bot_id = str(pipeline_bot_id or "").strip()
+    if not safe_bot_id:
+        raise HTTPException(status_code=400, detail="pipeline_bot_id is required")
+    try:
+        bot = await bot_registry.get(safe_bot_id)
+    except Exception:
+        raise HTTPException(status_code=404, detail="pipeline bot not found")
+    if not _bot_is_pipeline_entry(bot):
+        raise HTTPException(status_code=400, detail="bot is not marked as a pipeline entry")
+
+    suites = await store.list_test_suites(pipeline_bot_id=safe_bot_id, limit=500)
+    suite_id = str(body.suite_id or "").strip()
+    if not suite_id:
+        routing = _bot_routing_rules(bot)
+        testing = routing.get("platform_ai_testing") if isinstance(routing.get("platform_ai_testing"), dict) else {}
+        suite_id = str(testing.get("default_suite_id") or "").strip()
+    suite = await store.get_test_suite(suite_id) if suite_id else None
+    if suite is None:
+        suite = suites[0] if suites else None
+    if suite is None:
+        raise HTTPException(status_code=400, detail="no stored test suite found for this pipeline; generate one first")
+    if str(suite.get("pipeline_bot_id") or "").strip() not in {"", safe_bot_id}:
+        raise HTTPException(status_code=400, detail="suite is not scoped to this pipeline")
+
+    routing = _bot_routing_rules(bot)
+    launch_profile = routing.get("launch_profile") if isinstance(routing.get("launch_profile"), dict) else {}
+    launch_payload = launch_profile.get("payload") if isinstance(launch_profile.get("payload"), dict) else {}
+    if not launch_payload:
+        launch_payload = {"instruction": f"Run pipeline test for {safe_bot_id}"}
+    orchestration_id = str(uuid.uuid4())
+    task = await task_manager.create_task(
+        bot_id=safe_bot_id,
+        payload=launch_payload,
+        metadata=TaskMetadata(
+            source="platform_ai_pipeline_test",
+            orchestration_id=orchestration_id,
+            pipeline_name=_pipeline_name_for_bot(bot),
+            pipeline_entry_bot_id=safe_bot_id,
+        ),
+    )
+    if bool(body.wait_for_terminal):
+        await _wait_for_orchestration_terminal(
+            request,
+            orchestration_id=orchestration_id,
+            poll_interval_seconds=float(body.poll_interval_seconds or 1.0),
+            max_wait_seconds=float(body.max_wait_seconds or 900.0),
+        )
+
+    context = await _resolve_context(request, assignment_id=None, run_id=None, orchestration_id=orchestration_id)
+    graph = context.get("graph") if isinstance(context.get("graph"), dict) else {"nodes": [], "edges": []}
+    tasks = context.get("tasks") if isinstance(context.get("tasks"), list) else []
+    if not tasks:
+        raise HTTPException(status_code=400, detail="pipeline test run produced no tasks to evaluate")
+    run_record = await store.create_test_run(
+        suite_id=str(suite.get("id") or ""),
+        session_id=suite.get("session_id"),
+        pipeline_bot_id=safe_bot_id,
+        assignment_id=context.get("assignment_id"),
+        run_id=context.get("run_id"),
+        orchestration_id=orchestration_id,
+        status="running",
+        score=0.0,
+        result={"started_at": _now(), "pipeline_bot_id": safe_bot_id},
+    )
+    suite_payload = suite.get("suite") if isinstance(suite.get("suite"), dict) else {}
+    evaluation = _evaluate_suite(suite_payload, tasks, graph)
+    evaluation["context"] = {
+        "pipeline_bot_id": safe_bot_id,
+        "orchestration_id": orchestration_id,
+        "assignment_id": context.get("assignment_id"),
+        "run_id": context.get("run_id"),
+    }
+    final_run = await store.complete_test_run(
+        run_record["id"],
+        status=str(evaluation.get("status") or "failed"),
+        score=float(evaluation.get("score") or 0.0),
+        result=evaluation,
+    )
+    assert final_run is not None
+    event = None
+    if str(suite.get("session_id") or "").strip():
+        event = await store.append_event(
+            str(suite.get("session_id") or ""),
+            "action_trace",
+            {
+                "action": "run_pipeline_quality_suite",
+                "pipeline_bot_id": safe_bot_id,
+                "suite_id": suite.get("id"),
+                "test_run_id": final_run.get("id"),
+                "status": final_run.get("status"),
+                "score": final_run.get("score"),
+                "operator_id": str(body.operator_id or "").strip() or None,
+                "metadata": body.metadata,
+            },
+        )
+    return {
+        "pipeline": _pipeline_entry_payload(bot),
+        "suite": suite,
+        "launched_task": task.model_dump(),
+        "test_run": final_run,
+        "event": event,
+    }
