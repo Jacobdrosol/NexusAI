@@ -53,6 +53,32 @@ ensure_runtime_nginx_conf() {
   fi
 }
 
+ensure_service_running() {
+  SERVICE_NAME="$1"
+  SERVICE_PROFILE="${2:-}"
+  SERVICE_ID="$(docker compose $COMPOSE_ARGS ps -q "$SERVICE_NAME" 2>/dev/null || true)"
+
+  if [ -z "$SERVICE_ID" ]; then
+    if [ -n "$SERVICE_PROFILE" ]; then
+      docker compose $COMPOSE_ARGS --profile "$SERVICE_PROFILE" up -d "$SERVICE_NAME"
+    else
+      docker compose $COMPOSE_ARGS up -d "$SERVICE_NAME"
+    fi
+    return 0
+  fi
+
+  SERVICE_RUNNING="$(docker inspect -f '{{.State.Running}}' "$SERVICE_ID" 2>/dev/null || echo false)"
+  if [ "$SERVICE_RUNNING" != "true" ]; then
+    if ! docker compose $COMPOSE_ARGS start "$SERVICE_NAME"; then
+      if [ -n "$SERVICE_PROFILE" ]; then
+        docker compose $COMPOSE_ARGS --profile "$SERVICE_PROFILE" up -d "$SERVICE_NAME"
+      else
+        docker compose $COMPOSE_ARGS up -d "$SERVICE_NAME"
+      fi
+    fi
+  fi
+}
+
 run_switch_command() {
   if [ -f "$SWITCH_CMD" ]; then
     if [ -x "$SWITCH_CMD" ]; then
@@ -130,7 +156,9 @@ wait_for_control_plane_health() {
 ensure_active_dashboard_available() {
   ACTIVE_SERVICE="dashboard_$CURRENT_COLOR"
   echo "[deploy] ensuring active dashboard backend is available: $ACTIVE_SERVICE"
-  docker compose $COMPOSE_ARGS --profile "$CURRENT_COLOR" up -d "$ACTIVE_SERVICE"
+  # Never recreate the currently-active color during deploy prechecks.
+  # If it exists, keep it as-is and only verify health.
+  ensure_service_running "$ACTIVE_SERVICE" "$CURRENT_COLOR"
 
   ATTEMPTS=0
   TARGET_HOST="nexus-dashboard-$CURRENT_COLOR"
@@ -192,19 +220,11 @@ if [ "$GATEWAY_RECREATE" = "1" ]; then
   docker compose $COMPOSE_ARGS up -d --force-recreate dashboard_gateway
 else
   echo "[deploy] ensuring gateway is running (no recreate)"
-  GATEWAY_ID="$(docker compose $COMPOSE_ARGS ps -q dashboard_gateway || true)"
-  if [ -z "$GATEWAY_ID" ]; then
-    docker compose $COMPOSE_ARGS up -d dashboard_gateway
-  else
-    GATEWAY_RUNNING="$(docker inspect -f '{{.State.Running}}' "$GATEWAY_ID" 2>/dev/null || echo false)"
-    if [ "$GATEWAY_RUNNING" != "true" ]; then
-      docker compose $COMPOSE_ARGS up -d dashboard_gateway
-    fi
-  fi
+  ensure_service_running "dashboard_gateway"
 fi
 
 echo "[deploy] building and starting candidate dashboard"
-docker compose $COMPOSE_ARGS --profile "$NEXT_COLOR" up -d --build "dashboard_$NEXT_COLOR"
+docker compose $COMPOSE_ARGS --profile "$NEXT_COLOR" up -d --build --force-recreate "dashboard_$NEXT_COLOR"
 
 echo "[deploy] waiting for candidate health"
 ATTEMPTS=0
