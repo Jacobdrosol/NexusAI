@@ -3009,6 +3009,8 @@ def _task_report_markdown(task: Task) -> str:
 
 
 class TaskManager:
+    _TERMINAL_TASK_STATUSES = {"completed", "failed", "retried", "cancelled"}
+
     def __init__(
         self,
         scheduler: Any,
