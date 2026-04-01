@@ -8,6 +8,7 @@
     <a class="btn" href="{{ url_for('platform_ai.platform_ai_page') }}">Back to Platform AI</a>
     {% if session %}
     <button class="btn" type="button" onclick="reloadWorkspace()">Refresh</button>
+    <button class="btn" type="button" onclick="downloadSessionExport()">Export Session</button>
     {% endif %}
   </div>
 </div>
@@ -34,6 +35,8 @@
     <button class="btn" type="button" onclick="controlSession('pause')">Pause</button>
     <button class="btn" type="button" onclick="controlSession('resume')">Resume</button>
     <button class="btn btn-danger" type="button" onclick="controlSession('stop')">Stop</button>
+    <button class="btn" type="button" onclick="controlSession('archive')">Archive</button>
+    <button class="btn" type="button" onclick="controlSession('restore')">Restore</button>
     <button class="btn" type="button" onclick="controlSession('deploy')">Deploy</button>
     <button class="btn" type="button" onclick="controlSession('code_edit')">Enable Repo Edit Path</button>
   </div>
@@ -293,6 +296,26 @@ function htmlEscape(value) {
 
 function reloadWorkspace() {
   window.location.reload();
+}
+
+async function downloadSessionExport() {
+  if (!SESSION_ID) return;
+  try {
+    const res = await fetch('/api/platform-ai/sessions/' + encodeURIComponent(SESSION_ID) + '/export');
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Export failed');
+    const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `platform-ai-session-${SESSION_ID}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (error) {
+    setStatus('session-control-status', error.message || 'Export failed', true);
+  }
 }
 
 async function controlSession(action, extra) {

@@ -85,17 +85,26 @@ def _session_context_files(session: Dict[str, Any]) -> List[Dict[str, Any]]:
 @login_required
 def platform_ai_page() -> str:
     cp = get_cp_client()
-    sessions_resp = cp.list_platform_ai_sessions(limit=300) or {}
+    sessions_active_resp = cp.list_platform_ai_sessions(limit=300, archived="active") or {}
+    sessions_archived_resp = cp.list_platform_ai_sessions(limit=300, archived="archived") or {}
     pipelines_resp = cp.list_platform_ai_pipelines() or {}
-    sessions = _as_list(sessions_resp.get("sessions"))
+    workers = cp.list_workers() or []
+    models = cp.list_models() or []
+    api_keys = cp.list_keys() or []
+    sessions_active = _as_list(sessions_active_resp.get("sessions"))
+    sessions_archived = _as_list(sessions_archived_resp.get("sessions"))
     pipelines = _as_list(pipelines_resp.get("pipelines"))
     error = None
-    if sessions_resp is None and pipelines_resp is None:
+    if sessions_active_resp is None and sessions_archived_resp is None and pipelines_resp is None:
         error = "Control plane unavailable"
     return render_template(
         "platform_ai.html",
-        sessions=sessions,
+        sessions_active=sessions_active,
+        sessions_archived=sessions_archived,
         pipelines=pipelines,
+        workers=workers,
+        models=models,
+        api_keys=api_keys,
         error=error,
         active_page="platform_ai",
     )
@@ -156,11 +165,13 @@ def api_list_platform_ai_sessions():
     assignment_id = str(request.args.get("assignment_id") or "").strip() or None
     orchestration_id = str(request.args.get("orchestration_id") or "").strip() or None
     mode = str(request.args.get("mode") or "").strip() or None
+    archived = str(request.args.get("archived") or "active").strip() or "active"
     limit = _safe_int(request.args.get("limit"), 100, min_value=1, max_value=2000)
     data = cp.list_platform_ai_sessions(
         assignment_id=assignment_id,
         orchestration_id=orchestration_id,
         mode=mode,
+        archived=archived,
         limit=limit,
     )
     if data is None:
@@ -186,6 +197,16 @@ def api_get_platform_ai_session(session_id: str):
     data = cp.get_platform_ai_session(session_id)
     if data is None:
         return _cp_error_response(cp, "failed to load platform ai session")
+    return jsonify(data)
+
+
+@bp.get("/api/platform-ai/sessions/<session_id>/export")
+@login_required
+def api_export_platform_ai_session(session_id: str):
+    cp = get_cp_client()
+    data = cp.export_platform_ai_session(session_id)
+    if data is None:
+        return _cp_error_response(cp, "failed to export platform ai session")
     return jsonify(data)
 
 

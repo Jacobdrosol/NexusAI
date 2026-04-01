@@ -264,6 +264,89 @@ async def test_platform_ai_pipeline_entry_suite_catalog_and_run(cp_client):
 
 
 @pytest.mark.anyio
+async def test_platform_ai_pipeline_session_lock_requires_archive(cp_client):
+    first = await cp_client.post(
+        "/v1/platform-ai/sessions",
+        json={
+            "mode": "pipeline_tuner",
+            "operator_id": "owner@example.com",
+            "pipeline_bot_id": "pm-orchestrator",
+            "pipeline_name": "PM Workflow",
+            "start_paused": True,
+        },
+    )
+    assert first.status_code == 200
+    first_id = str((first.json() or {}).get("id") or "")
+    assert first_id
+
+    second = await cp_client.post(
+        "/v1/platform-ai/sessions",
+        json={
+            "mode": "pipeline_tuner",
+            "operator_id": "owner@example.com",
+            "pipeline_bot_id": "pm-orchestrator",
+            "pipeline_name": "PM Workflow",
+        },
+    )
+    assert second.status_code == 409
+
+    archive_resp = await cp_client.post(
+        f"/v1/platform-ai/sessions/{first_id}/control",
+        json={"action": "archive", "operator_id": "owner@example.com"},
+    )
+    assert archive_resp.status_code == 200
+    assert str((archive_resp.json().get("session") or {}).get("status") or "") == "archived"
+
+    third = await cp_client.post(
+        "/v1/platform-ai/sessions",
+        json={
+            "mode": "pipeline_tuner",
+            "operator_id": "owner@example.com",
+            "pipeline_bot_id": "pm-orchestrator",
+            "pipeline_name": "PM Workflow",
+            "start_paused": True,
+        },
+    )
+    assert third.status_code == 200
+
+    archived_resp = await cp_client.get("/v1/platform-ai/sessions?archived=archived&limit=100")
+    assert archived_resp.status_code == 200
+    archived = archived_resp.json().get("sessions") or []
+    assert any(str(item.get("id") or "") == first_id for item in archived)
+
+    active_resp = await cp_client.get("/v1/platform-ai/sessions?archived=active&limit=100")
+    assert active_resp.status_code == 200
+    active = active_resp.json().get("sessions") or []
+    assert all(str(item.get("id") or "") != first_id for item in active)
+
+
+@pytest.mark.anyio
+async def test_platform_ai_session_export_bundle(cp_client):
+    create_resp = await cp_client.post(
+        "/v1/platform-ai/sessions",
+        json={"mode": "assignment_follower", "operator_id": "owner@example.com", "start_paused": True},
+    )
+    assert create_resp.status_code == 200
+    session_id = str((create_resp.json() or {}).get("id") or "")
+    assert session_id
+
+    message_resp = await cp_client.post(
+        f"/v1/platform-ai/sessions/{session_id}/messages",
+        json={"role": "operator", "content": "test export"},
+    )
+    assert message_resp.status_code == 200
+
+    export_resp = await cp_client.get(f"/v1/platform-ai/sessions/{session_id}/export")
+    assert export_resp.status_code == 200
+    exported = export_resp.json()
+    assert isinstance(exported.get("session"), dict)
+    assert isinstance(exported.get("messages"), list)
+    assert isinstance(exported.get("events"), list)
+    assert isinstance(exported.get("test_suites"), list)
+    assert isinstance(exported.get("test_runs"), list)
+
+
+@pytest.mark.anyio
 async def test_platform_catalog_includes_project_manager_pipeline_fallback(cp_client):
     bot_id = "pm-catalog-fallback"
     created_bot = await cp_client.post(

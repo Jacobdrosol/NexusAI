@@ -173,6 +173,7 @@ class PlatformAISessionStore:
         self,
         *,
         mode: str,
+        status: str = "active",
         assignment_id: Optional[str] = None,
         run_id: Optional[str] = None,
         orchestration_id: Optional[str] = None,
@@ -194,7 +195,7 @@ class PlatformAISessionStore:
                 (
                     session_id,
                     str(mode or "").strip(),
-                    "active",
+                    str(status or "active").strip() or "active",
                     str(assignment_id or "").strip() or None,
                     str(run_id or "").strip() or None,
                     str(orchestration_id or "").strip() or None,
@@ -242,10 +243,11 @@ class PlatformAISessionStore:
         assignment_id: Optional[str] = None,
         orchestration_id: Optional[str] = None,
         mode: Optional[str] = None,
+        archived: str = "active",
         limit: int = 100,
     ) -> List[Dict[str, Any]]:
         await self._ensure_db()
-        safe_limit = max(1, min(int(limit), 2000))
+        safe_limit = max(1, min(int(limit), 50000))
         clauses: List[str] = []
         params: List[Any] = []
         if str(assignment_id or "").strip():
@@ -257,6 +259,13 @@ class PlatformAISessionStore:
         if str(mode or "").strip():
             clauses.append("mode = ?")
             params.append(str(mode or "").strip())
+        archived_mode = str(archived or "active").strip().lower()
+        if archived_mode == "archived":
+            clauses.append("status = ?")
+            params.append("archived")
+        elif archived_mode == "active":
+            clauses.append("status != ?")
+            params.append("archived")
         where_sql = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         query = (
             "SELECT * FROM platform_ai_sessions "
@@ -355,7 +364,7 @@ class PlatformAISessionStore:
 
     async def list_events(self, session_id: str, *, limit: int = 200) -> List[Dict[str, Any]]:
         await self._ensure_db()
-        safe_limit = max(1, min(int(limit), 2000))
+        safe_limit = max(1, min(int(limit), 50000))
         async with open_sqlite(self._db_path) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
@@ -417,7 +426,7 @@ class PlatformAISessionStore:
 
     async def list_messages(self, session_id: str, *, limit: int = 200) -> List[Dict[str, Any]]:
         await self._ensure_db()
-        safe_limit = max(1, min(int(limit), 2000))
+        safe_limit = max(1, min(int(limit), 50000))
         async with open_sqlite(self._db_path) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
@@ -526,7 +535,7 @@ class PlatformAISessionStore:
         limit: int = 200,
     ) -> List[Dict[str, Any]]:
         await self._ensure_db()
-        safe_limit = max(1, min(int(limit), 2000))
+        safe_limit = max(1, min(int(limit), 50000))
         clauses: List[str] = []
         params: List[Any] = []
         if str(session_id or "").strip():
@@ -681,7 +690,7 @@ class PlatformAISessionStore:
     async def list_test_runs(self, suite_id: str, *, limit: int = 200) -> List[Dict[str, Any]]:
         await self._ensure_db()
         safe_suite_id = str(suite_id or "").strip()
-        safe_limit = max(1, min(int(limit), 2000))
+        safe_limit = max(1, min(int(limit), 50000))
         async with open_sqlite(self._db_path) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
@@ -711,3 +720,35 @@ class PlatformAISessionStore:
             }
             for row in rows
         ]
+
+    async def export_session_bundle(self, session_id: str) -> Optional[Dict[str, Any]]:
+        await self._ensure_db()
+        session = await self.get_session(session_id)
+        if session is None:
+            return None
+        safe_session_id = str(session.get("id") or "").strip()
+        if not safe_session_id:
+            return None
+
+        events = await self.list_events(safe_session_id, limit=50000)
+        messages = await self.list_messages(safe_session_id, limit=50000)
+        suites = await self.list_test_suites(session_id=safe_session_id, limit=50000)
+        suite_runs: Dict[str, List[Dict[str, Any]]] = {}
+        all_runs: List[Dict[str, Any]] = []
+        for suite in suites:
+            suite_id = str(suite.get("id") or "").strip()
+            if not suite_id:
+                continue
+            runs = await self.list_test_runs(suite_id, limit=50000)
+            suite_runs[suite_id] = runs
+            all_runs.extend(runs)
+
+        return {
+            "exported_at": _now(),
+            "session": session,
+            "messages": messages,
+            "events": events,
+            "test_suites": suites,
+            "test_runs": all_runs,
+            "suite_runs": suite_runs,
+        }

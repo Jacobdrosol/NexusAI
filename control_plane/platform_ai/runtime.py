@@ -117,7 +117,7 @@ class PlatformAISessionRuntime:
                 if session is None:
                     break
                 status = str(session.get("status") or "").strip().lower()
-                if status in {"stopped", "completed", "failed"}:
+                if status in {"stopped", "completed", "failed", "archived"}:
                     await self._store.append_event(
                         session_id,
                         "action_trace",

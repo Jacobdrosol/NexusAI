@@ -656,6 +656,7 @@ class CPClient:
         assignment_id: Optional[str] = None,
         orchestration_id: Optional[str] = None,
         mode: Optional[str] = None,
+        archived: str = "active",
         limit: int = 100,
     ) -> Optional[Dict[str, Any]]:
         parts = [f"limit={max(1, int(limit))}"]
@@ -665,6 +666,8 @@ class CPClient:
             parts.append(f"orchestration_id={requests.utils.quote(str(orchestration_id), safe='')}")
         if mode:
             parts.append(f"mode={requests.utils.quote(str(mode), safe='')}")
+        if archived:
+            parts.append(f"archived={requests.utils.quote(str(archived), safe='')}")
         return self._get("/v1/platform-ai/sessions?" + "&".join(parts))
 
     def control_platform_ai_session(self, session_id: str, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -672,6 +675,9 @@ class CPClient:
 
     def get_platform_ai_session(self, session_id: str) -> Optional[Dict[str, Any]]:
         return self._get(f"/v1/platform-ai/sessions/{session_id}")
+
+    def export_platform_ai_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+        return self._get(f"/v1/platform-ai/sessions/{session_id}/export")
 
     def patch_platform_ai_session(self, session_id: str, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return self._patch(f"/v1/platform-ai/sessions/{session_id}", body)

@@ -16,31 +16,82 @@
 
 <section class="panel" style="margin-bottom:1rem;">
   <div class="page-header" style="margin-bottom:0.75rem;">
-    <h2 class="panel-title">Sessions</h2>
-    <div class="mini-note">{{ sessions|length }} total</div>
+    <h2 class="panel-title">Active Sessions</h2>
+    <div class="mini-note">{{ sessions_active|length }} total</div>
   </div>
   <table>
     <thead>
       <tr>
-        <th>Mode</th><th>Status</th><th>Assignment</th><th>Orchestration</th><th>Operator</th><th>Updated</th><th>Metadata</th>
+        <th>Mode</th><th>Status</th><th>Pipeline</th><th>Assignment</th><th>Operator</th><th>Updated</th><th>Actions</th>
       </tr>
     </thead>
     <tbody>
-      {% for session in sessions %}
+      {% for session in sessions_active %}
+      {% set meta = session.metadata or {} %}
       <tr>
         <td>
           <a href="{{ url_for('platform_ai.platform_ai_session_page', session_id=session.id) }}"><strong>{{ session.mode }}</strong></a><br>
           <span class="mini-note"><code>{{ session.id }}</code></span>
         </td>
         <td><span class="badge badge-{{ session.status }}">{{ session.status }}</span></td>
+        <td>
+          <div>{{ meta.get("pipeline_name") or "—" }}</div>
+          <div class="mini-note"><code>{{ meta.get("pipeline_bot_id") or "—" }}</code></div>
+        </td>
         <td><code>{{ session.assignment_id or "—" }}</code></td>
-        <td><code>{{ session.orchestration_id or "—" }}</code></td>
         <td>{{ session.operator_id or "—" }}</td>
         <td>{{ (session.updated_at[:19] if session.updated_at else "") | replace('T', ' ') }}</td>
-        <td><code>{{ (session.metadata or {}) | tojson }}</code></td>
+        <td>
+          <div style="display:flex;gap:0.35rem;flex-wrap:wrap;">
+            <a class="btn btn-sm" href="{{ url_for('platform_ai.platform_ai_session_page', session_id=session.id) }}">Open</a>
+            <button class="btn btn-sm" type="button" onclick="controlSessionFromIndex('{{ session.id }}','archive')">Archive</button>
+            <button class="btn btn-sm" type="button" onclick="exportSessionFromIndex('{{ session.id }}')">Export</button>
+          </div>
+        </td>
       </tr>
       {% else %}
-      <tr><td colspan="7" class="empty">No Platform AI sessions yet</td></tr>
+      <tr><td colspan="7" class="empty">No active Platform AI sessions</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="panel" style="margin-bottom:1rem;">
+  <div class="page-header" style="margin-bottom:0.75rem;">
+    <h2 class="panel-title">Archived Sessions</h2>
+    <div class="mini-note">{{ sessions_archived|length }} total</div>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>Mode</th><th>Status</th><th>Pipeline</th><th>Assignment</th><th>Operator</th><th>Updated</th><th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for session in sessions_archived %}
+      {% set meta = session.metadata or {} %}
+      <tr>
+        <td>
+          <a href="{{ url_for('platform_ai.platform_ai_session_page', session_id=session.id) }}"><strong>{{ session.mode }}</strong></a><br>
+          <span class="mini-note"><code>{{ session.id }}</code></span>
+        </td>
+        <td><span class="badge badge-{{ session.status }}">{{ session.status }}</span></td>
+        <td>
+          <div>{{ meta.get("pipeline_name") or "—" }}</div>
+          <div class="mini-note"><code>{{ meta.get("pipeline_bot_id") or "—" }}</code></div>
+        </td>
+        <td><code>{{ session.assignment_id or "—" }}</code></td>
+        <td>{{ session.operator_id or "—" }}</td>
+        <td>{{ (session.updated_at[:19] if session.updated_at else "") | replace('T', ' ') }}</td>
+        <td>
+          <div style="display:flex;gap:0.35rem;flex-wrap:wrap;">
+            <button class="btn btn-sm" type="button" onclick="controlSessionFromIndex('{{ session.id }}','restore')">Restore</button>
+            <button class="btn btn-sm" type="button" onclick="exportSessionFromIndex('{{ session.id }}')">Export</button>
+          </div>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="empty">No archived sessions</td></tr>
       {% endfor %}
     </tbody>
   </table>
@@ -79,9 +130,9 @@
       <div>
         <label for="platform-ai-session-mode">Mode</label>
         <select id="platform-ai-session-mode" class="form-control">
-          <option value="assignment_follower">assignment_follower</option>
           <option value="pipeline_tuner">pipeline_tuner</option>
           <option value="pipeline_designer">pipeline_designer</option>
+          <option value="assignment_follower">assignment_follower</option>
         </select>
       </div>
       <div>
@@ -91,47 +142,43 @@
     </div>
     <div class="split-grid" style="grid-template-columns:1fr 1fr;gap:0.75rem;margin-bottom:0.75rem;">
       <div>
-        <label for="platform-ai-session-assignment">Assignment ID (optional)</label>
-        <input id="platform-ai-session-assignment" class="form-control" placeholder="assignment id">
+        <label for="platform-ai-session-pipeline">Pipeline</label>
+        <select id="platform-ai-session-pipeline" class="form-control">
+          <option value="">Select pipeline</option>
+          {% for pipeline in pipelines %}
+          <option value="{{ pipeline.pipeline_bot_id }}">{{ pipeline.name }} ({{ pipeline.pipeline_bot_id }})</option>
+          {% endfor %}
+        </select>
       </div>
       <div>
-        <label for="platform-ai-session-orchestration">Orchestration ID (optional)</label>
-        <input id="platform-ai-session-orchestration" class="form-control" placeholder="orchestration id">
+        <label for="platform-ai-session-pipeline-name">Pipeline Name (optional / design mode)</label>
+        <input id="platform-ai-session-pipeline-name" class="form-control" placeholder="pm-docs / pm / custom name">
       </div>
     </div>
-    <div class="split-grid" style="grid-template-columns:1fr 1fr 1fr;gap:0.75rem;margin-bottom:0.75rem;">
-      <div>
-        <label for="platform-ai-session-provider">Provider</label>
-        <input id="platform-ai-session-provider" class="form-control" placeholder="openai / anthropic / vertex">
+    <details style="margin-bottom:0.75rem;">
+      <summary style="cursor:pointer;">Optional Attach IDs</summary>
+      <div class="split-grid" style="grid-template-columns:1fr 1fr;gap:0.75rem;margin-top:0.65rem;">
+        <div>
+          <label for="platform-ai-session-assignment">Assignment ID</label>
+          <input id="platform-ai-session-assignment" class="form-control" placeholder="assignment id">
+        </div>
+        <div>
+          <label for="platform-ai-session-orchestration">Orchestration ID</label>
+          <input id="platform-ai-session-orchestration" class="form-control" placeholder="orchestration id">
+        </div>
       </div>
-      <div>
-        <label for="platform-ai-session-model">Model</label>
-        <input id="platform-ai-session-model" class="form-control" placeholder="model id">
-      </div>
-      <div>
-        <label for="platform-ai-session-backend">Backend Type</label>
-        <input id="platform-ai-session-backend" class="form-control" placeholder="responses / chat / custom">
-      </div>
-    </div>
-    <div class="split-grid" style="grid-template-columns:1fr 1fr;gap:0.75rem;margin-bottom:0.75rem;">
-      <div>
-        <label for="platform-ai-session-credential">Credential Ref</label>
-        <input id="platform-ai-session-credential" class="form-control" placeholder="vault://vertex-service-account">
-      </div>
-      <div>
-        <label for="platform-ai-session-vertex-project">Vertex Project ID</label>
-        <input id="platform-ai-session-vertex-project" class="form-control" placeholder="gcp-project-id">
+    </details>
+    <div class="panel" style="margin-bottom:0.75rem;padding:0.75rem;">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;flex-wrap:wrap;">
+        <div>
+          <div><strong>Model Config</strong></div>
+          <div id="platform-ai-session-backend-summary" class="mini-note">Not configured</div>
+        </div>
+        <button class="btn" type="button" onclick="openSessionBackendModal()">Pick Model</button>
       </div>
     </div>
-    <div class="split-grid" style="grid-template-columns:1fr 1fr;gap:0.75rem;margin-bottom:0.75rem;">
-      <div>
-        <label for="platform-ai-session-vertex-location">Vertex Location</label>
-        <input id="platform-ai-session-vertex-location" class="form-control" placeholder="us-central1">
-      </div>
-      <div>
-        <label for="platform-ai-session-params">Backend Params JSON</label>
-        <input id="platform-ai-session-params" class="form-control" placeholder='{"temperature":0.1}'>
-      </div>
+    <div style="margin-bottom:0.75rem;">
+      <label><input id="platform-ai-session-start-paused" type="checkbox" checked> Start paused (recommended)</label>
     </div>
     <div id="platform-ai-session-create-status" class="mini-note" style="margin-bottom:0.75rem;"></div>
     <div class="modal-actions">
@@ -140,23 +187,120 @@
     </div>
   </div>
 </div>
+
+<div id="modal-session-backend" class="modal" style="display:none;">
+  <div class="modal-content">
+    <h2>Model Configuration</h2>
+    <form id="form-session-backend">
+      <div class="form-group">
+        <label>Worker</label>
+        <select class="form-control" name="worker_id">
+          <option value="">None</option>
+          {% for w in workers %}
+          <option value="{{ w.id }}">{{ w.name }} ({{ w.id }})</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Type</label>
+        <select class="form-control" name="type">
+          <option value="cloud_api">cloud_api</option>
+          <option value="remote_llm">remote_llm</option>
+          <option value="local_llm">local_llm</option>
+          <option value="cli">cli</option>
+          <option value="custom">custom</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Provider / CLI</label>
+        <select class="form-control" name="provider">
+          <option value="">Select provider</option>
+          <option value="ollama_cloud">ollama_cloud</option>
+          <option value="openai">openai</option>
+          <option value="claude">claude</option>
+          <option value="gemini">gemini</option>
+          <option value="vertex">vertex</option>
+          <option value="ollama">ollama</option>
+          <option value="codex">codex</option>
+          <option value="cli">cli</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Model</label>
+        <select class="form-control" name="model_select" onchange="syncSessionModelInput(this.value)">
+          <option value="">Select discovered model...</option>
+        </select>
+        <input class="form-control" style="margin-top:0.5rem;" name="model" placeholder="Model name">
+        <div id="session-backend-model-help" class="mini-note" style="margin-top:0.45rem;">Choose provider first, then pick a model.</div>
+      </div>
+      <div class="form-group">
+        <label>API Key Ref</label>
+        <select class="form-control" name="api_key_ref">
+          <option value="">None</option>
+          {% for k in api_keys %}
+          <option value="{{ k.name }}">{{ k.name }} ({{ k.provider }})</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="split-grid" style="grid-template-columns:1fr 1fr;gap:0.75rem;">
+        <div class="form-group">
+          <label>Temperature</label>
+          <input class="form-control" type="number" step="any" name="temperature">
+        </div>
+        <div class="form-group">
+          <label>Max Tokens</label>
+          <input class="form-control" type="number" name="max_tokens">
+        </div>
+      </div>
+      <div class="split-grid" style="grid-template-columns:1fr 1fr;gap:0.75rem;">
+        <div class="form-group">
+          <label>Vertex Project ID</label>
+          <input class="form-control" name="vertex_project_id" placeholder="gcp-project-id">
+        </div>
+        <div class="form-group">
+          <label>Vertex Location</label>
+          <input class="form-control" name="vertex_location" placeholder="us-central1">
+        </div>
+      </div>
+      <details style="margin-top:0.5rem;">
+        <summary style="cursor:pointer;">Advanced Local Runtime</summary>
+        <div class="split-grid" style="grid-template-columns:1fr 1fr;margin-top:0.75rem;">
+          <div class="form-group"><label>Context Window</label><input class="form-control" type="number" name="num_ctx"></div>
+          <div class="form-group"><label>Num Width</label><input class="form-control" type="number" name="num_width"></div>
+          <div class="form-group"><label>GPU Layers</label><input class="form-control" type="number" name="num_gpu"></div>
+          <div class="form-group"><label>Main GPU Index</label><input class="form-control" type="number" name="main_gpu"></div>
+          <div class="form-group"><label>CPU Threads</label><input class="form-control" type="number" name="num_thread"></div>
+          <div class="form-group"><label>Top P</label><input class="form-control" type="number" step="any" name="top_p"></div>
+          <div class="form-group"><label>Repeat Penalty</label><input class="form-control" type="number" step="any" name="repeat_penalty"></div>
+        </div>
+      </details>
+      <div class="modal-actions">
+        <button type="button" class="btn btn-primary" onclick="applySessionBackendForm()">Apply</button>
+        <button type="button" class="btn" onclick="closeSessionBackendModal()">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
 <script>
+const PLATFORM_PIPES = {{ pipelines|tojson }};
+const WORKERS = {{ workers|tojson }};
+const GLOBAL_MODELS = {{ models|tojson }};
+const API_KEYS = {{ api_keys|tojson }};
+const PROVIDER_MODEL_SUGGESTIONS = {
+  ollama_cloud: ['qwen3.5:cloud','qwen3-coder:480b-cloud','gpt-oss:120b-cloud'],
+  openai: ['gpt-4o','gpt-4o-mini','gpt-5','gpt-5-mini'],
+  claude: ['claude-3-5-sonnet','claude-3-7-sonnet','claude-4-sonnet'],
+  gemini: ['gemini-1.5-pro','gemini-1.5-flash','gemini-2.0-flash'],
+  vertex: ['gemini-2.0-flash','gemini-1.5-pro']
+};
+let NEW_SESSION_BACKEND = null;
+
 function getCsrf() {
   const el = document.querySelector('input[name=csrf_token]');
   return el ? el.value : '';
-}
-
-function openCreateSessionModal() {
-  const modal = document.getElementById('modal-create-session');
-  if (modal) modal.style.display = 'flex';
-}
-
-function closeCreateSessionModal() {
-  const modal = document.getElementById('modal-create-session');
-  if (modal) modal.style.display = 'none';
 }
 
 function setCreateSessionStatus(message, isError) {
@@ -166,37 +310,254 @@ function setCreateSessionStatus(message, isError) {
   el.style.color = isError ? '#fca5a5' : '#a0aec0';
 }
 
-function parseJsonField(raw, fallback) {
-  const text = String(raw || '').trim();
-  if (!text) return fallback;
-  try {
-    return JSON.parse(text);
-  } catch (error) {
-    throw new Error('Invalid JSON in backend params.');
+function openCreateSessionModal() {
+  document.getElementById('modal-create-session').style.display = 'flex';
+  if (!NEW_SESSION_BACKEND) renderBackendSummary();
+}
+
+function closeCreateSessionModal() {
+  document.getElementById('modal-create-session').style.display = 'none';
+}
+
+function openSessionBackendModal() {
+  const form = document.getElementById('form-session-backend');
+  if (!form) return;
+  if (!NEW_SESSION_BACKEND) {
+    form.reset();
+    form.type.value = 'cloud_api';
+    refreshSessionApiKeyOptions('');
+    refreshSessionModelOptions('');
+  } else {
+    form.worker_id.value = NEW_SESSION_BACKEND.worker_id || '';
+    form.type.value = NEW_SESSION_BACKEND.type || 'cloud_api';
+    form.provider.value = NEW_SESSION_BACKEND.provider || '';
+    form.model.value = NEW_SESSION_BACKEND.model || '';
+    form.temperature.value = NEW_SESSION_BACKEND.params?.temperature ?? '';
+    form.max_tokens.value = NEW_SESSION_BACKEND.params?.max_tokens ?? '';
+    form.num_ctx.value = NEW_SESSION_BACKEND.params?.num_ctx ?? '';
+    form.num_width.value = NEW_SESSION_BACKEND.params?.num_width ?? '';
+    form.num_gpu.value = NEW_SESSION_BACKEND.params?.num_gpu ?? '';
+    form.main_gpu.value = NEW_SESSION_BACKEND.params?.main_gpu ?? '';
+    form.num_thread.value = NEW_SESSION_BACKEND.params?.num_thread ?? '';
+    form.top_p.value = NEW_SESSION_BACKEND.params?.top_p ?? '';
+    form.repeat_penalty.value = NEW_SESSION_BACKEND.params?.repeat_penalty ?? '';
+    form.vertex_project_id.value = NEW_SESSION_BACKEND.vertex_project_id || '';
+    form.vertex_location.value = NEW_SESSION_BACKEND.vertex_location || '';
+    refreshSessionApiKeyOptions(NEW_SESSION_BACKEND.api_key_ref || '');
+    refreshSessionModelOptions(NEW_SESSION_BACKEND.model || '');
+  }
+  document.getElementById('modal-session-backend').style.display = 'flex';
+}
+
+function closeSessionBackendModal() {
+  document.getElementById('modal-session-backend').style.display = 'none';
+}
+
+function syncSessionModelInput(value) {
+  if (!value) return;
+  document.querySelector('#form-session-backend input[name=model]').value = value;
+}
+
+function modelsForWorker(workerId, provider) {
+  const worker = (WORKERS || []).find((w) => String(w.id) === String(workerId));
+  if (!worker) return [];
+  const capabilities = Array.isArray(worker.capabilities) ? worker.capabilities : [];
+  const wanted = String(provider || '').trim().toLowerCase();
+  const names = [];
+  capabilities.forEach((cap) => {
+    if (String(cap.type || '').toLowerCase() !== 'llm') return;
+    if (wanted && String(cap.provider || '').toLowerCase() !== wanted) return;
+    (cap.models || []).forEach((name) => {
+      if (name && !names.includes(name)) names.push(name);
+    });
+  });
+  return names;
+}
+
+function globalModelsForProvider(provider) {
+  const wanted = String(provider || '').trim().toLowerCase();
+  const names = [];
+  (GLOBAL_MODELS || []).forEach((m) => {
+    if (wanted && String(m.provider || '').toLowerCase() !== wanted) return;
+    const name = String(m.name || '').trim();
+    if (name && !names.includes(name)) names.push(name);
+  });
+  return names;
+}
+
+function suggestedModelsForProvider(provider) {
+  const wanted = String(provider || '').trim().toLowerCase();
+  return Array.isArray(PROVIDER_MODEL_SUGGESTIONS[wanted]) ? PROVIDER_MODEL_SUGGESTIONS[wanted] : [];
+}
+
+function currentSessionAvailableModels() {
+  const form = document.getElementById('form-session-backend');
+  const type = String(form.type.value || '').trim().toLowerCase();
+  const provider = String(form.provider.value || '').trim().toLowerCase();
+  const workerId = String(form.worker_id.value || '').trim();
+  if (type === 'local_llm' && workerId) return modelsForWorker(workerId, provider);
+  const catalog = globalModelsForProvider(provider);
+  if (catalog.length) return catalog;
+  return suggestedModelsForProvider(provider);
+}
+
+function refreshSessionApiKeyOptions(preferredValue='') {
+  const form = document.getElementById('form-session-backend');
+  const select = form.api_key_ref;
+  const provider = String(form.provider.value || '').trim().toLowerCase();
+  const currentValue = preferredValue || String(select.value || '').trim();
+  const matching = (API_KEYS || []).filter((k) => {
+    const keyProvider = String(k.provider || '').trim().toLowerCase();
+    return !provider || provider === 'cli' || keyProvider === provider;
+  });
+  select.innerHTML = '<option value="">None</option>' + matching.map((k) => (
+    `<option value="${k.name}">${k.name} (${k.provider})</option>`
+  )).join('');
+  if (currentValue && matching.some((k) => String(k.name) === currentValue)) {
+    select.value = currentValue;
   }
 }
 
-async function createPlatformAISession() {
-  let params = {};
-  try {
-    params = parseJsonField(document.getElementById('platform-ai-session-params')?.value || '', {});
-  } catch (error) {
-    setCreateSessionStatus(error.message || 'Invalid params JSON', true);
+function refreshSessionModelOptions(preferredValue='') {
+  const form = document.getElementById('form-session-backend');
+  const select = form.model_select;
+  const modelInput = form.model;
+  const type = String(form.type.value || '').trim().toLowerCase();
+  const workerId = String(form.worker_id.value || '').trim();
+  const options = Array.from(new Set(currentSessionAvailableModels()));
+  const currentValue = preferredValue || modelInput.value || '';
+  const workerBoundLocal = type === 'local_llm' && !!workerId;
+  const help = document.getElementById('session-backend-model-help');
+
+  if (!options.length) {
+    select.innerHTML = workerBoundLocal
+      ? '<option value="">No installed models found on worker</option>'
+      : '<option value="">No discovered models</option>';
+  } else {
+    select.innerHTML = '<option value="">Select discovered model...</option>' +
+      options.map((name) => `<option value="${name}">${name}</option>`).join('');
+  }
+
+  if (currentValue && options.includes(currentValue)) {
+    select.value = currentValue;
+    modelInput.value = currentValue;
+  } else if (!currentValue && options.length === 1) {
+    select.value = options[0];
+    modelInput.value = options[0];
+  }
+  if (help) {
+    help.textContent = workerBoundLocal
+      ? "This worker's installed local models are shown here."
+      : 'Provider catalog/suggested models are shown here.';
+  }
+}
+
+function applySessionBackendForm() {
+  const form = document.getElementById('form-session-backend');
+  const fd = new FormData(form);
+  const backend = {
+    type: String(fd.get('type') || '').trim(),
+    provider: String(fd.get('provider') || '').trim(),
+    model: String(fd.get('model') || '').trim(),
+    worker_id: String(fd.get('worker_id') || '').trim() || null,
+    api_key_ref: String(fd.get('api_key_ref') || '').trim() || null,
+    vertex_project_id: String(fd.get('vertex_project_id') || '').trim() || null,
+    vertex_location: String(fd.get('vertex_location') || '').trim() || null,
+  };
+  if (!backend.type || !backend.provider || !backend.model) {
+    setCreateSessionStatus('Model config needs type, provider, and model.', true);
     return;
   }
+  const temp = String(fd.get('temperature') || '').trim();
+  const maxTokens = String(fd.get('max_tokens') || '').trim();
+  const numCtx = String(fd.get('num_ctx') || '').trim();
+  const numWidth = String(fd.get('num_width') || '').trim();
+  const numGpu = String(fd.get('num_gpu') || '').trim();
+  const mainGpu = String(fd.get('main_gpu') || '').trim();
+  const numThread = String(fd.get('num_thread') || '').trim();
+  const topP = String(fd.get('top_p') || '').trim();
+  const repeatPenalty = String(fd.get('repeat_penalty') || '').trim();
+  backend.params = {};
+  if (temp) backend.params.temperature = Number(temp);
+  if (maxTokens) backend.params.max_tokens = parseInt(maxTokens, 10);
+  if (numCtx) backend.params.num_ctx = parseInt(numCtx, 10);
+  if (numWidth) backend.params.num_width = parseInt(numWidth, 10);
+  if (numGpu) backend.params.num_gpu = parseInt(numGpu, 10);
+  if (mainGpu) backend.params.main_gpu = parseInt(mainGpu, 10);
+  if (numThread) backend.params.num_thread = parseInt(numThread, 10);
+  if (topP) backend.params.top_p = Number(topP);
+  if (repeatPenalty) backend.params.repeat_penalty = Number(repeatPenalty);
+  NEW_SESSION_BACKEND = backend;
+  renderBackendSummary();
+  closeSessionBackendModal();
+  setCreateSessionStatus('Model config applied.', false);
+}
+
+function renderBackendSummary() {
+  const el = document.getElementById('platform-ai-session-backend-summary');
+  if (!el) return;
+  if (!NEW_SESSION_BACKEND) {
+    el.textContent = 'Not configured';
+    return;
+  }
+  const provider = NEW_SESSION_BACKEND.provider || 'provider?';
+  const model = NEW_SESSION_BACKEND.model || 'model?';
+  const type = NEW_SESSION_BACKEND.type || 'type?';
+  const cred = NEW_SESSION_BACKEND.api_key_ref || 'no-key';
+  el.textContent = `${type} | ${provider} | ${model} | key: ${cred}`;
+}
+
+async function createPlatformAISession() {
+  const mode = String(document.getElementById('platform-ai-session-mode')?.value || '').trim();
+  const operatorId = String(document.getElementById('platform-ai-session-operator')?.value || '').trim() || undefined;
+  const pipelineBotId = String(document.getElementById('platform-ai-session-pipeline')?.value || '').trim() || undefined;
+  const pipelineName = String(document.getElementById('platform-ai-session-pipeline-name')?.value || '').trim() || undefined;
+  const assignmentId = String(document.getElementById('platform-ai-session-assignment')?.value || '').trim() || undefined;
+  const orchestrationId = String(document.getElementById('platform-ai-session-orchestration')?.value || '').trim() || undefined;
+  const startPaused = !!document.getElementById('platform-ai-session-start-paused')?.checked;
+
+  if (!mode) {
+    setCreateSessionStatus('Mode is required.', true);
+    return;
+  }
+  if (mode === 'pipeline_tuner' && !pipelineBotId) {
+    setCreateSessionStatus('Pipeline tuner requires selecting a pipeline.', true);
+    return;
+  }
+  if (mode === 'pipeline_designer' && !pipelineBotId && !pipelineName) {
+    setCreateSessionStatus('Pipeline designer requires a selected pipeline or pipeline name.', true);
+    return;
+  }
+  if (!NEW_SESSION_BACKEND) {
+    setCreateSessionStatus('Pick model configuration first.', true);
+    return;
+  }
+  if (String(NEW_SESSION_BACKEND.provider || '').trim().toLowerCase() === 'vertex' && !NEW_SESSION_BACKEND.api_key_ref) {
+    setCreateSessionStatus('Vertex requires an API key reference pointing to service-account JSON.', true);
+    return;
+  }
+
   const body = {
-    mode: String(document.getElementById('platform-ai-session-mode')?.value || 'assignment_follower').trim(),
-    operator_id: String(document.getElementById('platform-ai-session-operator')?.value || '').trim() || undefined,
-    assignment_id: String(document.getElementById('platform-ai-session-assignment')?.value || '').trim() || undefined,
-    orchestration_id: String(document.getElementById('platform-ai-session-orchestration')?.value || '').trim() || undefined,
-    provider: String(document.getElementById('platform-ai-session-provider')?.value || '').trim() || undefined,
-    model: String(document.getElementById('platform-ai-session-model')?.value || '').trim() || undefined,
-    backend_type: String(document.getElementById('platform-ai-session-backend')?.value || '').trim() || undefined,
-    credential_ref: String(document.getElementById('platform-ai-session-credential')?.value || '').trim() || undefined,
-    vertex_project_id: String(document.getElementById('platform-ai-session-vertex-project')?.value || '').trim() || undefined,
-    vertex_location: String(document.getElementById('platform-ai-session-vertex-location')?.value || '').trim() || undefined,
-    params: params,
-    metadata: {source: 'platform_ai_index'},
+    mode: mode,
+    start_paused: startPaused,
+    operator_id: operatorId,
+    assignment_id: assignmentId,
+    orchestration_id: orchestrationId,
+    pipeline_bot_id: pipelineBotId,
+    pipeline_name: pipelineName,
+    provider: NEW_SESSION_BACKEND.provider || undefined,
+    model: NEW_SESSION_BACKEND.model || undefined,
+    backend_type: NEW_SESSION_BACKEND.type || undefined,
+    credential_ref: NEW_SESSION_BACKEND.api_key_ref || undefined,
+    vertex_project_id: NEW_SESSION_BACKEND.vertex_project_id || undefined,
+    vertex_location: NEW_SESSION_BACKEND.vertex_location || undefined,
+    params: NEW_SESSION_BACKEND.params || {},
+    metadata: {
+      source: 'platform_ai_index',
+      pipeline_bot_id: pipelineBotId || undefined,
+      pipeline_name: pipelineName || undefined,
+      backend_worker_id: NEW_SESSION_BACKEND.worker_id || undefined,
+    },
   };
   setCreateSessionStatus('Creating session...', false);
   try {
@@ -206,7 +567,7 @@ async function createPlatformAISession() {
       body: JSON.stringify(body),
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || 'Failed to create Platform AI session');
+    if (!res.ok) throw new Error(data.error || 'Failed to create session');
     const id = String(data.id || '').trim();
     if (!id) throw new Error('Session created but response id is missing');
     window.location.href = '/platform-ai/sessions/' + encodeURIComponent(id);
@@ -214,5 +575,55 @@ async function createPlatformAISession() {
     setCreateSessionStatus(error.message || 'Failed to create session', true);
   }
 }
+
+async function controlSessionFromIndex(sessionId, action) {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return;
+  try {
+    const res = await fetch('/api/platform-ai/sessions/' + encodeURIComponent(sid) + '/control', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
+      body: JSON.stringify({action: action}),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Action failed');
+    window.location.reload();
+  } catch (error) {
+    alert(error.message || 'Action failed');
+  }
+}
+
+async function exportSessionFromIndex(sessionId) {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return;
+  try {
+    const res = await fetch('/api/platform-ai/sessions/' + encodeURIComponent(sid) + '/export');
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Export failed');
+    const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `platform-ai-session-${sid}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (error) {
+    alert(error.message || 'Export failed');
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const form = document.getElementById('form-session-backend');
+  if (!form) return;
+  form.worker_id?.addEventListener('change', () => refreshSessionModelOptions());
+  form.provider?.addEventListener('change', () => {
+    refreshSessionApiKeyOptions();
+    refreshSessionModelOptions();
+  });
+  form.type?.addEventListener('change', () => refreshSessionModelOptions());
+  renderBackendSummary();
+});
 </script>
 {% endblock %}

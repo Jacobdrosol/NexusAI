@@ -496,11 +496,14 @@ async def _wait_for_orchestration_terminal(
 
 class CreatePlatformAISessionRequest(BaseModel):
     mode: str
+    start_paused: bool = False
     assignment_id: Optional[str] = None
     run_id: Optional[str] = None
     orchestration_id: Optional[str] = None
     operator_id: Optional[str] = None
     privileged: bool = False
+    pipeline_bot_id: Optional[str] = None
+    pipeline_name: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
     provider: Optional[str] = None
     model: Optional[str] = None
@@ -622,6 +625,39 @@ async def _find_or_create_pipeline_session(request: Request, *, pipeline_bot_id:
     return paused or created
 
 
+def _session_pipeline_bot_id(session: Dict[str, Any]) -> str:
+    metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
+    return str(metadata.get("pipeline_bot_id") or metadata.get("entry_bot_id") or "").strip()
+
+
+async def _ensure_pipeline_not_already_claimed(
+    request: Request,
+    *,
+    pipeline_bot_id: str,
+) -> None:
+    safe_pipeline_bot_id = str(pipeline_bot_id or "").strip()
+    if not safe_pipeline_bot_id:
+        return
+    store = request.app.state.platform_ai_session_store
+    sessions = await store.list_sessions(limit=2000, archived="active")
+    for existing in sessions:
+        if _session_pipeline_bot_id(existing) != safe_pipeline_bot_id:
+            continue
+        metadata = existing.get("metadata") if isinstance(existing.get("metadata"), dict) else {}
+        source = str(metadata.get("source") or "").strip()
+        if bool(metadata.get("auto_managed")) or source in {"pipeline_test_modal", "pipeline_suite_api"}:
+            continue
+        existing_id = str(existing.get("id") or "").strip()
+        existing_status = str(existing.get("status") or "").strip().lower() or "unknown"
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"pipeline '{safe_pipeline_bot_id}' is already attached to session {existing_id} "
+                f"({existing_status}); archive that session before creating another"
+            ),
+        )
+
+
 @router.post("/sessions")
 async def create_session(request: Request, body: CreatePlatformAISessionRequest) -> Dict[str, Any]:
     store = request.app.state.platform_ai_session_store
@@ -629,6 +665,12 @@ async def create_session(request: Request, body: CreatePlatformAISessionRequest)
     privileged = bool(body.privileged)
     if privileged and not _is_privileged_allowed(operator_id):
         raise HTTPException(status_code=403, detail="privileged Platform AI mode is disabled or operator is not allowlisted")
+    mode = str(body.mode or "").strip()
+    if not mode:
+        raise HTTPException(status_code=400, detail="mode is required")
+
+    pipeline_bot_id = str(body.pipeline_bot_id or "").strip()
+    pipeline_name = str(body.pipeline_name or "").strip()
     backend_cfg = _default_backend_config(
         body.provider,
         body.model,
@@ -640,10 +682,32 @@ async def create_session(request: Request, body: CreatePlatformAISessionRequest)
     )
     _validate_backend_config(backend_cfg)
     metadata = dict(body.metadata or {})
+    if str(metadata.get("pipeline_bot_id") or "").strip() and not pipeline_bot_id:
+        pipeline_bot_id = str(metadata.get("pipeline_bot_id") or "").strip()
+    if str(metadata.get("pipeline_name") or "").strip() and not pipeline_name:
+        pipeline_name = str(metadata.get("pipeline_name") or "").strip()
+    if mode == "pipeline_tuner" and not pipeline_bot_id:
+        has_attach_target = bool(
+            str(body.assignment_id or "").strip()
+            or str(body.orchestration_id or "").strip()
+            or str(body.run_id or "").strip()
+        )
+        if not has_attach_target:
+            raise HTTPException(
+                status_code=400,
+                detail="pipeline_tuner sessions require pipeline_bot_id or an attached assignment/orchestration/run target",
+            )
+    if pipeline_bot_id:
+        await _ensure_pipeline_not_already_claimed(request, pipeline_bot_id=pipeline_bot_id)
+        metadata["pipeline_bot_id"] = pipeline_bot_id
+    if pipeline_name:
+        metadata["pipeline_name"] = pipeline_name
     metadata["backend"] = backend_cfg
     metadata.setdefault("current_phase", "observe")
+    initial_status = "paused" if bool(body.start_paused) else "active"
     session = await store.create_session(
-        mode=body.mode,
+        mode=mode,
+        status=initial_status,
         assignment_id=body.assignment_id,
         run_id=body.run_id,
         orchestration_id=body.orchestration_id,
@@ -668,6 +732,7 @@ async def list_sessions(
     assignment_id: Optional[str] = None,
     orchestration_id: Optional[str] = None,
     mode: Optional[str] = None,
+    archived: str = "active",
     limit: int = 100,
 ) -> Dict[str, Any]:
     store = request.app.state.platform_ai_session_store
@@ -675,6 +740,7 @@ async def list_sessions(
         assignment_id=assignment_id,
         orchestration_id=orchestration_id,
         mode=mode,
+        archived=archived,
         limit=limit,
     )
     return {"sessions": sessions}
@@ -687,6 +753,27 @@ async def get_session(session_id: str, request: Request) -> Dict[str, Any]:
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
     return session
+
+
+@router.get("/sessions/{session_id}/export")
+async def export_session(session_id: str, request: Request) -> Dict[str, Any]:
+    store = request.app.state.platform_ai_session_store
+    bundle = await store.export_session_bundle(session_id)
+    if bundle is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    session_obj = bundle.get("session") if isinstance(bundle.get("session"), dict) else {}
+    pipeline_bot_id = _session_pipeline_bot_id(session_obj)
+    if pipeline_bot_id:
+        bot_registry = request.app.state.bot_registry
+        try:
+            pipeline_bot = await bot_registry.get(pipeline_bot_id)
+            if hasattr(pipeline_bot, "model_dump"):
+                bundle["pipeline_bot_config"] = pipeline_bot.model_dump()
+            else:
+                bundle["pipeline_bot_config"] = dict(pipeline_bot)
+        except Exception:
+            bundle["pipeline_bot_config"] = None
+    return bundle
 
 
 @router.patch("/sessions/{session_id}")
@@ -818,6 +905,12 @@ async def control_session(session_id: str, request: Request, body: ControlPlatfo
         result = {"status": "active"}
         if runtime is not None:
             await runtime.ensure_session_loop(session_id)
+    elif action in {"archive", "close"}:
+        next_status = "archived"
+        result = {"status": "archived"}
+    elif action in {"restore", "unarchive"}:
+        next_status = "paused"
+        result = {"status": "paused"}
     elif action in {"pause", "hold"}:
         next_status = "paused"
         result = {"status": "paused"}

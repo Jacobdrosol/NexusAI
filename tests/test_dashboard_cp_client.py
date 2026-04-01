@@ -108,3 +108,34 @@ def test_patch_platform_ai_session_uses_patch():
     called_url = str(patch_mock.call_args.args[0])
     assert called_url.endswith("/v1/platform-ai/sessions/sess-1")
     assert patch_mock.call_args.kwargs["json"]["status"] == "paused"
+
+
+def test_list_platform_ai_sessions_includes_archived_filter():
+    cp = CPClient(base_url="http://example.invalid", timeout=0.1)
+
+    ok_resp = Mock()
+    ok_resp.raise_for_status.return_value = None
+    ok_resp.text = '{"sessions":[]}'
+    ok_resp.json.return_value = {"sessions": []}
+
+    with patch("dashboard.cp_client.requests.get", return_value=ok_resp) as get_mock:
+        cp.list_platform_ai_sessions(limit=50, archived="archived")
+
+    called_url = str(get_mock.call_args.args[0])
+    assert "/v1/platform-ai/sessions?" in called_url
+    assert "archived=archived" in called_url
+
+
+def test_export_platform_ai_session_hits_export_endpoint():
+    cp = CPClient(base_url="http://example.invalid", timeout=0.1)
+
+    ok_resp = Mock()
+    ok_resp.raise_for_status.return_value = None
+    ok_resp.text = '{"session":{"id":"sess-1"}}'
+    ok_resp.json.return_value = {"session": {"id": "sess-1"}}
+
+    with patch("dashboard.cp_client.requests.get", return_value=ok_resp) as get_mock:
+        cp.export_platform_ai_session("sess-1")
+
+    called_url = str(get_mock.call_args.args[0])
+    assert called_url.endswith("/v1/platform-ai/sessions/sess-1/export")
