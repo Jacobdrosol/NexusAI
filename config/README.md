@@ -29,8 +29,10 @@ Top-level keys:
 | `control_plane.bots_config_dir` | Directory scanned for bot YAMLs |
 | `control_plane.seed_workers_from_config` | If `true`, seed missing workers from YAML files at startup. Defaults to `false` for UI-first installs. |
 | `control_plane.seed_bots_from_config` | If `true`, seed missing bots from YAML files at startup. Defaults to `false` for UI-first installs. |
+| `control_plane.force_seed_bots_from_config` | If `true`, overwrite existing bot records in the DB with YAML config values on every startup. Useful for bot-pack installs. |
 | `control_plane.heartbeat_timeout_seconds` | Seconds before a silent worker is marked offline |
 | `logging.level` | Python logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
+| `logging.file_path` | Optional log file path (e.g. `data/nexus.log`) |
 
 ## Adding a Worker
 

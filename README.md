@@ -18,6 +18,7 @@
 
 ## Documentation
 
+### User & Operator Docs
 - Getting started: `docs/GETTING_STARTED.md`
 - Chat/PM/workspace setup: `docs/CHAT_PM_WORKSPACE_SETUP.md`
 - Product usage: `docs/USER_GUIDE.md`
@@ -26,6 +27,33 @@
 - Worker node bootstrap: `worker_node/docs/WORKER_NODE_BOOTSTRAP.md`
 - UAT checklist: `docs/UAT_RUNBOOK.md`
 - Configuration reference: `config/README.md`
+
+### Developer / Refactor Reference
+- **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — Full system architecture, ASCII diagram, database schema, blue/green model, known debt
+- **[docs/PM_WORKFLOW.md](docs/PM_WORKFLOW.md)** — Complete PM orchestration DAG, stage roles, fan-out/join, scope lock, docs-only mode, known bugs
+- **[docs/REFACTOR_PRIORITIES.md](docs/REFACTOR_PRIORITIES.md)** — Prioritized refactor list with file references and rationale
+
+### Per-Module READMEs
+| Module | README |
+|--------|--------|
+| `control_plane/` | [control_plane/README.md](control_plane/README.md) |
+| `control_plane/api/` | [control_plane/api/README.md](control_plane/api/README.md) — full endpoint table |
+| `control_plane/task_manager/` | [control_plane/task_manager/README.md](control_plane/task_manager/README.md) |
+| `control_plane/scheduler/` | [control_plane/scheduler/README.md](control_plane/scheduler/README.md) |
+| `control_plane/chat/` | [control_plane/chat/README.md](control_plane/chat/README.md) |
+| `control_plane/registry/` | [control_plane/registry/README.md](control_plane/registry/README.md) |
+| `control_plane/vault/` | [control_plane/vault/README.md](control_plane/vault/README.md) |
+| `control_plane/database/` | [control_plane/database/README.md](control_plane/database/README.md) |
+| `control_plane/audit/` | [control_plane/audit/README.md](control_plane/audit/README.md) |
+| `control_plane/security/` | [control_plane/security/README.md](control_plane/security/README.md) |
+| `control_plane/keys/` | [control_plane/keys/README.md](control_plane/keys/README.md) |
+| `control_plane/github/` | [control_plane/github/README.md](control_plane/github/README.md) |
+| `shared/` | [shared/README.md](shared/README.md) |
+| `dashboard/` | [dashboard/README.md](dashboard/README.md) |
+| `dashboard/routes/` | [dashboard/routes/README.md](dashboard/routes/README.md) |
+| `worker_agent/` | [worker_agent/README.md](worker_agent/README.md) |
+| `worker_agent/backends/` | [worker_agent/backends/README.md](worker_agent/backends/README.md) |
+| `tests/` | [tests/README.md](tests/README.md) |
 
 ---
 
