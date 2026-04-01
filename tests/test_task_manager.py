@@ -8083,6 +8083,33 @@ def test_assignment_validation_rejects_database_engineer_duplicate_sql_artifacts
     assert "multiple SQL migration artifacts" in error
 
 
+def test_assignment_validation_rejects_database_engineer_pass_without_canonical_sql_artifact():
+    from control_plane.task_manager.task_manager import _assignment_validation_error
+    from shared.models import Task, TaskMetadata
+
+    task = Task(
+        id="task-db-missing-sql",
+        bot_id="pm-database-engineer",
+        payload={
+            "instruction": "Create the canonical migration script.",
+            "step_kind": "review",
+        },
+        metadata=TaskMetadata(source="bot_trigger", orchestration_id="orch-db-missing-sql"),
+        created_at="2026-03-31T00:00:00+00:00",
+        updated_at="2026-03-31T00:00:00+00:00",
+    )
+
+    result = {
+        "status": "pass",
+        "change_summary": "schema ok",
+        "artifacts": [],
+    }
+
+    error = _assignment_validation_error(task, result)
+
+    assert "required canonical `.sql` migration artifact" in error
+
+
 def test_assignment_validation_rejects_database_engineer_unexpected_repo_outputs():
     from control_plane.task_manager.task_manager import _assignment_validation_error
     from shared.models import Task, TaskMetadata
@@ -8126,6 +8153,29 @@ def test_database_result_contains_destructive_alter_table_sql():
     assert _database_result_contains_destructive_sql(result) is True
 
 
+def test_docs_only_pm_route_still_waits_for_security_completion():
+    from control_plane.task_manager.task_manager import TaskManager
+
+    tm = TaskManager(scheduler=object(), db_path=":memory:")
+
+    route = tm._classify_pm_workstream_route(
+        {
+            "title": "Documentation branch",
+            "instruction": "Write only markdown docs in docs/blocks and do not edit code.",
+            "assignment_scope": {
+                "docs_only": True,
+                "requested_output_paths": ["docs/blocks"],
+            },
+        },
+        default_target_bot_id="pm-coder",
+        policy={"consulted_root_system_prompt": True},
+    )
+
+    assert route["route_kind"] == "generic_coder"
+    assert route["target_bot_id"] == "pm-coder"
+    assert route["branch_completion_bot_ids"] == ["pm-security-reviewer"]
+
+
 def test_refresh_fanout_payload_metadata_updates_expected_branch_keys_after_pm_trim():
     from control_plane.task_manager.task_manager import TaskManager
 
@@ -8158,6 +8208,65 @@ def test_refresh_fanout_payload_metadata_updates_expected_branch_keys_after_pm_t
 
     assert all(payload["fanout_count"] == 3 for payload in refreshed)
     assert all(payload["fanout_expected_branch_keys"] == ["0", "2", "4"] for payload in refreshed)
+
+
+def test_pm_assignment_research_enforcement_canonicalizes_exact_three_default_lanes():
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Task, TaskMetadata
+
+    tm = TaskManager(scheduler=object(), db_path=":memory:")
+    task = Task(
+        id="pm-orchestrator-root",
+        bot_id="pm-orchestrator",
+        payload={"instruction": "plan the assignment"},
+        metadata=TaskMetadata(
+            source="chat_assign",
+            orchestration_id="orch-research-canonical",
+            run_class="pm_assignment",
+            root_pm_bot_id="pm-orchestrator",
+        ),
+        status="completed",
+        created_at="2026-03-31T00:00:00+00:00",
+        updated_at="2026-03-31T00:00:00+00:00",
+    )
+    trigger = type("Trigger", (), {"target_bot_id": "pm-research-analyst"})()
+    items = [
+        {
+            "id": "repo_custom",
+            "title": "Repo scan",
+            "instruction": "Inspect the repository",
+            "bot_id": "pm-research-analyst",
+            "role_hint": "researcher",
+            "step_kind": "specification",
+        },
+        {
+            "id": "data_custom",
+            "title": "Project context scan",
+            "instruction": "Inspect requirements and data context",
+            "bot_id": "pm-research-analyst",
+            "role_hint": "researcher",
+            "step_kind": "specification",
+        },
+        {
+            "id": "online_custom",
+            "title": "Online docs scan",
+            "instruction": "Inspect online docs only when needed",
+            "bot_id": "pm-research-analyst",
+            "role_hint": "researcher",
+            "step_kind": "specification",
+        },
+    ]
+
+    enforced, budget = tm._pm_assignment_enforce_default_research_items(task, trigger, items)
+
+    assert [item["id"] for item in enforced] == ["step_1_code", "step_1_data", "step_1_online"]
+    assert [item["title"] for item in enforced] == [
+        "Repository implementation patterns",
+        "Requirements and data context",
+        "External docs and standards",
+    ]
+    assert budget is not None
+    assert budget["reason"] == "pm_assignment_research_default_three"
 
 
 def test_assignment_test_source_files_recognize_dotnet_test_projects() -> None:

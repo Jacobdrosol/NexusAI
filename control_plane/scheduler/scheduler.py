@@ -368,7 +368,7 @@ def _pm_database_contract_prompt_suffix(bot_id: str | None, payload: Any) -> str
         return ""
     return (
         "\n\nDatabase stage contract:\n"
-        "Return exactly one canonical SQL migration script artifact for this stage.\n"
+        "If the outcome is pass/completed, return exactly one canonical SQL migration script artifact for this stage.\n"
         "Do not emit duplicate migration variants, alternate SQL files, test_logs outputs, or unrelated top-level repo artifacts.\n"
         "Reject destructive SQL. Forbidden statements include DELETE, DROP, TRUNCATE, and destructive ALTER TABLE forms such as DROP COLUMN or DROP CONSTRAINT.\n"
         "If the branch has no applicable database change, return a structured skip/not_applicable outcome instead of inventing SQL."

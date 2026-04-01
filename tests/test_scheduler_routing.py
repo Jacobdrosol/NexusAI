@@ -1502,7 +1502,7 @@ async def test_scheduler_appends_database_stage_contract_guidance_to_system_prom
 
     system_message = result["payload"][0]["content"]
     assert "Database stage contract:" in system_message
-    assert "exactly one canonical SQL migration script artifact" in system_message
+    assert "If the outcome is pass/completed, return exactly one canonical SQL migration script artifact" in system_message
     assert "DELETE, DROP, TRUNCATE, and destructive ALTER TABLE" in system_message
 
 

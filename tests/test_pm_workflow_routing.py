@@ -125,10 +125,31 @@ _DB_PASS = {
     "status": "pass",
     "change_summary": "db schema ok",
     "files_touched": [],
-    "artifacts": [],
+    "artifacts": [
+        {
+            "path": "migrations/20260331_canonical_feature.sql",
+            "content": "CREATE TABLE widgets(id INT PRIMARY KEY);",
+        }
+    ],
     "risks": [],
     "handoff_notes": "ready for ui test",
 }
+
+
+def _db_pass() -> dict:
+    return {
+        "status": "pass",
+        "change_summary": "db schema ok",
+        "files_touched": [],
+        "artifacts": [
+            {
+                "path": "migrations/20260331_canonical_feature.sql",
+                "content": "CREATE TABLE widgets(id INT PRIMARY KEY);",
+            }
+        ],
+        "risks": [],
+        "handoff_notes": "ready for ui test",
+    }
 
 _UI_SKIP = {
     "status": "skip",
@@ -1163,7 +1184,7 @@ async def test_pm_assignment_generic_workstreams_join_to_single_db_ui_and_final_
             if task.bot_id == "pm-security-reviewer":
                 return _SECURITY_PASS
             if task.bot_id == "pm-database-engineer":
-                return _DB_PASS
+                return _db_pass()
             if task.bot_id == "pm-ui-tester":
                 return _UI_SKIP
             if task.bot_id == "pm-final-qc":

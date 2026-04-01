@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import heapq
 import json
 import logging
@@ -1747,6 +1748,7 @@ def _database_result_contract_failure(result: Any) -> Optional[Dict[str, Any]]:
         return None
     repo_candidates = _database_result_repo_candidates(result)
     raw_text = str(result.get("raw_text") or result.get("content") or result.get("output") or "").strip()
+    status = str(result.get("status") or result.get("outcome") or "").strip().lower()
     sql_candidates = [
         item
         for item in repo_candidates
@@ -1789,6 +1791,17 @@ def _database_result_contract_failure(result: Any) -> Optional[Dict[str, Any]]:
             "message": (
                 "pm-database-engineer emitted SQL content without a canonical `.sql` migration artifact. "
                 "Return exactly one SQL script artifact."
+            ),
+            "details": {
+                "reason_code": "database_stage_missing_canonical_sql_artifact",
+            },
+        }
+    if not sql_candidates and status in {"pass", "completed", "complete"}:
+        return {
+            "code": "database_stage_missing_canonical_sql_artifact",
+            "message": (
+                "pm-database-engineer completed without returning the required canonical `.sql` migration artifact. "
+                "Return exactly one SQL script artifact, or return skip/not_applicable when no database change is needed."
             ),
             "details": {
                 "reason_code": "database_stage_missing_canonical_sql_artifact",
@@ -4004,6 +4017,13 @@ class TaskManager:
         contract = await self._bot_output_contract(bot_id)
         return str(contract.get("mode") or "model_output").strip().lower()
 
+    def _bot_allows_repo_output_for_task(self, task: Task, bot: Any) -> bool:
+        if bot_allows_repo_output(bot):
+            return True
+        if str(task.bot_id or "").strip().lower() == "pm-database-engineer":
+            return True
+        return False
+
     async def _bot_has_enabled_input_transform(self, bot_id: str) -> bool:
         bot = await self._bot_registry.get(bot_id)
         routing_rules = getattr(bot, "routing_rules", None)
@@ -4298,7 +4318,8 @@ class TaskManager:
                 except Exception:
                     bot = None
             payload = task.payload if isinstance(task.payload, dict) else {}
-            if bot is not None and not bot_allows_repo_output(bot):
+            bot_allows_repo_output_for_task = bool(bot is not None and self._bot_allows_repo_output_for_task(task, bot))
+            if bot is not None and not bot_allows_repo_output_for_task:
                 # Inject bot role as role_hint if not already present in payload
                 if "role_hint" not in payload and bot.role:
                     payload = dict(payload)
@@ -4328,8 +4349,8 @@ class TaskManager:
                 raw_result = {"deterministic_transform": True}
             else:
                 raw_result = await self._scheduler.schedule(task)
-            result = await self._normalize_task_result(task, raw_result)
-            if bot is not None and not bot_allows_repo_output(bot):
+            result = await self._normalize_task_result(task, copy.deepcopy(raw_result))
+            if bot is not None and not bot_allows_repo_output_for_task:
                 result = _strip_repo_output_claims_for_deny_policy(result)
             result = self._sanitize_pm_assignment_result(task, result)
             if _prefers_truncation_retry(task) and _looks_like_truncated_result(raw_result):
@@ -4371,7 +4392,7 @@ class TaskManager:
                     },
                     result=result,
                 )
-            if bot is not None and not bot_allows_repo_output(bot):
+            if bot is not None and not bot_allows_repo_output_for_task:
                 repo_output_paths = _result_repo_output_candidate_paths(result)
                 if repo_output_paths:
                     preview = ", ".join(repo_output_paths[:5])
@@ -4667,7 +4688,15 @@ class TaskManager:
                     bot = await self._bot_registry.get(bot_id)
                 except Exception:
                     continue
-                if bot_allows_repo_output(bot):
+                candidate_stub = Task(
+                    id="",
+                    bot_id=bot_id,
+                    payload={},
+                    status="queued",
+                    created_at="",
+                    updated_at="",
+                )
+                if self._bot_allows_repo_output_for_task(candidate_stub, bot):
                     allowed_repo_output_bot_ids.add(bot_id)
             scoped_tasks = [
                 candidate for candidate in scoped_tasks if str(candidate.bot_id or "").strip() in allowed_repo_output_bot_ids
@@ -6036,16 +6065,15 @@ class TaskManager:
         contract_bot_changed = False
         for field_name in ("bot_id", "target_bot_id", "assigned_bot_id"):
             raw_value = str(normalized.get(field_name) or "").strip()
-            if not raw_value or raw_value == "pm-coder":
-                continue
-            normalized[field_name] = "pm-coder"
-            contract_bot_changed = True
+            if raw_value != "pm-coder":
+                normalized[field_name] = "pm-coder"
+                contract_bot_changed = True
         role_hint = str(normalized.get("role_hint") or "").strip().lower()
-        if role_hint and role_hint not in {"coder", "developer", "engineer", "implementation"}:
+        if role_hint not in {"coder", "developer", "engineer", "implementation"}:
             normalized["role_hint"] = "coder"
             contract_bot_changed = True
         step_kind = str(normalized.get("step_kind") or "").strip().lower()
-        if step_kind in {"planning", "specification", "analysis", "review", "validation", "test_execution"}:
+        if step_kind != "repo_change":
             normalized["step_kind"] = "repo_change"
             contract_bot_changed = True
         deliverables = normalized.get("deliverables")
@@ -6063,16 +6091,15 @@ class TaskManager:
             workstream_copy = dict(workstream)
             for field_name in ("bot_id", "target_bot_id", "assigned_bot_id"):
                 raw_value = str(workstream_copy.get(field_name) or "").strip()
-                if not raw_value or raw_value == "pm-coder":
-                    continue
-                workstream_copy[field_name] = "pm-coder"
-                contract_bot_changed = True
+                if raw_value != "pm-coder":
+                    workstream_copy[field_name] = "pm-coder"
+                    contract_bot_changed = True
             workstream_role_hint = str(workstream_copy.get("role_hint") or "").strip().lower()
-            if workstream_role_hint and workstream_role_hint not in {"coder", "developer", "engineer", "implementation"}:
+            if workstream_role_hint not in {"coder", "developer", "engineer", "implementation"}:
                 workstream_copy["role_hint"] = "coder"
                 contract_bot_changed = True
             workstream_step_kind = str(workstream_copy.get("step_kind") or "").strip().lower()
-            if workstream_step_kind in {"planning", "specification", "analysis", "review", "validation", "test_execution"}:
+            if workstream_step_kind != "repo_change":
                 workstream_copy["step_kind"] = "repo_change"
                 contract_bot_changed = True
             workstream_deliverables = workstream_copy.get("deliverables")
@@ -6572,7 +6599,7 @@ class TaskManager:
             return {
                 "route_kind": "generic_coder",
                 "target_bot_id": default_target_bot_id,
-                "branch_completion_bot_ids": ["pm-tester"],
+                "branch_completion_bot_ids": ["pm-security-reviewer"],
                 "route_reason": "docs_only_passthrough",
             }
 
@@ -7498,11 +7525,18 @@ class TaskManager:
                 item.setdefault("depends_on", [])
             enforced_items.append(item)
 
-        if (
+        default_specs = [self._pm_assignment_default_research_item_for_lane(lane) for lane in required_lanes]
+        canonical_defaults_match = (
             not defaulted
             and len(normalized_items) == len(required_lanes)
             and all(self._pm_assignment_research_lane(item) in {"repo", "data", "online"} for item in normalized_items)
-        ):
+            and all(
+                str(item.get("id") or "").strip() == str(default_item.get("id") or "").strip()
+                and str(item.get("title") or "").strip() == str(default_item.get("title") or "").strip()
+                for item, default_item in zip(normalized_items, default_specs)
+            )
+        )
+        if canonical_defaults_match:
             return normalized_items, None
 
         return enforced_items, {
@@ -7511,6 +7545,7 @@ class TaskManager:
             "original_count": len(normalized_items),
             "kept_count": len(enforced_items),
             "split_required": split_required,
+            "defaulted_missing_lanes": defaulted,
         }
 
     def _pm_assignment_research_fanout_budget(
@@ -7612,7 +7647,22 @@ class TaskManager:
             if trigger_filter:
                 pm_fanout_budget.update(trigger_filter)
             if research_default_budget:
-                pm_fanout_budget.update(research_default_budget)
+                preserve_trigger_filter_budget = bool(
+                    trigger_filter
+                    and not bool(research_default_budget.get("defaulted_missing_lanes"))
+                    and int(research_default_budget.get("original_count") or 0)
+                    == int(research_default_budget.get("kept_count") or 0)
+                )
+                if preserve_trigger_filter_budget:
+                    pm_fanout_budget.update(
+                        {
+                            key: value
+                            for key, value in research_default_budget.items()
+                            if key not in {"reason", "original_count", "kept_count"}
+                        }
+                    )
+                else:
+                    pm_fanout_budget.update(research_default_budget)
             if fanout_budget:
                 pm_fanout_budget.update(fanout_budget)
             if implementation_budget:

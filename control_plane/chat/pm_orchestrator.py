@@ -1461,7 +1461,8 @@ class PMOrchestrator:
                     "'title' (short workstream name), 'instruction' (self-contained implementation instruction for the coder), "
                     "'scope' (list of files to create/modify), 'acceptance_criteria' (list), and 'test_strategy' (string). "
                     "The implementation_workstreams array drives the entire downstream coder fan-out — every coder, tester, "
-                    "and security reviewer branch is created from this list. Do not omit it."
+                    "and security reviewer branch is created from this list. Do not omit it. "
+                    "Do not emit direct implementation steps for pm-database-engineer, pm-ui-tester, or pm-final-qc."
                 ),
                 "bot_id": "pm-engineer",
                 "role_hint": "engineer",
