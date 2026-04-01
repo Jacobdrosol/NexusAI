@@ -5440,6 +5440,37 @@ class TaskManager:
             event,
             trigger_depth,
         )
+
+        # Pre-validate required_output_fields declared on the bot's workflow.
+        # Missing fields here almost always cause downstream triggers to silently skip.
+        _required_output_fields = list(getattr(workflow, "required_output_fields", None) or [])
+        if _required_output_fields and task.status == "completed":
+            _missing_required = (
+                [f for f in _required_output_fields if self._lookup_result_field(task.result, f) is None]
+                if isinstance(task.result, dict)
+                else list(_required_output_fields)
+            )
+            if _missing_required:
+                logger.warning(
+                    "[TRIGGER] REQUIRED_OUTPUT_MISSING task=%s bot=%s missing=%s result_keys=%s",
+                    task.id,
+                    task.bot_id,
+                    _missing_required,
+                    list(task.result.keys()) if isinstance(task.result, dict) else None,
+                )
+                await self._record_trigger_dispatch_skip(
+                    source_task=task,
+                    trigger_id="required-output-check",
+                    target_bot_id="",
+                    details={
+                        "reason": "required_output_fields_missing",
+                        "missing_fields": _missing_required,
+                        "required_fields": _required_output_fields,
+                        "result_keys": list(task.result.keys()) if isinstance(task.result, dict) else None,
+                    },
+                )
+
+        _result_mismatch_skipped: list = []
         for trigger in triggers:
             try:
                 if not trigger.enabled or trigger.event != event:
@@ -5475,15 +5506,29 @@ class TaskManager:
                 if trigger.result_field and isinstance(task.result, dict):
                     result_field_value = self._lookup_result_field(task.result, trigger.result_field)
                 if not self._trigger_matches_result(task, trigger):
-                    logger.debug(
+                    logger.warning(
                         "[TRIGGER] SKIP trigger=%s task=%s reason=result_mismatch "
-                        "result_field=%s expected=%s actual=%s",
+                        "result_field=%s expected=%s actual=%s result_keys=%s",
                         trigger.id,
                         task.id,
                         trigger.result_field,
                         trigger.result_equals,
                         result_field_value,
+                        list(task.result.keys()) if isinstance(task.result, dict) else None,
                     )
+                    await self._record_trigger_dispatch_skip(
+                        source_task=task,
+                        trigger_id=str(getattr(trigger, "id", "") or ""),
+                        target_bot_id=str(getattr(trigger, "target_bot_id", "") or ""),
+                        details={
+                            "reason": "result_field_missing_or_unmatched",
+                            "result_field": getattr(trigger, "result_field", None),
+                            "result_equals": getattr(trigger, "result_equals", None),
+                            "actual_value": str(result_field_value) if result_field_value is not None else None,
+                            "result_keys": list(task.result.keys()) if isinstance(task.result, dict) else None,
+                        },
+                    )
+                    _result_mismatch_skipped.append(str(getattr(trigger, "id", "") or ""))
                     continue
                 target_bot_id = self._resolve_trigger_target_bot_id(task, trigger.target_bot_id)
                 if not target_bot_id:
@@ -5719,6 +5764,34 @@ class TaskManager:
                     target_bot_id=str(getattr(trigger, "target_bot_id", "") or ""),
                     message=str(exc),
                 )
+        # Detect orchestration step gap: all result-conditional triggers silently skipped → possible halt.
+        if _result_mismatch_skipped:
+            _forward_ids = [
+                str(getattr(t, "id", "") or "")
+                for t in triggers
+                if getattr(t, "event", "") == event
+                and getattr(t, "result_field", None)
+            ]
+            if set(_result_mismatch_skipped) >= set(_forward_ids) and _forward_ids:
+                logger.warning(
+                    "[TRIGGER] STEP_GAP task=%s bot=%s event=%s skipped=%s — all result-conditional triggers unmatched, orchestration may have halted",
+                    task.id,
+                    task.bot_id,
+                    event,
+                    _result_mismatch_skipped,
+                )
+                await self._record_trigger_dispatch_skip(
+                    source_task=task,
+                    trigger_id="step-gap",
+                    target_bot_id="",
+                    details={
+                        "reason": "all_result_conditional_triggers_skipped",
+                        "skipped_trigger_ids": _result_mismatch_skipped,
+                        "event": event,
+                        "result_keys": list(task.result.keys()) if isinstance(task.result, dict) else None,
+                    },
+                )
+
         try:
             await self._dispatch_dynamic_pm_supplemental_tasks(task)
         except Exception as exc:
