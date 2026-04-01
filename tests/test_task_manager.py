@@ -5355,6 +5355,35 @@ async def test_chat_assign_test_execution_uses_orchestration_temp_workspace(tmp_
 
 
 @pytest.mark.anyio
+async def test_update_status_terminal_override_cancels_stale_runner_and_preserves_result(tmp_path):
+    import asyncio
+
+    from control_plane.task_manager.task_manager import TaskManager
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    class BlockingScheduler:
+        async def schedule(self, _task):
+            started.set()
+            await release.wait()
+            raise AssertionError("stale runner was not cancelled")
+
+    tm = TaskManager(BlockingScheduler(), db_path=str(tmp_path / "status-override.db"))
+    task = await tm.create_task(bot_id="bot1", payload={"instruction": "start"})
+
+    await asyncio.wait_for(started.wait(), timeout=2.0)
+
+    await tm.update_status(task.id, "completed", result={"answer": "kept"})
+    await asyncio.sleep(0.1)
+
+    updated = await tm.get_task(task.id)
+    assert updated.status == "completed"
+    assert updated.result == {"answer": "kept"}
+    assert updated.error is None
+
+
+@pytest.mark.anyio
 async def test_chat_assign_python_test_execution_writes_requested_text_report(tmp_path, monkeypatch):
     import asyncio
 

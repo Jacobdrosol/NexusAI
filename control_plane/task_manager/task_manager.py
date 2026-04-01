@@ -30,6 +30,7 @@ _TASKS_TABLE = "cp_tasks"
 _TASK_DEPENDENCIES_TABLE = "cp_task_dependencies"
 _BOT_RUNS_TABLE = "cp_bot_runs"
 _BOT_RUN_ARTIFACTS_TABLE = "cp_bot_run_artifacts"
+_STATUS_UPDATE_UNSET = object()
 
 _CREATE_TASKS = f"""
 CREATE TABLE IF NOT EXISTS {_TASKS_TABLE} (
@@ -4191,20 +4192,36 @@ class TaskManager:
         self,
         task_id: str,
         status: str,
-        result: Optional[Any] = None,
-        error: Optional[TaskError] = None,
+        result: Any = _STATUS_UPDATE_UNSET,
+        error: Any = _STATUS_UPDATE_UNSET,
     ) -> None:
         await self._ensure_db()
         should_track_trigger_dispatch = status in {"completed", "failed"}
+        runner_to_cancel: Optional[asyncio.Task[Any]] = None
         async with self._lock:
             if task_id not in self._tasks:
                 raise TaskNotFoundError(f"Task not found: {task_id}")
+            existing_task = self._tasks[task_id]
+            active_runner = self._runner_tasks.get(task_id)
+            current_async_task = asyncio.current_task()
+            if (
+                status in self._TERMINAL_TASK_STATUSES
+                and active_runner is not None
+                and active_runner is not current_async_task
+                and not active_runner.done()
+            ):
+                runner_to_cancel = active_runner
             now = datetime.now(timezone.utc).isoformat()
-            self._tasks[task_id] = self._tasks[task_id].model_copy(
+            next_result = existing_task.result if result is _STATUS_UPDATE_UNSET else result
+            if error is _STATUS_UPDATE_UNSET:
+                next_error = None if status in {"queued", "running", "completed", "retried"} else existing_task.error
+            else:
+                next_error = error
+            self._tasks[task_id] = existing_task.model_copy(
                 update={
                     "status": status,
-                    "result": result,
-                    "error": error,
+                    "result": next_result,
+                    "error": next_error,
                     "updated_at": now,
                 }
             )
@@ -4225,6 +4242,8 @@ class TaskManager:
                 self._trigger_dispatch_pending.add(task_id)
             else:
                 self._trigger_dispatch_pending.discard(task_id)
+        if runner_to_cancel is not None:
+            runner_to_cancel.cancel()
         await self._persist_task(updated_task)
         await self._upsert_bot_run(updated_task)
         try:
@@ -4232,6 +4251,10 @@ class TaskManager:
                 await self._record_artifacts_for_task(updated_task)
                 if status in {"completed", "failed"}:
                     await self._dispatch_triggers(updated_task)
+                    if should_track_trigger_dispatch:
+                        async with self._lock:
+                            self._trigger_dispatch_pending.discard(task_id)
+                        should_track_trigger_dispatch = False
                 await self._try_unblock_tasks()
         finally:
             if should_track_trigger_dispatch:
