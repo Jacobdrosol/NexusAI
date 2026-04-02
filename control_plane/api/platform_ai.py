@@ -16,6 +16,13 @@ from shared.models import TaskMetadata
 router = APIRouter(prefix="/v1/platform-ai", tags=["platform-ai"])
 
 _QUALITY_FIELDS = {"summary", "quality_gates", "acceptance_criteria", "tests", "artifacts", "warnings", "errors"}
+_TERMINAL_AUTONOMOUS_STATES = {
+    "converged",
+    "max_iterations_reached",
+    "stopped",
+    "refinement_launch_failed",
+    "launch_failed",
+}
 
 
 def _now() -> str:
@@ -97,6 +104,36 @@ def _pipeline_entry_payload(bot: Any) -> Dict[str, Any]:
         "pipeline": bool(capabilities.get("pipeline") or capabilities.get("is_pipeline_entry")),
         "pipeline_name": str(capabilities.get("pipeline_name") or "").strip() or None,
         "default_suite_id": str(testing.get("default_suite_id") or "").strip() or None,
+    }
+
+
+def _pipeline_tuner_reset_metadata(
+    session: Dict[str, Any],
+    *,
+    for_new_target: bool,
+) -> Dict[str, Any]:
+    if str(session.get("mode") or "").strip().lower() != "pipeline_tuner":
+        return {}
+    metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
+    current_status = str(session.get("status") or "").strip().lower()
+    autonomous_state = str(metadata.get("autonomous_state") or "").strip().lower()
+    should_reset = for_new_target or current_status in {"failed", "completed", "stopped"} or autonomous_state in _TERMINAL_AUTONOMOUS_STATES
+    if not should_reset:
+        return {}
+    return {
+        "autonomous_iteration": 0,
+        "autonomous_state": "observe",
+        "autonomous_launch_state": None,
+        "autonomous_launch_error": None,
+        "autonomous_last_eval_signature": None,
+        "autonomous_last_eval_status": None,
+        "autonomous_last_eval_score": None,
+        "autonomous_last_eval_run_id": None,
+        "autonomous_last_eval_at": None,
+        "autonomous_last_refine_signature": None,
+        "autonomous_last_bot_refine_result": None,
+        "autonomous_terminalized_at": None,
+        "autonomous_terminal_reason": None,
     }
 
 
@@ -916,9 +953,11 @@ async def control_session(session_id: str, request: Request, body: ControlPlatfo
 
     next_status: Optional[str] = None
     result: Dict[str, Any] = {}
+    control_metadata: Dict[str, Any] = dict(body.metadata or {})
     if action in {"start", "resume", "continue"}:
         next_status = "active"
         result = {"status": "active"}
+        control_metadata.update(_pipeline_tuner_reset_metadata(session, for_new_target=False))
         if runtime is not None:
             await runtime.ensure_session_loop(session_id)
     elif action in {"archive", "close"}:
@@ -940,12 +979,13 @@ async def control_session(session_id: str, request: Request, body: ControlPlatfo
         if not assignment_id:
             raise HTTPException(status_code=400, detail="attach_assignment requires assignment_id")
         context = await _resolve_context(request, assignment_id=assignment_id, run_id=None, orchestration_id=None)
+        control_metadata.update(_pipeline_tuner_reset_metadata(session, for_new_target=True))
         session = await store.update_session(
             session_id,
             assignment_id=context.get("assignment_id"),
             run_id=context.get("run_id"),
             orchestration_id=context.get("orchestration_id"),
-            metadata=body.metadata,
+            metadata=control_metadata,
         ) or session
         result = {
             "assignment_id": context.get("assignment_id"),
@@ -957,12 +997,13 @@ async def control_session(session_id: str, request: Request, body: ControlPlatfo
         if not orch_id:
             raise HTTPException(status_code=400, detail="attach_orchestration requires orchestration_id")
         context = await _resolve_context(request, assignment_id=None, run_id=None, orchestration_id=orch_id)
+        control_metadata.update(_pipeline_tuner_reset_metadata(session, for_new_target=True))
         session = await store.update_session(
             session_id,
             assignment_id=context.get("assignment_id"),
             run_id=context.get("run_id"),
             orchestration_id=context.get("orchestration_id"),
-            metadata=body.metadata,
+            metadata=control_metadata,
         ) or session
         result = {
             "assignment_id": context.get("assignment_id"),
@@ -1001,13 +1042,13 @@ async def control_session(session_id: str, request: Request, body: ControlPlatfo
         raise HTTPException(status_code=400, detail=f"unsupported control action: {action}")
 
     if next_status is not None:
-        session = await store.update_session(session_id, status=next_status, metadata=body.metadata) or session
-    elif body.metadata and action not in {"attach_assignment", "attach_orchestration"}:
-        session = await store.update_session(session_id, metadata=body.metadata) or session
+        session = await store.update_session(session_id, status=next_status, metadata=control_metadata) or session
+    elif control_metadata and action not in {"attach_assignment", "attach_orchestration"}:
+        session = await store.update_session(session_id, metadata=control_metadata) or session
     event = await store.append_event(
         session_id,
         "action_trace",
-        {"action": action, "operator_id": operator_id, "privileged": privileged_requested, "result": result, "metadata": body.metadata},
+        {"action": action, "operator_id": operator_id, "privileged": privileged_requested, "result": result, "metadata": control_metadata},
     )
     return {"session": session, "result": result, "event": event}
 

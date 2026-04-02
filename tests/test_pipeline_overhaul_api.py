@@ -347,6 +347,115 @@ async def test_platform_ai_session_export_bundle(cp_client):
 
 
 @pytest.mark.anyio
+async def test_platform_ai_resume_resets_exhausted_pipeline_tuner_state(cp_client):
+    create_resp = await cp_client.post(
+        "/v1/platform-ai/sessions",
+        json={
+            "mode": "pipeline_tuner",
+            "operator_id": "owner@example.com",
+            "pipeline_bot_id": "pm-orchestrator",
+            "pipeline_name": "PM Workflow",
+            "start_paused": True,
+        },
+    )
+    assert create_resp.status_code == 200
+    session_id = str((create_resp.json() or {}).get("id") or "")
+    assert session_id
+
+    patch_resp = await cp_client.patch(
+        f"/v1/platform-ai/sessions/{session_id}",
+        json={
+            "status": "failed",
+            "metadata": {
+                "autonomous_iteration": 6,
+                "autonomous_state": "max_iterations_reached",
+                "autonomous_last_eval_signature": "sig-1",
+                "autonomous_last_refine_signature": "sig-1",
+                "autonomous_terminalized_at": "2026-04-02T13:07:35+00:00",
+                "autonomous_terminal_reason": "autonomous_max_iterations_reached",
+            },
+        },
+    )
+    assert patch_resp.status_code == 200
+
+    resume_resp = await cp_client.post(
+        f"/v1/platform-ai/sessions/{session_id}/control",
+        json={"action": "resume", "operator_id": "owner@example.com"},
+    )
+    assert resume_resp.status_code == 200
+    session = resume_resp.json().get("session") or {}
+    metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
+    assert str(session.get("status") or "") == "active"
+    assert int(metadata.get("autonomous_iteration") or 0) == 0
+    assert str(metadata.get("autonomous_state") or "") == "observe"
+    assert metadata.get("autonomous_last_eval_signature") is None
+    assert metadata.get("autonomous_terminalized_at") is None
+
+
+@pytest.mark.anyio
+async def test_platform_ai_attach_assignment_resets_exhausted_pipeline_tuner_state(cp_client):
+    create_conversation = await cp_client.post("/v1/chat/conversations", json={"title": "Attach Assignment Reset"})
+    conversation_id = create_conversation.json()["id"]
+    pm_bot_id = "pm-attach-reset"
+    created_bot = await cp_client.post("/v1/bots", json=_pm_bot_payload(pm_bot_id))
+    assert created_bot.status_code == 200
+
+    create_assignment_resp = await cp_client.post(
+        "/v1/assignments",
+        json={
+            "conversation_id": conversation_id,
+            "instruction": "Attach and reset autonomous state.",
+            "pm_bot_id": pm_bot_id,
+        },
+    )
+    assert create_assignment_resp.status_code == 200
+    assignment = (create_assignment_resp.json().get("assignment") or {})
+    assignment_id = str(assignment.get("assignment_id") or "")
+    assert assignment_id
+
+    session_resp = await cp_client.post(
+        "/v1/platform-ai/sessions",
+        json={
+            "mode": "pipeline_tuner",
+            "operator_id": "owner@example.com",
+            "pipeline_bot_id": pm_bot_id,
+            "pipeline_name": "PM Workflow",
+            "start_paused": True,
+        },
+    )
+    assert session_resp.status_code == 200
+    session_id = str((session_resp.json() or {}).get("id") or "")
+    assert session_id
+
+    patch_resp = await cp_client.patch(
+        f"/v1/platform-ai/sessions/{session_id}",
+        json={
+            "metadata": {
+                "autonomous_iteration": 4,
+                "autonomous_state": "max_iterations_reached",
+                "autonomous_last_eval_signature": "sig-attach",
+                "autonomous_terminalized_at": "2026-04-02T13:07:35+00:00",
+                "autonomous_terminal_reason": "autonomous_max_iterations_reached",
+            },
+        },
+    )
+    assert patch_resp.status_code == 200
+
+    attach_resp = await cp_client.post(
+        f"/v1/platform-ai/sessions/{session_id}/control",
+        json={"action": "attach_assignment", "assignment_id": assignment_id, "operator_id": "owner@example.com"},
+    )
+    assert attach_resp.status_code == 200
+    session = attach_resp.json().get("session") or {}
+    metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
+    assert int(metadata.get("autonomous_iteration") or 0) == 0
+    assert str(metadata.get("autonomous_state") or "") == "observe"
+    assert metadata.get("autonomous_last_eval_signature") is None
+    assert metadata.get("autonomous_terminalized_at") is None
+    assert str(session.get("assignment_id") or "") == assignment_id
+
+
+@pytest.mark.anyio
 async def test_platform_catalog_includes_project_manager_pipeline_fallback(cp_client):
     bot_id = "pm-catalog-fallback"
     created_bot = await cp_client.post(
