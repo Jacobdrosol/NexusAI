@@ -189,8 +189,8 @@
     <div><strong>Mode:</strong> <span id="session-mode">{{ session.mode }}</span></div>
     <div><strong>Status:</strong> <span class="badge badge-{{ session.status }}" id="session-status">{{ session.status }}</span></div>
     <div><strong>Operator:</strong> <span id="session-operator">{{ session.operator_id or "—" }}</span></div>
-    <div><strong>Assignment:</strong> <code id="session-assignment">{{ session.assignment_id or "—" }}</code></div>
     <div><strong>Orchestration:</strong> <code id="session-orchestration">{{ session.orchestration_id or "—" }}</code></div>
+    <div><strong>Run ID:</strong> <code id="session-run-id">{{ session.run_id or "—" }}</code></div>
     <div><strong>Updated:</strong> <span id="session-updated">{{ (session.updated_at[:19] if session.updated_at else "") | replace('T',' ') }}</span></div>
     <div><strong>Current Phase:</strong> <span id="session-current-phase">{{ (session.metadata or {}).get("current_phase") or "—" }}</span></div>
     <div><strong>Active Action:</strong> <span id="session-active-action">{{ (session.metadata or {}).get("active_action") or "—" }}</span></div>
@@ -199,6 +199,7 @@
     <div><strong>Active Bots:</strong> <span id="session-active-bots">—</span></div>
     <div><strong>Last Heartbeat:</strong> <span id="session-last-heartbeat">{{ (session.metadata or {}).get("last_heartbeat_at") or "—" }}</span></div>
     <div style="grid-column:1 / -1;"><strong>Runtime Detail:</strong> <span id="session-runtime-detail" class="mini-note">—</span></div>
+    <div style="grid-column:1 / -1;" class="mini-note">Assignment ID is internal lineage metadata. Primary runtime target is orchestration ID.</div>
   </div>
   <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-top:0.75rem;">
     <button class="btn btn-primary" type="button" onclick="controlSession('start')">Start</button>
@@ -210,20 +211,11 @@
     <button class="btn" type="button" onclick="controlSession('deploy')">Deploy</button>
     <button class="btn" type="button" onclick="controlSession('code_edit')">Enable Repo Edit Path</button>
   </div>
-  <div class="split-grid" style="grid-template-columns:1fr 1fr;gap:0.75rem;margin-top:0.75rem;">
-    <div>
-      <label for="control-assignment-id">Attach Assignment</label>
-      <div style="display:flex;gap:0.5rem;">
-        <input id="control-assignment-id" class="form-control" placeholder="assignment id">
-        <button class="btn" type="button" onclick="attachAssignment()">Attach</button>
-      </div>
-    </div>
-    <div>
-      <label for="control-orchestration-id">Attach Orchestration</label>
-      <div style="display:flex;gap:0.5rem;">
-        <input id="control-orchestration-id" class="form-control" placeholder="orchestration id">
-        <button class="btn" type="button" onclick="attachOrchestration()">Attach</button>
-      </div>
+  <div style="margin-top:0.75rem;">
+    <label for="control-orchestration-id">Attach Orchestration</label>
+    <div style="display:flex;gap:0.5rem;">
+      <input id="control-orchestration-id" class="form-control" placeholder="orchestration id">
+      <button class="btn" type="button" onclick="attachOrchestration()">Attach</button>
     </div>
   </div>
   <div class="split-grid" style="grid-template-columns:1fr 1fr;gap:0.75rem;margin-top:0.75rem;">
@@ -571,15 +563,6 @@ async function controlSession(action, extra) {
   }
 }
 
-async function attachAssignment() {
-  const assignmentId = String(document.getElementById('control-assignment-id')?.value || '').trim();
-  if (!assignmentId) {
-    setStatus('session-control-status', 'assignment_id is required', true);
-    return;
-  }
-  await controlSession('attach_assignment', {assignment_id: assignmentId});
-}
-
 async function attachOrchestration() {
   const orchestrationId = String(document.getElementById('control-orchestration-id')?.value || '').trim();
   if (!orchestrationId) {
@@ -840,10 +823,10 @@ async function refreshSessionHeader() {
     badge.textContent = status || 'unknown';
     badge.className = 'badge badge-' + (status || 'unknown');
   }
-  const assign = document.getElementById('session-assignment');
-  if (assign) assign.textContent = String(data.assignment_id || '—');
   const orch = document.getElementById('session-orchestration');
   if (orch) orch.textContent = String(data.orchestration_id || '—');
+  const runIdEl = document.getElementById('session-run-id');
+  if (runIdEl) runIdEl.textContent = String(data.run_id || '—');
   const updated = document.getElementById('session-updated');
   if (updated) updated.textContent = displayTs(data.updated_at || '');
   const metadata = data && typeof data.metadata === 'object' ? data.metadata : {};
@@ -883,7 +866,6 @@ async function refreshSessionHeader() {
   const latestUpdated = String((latestTask && latestTask.updated_at) || '').trim();
   const detailBits = [];
   if (runtimeState.orchestration_id) detailBits.push(`orch ${runtimeState.orchestration_id}`);
-  if (runtimeState.assignment_id) detailBits.push(`assignment ${runtimeState.assignment_id}`);
   if (latestBot || latestStatus) {
     detailBits.push(`latest ${latestBot || 'task'} ${latestStatus || ''}`.trim());
   }

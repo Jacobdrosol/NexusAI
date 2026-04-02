@@ -22,7 +22,7 @@
   <table>
     <thead>
       <tr>
-        <th>Pipeline</th><th>Status</th><th>Mode</th><th>Assignment</th><th>Operator</th><th>Updated</th><th>Actions</th>
+        <th>Pipeline</th><th>Status</th><th>Mode</th><th>Orchestration</th><th>Operator</th><th>Updated</th><th>Actions</th>
       </tr>
     </thead>
     <tbody>
@@ -36,7 +36,7 @@
         </td>
         <td><span class="badge badge-{{ session.status }}">{{ session.status }}</span></td>
         <td><code>{{ session.mode }}</code></td>
-        <td><code>{{ session.assignment_id or "—" }}</code></td>
+        <td><code>{{ session.orchestration_id or "—" }}</code></td>
         <td>{{ session.operator_id or "—" }}</td>
         <td>{{ (session.updated_at[:19] if session.updated_at else "") | replace('T', ' ') }}</td>
         <td>
@@ -62,7 +62,7 @@
   <table>
     <thead>
       <tr>
-        <th>Pipeline</th><th>Status</th><th>Mode</th><th>Assignment</th><th>Operator</th><th>Updated</th><th>Actions</th>
+        <th>Pipeline</th><th>Status</th><th>Mode</th><th>Orchestration</th><th>Operator</th><th>Updated</th><th>Actions</th>
       </tr>
     </thead>
     <tbody>
@@ -76,7 +76,7 @@
         </td>
         <td><span class="badge badge-{{ session.status }}">{{ session.status }}</span></td>
         <td><code>{{ session.mode }}</code></td>
-        <td><code>{{ session.assignment_id or "—" }}</code></td>
+        <td><code>{{ session.orchestration_id or "—" }}</code></td>
         <td>{{ session.operator_id or "—" }}</td>
         <td>{{ (session.updated_at[:19] if session.updated_at else "") | replace('T', ' ') }}</td>
         <td>
@@ -173,16 +173,10 @@
       </div>
     </div>
     <details style="margin-bottom:0.75rem;">
-      <summary style="cursor:pointer;">Optional Attach IDs</summary>
-      <div class="split-grid" style="grid-template-columns:1fr 1fr;gap:0.75rem;margin-top:0.65rem;">
-        <div>
-          <label for="platform-ai-session-assignment">Assignment ID</label>
-          <input id="platform-ai-session-assignment" class="form-control" placeholder="assignment id">
-        </div>
-        <div>
-          <label for="platform-ai-session-orchestration">Orchestration ID</label>
-          <input id="platform-ai-session-orchestration" class="form-control" placeholder="orchestration id">
-        </div>
+      <summary style="cursor:pointer;">Optional Attach Target</summary>
+      <div style="margin-top:0.65rem;">
+        <label for="platform-ai-session-orchestration">Orchestration ID (optional)</label>
+        <input id="platform-ai-session-orchestration" class="form-control" placeholder="orchestration id">
       </div>
     </details>
     <div class="panel" style="margin-bottom:0.75rem;padding:0.75rem;">
@@ -533,7 +527,6 @@ async function createPlatformAISession() {
   const pipelineName = String(document.getElementById('platform-ai-session-pipeline-name')?.value || '').trim() || undefined;
   const projectId = String(document.getElementById('platform-ai-session-project')?.value || '').trim() || undefined;
   const targetBotId = String(document.getElementById('platform-ai-session-target-bot')?.value || '').trim() || undefined;
-  const assignmentId = String(document.getElementById('platform-ai-session-assignment')?.value || '').trim() || undefined;
   const orchestrationId = String(document.getElementById('platform-ai-session-orchestration')?.value || '').trim() || undefined;
   const startPaused = !!document.getElementById('platform-ai-session-start-paused')?.checked;
 
@@ -566,7 +559,6 @@ async function createPlatformAISession() {
     mode: mode,
     start_paused: startPaused,
     operator_id: operatorId,
-    assignment_id: assignmentId,
     orchestration_id: orchestrationId,
     project_id: projectId,
     pipeline_bot_id: pipelineBotId,

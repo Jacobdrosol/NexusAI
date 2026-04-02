@@ -418,7 +418,7 @@ class PlatformAISessionRuntime:
         phase = "observe"
         active_action = "monitor_pipeline"
         if not context.get("orchestration_id"):
-            active_action = "await_target_attachment"
+            active_action = "await_orchestration_attachment"
             phase = "observe"
         elif int(status_counts.get("running") or 0) > 0:
             active_action = "monitor_running_bots"
@@ -436,8 +436,8 @@ class PlatformAISessionRuntime:
         running_bot_labels = [str(item.get("bot") or item.get("bot_id") or "").strip() for item in active_tasks if str(item.get("status") or "") == "running"]
         running_bot_labels = [item for item in running_bot_labels if item]
         if not context.get("orchestration_id"):
-            detail = "No assignment/orchestration attached yet. Attach a target run or start an isolated pipeline test."
-            heartbeat_detail = "Waiting for attached assignment/orchestration."
+            detail = "No orchestration attached yet. Attach an orchestration ID or launch an isolated pipeline test."
+            heartbeat_detail = "Waiting for attached orchestration ID."
         elif not total_tasks:
             detail = f"Attached to orchestration {context.get('orchestration_id')}, waiting for tasks to appear."
             heartbeat_detail = "No tasks available yet for the attached orchestration."
