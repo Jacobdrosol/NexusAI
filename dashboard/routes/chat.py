@@ -902,11 +902,31 @@ def api_mark_pm_run_failed(orchestration_id: str):
 @login_required
 def api_orchestration_graph(orchestration_id: str):
     cp = get_cp_client()
+    assignment_graph: Dict[str, Any] = {}
+    if hasattr(cp, "get_assignment_graph_by_orchestration"):
+        try:
+            fetched = cp.get_assignment_graph_by_orchestration(orchestration_id)
+        except Exception:
+            fetched = None
+        if isinstance(fetched, dict):
+            assignment_graph = fetched
+
     tasks = _cp_list_tasks_safe(cp, orchestration_id=orchestration_id, include_content=False)
     if tasks is None:
-        return jsonify({"error": "control plane unavailable"}), 502
+        fallback_tasks = assignment_graph.get("tasks") if isinstance(assignment_graph.get("tasks"), list) else None
+        if fallback_tasks is None:
+            return jsonify({"error": "control plane unavailable"}), 502
+        tasks = fallback_tasks
 
     scoped_tasks = [task for task in tasks if isinstance(task, dict)]
+    assignment_id = str(assignment_graph.get("assignment_id") or "").strip()
+    run_id = str(assignment_graph.get("run_id") or "").strip()
+    run_state = str(assignment_graph.get("state") or "").strip()
+    node_overrides = (
+        assignment_graph.get("node_overrides")
+        if isinstance(assignment_graph.get("node_overrides"), dict)
+        else {}
+    )
     task_by_id = {
         str(task.get("id") or "").strip(): task
         for task in scoped_tasks
@@ -1196,6 +1216,10 @@ def api_orchestration_graph(orchestration_id: str):
     return jsonify(
         {
             "orchestration_id": orchestration_id,
+            "assignment_id": assignment_id or None,
+            "run_id": run_id or None,
+            "state": run_state or None,
+            "node_overrides": node_overrides,
             "nodes": nodes,
             "edges": edges,
             "stage_order": stage_order,

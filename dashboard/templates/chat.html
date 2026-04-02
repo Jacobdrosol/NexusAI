@@ -2653,6 +2653,93 @@ function compareDagNodeOrder(a, b, laneRank) {
   return 0;
 }
 
+function normalizeDagNodeOverride(raw) {
+  const payload = raw && typeof raw === 'object' ? raw : {};
+  const bindings = Array.isArray(payload.connection_bindings)
+    ? payload.connection_bindings
+      .filter((item) => item && typeof item === 'object')
+      .map((item) => ({
+        slot: String(item.slot || '').trim(),
+        project_connection_id: String(item.project_connection_id || '').trim(),
+      }))
+      .filter((item) => item.slot && item.project_connection_id)
+    : [];
+  const policyOverrides = payload.policy_overrides && typeof payload.policy_overrides === 'object'
+    ? payload.policy_overrides
+    : {};
+  return {
+    skip: Boolean(payload.skip),
+    instructions: String(payload.instructions || '').trim(),
+    execution_mode: String(payload.execution_mode || '').trim(),
+    connection_bindings: bindings,
+    policy_overrides: policyOverrides,
+  };
+}
+
+function findDagNodeOverride(graph, node) {
+  const overrides = graph?.node_overrides && typeof graph.node_overrides === 'object'
+    ? graph.node_overrides
+    : {};
+  const candidates = [
+    String(node?.bot_id || '').trim(),
+    String(node?.stage_key || '').trim(),
+    String(node?.step_id || '').trim(),
+    String(node?.id || '').trim(),
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    const match = overrides[candidate];
+    if (match && typeof match === 'object') {
+      return {key: candidate, override: normalizeDagNodeOverride(match)};
+    }
+  }
+  return null;
+}
+
+function hasDagNodeOverride(override) {
+  if (!override || typeof override !== 'object') return false;
+  return Boolean(
+    override.skip
+    || override.instructions
+    || override.execution_mode
+    || (Array.isArray(override.connection_bindings) && override.connection_bindings.length)
+    || (override.policy_overrides && Object.keys(override.policy_overrides).length),
+  );
+}
+
+function formatDagNodeOverride(graph, node) {
+  const overrides = graph?.node_overrides && typeof graph.node_overrides === 'object'
+    ? graph.node_overrides
+    : {};
+  const overrideCount = Object.keys(overrides).length;
+  const metadata = [
+    formatDagField('Assignment ID', graph?.assignment_id || ''),
+    formatDagField('Assignment Run', graph?.run_id || ''),
+    formatDagField('Saved override count', overrideCount),
+  ].join('');
+  const entry = findDagNodeOverride(graph, node);
+  if (!entry || !hasDagNodeOverride(entry.override)) {
+    return `
+      <div class="dag-detail-row" style="margin-top:0.65rem;"><strong>Saved Assignment Configuration</strong></div>
+      ${metadata}
+      <div class="dag-detail-row"><strong>Node override:</strong> <span>none for this node</span></div>
+    `;
+  }
+  const bindingSummary = entry.override.connection_bindings.map((item) => `${item.slot} -> ${item.project_connection_id}`);
+  const policySummary = entry.override.policy_overrides && Object.keys(entry.override.policy_overrides).length
+    ? JSON.stringify(entry.override.policy_overrides)
+    : '';
+  return `
+    <div class="dag-detail-row" style="margin-top:0.65rem;"><strong>Saved Assignment Configuration</strong></div>
+    ${metadata}
+    ${formatDagField('Override key', entry.key)}
+    ${formatDagField('Skip node', entry.override.skip ? 'yes' : 'no')}
+    ${formatDagField('Execution mode', entry.override.execution_mode)}
+    ${formatDagField('Extra instructions', entry.override.instructions)}
+    ${formatDagField('Connection bindings', bindingSummary)}
+    ${formatDagField('Policy overrides', policySummary)}
+  `;
+}
+
 function renderDagDetail(node, graph) {
   const detail = document.getElementById('dag-detail');
   if (!detail) return;
@@ -2683,6 +2770,7 @@ function renderDagDetail(node, graph) {
       ${formatDagField('Join inputs', joinIds)}
       ${formatDagField('Depends on', node.depends_on || [])}
       ${formatDagField('Orchestration ID', graph?.orchestration_id || '')}
+      ${formatDagNodeOverride(graph, node)}
     </div>
   `;
 }
@@ -2846,8 +2934,11 @@ function renderDagGraph(graph) {
     || nodes[0];
   if (defaultNode) selectDagNode(defaultNode.id);
 
+  const overrideCount = graph?.node_overrides && typeof graph.node_overrides === 'object'
+    ? Object.keys(graph.node_overrides).length
+    : 0;
   state.className = 'state-info';
-  state.textContent = `Graph loaded: ${nodes.length} node(s).`;
+  state.textContent = `Graph loaded: ${nodes.length} node(s). Saved assignment overrides: ${overrideCount}.`;
 }
 
 async function openDagViewer(orchestrationId) {

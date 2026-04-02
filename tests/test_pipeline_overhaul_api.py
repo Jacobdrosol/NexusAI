@@ -104,6 +104,14 @@ async def test_assignment_preview_create_and_lineage(cp_client):
 
     graph_resp = await cp_client.get(f"/v1/assignments/{assignment_id}/graph")
     assert graph_resp.status_code == 200
+    orchestration_id = str(assignment.get("orchestration_id") or "")
+    assert orchestration_id
+    graph_by_orch_resp = await cp_client.get(f"/v1/assignments/by-orchestration/{orchestration_id}/graph")
+    assert graph_by_orch_resp.status_code == 200
+    graph_by_orch = graph_by_orch_resp.json()
+    overrides = graph_by_orch.get("node_overrides") if isinstance(graph_by_orch.get("node_overrides"), dict) else {}
+    assert pm_bot_id in overrides
+    assert str((overrides.get(pm_bot_id) or {}).get("execution_mode") or "") == "code_runner"
     lineage_resp = await cp_client.get(f"/v1/assignments/{assignment_id}/lineage")
     assert lineage_resp.status_code == 200
     lineage = lineage_resp.json()

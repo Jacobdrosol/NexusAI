@@ -630,6 +630,10 @@ class CPClient:
     def get_assignment_graph(self, assignment_id: str) -> Optional[Dict[str, Any]]:
         return self._get(f"/v1/assignments/{assignment_id}/graph")
 
+    def get_assignment_graph_by_orchestration(self, orchestration_id: str) -> Optional[Dict[str, Any]]:
+        safe_id = requests.utils.quote(str(orchestration_id), safe="")
+        return self._get(f"/v1/assignments/by-orchestration/{safe_id}/graph")
+
     def splice_assignment(self, assignment_id: str, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return self._post(f"/v1/assignments/{assignment_id}/splice", body, timeout=_CHAT_TIMEOUT)
 

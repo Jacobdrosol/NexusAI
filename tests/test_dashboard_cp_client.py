@@ -94,6 +94,21 @@ def test_platform_ai_pipeline_endpoints():
     assert called_url.endswith("/v1/platform-ai/pipelines")
 
 
+def test_get_assignment_graph_by_orchestration_hits_expected_endpoint():
+    cp = CPClient(base_url="http://example.invalid", timeout=0.1)
+
+    ok_resp = Mock()
+    ok_resp.raise_for_status.return_value = None
+    ok_resp.text = '{"orchestration_id":"orch-1"}'
+    ok_resp.json.return_value = {"orchestration_id": "orch-1"}
+
+    with patch("dashboard.cp_client.requests.get", return_value=ok_resp) as get_mock:
+        cp.get_assignment_graph_by_orchestration("orch-1")
+
+    called_url = str(get_mock.call_args.args[0])
+    assert called_url.endswith("/v1/assignments/by-orchestration/orch-1/graph")
+
+
 def test_patch_platform_ai_session_uses_patch():
     cp = CPClient(base_url="http://example.invalid", timeout=0.1)
 

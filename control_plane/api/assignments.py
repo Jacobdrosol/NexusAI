@@ -179,6 +179,17 @@ async def assignment_graph(assignment_id: str, request: Request) -> Dict[str, An
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+@router.get("/by-orchestration/{orchestration_id}/graph")
+async def assignment_graph_by_orchestration(orchestration_id: str, request: Request) -> Dict[str, Any]:
+    service = request.app.state.assignment_service
+    try:
+        return await service.get_graph(orchestration_id=orchestration_id)
+    except Exception as exc:
+        detail = str(exc)
+        status_code = 404 if "run not found" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail)
+
+
 @router.post("/{assignment_id}/splice")
 async def splice_assignment(assignment_id: str, request: Request, body: SpliceAssignmentRequest) -> Dict[str, Any]:
     service = request.app.state.assignment_service
