@@ -361,39 +361,78 @@ def _evaluate_suite(suite: Dict[str, Any], tasks: List[Dict[str, Any]], graph: D
     }
 
 
-def _build_default_suite(*, suite_name: str, graph: Dict[str, Any]) -> Dict[str, Any]:
+def _build_default_suite(
+    *,
+    suite_name: str,
+    graph: Dict[str, Any],
+    brief_expected_deliverables: Optional[List[str]] = None,
+    brief_forbidden: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    tests = [
+        {
+            "id": "pipeline-completion",
+            "name": "Pipeline completes without failed nodes",
+            "type": "pipeline",
+            "weight": 0.30,
+            "pass_threshold": 0.95,
+            "assertions": [{"kind": "no_failed_tasks"}, {"kind": "min_completed_ratio", "value": 1.0}],
+        },
+        {
+            "id": "graph-coverage",
+            "name": "Graph nodes are represented in run execution",
+            "type": "coverage",
+            "weight": 0.20,
+            "pass_threshold": 0.9,
+            "assertions": [{"kind": "node_coverage_ratio", "value": 1.0}],
+        },
+        {
+            "id": "critical-quality",
+            "name": "Critical stages meet quality signals",
+            "type": "quality",
+            "weight": 0.25,
+            "pass_threshold": 0.8,
+            "assertions": [{"kind": "min_avg_quality", "value": 0.7, "target_nodes": _critical_nodes(graph)}],
+        },
+        {
+            "id": "terminal-stage",
+            "name": "Terminal delivery stage was reached and completed",
+            "type": "topology",
+            "weight": 0.15,
+            "pass_threshold": 1.0,
+            "assertions": [{"kind": "terminal_stage_reached"}],
+        },
+        {
+            "id": "no-stall-loop",
+            "name": "No stage spun in a stalled loop",
+            "type": "topology",
+            "weight": 0.10,
+            "pass_threshold": 1.0,
+            # Tighter threshold when operator explicitly forbids spinning behavior.
+            "assertions": [{"kind": "no_stalled_loop", "value": 3 if brief_forbidden else 5}],
+        },
+    ]
+    # If the session brief declares expected deliverables, add materialization
+    # assertions so their stages must be reached and completed.  These are
+    # zero-weight extras — they inform the report without skewing the weighted
+    # score because they're already covered by terminal-stage/graph-coverage.
+    if brief_expected_deliverables:
+        for deliverable in brief_expected_deliverables:
+            stage_hint = deliverable.lower().replace(" ", "_")
+            tests.append({
+                "id": f"deliverable-{stage_hint}",
+                "name": f"Expected deliverable stage '{deliverable}' materialized",
+                "type": "topology",
+                "weight": 0.0,
+                "pass_threshold": 1.0,
+                "assertions": [{"kind": "required_stage_materialization", "target_node": stage_hint}],
+            })
     return {
         "name": suite_name,
         "version": "v1",
         "generated_at": _now(),
         "suite_pass_threshold": 0.8,
         "graph_nodes": _node_ids(graph),
-        "tests": [
-            {
-                "id": "pipeline-completion",
-                "name": "Pipeline completes without failed nodes",
-                "type": "pipeline",
-                "weight": 0.35,
-                "pass_threshold": 0.95,
-                "assertions": [{"kind": "no_failed_tasks"}, {"kind": "min_completed_ratio", "value": 1.0}],
-            },
-            {
-                "id": "graph-coverage",
-                "name": "Graph nodes are represented in run execution",
-                "type": "coverage",
-                "weight": 0.25,
-                "pass_threshold": 0.9,
-                "assertions": [{"kind": "node_coverage_ratio", "value": 1.0}],
-            },
-            {
-                "id": "critical-quality",
-                "name": "Critical stages meet quality signals",
-                "type": "quality",
-                "weight": 0.40,
-                "pass_threshold": 0.8,
-                "assertions": [{"kind": "min_avg_quality", "value": 0.7, "target_nodes": _critical_nodes(graph)}],
-            },
-        ],
+        "tests": tests,
     }
 
 
@@ -1608,8 +1647,35 @@ class PlatformAISessionRuntime:
         if not orchestration_id or not tasks:
             return
 
-        eval_signature_preview = f"{orchestration_id}:{len(tasks)}"
-        action_snapshot = {"orchestration_id": orchestration_id, "eval_signature": eval_signature_preview}
+        # Read session brief — it constrains what the tuner should focus on and
+        # provides expected_deliverables / forbidden_behaviors for richer assertions.
+        brief_data: Dict[str, Any] = {}
+        try:
+            brief_row = await self._store.get_session_brief(session_id)
+            if isinstance(brief_row, dict):
+                brief_data = brief_row.get("brief") if isinstance(brief_row.get("brief"), dict) else {}
+        except Exception:
+            pass
+        brief_expected_deliverables: List[str] = [
+            str(d) for d in (brief_data.get("expected_deliverables") or []) if str(d).strip()
+        ]
+        brief_tuning_scope = str(brief_data.get("tuning_scope") or "").strip()
+        brief_forbidden = [
+            str(b) for b in (brief_data.get("forbidden_behaviors") or []) if str(b).strip()
+        ]
+
+        # Dedup using a richer signature that includes task statuses so that
+        # status transitions (e.g. running→completed) are not suppressed.
+        _status_key = ":".join(
+            f"{str(t.get('id', ''))[:8]}={str(t.get('status', ''))}"
+            for t in sorted(tasks, key=lambda t: str(t.get("id") or ""))[:20]
+        )
+        eval_signature_preview = f"{orchestration_id}:{len(tasks)}:{_status_key}"
+        action_snapshot = {
+            "orchestration_id": orchestration_id,
+            "eval_signature": eval_signature_preview,
+            "brief_tuning_scope": brief_tuning_scope or None,
+        }
         recent_actions = await self._store.list_actions(session_id, limit=10)
         current_input_hash = self._compute_state_hash(action_snapshot)
         if any(
@@ -1648,7 +1714,12 @@ class PlatformAISessionRuntime:
             suite = existing[0] if existing else None
         if suite is None:
             suite_name = f"{pipeline_name or pipeline_bot_id or 'pipeline'} Autonomous Quality Suite"
-            suite_def = _build_default_suite(suite_name=suite_name, graph=graph)
+            suite_def = _build_default_suite(
+                suite_name=suite_name,
+                graph=graph,
+                brief_expected_deliverables=brief_expected_deliverables,
+                brief_forbidden=brief_forbidden,
+            )
             suite = await self._store.create_test_suite(
                 session_id=session_id,
                 name=suite_name,
@@ -1682,6 +1753,12 @@ class PlatformAISessionRuntime:
         )
 
         if not all(str(task.get("status") or "").strip().lower() in _TERMINAL_STATUSES for task in tasks):
+            await self._complete_action_record(
+                action["id"],
+                output_snapshot={"reason": "tasks_not_terminal", "task_count": len(tasks)},
+                had_effect=False,
+                summary="Tasks not yet terminal; deferring evaluation.",
+            )
             return
 
         eval_signature = json.dumps(
@@ -1702,6 +1779,12 @@ class PlatformAISessionRuntime:
             ensure_ascii=False,
         )
         if str(metadata.get("autonomous_last_eval_signature") or "") == eval_signature:
+            await self._complete_action_record(
+                action["id"],
+                output_snapshot={"reason": "eval_signature_unchanged"},
+                had_effect=False,
+                summary="Eval signature unchanged since last run; no new evaluation needed.",
+            )
             return
 
         run_record = await self._store.create_test_run(
@@ -1723,6 +1806,11 @@ class PlatformAISessionRuntime:
             "orchestration_id": orchestration_id,
             "assignment_id": context.get("assignment_id"),
             "run_id": context.get("run_id"),
+            # Session brief constraints — makes the evaluation result actionable
+            # against operator-declared expectations, not just graph heuristics.
+            "brief_expected_deliverables": brief_expected_deliverables or None,
+            "brief_tuning_scope": brief_tuning_scope or None,
+            "brief_forbidden_behaviors": brief_forbidden or None,
         }
         final_run = await self._store.complete_test_run(
             str(run_record.get("id") or ""),

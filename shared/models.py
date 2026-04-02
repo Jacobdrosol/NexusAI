@@ -195,6 +195,10 @@ class TaskMetadata(BaseModel):
     allowed_bot_ids: List[str] = Field(default_factory=list)
     workflow_graph_id: Optional[str] = None
     run_class: Optional[str] = None
+    # Fan-out / join convergence identity — explicit fields so evaluators and
+    # join gates can operate without parsing the opaque step_id string.
+    branch_id: Optional[str] = None       # stable per-lane key (e.g. "branch:0")
+    fan_out_source: Optional[str] = None  # fanout_id that spawned this branch
 
 
 class TaskError(BaseModel):

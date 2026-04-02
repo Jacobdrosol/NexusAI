@@ -25,6 +25,19 @@ def _task_result_is_skip(result: Any) -> bool:
     return outcome == "skip" or failure_type in {"skip", "not_applicable", "not-applicable", "n/a"}
 
 
+def _infer_template_id_from_pm_bot(pm_bot: Bot) -> Optional[str]:
+    """Return a known OrchestrationTemplate ID for this PM bot's workflow graph,
+    or None if no match is found.  This lets bootstrap annotation skip needing
+    a full template-store round-trip while still giving downstream evaluators a
+    deterministic template to load."""
+    graph_id = str(bot_workflow_graph_id(pm_bot) or "").lower()
+    if "pm_software_delivery" in graph_id or "software_delivery" in graph_id:
+        return "pm_software_delivery_v1"
+    if "course_generation" in graph_id or "course" in graph_id:
+        return "course_generation_v1"
+    return None
+
+
 class PMOrchestrator:
     """Creates dependency-ordered tasks from a high-level chat assignment."""
 
@@ -613,6 +626,10 @@ class PMOrchestrator:
         allowed_bot_ids = derive_allowed_bot_ids(pm_bot.id, bots)
         workflow_graph_id = bot_workflow_graph_id(pm_bot)
         pipeline_name = f"PM Workflow: {str(pm_bot.name or pm_bot.id)}".strip()
+        # Infer the orchestration template ID from the PM bot's workflow graph
+        # so downstream evaluators can load the authoritative template definition
+        # instead of relying purely on heuristic graph discovery.
+        inferred_template_id = _infer_template_id_from_pm_bot(pm_bot)
         assignment_scope = self._extract_assignment_scope(
             instruction,
             conversation_brief=conversation_brief,
@@ -653,6 +670,9 @@ class PMOrchestrator:
                 "node_overrides": node_overrides if isinstance(node_overrides, dict) else {},
                 "orchestration_run_id": str(orchestration_run_id or "").strip(),
                 "assignment_id": str(assignment_id or "").strip(),
+                # Template hint — helps downstream evaluators load the authoritative
+                # pipeline template without relying on heuristic graph introspection.
+                "template_id": inferred_template_id or "",
             },
             metadata=TaskMetadata(
                 source="chat_assign",
@@ -934,6 +954,17 @@ class PMOrchestrator:
             )
         ]
         workflow_complete = ((not terminal_stage_id) or terminal_stage_terminal) and deliverables_complete
+        if not workflow_complete:
+            # Supplement the heuristic with the GraphCompletenessEvaluator's authoritative verdict.
+            try:
+                from control_plane.orchestration.graph_completeness import GraphCompletenessEvaluator
+                _ev = GraphCompletenessEvaluator.for_pm_software_delivery()
+                _task_dicts = [t.model_dump() for t in final_tasks]
+                _report = _ev.evaluate(graph={"nodes": [], "edges": []}, tasks=_task_dicts)
+                if bool(_report.is_complete):
+                    workflow_complete = True
+            except Exception:
+                pass
 
         # Compute all observed bot IDs across ALL tasks (not just latest cycle)
         all_observed_bot_ids: List[str] = []

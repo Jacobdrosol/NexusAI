@@ -407,19 +407,57 @@ class OrchestrationRunStore:
 
         merged_nodes = list(node_map.values()) + dynamic_nodes
         merged_edges = edges + dynamic_edges
-        aggregate_state = _aggregate_node_status([str(item.get("status") or "queued") for item in merged_nodes]) if merged_nodes else "queued"
+        # Heuristic state kept in legacy `state` column for backwards compat.
+        heuristic_state = _aggregate_node_status([str(item.get("status") or "queued") for item in merged_nodes]) if merged_nodes else "queued"
         updated_graph = {"nodes": merged_nodes, "edges": merged_edges}
+
+        # GraphCompletenessEvaluator is the authoritative source for orch_state
+        # and completion_report_json.  Fall back to heuristic if unavailable.
+        task_dicts = [
+            t.model_dump() if hasattr(t, "model_dump") else (t if isinstance(t, dict) else {})
+            for t in tasks
+        ]
+        evaluator_orch_state: Optional[str] = None
+        completion_report_str: Optional[str] = None
+        try:
+            from control_plane.orchestration.graph_completeness import GraphCompletenessEvaluator
+            _ev = GraphCompletenessEvaluator.for_pm_software_delivery()
+            _report = _ev.evaluate(graph=updated_graph, tasks=task_dicts)
+            evaluator_orch_state = str(_report.orchestration_state or "").strip() or None
+            completion_report_str = _json_dumps(_report.to_dict())
+        except Exception:
+            pass
+        orch_state = evaluator_orch_state or heuristic_state
 
         async with self._lock:
             async with open_sqlite(self._db_path) as db:
+                db.row_factory = aiosqlite.Row
+                async with db.execute(
+                    "SELECT orch_state FROM orchestration_runs WHERE id = ? LIMIT 1", (run_id,)
+                ) as cursor:
+                    row = await cursor.fetchone()
+                previous_orch_state = str(row["orch_state"] or "") if row else None
+                now = _now_iso()
                 await db.execute(
                     """
                     UPDATE orchestration_runs
-                    SET graph_snapshot = ?, state = ?, updated_at = ?
+                    SET graph_snapshot = ?, state = ?, orch_state = ?,
+                        completion_report_json = COALESCE(?, completion_report_json),
+                        updated_at = ?
                     WHERE id = ?
                     """,
-                    (_json_dumps(updated_graph), aggregate_state, _now_iso(), run_id),
+                    (_json_dumps(updated_graph), heuristic_state, orch_state,
+                     completion_report_str, now, run_id),
                 )
+                # Log the state transition for auditability.
+                if previous_orch_state and previous_orch_state != orch_state:
+                    log_id = str(uuid.uuid4())
+                    await db.execute(
+                        """INSERT INTO orchestration_run_state_log
+                           (id, run_id, previous_state, new_state, reason, actor, created_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                        (log_id, run_id, previous_orch_state, orch_state, "graph_sync", "system", now),
+                    )
                 await db.commit()
         return await self.get_run(run_id)
 

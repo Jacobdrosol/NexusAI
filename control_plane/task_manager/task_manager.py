@@ -6053,6 +6053,14 @@ class TaskManager:
                         fanout_id = payload.get("fanout_id") if isinstance(payload, dict) else None
                         fanout_idx = payload.get("fanout_index") if isinstance(payload, dict) else None
                         if fanout_id is not None:
+                            # Annotate explicit branch identity so join gates and the
+                            # GraphCompletenessEvaluator can reason about convergence
+                            # without parsing the opaque step_id string.
+                            _branch_key = self._fanout_branch_key(task, trigger, payload)
+                            branch_metadata = branch_metadata.model_copy(update={
+                                "fan_out_source": fanout_id,
+                                "branch_id": _branch_key or (f"branch:{fanout_idx}" if fanout_idx is not None else None),
+                            })
                             logger.info(
                                 "[FANOUT] trigger=%s source_task=%s fanout_id=%s branch=%s target=%s",
                                 trigger.id,
