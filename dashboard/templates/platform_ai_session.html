@@ -192,6 +192,13 @@
     <div><strong>Assignment:</strong> <code id="session-assignment">{{ session.assignment_id or "—" }}</code></div>
     <div><strong>Orchestration:</strong> <code id="session-orchestration">{{ session.orchestration_id or "—" }}</code></div>
     <div><strong>Updated:</strong> <span id="session-updated">{{ (session.updated_at[:19] if session.updated_at else "") | replace('T',' ') }}</span></div>
+    <div><strong>Current Phase:</strong> <span id="session-current-phase">{{ (session.metadata or {}).get("current_phase") or "—" }}</span></div>
+    <div><strong>Active Action:</strong> <span id="session-active-action">{{ (session.metadata or {}).get("active_action") or "—" }}</span></div>
+    <div><strong>Last Tool:</strong> <span id="session-last-tool">{{ (session.metadata or {}).get("last_tool_call") or "—" }}</span></div>
+    <div><strong>Task Progress:</strong> <span id="session-task-progress">—</span></div>
+    <div><strong>Active Bots:</strong> <span id="session-active-bots">—</span></div>
+    <div><strong>Last Heartbeat:</strong> <span id="session-last-heartbeat">{{ (session.metadata or {}).get("last_heartbeat_at") or "—" }}</span></div>
+    <div style="grid-column:1 / -1;"><strong>Runtime Detail:</strong> <span id="session-runtime-detail" class="mini-note">—</span></div>
   </div>
   <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-top:0.75rem;">
     <button class="btn btn-primary" type="button" onclick="controlSession('start')">Start</button>
@@ -840,6 +847,47 @@ async function refreshSessionHeader() {
   const updated = document.getElementById('session-updated');
   if (updated) updated.textContent = displayTs(data.updated_at || '');
   const metadata = data && typeof data.metadata === 'object' ? data.metadata : {};
+  const runtimeState = metadata && typeof metadata.runtime_state === 'object' ? metadata.runtime_state : {};
+  const setText = (id, value) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const text = String(value ?? '').trim();
+    el.textContent = text || '—';
+  };
+  setText('session-current-phase', String(metadata.current_phase || ''));
+  setText('session-active-action', String(metadata.active_action || ''));
+  setText('session-last-tool', String(metadata.last_tool_call || ''));
+  setText('session-last-heartbeat', displayTs(metadata.last_heartbeat_at || ''));
+  const statusCounts = runtimeState && typeof runtimeState.status_counts === 'object' ? runtimeState.status_counts : {};
+  const totalTasks = Number(runtimeState.task_total || 0);
+  const completed = Number(statusCounts.completed || 0);
+  const failed = Number(statusCounts.failed || 0);
+  const running = Number(statusCounts.running || 0);
+  const queued = Number(statusCounts.queued || 0);
+  const blocked = Number(statusCounts.blocked || 0);
+  setText(
+    'session-task-progress',
+    totalTasks
+      ? `${completed}/${totalTasks} completed · ${running} running · ${queued} queued · ${blocked} blocked · ${failed} failed`
+      : 'No tasks yet'
+  );
+  const activeTasks = Array.isArray(runtimeState.active_tasks) ? runtimeState.active_tasks : [];
+  const activeBotLabels = activeTasks
+    .map((row) => String(row?.bot || row?.bot_id || '').trim())
+    .filter(Boolean);
+  setText('session-active-bots', activeBotLabels.length ? activeBotLabels.slice(0, 6).join(', ') : 'None active');
+  const latestTask = runtimeState && typeof runtimeState.latest_task === 'object' ? runtimeState.latest_task : {};
+  const latestBot = String(latestTask.bot || latestTask.bot_id || '').trim();
+  const latestStatus = String(latestTask.status || '').trim();
+  const latestUpdated = String(latestTask.updated_at || '').trim();
+  const detailBits = [];
+  if (runtimeState.orchestration_id) detailBits.push(`orch ${runtimeState.orchestration_id}`);
+  if (runtimeState.assignment_id) detailBits.push(`assignment ${runtimeState.assignment_id}`);
+  if (latestBot || latestStatus) {
+    detailBits.push(`latest ${latestBot || 'task'} ${latestStatus || ''}`.trim());
+  }
+  if (latestUpdated) detailBits.push(`@ ${displayTs(latestUpdated)}`);
+  setText('session-runtime-detail', detailBits.join(' · ') || 'Waiting for session activity');
   LAST_CONTEXT_FILES = Array.isArray(metadata.context_files) ? metadata.context_files : [];
   LAST_MESSAGE_FILES = Array.isArray(metadata.message_files) ? metadata.message_files : [];
   const projectSelect = document.getElementById('session-project-id');

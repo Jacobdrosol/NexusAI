@@ -22,7 +22,7 @@
   <table>
     <thead>
       <tr>
-        <th>Mode</th><th>Status</th><th>Pipeline</th><th>Assignment</th><th>Operator</th><th>Updated</th><th>Actions</th>
+        <th>Pipeline</th><th>Status</th><th>Mode</th><th>Assignment</th><th>Operator</th><th>Updated</th><th>Actions</th>
       </tr>
     </thead>
     <tbody>
@@ -30,14 +30,12 @@
       {% set meta = session.metadata or {} %}
       <tr>
         <td>
-          <a href="{{ url_for('platform_ai.platform_ai_session_page', session_id=session.id) }}"><strong>{{ session.mode }}</strong></a><br>
+          <a href="{{ url_for('platform_ai.platform_ai_session_page', session_id=session.id) }}"><strong>{{ meta.get("pipeline_name") or "—" }}</strong></a><br>
+          <span class="mini-note"><code>{{ meta.get("pipeline_bot_id") or "—" }}</code></span><br>
           <span class="mini-note"><code>{{ session.id }}</code></span>
         </td>
         <td><span class="badge badge-{{ session.status }}">{{ session.status }}</span></td>
-        <td>
-          <div>{{ meta.get("pipeline_name") or "—" }}</div>
-          <div class="mini-note"><code>{{ meta.get("pipeline_bot_id") or "—" }}</code></div>
-        </td>
+        <td><code>{{ session.mode }}</code></td>
         <td><code>{{ session.assignment_id or "—" }}</code></td>
         <td>{{ session.operator_id or "—" }}</td>
         <td>{{ (session.updated_at[:19] if session.updated_at else "") | replace('T', ' ') }}</td>
@@ -64,7 +62,7 @@
   <table>
     <thead>
       <tr>
-        <th>Mode</th><th>Status</th><th>Pipeline</th><th>Assignment</th><th>Operator</th><th>Updated</th><th>Actions</th>
+        <th>Pipeline</th><th>Status</th><th>Mode</th><th>Assignment</th><th>Operator</th><th>Updated</th><th>Actions</th>
       </tr>
     </thead>
     <tbody>
@@ -72,14 +70,12 @@
       {% set meta = session.metadata or {} %}
       <tr>
         <td>
-          <a href="{{ url_for('platform_ai.platform_ai_session_page', session_id=session.id) }}"><strong>{{ session.mode }}</strong></a><br>
+          <a href="{{ url_for('platform_ai.platform_ai_session_page', session_id=session.id) }}"><strong>{{ meta.get("pipeline_name") or "—" }}</strong></a><br>
+          <span class="mini-note"><code>{{ meta.get("pipeline_bot_id") or "—" }}</code></span><br>
           <span class="mini-note"><code>{{ session.id }}</code></span>
         </td>
         <td><span class="badge badge-{{ session.status }}">{{ session.status }}</span></td>
-        <td>
-          <div>{{ meta.get("pipeline_name") or "—" }}</div>
-          <div class="mini-note"><code>{{ meta.get("pipeline_bot_id") or "—" }}</code></div>
-        </td>
+        <td><code>{{ session.mode }}</code></td>
         <td><code>{{ session.assignment_id or "—" }}</code></td>
         <td>{{ session.operator_id or "—" }}</td>
         <td>{{ (session.updated_at[:19] if session.updated_at else "") | replace('T', ' ') }}</td>

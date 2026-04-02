@@ -125,7 +125,13 @@ async def lifespan(app: FastAPI):
         connection_resolver=connection_resolver,
     )
     platform_ai_session_store = PlatformAISessionStore()
-    platform_ai_runtime = PlatformAISessionRuntime(platform_ai_session_store)
+    platform_ai_runtime = PlatformAISessionRuntime(
+        platform_ai_session_store,
+        assignment_service=assignment_service,
+        run_store=orchestration_run_store,
+        task_manager=task_manager,
+        bot_registry=bot_registry,
+    )
     agent_schedule_engine = AgentScheduleEngine(
         assignment_service=assignment_service,
         task_manager=task_manager,

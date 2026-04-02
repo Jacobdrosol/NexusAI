@@ -370,10 +370,14 @@ class PlatformAISessionStore:
             async with db.execute(
                 """
                 SELECT id, session_id, event_type, payload_json, created_at
-                FROM platform_ai_events
-                WHERE session_id = ?
+                FROM (
+                    SELECT id, session_id, event_type, payload_json, created_at
+                    FROM platform_ai_events
+                    WHERE session_id = ?
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                ) recent
                 ORDER BY created_at ASC
-                LIMIT ?
                 """,
                 (str(session_id or "").strip(), safe_limit),
             ) as cursor:
@@ -432,10 +436,14 @@ class PlatformAISessionStore:
             async with db.execute(
                 """
                 SELECT id, session_id, role, content, metadata_json, created_at
-                FROM platform_ai_messages
-                WHERE session_id = ?
+                FROM (
+                    SELECT id, session_id, role, content, metadata_json, created_at
+                    FROM platform_ai_messages
+                    WHERE session_id = ?
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                ) recent
                 ORDER BY created_at ASC
-                LIMIT ?
                 """,
                 (str(session_id or "").strip(), safe_limit),
             ) as cursor:
