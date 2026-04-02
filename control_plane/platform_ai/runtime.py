@@ -3,14 +3,230 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from control_plane.platform_ai.session_store import PlatformAISessionStore
+from shared.models import TaskMetadata
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+_TERMINAL_STATUSES = {"completed", "failed", "cancelled", "retried"}
+_QUALITY_FIELDS = {"summary", "quality_gates", "acceptance_criteria", "tests", "artifacts", "warnings", "errors"}
+
+
+def _task_text(task: Dict[str, Any]) -> str:
+    value = task.get("result")
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, ensure_ascii=False)
+    except Exception:
+        return str(value or "")
+
+
+def _task_fields(task: Dict[str, Any]) -> set[str]:
+    result = task.get("result")
+    if isinstance(result, dict):
+        return {str(key) for key in result.keys()}
+    return set()
+
+
+def _task_quality(task: Dict[str, Any]) -> float:
+    score = 0.0
+    status = str(task.get("status") or "").strip().lower()
+    text = _task_text(task).strip()
+    fields = _task_fields(task)
+    if status == "completed":
+        score += 0.3
+    if len(text) >= 100:
+        score += 0.2
+    elif len(text) >= 40:
+        score += 0.1
+    if fields:
+        score += 0.2
+    hits = sum(1 for field in _QUALITY_FIELDS if field in fields)
+    if hits >= 2:
+        score += 0.3
+    elif hits == 1:
+        score += 0.15
+    if "errors" in fields and isinstance(task.get("result"), dict) and task["result"].get("errors"):
+        score -= 0.15
+    return max(0.0, min(1.0, score))
+
+
+def _task_identities(task: Dict[str, Any]) -> set[str]:
+    identities = set()
+    bot_id = str(task.get("bot_id") or "").strip()
+    if bot_id:
+        identities.add(bot_id)
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    step_id = str(metadata.get("step_id") or "").strip()
+    if step_id:
+        identities.add(step_id)
+    return identities
+
+
+def _node_ids(graph: Dict[str, Any]) -> List[str]:
+    nodes = graph.get("nodes") if isinstance(graph.get("nodes"), list) else []
+    ids: List[str] = []
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        node_id = str(node.get("id") or node.get("bot_id") or "").strip()
+        if node_id and node_id not in ids:
+            ids.append(node_id)
+    return ids
+
+
+def _critical_nodes(graph: Dict[str, Any]) -> List[str]:
+    nodes = graph.get("nodes") if isinstance(graph.get("nodes"), list) else []
+    picked: List[str] = []
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        node_id = str(node.get("id") or node.get("bot_id") or "").strip()
+        desc = f"{node_id} {str(node.get('title') or '')}".lower()
+        if any(token in desc for token in ("tester", "security", "final", "qc", "database", "coder")):
+            if node_id and node_id not in picked:
+                picked.append(node_id)
+    return picked or _node_ids(graph)[:3]
+
+
+def _assertion(kind: str, passed: bool, score: float, detail: str) -> Dict[str, Any]:
+    return {
+        "kind": kind,
+        "passed": bool(passed),
+        "score": max(0.0, min(1.0, float(score))),
+        "detail": str(detail or ""),
+    }
+
+
+def _select_tasks(tasks: List[Dict[str, Any]], targets: List[str]) -> List[Dict[str, Any]]:
+    if not targets:
+        return list(tasks)
+    wanted = {str(item).strip() for item in targets if str(item).strip()}
+    selected: List[Dict[str, Any]] = []
+    for task in tasks:
+        if _task_identities(task).intersection(wanted):
+            selected.append(task)
+    return selected
+
+
+def _evaluate_assertion(assertion: Dict[str, Any], tasks: List[Dict[str, Any]], graph: Dict[str, Any]) -> Dict[str, Any]:
+    kind = str(assertion.get("kind") or "").strip().lower()
+    targets = [str(item) for item in (assertion.get("target_nodes") or []) if str(item).strip()]
+    selected = _select_tasks(tasks, targets)
+    if kind == "no_failed_tasks":
+        failed = sum(1 for task in tasks if str(task.get("status") or "").strip().lower() == "failed")
+        return _assertion(kind, failed == 0, 1.0 if failed == 0 else 0.0, f"failed_tasks={failed}")
+    if kind == "min_completed_ratio":
+        total = max(1, len(tasks))
+        completed = sum(1 for task in tasks if str(task.get("status") or "").strip().lower() == "completed")
+        ratio = completed / total
+        target = float(assertion.get("value") or 1.0)
+        return _assertion(kind, ratio >= target, min(1.0, ratio / max(0.01, target)), f"ratio={ratio:.3f}")
+    if kind == "node_coverage_ratio":
+        nodes = _node_ids(graph)
+        if not nodes:
+            return _assertion(kind, True, 1.0, "no graph nodes")
+        seen = set()
+        for task in tasks:
+            seen.update(_task_identities(task))
+        coverage = sum(1 for node in nodes if node in seen) / max(1, len(nodes))
+        target = float(assertion.get("value") or 1.0)
+        return _assertion(kind, coverage >= target, min(1.0, coverage / max(0.01, target)), f"coverage={coverage:.3f}")
+    if kind == "min_avg_quality":
+        if not selected:
+            return _assertion(kind, False, 0.0, "no target tasks")
+        avg = sum(_task_quality(task) for task in selected) / max(1, len(selected))
+        target = float(assertion.get("value") or 0.7)
+        return _assertion(kind, avg >= target, min(1.0, avg / max(0.01, target)), f"avg_quality={avg:.3f}")
+    return _assertion(kind or "unknown", False, 0.0, "unsupported assertion")
+
+
+def _evaluate_suite(suite: Dict[str, Any], tasks: List[Dict[str, Any]], graph: Dict[str, Any]) -> Dict[str, Any]:
+    tests = suite.get("tests") if isinstance(suite.get("tests"), list) else []
+    evaluated: List[Dict[str, Any]] = []
+    weighted = 0.0
+    total_weight = 0.0
+    for test in tests:
+        if not isinstance(test, dict):
+            continue
+        assertions = test.get("assertions") if isinstance(test.get("assertions"), list) else []
+        checks = [_evaluate_assertion(item, tasks, graph) for item in assertions if isinstance(item, dict)]
+        if not checks:
+            checks = [_assertion("none", False, 0.0, "no assertions")]
+        score = sum(float(item.get("score") or 0.0) for item in checks) / max(1, len(checks))
+        threshold = float(test.get("pass_threshold") or 0.8)
+        passed = all(bool(item.get("passed")) for item in checks) and score >= threshold
+        weight = float(test.get("weight") or 1.0)
+        weighted += score * max(0.0, weight)
+        total_weight += max(0.0, weight)
+        evaluated.append(
+            {
+                "id": str(test.get("id") or ""),
+                "name": str(test.get("name") or ""),
+                "type": str(test.get("type") or "quality"),
+                "score": score,
+                "pass_threshold": threshold,
+                "weight": weight,
+                "passed": passed,
+                "assertions": checks,
+            }
+        )
+    suite_score = weighted / max(0.0001, total_weight)
+    suite_threshold = float(suite.get("suite_pass_threshold") or 0.8)
+    suite_passed = bool(evaluated) and all(bool(item.get("passed")) for item in evaluated) and suite_score >= suite_threshold
+    return {
+        "status": "passed" if suite_passed else "failed",
+        "score": round(suite_score, 4),
+        "suite_pass_threshold": suite_threshold,
+        "tests": evaluated,
+        "task_count": len(tasks),
+        "graph_node_count": len(_node_ids(graph)),
+        "evaluated_at": _now(),
+    }
+
+
+def _build_default_suite(*, suite_name: str, graph: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "name": suite_name,
+        "version": "v1",
+        "generated_at": _now(),
+        "suite_pass_threshold": 0.8,
+        "graph_nodes": _node_ids(graph),
+        "tests": [
+            {
+                "id": "pipeline-completion",
+                "name": "Pipeline completes without failed nodes",
+                "type": "pipeline",
+                "weight": 0.35,
+                "pass_threshold": 0.95,
+                "assertions": [{"kind": "no_failed_tasks"}, {"kind": "min_completed_ratio", "value": 1.0}],
+            },
+            {
+                "id": "graph-coverage",
+                "name": "Graph nodes are represented in run execution",
+                "type": "coverage",
+                "weight": 0.25,
+                "pass_threshold": 0.9,
+                "assertions": [{"kind": "node_coverage_ratio", "value": 1.0}],
+            },
+            {
+                "id": "critical-quality",
+                "name": "Critical stages meet quality signals",
+                "type": "quality",
+                "weight": 0.40,
+                "pass_threshold": 0.8,
+                "assertions": [{"kind": "min_avg_quality", "value": 0.7, "target_nodes": _critical_nodes(graph)}],
+            },
+        ],
+    }
 
 
 class PlatformAISessionRuntime:
@@ -159,6 +375,7 @@ class PlatformAISessionRuntime:
                         "last_heartbeat_at": _now(),
                     },
                 )
+                await self._run_autonomous_pipeline_tuner(session_id, session=session, snapshot=snapshot)
                 now_mono = time.monotonic()
                 changed = bool(signature) and signature != previous_signature
                 heartbeat_due = (now_mono - float(self._last_heartbeat_ts.get(session_id) or 0.0)) >= 30.0
@@ -252,6 +469,27 @@ class PlatformAISessionRuntime:
                 content=f"Acknowledged. Applying operator direction: {content[:500]}",
                 metadata={"source": "runtime_ack", "operator_message_id": mid},
             )
+            session = await self._store.get_session(session_id)
+            mode = str((session or {}).get("mode") or "").strip().lower()
+            if mode == "pipeline_tuner":
+                await self._store.update_session(
+                    session_id,
+                    metadata={
+                        "autonomous_enabled": True,
+                        "autonomous_goal": content[:4000],
+                        "autonomous_goal_updated_at": _now(),
+                        "autonomous_goal_message_id": mid,
+                    },
+                )
+                await self._store.append_event(
+                    session_id,
+                    "action_trace",
+                    {
+                        "action": "autonomous_goal_updated",
+                        "goal_preview": content[:240],
+                        "message_id": mid,
+                    },
+                )
             await self._store.append_event(
                 session_id,
                 "action_trace",
@@ -499,6 +737,304 @@ class PlatformAISessionRuntime:
             "active_tasks": active_tasks,
             "orchestration_id": context.get("orchestration_id"),
         }
+
+    async def _pipeline_name_for_bot_id(self, bot_id: str) -> str:
+        safe_bot_id = str(bot_id or "").strip()
+        if not safe_bot_id:
+            return ""
+        if self._bot_registry is None:
+            return safe_bot_id
+        try:
+            bot = await self._bot_registry.get(safe_bot_id)
+        except Exception:
+            return safe_bot_id
+        capabilities = getattr(bot, "assignment_capabilities", None)
+        if hasattr(capabilities, "model_dump"):
+            capabilities = capabilities.model_dump()
+        capabilities = capabilities if isinstance(capabilities, dict) else {}
+        routing = getattr(bot, "routing_rules", None)
+        routing = routing if isinstance(routing, dict) else {}
+        launch_profile = routing.get("launch_profile") if isinstance(routing.get("launch_profile"), dict) else {}
+        return (
+            str(capabilities.get("pipeline_name") or "").strip()
+            or str(launch_profile.get("pipeline_name") or "").strip()
+            or str(launch_profile.get("label") or "").strip()
+            or str(getattr(bot, "name", "") or "").strip()
+            or safe_bot_id
+        )
+
+    async def _pipeline_launch_payload(self, *, pipeline_bot_id: str, goal: str) -> Dict[str, Any]:
+        safe_bot_id = str(pipeline_bot_id or "").strip()
+        fallback = {"instruction": (goal[:2000] if goal else f"Run pipeline test for {safe_bot_id}")}
+        if self._bot_registry is None:
+            return fallback
+        try:
+            bot = await self._bot_registry.get(safe_bot_id)
+        except Exception:
+            return fallback
+        routing = getattr(bot, "routing_rules", None)
+        routing = routing if isinstance(routing, dict) else {}
+        launch_profile = routing.get("launch_profile") if isinstance(routing.get("launch_profile"), dict) else {}
+        launch_payload = launch_profile.get("payload") if isinstance(launch_profile.get("payload"), dict) else {}
+        if not launch_payload:
+            return fallback
+        merged = dict(launch_payload)
+        if goal and not str(merged.get("instruction") or "").strip():
+            merged["instruction"] = goal[:2000]
+        return merged
+
+    def _derive_pipeline_bot_id(self, *, context: Dict[str, Any], session_metadata: Dict[str, Any]) -> Optional[str]:
+        from_meta = str(session_metadata.get("pipeline_bot_id") or "").strip()
+        if from_meta:
+            return from_meta
+        tasks = context.get("tasks") if isinstance(context.get("tasks"), list) else []
+        for row in tasks:
+            if not isinstance(row, dict):
+                continue
+            metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+            pipeline_entry = str(metadata.get("pipeline_entry_bot_id") or "").strip()
+            if pipeline_entry:
+                return pipeline_entry
+        graph = context.get("graph") if isinstance(context.get("graph"), dict) else {}
+        nodes = graph.get("nodes") if isinstance(graph.get("nodes"), list) else []
+        if nodes:
+            first = nodes[0]
+            if isinstance(first, dict):
+                node_id = str(first.get("id") or first.get("bot_id") or "").strip()
+                if node_id:
+                    return node_id
+        return None
+
+    async def _run_autonomous_pipeline_tuner(
+        self,
+        session_id: str,
+        *,
+        session: Dict[str, Any],
+        snapshot: Dict[str, Any],
+    ) -> None:
+        mode = str(session.get("mode") or "").strip().lower()
+        if mode != "pipeline_tuner":
+            return
+        metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
+        if not bool(metadata.get("autonomous_enabled")):
+            return
+        context = await self._resolve_context(session)
+        pipeline_bot_id = self._derive_pipeline_bot_id(context=context, session_metadata=metadata)
+        pipeline_name = str(metadata.get("pipeline_name") or "").strip()
+        if not pipeline_name and pipeline_bot_id:
+            pipeline_name = await self._pipeline_name_for_bot_id(pipeline_bot_id)
+        orchestration_id = str(context.get("orchestration_id") or "").strip()
+        goal = str(metadata.get("autonomous_goal") or "").strip()
+
+        if pipeline_bot_id and (
+            str(metadata.get("pipeline_bot_id") or "").strip() != pipeline_bot_id
+            or str(metadata.get("pipeline_name") or "").strip() != pipeline_name
+        ):
+            await self._store.update_session(
+                session_id,
+                metadata={
+                    "pipeline_bot_id": pipeline_bot_id,
+                    "pipeline_name": pipeline_name or pipeline_bot_id,
+                },
+            )
+
+        if not orchestration_id and pipeline_bot_id and self._task_manager is not None:
+            launch_lock = str(metadata.get("autonomous_launch_state") or "").strip().lower()
+            if launch_lock not in {"launched", "launching"}:
+                await self._store.update_session(session_id, metadata={"autonomous_launch_state": "launching"})
+                try:
+                    launch_orchestration_id = str(uuid.uuid4())
+                    payload = await self._pipeline_launch_payload(pipeline_bot_id=pipeline_bot_id, goal=goal)
+                    created = await self._task_manager.create_task(
+                        bot_id=pipeline_bot_id,
+                        payload=payload,
+                        metadata=TaskMetadata(
+                            source="platform_ai_autonomous_tuner",
+                            orchestration_id=launch_orchestration_id,
+                            pipeline_name=pipeline_name or pipeline_bot_id,
+                            pipeline_entry_bot_id=pipeline_bot_id,
+                        ),
+                    )
+                    await self._store.update_session(
+                        session_id,
+                        orchestration_id=launch_orchestration_id,
+                        metadata={
+                            "autonomous_launch_state": "launched",
+                            "autonomous_launched_orchestration_id": launch_orchestration_id,
+                            "autonomous_launched_task_id": str(getattr(created, "id", "") or ""),
+                        },
+                    )
+                    await self._store.append_event(
+                        session_id,
+                        "action_trace",
+                        {
+                            "action": "autonomous_orchestration_launched",
+                            "pipeline_bot_id": pipeline_bot_id,
+                            "pipeline_name": pipeline_name or pipeline_bot_id,
+                            "orchestration_id": launch_orchestration_id,
+                            "task_id": str(getattr(created, "id", "") or ""),
+                        },
+                    )
+                    await self._store.append_message(
+                        session_id,
+                        role="assistant",
+                        content=(
+                            f"Autonomous tuner launched orchestration `{launch_orchestration_id}` for pipeline "
+                            f"`{pipeline_name or pipeline_bot_id}`. I will monitor it and run quality suite evaluation when terminal."
+                        ),
+                        metadata={"source": "autonomous_tuner"},
+                    )
+                except Exception as exc:
+                    await self._store.update_session(
+                        session_id,
+                        metadata={"autonomous_launch_state": "failed", "autonomous_launch_error": str(exc)},
+                    )
+                    await self._store.append_event(
+                        session_id,
+                        "action_trace",
+                        {"action": "autonomous_orchestration_launch_failed", "detail": str(exc)},
+                    )
+            return
+
+        tasks = context.get("tasks") if isinstance(context.get("tasks"), list) else []
+        graph = context.get("graph") if isinstance(context.get("graph"), dict) else {"nodes": [], "edges": []}
+        if not orchestration_id or not tasks:
+            return
+
+        suite_id = str(metadata.get("autonomous_suite_id") or "").strip()
+        suite = await self._store.get_test_suite(suite_id) if suite_id else None
+        if suite is None:
+            existing = await self._store.list_test_suites(
+                session_id=session_id,
+                pipeline_bot_id=pipeline_bot_id,
+                limit=20,
+            )
+            suite = existing[0] if existing else None
+        if suite is None:
+            suite_name = f"{pipeline_name or pipeline_bot_id or 'pipeline'} Autonomous Quality Suite"
+            suite_def = _build_default_suite(suite_name=suite_name, graph=graph)
+            suite = await self._store.create_test_suite(
+                session_id=session_id,
+                name=suite_name,
+                suite=suite_def,
+                status="active",
+                pipeline_bot_id=pipeline_bot_id,
+                assignment_id=context.get("assignment_id"),
+                run_id=context.get("run_id"),
+                orchestration_id=orchestration_id,
+                metadata={"generator": "platform_ai_runtime", "source": "autonomous_tuner"},
+            )
+            await self._store.append_event(
+                session_id,
+                "action_trace",
+                {
+                    "action": "autonomous_suite_created",
+                    "suite_id": suite.get("id"),
+                    "suite_name": suite.get("name"),
+                    "pipeline_bot_id": pipeline_bot_id,
+                },
+            )
+            await self._store.append_message(
+                session_id,
+                role="assistant",
+                content=f"Created autonomous quality suite `{suite.get('name')}` for `{pipeline_name or pipeline_bot_id}`.",
+                metadata={"source": "autonomous_tuner"},
+            )
+        await self._store.update_session(
+            session_id,
+            metadata={"autonomous_suite_id": str(suite.get("id") or "").strip() or None},
+        )
+
+        if not all(str(task.get("status") or "").strip().lower() in _TERMINAL_STATUSES for task in tasks):
+            return
+
+        eval_signature = json.dumps(
+            {
+                "suite_id": str(suite.get("id") or ""),
+                "orchestration_id": orchestration_id,
+                "tasks": [
+                    {
+                        "id": str(task.get("id") or ""),
+                        "status": str(task.get("status") or ""),
+                        "updated_at": str(task.get("updated_at") or ""),
+                    }
+                    for task in tasks
+                    if isinstance(task, dict)
+                ],
+            },
+            sort_keys=True,
+            ensure_ascii=False,
+        )
+        if str(metadata.get("autonomous_last_eval_signature") or "") == eval_signature:
+            return
+
+        run_record = await self._store.create_test_run(
+            suite_id=str(suite.get("id") or ""),
+            session_id=session_id,
+            pipeline_bot_id=pipeline_bot_id,
+            assignment_id=context.get("assignment_id"),
+            run_id=context.get("run_id"),
+            orchestration_id=orchestration_id,
+            status="running",
+            score=0.0,
+            result={"started_at": _now(), "source": "autonomous_tuner"},
+        )
+        suite_payload = suite.get("suite") if isinstance(suite.get("suite"), dict) else {}
+        evaluation = _evaluate_suite(suite_payload, [task for task in tasks if isinstance(task, dict)], graph)
+        evaluation["context"] = {
+            "pipeline_bot_id": pipeline_bot_id,
+            "pipeline_name": pipeline_name or pipeline_bot_id,
+            "orchestration_id": orchestration_id,
+            "assignment_id": context.get("assignment_id"),
+            "run_id": context.get("run_id"),
+        }
+        final_run = await self._store.complete_test_run(
+            str(run_record.get("id") or ""),
+            status=str(evaluation.get("status") or "failed"),
+            score=float(evaluation.get("score") or 0.0),
+            result=evaluation,
+        )
+        await self._store.update_session(
+            session_id,
+            metadata={
+                "autonomous_last_eval_signature": eval_signature,
+                "autonomous_last_eval_status": str(evaluation.get("status") or "failed"),
+                "autonomous_last_eval_score": float(evaluation.get("score") or 0.0),
+                "autonomous_last_eval_run_id": str((final_run or {}).get("id") or ""),
+                "autonomous_last_eval_at": _now(),
+            },
+        )
+        await self._store.append_event(
+            session_id,
+            "action_trace",
+            {
+                "action": "autonomous_suite_evaluated",
+                "suite_id": suite.get("id"),
+                "suite_run_id": (final_run or {}).get("id"),
+                "status": (final_run or {}).get("status"),
+                "score": (final_run or {}).get("score"),
+                "orchestration_id": orchestration_id,
+            },
+        )
+        failed_tests = [
+            item
+            for item in (evaluation.get("tests") if isinstance(evaluation.get("tests"), list) else [])
+            if isinstance(item, dict) and not bool(item.get("passed"))
+        ]
+        summary = (
+            f"Autonomous suite run complete for `{pipeline_name or pipeline_bot_id}` "
+            f"on orchestration `{orchestration_id}`: status={evaluation.get('status')} "
+            f"score={float(evaluation.get('score') or 0.0):.3f}."
+        )
+        if failed_tests:
+            top = ", ".join(str(item.get("id") or item.get("name") or "test") for item in failed_tests[:3])
+            summary += f" Failed checks: {top}."
+        await self._store.append_message(
+            session_id,
+            role="assistant",
+            content=summary,
+            metadata={"source": "autonomous_tuner", "suite_run_id": (final_run or {}).get("id")},
+        )
 
     async def _deploy_loop(self, session_id: str, *, requested_by: str) -> None:
         last_log_len = 0
