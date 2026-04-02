@@ -5428,9 +5428,11 @@ class TaskManager:
             branch_key = str(self._resolve_join_branch_key(payload) or "").strip()
             if fanout_id or branch_key:
                 return "|".join(part for part in (fanout_id, branch_key) if part)
-            workstream_index = str(payload.get("workstream_index") or "").strip()
-            if workstream_index:
-                return workstream_index
+            raw_workstream_index = payload.get("workstream_index")
+            if raw_workstream_index is not None:
+                workstream_index = str(raw_workstream_index).strip()
+                if workstream_index:
+                    return workstream_index
             workstream = payload.get("workstream")
             if isinstance(workstream, dict):
                 workstream_identity = {
@@ -5944,7 +5946,19 @@ class TaskManager:
                         compatible_join_triggers=compatible_join_triggers,
                     )
                     continue
+                _fan_out_payload_index = 0
                 for payload in payloads:
+                    _fan_out_payload_index += 1
+                    _workstream_idx = payload.get("workstream_index") if isinstance(payload, dict) else None
+                    logger.info(
+                        "[TRIGGER] DISPATCH_ATTEMPT trigger=%s task=%s bot=%s payload=%d/%d workstream_index=%s",
+                        trigger.id,
+                        task.id,
+                        task.bot_id,
+                        _fan_out_payload_index,
+                        len(payloads),
+                        _workstream_idx,
+                    )
                     payload_target_bot_id = (
                         self._dynamic_pm_target_bot_id(payload, target_bot_id)
                         if task.bot_id == "pm-engineer"
@@ -6077,11 +6091,34 @@ class TaskManager:
                                 fanout_idx,
                                 payload_target_bot_id,
                             )
-                    await self.create_task(
-                        bot_id=payload_target_bot_id,
-                        payload=payload,
-                        metadata=branch_metadata,
-                    )
+                    try:
+                        await self.create_task(
+                            bot_id=payload_target_bot_id,
+                            payload=payload,
+                            metadata=branch_metadata,
+                        )
+                        logger.info(
+                            "[TRIGGER] DISPATCH_OK trigger=%s task=%s target=%s workstream_index=%s",
+                            trigger.id,
+                            task.id,
+                            payload_target_bot_id,
+                            payload.get("workstream_index") if isinstance(payload, dict) else None,
+                        )
+                    except Exception as create_exc:
+                        logger.exception(
+                            "[TRIGGER] DISPATCH_FAILED trigger=%s task=%s target=%s workstream_index=%s — "
+                            "payload creation failed, continuing to next payload",
+                            trigger.id,
+                            task.id,
+                            payload_target_bot_id,
+                            payload.get("workstream_index") if isinstance(payload, dict) else None,
+                        )
+                        await self._record_trigger_dispatch_error(
+                            source_task=task,
+                            trigger_id=str(getattr(trigger, "id", "") or ""),
+                            target_bot_id=str(payload_target_bot_id or ""),
+                            message=str(create_exc),
+                        )
             except Exception as exc:
                 logger.exception(
                     "Trigger %s failed while dispatching task %s to %s",
@@ -7097,15 +7134,39 @@ class TaskManager:
         if not str(getattr(trigger, "fan_out_field", "") or "").strip():
             return payloads
         if not self._pm_assignment_dynamic_management_enabled(task):
+            logger.info(
+                "[FANOUT] ROUTING trigger=%s task=%s dynamic_management_disabled → returning %d payloads unchanged",
+                getattr(trigger, "id", ""),
+                task.id,
+                len(payloads),
+            )
             return payloads
         if not payloads or not all(isinstance(payload, dict) for payload in payloads):
             return payloads
 
+        logger.info(
+            "[FANOUT] ROUTING trigger=%s task=%s payloads_in=%d",
+            getattr(trigger, "id", ""),
+            task.id,
+            len(payloads),
+        )
         payloads, path_filter_budget = self._prune_pm_assignment_workstream_payloads(payloads)
         if not payloads:
             return []
+        logger.info(
+            "[FANOUT] ROUTING trigger=%s task=%s after_prune=%d",
+            getattr(trigger, "id", ""),
+            task.id,
+            len(payloads),
+        )
         payloads = [self._sanitize_pm_assignment_branch_payload(payload) for payload in payloads]
         payloads, dedupe_budget = self._dedupe_pm_assignment_workstream_payloads(payloads)
+        logger.info(
+            "[FANOUT] ROUTING trigger=%s task=%s after_dedupe=%d",
+            getattr(trigger, "id", ""),
+            task.id,
+            len(payloads),
+        )
         policy = await self._load_pm_workstream_routing_policy(task)
         routes = [
             self._classify_pm_workstream_route(
@@ -7117,6 +7178,12 @@ class TaskManager:
             if isinstance(payload, dict)
         ]
         payloads, routes, workstream_budget = self._pm_assignment_workstream_budget(payloads, routes)
+        logger.info(
+            "[FANOUT] ROUTING trigger=%s task=%s after_budget=%d",
+            getattr(trigger, "id", ""),
+            task.id,
+            len(payloads),
+        )
         payloads = self._refresh_fanout_payload_metadata(payloads)
         combined_budget = None
         if path_filter_budget or dedupe_budget or workstream_budget:
@@ -8028,6 +8095,14 @@ class TaskManager:
             )
             if not items:
                 return []
+        logger.info(
+            "[FANOUT] BUILD trigger=%s task=%s bot=%s fan_out_field=%s resolved_items=%d",
+            getattr(trigger, "id", ""),
+            task.id,
+            task.bot_id,
+            fan_out_field,
+            len(items),
+        )
         items, trigger_filter = self._pm_assignment_research_trigger_items(task, trigger, items)
         items, research_default_budget = self._pm_assignment_enforce_default_research_items(
             task,
@@ -8036,6 +8111,13 @@ class TaskManager:
         )
         items, fanout_budget = self._pm_assignment_research_fanout_budget(task, trigger, items)
         items, implementation_budget = self._pm_assignment_workstream_trigger_items(task, trigger, items)
+        logger.info(
+            "[FANOUT] BUILD trigger=%s task=%s bot=%s items_after_filters=%d",
+            getattr(trigger, "id", ""),
+            task.id,
+            task.bot_id,
+            len(items),
+        )
         alias = str(getattr(trigger, "fan_out_alias", "") or "").strip() or "item"
         index_alias = str(getattr(trigger, "fan_out_index_alias", "") or "").strip() or "item_index"
         total = len(items)
