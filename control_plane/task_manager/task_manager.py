@@ -1779,6 +1779,9 @@ def _database_result_contract_failure(result: Any) -> Optional[Dict[str, Any]]:
     repo_candidates = _database_result_repo_candidates(result)
     raw_text = str(result.get("raw_text") or result.get("content") or result.get("output") or "").strip()
     status = str(result.get("status") or result.get("outcome") or "").strip().lower()
+    failure_type = str(result.get("failure_type") or "").strip().lower()
+    # skip/not_applicable outcomes are always allowed without a SQL artifact
+    is_skip = status in {"skip", "not_applicable"} or failure_type in {"skip", "not_applicable"}
     sql_candidates = [
         item
         for item in repo_candidates
@@ -1815,23 +1818,28 @@ def _database_result_contract_failure(result: Any) -> Optional[Dict[str, Any]]:
                 "paths": [str(item.get("path") or "").strip() for item in sql_candidates],
             },
         }
-    if not sql_candidates and re.search(r"(?im)\b(create|alter|insert|update|delete|drop|truncate)\b", raw_text):
+    # If explicitly skipping, allow SQL prose in handoff/evidence without requiring an artifact
+    if not sql_candidates and not is_skip and re.search(
+        r"(?im)\b(create|alter|insert|update|delete|drop|truncate)\b", raw_text
+    ):
         return {
             "code": "database_stage_missing_canonical_sql_artifact",
             "message": (
                 "pm-database-engineer emitted SQL content without a canonical `.sql` migration artifact. "
-                "Return exactly one SQL script artifact."
+                "Return exactly one SQL script artifact with a `path` and `content` field, "
+                "or return outcome=skip / failure_type=not_applicable when no new database work is needed."
             ),
             "details": {
                 "reason_code": "database_stage_missing_canonical_sql_artifact",
             },
         }
-    if not sql_candidates and status in {"pass", "completed", "complete"}:
+    if not sql_candidates and not is_skip and status in {"pass", "completed", "complete"}:
         return {
             "code": "database_stage_missing_canonical_sql_artifact",
             "message": (
                 "pm-database-engineer completed without returning the required canonical `.sql` migration artifact. "
-                "Return exactly one SQL script artifact, or return skip/not_applicable when no database change is needed."
+                "Return exactly one SQL script artifact, or return outcome=skip / failure_type=not_applicable "
+                "when no database change is needed."
             ),
             "details": {
                 "reason_code": "database_stage_missing_canonical_sql_artifact",
