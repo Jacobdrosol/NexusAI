@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
+import re
 import time
 import uuid
 from datetime import datetime, timezone
@@ -146,6 +148,24 @@ def _evaluate_assertion(assertion: Dict[str, Any], tasks: List[Dict[str, Any]], 
         avg = sum(_task_quality(task) for task in selected) / max(1, len(selected))
         target = float(assertion.get("value") or 0.7)
         return _assertion(kind, avg >= target, min(1.0, avg / max(0.01, target)), f"avg_quality={avg:.3f}")
+    if kind == "required_keywords":
+        keywords = [str(item).strip().lower() for item in (assertion.get("keywords") or []) if str(item).strip()]
+        if not keywords:
+            return _assertion(kind, True, 1.0, "no keywords")
+        text = "\n".join(_task_text(task) for task in selected).lower()
+        hit = sum(1 for word in keywords if word in text)
+        ratio = hit / max(1, len(keywords))
+        return _assertion(kind, ratio >= 1.0, ratio, f"keywords={hit}/{len(keywords)}")
+    if kind == "required_fields":
+        required = [str(item).strip() for item in (assertion.get("fields") or []) if str(item).strip()]
+        if not required:
+            return _assertion(kind, True, 1.0, "no fields")
+        available = set()
+        for task in selected:
+            available.update(_task_fields(task))
+        hit = sum(1 for field in required if field in available)
+        ratio = hit / max(1, len(required))
+        return _assertion(kind, ratio >= 1.0, ratio, f"fields={hit}/{len(required)}")
     return _assertion(kind or "unknown", False, 0.0, "unsupported assertion")
 
 
@@ -805,6 +825,258 @@ class PlatformAISessionRuntime:
                     return node_id
         return None
 
+    def _goal_keywords(self, goal: str) -> List[str]:
+        raw = str(goal or "").lower()
+        tokens = re.findall(r"[a-z0-9_]{5,}", raw)
+        blocked = {
+            "should",
+            "could",
+            "would",
+            "their",
+            "there",
+            "about",
+            "through",
+            "while",
+            "these",
+            "those",
+            "pipeline",
+            "please",
+            "tests",
+            "suite",
+            "quality",
+            "output",
+            "correct",
+        }
+        seen: List[str] = []
+        for token in tokens:
+            if token in blocked:
+                continue
+            if token not in seen:
+                seen.append(token)
+            if len(seen) >= 8:
+                break
+        return seen
+
+    def _merge_autotune_directives(self, system_prompt: str, directives: str) -> str:
+        start_marker = "[[NEXUS_PLATFORM_AI_AUTOTUNE_START]]"
+        end_marker = "[[NEXUS_PLATFORM_AI_AUTOTUNE_END]]"
+        base = str(system_prompt or "").strip()
+        block = f"{start_marker}\n{directives.strip()}\n{end_marker}".strip()
+        if start_marker in base and end_marker in base:
+            pattern = re.compile(re.escape(start_marker) + r".*?" + re.escape(end_marker), re.DOTALL)
+            return pattern.sub(block, base).strip()
+        if not base:
+            return block
+        return f"{base}\n\n{block}".strip()
+
+    async def _apply_bot_refinement(
+        self,
+        *,
+        session_id: str,
+        pipeline_bot_id: str,
+        iteration: int,
+        goal: str,
+        evaluation: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        if self._bot_registry is None:
+            return {"updated": False, "reason": "bot_registry_unavailable"}
+        safe_bot_id = str(pipeline_bot_id or "").strip()
+        if not safe_bot_id:
+            return {"updated": False, "reason": "pipeline_bot_id_missing"}
+        try:
+            bot = await self._bot_registry.get(safe_bot_id)
+        except Exception as exc:
+            return {"updated": False, "reason": f"bot_lookup_failed:{exc}"}
+
+        failed_tests = [
+            item
+            for item in (evaluation.get("tests") if isinstance(evaluation.get("tests"), list) else [])
+            if isinstance(item, dict) and not bool(item.get("passed"))
+        ]
+        failed_assertions: List[str] = []
+        for test in failed_tests[:5]:
+            assertions = test.get("assertions") if isinstance(test.get("assertions"), list) else []
+            for check in assertions:
+                if not isinstance(check, dict):
+                    continue
+                if bool(check.get("passed")):
+                    continue
+                failed_assertions.append(str(check.get("kind") or "assertion"))
+                if len(failed_assertions) >= 8:
+                    break
+            if len(failed_assertions) >= 8:
+                break
+        keywords = self._goal_keywords(goal)
+        directives = [
+            f"Platform AI tuning iteration: {iteration}",
+            f"Goal summary: {goal[:1200] if goal else 'Improve end-to-end execution and output quality.'}",
+            f"Failed tests: {', '.join(str(item.get('id') or item.get('name') or 'test') for item in failed_tests[:5]) or 'none'}",
+            f"Failed assertion kinds: {', '.join(failed_assertions) or 'none'}",
+            "Requirements:",
+            "- Produce deterministic, structured outputs with explicit quality sections and acceptance checks.",
+            "- Prioritize passing no_failed_tasks, completed_ratio, node_coverage_ratio, and min_avg_quality checks.",
+            "- Avoid partial/incomplete outputs; prefer complete artifacts with validation notes.",
+        ]
+        if keywords:
+            directives.append(f"- Ensure outputs explicitly cover: {', '.join(keywords)}.")
+        existing_prompt = str(getattr(bot, "system_prompt", "") or "")
+        new_prompt = self._merge_autotune_directives(existing_prompt, "\n".join(directives))
+        routing_rules = getattr(bot, "routing_rules", None)
+        routing_rules = copy.deepcopy(routing_rules) if isinstance(routing_rules, dict) else {}
+        tuner_meta = routing_rules.get("platform_ai_tuner") if isinstance(routing_rules.get("platform_ai_tuner"), dict) else {}
+        tuner_meta.update(
+            {
+                "last_refined_at": _now(),
+                "last_iteration": iteration,
+                "last_goal": goal[:2000],
+                "last_score": float(evaluation.get("score") or 0.0),
+                "last_status": str(evaluation.get("status") or ""),
+                "failed_tests": [str(item.get("id") or item.get("name") or "") for item in failed_tests[:10]],
+                "failed_assertions": failed_assertions,
+            }
+        )
+        routing_rules["platform_ai_tuner"] = tuner_meta
+        updated = bot.model_copy(update={"system_prompt": new_prompt, "routing_rules": routing_rules})
+        try:
+            await self._bot_registry.update(safe_bot_id, updated)
+        except Exception as exc:
+            return {"updated": False, "reason": f"bot_update_failed:{exc}"}
+        await self._store.append_event(
+            session_id,
+            "action_trace",
+            {
+                "action": "autonomous_bot_refined",
+                "pipeline_bot_id": safe_bot_id,
+                "iteration": iteration,
+                "failed_tests": [str(item.get("id") or item.get("name") or "") for item in failed_tests[:5]],
+                "failed_assertions": failed_assertions[:8],
+            },
+        )
+        return {"updated": True}
+
+    async def _refine_suite_definition(
+        self,
+        *,
+        base_suite: Dict[str, Any],
+        graph: Dict[str, Any],
+        evaluation: Dict[str, Any],
+        goal: str,
+        iteration: int,
+    ) -> Dict[str, Any]:
+        suite = copy.deepcopy(base_suite if isinstance(base_suite, dict) else {})
+        tests = suite.get("tests") if isinstance(suite.get("tests"), list) else []
+        keywords = self._goal_keywords(goal)
+        failed_tests = [
+            item
+            for item in (evaluation.get("tests") if isinstance(evaluation.get("tests"), list) else [])
+            if isinstance(item, dict) and not bool(item.get("passed"))
+        ]
+        target_nodes = _critical_nodes(graph)
+        dynamic_test = {
+            "id": f"autonomous-iteration-{iteration}",
+            "name": f"Autonomous Iteration {iteration} Regression Gate",
+            "type": "expectation",
+            "weight": 0.35,
+            "pass_threshold": min(0.95, max(0.75, float(suite.get("suite_pass_threshold") or 0.8))),
+            "assertions": [
+                {"kind": "no_failed_tasks"},
+                {"kind": "min_completed_ratio", "value": 1.0},
+                {"kind": "min_avg_quality", "value": min(0.92, max(0.75, float(evaluation.get("score") or 0.75))), "target_nodes": target_nodes},
+            ],
+        }
+        if keywords:
+            dynamic_test["assertions"].append({"kind": "required_keywords", "keywords": keywords, "target_nodes": target_nodes})
+        failed_assertion_kinds: List[str] = []
+        for test in failed_tests[:5]:
+            assertions = test.get("assertions") if isinstance(test.get("assertions"), list) else []
+            for check in assertions:
+                if not isinstance(check, dict) or bool(check.get("passed")):
+                    continue
+                failed_assertion_kinds.append(str(check.get("kind") or "").strip())
+        if "required_fields" in failed_assertion_kinds:
+            dynamic_test["assertions"].append(
+                {
+                    "kind": "required_fields",
+                    "fields": ["summary", "quality_gates", "acceptance_criteria"],
+                    "target_nodes": target_nodes,
+                }
+            )
+        tests = [item for item in tests if not (isinstance(item, dict) and str(item.get("id") or "").strip() == dynamic_test["id"])]
+        tests.append(dynamic_test)
+        suite["tests"] = tests
+        suite["version"] = f"v1-autonomous-{iteration}"
+        suite["generated_at"] = _now()
+        suite["suite_pass_threshold"] = min(0.98, max(0.8, float(suite.get("suite_pass_threshold") or 0.8)))
+        return suite
+
+    async def _launch_autonomous_orchestration(
+        self,
+        *,
+        session_id: str,
+        pipeline_bot_id: str,
+        pipeline_name: str,
+        goal: str,
+        reason: str,
+        iteration: int,
+    ) -> Optional[str]:
+        if self._task_manager is None:
+            return None
+        launch_orchestration_id = str(uuid.uuid4())
+        payload = await self._pipeline_launch_payload(pipeline_bot_id=pipeline_bot_id, goal=goal)
+        try:
+            created = await self._task_manager.create_task(
+                bot_id=pipeline_bot_id,
+                payload=payload,
+                metadata=TaskMetadata(
+                    source="platform_ai_autonomous_tuner",
+                    orchestration_id=launch_orchestration_id,
+                    pipeline_name=pipeline_name or pipeline_bot_id,
+                    pipeline_entry_bot_id=pipeline_bot_id,
+                ),
+            )
+        except Exception as exc:
+            await self._store.append_event(
+                session_id,
+                "action_trace",
+                {"action": "autonomous_orchestration_launch_failed", "reason": reason, "detail": str(exc)},
+            )
+            return None
+        await self._store.update_session(
+            session_id,
+            orchestration_id=launch_orchestration_id,
+            metadata={
+                "autonomous_launch_state": "launched",
+                "autonomous_launched_orchestration_id": launch_orchestration_id,
+                "autonomous_launched_task_id": str(getattr(created, "id", "") or ""),
+                "autonomous_iteration": int(iteration),
+                "autonomous_state": "running_iteration",
+                "autonomous_current_reason": reason,
+            },
+        )
+        await self._store.append_event(
+            session_id,
+            "action_trace",
+            {
+                "action": "autonomous_orchestration_launched",
+                "reason": reason,
+                "iteration": int(iteration),
+                "pipeline_bot_id": pipeline_bot_id,
+                "pipeline_name": pipeline_name or pipeline_bot_id,
+                "orchestration_id": launch_orchestration_id,
+                "task_id": str(getattr(created, "id", "") or ""),
+            },
+        )
+        await self._store.append_message(
+            session_id,
+            role="assistant",
+            content=(
+                f"Autonomous tuner launched orchestration `{launch_orchestration_id}` "
+                f"(iteration {iteration}, reason: {reason}) for `{pipeline_name or pipeline_bot_id}`."
+            ),
+            metadata={"source": "autonomous_tuner", "iteration": int(iteration), "reason": reason},
+        )
+        return launch_orchestration_id
+
     async def _run_autonomous_pipeline_tuner(
         self,
         session_id: str,
@@ -825,6 +1097,9 @@ class PlatformAISessionRuntime:
             pipeline_name = await self._pipeline_name_for_bot_id(pipeline_bot_id)
         orchestration_id = str(context.get("orchestration_id") or "").strip()
         goal = str(metadata.get("autonomous_goal") or "").strip()
+        current_iteration = int(metadata.get("autonomous_iteration") or 0)
+        max_iterations = max(1, min(25, int(metadata.get("autonomous_max_iterations") or 6)))
+        target_score = max(0.6, min(0.99, float(metadata.get("autonomous_target_score") or 0.9)))
 
         if pipeline_bot_id and (
             str(metadata.get("pipeline_bot_id") or "").strip() != pipeline_bot_id
@@ -842,57 +1117,18 @@ class PlatformAISessionRuntime:
             launch_lock = str(metadata.get("autonomous_launch_state") or "").strip().lower()
             if launch_lock not in {"launched", "launching"}:
                 await self._store.update_session(session_id, metadata={"autonomous_launch_state": "launching"})
-                try:
-                    launch_orchestration_id = str(uuid.uuid4())
-                    payload = await self._pipeline_launch_payload(pipeline_bot_id=pipeline_bot_id, goal=goal)
-                    created = await self._task_manager.create_task(
-                        bot_id=pipeline_bot_id,
-                        payload=payload,
-                        metadata=TaskMetadata(
-                            source="platform_ai_autonomous_tuner",
-                            orchestration_id=launch_orchestration_id,
-                            pipeline_name=pipeline_name or pipeline_bot_id,
-                            pipeline_entry_bot_id=pipeline_bot_id,
-                        ),
-                    )
+                launched = await self._launch_autonomous_orchestration(
+                    session_id=session_id,
+                    pipeline_bot_id=pipeline_bot_id,
+                    pipeline_name=pipeline_name or pipeline_bot_id,
+                    goal=goal,
+                    reason="initial",
+                    iteration=max(1, current_iteration),
+                )
+                if not launched:
                     await self._store.update_session(
                         session_id,
-                        orchestration_id=launch_orchestration_id,
-                        metadata={
-                            "autonomous_launch_state": "launched",
-                            "autonomous_launched_orchestration_id": launch_orchestration_id,
-                            "autonomous_launched_task_id": str(getattr(created, "id", "") or ""),
-                        },
-                    )
-                    await self._store.append_event(
-                        session_id,
-                        "action_trace",
-                        {
-                            "action": "autonomous_orchestration_launched",
-                            "pipeline_bot_id": pipeline_bot_id,
-                            "pipeline_name": pipeline_name or pipeline_bot_id,
-                            "orchestration_id": launch_orchestration_id,
-                            "task_id": str(getattr(created, "id", "") or ""),
-                        },
-                    )
-                    await self._store.append_message(
-                        session_id,
-                        role="assistant",
-                        content=(
-                            f"Autonomous tuner launched orchestration `{launch_orchestration_id}` for pipeline "
-                            f"`{pipeline_name or pipeline_bot_id}`. I will monitor it and run quality suite evaluation when terminal."
-                        ),
-                        metadata={"source": "autonomous_tuner"},
-                    )
-                except Exception as exc:
-                    await self._store.update_session(
-                        session_id,
-                        metadata={"autonomous_launch_state": "failed", "autonomous_launch_error": str(exc)},
-                    )
-                    await self._store.append_event(
-                        session_id,
-                        "action_trace",
-                        {"action": "autonomous_orchestration_launch_failed", "detail": str(exc)},
+                        metadata={"autonomous_launch_state": "failed", "autonomous_launch_error": "launch_failed"},
                     )
             return
 
@@ -994,6 +1230,9 @@ class PlatformAISessionRuntime:
             score=float(evaluation.get("score") or 0.0),
             result=evaluation,
         )
+        eval_status = str(evaluation.get("status") or "failed").strip().lower()
+        eval_score = float(evaluation.get("score") or 0.0)
+        passed_target = eval_status == "passed" and eval_score >= target_score
         await self._store.update_session(
             session_id,
             metadata={
@@ -1002,6 +1241,7 @@ class PlatformAISessionRuntime:
                 "autonomous_last_eval_score": float(evaluation.get("score") or 0.0),
                 "autonomous_last_eval_run_id": str((final_run or {}).get("id") or ""),
                 "autonomous_last_eval_at": _now(),
+                "autonomous_state": "converged" if passed_target else "needs_refinement",
             },
         )
         await self._store.append_event(
@@ -1035,6 +1275,136 @@ class PlatformAISessionRuntime:
             content=summary,
             metadata={"source": "autonomous_tuner", "suite_run_id": (final_run or {}).get("id")},
         )
+
+        if passed_target:
+            await self._store.append_event(
+                session_id,
+                "action_trace",
+                {
+                    "action": "autonomous_converged",
+                    "target_score": target_score,
+                    "score": eval_score,
+                    "iteration": current_iteration,
+                },
+            )
+            await self._store.append_message(
+                session_id,
+                role="assistant",
+                content=(
+                    f"Autonomous tuner reached target quality for `{pipeline_name or pipeline_bot_id}`: "
+                    f"score {eval_score:.3f} (target {target_score:.3f})."
+                ),
+                metadata={"source": "autonomous_tuner", "state": "converged"},
+            )
+            return
+
+        refined_signature = str(metadata.get("autonomous_last_refine_signature") or "")
+        if refined_signature == eval_signature:
+            return
+        if current_iteration >= max_iterations:
+            await self._store.update_session(
+                session_id,
+                metadata={
+                    "autonomous_state": "max_iterations_reached",
+                    "autonomous_last_refine_signature": eval_signature,
+                },
+            )
+            await self._store.append_event(
+                session_id,
+                "action_trace",
+                {
+                    "action": "autonomous_max_iterations_reached",
+                    "iteration": current_iteration,
+                    "max_iterations": max_iterations,
+                    "score": eval_score,
+                    "target_score": target_score,
+                },
+            )
+            await self._store.append_message(
+                session_id,
+                role="assistant",
+                content=(
+                    f"Autonomous tuner stopped after {current_iteration} iteration(s) without hitting target "
+                    f"{target_score:.3f}. Last score: {eval_score:.3f}. Review latest suite run and bot refinements."
+                ),
+                metadata={"source": "autonomous_tuner", "state": "max_iterations_reached"},
+            )
+            return
+
+        next_iteration = current_iteration + 1
+        refined_suite_payload = await self._refine_suite_definition(
+            base_suite=suite.get("suite") if isinstance(suite.get("suite"), dict) else {},
+            graph=graph,
+            evaluation=evaluation,
+            goal=goal,
+            iteration=next_iteration,
+        )
+        refined_suite = await self._store.create_test_suite(
+            session_id=session_id,
+            name=f"{pipeline_name or pipeline_bot_id} Autonomous Suite v{next_iteration}",
+            suite=refined_suite_payload,
+            status="active",
+            pipeline_bot_id=pipeline_bot_id,
+            assignment_id=context.get("assignment_id"),
+            run_id=context.get("run_id"),
+            orchestration_id=orchestration_id,
+            metadata={"generator": "platform_ai_runtime_refine", "iteration": next_iteration, "parent_suite_id": suite.get("id")},
+        )
+        await self._store.append_event(
+            session_id,
+            "action_trace",
+            {
+                "action": "autonomous_suite_refined",
+                "previous_suite_id": suite.get("id"),
+                "suite_id": refined_suite.get("id"),
+                "iteration": next_iteration,
+            },
+        )
+        bot_refine = await self._apply_bot_refinement(
+            session_id=session_id,
+            pipeline_bot_id=pipeline_bot_id or "",
+            iteration=next_iteration,
+            goal=goal,
+            evaluation=evaluation,
+        )
+        if not bool(bot_refine.get("updated")):
+            await self._store.append_event(
+                session_id,
+                "action_trace",
+                {
+                    "action": "autonomous_bot_refine_skipped",
+                    "iteration": next_iteration,
+                    "result": bot_refine,
+                },
+            )
+        launched = await self._launch_autonomous_orchestration(
+            session_id=session_id,
+            pipeline_bot_id=pipeline_bot_id or "",
+            pipeline_name=pipeline_name or (pipeline_bot_id or ""),
+            goal=goal,
+            reason="refinement_iteration",
+            iteration=next_iteration,
+        )
+        await self._store.update_session(
+            session_id,
+            metadata={
+                "autonomous_iteration": next_iteration,
+                "autonomous_suite_id": str(refined_suite.get("id") or ""),
+                "autonomous_last_refine_signature": eval_signature,
+                "autonomous_last_bot_refine_result": bot_refine,
+                "autonomous_state": "running_iteration" if launched else "refinement_launch_failed",
+            },
+        )
+        if launched:
+            await self._store.append_message(
+                session_id,
+                role="assistant",
+                content=(
+                    f"Autonomous refinement iteration {next_iteration} applied. "
+                    f"Suite `{refined_suite.get('id')}` and bot tuning updated; launched orchestration `{launched}`."
+                ),
+                metadata={"source": "autonomous_tuner", "iteration": next_iteration},
+            )
 
     async def _deploy_loop(self, session_id: str, *, requested_by: str) -> None:
         last_log_len = 0
