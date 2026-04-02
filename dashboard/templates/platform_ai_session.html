@@ -13,6 +13,169 @@
   </div>
 </div>
 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+<style>
+.session-chat-dropzone {
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 14px;
+  padding: 0.75rem;
+  background: rgba(10, 17, 30, 0.72);
+  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+.session-chat-dropzone.drag-active {
+  border-color: #4fd1c5;
+  background: rgba(28, 56, 66, 0.88);
+  box-shadow: 0 0 0 1px rgba(79, 209, 197, 0.35);
+}
+.session-chat-dropzone:not(.has-attachments):not(.drag-active) .session-attachment-list,
+.session-chat-dropzone:not(.has-attachments):not(.drag-active) .session-attachment-hint {
+  display: none;
+}
+.session-chat-compose-top {
+  display: flex;
+  align-items: stretch;
+  gap: 0.65rem;
+}
+.session-chat-compose-main {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.session-chat-compose-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.4rem;
+  flex: 0 0 auto;
+}
+.session-chat-textarea {
+  min-height: 76px;
+  resize: vertical;
+}
+.session-attachment-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  margin-top: 0.55rem;
+}
+.session-attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  max-width: 360px;
+  padding: 0.42rem 0.78rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(255,255,255,0.08);
+  color: #e6edf7;
+  font-size: 0.92rem;
+}
+.session-attachment-chip-preview {
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  object-fit: cover;
+  border: 1px solid rgba(255,255,255,0.14);
+  flex: 0 0 auto;
+}
+.session-attachment-chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-attachment-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.14);
+  color: #f8fafc;
+  cursor: pointer;
+}
+.session-attachment-chip-remove:hover {
+  background: rgba(248, 113, 113, 0.34);
+}
+.session-message-card {
+  border: 1px solid rgba(148,163,184,0.2);
+  border-radius: 12px;
+  padding: 0.65rem;
+  margin-bottom: 0.55rem;
+  background: rgba(255,255,255,0.03);
+}
+.session-message-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  margin-bottom: 0.35rem;
+}
+.session-message-attachments {
+  margin-top: 0.55rem;
+}
+.session-message-attachments-label {
+  margin-bottom: 0.35rem;
+  color: rgba(226, 232, 240, 0.82);
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+.session-message-attachment-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+.session-message-attachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  max-width: min(100%, 380px);
+  padding: 0.44rem 0.7rem;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 14px;
+  background: rgba(255,255,255,0.05);
+  text-decoration: none;
+  color: inherit;
+}
+.session-message-attachment-preview {
+  max-width: 96px;
+  max-height: 72px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.12);
+  object-fit: cover;
+  flex: 0 0 auto;
+}
+.session-message-attachment-name {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #f8fafc;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+.session-message-attachment-detail {
+  display: block;
+  margin-top: 0.15rem;
+  color: rgba(226, 232, 240, 0.72);
+  font-size: 0.78rem;
+}
+.session-timeline-entry {
+  padding: 0.55rem;
+  border: 1px solid rgba(148,163,184,0.15);
+  border-radius: 10px;
+  margin-bottom: 0.55rem;
+}
+.session-timeline-log {
+  min-height: 180px;
+  max-height: 540px;
+  overflow: auto;
+  border: 1px solid #1f2937;
+  border-radius: 10px;
+  padding: 0.6rem;
+}
+</style>
 
 {% if error %}
 <div class="alert alert-error">{{ error }}</div>
@@ -81,6 +244,31 @@
   </div>
   <div class="split-grid" style="grid-template-columns:1fr 1fr 1fr;gap:0.75rem;">
     <div>
+      <label for="session-project-id">Project Context</label>
+      <select id="session-project-id" class="form-control">
+        <option value="">No project selected</option>
+        {% for project in projects %}
+        <option value="{{ project.id }}" {% if ((session.metadata or {}).get('project_id') == project.id) %}selected{% endif %}>
+          {{ project.name }} ({{ project.id }})
+        </option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label for="session-target-bot-id">Target Bot</label>
+      <select id="session-target-bot-id" class="form-control">
+        <option value="">No bot selected</option>
+        {% for bot in bots %}
+        <option value="{{ bot.id }}" {% if ((session.metadata or {}).get('target_bot_id') == bot.id) %}selected{% endif %}>
+          {{ bot.name }} ({{ bot.id }})
+        </option>
+        {% endfor %}
+      </select>
+    </div>
+    <div style="display:flex;align-items:flex-end;">
+      <button class="btn" type="button" onclick="updateTargetContext()">Update Session Context</button>
+    </div>
+    <div>
       <label for="session-provider">Provider</label>
       <input id="session-provider" class="form-control" value="{{ ((session.metadata or {}).get('backend') or {}).get('provider') or '' }}">
     </div>
@@ -145,56 +333,65 @@
 
 <section class="panel" style="margin-bottom:1rem;">
   <div class="page-header" style="margin-bottom:0.75rem;">
+    <h2 class="panel-title">Session File Library</h2>
+    <div class="mini-note" id="message-files-count">{{ message_files|length }} files</div>
+  </div>
+  <div id="message-files-list" style="max-height:28vh;overflow:auto;border:1px solid #1f2937;border-radius:10px;padding:0.6rem;">
+    {% for row in message_files %}
+    <div style="padding:0.35rem 0;border-bottom:1px solid rgba(148,163,184,0.15);">
+      <a href="{{ row.url }}" target="_blank" rel="noopener">{{ row.name }}</a>
+      <div class="mini-note">{{ row.size_bytes }} bytes • {{ row.content_type or "unknown" }} • {{ (row.uploaded_at[:19] if row.uploaded_at else "") | replace('T',' ') }}</div>
+    </div>
+    {% else %}
+    <div class="empty">No uploaded message files yet</div>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="panel" style="margin-bottom:1rem;">
+  <div class="page-header" style="margin-bottom:0.75rem;">
     <h2 class="panel-title">Conversation Timeline</h2>
     <div class="mini-note">Messages + action/tool/decision/outcome stream</div>
   </div>
-  <div id="session-timeline-log" style="max-height:56vh;overflow:auto;border:1px solid #1f2937;border-radius:10px;padding:0.6rem;">
+  <div id="session-timeline-log" class="session-timeline-log">
     <div class="empty">Timeline loading...</div>
   </div>
 </section>
 
-<div class="split-grid" style="grid-template-columns:1fr 1fr;gap:1rem;">
-  <section class="panel">
-    <div class="page-header" style="margin-bottom:0.75rem;">
-      <h2 class="panel-title">Operator Chat</h2>
-      <div class="mini-note">{{ messages|length }} messages</div>
-    </div>
-    <div id="operator-chat-log" style="max-height:44vh;overflow:auto;border:1px solid #1f2937;border-radius:10px;padding:0.6rem;">
-      {% for message in messages %}
-      <div style="padding:0.4rem 0;border-bottom:1px solid rgba(148,163,184,0.15);">
-        <div class="mini-note"><strong>{{ message.role }}</strong> • {{ (message.created_at[:19] if message.created_at else "") | replace('T',' ') }}</div>
-        <div style="white-space:pre-wrap;">{{ message.content }}</div>
+<section class="panel" style="margin-bottom:1rem;">
+  <div class="page-header" style="margin-bottom:0.75rem;">
+    <h2 class="panel-title">Session Chat</h2>
+    <div class="mini-note"><span id="session-chat-message-count">{{ messages|length }}</span> messages</div>
+  </div>
+  <div id="operator-chat-log" style="max-height:46vh;overflow:auto;border:1px solid #1f2937;border-radius:10px;padding:0.6rem;margin-bottom:0.75rem;">
+    {% for message in messages %}
+    <div class="session-message-card">
+      <div class="session-message-meta">
+        <div><strong>{{ message.role }}</strong></div>
+        <div class="mini-note">{{ (message.created_at[:19] if message.created_at else "") | replace('T',' ') }}</div>
       </div>
-      {% else %}
-      <div class="empty">No messages yet</div>
-      {% endfor %}
+      <div style="white-space:pre-wrap;">{{ message.content }}</div>
     </div>
-    <div style="margin-top:0.75rem;">
-      <textarea id="operator-chat-input" class="form-control" rows="4" placeholder="Send operator message while session runs..."></textarea>
-    </div>
-    <div style="display:flex;gap:0.5rem;margin-top:0.5rem;">
-      <button class="btn btn-primary" type="button" onclick="sendOperatorMessage()">Send</button>
-    </div>
-    <div id="operator-chat-status" class="mini-note" style="margin-top:0.5rem;"></div>
-  </section>
-
-  <section class="panel">
-    <div class="page-header" style="margin-bottom:0.75rem;">
-      <h2 class="panel-title">Live Action Trace</h2>
-      <div class="mini-note">{{ events|length }} events</div>
-    </div>
-    <div id="action-trace-log" style="max-height:52vh;overflow:auto;border:1px solid #1f2937;border-radius:10px;padding:0.6rem;">
-      {% for event in events %}
-      <div style="padding:0.4rem 0;border-bottom:1px solid rgba(148,163,184,0.15);">
-        <div class="mini-note"><strong>{{ event.event_type }}</strong> • {{ (event.created_at[:19] if event.created_at else "") | replace('T',' ') }}</div>
-        <pre style="white-space:pre-wrap;margin:0;">{{ (event.payload or {}) | tojson(indent=2) }}</pre>
+    {% else %}
+    <div class="empty">No messages yet</div>
+    {% endfor %}
+  </div>
+  <input type="file" id="session-chat-attachment-input" style="display:none;" multiple onchange="handleSessionAttachmentSelect(event)">
+  <div id="session-chat-dropzone" class="session-chat-dropzone">
+    <div class="session-chat-compose-top">
+      <div class="session-chat-compose-main">
+        <textarea id="operator-chat-input" class="form-control session-chat-textarea" placeholder="Send operator message while session runs..."></textarea>
       </div>
-      {% else %}
-      <div class="empty">No action trace events yet</div>
-      {% endfor %}
+      <div class="session-chat-compose-actions">
+        <button type="button" class="btn" onclick="triggerSessionAttachmentPicker()" aria-label="Add files">+</button>
+        <button class="btn btn-primary" type="button" onclick="sendOperatorMessage()">Send</button>
+      </div>
     </div>
-  </section>
-</div>
+    <div id="session-chat-attachment-list" class="session-attachment-list" aria-live="polite"></div>
+    <div class="mini-note session-attachment-hint">Drag files here or use +. Max 15 files, 1 GB total per message.</div>
+  </div>
+  <div id="operator-chat-status" class="mini-note" style="margin-top:0.5rem;"></div>
+</section>
 
 <div class="split-grid" style="grid-template-columns:1fr 1fr;gap:1rem;margin-top:1rem;">
   <section class="panel">
@@ -220,11 +417,16 @@
         {% endfor %}
       </select>
     </div>
+    <div class="form-group">
+      <label for="target-bot-test-prompt">Target Bot Test Prompt</label>
+      <textarea id="target-bot-test-prompt" class="form-control" rows="3" placeholder="Optional isolated bot test prompt"></textarea>
+    </div>
     <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
       <button class="btn" type="button" onclick="loadPipelineSuites()">Refresh Suites</button>
       <button class="btn" type="button" onclick="designPipelineSuite('operator_manual')">Design My Suite</button>
       <button class="btn" type="button" onclick="designPipelineSuite('platform_ai_auto')">Generate AI Suite</button>
       <button class="btn btn-primary" type="button" onclick="runPipelineSuite()">Run Suite</button>
+      <button class="btn" type="button" onclick="runTargetBotTest()">Run Target Bot Test</button>
     </div>
     <div id="suite-status" class="mini-note" style="margin-top:0.75rem;"></div>
   </section>
@@ -261,12 +463,18 @@
 {% block scripts %}
 <script>
 const SESSION_ID = {{ (session.id if session else '') | tojson }};
+const INITIAL_MESSAGES = {{ messages|default([], true)|tojson }};
+const INITIAL_EVENTS = {{ events|default([], true)|tojson }};
 let EVENTS_CURSOR = 0;
 let MESSAGES_CURSOR = 0;
 let AUTO_POLL_HANDLE = null;
-let LAST_MESSAGES = [];
-let LAST_EVENTS = [];
+let LAST_MESSAGES = Array.isArray(INITIAL_MESSAGES) ? INITIAL_MESSAGES : [];
+let LAST_EVENTS = Array.isArray(INITIAL_EVENTS) ? INITIAL_EVENTS : [];
 let LAST_CONTEXT_FILES = {{ context_files|default([], true)|tojson }};
+let LAST_MESSAGE_FILES = {{ message_files|default([], true)|tojson }};
+let pendingSessionAttachments = [];
+const SESSION_ATTACHMENT_MAX_FILES = 15;
+const SESSION_ATTACHMENT_MAX_TOTAL_BYTES = 1024 * 1024 * 1024;
 
 function getCsrf() {
   const el = document.querySelector('input[name=csrf_token]');
@@ -291,7 +499,25 @@ function parseJsonSafe(text, fallback) {
 }
 
 function htmlEscape(value) {
-  return String(value || '').replace(/[<>&]/g, (ch) => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[ch]));
+  return String(value || '').replace(/[&<>"']/g, (ch) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;', "'":'&#39;'}[ch]));
+}
+
+function formatBytes(value) {
+  const bytes = Number(value || 0);
+  if (!Number.isFinite(bytes) || bytes <= 0) return '';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let size = bytes;
+  let unitIndex = 0;
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex += 1;
+  }
+  const rounded = size >= 100 || unitIndex === 0 ? size.toFixed(0) : size.toFixed(1);
+  return `${rounded} ${units[unitIndex]}`;
+}
+
+function displayTs(raw) {
+  return String(raw || '').replace('T', ' ').slice(0, 19);
 }
 
 function reloadWorkspace() {
@@ -374,26 +600,224 @@ async function rerunNode() {
   await controlSession('rerun_node', {node_id: nodeId});
 }
 
+function clearPendingSessionAttachments() {
+  pendingSessionAttachments.forEach((attachment) => {
+    if (attachment && attachment.preview_url && String(attachment.preview_url).startsWith('blob:')) {
+      try { URL.revokeObjectURL(attachment.preview_url); } catch (error) {}
+    }
+  });
+  pendingSessionAttachments = [];
+  renderSessionComposerAttachments();
+}
+
+function triggerSessionAttachmentPicker() {
+  const input = document.getElementById('session-chat-attachment-input');
+  if (!input) return;
+  input.value = '';
+  input.click();
+}
+
+function totalPendingSessionAttachmentBytes() {
+  return pendingSessionAttachments.reduce((sum, item) => sum + Number(item?.size_bytes || 0), 0);
+}
+
+function validateIncomingSessionAttachmentBatch(files) {
+  const nextFiles = Array.from(files || []);
+  if (!nextFiles.length) return true;
+  const nextCount = pendingSessionAttachments.length + nextFiles.length;
+  if (nextCount > SESSION_ATTACHMENT_MAX_FILES) {
+    alert(`You can attach at most ${SESSION_ATTACHMENT_MAX_FILES} files to one message.`);
+    return false;
+  }
+  const nextBytes = totalPendingSessionAttachmentBytes() + nextFiles.reduce((sum, file) => sum + Number(file?.size || 0), 0);
+  if (nextBytes > SESSION_ATTACHMENT_MAX_TOTAL_BYTES) {
+    alert('Attachment limit exceeded. Maximum total attachment size is 1 GB per message.');
+    return false;
+  }
+  return true;
+}
+
+async function addSessionComposerFiles(files) {
+  const nextFiles = Array.from(files || []);
+  if (!nextFiles.length) return;
+  if (!validateIncomingSessionAttachmentBatch(nextFiles)) return;
+  nextFiles.forEach((file) => {
+    const mime = String(file?.type || '').trim();
+    const isImage = mime.toLowerCase().startsWith('image/');
+    pendingSessionAttachments.push({
+      file: file,
+      name: String(file.name || 'attachment'),
+      mime_type: mime || 'application/octet-stream',
+      size_bytes: Number(file.size || 0),
+      kind: isImage ? 'image' : 'file',
+      preview_url: isImage ? URL.createObjectURL(file) : '',
+    });
+  });
+  renderSessionComposerAttachments();
+}
+
+async function handleSessionAttachmentSelect(event) {
+  const files = Array.from(event?.target?.files || []);
+  try {
+    await addSessionComposerFiles(files);
+  } finally {
+    if (event?.target) event.target.value = '';
+  }
+}
+
+function setupSessionComposerDragDrop() {
+  const dropzone = document.getElementById('session-chat-dropzone');
+  if (!dropzone) return;
+  ['dragenter', 'dragover'].forEach((eventName) => {
+    dropzone.addEventListener(eventName, (event) => {
+      event.preventDefault();
+      dropzone.classList.add('drag-active');
+    });
+  });
+  ['dragleave', 'dragend', 'drop'].forEach((eventName) => {
+    dropzone.addEventListener(eventName, (event) => {
+      event.preventDefault();
+      if (eventName !== 'drop') {
+        const related = event.relatedTarget;
+        if (related && dropzone.contains(related)) return;
+      }
+      dropzone.classList.remove('drag-active');
+    });
+  });
+  dropzone.addEventListener('drop', async (event) => {
+    const files = Array.from(event.dataTransfer?.files || []);
+    await addSessionComposerFiles(files);
+  });
+}
+
+function renderSessionComposerAttachments() {
+  const shell = document.getElementById('session-chat-attachment-list');
+  const dropzone = document.getElementById('session-chat-dropzone');
+  if (!shell) return;
+  if (!pendingSessionAttachments.length) {
+    shell.innerHTML = '';
+    if (dropzone) dropzone.classList.remove('has-attachments');
+    return;
+  }
+  if (dropzone) dropzone.classList.add('has-attachments');
+  shell.innerHTML = pendingSessionAttachments.map((attachment, index) => {
+    const name = htmlEscape(String(attachment?.name || 'attachment'));
+    const mime = htmlEscape(String(attachment?.mime_type || ''));
+    const sizeText = htmlEscape(formatBytes(attachment?.size_bytes || 0));
+    const preview = attachment?.kind === 'image' && attachment?.preview_url
+      ? `<img class="session-attachment-chip-preview" src="${htmlEscape(String(attachment.preview_url))}" alt="${name}">`
+      : '';
+    return `
+      <div class="session-attachment-chip" title="${name}">
+        ${preview}
+        <span class="session-attachment-chip-label">${name}${mime ? ' · ' + mime : ''}${sizeText ? ' · ' + sizeText : ''}</span>
+        <button type="button" class="session-attachment-chip-remove" onclick="removeSessionComposerAttachment(${index})" aria-label="Remove ${name}">×</button>
+      </div>
+    `;
+  }).join('');
+}
+
+function removeSessionComposerAttachment(index) {
+  const next = [];
+  pendingSessionAttachments.forEach((attachment, idx) => {
+    if (idx === index) {
+      if (attachment && attachment.preview_url && String(attachment.preview_url).startsWith('blob:')) {
+        try { URL.revokeObjectURL(attachment.preview_url); } catch (error) {}
+      }
+      return;
+    }
+    next.push(attachment);
+  });
+  pendingSessionAttachments = next;
+  renderSessionComposerAttachments();
+}
+
+async function uploadPendingSessionMessageFiles() {
+  if (!pendingSessionAttachments.length) return [];
+  const form = new FormData();
+  pendingSessionAttachments.forEach((attachment) => {
+    if (attachment?.file) form.append('files', attachment.file);
+  });
+  const res = await fetch('/api/platform-ai/sessions/' + encodeURIComponent(SESSION_ID) + '/message-files', {
+    method: 'POST',
+    headers: {'X-CSRFToken': getCsrf()},
+    body: form,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Failed to upload message attachments');
+  return Array.isArray(data.files) ? data.files : [];
+}
+
+function renderMessageAttachmentsHtml(meta) {
+  const attachments = Array.isArray(meta?.attachments) ? meta.attachments : [];
+  if (!attachments.length) return '';
+  return `
+    <div class="session-message-attachments">
+      <div class="session-message-attachments-label">Attachments</div>
+      <div class="session-message-attachment-list">
+      ${attachments.map((attachment) => {
+        const name = htmlEscape(String(attachment?.name || 'attachment'));
+        const mime = htmlEscape(String(attachment?.mime_type || attachment?.content_type || ''));
+        const kind = String(attachment?.kind || '').trim().toLowerCase();
+        const url = htmlEscape(String(attachment?.url || attachment?.file_url || '') || '#');
+        const sizeText = htmlEscape(formatBytes(attachment?.size_bytes || 0));
+        const preview = kind === 'image' && url && url !== '#'
+          ? `<img class="session-message-attachment-preview" src="${url}" alt="${name}">`
+          : '';
+        const detail = [mime, sizeText].filter(Boolean).join(' · ');
+        return `
+          <a class="session-message-attachment" href="${url}" target="_blank" rel="noopener">
+            ${preview}
+            <div>
+              <span class="session-message-attachment-name">${name}</span>
+              <span class="session-message-attachment-detail">${htmlEscape(detail)}</span>
+            </div>
+          </a>
+        `;
+      }).join('')}
+      </div>
+    </div>
+  `;
+}
+
 async function sendOperatorMessage() {
   if (!SESSION_ID) return;
-  const content = String(document.getElementById('operator-chat-input')?.value || '').trim();
-  if (!content) {
+  const input = document.getElementById('operator-chat-input');
+  const content = String(input?.value || '').trim();
+  if (!content && !pendingSessionAttachments.length) {
     setStatus('operator-chat-status', 'Message cannot be empty', true);
     return;
   }
   setStatus('operator-chat-status', 'Sending...', false);
   try {
+    const uploaded = await uploadPendingSessionMessageFiles();
+    const attachments = uploaded.map((row) => {
+      const contentType = String(row?.content_type || '').trim();
+      return {
+        file_id: String(row?.id || '').trim() || null,
+        name: String(row?.name || 'attachment'),
+        mime_type: contentType || null,
+        kind: contentType.toLowerCase().startsWith('image/') ? 'image' : 'file',
+        size_bytes: Number(row?.size_bytes || 0),
+        url: String(row?.url || '').trim() || null,
+      };
+    });
+    const finalContent = content || `Attached ${attachments.length} file(s).`;
+    const payload = {role: 'operator', content: finalContent, metadata: {}};
+    if (attachments.length) payload.metadata.attachments = attachments;
     const res = await fetch('/api/platform-ai/sessions/' + encodeURIComponent(SESSION_ID) + '/messages', {
       method: 'POST',
       headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
-      body: JSON.stringify({role: 'operator', content}),
+      body: JSON.stringify(payload),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || 'Failed to send message');
-    document.getElementById('operator-chat-input').value = '';
+    if (input) input.value = '';
+    clearPendingSessionAttachments();
     setStatus('operator-chat-status', 'Message sent', false);
     await refreshMessages(true);
     await refreshEvents(true);
+    await refreshSessionHeader();
   } catch (error) {
     setStatus('operator-chat-status', error.message || 'Failed to send message', true);
   }
@@ -414,17 +838,25 @@ async function refreshSessionHeader() {
   const orch = document.getElementById('session-orchestration');
   if (orch) orch.textContent = String(data.orchestration_id || '—');
   const updated = document.getElementById('session-updated');
-  if (updated) updated.textContent = String((data.updated_at || '').replace('T', ' ').slice(0, 19));
+  if (updated) updated.textContent = displayTs(data.updated_at || '');
   const metadata = data && typeof data.metadata === 'object' ? data.metadata : {};
   LAST_CONTEXT_FILES = Array.isArray(metadata.context_files) ? metadata.context_files : [];
+  LAST_MESSAGE_FILES = Array.isArray(metadata.message_files) ? metadata.message_files : [];
+  const projectSelect = document.getElementById('session-project-id');
+  if (projectSelect) projectSelect.value = String(metadata.project_id || '');
+  const targetBotSelect = document.getElementById('session-target-bot-id');
+  if (targetBotSelect) targetBotSelect.value = String(metadata.target_bot_id || '');
   renderContextFiles();
+  renderMessageFileLibrary();
 }
 
 function renderMessages(messages) {
   const root = document.getElementById('operator-chat-log');
+  const count = document.getElementById('session-chat-message-count');
   if (!root) return;
   const rows = Array.isArray(messages) ? messages : [];
   LAST_MESSAGES = rows;
+  if (count) count.textContent = String(rows.length);
   if (!rows.length) {
     root.innerHTML = '<div class="empty">No messages yet</div>';
     renderTimeline();
@@ -432,31 +864,27 @@ function renderMessages(messages) {
   }
   root.innerHTML = rows.map((message) => {
     const role = String(message.role || 'assistant');
-    const created = String(message.created_at || '').replace('T', ' ').slice(0, 19);
+    const created = displayTs(message.created_at || '');
     const content = htmlEscape(message.content || '');
-    return `<div style="padding:0.4rem 0;border-bottom:1px solid rgba(148,163,184,0.15);"><div class="mini-note"><strong>${role}</strong> • ${created}</div><div style="white-space:pre-wrap;">${content}</div></div>`;
+    const attachments = renderMessageAttachmentsHtml(message.metadata || {});
+    return `
+      <div class="session-message-card">
+        <div class="session-message-meta">
+          <div><strong>${htmlEscape(role)}</strong></div>
+          <div class="mini-note">${htmlEscape(created)}</div>
+        </div>
+        <div style="white-space:pre-wrap;">${content}</div>
+        ${attachments}
+      </div>
+    `;
   }).join('');
   root.scrollTop = root.scrollHeight;
   renderTimeline();
 }
 
 function renderEvents(events) {
-  const root = document.getElementById('action-trace-log');
-  if (!root) return;
   const rows = Array.isArray(events) ? events : [];
   LAST_EVENTS = rows;
-  if (!rows.length) {
-    root.innerHTML = '<div class="empty">No action trace events yet</div>';
-    renderTimeline();
-    return;
-  }
-  root.innerHTML = rows.map((event) => {
-    const kind = String(event.event_type || 'event');
-    const created = String(event.created_at || '').replace('T', ' ').slice(0, 19);
-    const payload = htmlEscape(JSON.stringify(event.payload || {}, null, 2));
-    return `<div style="padding:0.4rem 0;border-bottom:1px solid rgba(148,163,184,0.15);"><div class="mini-note"><strong>${kind}</strong> • ${created}</div><pre style="white-space:pre-wrap;margin:0;">${payload}</pre></div>`;
-  }).join('');
-  root.scrollTop = root.scrollHeight;
   renderTimeline();
 }
 
@@ -466,13 +894,15 @@ function renderTimeline() {
   const rows = [];
   for (const message of LAST_MESSAGES) {
     const role = String(message.role || 'assistant').toLowerCase();
+    const meta = message && typeof message.metadata === 'object' ? message.metadata : {};
+    const attachments = Array.isArray(meta.attachments) ? meta.attachments : [];
     rows.push({
       created_at: String(message.created_at || ''),
       type: 'message',
       role: role,
       title: role === 'operator' ? 'Operator Message' : (role === 'assistant' ? 'Platform AI Message' : 'Message'),
       body: String(message.content || ''),
-      meta: message.metadata || {},
+      meta: Object.assign({}, meta, {attachment_count: attachments.length}),
     });
   }
   for (const event of LAST_EVENTS) {
@@ -494,14 +924,14 @@ function renderTimeline() {
     return;
   }
   root.innerHTML = rows.map((row) => {
-    const when = String(row.created_at || '').replace('T', ' ').slice(0, 19);
+    const when = displayTs(row.created_at || '');
     const tone = row.type === 'message'
       ? (row.role === 'operator' ? '#22d3ee' : '#10b981')
       : '#93c5fd';
     const body = htmlEscape(row.body || '');
     const meta = htmlEscape(JSON.stringify(row.meta || {}, null, 2));
     return `
-      <div style="padding:0.55rem;border:1px solid rgba(148,163,184,0.15);border-radius:10px;margin-bottom:0.55rem;">
+      <div class="session-timeline-entry">
         <div style="display:flex;gap:0.5rem;align-items:center;justify-content:space-between;">
           <strong style="color:${tone};">${htmlEscape(row.title)}</strong>
           <span class="mini-note">${when}</span>
@@ -537,6 +967,32 @@ async function refreshEvents(force) {
   if (!force && rows.length <= EVENTS_CURSOR) return;
   EVENTS_CURSOR = rows.length;
   renderEvents(rows);
+}
+
+async function updateTargetContext() {
+  const projectId = String(document.getElementById('session-project-id')?.value || '').trim();
+  const targetBotId = String(document.getElementById('session-target-bot-id')?.value || '').trim();
+  try {
+    const res = await fetch('/api/platform-ai/sessions/' + encodeURIComponent(SESSION_ID), {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
+      body: JSON.stringify({
+        project_id: projectId || null,
+        target_bot_id: targetBotId || null,
+        metadata: {
+          project_id: projectId || null,
+          target_bot_id: targetBotId || null,
+        },
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Failed to update target context');
+    setStatus('backend-update-status', 'Session context updated.', false);
+    await refreshSessionHeader();
+    await refreshEvents(true);
+  } catch (error) {
+    setStatus('backend-update-status', error.message || 'Failed to update target context', true);
+  }
 }
 
 async function updateBackendConfig() {
@@ -676,6 +1132,40 @@ async function runPipelineSuite() {
   }
 }
 
+async function runTargetBotTest() {
+  const targetBotId = String(document.getElementById('session-target-bot-id')?.value || '').trim();
+  if (!targetBotId) {
+    setStatus('suite-status', 'Select Target Bot first.', true);
+    return;
+  }
+  const suiteId = String(document.getElementById('suite-id')?.value || '').trim();
+  const prompt = String(document.getElementById('target-bot-test-prompt')?.value || '').trim();
+  setStatus('suite-status', 'Running isolated target bot test...', false);
+  try {
+    const res = await fetch('/api/platform-ai/sessions/' + encodeURIComponent(SESSION_ID) + '/bot-test-run', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
+      body: JSON.stringify({
+        target_bot_id: targetBotId,
+        suite_id: suiteId || undefined,
+        prompt: prompt || undefined,
+        wait_for_terminal: true,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Failed to run target bot test');
+    const suiteRun = data.suite_run || {};
+    const run = suiteRun.test_run || {};
+    setStatus('suite-status', `Target bot test completed: ${run.status || 'unknown'} (score ${Number(run.score || 0).toFixed(3)})`, run.status !== 'passed');
+    await refreshSessionHeader();
+    await refreshEvents(true);
+    await refreshMessages(true);
+    await renderRecentRuns();
+  } catch (error) {
+    setStatus('suite-status', error.message || 'Failed to run target bot test', true);
+  }
+}
+
 async function renderRecentRuns() {
   const suiteId = String(document.getElementById('suite-id')?.value || '').trim();
   if (!suiteId) return;
@@ -692,7 +1182,7 @@ async function renderRecentRuns() {
     tbody.innerHTML = rows.map((row) => {
       const status = String(row.status || 'unknown');
       const score = Number(row.score || 0);
-      const created = String(row.created_at || '').replace('T', ' ').slice(0, 19);
+      const created = displayTs(row.created_at || '');
       const id = String(row.id || '');
       return `<tr><td><span class="badge badge-${status}">${status}</span></td><td>${score.toFixed(3)}</td><td>${created}</td><td><code>${id}</code></td></tr>`;
     }).join('');
@@ -715,9 +1205,29 @@ function renderContextFiles() {
     const name = htmlEscape(row.name || row.path || 'file');
     const size = Number(row.size_bytes || 0);
     const type = htmlEscape(row.content_type || 'unknown');
-    const when = htmlEscape(String(row.uploaded_at || '').replace('T', ' ').slice(0, 19));
+    const when = htmlEscape(displayTs(row.uploaded_at || ''));
     const path = htmlEscape(row.path || '');
     return `<div style="padding:0.35rem 0;border-bottom:1px solid rgba(148,163,184,0.15);"><strong>${name}</strong><div class="mini-note">${size} bytes • ${type} • ${when}</div><div class="mini-note"><code>${path}</code></div></div>`;
+  }).join('');
+}
+
+function renderMessageFileLibrary() {
+  const root = document.getElementById('message-files-list');
+  const count = document.getElementById('message-files-count');
+  if (count) count.textContent = `${Array.isArray(LAST_MESSAGE_FILES) ? LAST_MESSAGE_FILES.length : 0} files`;
+  if (!root) return;
+  const rows = Array.isArray(LAST_MESSAGE_FILES) ? LAST_MESSAGE_FILES : [];
+  if (!rows.length) {
+    root.innerHTML = '<div class="empty">No uploaded message files yet</div>';
+    return;
+  }
+  root.innerHTML = rows.map((row) => {
+    const name = htmlEscape(row.name || 'file');
+    const size = Number(row.size_bytes || 0);
+    const type = htmlEscape(row.content_type || 'unknown');
+    const when = htmlEscape(displayTs(row.uploaded_at || ''));
+    const url = htmlEscape(row.url || '#');
+    return `<div style="padding:0.35rem 0;border-bottom:1px solid rgba(148,163,184,0.15);"><a href="${url}" target="_blank" rel="noopener">${name}</a><div class="mini-note">${size} bytes • ${type} • ${when}</div></div>`;
   }).join('');
 }
 
@@ -758,7 +1268,12 @@ async function pollWorkspace() {
 
 document.addEventListener('DOMContentLoaded', async () => {
   if (!SESSION_ID) return;
+  renderSessionComposerAttachments();
   renderContextFiles();
+  renderMessageFileLibrary();
+  renderMessages(LAST_MESSAGES);
+  renderEvents(LAST_EVENTS);
+  setupSessionComposerDragDrop();
   await refreshMessages(true);
   await refreshEvents(true);
   AUTO_POLL_HANDLE = setInterval(pollWorkspace, 4000);

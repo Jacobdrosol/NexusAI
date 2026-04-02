@@ -389,6 +389,50 @@ async def test_platform_catalog_includes_project_manager_pipeline_fallback(cp_cl
 
 
 @pytest.mark.anyio
+async def test_platform_ai_bot_designer_requires_target_bot(cp_client):
+    missing_target = await cp_client.post(
+        "/v1/platform-ai/sessions",
+        json={"mode": "bot_designer", "operator_id": "owner@example.com"},
+    )
+    assert missing_target.status_code == 400
+
+    valid = await cp_client.post(
+        "/v1/platform-ai/sessions",
+        json={
+            "mode": "bot_designer",
+            "operator_id": "owner@example.com",
+            "target_bot_id": "pm-orchestrator",
+            "start_paused": True,
+        },
+    )
+    assert valid.status_code == 200
+    created = valid.json()
+    metadata = created.get("metadata") if isinstance(created.get("metadata"), dict) else {}
+    assert str(metadata.get("target_bot_id") or "") == "pm-orchestrator"
+
+
+@pytest.mark.anyio
+async def test_platform_ai_session_patch_project_and_target_context(cp_client):
+    create_resp = await cp_client.post(
+        "/v1/platform-ai/sessions",
+        json={"mode": "assignment_follower", "operator_id": "owner@example.com", "start_paused": True},
+    )
+    assert create_resp.status_code == 200
+    session_id = str((create_resp.json() or {}).get("id") or "")
+    assert session_id
+
+    patch_resp = await cp_client.patch(
+        f"/v1/platform-ai/sessions/{session_id}",
+        json={"project_id": "proj-a", "target_bot_id": "bot-a"},
+    )
+    assert patch_resp.status_code == 200
+    updated = patch_resp.json()
+    metadata = updated.get("metadata") if isinstance(updated.get("metadata"), dict) else {}
+    assert str(metadata.get("project_id") or "") == "proj-a"
+    assert str(metadata.get("target_bot_id") or "") == "bot-a"
+
+
+@pytest.mark.anyio
 async def test_agent_scheduler_create_and_manual_trigger(cp_client):
     bot_id = "scheduled-bot"
     bot_resp = await cp_client.post(

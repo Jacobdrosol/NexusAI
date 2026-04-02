@@ -132,6 +132,7 @@
         <select id="platform-ai-session-mode" class="form-control">
           <option value="pipeline_tuner">pipeline_tuner</option>
           <option value="pipeline_designer">pipeline_designer</option>
+          <option value="bot_designer">bot_designer</option>
           <option value="assignment_follower">assignment_follower</option>
         </select>
       </div>
@@ -153,6 +154,26 @@
       <div>
         <label for="platform-ai-session-pipeline-name">Pipeline Name (optional / design mode)</label>
         <input id="platform-ai-session-pipeline-name" class="form-control" placeholder="pm-docs / pm / custom name">
+      </div>
+    </div>
+    <div class="split-grid" style="grid-template-columns:1fr 1fr;gap:0.75rem;margin-bottom:0.75rem;">
+      <div>
+        <label for="platform-ai-session-project">Project (optional)</label>
+        <select id="platform-ai-session-project" class="form-control">
+          <option value="">No project selected</option>
+          {% for project in projects %}
+          <option value="{{ project.id }}">{{ project.name }} ({{ project.id }})</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div>
+        <label for="platform-ai-session-target-bot">Target Bot (for bot_designer)</label>
+        <select id="platform-ai-session-target-bot" class="form-control">
+          <option value="">No bot selected</option>
+          {% for bot in bots %}
+          <option value="{{ bot.id }}">{{ bot.name }} ({{ bot.id }})</option>
+          {% endfor %}
+        </select>
       </div>
     </div>
     <details style="margin-bottom:0.75rem;">
@@ -289,6 +310,8 @@ const PLATFORM_PIPES = {{ pipelines|tojson }};
 const WORKERS = {{ workers|tojson }};
 const GLOBAL_MODELS = {{ models|tojson }};
 const API_KEYS = {{ api_keys|tojson }};
+const PROJECTS = {{ projects|tojson }};
+const BOTS = {{ bots|tojson }};
 const PROVIDER_MODEL_SUGGESTIONS = {
   ollama_cloud: ['qwen3.5:cloud','qwen3-coder:480b-cloud','gpt-oss:120b-cloud'],
   openai: ['gpt-4o','gpt-4o-mini','gpt-5','gpt-5-mini'],
@@ -512,6 +535,8 @@ async function createPlatformAISession() {
   const operatorId = String(document.getElementById('platform-ai-session-operator')?.value || '').trim() || undefined;
   const pipelineBotId = String(document.getElementById('platform-ai-session-pipeline')?.value || '').trim() || undefined;
   const pipelineName = String(document.getElementById('platform-ai-session-pipeline-name')?.value || '').trim() || undefined;
+  const projectId = String(document.getElementById('platform-ai-session-project')?.value || '').trim() || undefined;
+  const targetBotId = String(document.getElementById('platform-ai-session-target-bot')?.value || '').trim() || undefined;
   const assignmentId = String(document.getElementById('platform-ai-session-assignment')?.value || '').trim() || undefined;
   const orchestrationId = String(document.getElementById('platform-ai-session-orchestration')?.value || '').trim() || undefined;
   const startPaused = !!document.getElementById('platform-ai-session-start-paused')?.checked;
@@ -526,6 +551,10 @@ async function createPlatformAISession() {
   }
   if (mode === 'pipeline_designer' && !pipelineBotId && !pipelineName) {
     setCreateSessionStatus('Pipeline designer requires a selected pipeline or pipeline name.', true);
+    return;
+  }
+  if (mode === 'bot_designer' && !targetBotId) {
+    setCreateSessionStatus('Bot designer requires selecting a target bot.', true);
     return;
   }
   if (!NEW_SESSION_BACKEND) {
@@ -543,8 +572,10 @@ async function createPlatformAISession() {
     operator_id: operatorId,
     assignment_id: assignmentId,
     orchestration_id: orchestrationId,
+    project_id: projectId,
     pipeline_bot_id: pipelineBotId,
     pipeline_name: pipelineName,
+    target_bot_id: targetBotId,
     provider: NEW_SESSION_BACKEND.provider || undefined,
     model: NEW_SESSION_BACKEND.model || undefined,
     backend_type: NEW_SESSION_BACKEND.type || undefined,
@@ -556,6 +587,8 @@ async function createPlatformAISession() {
       source: 'platform_ai_index',
       pipeline_bot_id: pipelineBotId || undefined,
       pipeline_name: pipelineName || undefined,
+      project_id: projectId || undefined,
+      target_bot_id: targetBotId || undefined,
       backend_worker_id: NEW_SESSION_BACKEND.worker_id || undefined,
     },
   };

@@ -502,8 +502,10 @@ class CreatePlatformAISessionRequest(BaseModel):
     orchestration_id: Optional[str] = None
     operator_id: Optional[str] = None
     privileged: bool = False
+    project_id: Optional[str] = None
     pipeline_bot_id: Optional[str] = None
     pipeline_name: Optional[str] = None
+    target_bot_id: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
     provider: Optional[str] = None
     model: Optional[str] = None
@@ -519,6 +521,8 @@ class UpdatePlatformAISessionRequest(BaseModel):
     assignment_id: Optional[str] = None
     run_id: Optional[str] = None
     orchestration_id: Optional[str] = None
+    project_id: Optional[str] = None
+    target_bot_id: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
     provider: Optional[str] = None
     model: Optional[str] = None
@@ -671,6 +675,8 @@ async def create_session(request: Request, body: CreatePlatformAISessionRequest)
 
     pipeline_bot_id = str(body.pipeline_bot_id or "").strip()
     pipeline_name = str(body.pipeline_name or "").strip()
+    project_id = str(body.project_id or "").strip()
+    target_bot_id = str(body.target_bot_id or "").strip()
     backend_cfg = _default_backend_config(
         body.provider,
         body.model,
@@ -697,11 +703,17 @@ async def create_session(request: Request, body: CreatePlatformAISessionRequest)
                 status_code=400,
                 detail="pipeline_tuner sessions require pipeline_bot_id or an attached assignment/orchestration/run target",
             )
+    if mode == "bot_designer" and not target_bot_id:
+        raise HTTPException(status_code=400, detail="bot_designer sessions require target_bot_id")
     if pipeline_bot_id:
         await _ensure_pipeline_not_already_claimed(request, pipeline_bot_id=pipeline_bot_id)
         metadata["pipeline_bot_id"] = pipeline_bot_id
     if pipeline_name:
         metadata["pipeline_name"] = pipeline_name
+    if project_id:
+        metadata["project_id"] = project_id
+    if target_bot_id:
+        metadata["target_bot_id"] = target_bot_id
     metadata["backend"] = backend_cfg
     metadata.setdefault("current_phase", "observe")
     initial_status = "paused" if bool(body.start_paused) else "active"
@@ -784,6 +796,10 @@ async def patch_session(session_id: str, request: Request, body: UpdatePlatformA
         raise HTTPException(status_code=404, detail="session not found")
 
     metadata = dict(body.metadata or {})
+    if body.project_id is not None:
+        metadata["project_id"] = str(body.project_id or "").strip() or None
+    if body.target_bot_id is not None:
+        metadata["target_bot_id"] = str(body.target_bot_id or "").strip() or None
     status = str(body.status or "").strip().lower() or None
     current_status = str(session.get("status") or "").strip().lower()
     wants_backend_update = any(
