@@ -1839,6 +1839,67 @@ async def test_required_output_fields_allow_trigger_dispatch_when_present(tmp_pa
 
 
 @pytest.mark.anyio
+async def test_required_output_fields_allow_status_alias_via_outcome(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot
+
+    class StubScheduler:
+        async def schedule(self, task):
+            if task.bot_id == "pm-tester":
+                return {
+                    "outcome": "pass",
+                    "failure_type": "pass",
+                    "findings": [],
+                    "handoff_notes": "validated",
+                }
+            return {"answer": f"done:{task.bot_id}"}
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "required-output-status-alias-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="pm-tester",
+            name="PM Tester",
+            role="tester",
+            backends=[],
+            workflow={
+                "required_output_fields": ["status", "failure_type"],
+                "triggers": [
+                    {
+                        "id": "route-pass",
+                        "event": "task_completed",
+                        "target_bot_id": "pm-security-reviewer",
+                        "condition": "has_result",
+                        "result_field": "failure_type",
+                        "result_equals": "pass",
+                    }
+                ],
+            },
+        )
+    )
+    await bot_registry.register(Bot(id="pm-security-reviewer", name="PM Security Reviewer", role="reviewer", backends=[]))
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "required-output-status-alias-tasks.db"), bot_registry=bot_registry)
+    root = await tm.create_task(bot_id="pm-tester", payload={"instruction": "validate"})
+
+    for _ in range(50):
+        tasks = await tm.list_tasks()
+        if len(tasks) >= 2 and any(task.bot_id == "pm-security-reviewer" for task in tasks):
+            break
+        await asyncio.sleep(0.1)
+
+    updated = await tm.get_task(root.id)
+    assert updated.status == "completed"
+    assert updated.error is None
+    assert updated.result["outcome"] == "pass"
+
+    tasks = await tm.list_tasks()
+    assert any(task.bot_id == "pm-security-reviewer" for task in tasks)
+
+
+@pytest.mark.anyio
 async def test_trigger_skip_records_diagnostics_when_fan_out_produces_no_payloads(tmp_path):
     import asyncio
 

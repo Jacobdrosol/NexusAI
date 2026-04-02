@@ -467,3 +467,62 @@ async def test_review_assignment_prefers_repo_output_bot_provenance_for_duplicat
     assert item["bot_id"] == "pm-coder-review-provenance"
     assert item["apply_eligible"] is True
     assert body["generated_deliverables"] == ["docs/blocks/roadmap.md"]
+
+
+@pytest.mark.anyio
+async def test_review_assignment_extracts_expected_repo_path_from_deliverable_text(cp_app, tmp_path, monkeypatch):
+    project_id = "proj-review-deliverable-text"
+    orchestration_id = "orch-review-deliverable-text"
+    base_root = tmp_path / "repo-workspaces"
+    root = base_root / project_id / "repo"
+    root.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init", "-b", "main"], cwd=root, check=True, capture_output=True)
+    monkeypatch.setenv("NEXUSAI_REPO_WORKSPACE_ROOT", str(base_root))
+
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        await client.post("/v1/projects", json={"id": project_id, "name": "Deliverable Text Project", "mode": "isolated"})
+        await client.put(
+            f"/v1/projects/{project_id}/repo/workspace",
+            json={"enabled": True, "managed_path_mode": True},
+        )
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "pm-coder-deliverable-text",
+                "name": "PM Coder Deliverable Text",
+                "role": "coder",
+                "enabled": True,
+                "backends": [],
+                "execution_policy": {"repo_output_mode": "allow"},
+            },
+        )
+
+        task = await cp_app.state.task_manager.create_task(
+            bot_id="pm-coder-deliverable-text",
+            payload={
+                "instruction": "create sql file",
+                "deliverables": ["File: `temp/sql/ai_grading_migration.sql` containing the full migration script."],
+            },
+            metadata=TaskMetadata(
+                source="chat_assign",
+                project_id=project_id,
+                orchestration_id=orchestration_id,
+                conversation_id="conv-review-deliverable-text",
+            ),
+        )
+        await cp_app.state.task_manager.update_status(
+            task.id,
+            "completed",
+            result={"artifacts": [{"path": "temp/sql/ai_grading_migration.sql", "content": "-- migration\nSELECT 1;\n"}]},
+        )
+
+        resp = await client.post(
+            f"/v1/projects/{project_id}/repo/workspace/review-assignment",
+            json={"orchestration_id": orchestration_id, "include_content": True},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["expected_deliverables"] == ["temp/sql/ai_grading_migration.sql"]
+    assert body["generated_deliverables"] == ["temp/sql/ai_grading_migration.sql"]
+    assert body["missing_deliverables"] == []

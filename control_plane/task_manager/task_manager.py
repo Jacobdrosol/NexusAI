@@ -317,6 +317,15 @@ def _is_empty_contract_value(value: Any) -> bool:
     return value in (None, "", [], {})
 
 
+def _payload_field_aliases(path: str) -> list[str]:
+    normalized = str(path or "").strip()
+    if normalized == "status":
+        return ["status", "outcome"]
+    if normalized == "outcome":
+        return ["outcome", "status"]
+    return [normalized]
+
+
 def _missing_payload_fields(payload: Any, fields: list[str]) -> list[str]:
     if not isinstance(payload, dict):
         return [str(field) for field in fields]
@@ -325,7 +334,10 @@ def _missing_payload_fields(payload: Any, fields: list[str]) -> list[str]:
         path = str(field).strip()
         if not path:
             continue
-        if _lookup_payload_path(payload, path) is None:
+        candidate_paths = [candidate for candidate in _payload_field_aliases(path) if candidate]
+        if not candidate_paths:
+            continue
+        if all(_lookup_payload_path(payload, candidate) is None for candidate in candidate_paths):
             missing.append(path)
     return missing
 
@@ -338,7 +350,15 @@ def _empty_payload_fields(payload: Any, fields: list[str]) -> list[str]:
         path = str(field).strip()
         if not path:
             continue
-        if _is_empty_contract_value(_lookup_payload_path(payload, path)):
+        candidate_paths = [candidate for candidate in _payload_field_aliases(path) if candidate]
+        if not candidate_paths:
+            continue
+        candidate_values = [
+            _lookup_payload_path(payload, candidate)
+            for candidate in candidate_paths
+            if _lookup_payload_path(payload, candidate) is not None
+        ]
+        if candidate_values and all(_is_empty_contract_value(value) for value in candidate_values):
             empty.append(path)
     return empty
 

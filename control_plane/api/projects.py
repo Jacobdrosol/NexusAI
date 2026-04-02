@@ -682,7 +682,16 @@ def _assignment_file_candidates(
 
 
 def _normalize_assignment_repo_path(value: Any) -> str:
-    text = str(value or "").strip().replace("\\", "/").strip("`")
+    text = str(value or "").strip().replace("\\", "/")
+    if not text:
+        return ""
+    if "`" in text:
+        tick_matches = re.findall(r"`([^`]+)`", text)
+        for match in tick_matches:
+            candidate = str(match or "").strip().replace("\\", "/")
+            if candidate:
+                return candidate
+    text = text.strip("`")
     if not text:
         return ""
     return text
