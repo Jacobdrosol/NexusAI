@@ -57,6 +57,11 @@
         <td><code>{{ task.id }}</code></td>
         <td class="actions">
           <button class="btn btn-sm" type="button" onclick="retryTask('{{ task.id }}')">Retry</button>
+          <button
+            class="btn btn-sm"
+            type="button"
+            onclick='spliceAssignmentFromTask({{ {"id": task.id, "bot_id": task.bot_id, "step_id": ((task.metadata or {}).get("step_id") or "")}|tojson }})'
+          >Splice</button>
           <a class="btn btn-sm" href="/api/tasks/{{ task.id }}/download?section=payload">Payload</a>
           <a class="btn btn-sm" href="/api/tasks/{{ task.id }}/download?section=result">Result</a>
           <a class="btn btn-sm" href="/api/tasks/{{ task.id }}/download?section=error">Error</a>
@@ -177,6 +182,7 @@ let lastAssignmentRecapOrchestrationId = '';
 let activeDagGraph = null;
 let activeDagSelectedNodeId = '';
 let activeDagOrchestrationId = '';
+const pipelineOrchestrationId = {{ (pipeline.id if pipeline else "")|tojson }};
 
 function getCsrf() {
   const el = document.querySelector('input[name=csrf_token]');
@@ -206,6 +212,50 @@ function retryTask(taskId) {
     location.reload();
   })
   .catch((e) => alert(e.message || 'Retry failed'));
+}
+
+async function loadTaskPayload(taskId) {
+  const response = await fetch('/api/tasks/' + encodeURIComponent(taskId) + '?section=payload');
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || 'Task payload load failed');
+  return data.content ?? {};
+}
+
+async function resolveAssignmentNodeContext(task) {
+  const payload = await loadTaskPayload(task.id);
+  let assignmentId = String(payload?.assignment_id || '').trim();
+  const nodeId = String(task?.step_id || task?.bot_id || '').trim();
+  if (!assignmentId && pipelineOrchestrationId) {
+    const res = await fetch('/api/chat/orchestrations/' + encodeURIComponent(pipelineOrchestrationId) + '/graph');
+    const graph = await res.json().catch(() => ({}));
+    if (res.ok) {
+      assignmentId = String(graph?.assignment_id || '').trim();
+    }
+  }
+  if (!assignmentId) throw new Error('This run has no assignment_id metadata yet. Try a newer run or requeue and retry.');
+  if (!nodeId) throw new Error('Could not determine node id for this task.');
+  return {assignmentId, nodeId};
+}
+
+async function spliceAssignmentFromTask(task) {
+  try {
+    const ctx = await resolveAssignmentNodeContext(task);
+    const response = await fetch(
+      '/api/chat/assignments/' + encodeURIComponent(ctx.assignmentId) + '/splice',
+      {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
+        body: JSON.stringify({from_node_id: ctx.nodeId, node_overrides: {}}),
+      }
+    );
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Assignment splice failed');
+    const orchestrationId = data?.assignment?.orchestration_id || data?.child_run?.orchestration_id || 'unknown';
+    alert('Assignment splice queued: ' + orchestrationId);
+    location.reload();
+  } catch (error) {
+    alert(error.message || 'Assignment splice failed');
+  }
 }
 
 function setPipelineTestStatus(message, isError) {
