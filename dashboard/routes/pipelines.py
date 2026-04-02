@@ -151,6 +151,16 @@ def _pipeline_detail(cp, orchestration_id: str) -> dict[str, Any] | None:
     tasks = sorted(tasks, key=_task_sort_key)
     root = _root_task(tasks)
     root_meta = (root or {}).get("metadata") or {}
+    project_id = ""
+    conversation_id = ""
+    for task in tasks:
+        meta = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+        if not project_id:
+            project_id = str(meta.get("project_id") or "").strip()
+        if not conversation_id:
+            conversation_id = str(meta.get("conversation_id") or "").strip()
+        if project_id and conversation_id:
+            break
 
     task_ids = {str(task.get("id") or "") for task in tasks}
     artifacts: list[dict[str, Any]] = []
@@ -168,6 +178,8 @@ def _pipeline_detail(cp, orchestration_id: str) -> dict[str, Any] | None:
         "name": pipeline_name,
         "entry_bot_id": entry_bot_id,
         "root_task_id": str((root or {}).get("id") or ""),
+        "project_id": project_id,
+        "conversation_id": conversation_id,
         "status": _pipeline_status(tasks),
         "status_summary": _status_summary(tasks),
         "usage": _usage_totals(tasks),

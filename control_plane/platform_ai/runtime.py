@@ -99,6 +99,13 @@ def _critical_nodes(graph: Dict[str, Any]) -> List[str]:
     return picked or _node_ids(graph)[:3]
 
 
+def _counts_are_terminal(status_counts: Dict[str, Any]) -> bool:
+    running = int(status_counts.get("running") or 0)
+    queued = int(status_counts.get("queued") or 0)
+    blocked = int(status_counts.get("blocked") or 0)
+    return running == 0 and queued == 0 and blocked == 0
+
+
 def _assertion(kind: str, passed: bool, score: float, detail: str) -> Dict[str, Any]:
     return {
         "kind": kind,
@@ -299,6 +306,145 @@ class PlatformAISessionRuntime:
         except asyncio.CancelledError:
             pass
 
+    def _snapshot_is_terminal(self, snapshot: Dict[str, Any]) -> bool:
+        if not str(snapshot.get("orchestration_id") or "").strip():
+            return False
+        runtime_state = snapshot.get("runtime_state") if isinstance(snapshot.get("runtime_state"), dict) else {}
+        task_total = int(runtime_state.get("task_total") or 0)
+        status_counts = snapshot.get("status_counts") if isinstance(snapshot.get("status_counts"), dict) else {}
+        active_tasks = snapshot.get("active_tasks") if isinstance(snapshot.get("active_tasks"), list) else []
+        if task_total <= 0 or active_tasks:
+            return False
+        completed_like = (
+            int(status_counts.get("completed") or 0)
+            + int(status_counts.get("failed") or 0)
+            + int(status_counts.get("cancelled") or 0)
+            + int(status_counts.get("retried") or 0)
+        )
+        return completed_like >= task_total and _counts_are_terminal(status_counts)
+
+    def _autonomous_terminal_resolution(
+        self,
+        *,
+        session: Dict[str, Any],
+        snapshot: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        if str(session.get("mode") or "").strip().lower() != "pipeline_tuner":
+            return None
+        metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
+        if not bool(metadata.get("autonomous_enabled")):
+            return None
+        if not self._snapshot_is_terminal(snapshot):
+            return None
+        if str(metadata.get("autonomous_terminalized_at") or "").strip():
+            return None
+
+        status_counts = snapshot.get("status_counts") if isinstance(snapshot.get("status_counts"), dict) else {}
+        failed_tasks = int(status_counts.get("failed") or 0)
+        orchestration_id = str(snapshot.get("orchestration_id") or "").strip()
+        pipeline_name = str(metadata.get("pipeline_name") or metadata.get("pipeline_bot_id") or "pipeline").strip()
+        state = str(metadata.get("autonomous_state") or "").strip().lower()
+        current_iteration = int(metadata.get("autonomous_iteration") or 0)
+        max_iterations = max(1, min(25, int(metadata.get("autonomous_max_iterations") or 6)))
+        score = float(metadata.get("autonomous_last_eval_score") or 0.0)
+        target_score = max(0.6, min(0.99, float(metadata.get("autonomous_target_score") or 0.9)))
+        last_eval_signature = str(metadata.get("autonomous_last_eval_signature") or "").strip()
+        last_refine_signature = str(metadata.get("autonomous_last_refine_signature") or "").strip()
+
+        if state == "converged":
+            return {
+                "status": "completed",
+                "reason": "autonomous_converged",
+                "message": (
+                    f"Autonomous tuner finished cleanly for `{pipeline_name}` after orchestration "
+                    f"`{orchestration_id}` reached the target quality score {score:.3f}."
+                ),
+            }
+        if state == "max_iterations_reached":
+            return {
+                "status": "failed",
+                "reason": "autonomous_max_iterations_reached",
+                "message": (
+                    f"Autonomous tuner stopped for `{pipeline_name}` after {current_iteration} iteration(s) "
+                    f"without reaching target score {target_score:.3f}. Last score: {score:.3f}."
+                ),
+            }
+        if state in {"launch_failed", "refinement_launch_failed"}:
+            return {
+                "status": "failed",
+                "reason": state,
+                "message": (
+                    f"Autonomous tuner stopped for `{pipeline_name}` because it could not launch the next "
+                    f"remediation iteration after orchestration `{orchestration_id}` finished."
+                ),
+            }
+        if (
+            failed_tasks > 0
+            and last_eval_signature
+            and state in {"needs_refinement", "tune", "inspect_failures", ""}
+            and last_refine_signature == last_eval_signature
+        ):
+            return {
+                "status": "failed",
+                "reason": "autonomous_stalled_after_evaluation",
+                "message": (
+                    f"Autonomous tuner stopped for `{pipeline_name}` because orchestration `{orchestration_id}` "
+                    f"is terminal with {failed_tasks} failed task(s), but no new remediation iteration was launched."
+                ),
+            }
+        if failed_tasks > 0 and current_iteration >= max_iterations:
+            return {
+                "status": "failed",
+                "reason": "autonomous_max_iterations_reached",
+                "message": (
+                    f"Autonomous tuner stopped for `{pipeline_name}` after hitting the iteration cap with "
+                    f"{failed_tasks} failed task(s) remaining in orchestration `{orchestration_id}`."
+                ),
+            }
+        return None
+
+    async def _finalize_autonomous_session_if_terminal(
+        self,
+        session_id: str,
+        *,
+        session: Dict[str, Any],
+        snapshot: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        resolution = self._autonomous_terminal_resolution(session=session, snapshot=snapshot)
+        if resolution is None:
+            return None
+        reason = str(resolution.get("reason") or "autonomous_terminalized")
+        next_status = str(resolution.get("status") or "failed")
+        message = str(resolution.get("message") or "").strip()
+        updated = await self._store.update_session(
+            session_id,
+            status=next_status,
+            metadata={
+                "autonomous_terminalized_at": _now(),
+                "autonomous_terminal_reason": reason,
+                "autonomous_state": "converged" if next_status == "completed" else "stopped",
+            },
+        )
+        await self._store.append_event(
+            session_id,
+            "action_trace",
+            {
+                "action": "autonomous_session_terminalized",
+                "reason": reason,
+                "status": next_status,
+                "orchestration_id": snapshot.get("orchestration_id"),
+                "runtime_state": snapshot.get("runtime_state"),
+            },
+        )
+        if message:
+            await self._store.append_message(
+                session_id,
+                role="assistant",
+                content=message,
+                metadata={"source": "autonomous_tuner", "state": reason},
+            )
+        return updated
+
     async def post_message(
         self,
         session_id: str,
@@ -396,6 +542,9 @@ class PlatformAISessionRuntime:
                     },
                 )
                 await self._run_autonomous_pipeline_tuner(session_id, session=session, snapshot=snapshot)
+                session = await self._store.get_session(session_id) or session
+                if await self._finalize_autonomous_session_if_terminal(session_id, session=session, snapshot=snapshot):
+                    continue
                 now_mono = time.monotonic()
                 changed = bool(signature) and signature != previous_signature
                 heartbeat_due = (now_mono - float(self._last_heartbeat_ts.get(session_id) or 0.0)) >= 30.0
@@ -673,11 +822,16 @@ class PlatformAISessionRuntime:
             + int(status_counts.get("retried") or 0)
         )
         progress_ratio = (completed_like / total_tasks) if total_tasks else 0.0
+        terminal_counts = _counts_are_terminal(status_counts)
+        terminal_failure = bool(total_tasks) and terminal_counts and completed_like >= total_tasks and int(status_counts.get("failed") or 0) > 0
         phase = "observe"
         active_action = "monitor_pipeline"
         if not context.get("orchestration_id"):
             active_action = "await_orchestration_attachment"
             phase = "observe"
+        elif terminal_failure:
+            active_action = "terminal_failure_detected"
+            phase = "evaluate"
         elif int(status_counts.get("running") or 0) > 0:
             active_action = "monitor_running_bots"
             phase = "diagnose"
@@ -699,6 +853,16 @@ class PlatformAISessionRuntime:
         elif not total_tasks:
             detail = f"Attached to orchestration {context.get('orchestration_id')}, waiting for tasks to appear."
             heartbeat_detail = "No tasks available yet for the attached orchestration."
+        elif terminal_failure:
+            failed_count = int(status_counts.get("failed") or 0)
+            detail = (
+                f"Orchestration {context.get('orchestration_id')} is terminal with {failed_count} failed task(s) "
+                f"out of {total_tasks}. Waiting for autonomous remediation or terminal stop."
+            )
+            heartbeat_detail = (
+                f"Terminal failure detected ({completed_like}/{total_tasks} processed tasks, "
+                f"failed={failed_count})."
+            )
         else:
             detail = (
                 f"Tracking {total_tasks} tasks: running={int(status_counts.get('running') or 0)}, "

@@ -2362,6 +2362,8 @@ def test_pipelines_pages_render_grouped_pipeline_runs(dashboard_client):
                         "workflow_root_task_id": "task-root",
                         "pipeline_name": "Course Generation Pipeline",
                         "pipeline_entry_bot_id": "course-intake",
+                        "project_id": "proj-1",
+                        "conversation_id": "conv-1",
                     },
                 },
                 {
@@ -2379,6 +2381,8 @@ def test_pipelines_pages_render_grouped_pipeline_runs(dashboard_client):
                         "workflow_root_task_id": "task-root",
                         "pipeline_name": "Course Generation Pipeline",
                         "pipeline_entry_bot_id": "course-intake",
+                        "project_id": "proj-1",
+                        "conversation_id": "conv-1",
                     },
                 },
             ]
@@ -2401,5 +2405,12 @@ def test_pipelines_pages_render_grouped_pipeline_runs(dashboard_client):
     assert b"Pipelines" in list_resp.data
     assert b"Course Generation Pipeline" in list_resp.data
     assert detail_resp.status_code == 200
+    assert b"View DAG" in detail_resp.data
+    assert b"Full Recap" in detail_resp.data
+    assert b"Review Files" in detail_resp.data
+    assert b"Download DAG JSON" in detail_resp.data
+    assert b"Download Review JSON" in detail_resp.data
+    assert b"Download Recap TXT" in detail_resp.data
+    assert b"proj-1" in detail_resp.data
     assert b"Artifacts and Reports" in detail_resp.data
     assert b"Execution Report" in detail_resp.data
