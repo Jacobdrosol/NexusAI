@@ -6056,7 +6056,7 @@ class TaskManager:
                             # Annotate explicit branch identity so join gates and the
                             # GraphCompletenessEvaluator can reason about convergence
                             # without parsing the opaque step_id string.
-                            _branch_key = self._fanout_branch_key(task, trigger, payload)
+                            _branch_key = self._fanout_branch_key(trigger, payload)
                             branch_metadata = branch_metadata.model_copy(update={
                                 "fan_out_source": fanout_id,
                                 "branch_id": _branch_key or (f"branch:{fanout_idx}" if fanout_idx is not None else None),
