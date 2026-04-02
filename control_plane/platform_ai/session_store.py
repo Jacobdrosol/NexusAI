@@ -84,6 +84,62 @@ CREATE TABLE IF NOT EXISTS platform_ai_messages (
 )
 """
 
+_CREATE_BRIEFS = """
+CREATE TABLE IF NOT EXISTS platform_ai_session_briefs (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    target_pipeline_binding_id TEXT,
+    target_template_id TEXT,
+    target_project_id TEXT,
+    target_run_id TEXT,
+    target_orchestration_id TEXT,
+    expected_topology_json TEXT NOT NULL DEFAULT '{}',
+    expected_deliverables_json TEXT NOT NULL DEFAULT '[]',
+    quality_context_packs_json TEXT NOT NULL DEFAULT '[]',
+    forbidden_behaviors_json TEXT NOT NULL DEFAULT '[]',
+    tuning_goal TEXT NOT NULL DEFAULT '',
+    success_definition TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+)
+"""
+
+_CREATE_ACTIONS = """
+CREATE TABLE IF NOT EXISTS platform_ai_actions (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    action_type TEXT NOT NULL,
+    target_type TEXT,
+    target_id TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    rationale TEXT NOT NULL DEFAULT '',
+    input_snapshot_hash TEXT NOT NULL DEFAULT '',
+    output_snapshot_hash TEXT NOT NULL DEFAULT '',
+    state_delta_summary TEXT NOT NULL DEFAULT '',
+    error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+)
+"""
+
+_CREATE_PATCH_PROPOSALS = """
+CREATE TABLE IF NOT EXISTS platform_ai_patch_proposals (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    action_id TEXT,
+    target_config TEXT NOT NULL DEFAULT '',
+    before_state_json TEXT NOT NULL DEFAULT '{}',
+    after_state_json TEXT NOT NULL DEFAULT '{}',
+    rationale TEXT NOT NULL DEFAULT '',
+    expected_effect TEXT NOT NULL DEFAULT '',
+    validation_steps_json TEXT NOT NULL DEFAULT '[]',
+    rollback_note TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'proposed',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+)
+"""
+
 _CREATE_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_platform_ai_sessions_assignment ON platform_ai_sessions(assignment_id, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_platform_ai_events_session ON platform_ai_events(session_id, created_at)",
@@ -93,6 +149,10 @@ _CREATE_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_platform_ai_test_suites_pipeline ON platform_ai_test_suites(pipeline_bot_id, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_platform_ai_test_runs_suite ON platform_ai_test_runs(suite_id, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_platform_ai_test_runs_pipeline ON platform_ai_test_runs(pipeline_bot_id, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_platform_ai_briefs_session ON platform_ai_session_briefs(session_id, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_platform_ai_actions_session ON platform_ai_actions(session_id, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_platform_ai_patch_proposals_session ON platform_ai_patch_proposals(session_id, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_platform_ai_actions_status ON platform_ai_actions(session_id, status, created_at)",
 )
 
 
@@ -139,6 +199,11 @@ class PlatformAISessionStore:
             await db.execute(_CREATE_TEST_RUNS)
             await self._ensure_column(db, "platform_ai_test_suites", "pipeline_bot_id", "TEXT")
             await self._ensure_column(db, "platform_ai_test_runs", "pipeline_bot_id", "TEXT")
+            await db.execute(_CREATE_BRIEFS)
+            await db.execute(_CREATE_ACTIONS)
+            await db.execute(_CREATE_PATCH_PROPOSALS)
+            await self._ensure_column(db, "platform_ai_sessions", "brief_synthesized_at", "TEXT")
+            await self._ensure_column(db, "platform_ai_sessions", "no_progress_count", "INTEGER NOT NULL DEFAULT 0")
             # Auto-managed pipeline test sessions should not stay active across restarts.
             await db.execute(
                 """
@@ -728,6 +793,456 @@ class PlatformAISessionStore:
             }
             for row in rows
         ]
+
+    async def upsert_session_brief(
+        self,
+        session_id: str,
+        *,
+        target_pipeline_binding_id: Optional[str] = None,
+        target_template_id: Optional[str] = None,
+        target_project_id: Optional[str] = None,
+        target_run_id: Optional[str] = None,
+        target_orchestration_id: Optional[str] = None,
+        expected_topology: Optional[Dict[str, Any]] = None,
+        expected_deliverables: Optional[List[str]] = None,
+        quality_context_packs: Optional[List[str]] = None,
+        forbidden_behaviors: Optional[List[str]] = None,
+        tuning_goal: Optional[str] = None,
+        success_definition: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        await self._ensure_db()
+        sid = str(session_id or "").strip()
+        now = _now()
+        existing = await self.get_session_brief(sid)
+        if existing is not None:
+            brief_id = str(existing["id"])
+            async with open_sqlite(self._db_path) as db:
+                await db.execute(
+                    """
+                    UPDATE platform_ai_session_briefs
+                    SET target_pipeline_binding_id = COALESCE(?, target_pipeline_binding_id),
+                        target_template_id = COALESCE(?, target_template_id),
+                        target_project_id = COALESCE(?, target_project_id),
+                        target_run_id = COALESCE(?, target_run_id),
+                        target_orchestration_id = COALESCE(?, target_orchestration_id),
+                        expected_topology_json = COALESCE(?, expected_topology_json),
+                        expected_deliverables_json = COALESCE(?, expected_deliverables_json),
+                        quality_context_packs_json = COALESCE(?, quality_context_packs_json),
+                        forbidden_behaviors_json = COALESCE(?, forbidden_behaviors_json),
+                        tuning_goal = COALESCE(?, tuning_goal),
+                        success_definition = COALESCE(?, success_definition),
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        str(target_pipeline_binding_id or "").strip() or None,
+                        str(target_template_id or "").strip() or None,
+                        str(target_project_id or "").strip() or None,
+                        str(target_run_id or "").strip() or None,
+                        str(target_orchestration_id or "").strip() or None,
+                        _dumps(expected_topology) if expected_topology is not None else None,
+                        json.dumps(expected_deliverables, ensure_ascii=False) if expected_deliverables is not None else None,
+                        json.dumps(quality_context_packs, ensure_ascii=False) if quality_context_packs is not None else None,
+                        json.dumps(forbidden_behaviors, ensure_ascii=False) if forbidden_behaviors is not None else None,
+                        str(tuning_goal or "").strip() or None,
+                        str(success_definition or "").strip() or None,
+                        now,
+                        brief_id,
+                    ),
+                )
+                await db.commit()
+            result = await self.get_session_brief(sid)
+            assert result is not None
+            return result
+        brief_id = str(uuid.uuid4())
+        async with open_sqlite(self._db_path) as db:
+            await db.execute(
+                """
+                INSERT INTO platform_ai_session_briefs (
+                    id, session_id, target_pipeline_binding_id, target_template_id,
+                    target_project_id, target_run_id, target_orchestration_id,
+                    expected_topology_json, expected_deliverables_json,
+                    quality_context_packs_json, forbidden_behaviors_json,
+                    tuning_goal, success_definition, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    brief_id,
+                    sid,
+                    str(target_pipeline_binding_id or "").strip() or None,
+                    str(target_template_id or "").strip() or None,
+                    str(target_project_id or "").strip() or None,
+                    str(target_run_id or "").strip() or None,
+                    str(target_orchestration_id or "").strip() or None,
+                    _dumps(expected_topology or {}),
+                    json.dumps(expected_deliverables or [], ensure_ascii=False),
+                    json.dumps(quality_context_packs or [], ensure_ascii=False),
+                    json.dumps(forbidden_behaviors or [], ensure_ascii=False),
+                    str(tuning_goal or "").strip(),
+                    str(success_definition or "").strip(),
+                    now,
+                    now,
+                ),
+            )
+            await db.commit()
+        result = await self.get_session_brief(sid)
+        assert result is not None
+        return result
+
+    async def get_session_brief(self, session_id: str) -> Optional[Dict[str, Any]]:
+        await self._ensure_db()
+        sid = str(session_id or "").strip()
+        if not sid:
+            return None
+        async with open_sqlite(self._db_path) as db:
+            async with db.execute(
+                "SELECT * FROM platform_ai_session_briefs WHERE session_id = ? ORDER BY created_at DESC LIMIT 1",
+                (sid,),
+            ) as cursor:
+                row = await cursor.fetchone()
+        if row is None:
+            return None
+        keys = ["id", "session_id", "target_pipeline_binding_id", "target_template_id",
+                "target_project_id", "target_run_id", "target_orchestration_id",
+                "expected_topology_json", "expected_deliverables_json",
+                "quality_context_packs_json", "forbidden_behaviors_json",
+                "tuning_goal", "success_definition", "created_at", "updated_at"]
+        d = dict(zip(keys, row))
+        return {
+            "id": str(d.get("id") or ""),
+            "session_id": str(d.get("session_id") or ""),
+            "target_pipeline_binding_id": str(d.get("target_pipeline_binding_id") or "") or None,
+            "target_template_id": str(d.get("target_template_id") or "") or None,
+            "target_project_id": str(d.get("target_project_id") or "") or None,
+            "target_run_id": str(d.get("target_run_id") or "") or None,
+            "target_orchestration_id": str(d.get("target_orchestration_id") or "") or None,
+            "expected_topology": _loads(d.get("expected_topology_json"), {}),
+            "expected_deliverables": _loads(d.get("expected_deliverables_json"), []),
+            "quality_context_packs": _loads(d.get("quality_context_packs_json"), []),
+            "forbidden_behaviors": _loads(d.get("forbidden_behaviors_json"), []),
+            "tuning_goal": str(d.get("tuning_goal") or ""),
+            "success_definition": str(d.get("success_definition") or ""),
+            "created_at": str(d.get("created_at") or ""),
+            "updated_at": str(d.get("updated_at") or ""),
+        }
+
+    async def create_action(
+        self,
+        session_id: str,
+        *,
+        action_type: str,
+        target_type: Optional[str] = None,
+        target_id: Optional[str] = None,
+        rationale: str = "",
+        input_snapshot_hash: str = "",
+    ) -> Dict[str, Any]:
+        await self._ensure_db()
+        action_id = str(uuid.uuid4())
+        now = _now()
+        async with open_sqlite(self._db_path) as db:
+            await db.execute(
+                """
+                INSERT INTO platform_ai_actions (
+                    id, session_id, action_type, target_type, target_id,
+                    status, rationale, input_snapshot_hash, output_snapshot_hash,
+                    state_delta_summary, error, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, '', '', NULL, ?, ?)
+                """,
+                (
+                    action_id,
+                    str(session_id or "").strip(),
+                    str(action_type or "").strip(),
+                    str(target_type or "").strip() or None,
+                    str(target_id or "").strip() or None,
+                    str(rationale or "").strip(),
+                    str(input_snapshot_hash or "").strip(),
+                    now,
+                    now,
+                ),
+            )
+            await db.commit()
+        result = await self._get_action(action_id)
+        assert result is not None
+        return result
+
+    async def _get_action(self, action_id: str) -> Optional[Dict[str, Any]]:
+        async with open_sqlite(self._db_path) as db:
+            async with db.execute(
+                "SELECT * FROM platform_ai_actions WHERE id = ? LIMIT 1",
+                (str(action_id or "").strip(),),
+            ) as cursor:
+                row = await cursor.fetchone()
+        if row is None:
+            return None
+        keys = ["id", "session_id", "action_type", "target_type", "target_id",
+                "status", "rationale", "input_snapshot_hash", "output_snapshot_hash",
+                "state_delta_summary", "error", "created_at", "updated_at"]
+        d = dict(zip(keys, row))
+        return {
+            "id": str(d.get("id") or ""),
+            "session_id": str(d.get("session_id") or ""),
+            "action_type": str(d.get("action_type") or ""),
+            "target_type": str(d.get("target_type") or "") or None,
+            "target_id": str(d.get("target_id") or "") or None,
+            "status": str(d.get("status") or "pending"),
+            "rationale": str(d.get("rationale") or ""),
+            "input_snapshot_hash": str(d.get("input_snapshot_hash") or ""),
+            "output_snapshot_hash": str(d.get("output_snapshot_hash") or ""),
+            "state_delta_summary": str(d.get("state_delta_summary") or ""),
+            "error": str(d.get("error") or "") or None,
+            "created_at": str(d.get("created_at") or ""),
+            "updated_at": str(d.get("updated_at") or ""),
+        }
+
+    async def update_action(
+        self,
+        action_id: str,
+        *,
+        status: Optional[str] = None,
+        output_snapshot_hash: Optional[str] = None,
+        state_delta_summary: Optional[str] = None,
+        error: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        await self._ensure_db()
+        safe_id = str(action_id or "").strip()
+        if not safe_id:
+            return None
+        now = _now()
+        async with open_sqlite(self._db_path) as db:
+            await db.execute(
+                """
+                UPDATE platform_ai_actions
+                SET status = COALESCE(?, status),
+                    output_snapshot_hash = COALESCE(?, output_snapshot_hash),
+                    state_delta_summary = COALESCE(?, state_delta_summary),
+                    error = COALESCE(?, error),
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    str(status or "").strip() or None,
+                    str(output_snapshot_hash or "").strip() or None,
+                    str(state_delta_summary or "").strip() or None,
+                    str(error or "").strip() or None,
+                    now,
+                    safe_id,
+                ),
+            )
+            await db.commit()
+        return await self._get_action(safe_id)
+
+    async def list_actions(
+        self,
+        session_id: str,
+        *,
+        limit: int = 100,
+        status: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        await self._ensure_db()
+        sid = str(session_id or "").strip()
+        safe_limit = max(1, min(int(limit), 50000))
+        params: List[Any] = [sid]
+        where = "WHERE session_id = ?"
+        if str(status or "").strip():
+            where += " AND status = ?"
+            params.append(str(status or "").strip())
+        query = f"SELECT * FROM platform_ai_actions {where} ORDER BY created_at DESC LIMIT ?"
+        params.append(safe_limit)
+        async with open_sqlite(self._db_path) as db:
+            async with db.execute(query, tuple(params)) as cursor:
+                rows = await cursor.fetchall()
+        keys = ["id", "session_id", "action_type", "target_type", "target_id",
+                "status", "rationale", "input_snapshot_hash", "output_snapshot_hash",
+                "state_delta_summary", "error", "created_at", "updated_at"]
+        results = []
+        for row in rows:
+            d = dict(zip(keys, row))
+            results.append({
+                "id": str(d.get("id") or ""),
+                "session_id": str(d.get("session_id") or ""),
+                "action_type": str(d.get("action_type") or ""),
+                "target_type": str(d.get("target_type") or "") or None,
+                "target_id": str(d.get("target_id") or "") or None,
+                "status": str(d.get("status") or "pending"),
+                "rationale": str(d.get("rationale") or ""),
+                "input_snapshot_hash": str(d.get("input_snapshot_hash") or ""),
+                "output_snapshot_hash": str(d.get("output_snapshot_hash") or ""),
+                "state_delta_summary": str(d.get("state_delta_summary") or ""),
+                "error": str(d.get("error") or "") or None,
+                "created_at": str(d.get("created_at") or ""),
+                "updated_at": str(d.get("updated_at") or ""),
+            })
+        return results
+
+    async def get_last_action_of_type(self, session_id: str, action_type: str) -> Optional[Dict[str, Any]]:
+        await self._ensure_db()
+        sid = str(session_id or "").strip()
+        atype = str(action_type or "").strip()
+        async with open_sqlite(self._db_path) as db:
+            async with db.execute(
+                "SELECT * FROM platform_ai_actions WHERE session_id = ? AND action_type = ? ORDER BY created_at DESC LIMIT 1",
+                (sid, atype),
+            ) as cursor:
+                row = await cursor.fetchone()
+        if row is None:
+            return None
+        keys = ["id", "session_id", "action_type", "target_type", "target_id",
+                "status", "rationale", "input_snapshot_hash", "output_snapshot_hash",
+                "state_delta_summary", "error", "created_at", "updated_at"]
+        d = dict(zip(keys, row))
+        return {
+            "id": str(d.get("id") or ""),
+            "session_id": str(d.get("session_id") or ""),
+            "action_type": str(d.get("action_type") or ""),
+            "target_type": str(d.get("target_type") or "") or None,
+            "target_id": str(d.get("target_id") or "") or None,
+            "status": str(d.get("status") or "pending"),
+            "rationale": str(d.get("rationale") or ""),
+            "input_snapshot_hash": str(d.get("input_snapshot_hash") or ""),
+            "output_snapshot_hash": str(d.get("output_snapshot_hash") or ""),
+            "state_delta_summary": str(d.get("state_delta_summary") or ""),
+            "error": str(d.get("error") or "") or None,
+            "created_at": str(d.get("created_at") or ""),
+            "updated_at": str(d.get("updated_at") or ""),
+        }
+
+    async def count_consecutive_no_progress_actions(self, session_id: str) -> int:
+        await self._ensure_db()
+        sid = str(session_id or "").strip()
+        actions = await self.list_actions(sid, limit=50)
+        count = 0
+        for action in actions:
+            status = str(action.get("status") or "").strip().lower()
+            summary = str(action.get("state_delta_summary") or "").strip()
+            if status == "no_op" or not summary:
+                count += 1
+            else:
+                break
+        return count
+
+    async def create_patch_proposal(
+        self,
+        session_id: str,
+        *,
+        action_id: Optional[str] = None,
+        target_config: str,
+        before_state: Dict[str, Any],
+        after_state: Dict[str, Any],
+        rationale: str,
+        expected_effect: str,
+        validation_steps: Optional[List[str]] = None,
+        rollback_note: str = "",
+    ) -> Dict[str, Any]:
+        await self._ensure_db()
+        proposal_id = str(uuid.uuid4())
+        now = _now()
+        async with open_sqlite(self._db_path) as db:
+            await db.execute(
+                """
+                INSERT INTO platform_ai_patch_proposals (
+                    id, session_id, action_id, target_config,
+                    before_state_json, after_state_json, rationale, expected_effect,
+                    validation_steps_json, rollback_note, status, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'proposed', ?, ?)
+                """,
+                (
+                    proposal_id,
+                    str(session_id or "").strip(),
+                    str(action_id or "").strip() or None,
+                    str(target_config or "").strip(),
+                    _dumps(before_state or {}),
+                    _dumps(after_state or {}),
+                    str(rationale or "").strip(),
+                    str(expected_effect or "").strip(),
+                    json.dumps(validation_steps or [], ensure_ascii=False),
+                    str(rollback_note or "").strip(),
+                    now,
+                    now,
+                ),
+            )
+            await db.commit()
+        result = await self.get_patch_proposal(proposal_id)
+        assert result is not None
+        return result
+
+    async def update_patch_proposal_status(self, proposal_id: str, status: str) -> Optional[Dict[str, Any]]:
+        await self._ensure_db()
+        safe_id = str(proposal_id or "").strip()
+        if not safe_id:
+            return None
+        async with open_sqlite(self._db_path) as db:
+            await db.execute(
+                "UPDATE platform_ai_patch_proposals SET status = ?, updated_at = ? WHERE id = ?",
+                (str(status or "proposed").strip(), _now(), safe_id),
+            )
+            await db.commit()
+        return await self.get_patch_proposal(safe_id)
+
+    async def get_patch_proposal(self, proposal_id: str) -> Optional[Dict[str, Any]]:
+        await self._ensure_db()
+        safe_id = str(proposal_id or "").strip()
+        if not safe_id:
+            return None
+        async with open_sqlite(self._db_path) as db:
+            async with db.execute(
+                "SELECT * FROM platform_ai_patch_proposals WHERE id = ? LIMIT 1",
+                (safe_id,),
+            ) as cursor:
+                row = await cursor.fetchone()
+        if row is None:
+            return None
+        keys = ["id", "session_id", "action_id", "target_config",
+                "before_state_json", "after_state_json", "rationale", "expected_effect",
+                "validation_steps_json", "rollback_note", "status", "created_at", "updated_at"]
+        d = dict(zip(keys, row))
+        return {
+            "id": str(d.get("id") or ""),
+            "session_id": str(d.get("session_id") or ""),
+            "action_id": str(d.get("action_id") or "") or None,
+            "target_config": str(d.get("target_config") or ""),
+            "before_state": _loads(d.get("before_state_json"), {}),
+            "after_state": _loads(d.get("after_state_json"), {}),
+            "rationale": str(d.get("rationale") or ""),
+            "expected_effect": str(d.get("expected_effect") or ""),
+            "validation_steps": _loads(d.get("validation_steps_json"), []),
+            "rollback_note": str(d.get("rollback_note") or ""),
+            "status": str(d.get("status") or "proposed"),
+            "created_at": str(d.get("created_at") or ""),
+            "updated_at": str(d.get("updated_at") or ""),
+        }
+
+    async def list_patch_proposals(self, session_id: str, *, limit: int = 50) -> List[Dict[str, Any]]:
+        await self._ensure_db()
+        sid = str(session_id or "").strip()
+        safe_limit = max(1, min(int(limit), 50000))
+        async with open_sqlite(self._db_path) as db:
+            async with db.execute(
+                "SELECT * FROM platform_ai_patch_proposals WHERE session_id = ? ORDER BY created_at DESC LIMIT ?",
+                (sid, safe_limit),
+            ) as cursor:
+                rows = await cursor.fetchall()
+        keys = ["id", "session_id", "action_id", "target_config",
+                "before_state_json", "after_state_json", "rationale", "expected_effect",
+                "validation_steps_json", "rollback_note", "status", "created_at", "updated_at"]
+        results = []
+        for row in rows:
+            d = dict(zip(keys, row))
+            results.append({
+                "id": str(d.get("id") or ""),
+                "session_id": str(d.get("session_id") or ""),
+                "action_id": str(d.get("action_id") or "") or None,
+                "target_config": str(d.get("target_config") or ""),
+                "before_state": _loads(d.get("before_state_json"), {}),
+                "after_state": _loads(d.get("after_state_json"), {}),
+                "rationale": str(d.get("rationale") or ""),
+                "expected_effect": str(d.get("expected_effect") or ""),
+                "validation_steps": _loads(d.get("validation_steps_json"), []),
+                "rollback_note": str(d.get("rollback_note") or ""),
+                "status": str(d.get("status") or "proposed"),
+                "created_at": str(d.get("created_at") or ""),
+                "updated_at": str(d.get("updated_at") or ""),
+            })
+        return results
 
     async def export_session_bundle(self, session_id: str) -> Optional[Dict[str, Any]]:
         await self._ensure_db()

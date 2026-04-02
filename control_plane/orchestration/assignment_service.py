@@ -10,6 +10,17 @@ from shared.exceptions import BotNotFoundError, ConversationNotFoundError
 from shared.models import Bot, Task
 
 
+def _graph_completeness_report(*, graph: Dict[str, Any], tasks: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Evaluate pipeline completeness. Returns None if the evaluator is unavailable."""
+    try:
+        from control_plane.orchestration.graph_completeness import GraphCompletenessEvaluator
+        return GraphCompletenessEvaluator.for_pm_software_delivery().evaluate(
+            graph=graph, tasks=tasks
+        ).to_dict()
+    except Exception:
+        return None
+
+
 _DEFAULT_STAGE_ORDER = [
     "pm-orchestrator",
     "pm-research-analyst",
@@ -269,6 +280,10 @@ class AssignmentService:
             "graph": run.get("graph_snapshot") if isinstance(run.get("graph_snapshot"), dict) else {"nodes": [], "edges": []},
             "node_overrides": run.get("node_overrides") if isinstance(run.get("node_overrides"), dict) else {},
             "tasks": [task.model_dump() for task in tasks],
+            "completeness_report": _graph_completeness_report(
+                graph=run.get("graph_snapshot") if isinstance(run.get("graph_snapshot"), dict) else {"nodes": [], "edges": []},
+                tasks=[task.model_dump() for task in tasks],
+            ),
         }
 
     async def splice_and_rerun(

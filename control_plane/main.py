@@ -17,6 +17,7 @@ from control_plane.api import (
     database,
     keys,
     models_catalog,
+    orchestration,
     platform_ai,
     projects,
     schedules,
@@ -33,6 +34,11 @@ from control_plane.keys.key_vault import KeyVault
 from control_plane.observability import install_observability
 from control_plane.orchestration.assignment_service import AssignmentService
 from control_plane.orchestration.run_store import OrchestrationRunStore
+try:
+    from control_plane.orchestration.template_store import OrchestrationTemplateStore as _OrchTemplateStore
+    _HAS_TEMPLATE_STORE = True
+except ImportError:
+    _HAS_TEMPLATE_STORE = False
 from control_plane.orchestration_workspace_store import OrchestrationWorkspaceStore
 from control_plane.platform_ai.session_store import PlatformAISessionStore
 from control_plane.platform_ai.runtime import PlatformAISessionRuntime
@@ -116,6 +122,7 @@ async def lifespan(app: FastAPI):
         orchestration_workspace_store=orchestration_workspace_store,
     )
     orchestration_run_store = OrchestrationRunStore()
+    orchestration_template_store = _OrchTemplateStore() if _HAS_TEMPLATE_STORE else None
     assignment_service = AssignmentService(
         chat_manager=chat_manager,
         bot_registry=bot_registry,
@@ -155,6 +162,7 @@ async def lifespan(app: FastAPI):
     app.state.pm_orchestrator = pm_orchestrator
     app.state.connection_resolver = connection_resolver
     app.state.orchestration_run_store = orchestration_run_store
+    app.state.orchestration_template_store = orchestration_template_store
     app.state.assignment_service = assignment_service
     app.state.platform_ai_session_store = platform_ai_session_store
     app.state.platform_ai_runtime = platform_ai_runtime
@@ -237,6 +245,7 @@ def create_app() -> FastAPI:
     app.include_router(chat.router)
     app.include_router(assignments.router)
     app.include_router(platform_ai.router)
+    app.include_router(orchestration.router)
     app.include_router(schedules.router)
     app.include_router(vault.router)
     app.include_router(audit.router)

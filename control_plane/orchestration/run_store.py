@@ -42,6 +42,37 @@ _CREATE_RUN_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_orchestration_runs_conversation ON orchestration_runs(conversation_id, created_at)",
 )
 
+_CREATE_STATE_LOG = """
+CREATE TABLE IF NOT EXISTS orchestration_run_state_log (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    previous_state TEXT,
+    new_state TEXT NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    actor TEXT NOT NULL DEFAULT 'system',
+    created_at TEXT NOT NULL
+)
+"""
+
+_CREATE_JOIN_STATE = """
+CREATE TABLE IF NOT EXISTS orchestration_join_state (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    join_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'waiting',
+    expected_branch_count INTEGER NOT NULL DEFAULT 0,
+    resolved_branch_count INTEGER NOT NULL DEFAULT 0,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+)
+"""
+
+_CREATE_EXTRA_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS idx_orch_state_log_run ON orchestration_run_state_log(run_id, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_join_state_run ON orchestration_join_state(run_id, join_id)",
+)
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -131,8 +162,29 @@ class OrchestrationRunStore:
                 await db.execute(_CREATE_RUNS)
                 for statement in _CREATE_RUN_INDEXES:
                     await db.execute(statement)
+                await db.execute(_CREATE_STATE_LOG)
+                await db.execute(_CREATE_JOIN_STATE)
+                for statement in _CREATE_EXTRA_INDEXES:
+                    await db.execute(statement)
+                # Add new columns to orchestration_runs (idempotent)
+                await self._ensure_column(db, "orchestration_runs", "orch_state", "TEXT NOT NULL DEFAULT 'running'")
+                await self._ensure_column(db, "orchestration_runs", "stall_signature", "TEXT")
+                await self._ensure_column(db, "orchestration_runs", "stall_ticks", "INTEGER NOT NULL DEFAULT 0")
+                await self._ensure_column(db, "orchestration_runs", "template_id", "TEXT")
+                await self._ensure_column(db, "orchestration_runs", "binding_id", "TEXT")
+                await self._ensure_column(db, "orchestration_runs", "run_contract_json", "TEXT")
+                await self._ensure_column(db, "orchestration_runs", "completion_report_json", "TEXT")
                 await db.commit()
             self._ready = True
+
+    @staticmethod
+    async def _ensure_column(db: aiosqlite.Connection, table: str, column: str, column_def: str) -> None:
+        """Add a column to a table if it doesn't already exist."""
+        async with db.execute(f"PRAGMA table_info({table})") as cursor:
+            rows = await cursor.fetchall()
+        existing = {str(r[1]) for r in rows}
+        if column not in existing:
+            await db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {column_def}")
 
     async def create_run(
         self,
@@ -403,6 +455,254 @@ class OrchestrationRunStore:
         )
         await self.archive_run(str(current.get("id") or "").strip())
         return child
+
+    async def update_orch_state(
+        self,
+        run_id: str,
+        new_state: str,
+        *,
+        reason: str = "",
+        actor: str = "system",
+    ) -> Optional[Dict[str, Any]]:
+        """Transition orchestration state with history logging."""
+        await self._ensure_db()
+        rid = str(run_id or "").strip()
+        if not rid:
+            return None
+        async with self._lock:
+            async with open_sqlite(self._db_path) as db:
+                db.row_factory = aiosqlite.Row
+                async with db.execute(
+                    "SELECT orch_state FROM orchestration_runs WHERE id = ? LIMIT 1", (rid,)
+                ) as cursor:
+                    row = await cursor.fetchone()
+                previous_state = str(row["orch_state"] or "") if row else None
+                now = _now_iso()
+                await db.execute(
+                    "UPDATE orchestration_runs SET orch_state = ?, updated_at = ? WHERE id = ?",
+                    (new_state, now, rid),
+                )
+                log_id = str(uuid.uuid4())
+                await db.execute(
+                    """INSERT INTO orchestration_run_state_log
+                       (id, run_id, previous_state, new_state, reason, actor, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (log_id, rid, previous_state, new_state, reason or "", actor or "system", now),
+                )
+                await db.commit()
+        return await self.get_run(rid)
+
+    async def get_orch_state(self, run_id: str) -> Optional[str]:
+        """Get current orchestration state for a run."""
+        await self._ensure_db()
+        rid = str(run_id or "").strip()
+        if not rid:
+            return None
+        async with open_sqlite(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT orch_state FROM orchestration_runs WHERE id = ? LIMIT 1", (rid,)
+            ) as cursor:
+                row = await cursor.fetchone()
+        if row is None:
+            return None
+        return str(row["orch_state"] or "running")
+
+    async def cancel_orchestration(
+        self,
+        run_id: str,
+        *,
+        reason: str = "operator_cancelled",
+        actor: str = "operator",
+    ) -> Dict[str, Any]:
+        """
+        Cancel an orchestration: update state to failed_terminal, log it.
+        Returns {"cancelled": True, "run_id": run_id, "previous_state": ..., "reason": ...}
+        """
+        await self._ensure_db()
+        rid = str(run_id or "").strip()
+        previous_state = await self.get_orch_state(rid)
+        await self.update_orch_state(rid, "failed_terminal", reason=reason, actor=actor)
+        return {
+            "cancelled": True,
+            "run_id": rid,
+            "previous_state": previous_state,
+            "reason": reason,
+        }
+
+    async def update_stall_tracking(
+        self,
+        run_id: str,
+        *,
+        stall_signature: str,
+    ) -> Dict[str, Any]:
+        """
+        Update stall detection tracking for a run.
+        If new signature matches stored, increment stall_ticks.
+        If different, reset to 0 and store new signature.
+        Returns {"stall_ticks": int, "signature_changed": bool}
+        """
+        await self._ensure_db()
+        rid = str(run_id or "").strip()
+        async with self._lock:
+            async with open_sqlite(self._db_path) as db:
+                db.row_factory = aiosqlite.Row
+                async with db.execute(
+                    "SELECT stall_signature, stall_ticks FROM orchestration_runs WHERE id = ? LIMIT 1", (rid,)
+                ) as cursor:
+                    row = await cursor.fetchone()
+                if row is None:
+                    return {"stall_ticks": 0, "signature_changed": False}
+                current_sig = str(row["stall_signature"] or "")
+                current_ticks = int(row["stall_ticks"] or 0)
+                if current_sig == stall_signature:
+                    new_ticks = current_ticks + 1
+                    signature_changed = False
+                else:
+                    new_ticks = 0
+                    signature_changed = True
+                await db.execute(
+                    "UPDATE orchestration_runs SET stall_signature = ?, stall_ticks = ?, updated_at = ? WHERE id = ?",
+                    (stall_signature, new_ticks, _now_iso(), rid),
+                )
+                await db.commit()
+        return {"stall_ticks": new_ticks, "signature_changed": signature_changed}
+
+    async def update_completion_report(
+        self,
+        run_id: str,
+        *,
+        report: Dict[str, Any],
+    ) -> None:
+        """Store the latest GraphCompletenessEvaluator report on the run."""
+        await self._ensure_db()
+        rid = str(run_id or "").strip()
+        if not rid:
+            return
+        async with self._lock:
+            async with open_sqlite(self._db_path) as db:
+                await db.execute(
+                    "UPDATE orchestration_runs SET completion_report_json = ?, updated_at = ? WHERE id = ?",
+                    (_json_dumps(report), _now_iso(), rid),
+                )
+                await db.commit()
+
+    async def upsert_join_state(
+        self,
+        run_id: str,
+        join_id: str,
+        *,
+        status: str,
+        expected_branch_count: int = 0,
+        resolved_branch_count: int = 0,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Upsert join gate state for a run."""
+        await self._ensure_db()
+        rid = str(run_id or "").strip()
+        jid = str(join_id or "").strip()
+        now = _now_iso()
+        async with self._lock:
+            async with open_sqlite(self._db_path) as db:
+                db.row_factory = aiosqlite.Row
+                async with db.execute(
+                    "SELECT id FROM orchestration_join_state WHERE run_id = ? AND join_id = ? LIMIT 1",
+                    (rid, jid),
+                ) as cursor:
+                    existing = await cursor.fetchone()
+                if existing:
+                    await db.execute(
+                        """UPDATE orchestration_join_state
+                           SET status = ?, expected_branch_count = ?, resolved_branch_count = ?,
+                               metadata_json = ?, updated_at = ?
+                           WHERE run_id = ? AND join_id = ?""",
+                        (status, expected_branch_count, resolved_branch_count,
+                         _json_dumps(metadata or {}), now, rid, jid),
+                    )
+                else:
+                    await db.execute(
+                        """INSERT INTO orchestration_join_state
+                           (id, run_id, join_id, status, expected_branch_count, resolved_branch_count,
+                            metadata_json, created_at, updated_at)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (str(uuid.uuid4()), rid, jid, status, expected_branch_count,
+                         resolved_branch_count, _json_dumps(metadata or {}), now, now),
+                    )
+                await db.commit()
+        result = await self.get_join_state(rid, jid)
+        return result or {}
+
+    async def get_join_state(self, run_id: str, join_id: str) -> Optional[Dict[str, Any]]:
+        """Get join gate state."""
+        await self._ensure_db()
+        rid = str(run_id or "").strip()
+        jid = str(join_id or "").strip()
+        async with open_sqlite(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM orchestration_join_state WHERE run_id = ? AND join_id = ? LIMIT 1",
+                (rid, jid),
+            ) as cursor:
+                row = await cursor.fetchone()
+        if row is None:
+            return None
+        return self._row_to_join_state(row)
+
+    async def list_join_states(self, run_id: str) -> List[Dict[str, Any]]:
+        """List all join states for a run."""
+        await self._ensure_db()
+        rid = str(run_id or "").strip()
+        async with open_sqlite(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM orchestration_join_state WHERE run_id = ? ORDER BY join_id ASC",
+                (rid,),
+            ) as cursor:
+                rows = await cursor.fetchall()
+        return [self._row_to_join_state(r) for r in rows]
+
+    def _row_to_join_state(self, row: aiosqlite.Row) -> Dict[str, Any]:
+        return {
+            "id": str(row["id"]),
+            "run_id": str(row["run_id"] or ""),
+            "join_id": str(row["join_id"] or ""),
+            "status": str(row["status"] or "waiting"),
+            "expected_branch_count": int(row["expected_branch_count"] or 0),
+            "resolved_branch_count": int(row["resolved_branch_count"] or 0),
+            "metadata": _json_loads(row["metadata_json"], {}),
+            "created_at": str(row["created_at"] or ""),
+            "updated_at": str(row["updated_at"] or ""),
+        }
+
+    async def store_run_contract(self, run_id: str, contract: Dict[str, Any]) -> None:
+        """Store the RunContract on the run."""
+        await self._ensure_db()
+        rid = str(run_id or "").strip()
+        if not rid:
+            return
+        async with self._lock:
+            async with open_sqlite(self._db_path) as db:
+                await db.execute(
+                    "UPDATE orchestration_runs SET run_contract_json = ?, updated_at = ? WHERE id = ?",
+                    (_json_dumps(contract), _now_iso(), rid),
+                )
+                await db.commit()
+
+    async def get_run_contract(self, run_id: str) -> Optional[Dict[str, Any]]:
+        """Get the RunContract for a run."""
+        await self._ensure_db()
+        rid = str(run_id or "").strip()
+        if not rid:
+            return None
+        async with open_sqlite(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT run_contract_json FROM orchestration_runs WHERE id = ? LIMIT 1", (rid,)
+            ) as cursor:
+                row = await cursor.fetchone()
+        if row is None:
+            return None
+        return _json_loads(row["run_contract_json"], None)
 
     def _row_to_payload(self, row: Optional[aiosqlite.Row]) -> Optional[Dict[str, Any]]:
         if row is None:

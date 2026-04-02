@@ -3145,7 +3145,15 @@ async def review_assignment_in_project_repo_workspace(
     missing_deliverables = [
         path for path in expected_deliverables if path not in generated_deliverables
     ]
-    canonical_suite_complete = bool(expected_deliverables) and not missing_deliverables
+    deliverables_ok = bool(expected_deliverables) and not missing_deliverables
+    try:
+        from control_plane.orchestration.graph_completeness import GraphCompletenessEvaluator
+        _eval = GraphCompletenessEvaluator.for_pm_software_delivery()
+        _task_dicts = [task.model_dump() for task in scoped_tasks]
+        _report = _eval.evaluate(graph={"nodes": [], "edges": []}, tasks=_task_dicts)
+        canonical_suite_complete = deliverables_ok or bool(_report.is_complete)
+    except Exception:
+        canonical_suite_complete = deliverables_ok
     review_subset_complete = set(generated_deliverables).issubset(set(review_subset_paths))
     status_counts: Dict[str, int] = {}
     for item in review_files:

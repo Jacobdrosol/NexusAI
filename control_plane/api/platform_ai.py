@@ -223,6 +223,21 @@ def _task_fields(task: Dict[str, Any]) -> set[str]:
     return set()
 
 
+def _task_stage_role(task: Dict[str, Any]) -> str:
+    """Return the canonical lowercase stage role for a task.
+
+    Checks metadata.stage_role → metadata.step_id → bot_id in priority order.
+    Used by topology assertions to match tasks to graph stage roles.
+    """
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    role = (
+        str(metadata.get("stage_role") or "").strip()
+        or str(metadata.get("step_id") or "").strip()
+        or str(task.get("bot_id") or "").strip()
+    )
+    return role.lower()
+
+
 def _task_quality(task: Dict[str, Any]) -> float:
     score = 0.0
     status = str(task.get("status") or "").strip().lower()
@@ -352,6 +367,123 @@ def _evaluate_assertion(assertion: Dict[str, Any], tasks: List[Dict[str, Any]], 
         hit = sum(1 for field in required if field in available)
         ratio = hit / max(1, len(required))
         return _assertion(kind, ratio >= 1.0, ratio, f"fields={hit}/{len(required)}")
+    if kind == "required_stage_materialization":
+        # Each target_node (stage role / step_id / bot_id) must have ≥1 completed task.
+        if not targets:
+            return _assertion(kind, False, 0.0, "target_nodes required")
+        hit = 0
+        for target in targets:
+            tl = target.lower()
+            if any(
+                str(task.get("status") or "").strip().lower() == "completed"
+                and tl in _task_stage_role(task)
+                for task in tasks
+            ):
+                hit += 1
+        ratio = hit / max(1, len(targets))
+        return _assertion(kind, ratio >= 1.0, ratio, f"materialized={hit}/{len(targets)}")
+    if kind == "exact_branch_count":
+        # Fan-out node spawned exactly `value` branches.
+        if not targets:
+            return _assertion(kind, False, 0.0, "target_nodes required")
+        expected = int(assertion.get("value") or 0)
+        if expected <= 0:
+            return _assertion(kind, False, 0.0, "value (expected branch count) must be > 0")
+        target_role = targets[0].lower()
+        metadata_matches = sum(
+            1 for task in tasks
+            if isinstance(task.get("metadata"), dict)
+            and target_role in str(
+                task["metadata"].get("fan_out_source") or task["metadata"].get("parent_step_id") or ""
+            ).lower()
+        )
+        actual = metadata_matches if metadata_matches > 0 else sum(
+            1 for task in tasks if target_role in _task_stage_role(task)
+        )
+        passed = actual == expected
+        score = 1.0 if passed else max(0.0, 1.0 - abs(actual - expected) / max(1, expected))
+        return _assertion(kind, passed, score, f"branches={actual} expected={expected}")
+    if kind == "join_resolution":
+        # Join gate branches are all in terminal states (no active/queued/blocked tasks).
+        if not targets:
+            return _assertion(kind, False, 0.0, "target_nodes required")
+        _TERM = {"completed", "failed", "cancelled", "retried"}
+        target_role = targets[0].lower()
+        branch_tasks = [
+            task for task in tasks
+            if isinstance(task.get("metadata"), dict)
+            and target_role in str(
+                task["metadata"].get("join_gate_id") or task["metadata"].get("join_node_id") or ""
+            ).lower()
+        ]
+        if not branch_tasks:
+            branch_tasks = [task for task in tasks if target_role in _task_stage_role(task)]
+        if not branch_tasks:
+            return _assertion(kind, False, 0.0, f"no tasks for join target={target_role}")
+        unresolved = sum(
+            1 for task in branch_tasks
+            if str(task.get("status") or "").strip().lower() not in _TERM
+        )
+        score = 1.0 - (unresolved / max(1, len(branch_tasks)))
+        return _assertion(kind, unresolved == 0, score, f"unresolved={unresolved}/{len(branch_tasks)}")
+    if kind == "downstream_unlock":
+        # Nodes immediately downstream of target_nodes in the graph have no blocked tasks.
+        if not targets:
+            return _assertion(kind, True, 1.0, "no targets — skip")
+        target_set = {t.lower() for t in targets}
+        edges = graph.get("edges") if isinstance(graph.get("edges"), list) else []
+        downstream: set[str] = set()
+        for edge in edges:
+            if not isinstance(edge, dict):
+                continue
+            src = str(edge.get("source") or edge.get("from") or "").strip().lower()
+            dst = str(edge.get("target") or edge.get("to") or "").strip().lower()
+            if src in target_set and dst:
+                downstream.add(dst)
+        if not downstream:
+            return _assertion(kind, True, 1.0, "no downstream edges found")
+        blocked = sum(
+            1 for task in tasks
+            if str(task.get("status") or "").strip().lower() == "blocked"
+            and any(ds in _task_stage_role(task) for ds in downstream)
+        )
+        score = 1.0 if blocked == 0 else max(0.0, 1.0 - blocked / max(1, len(tasks)))
+        return _assertion(kind, blocked == 0, score, f"blocked_downstream={blocked}")
+    if kind == "terminal_stage_reached":
+        # A terminal stage (default: nodes with is_terminal=True, or "final_qc") has ≥1 completed task.
+        if targets:
+            stage_roles = [t.lower() for t in targets]
+        else:
+            nodes = graph.get("nodes") if isinstance(graph.get("nodes"), list) else []
+            stage_roles = [
+                str(n.get("id") or n.get("bot_id") or "").strip().lower()
+                for n in nodes
+                if isinstance(n, dict) and bool(n.get("is_terminal"))
+            ] or ["final_qc"]
+        hit = any(
+            str(task.get("status") or "").strip().lower() == "completed"
+            and any(role in _task_stage_role(task) for role in stage_roles)
+            for task in tasks
+        )
+        return _assertion(kind, hit, 1.0 if hit else 0.0, f"terminal_roles={stage_roles} reached={hit}")
+    if kind == "no_stalled_loop":
+        # No single stage role repeats more than `value` consecutive times without change.
+        max_repeats = max(1, int(assertion.get("value") or 5))
+        if len(tasks) < 2:
+            return _assertion(kind, True, 1.0, "too few tasks to detect loop")
+        max_run = current_run = 1
+        prev_role = _task_stage_role(tasks[0])
+        for task in tasks[1:]:
+            role = _task_stage_role(task)
+            if role and role == prev_role:
+                current_run += 1
+                max_run = max(max_run, current_run)
+            else:
+                prev_role = role
+                current_run = 1
+        passed = max_run <= max_repeats
+        score = min(1.0, max_repeats / max(1, max_run))
+        return _assertion(kind, passed, score, f"max_consecutive_same_role={max_run} limit={max_repeats}")
     return _assertion(kind or "unknown", False, 0.0, "unsupported assertion")
 
 
@@ -388,6 +520,13 @@ def _evaluate_suite(suite: Dict[str, Any], tasks: List[Dict[str, Any]], graph: D
     suite_score = weighted / max(0.0001, total_weight)
     suite_threshold = float(suite.get("suite_pass_threshold") or 0.8)
     suite_passed = bool(evaluated) and all(bool(item.get("passed")) for item in evaluated) and suite_score >= suite_threshold
+    completeness_report: Optional[Dict[str, Any]] = None
+    try:
+        from control_plane.orchestration.graph_completeness import GraphCompletenessEvaluator
+        _ev = GraphCompletenessEvaluator.for_pm_software_delivery()
+        completeness_report = _ev.evaluate(graph=graph, tasks=tasks).to_dict()
+    except Exception:
+        pass
     return {
         "status": "passed" if suite_passed else "failed",
         "score": round(suite_score, 4),
@@ -396,6 +535,7 @@ def _evaluate_suite(suite: Dict[str, Any], tasks: List[Dict[str, Any]], graph: D
         "task_count": len(tasks),
         "graph_node_count": len(_node_ids(graph)),
         "evaluated_at": _now(),
+        "completeness_report": completeness_report,
     }
 
 
@@ -1430,3 +1570,110 @@ async def run_pipeline_test_suite(pipeline_bot_id: str, request: Request, body: 
         "test_run": final_run,
         "event": event,
     }
+
+
+# ---------------------------------------------------------------------------
+# Pass 3: Session brief, durable actions, halt, and refresh-brief endpoints
+# ---------------------------------------------------------------------------
+
+
+class HaltSessionRequest(BaseModel):
+    reason: str = Field(default="operator_requested", description="Machine-readable halt reason")
+    operator_id: Optional[str] = Field(default=None)
+    metadata: Optional[Dict[str, Any]] = Field(default=None)
+
+
+class ApprovePatchRequest(BaseModel):
+    operator_id: Optional[str] = Field(default=None)
+    notes: Optional[str] = Field(default=None)
+
+
+class RefreshBriefRequest(BaseModel):
+    operator_id: Optional[str] = Field(default=None)
+
+
+@router.get("/sessions/{session_id}/brief")
+async def get_session_brief(session_id: str, request: Request) -> Dict[str, Any]:
+    """Return the compiled operator brief for a Platform AI session."""
+    runtime = request.app.state.platform_ai_runtime
+    safe_id = str(session_id or "").strip()
+    if not safe_id:
+        raise HTTPException(status_code=400, detail="session_id required")
+    brief = await runtime.get_session_brief(safe_id)
+    if brief is None:
+        raise HTTPException(status_code=404, detail="session brief not found — POST a message to synthesize one")
+    return {"session_id": safe_id, "brief": brief}
+
+
+@router.get("/sessions/{session_id}/actions")
+async def list_session_actions(
+    session_id: str,
+    request: Request,
+    limit: int = 50,
+    status: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Return durable action records for a Platform AI session."""
+    runtime = request.app.state.platform_ai_runtime
+    safe_id = str(session_id or "").strip()
+    if not safe_id:
+        raise HTTPException(status_code=400, detail="session_id required")
+    actions = await runtime.list_session_actions(safe_id, limit=limit, status=status)
+    return {"session_id": safe_id, "actions": actions, "count": len(actions)}
+
+
+@router.post("/sessions/{session_id}/actions/{action_id}/approve")
+async def approve_session_action(
+    session_id: str,
+    action_id: str,
+    request: Request,
+    body: ApprovePatchRequest,
+) -> Dict[str, Any]:
+    """Approve a pending patch proposal generated by Platform AI."""
+    runtime = request.app.state.platform_ai_runtime
+    safe_session = str(session_id or "").strip()
+    safe_action = str(action_id or "").strip()
+    if not safe_session or not safe_action:
+        raise HTTPException(status_code=400, detail="session_id and action_id required")
+    result = await runtime.approve_patch_proposal(
+        safe_session,
+        safe_action,
+        operator_id=str(body.operator_id or "").strip() or None,
+        notes=str(body.notes or "").strip() or None,
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="action not found or not approvable")
+    return {"session_id": safe_session, "action_id": safe_action, "approved": True, "result": result}
+
+
+@router.post("/sessions/{session_id}/halt")
+async def halt_session(session_id: str, request: Request, body: HaltSessionRequest) -> Dict[str, Any]:
+    """Explicitly halt a Platform AI session with a reason."""
+    runtime = request.app.state.platform_ai_runtime
+    safe_id = str(session_id or "").strip()
+    if not safe_id:
+        raise HTTPException(status_code=400, detail="session_id required")
+    reason = str(body.reason or "operator_requested").strip() or "operator_requested"
+    result = await runtime.halt_session(
+        safe_id,
+        reason=reason,
+        operator_id=str(body.operator_id or "").strip() or None,
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    return {"session_id": safe_id, "halted": True, "reason": reason, "session": result}
+
+
+@router.post("/sessions/{session_id}/refresh-brief")
+async def refresh_session_brief(session_id: str, request: Request, body: RefreshBriefRequest) -> Dict[str, Any]:
+    """Force a re-synthesis of the session brief from operator messages."""
+    runtime = request.app.state.platform_ai_runtime
+    safe_id = str(session_id or "").strip()
+    if not safe_id:
+        raise HTTPException(status_code=400, detail="session_id required")
+    brief = await runtime.refresh_session_brief(
+        safe_id,
+        operator_id=str(body.operator_id or "").strip() or None,
+    )
+    if brief is None:
+        raise HTTPException(status_code=404, detail="session not found")
+    return {"session_id": safe_id, "brief": brief, "refreshed_at": _now()}

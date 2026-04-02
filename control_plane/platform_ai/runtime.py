@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
 import json
 import re
 import time
@@ -71,6 +72,21 @@ def _task_identities(task: Dict[str, Any]) -> set[str]:
     if step_id:
         identities.add(step_id)
     return identities
+
+
+def _task_stage_role(task: Dict[str, Any]) -> str:
+    """Return the canonical lowercase stage role for a task.
+
+    Checks metadata.stage_role → metadata.step_id → bot_id in priority order.
+    Used by topology assertions to match tasks to graph stage roles.
+    """
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    role = (
+        str(metadata.get("stage_role") or "").strip()
+        or str(metadata.get("step_id") or "").strip()
+        or str(task.get("bot_id") or "").strip()
+    )
+    return role.lower()
 
 
 def _node_ids(graph: Dict[str, Any]) -> List[str]:
@@ -173,6 +189,123 @@ def _evaluate_assertion(assertion: Dict[str, Any], tasks: List[Dict[str, Any]], 
         hit = sum(1 for field in required if field in available)
         ratio = hit / max(1, len(required))
         return _assertion(kind, ratio >= 1.0, ratio, f"fields={hit}/{len(required)}")
+    if kind == "required_stage_materialization":
+        # Each target_node (stage role / step_id / bot_id) must have ≥1 completed task.
+        if not targets:
+            return _assertion(kind, False, 0.0, "target_nodes required")
+        hit = 0
+        for target in targets:
+            tl = target.lower()
+            if any(
+                str(task.get("status") or "").strip().lower() == "completed"
+                and tl in _task_stage_role(task)
+                for task in tasks
+            ):
+                hit += 1
+        ratio = hit / max(1, len(targets))
+        return _assertion(kind, ratio >= 1.0, ratio, f"materialized={hit}/{len(targets)}")
+    if kind == "exact_branch_count":
+        # Fan-out node spawned exactly `value` branches.
+        if not targets:
+            return _assertion(kind, False, 0.0, "target_nodes required")
+        expected = int(assertion.get("value") or 0)
+        if expected <= 0:
+            return _assertion(kind, False, 0.0, "value (expected branch count) must be > 0")
+        target_role = targets[0].lower()
+        metadata_matches = sum(
+            1 for task in tasks
+            if isinstance(task.get("metadata"), dict)
+            and target_role in str(
+                task["metadata"].get("fan_out_source") or task["metadata"].get("parent_step_id") or ""
+            ).lower()
+        )
+        actual = metadata_matches if metadata_matches > 0 else sum(
+            1 for task in tasks if target_role in _task_stage_role(task)
+        )
+        passed = actual == expected
+        score = 1.0 if passed else max(0.0, 1.0 - abs(actual - expected) / max(1, expected))
+        return _assertion(kind, passed, score, f"branches={actual} expected={expected}")
+    if kind == "join_resolution":
+        # Join gate branches are all in terminal states (no active/queued/blocked tasks).
+        if not targets:
+            return _assertion(kind, False, 0.0, "target_nodes required")
+        _TERM = {"completed", "failed", "cancelled", "retried"}
+        target_role = targets[0].lower()
+        branch_tasks = [
+            task for task in tasks
+            if isinstance(task.get("metadata"), dict)
+            and target_role in str(
+                task["metadata"].get("join_gate_id") or task["metadata"].get("join_node_id") or ""
+            ).lower()
+        ]
+        if not branch_tasks:
+            branch_tasks = [task for task in tasks if target_role in _task_stage_role(task)]
+        if not branch_tasks:
+            return _assertion(kind, False, 0.0, f"no tasks for join target={target_role}")
+        unresolved = sum(
+            1 for task in branch_tasks
+            if str(task.get("status") or "").strip().lower() not in _TERM
+        )
+        score = 1.0 - (unresolved / max(1, len(branch_tasks)))
+        return _assertion(kind, unresolved == 0, score, f"unresolved={unresolved}/{len(branch_tasks)}")
+    if kind == "downstream_unlock":
+        # Nodes immediately downstream of target_nodes in the graph have no blocked tasks.
+        if not targets:
+            return _assertion(kind, True, 1.0, "no targets — skip")
+        target_set = {t.lower() for t in targets}
+        edges = graph.get("edges") if isinstance(graph.get("edges"), list) else []
+        downstream: set[str] = set()
+        for edge in edges:
+            if not isinstance(edge, dict):
+                continue
+            src = str(edge.get("source") or edge.get("from") or "").strip().lower()
+            dst = str(edge.get("target") or edge.get("to") or "").strip().lower()
+            if src in target_set and dst:
+                downstream.add(dst)
+        if not downstream:
+            return _assertion(kind, True, 1.0, "no downstream edges found")
+        blocked = sum(
+            1 for task in tasks
+            if str(task.get("status") or "").strip().lower() == "blocked"
+            and any(ds in _task_stage_role(task) for ds in downstream)
+        )
+        score = 1.0 if blocked == 0 else max(0.0, 1.0 - blocked / max(1, len(tasks)))
+        return _assertion(kind, blocked == 0, score, f"blocked_downstream={blocked}")
+    if kind == "terminal_stage_reached":
+        # A terminal stage (default: nodes with is_terminal=True, or "final_qc") has ≥1 completed task.
+        if targets:
+            stage_roles = [t.lower() for t in targets]
+        else:
+            nodes = graph.get("nodes") if isinstance(graph.get("nodes"), list) else []
+            stage_roles = [
+                str(n.get("id") or n.get("bot_id") or "").strip().lower()
+                for n in nodes
+                if isinstance(n, dict) and bool(n.get("is_terminal"))
+            ] or ["final_qc"]
+        hit = any(
+            str(task.get("status") or "").strip().lower() == "completed"
+            and any(role in _task_stage_role(task) for role in stage_roles)
+            for task in tasks
+        )
+        return _assertion(kind, hit, 1.0 if hit else 0.0, f"terminal_roles={stage_roles} reached={hit}")
+    if kind == "no_stalled_loop":
+        # No single stage role repeats more than `value` consecutive times without change.
+        max_repeats = max(1, int(assertion.get("value") or 5))
+        if len(tasks) < 2:
+            return _assertion(kind, True, 1.0, "too few tasks to detect loop")
+        max_run = current_run = 1
+        prev_role = _task_stage_role(tasks[0])
+        for task in tasks[1:]:
+            role = _task_stage_role(task)
+            if role and role == prev_role:
+                current_run += 1
+                max_run = max(max_run, current_run)
+            else:
+                prev_role = role
+                current_run = 1
+        passed = max_run <= max_repeats
+        score = min(1.0, max_repeats / max(1, max_run))
+        return _assertion(kind, passed, score, f"max_consecutive_same_role={max_run} limit={max_repeats}")
     return _assertion(kind or "unknown", False, 0.0, "unsupported assertion")
 
 
@@ -209,6 +342,13 @@ def _evaluate_suite(suite: Dict[str, Any], tasks: List[Dict[str, Any]], graph: D
     suite_score = weighted / max(0.0001, total_weight)
     suite_threshold = float(suite.get("suite_pass_threshold") or 0.8)
     suite_passed = bool(evaluated) and all(bool(item.get("passed")) for item in evaluated) and suite_score >= suite_threshold
+    completeness_report: Optional[Dict[str, Any]] = None
+    try:
+        from control_plane.orchestration.graph_completeness import GraphCompletenessEvaluator
+        _ev = GraphCompletenessEvaluator.for_pm_software_delivery()
+        completeness_report = _ev.evaluate(graph=graph, tasks=tasks).to_dict()
+    except Exception:
+        pass
     return {
         "status": "passed" if suite_passed else "failed",
         "score": round(suite_score, 4),
@@ -217,6 +357,7 @@ def _evaluate_suite(suite: Dict[str, Any], tasks: List[Dict[str, Any]], graph: D
         "task_count": len(tasks),
         "graph_node_count": len(_node_ids(graph)),
         "evaluated_at": _now(),
+        "completeness_report": completeness_report,
     }
 
 
@@ -305,6 +446,134 @@ class PlatformAISessionRuntime:
             await task
         except asyncio.CancelledError:
             pass
+
+    def _compute_state_hash(self, data: Dict[str, Any]) -> str:
+        return hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
+
+    async def _synthesize_session_brief(
+        self,
+        session_id: str,
+        *,
+        session: Dict[str, Any],
+        message_content: str,
+    ) -> Dict[str, Any]:
+        text = str(message_content or "").strip()
+        tuning_goal = text[:4000]
+        success_definition = ""
+        for phrase in ("i want it to", "success means", "done when", "expected result"):
+            idx = text.lower().find(phrase)
+            if idx >= 0:
+                success_definition = text[idx : idx + 500].strip()
+                break
+        expected_deliverables: List[str] = []
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped and (stripped[0] in "-*\u2022" or (len(stripped) > 2 and stripped[0].isdigit() and stripped[1] in ".)")):
+                item = stripped.lstrip("-*\u20220123456789.) ").strip()
+                if item and len(item) >= 5:
+                    expected_deliverables.append(item[:200])
+                if len(expected_deliverables) >= 20:
+                    break
+        forbidden_behaviors: List[str] = []
+        lower_text = text.lower()
+        for phrase in ("do not", "avoid", "never", "don't"):
+            start = 0
+            while True:
+                idx = lower_text.find(phrase, start)
+                if idx < 0:
+                    break
+                snippet = text[idx : idx + 200].strip()
+                if snippet:
+                    forbidden_behaviors.append(snippet)
+                start = idx + 1
+                if len(forbidden_behaviors) >= 10:
+                    break
+            if len(forbidden_behaviors) >= 10:
+                break
+        metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
+        brief = await self._store.upsert_session_brief(
+            session_id,
+            tuning_goal=tuning_goal,
+            success_definition=success_definition,
+            expected_deliverables=expected_deliverables,
+            forbidden_behaviors=forbidden_behaviors,
+            target_pipeline_binding_id=str(metadata.get("pipeline_bot_id") or "").strip() or None,
+        )
+        await self._store.update_session(
+            session_id,
+            metadata={"brief_synthesized_at": _now()},
+        )
+        return brief
+
+    async def _create_action_record(
+        self,
+        session_id: str,
+        *,
+        action_type: str,
+        snapshot: Dict[str, Any],
+        target_type: Optional[str] = None,
+        target_id: Optional[str] = None,
+        rationale: str = "",
+    ) -> Dict[str, Any]:
+        input_hash = self._compute_state_hash(snapshot)
+        return await self._store.create_action(
+            session_id,
+            action_type=action_type,
+            target_type=target_type,
+            target_id=target_id,
+            rationale=rationale,
+            input_snapshot_hash=input_hash,
+        )
+
+    async def _complete_action_record(
+        self,
+        action_id: str,
+        *,
+        output_snapshot: Dict[str, Any],
+        had_effect: bool,
+        summary: str = "",
+        error: Optional[str] = None,
+    ) -> None:
+        output_hash = self._compute_state_hash(output_snapshot)
+        status = "completed" if had_effect else "no_op"
+        await self._store.update_action(
+            action_id,
+            status=status,
+            output_snapshot_hash=output_hash,
+            state_delta_summary=summary,
+            error=error,
+        )
+
+    async def _check_should_halt_as_stalled(
+        self,
+        session_id: str,
+        *,
+        no_op_threshold: int = 5,
+    ) -> Optional[str]:
+        count = await self._store.count_consecutive_no_progress_actions(session_id)
+        if count >= no_op_threshold:
+            return "stalled_duplicate_actions"
+        return None
+
+    async def _halt_session(
+        self,
+        session_id: str,
+        *,
+        reason: str,
+        message: str,
+    ) -> None:
+        await self._store.update_session(session_id, status="stopped")
+        await self._store.append_event(
+            session_id,
+            "action_trace",
+            {"action": "session_halted", "reason": reason, "halted_at": _now()},
+        )
+        await self._store.append_message(
+            session_id,
+            role="assistant",
+            content=message,
+            metadata={"source": "halt_guard", "halt_reason": reason},
+        )
 
     def _snapshot_is_terminal(self, snapshot: Dict[str, Any]) -> bool:
         if not str(snapshot.get("orchestration_id") or "").strip():
@@ -521,6 +790,33 @@ class PlatformAISessionRuntime:
 
                 await self._process_operator_messages(session_id)
 
+                # Check for stall condition
+                halt_reason = await self._check_should_halt_as_stalled(session_id)
+                if halt_reason:
+                    await self._halt_session(
+                        session_id,
+                        reason=halt_reason,
+                        message=(
+                            "Platform AI has halted this session: no measurable state change has occurred "
+                            "after repeated action attempts. Possible causes: no pipeline selected, ambiguous "
+                            "session brief, no writable config, graph state unchanged, or waiting on an active run. "
+                            "Review session brief and restart to resume."
+                        ),
+                    )
+                    break
+
+                session_meta = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
+                _has_target = bool(str(session_meta.get("pipeline_bot_id") or "").strip()) or bool(str(session.get("orchestration_id") or "").strip())
+                if not _has_target:
+                    _waiting_emitted = bool(session_meta.get("_waiting_for_target_emitted"))
+                    if not _waiting_emitted:
+                        await self._store.append_event(
+                            session_id,
+                            "action_trace",
+                            {"action": "waiting_for_target", "detail": "No pipeline_bot_id or orchestration_id set. Waiting for operator to provide a target."},
+                        )
+                        await self._store.update_session(session_id, metadata={"_waiting_for_target_emitted": True})
+
                 snapshot = await self._build_progress_snapshot(session)
                 signature = str(snapshot.get("signature") or "")
                 previous_signature = self._last_progress_signature.get(session_id)
@@ -669,6 +965,17 @@ class PlatformAISessionRuntime:
                     "detail": "Operator instruction has been accepted into session workflow.",
                 },
             )
+            brief = await self._synthesize_session_brief(session_id, session=session, message_content=content)
+            await self._store.append_event(
+                session_id,
+                "action_trace",
+                {
+                    "action": "session_brief_synthesized",
+                    "message_id": mid,
+                    "tuning_goal_preview": brief.get("tuning_goal", "")[:240],
+                },
+            )
+            await self._store.update_session(session_id, metadata={"no_progress_count": 0})
 
     async def _bot_label(self, bot_id: str) -> str:
         raw = str(bot_id or "").strip()
@@ -1301,6 +1608,35 @@ class PlatformAISessionRuntime:
         if not orchestration_id or not tasks:
             return
 
+        eval_signature_preview = f"{orchestration_id}:{len(tasks)}"
+        action_snapshot = {"orchestration_id": orchestration_id, "eval_signature": eval_signature_preview}
+        recent_actions = await self._store.list_actions(session_id, limit=10)
+        current_input_hash = self._compute_state_hash(action_snapshot)
+        if any(
+            str(a.get("input_snapshot_hash") or "") == current_input_hash
+            and str(a.get("action_type") or "") == "run_autonomous_pipeline_tuner"
+            for a in recent_actions
+        ):
+            dedup_action = await self._store.create_action(
+                session_id,
+                action_type="run_autonomous_pipeline_tuner",
+                input_snapshot_hash=current_input_hash,
+                rationale="Dedup: identical snapshot already processed",
+            )
+            await self._store.update_action(
+                dedup_action["id"],
+                status="no_op",
+                state_delta_summary="",
+            )
+            return
+
+        action = await self._create_action_record(
+            session_id,
+            action_type="run_autonomous_pipeline_tuner",
+            snapshot=action_snapshot,
+            rationale="Autonomous pipeline quality evaluation cycle",
+        )
+
         suite_id = str(metadata.get("autonomous_suite_id") or "").strip()
         suite = await self._store.get_test_suite(suite_id) if suite_id else None
         if suite is None:
@@ -1397,6 +1733,7 @@ class PlatformAISessionRuntime:
         eval_status = str(evaluation.get("status") or "failed").strip().lower()
         eval_score = float(evaluation.get("score") or 0.0)
         passed_target = eval_status == "passed" and eval_score >= target_score
+        last_eval_status = str(metadata.get("autonomous_last_eval_status") or "").strip().lower()
         await self._store.update_session(
             session_id,
             metadata={
@@ -1440,6 +1777,42 @@ class PlatformAISessionRuntime:
             metadata={"source": "autonomous_tuner", "suite_run_id": (final_run or {}).get("id")},
         )
 
+        if not passed_target:
+            _existing_prompt_preview = ""
+            if self._bot_registry is not None and pipeline_bot_id:
+                try:
+                    _bot_for_preview = await self._bot_registry.get(pipeline_bot_id)
+                    _existing_prompt_preview = str(getattr(_bot_for_preview, "system_prompt", "") or "")[:500]
+                except Exception:
+                    _existing_prompt_preview = ""
+            _failed_tests_for_pp = [
+                item
+                for item in (evaluation.get("tests") if isinstance(evaluation.get("tests"), list) else [])
+                if isinstance(item, dict) and not bool(item.get("passed"))
+            ]
+            _failed_assertions_for_pp: List[str] = []
+            for _ft in _failed_tests_for_pp[:5]:
+                for _check in (_ft.get("assertions") if isinstance(_ft.get("assertions"), list) else []):
+                    if isinstance(_check, dict) and not bool(_check.get("passed")):
+                        _failed_assertions_for_pp.append(str(_check.get("kind") or "assertion"))
+            _next_iter_for_pp = current_iteration + 1
+            _patch_proposal = await self._store.create_patch_proposal(
+                session_id,
+                action_id=action["id"],
+                target_config=f"bot:{pipeline_bot_id}:system_prompt",
+                before_state={"system_prompt_preview": _existing_prompt_preview},
+                after_state={"directives_applied": f"iteration_{_next_iter_for_pp}_refinement"},
+                rationale=f"Bot refinement for iteration {_next_iter_for_pp} based on failed tests: {_failed_assertions_for_pp[:5]}",
+                expected_effect=f"Pipeline quality score improvement from {eval_score:.3f} toward target {target_score:.3f}",
+                validation_steps=["launch_new_orchestration", "evaluate_suite", "compare_score"],
+                rollback_note="Remove [[NEXUS_PLATFORM_AI_AUTOTUNE_START]]...[[NEXUS_PLATFORM_AI_AUTOTUNE_END]] block from system_prompt",
+            )
+            await self._store.append_event(session_id, "action_trace", {
+                "action": "patch_proposal_created",
+                "proposal_id": _patch_proposal["id"],
+                "target_config": _patch_proposal["target_config"],
+            })
+
         if passed_target:
             await self._store.append_event(
                 session_id,
@@ -1460,10 +1833,22 @@ class PlatformAISessionRuntime:
                 ),
                 metadata={"source": "autonomous_tuner", "state": "converged"},
             )
+            await self._complete_action_record(
+                action["id"],
+                output_snapshot={"eval_status": eval_status, "eval_score": eval_score, "launched": False},
+                had_effect=eval_status != last_eval_status,
+                summary=f"Converged: {eval_status} score={eval_score:.3f}",
+            )
             return
 
         refined_signature = str(metadata.get("autonomous_last_refine_signature") or "")
         if refined_signature == eval_signature:
+            await self._complete_action_record(
+                action["id"],
+                output_snapshot={"eval_status": eval_status, "eval_score": eval_score, "launched": False},
+                had_effect=False,
+                summary="Refinement signature already processed; no new action taken.",
+            )
             return
         if current_iteration >= max_iterations:
             await self._store.update_session(
@@ -1492,6 +1877,12 @@ class PlatformAISessionRuntime:
                     f"{target_score:.3f}. Last score: {eval_score:.3f}. Review latest suite run and bot refinements."
                 ),
                 metadata={"source": "autonomous_tuner", "state": "max_iterations_reached"},
+            )
+            await self._complete_action_record(
+                action["id"],
+                output_snapshot={"eval_status": eval_status, "eval_score": eval_score, "launched": False},
+                had_effect=eval_status != last_eval_status,
+                summary=f"Max iterations reached: {eval_status} score={eval_score:.3f}",
             )
             return
 
@@ -1569,6 +1960,12 @@ class PlatformAISessionRuntime:
                 ),
                 metadata={"source": "autonomous_tuner", "iteration": next_iteration},
             )
+        await self._complete_action_record(
+            action["id"],
+            output_snapshot={"eval_status": eval_status, "eval_score": eval_score, "launched": bool(launched)},
+            had_effect=bool(launched) or eval_status != last_eval_status,
+            summary=f"Evaluation: {eval_status} score={eval_score:.3f}, launched={bool(launched)}",
+        )
 
     async def _deploy_loop(self, session_id: str, *, requested_by: str) -> None:
         last_log_len = 0
@@ -1633,3 +2030,37 @@ class PlatformAISessionRuntime:
                 await asyncio.sleep(2.0)
         finally:
             self._deploy_tasks.pop(session_id, None)
+
+    async def get_session_brief(self, session_id: str) -> Optional[Dict[str, Any]]:
+        return await self._store.get_session_brief(session_id)
+
+    async def list_session_actions(self, session_id: str, *, limit: int = 100) -> List[Dict[str, Any]]:
+        return await self._store.list_actions(session_id, limit=limit)
+
+    async def get_patch_proposal(self, proposal_id: str) -> Optional[Dict[str, Any]]:
+        return await self._store.get_patch_proposal(proposal_id)
+
+    async def list_patch_proposals(self, session_id: str, *, limit: int = 50) -> List[Dict[str, Any]]:
+        return await self._store.list_patch_proposals(session_id, limit=limit)
+
+    async def approve_patch_proposal(self, session_id: str, proposal_id: str) -> Dict[str, Any]:
+        updated = await self._store.update_patch_proposal_status(proposal_id, "approved")
+        if updated is None:
+            return {"status": "error", "detail": "proposal_not_found"}
+        await self._store.append_event(session_id, "action_trace", {
+            "action": "patch_proposal_approved",
+            "proposal_id": proposal_id,
+            "target_config": updated.get("target_config"),
+        })
+        return {"status": "approved", "proposal": updated}
+
+    async def halt_session(self, session_id: str, *, reason: str = "operator_halt") -> Dict[str, Any]:
+        await self._halt_session(session_id, reason=reason, message=f"Session halted by operator (reason: {reason}).")
+        return {"status": "stopped", "reason": reason}
+
+    async def refresh_session_brief(self, session_id: str, *, content: str) -> Dict[str, Any]:
+        session = await self._store.get_session(session_id)
+        if session is None:
+            return {"status": "error", "detail": "session_not_found"}
+        brief = await self._synthesize_session_brief(session_id, session=session, message_content=content)
+        return {"status": "ok", "brief": brief}

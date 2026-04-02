@@ -5877,12 +5877,30 @@ class TaskManager:
                     default_target_bot_id=target_bot_id,
                 )
                 if not payloads:
-                    logger.warning("[TRIGGER] SKIP trigger=%s task=%s reason=no_payloads target=%s", trigger.id, task.id, target_bot_id)
+                    skip_details = self._describe_trigger_payload_skip(task, trigger)
+                    _fan_out_field = str(getattr(trigger, "fan_out_field", "") or "").strip()
+                    _empty_reason = str(skip_details.get("reason") or "")
+                    _is_empty_fanout = bool(_fan_out_field) and _empty_reason in {
+                        "fan_out_field_resolved_empty_list",
+                        "fan_out_result_field_resolved_empty_list",
+                    }
+                    if _is_empty_fanout:
+                        logger.error(
+                            "[TRIGGER] FATAL_EMPTY_FANOUT trigger=%s task=%s reason=%s "
+                            "fan_out_field=%s target=%s — PM produced zero implementation "
+                            "workstreams. Orchestration cannot proceed from this branch.",
+                            trigger.id, task.id, _empty_reason, _fan_out_field, target_bot_id,
+                        )
+                    else:
+                        logger.warning(
+                            "[TRIGGER] SKIP trigger=%s task=%s reason=no_payloads target=%s",
+                            trigger.id, task.id, target_bot_id,
+                        )
                     await self._record_trigger_dispatch_skip(
                         source_task=task,
                         trigger_id=str(getattr(trigger, "id", "") or ""),
                         target_bot_id=str(target_bot_id or ""),
-                        details=self._describe_trigger_payload_skip(task, trigger),
+                        details={**skip_details, "fatal_empty_fanout": _is_empty_fanout},
                     )
                     continue
                 base_child_metadata = self._trigger_child_metadata(
