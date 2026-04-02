@@ -151,6 +151,68 @@ All routes are prefixed with `/v1/`. Auth: set `X-Nexus-API-Key: <token>` header
 
 ---
 
+## Platform AI — `/v1/platform-ai`
+
+> **⚠️ Status: Active Development / Testing — Not Yet Stable**
+
+| Method | Path | Description | Key Params | Errors |
+|--------|------|-------------|------------|--------|
+| `POST` | `/v1/platform-ai/sessions` | Create a Platform AI session | `mode`, `assignment_id`, `orchestration_id`, `run_id`, `goal`, `operator_id`, `backend_config` | 400 |
+| `GET` | `/v1/platform-ai/sessions` | List sessions | `assignment_id`, `orchestration_id`, `mode`, `archived`, `limit` | — |
+| `GET` | `/v1/platform-ai/sessions/{id}` | Get session detail | — | 404 |
+| `GET` | `/v1/platform-ai/sessions/{id}/export` | Export full session bundle | — | 404 |
+| `PATCH` | `/v1/platform-ai/sessions/{id}` | Update session metadata, goal, or archive | Partial session fields | 404 |
+| `GET` | `/v1/platform-ai/sessions/{id}/events` | List action trace events (immutable) | `limit` | 404 |
+| `GET` | `/v1/platform-ai/sessions/{id}/messages` | List conversation messages | `limit` | 404 |
+| `POST` | `/v1/platform-ai/sessions/{id}/messages` | Post operator message (drives autonomous loop) | `content`, `role` | 404 |
+| `POST` | `/v1/platform-ai/sessions/{id}/control` | Execute control action | `action` (start_deploy, splice_rerun, rerun_node, pause, resume, archive) | 404, 400 |
+| `POST` | `/v1/platform-ai/sessions/{id}/test-suites/design` | Design a quality test suite for the session | `goal`, `target_nodes`, `assertions` | 404 |
+| `GET` | `/v1/platform-ai/sessions/{id}/test-suites` | List suites for this session | — | 404 |
+| `GET` | `/v1/platform-ai/test-suites` | List all test suites | `pipeline_bot_id`, `assignment_id` | — |
+| `GET` | `/v1/platform-ai/test-suites/{suite_id}` | Get test suite | — | 404 |
+| `POST` | `/v1/platform-ai/test-suites/{suite_id}/run` | Execute test suite against an orchestration | `orchestration_id`, `wait_timeout_seconds` | 404, 400 |
+| `GET` | `/v1/platform-ai/test-suites/{suite_id}/runs` | List runs for a suite | `limit` | 404 |
+| `GET` | `/v1/platform-ai/test-runs/{run_id}` | Get test run result | — | 404 |
+| `GET` | `/v1/platform-ai/pipelines` | List pipelines visible to Platform AI | — | — |
+| `GET` | `/v1/platform-ai/pipelines/{bot_id}/test-suites` | List suites for a pipeline | — | 404 |
+| `POST` | `/v1/platform-ai/pipelines/{bot_id}/test-suites/design` | Design a pipeline-scoped quality suite | `goal`, `assertions` | 404 |
+| `POST` | `/v1/platform-ai/pipelines/{bot_id}/test-suites/run` | Run quality suite against pipeline | `orchestration_id`, `wait` | 404 |
+
+**Session modes:**
+
+| Mode | Description |
+|------|-------------|
+| `pipeline_tuner` | Autonomous: monitor, evaluate, refine, relaunch until convergence |
+| `bot_designer` | Interactive: operator-driven bot configuration assistance |
+| `copilot` | General assistant for platform questions |
+
+**Control actions:**
+
+| Action | Description |
+|--------|-------------|
+| `start_deploy` | Trigger a blue/green deploy within the session |
+| `splice_rerun` | Create a child run from a specific node (splice) |
+| `rerun_node` | Retry a specific task in the current orchestration |
+| `pause` | Pause the autonomous session loop |
+| `resume` | Resume a paused session |
+| `archive` | Archive a completed or stopped session |
+
+---
+
+## Orchestration — `/v1/orchestration`
+
+| Method | Path | Description | Key Params | Errors |
+|--------|------|-------------|------------|--------|
+| `GET` | `/v1/orchestration/runs` | List orchestration runs | `assignment_id`, `limit` | — |
+| `GET` | `/v1/orchestration/runs/{run_id}` | Get run detail with graph | — | 404 |
+| `GET` | `/v1/orchestration/runs/{run_id}/lineage` | Get full run lineage chain | — | 404 |
+| `POST` | `/v1/orchestration/assignments/preview` | Dry-run assignment (no execution) | `pm_bot_id`, `goal`, `project_id` | 400 |
+| `POST` | `/v1/orchestration/assignments` | Create and launch assignment | `pm_bot_id`, `goal`, `project_id`, `node_overrides` | 400 |
+| `POST` | `/v1/orchestration/runs/{run_id}/splice` | Splice-and-rerun from node | `from_node_id` | 404, 400 |
+| `POST` | `/v1/orchestration/runs/{run_id}/rerun-node` | Retry specific node | `node_id` | 404, 400 |
+
+---
+
 ## Health
 
 | Method | Path | Description |

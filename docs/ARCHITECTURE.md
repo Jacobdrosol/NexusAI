@@ -178,6 +178,60 @@ Standard deployment uses `docker-compose.yml` with a single dashboard container.
 
 ---
 
+## Platform AI (In-Platform Autonomous Tuner)
+
+> **⚠️ Status: Active Development / Testing — Not Yet Stable**
+
+As of April 2026, the platform includes an in-platform AI copilot called **Platform AI** (`control_plane/platform_ai/`). This is a separate autonomous layer that monitors running PM workflows, evaluates output quality, and iteratively refines bot prompts to improve pipeline convergence — the same goal as the external NexusAI-Audit tool, but built directly into the platform runtime.
+
+```
+Operator → Platform AI Session (dashboard /platform-ai/)
+              │
+              ▼
+          PlatformAISessionRuntime (async background loop per session)
+              │   1. Snapshot: poll task_manager for live task state
+              │   2. Evaluate: run quality test suite (assertions on task outputs)
+              │   3. Refine: patch bot system_prompt with failure analysis
+              │   4. Launch: create new orchestration via AssignmentService
+              │   5. Repeat until converged or max_iterations
+              │
+              ▼
+          AssignmentService (control_plane/orchestration/)
+              │   - Creates/splices orchestration runs
+              │   - Tracks run lineage in OrchestrationRunStore
+              │
+              ▼
+          AgentScheduleEngine (control_plane/agent_scheduler/)
+                  - Time-based (cron) autonomous agent dispatch
+                  - Not yet integrated with Platform AI sessions
+```
+
+**New modules introduced with Platform AI:**
+
+| Module | Purpose |
+|--------|---------|
+| `control_plane/platform_ai/` | Session management + autonomous runtime loop |
+| `control_plane/orchestration/` | Assignment service + run store (lineage, graph, splice) |
+| `control_plane/agent_scheduler/` | Cron-based scheduled agent dispatch |
+| `control_plane/connections/` | Project/bot connection resolver |
+
+**New database tables (Platform AI):**
+
+| Table | Purpose |
+|-------|---------|
+| `platform_ai_sessions` | Sessions: mode, status, orchestration bindings |
+| `platform_ai_events` | Immutable action trace per session |
+| `platform_ai_messages` | Operator ↔ AI conversation history |
+| `platform_ai_test_suites` | Quality assertion definitions |
+| `platform_ai_test_runs` | Test execution results with scores |
+| `orchestration_runs` | Run lineage: parent/child, graph snapshots, node overrides |
+| `agent_schedules` | Cron schedule definitions |
+| `agent_schedule_runs` | Dispatch history per schedule |
+
+**Current status:** The autonomous tuner loop has been implemented and gone through several fix iterations (dead loop stop, state reset on resume, exhausted state handling). As of April 2, 2026 it is still under active testing and **not functioning reliably**. Known issues include race conditions in session loop spawning, incomplete control action stubs, and stalled-state detection that terminates prematurely.
+
+---
+
 ## Known Architectural Debt
 
 1. **Single SQLite file for everything**: All services share one SQLite file with no connection pooling. High-concurrency write workloads (many parallel tasks) will hit SQLite write-lock contention. `aiosqlite` serializes writes but doesn't eliminate the bottleneck.

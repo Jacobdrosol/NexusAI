@@ -2,6 +2,8 @@
 
 **NexusAI** is a modular, distributed LLM Control Plane that orchestrates multiple machines, GPUs, cloud APIs, and CLI-based models via specialized **bots** (logical agents) and **workers** (compute backends).
 
+> **⚠️ Platform AI is in active development:** As of April 2026, the in-platform autonomous AI copilot (`control_plane/platform_ai/`) is under active testing and **not yet functioning reliably**. The feature provides automated pipeline quality evaluation and bot prompt tuning. See `control_plane/platform_ai/README.md` for status and known issues.
+
 ---
 
 ## Quick Start with Docker
@@ -48,6 +50,10 @@
 | `control_plane/security/` | [control_plane/security/README.md](control_plane/security/README.md) |
 | `control_plane/keys/` | [control_plane/keys/README.md](control_plane/keys/README.md) |
 | `control_plane/github/` | [control_plane/github/README.md](control_plane/github/README.md) |
+| `control_plane/platform_ai/` ⚠️ | [control_plane/platform_ai/README.md](control_plane/platform_ai/README.md) — **In testing, not yet stable** |
+| `control_plane/orchestration/` | [control_plane/orchestration/README.md](control_plane/orchestration/README.md) — run lineage, splice, assignment service |
+| `control_plane/agent_scheduler/` ⚠️ | [control_plane/agent_scheduler/README.md](control_plane/agent_scheduler/README.md) — cron-based agent dispatch, **incomplete** |
+| `control_plane/connections/` | [control_plane/connections/README.md](control_plane/connections/README.md) — connection resolver |
 | `shared/` | [shared/README.md](shared/README.md) |
 | `dashboard/` | [dashboard/README.md](dashboard/README.md) |
 | `dashboard/routes/` | [dashboard/routes/README.md](dashboard/routes/README.md) |
