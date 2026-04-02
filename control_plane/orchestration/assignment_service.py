@@ -288,15 +288,24 @@ class AssignmentService:
             merged[str(key)] = value
 
         # Preserve upstream results by defaulting upstream stages to deterministic skip.
+        graph_snapshot = (
+            parent.get("graph_snapshot")
+            if isinstance(parent.get("graph_snapshot"), dict)
+            else {"nodes": [], "edges": []}
+        )
         upstream = self._upstream_nodes(
-            graph=parent.get("graph_snapshot") if isinstance(parent.get("graph_snapshot"), dict) else {"nodes": [], "edges": []},
+            graph=graph_snapshot,
             from_node_id=from_node_id,
         )
+        node_lookup = self._graph_node_lookup(graph_snapshot)
         for node_id in upstream:
-            current = merged.get(node_id) if isinstance(merged.get(node_id), dict) else {}
-            current["skip"] = True
-            current.setdefault("execution_mode", "preserve_upstream")
-            merged[node_id] = current
+            node_doc = node_lookup.get(node_id) if isinstance(node_lookup, dict) else None
+            override_keys = self._node_override_keys(node_doc, fallback_id=node_id)
+            for key in override_keys:
+                current = merged.get(key) if isinstance(merged.get(key), dict) else {}
+                current["skip"] = True
+                current.setdefault("execution_mode", "preserve_upstream")
+                merged[key] = current
 
         child = await self._run_store.create_splice_child(
             run_id=run_id,
@@ -408,9 +417,40 @@ class AssignmentService:
     def _upstream_nodes(self, *, graph: Dict[str, Any], from_node_id: str) -> Set[str]:
         nodes = graph.get("nodes") if isinstance(graph, dict) and isinstance(graph.get("nodes"), list) else []
         edges = graph.get("edges") if isinstance(graph, dict) and isinstance(graph.get("edges"), list) else []
-        valid_nodes = {str(item.get("id") or "").strip() for item in nodes if isinstance(item, dict) and str(item.get("id") or "").strip()}
+        valid_nodes = {
+            str(item.get("id") or "").strip()
+            for item in nodes
+            if isinstance(item, dict) and str(item.get("id") or "").strip()
+        }
+        alias_map: Dict[str, Set[str]] = {}
+        for item in nodes:
+            if not isinstance(item, dict):
+                continue
+            node_id = str(item.get("id") or "").strip()
+            if not node_id:
+                continue
+            details = item.get("details") if isinstance(item.get("details"), dict) else {}
+            aliases = {
+                node_id,
+                str(item.get("bot_id") or "").strip(),
+                str(item.get("stage_key") or "").strip(),
+                str(item.get("step_id") or "").strip(),
+                str(details.get("step_id") or "").strip(),
+                str(details.get("task_id") or "").strip(),
+            }
+            for alias in aliases:
+                normalized = str(alias or "").strip()
+                if not normalized:
+                    continue
+                alias_map.setdefault(normalized, set()).add(node_id)
         target = str(from_node_id or "").strip()
-        if target not in valid_nodes:
+        if not target:
+            return set()
+        if target in valid_nodes:
+            targets = {target}
+        else:
+            targets = alias_map.get(target) or set()
+        if not targets:
             return set()
         reverse_adj: Dict[str, Set[str]] = {}
         for edge in edges:
@@ -421,7 +461,7 @@ class AssignmentService:
             if source and dest:
                 reverse_adj.setdefault(dest, set()).add(source)
         visited: Set[str] = set()
-        stack = [target]
+        stack = list(targets)
         while stack:
             current = stack.pop()
             for parent in reverse_adj.get(current, set()):
@@ -430,3 +470,35 @@ class AssignmentService:
                 visited.add(parent)
                 stack.append(parent)
         return visited
+
+    def _graph_node_lookup(self, graph: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+        nodes = graph.get("nodes") if isinstance(graph, dict) and isinstance(graph.get("nodes"), list) else []
+        lookup: Dict[str, Dict[str, Any]] = {}
+        for item in nodes:
+            if not isinstance(item, dict):
+                continue
+            node_id = str(item.get("id") or "").strip()
+            if not node_id:
+                continue
+            lookup[node_id] = item
+        return lookup
+
+    def _node_override_keys(self, node_doc: Optional[Dict[str, Any]], *, fallback_id: str) -> Set[str]:
+        keys: Set[str] = set()
+        if isinstance(node_doc, dict):
+            details = node_doc.get("details") if isinstance(node_doc.get("details"), dict) else {}
+            for candidate in (
+                node_doc.get("bot_id"),
+                node_doc.get("stage_key"),
+                node_doc.get("step_id"),
+                details.get("step_id"),
+                node_doc.get("id"),
+            ):
+                normalized = str(candidate or "").strip()
+                if not normalized or normalized.startswith("task:"):
+                    continue
+                keys.add(normalized)
+        fallback = str(fallback_id or "").strip()
+        if fallback and not fallback.startswith("task:"):
+            keys.add(fallback)
+        return keys

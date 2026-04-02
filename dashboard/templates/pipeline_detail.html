@@ -224,7 +224,7 @@ async function loadTaskPayload(taskId) {
 async function resolveAssignmentNodeContext(task) {
   const payload = await loadTaskPayload(task.id);
   let assignmentId = String(payload?.assignment_id || '').trim();
-  const nodeId = String(task?.step_id || task?.bot_id || '').trim();
+  const nodeId = String(task?.bot_id || task?.step_id || ('task:' + String(task?.id || '').trim())).trim();
   if (!assignmentId && pipelineOrchestrationId) {
     const res = await fetch('/api/chat/orchestrations/' + encodeURIComponent(pipelineOrchestrationId) + '/graph');
     const graph = await res.json().catch(() => ({}));

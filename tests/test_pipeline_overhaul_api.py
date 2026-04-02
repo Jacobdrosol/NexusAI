@@ -120,6 +120,47 @@ async def test_assignment_preview_create_and_lineage(cp_client):
 
 
 @pytest.mark.anyio
+async def test_assignment_splice_posts_messages_to_origin_chat(cp_client):
+    create_conversation = await cp_client.post("/v1/chat/conversations", json={"title": "Assignment Splice"})
+    conversation_id = create_conversation.json()["id"]
+    pm_bot_id = "pm-assign-splice"
+    created_bot = await cp_client.post("/v1/bots", json=_pm_bot_payload(pm_bot_id))
+    assert created_bot.status_code == 200
+
+    create_resp = await cp_client.post(
+        "/v1/assignments",
+        json={
+            "conversation_id": conversation_id,
+            "instruction": "Initial pipeline run for splice verification.",
+            "pm_bot_id": pm_bot_id,
+        },
+    )
+    assert create_resp.status_code == 200
+    assignment = (create_resp.json().get("assignment") or {})
+    assignment_id = str(assignment.get("assignment_id") or "")
+    assert assignment_id
+
+    splice_resp = await cp_client.post(
+        f"/v1/assignments/{assignment_id}/splice",
+        json={"from_node_id": pm_bot_id, "node_overrides": {}},
+    )
+    assert splice_resp.status_code == 200
+    splice_body = splice_resp.json()
+    assert isinstance(splice_body.get("assignment"), dict)
+    assert isinstance(splice_body.get("assistant_message"), dict)
+
+    messages_resp = await cp_client.get(f"/v1/chat/conversations/{conversation_id}/messages")
+    assert messages_resp.status_code == 200
+    messages = messages_resp.json() or []
+    assert any(
+        str((row.get("metadata") or {}).get("request_type") or "") == "splice"
+        and str((row.get("metadata") or {}).get("mode") or "") == "assign_pending"
+        for row in messages
+        if isinstance(row, dict)
+    )
+
+
+@pytest.mark.anyio
 async def test_platform_ai_session_control_flow(cp_client):
     create_resp = await cp_client.post(
         "/v1/platform-ai/sessions",

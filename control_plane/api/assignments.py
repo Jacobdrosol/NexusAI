@@ -193,14 +193,92 @@ async def assignment_graph_by_orchestration(orchestration_id: str, request: Requ
 @router.post("/{assignment_id}/splice")
 async def splice_assignment(assignment_id: str, request: Request, body: SpliceAssignmentRequest) -> Dict[str, Any]:
     service = request.app.state.assignment_service
+    chat_manager = request.app.state.chat_manager
+    pm_orchestrator = request.app.state.pm_orchestrator
     run = await _resolve_run(request, assignment_id)
     try:
-        return await service.splice_and_rerun(
+        result = await service.splice_and_rerun(
             run_id=str(run.get("id") or ""),
             from_node_id=body.from_node_id,
             override_patch=_dump_overrides(body.node_overrides),
             context_items=list(body.context_items or []),
         )
+        assignment = result.get("assignment") if isinstance(result.get("assignment"), dict) else {}
+        conversation_id = str(run.get("conversation_id") or "").strip()
+        pm_bot_id = str(assignment.get("pm_bot_id") or run.get("pm_bot_id") or "").strip()
+        if conversation_id and assignment:
+            user_message = await chat_manager.add_message(
+                conversation_id=conversation_id,
+                role="user",
+                content=f"@splice {body.from_node_id}",
+                metadata={
+                    "mode": "assign_request",
+                    "request_type": "splice",
+                    "requested_pm_bot_id": pm_bot_id,
+                    "assigned_pm_bot_id": pm_bot_id,
+                    "orchestration_id": assignment.get("orchestration_id"),
+                    "assignment_id": assignment.get("assignment_id"),
+                    "run_id": assignment.get("run_id"),
+                    "spliced_from_node_id": body.from_node_id,
+                    "lineage_parent_run_id": str(run.get("id") or ""),
+                    "node_overrides": _dump_overrides(body.node_overrides),
+                },
+            )
+            assistant_message = await chat_manager.add_message(
+                conversation_id=conversation_id,
+                role="assistant",
+                content=(
+                    f"Assignment splice queued from node '{body.from_node_id}'.\n"
+                    f"Assigned Bot: {pm_bot_id}\n"
+                    f"Orchestration ID: {assignment.get('orchestration_id')}\n"
+                    f"Assignment ID: {assignment.get('assignment_id')}\n"
+                    "A full assignment summary will be posted when the workflow finishes."
+                ),
+                bot_id=pm_bot_id or None,
+                metadata={
+                    "mode": "assign_pending",
+                    "request_type": "splice",
+                    "orchestration_id": assignment.get("orchestration_id"),
+                    "assignment_id": assignment.get("assignment_id"),
+                    "run_id": assignment.get("run_id"),
+                    "task_count": len(assignment.get("tasks") or []),
+                    "assigned_pm_bot_id": pm_bot_id,
+                    "spliced_from_node_id": body.from_node_id,
+                    "lineage_parent_run_id": str(run.get("id") or ""),
+                },
+            )
+
+            async def _persist_summary() -> None:
+                assignment_for_summary = {
+                    "orchestration_id": assignment.get("orchestration_id"),
+                    "pm_bot_id": pm_bot_id,
+                    "tasks": assignment.get("tasks") or [],
+                }
+                try:
+                    completion = await pm_orchestrator.wait_for_completion(assignment_for_summary)
+                    await pm_orchestrator.persist_summary_message(
+                        conversation_id=conversation_id,
+                        assignment=assignment_for_summary,
+                        completion=completion,
+                    )
+                except Exception as exc:
+                    await chat_manager.add_message(
+                        conversation_id=conversation_id,
+                        role="assistant",
+                        content=f"Assignment summary failed for orchestration {assignment.get('orchestration_id')}: {exc}",
+                        bot_id=pm_bot_id or None,
+                        metadata={
+                            "mode": "assign_error",
+                            "request_type": "splice",
+                            "orchestration_id": assignment.get("orchestration_id"),
+                            "assignment_id": assignment.get("assignment_id"),
+                        },
+                    )
+
+            asyncio.create_task(_persist_summary())
+            result["user_message"] = user_message
+            result["assistant_message"] = assistant_message
+        return result
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 

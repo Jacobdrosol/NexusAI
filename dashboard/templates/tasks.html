@@ -396,7 +396,7 @@ async function loadTaskPayload(taskId) {
 async function resolveAssignmentNodeContext(task) {
   const payload = await loadTaskPayload(task.id);
   const assignmentId = String(payload?.assignment_id || '').trim();
-  const nodeId = String(task?.metadata?.step_id || task?.bot_id || '').trim();
+  const nodeId = String(task?.bot_id || task?.metadata?.step_id || ('task:' + String(task?.id || '').trim())).trim();
   if (!assignmentId) throw new Error('This task does not include assignment_id metadata.');
   if (!nodeId) throw new Error('Could not determine node id for this task.');
   return {assignmentId, nodeId, payload};
