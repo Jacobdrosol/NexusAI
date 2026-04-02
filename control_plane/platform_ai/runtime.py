@@ -218,11 +218,21 @@ class PlatformAISessionRuntime:
     async def _process_operator_messages(self, session_id: str) -> None:
         seen = self._processed_operator_messages.setdefault(session_id, set())
         messages = await self._store.list_messages(session_id, limit=300)
+        acknowledged_ids: set[str] = set()
+        for message in messages:
+            role = str(message.get("role") or "").strip().lower()
+            if role != "assistant":
+                continue
+            metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
+            source = str(metadata.get("source") or "").strip().lower()
+            message_id = str(metadata.get("operator_message_id") or "").strip()
+            if source == "runtime_ack" and message_id:
+                acknowledged_ids.add(message_id)
         for message in messages:
             if str(message.get("role") or "").strip().lower() != "operator":
                 continue
             mid = str(message.get("id") or "").strip()
-            if not mid or mid in seen:
+            if not mid or mid in seen or mid in acknowledged_ids:
                 continue
             seen.add(mid)
             content = str(message.get("content") or "").strip()

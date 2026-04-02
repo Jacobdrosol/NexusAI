@@ -876,10 +876,11 @@ async function refreshSessionHeader() {
     .map((row) => String(row?.bot || row?.bot_id || '').trim())
     .filter(Boolean);
   setText('session-active-bots', activeBotLabels.length ? activeBotLabels.slice(0, 6).join(', ') : 'None active');
-  const latestTask = runtimeState && typeof runtimeState.latest_task === 'object' ? runtimeState.latest_task : {};
-  const latestBot = String(latestTask.bot || latestTask.bot_id || '').trim();
-  const latestStatus = String(latestTask.status || '').trim();
-  const latestUpdated = String(latestTask.updated_at || '').trim();
+  const latestTaskRaw = runtimeState && typeof runtimeState.latest_task === 'object' && runtimeState.latest_task ? runtimeState.latest_task : {};
+  const latestTask = latestTaskRaw && typeof latestTaskRaw === 'object' ? latestTaskRaw : {};
+  const latestBot = String((latestTask && (latestTask.bot || latestTask.bot_id)) || '').trim();
+  const latestStatus = String((latestTask && latestTask.status) || '').trim();
+  const latestUpdated = String((latestTask && latestTask.updated_at) || '').trim();
   const detailBits = [];
   if (runtimeState.orchestration_id) detailBits.push(`orch ${runtimeState.orchestration_id}`);
   if (runtimeState.assignment_id) detailBits.push(`assignment ${runtimeState.assignment_id}`);
