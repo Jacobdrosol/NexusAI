@@ -4522,12 +4522,22 @@ class TaskManager:
             if not project_id:
                 return payload
 
-            project = await self._project_registry.get(project_id)
-            cfg = _extract_project_repo_workspace(project)
-            if not bool(cfg.get("enabled", False)):
-                return payload
+            # Prefer the orchestration's temp workspace (which has coder-written files from
+            # earlier stages in the same pipeline run) over the live repo root.
+            root_str: str | None = None
+            assignment_workspace = payload.get("assignment_workspace")
+            if isinstance(assignment_workspace, dict):
+                temp_root = str(assignment_workspace.get("temp_root") or "").strip()
+                if temp_root:
+                    root_str = temp_root
 
-            root_str = _resolve_repo_workspace_root(project_id, cfg, require_enabled=True)
+            if not root_str:
+                project = await self._project_registry.get(project_id)
+                cfg = _extract_project_repo_workspace(project)
+                if not bool(cfg.get("enabled", False)):
+                    return payload
+                root_str = _resolve_repo_workspace_root(project_id, cfg, require_enabled=True)
+
             if not root_str:
                 return payload
             root = normalize_workspace_root(root_str)

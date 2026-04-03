@@ -1907,7 +1907,7 @@ async def mark_pm_run_failed(conversation_id: str, orchestration_id: str, reques
         metadata = message.metadata if isinstance(message.metadata, dict) else {}
         if str(metadata.get("orchestration_id") or "").strip() != str(orchestration_id or "").strip():
             continue
-        if str(metadata.get("mode") or "").strip() not in {"pm_run_report", "assign_summary", "assign_pending"}:
+        if str(metadata.get("mode") or "").strip() not in {"pm_run_report", "assign_summary", "assign_pending", "assign_request"}:
             continue
         related_messages.append(message)
         if target is None and str(metadata.get("mode") or "").strip() in {"pm_run_report", "assign_summary"}:
@@ -1953,6 +1953,7 @@ async def mark_pm_run_failed(conversation_id: str, orchestration_id: str, reques
             }
         )
         next_content = None
+        # Only rewrite content/mode for the run report messages, not the user assign_request
         if mode in {"pm_run_report", "assign_summary"} or message.id == target.id:
             next_metadata["mode"] = "pm_run_report"
             next_content = content
