@@ -4662,7 +4662,7 @@ class TaskManager:
         except Exception:
             return task
 
-
+    async def _run_task(self, task_id: str) -> None:
         raw_result: Any = None
         try:
             if self._is_closing:
