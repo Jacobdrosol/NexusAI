@@ -1389,7 +1389,7 @@ async def _ensure_orchestration_temp_workspace(
     try:
         project = await project_registry.get(project_id)
         cfg = _extract_project_repo_workspace(project)
-        root = _resolve_repo_workspace_root(project_id, cfg, require_enabled=True)
+        root = _resolve_repo_workspace_root(project_id, cfg, require_enabled=False)
         snapshot = await _repo_status_snapshot(root=root, cfg=cfg)
         if not bool(snapshot.get("is_repo")):
             raise HTTPException(status_code=400, detail="repo workspace is not a git repository")

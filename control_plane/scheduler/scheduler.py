@@ -256,7 +256,7 @@ def _assignment_scope_prompt_suffix(payload: Any) -> str:
                 transcript_label += f", {conversation_transcript_strategy}"
             transcript_label += ")"
         parts.append(transcript_label + ":")
-        parts.append(_truncate_text(conversation_transcript, 6000))
+        parts.append(_truncate_text(conversation_transcript, 12000))
     parts.append("If repo, vault, or workspace search surfaces unrelated files, ignore them. If relevant evidence is missing, say so explicitly instead of changing scope.")
     if isinstance(focus_topics, list):
         normalized_topics = [str(item).strip() for item in focus_topics if str(item).strip()]

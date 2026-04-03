@@ -4534,13 +4534,19 @@ class TaskManager:
             # If temp_root wasn't in the payload (e.g. pm-tester triggered directly from
             # pm-coder without assignment_workspace forwarded), look it up from the
             # orchestration workspace store so we still see the coder-written files.
+            # Also eagerly create the temp workspace if it doesn't exist yet (so the
+            # pm-orchestrator gets workspace context on cycle 1 before any coder runs).
             if not root_str and self._orchestration_workspace_store is not None:
                 orch_id = str((task.metadata.orchestration_id if task.metadata else None) or "").strip()
                 if orch_id and project_id:
                     try:
-                        ws_entry = await self._orchestration_workspace_store.get(
+                        from control_plane.api.projects import _ensure_orchestration_temp_workspace
+                        ws_entry = await _ensure_orchestration_temp_workspace(
                             project_id=project_id,
                             orchestration_id=orch_id,
+                            project_registry=self._project_registry,
+                            workspace_store=self._orchestration_workspace_store,
+                            strict=False,
                         )
                         if ws_entry:
                             tr = str(ws_entry.get("temp_root") or "").strip()
@@ -4552,9 +4558,10 @@ class TaskManager:
             if not root_str:
                 project = await self._project_registry.get(project_id)
                 cfg = _extract_project_repo_workspace(project)
-                if not bool(cfg.get("enabled", False)):
+                try:
+                    root_str = _resolve_repo_workspace_root(project_id, cfg, require_enabled=False)
+                except Exception:
                     return payload
-                root_str = _resolve_repo_workspace_root(project_id, cfg, require_enabled=True)
 
             if not root_str:
                 return payload
@@ -4605,7 +4612,57 @@ class TaskManager:
             logger.debug("Workspace context injection skipped for task %s: %s", task.id if task else "?", _ws_exc)
             return payload
 
-    async def _run_task(self, task_id: str) -> None:
+    async def _inherit_orchestration_assignment_scope(self, task: "Task") -> "Task":
+        """Ensure the task payload always carries the full assignment_scope (including
+        conversation_transcript) from the orchestration's initial chat-assign task.
+
+        This fixes meta-loop scope collapse: when pm-final-qc triggers pm-orchestrator for
+        re-orchestration, the trigger payload doesn't include assignment_scope (and thus has
+        no conversation transcript).  Without the transcript, the orchestrator re-plans from
+        only the narrow trigger title instead of the full feature specification.
+        """
+        try:
+            payload = task.payload if isinstance(task.payload, dict) else {}
+            scope = payload.get("assignment_scope") or {}
+            if str(scope.get("conversation_transcript") or "").strip():
+                return task  # Already has transcript — nothing to do.
+
+            orchestration_id = str((task.metadata.orchestration_id if task.metadata else None) or "").strip()
+            if not orchestration_id:
+                return task
+
+            async with self._lock:
+                tasks = list(self._tasks.values())
+
+            root_scope: dict | None = None
+            for candidate in tasks:
+                candidate_meta = candidate.metadata or TaskMetadata()
+                if str(candidate_meta.orchestration_id or "").strip() != orchestration_id:
+                    continue
+                if candidate.bot_id != "pm-orchestrator":
+                    continue
+                candidate_source = str(candidate_meta.source or "").strip().lower()
+                if candidate_source not in {"chat_assign", "assign_task", "launch_profile"}:
+                    continue
+                candidate_payload = candidate.payload if isinstance(candidate.payload, dict) else {}
+                candidate_scope = candidate_payload.get("assignment_scope") or {}
+                if str(candidate_scope.get("conversation_transcript") or "").strip():
+                    root_scope = candidate_scope
+                    break
+
+            if root_scope is None:
+                return task
+
+            # Merge: root_scope provides defaults; current scope fields override when present.
+            merged_scope = dict(root_scope)
+            merged_scope.update({k: v for k, v in scope.items() if v is not None and v != ""})
+            updated_payload = dict(payload)
+            updated_payload["assignment_scope"] = merged_scope
+            return task.model_copy(update={"payload": updated_payload})
+        except Exception:
+            return task
+
+
         raw_result: Any = None
         try:
             if self._is_closing:
@@ -4731,6 +4788,10 @@ class TaskManager:
                     )
                     if _injected_payload is not runtime_payload:
                         task_for_execution = task_for_execution.model_copy(update={"payload": _injected_payload})
+                # Ensure the conversation transcript is always present by inheriting from the
+                # orchestration's initial task (fixes meta-loop scope collapse where the
+                # pm-final-qc → pm-orchestrator trigger doesn't forward assignment_scope).
+                task_for_execution = await self._inherit_orchestration_assignment_scope(task_for_execution)
                 raw_result = await self._scheduler.schedule(task_for_execution)
             result = await self._normalize_task_result(task_for_execution, copy.deepcopy(raw_result))
             if bot is not None and not bot_allows_repo_output_for_task:
