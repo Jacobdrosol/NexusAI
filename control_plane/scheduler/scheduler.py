@@ -16,6 +16,11 @@ from cryptography.hazmat.primitives.asymmetric import padding
 from control_plane.connections.resolver import ConnectionResolver
 from shared.bot_policy import bot_allows_repo_output
 from shared.exceptions import BackendError, BotNotFoundError, NoViableBackendError
+
+try:
+    from control_plane.chat.workspace_tools import list_workspace_tree  # noqa: F401
+except ImportError:
+    list_workspace_tree = None  # type: ignore[assignment]
 from shared.models import BackendConfig, BackendParams, Task, Worker
 from shared.settings_manager import SettingsManager
 
@@ -1426,6 +1431,24 @@ def _broken_link_retry_suggestions(error_message: str, available_docs: list[str]
     return suggestions
 
 
+def _workspace_context_prompt_suffix(payload: Any) -> str:
+    """Build a system prompt suffix from pre-fetched workspace context items."""
+    if not isinstance(payload, dict):
+        return ""
+    items = payload.get("workspace_context_items")
+    if not isinstance(items, list) or not items:
+        return ""
+    tree = str(payload.get("workspace_context_tree") or "").strip()
+    parts: list[str] = ["Workspace context (pre-fetched from the project repository):"]
+    if tree:
+        parts.append(f"Directory tree:\n```\n{tree}\n```")
+    for item in items:
+        text = str(item or "").strip()
+        if text:
+            parts.append(text)
+    return "\n\n".join(parts)
+
+
 def _prepare_system_prompt(bot: Any, *, bot_id: str | None = None, payload: Any = None, task: Task | None = None) -> str | None:
     base = str(getattr(bot, "system_prompt", None) or "").strip()
     suffix_parts: list[str] = []
@@ -1445,6 +1468,9 @@ def _prepare_system_prompt(bot: Any, *, bot_id: str | None = None, payload: Any 
         connection_suffix = _connection_context_prompt_suffix(bot_id, bot, payload).strip()
         if connection_suffix:
             suffix_parts.append(connection_suffix)
+    workspace_context_suffix = _workspace_context_prompt_suffix(payload).strip()
+    if workspace_context_suffix:
+        suffix_parts.append(workspace_context_suffix)
     retry_suffix = _retry_prompt_suffix(task).strip()
     if retry_suffix:
         suffix_parts.append(retry_suffix)

@@ -526,3 +526,45 @@ def search_workspace_snippets(
 
     matches.sort(key=lambda row: (-int(row.get("score") or 0), str(row.get("path") or "")))
     return matches[: max(1, limit)]
+
+
+def list_workspace_tree(
+    root: Path,
+    *,
+    max_depth: int = 4,
+    max_entries: int = 300,
+    ignore_dirs: set[str] | None = None,
+) -> str:
+    """Return a compact indented directory tree string for the workspace."""
+    if ignore_dirs is None:
+        ignore_dirs = _IGNORE_DIR_NAMES
+    lines: list[str] = []
+    entry_count = 0
+
+    def _walk(path: Path, depth: int, prefix: str) -> None:
+        nonlocal entry_count
+        if depth > max_depth or entry_count >= max_entries:
+            return
+        try:
+            children = sorted(path.iterdir(), key=lambda p: (p.is_file(), p.name.lower()))
+        except PermissionError:
+            return
+        dirs = [c for c in children if c.is_dir() and c.name not in ignore_dirs]
+        files = [c for c in children if c.is_file() and c.suffix.lower() not in _BLOCKED_SUFFIXES]
+        for d in dirs:
+            if entry_count >= max_entries:
+                break
+            lines.append(f"{prefix}{d.name}/")
+            entry_count += 1
+            _walk(d, depth + 1, prefix + "  ")
+        for fi in files:
+            if entry_count >= max_entries:
+                break
+            lines.append(f"{prefix}{fi.name}")
+            entry_count += 1
+
+    _walk(root, 0, "")
+    result = "\n".join(lines)
+    if entry_count >= max_entries:
+        result += f"\n... (tree truncated at {max_entries} entries)"
+    return result

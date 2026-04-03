@@ -4501,6 +4501,82 @@ class TaskManager:
             reason="pipeline_failed",
         )
 
+    async def _inject_workspace_context_into_payload(
+        self,
+        task: "Task",
+        payload: dict,
+    ) -> dict:
+        """Pre-fetch repo directory tree and relevant file snippets for workspace-aware bots."""
+        try:
+            from control_plane.api.projects import _extract_project_repo_workspace, _resolve_repo_workspace_root
+            from control_plane.chat.workspace_tools import (
+                list_workspace_tree,
+                normalize_workspace_root,
+                search_workspace_snippets,
+            )
+            from pathlib import Path
+
+            if self._project_registry is None:
+                return payload
+            project_id = str((task.metadata.project_id if task.metadata else None) or "").strip()
+            if not project_id:
+                return payload
+
+            project = await self._project_registry.get(project_id)
+            cfg = _extract_project_repo_workspace(project)
+            if not bool(cfg.get("enabled", False)):
+                return payload
+
+            root_str = _resolve_repo_workspace_root(project_id, cfg, require_enabled=True)
+            if not root_str:
+                return payload
+            root = normalize_workspace_root(root_str)
+            if root is None:
+                return payload
+
+            # Build directory tree (run in thread to avoid blocking event loop)
+            tree_str = await asyncio.to_thread(
+                list_workspace_tree,
+                root,
+                max_depth=4,
+                max_entries=300,
+            )
+
+            # Extract search query from task payload
+            instruction = str(payload.get("instruction") or "").strip()
+            title = str(payload.get("title") or "").strip()
+            query = (instruction[:300] + " " + title).strip() or project_id
+
+            # Fetch relevant file snippets
+            snippets = await asyncio.to_thread(
+                search_workspace_snippets,
+                root,
+                query,
+                limit=8,
+                max_files=600,
+                max_file_bytes=300_000,
+                max_chars_per_snippet=400,
+            )
+            items: list[str] = []
+            for hit in snippets:
+                path = str(hit.get("path") or "").strip()
+                snippet = str(hit.get("snippet") or "").strip()
+                if path and snippet:
+                    items.append(f"[workspace:file] {path}\n{snippet}")
+
+            if not tree_str and not items:
+                return payload
+
+            updated = dict(payload)
+            if tree_str:
+                updated["workspace_context_tree"] = tree_str
+            if items:
+                updated["workspace_context_items"] = items
+            return updated
+        except Exception as _ws_exc:
+            logger.debug("Workspace context injection skipped for task %s: %s", task.id if task else "?", _ws_exc)
+            return payload
+
     async def _run_task(self, task_id: str) -> None:
         raw_result: Any = None
         try:
@@ -4616,6 +4692,17 @@ class TaskManager:
             elif mode == "payload_transform":
                 raw_result = {"deterministic_transform": True}
             else:
+                # Inject workspace context for workspace-aware bots
+                _exec_policy = {}
+                if bot is not None:
+                    _exec_policy = dict(getattr(bot, "execution_policy", None) or {})
+                if bool(_exec_policy.get("workspace_context_injection", False)):
+                    _injected_payload = await self._inject_workspace_context_into_payload(
+                        task_for_execution,
+                        dict(runtime_payload),
+                    )
+                    if _injected_payload is not runtime_payload:
+                        task_for_execution = task_for_execution.model_copy(update={"payload": _injected_payload})
                 raw_result = await self._scheduler.schedule(task_for_execution)
             result = await self._normalize_task_result(task_for_execution, copy.deepcopy(raw_result))
             if bot is not None and not bot_allows_repo_output_for_task:
@@ -5577,6 +5664,12 @@ class TaskManager:
         async with self._lock:
             tasks = list(self._tasks.values())
 
+        # For the pm-final-qc→pm-orchestrator meta-loop route the workflow_root_task_id
+        # changes with every cycle (the restarted orchestrator becomes the new sub-tree
+        # root), so filtering by root_id always produces repeat_count=0 and the guard
+        # never fires.  For this specific route count by orchestration_id only.
+        is_meta_loop_route = branch_identity == "pm-final-qc:pm-orchestrator:reorchestration"
+
         repeat_count = 0
         pair_repeat_count = 0
         for candidate in tasks:
@@ -5587,8 +5680,9 @@ class TaskManager:
             candidate_meta = candidate.metadata or TaskMetadata()
             if str(candidate_meta.source or "").strip().lower() != "bot_trigger":
                 continue
-            if (candidate_meta.workflow_root_task_id or candidate.id) != root_id:
-                continue
+            if not is_meta_loop_route:
+                if (candidate_meta.workflow_root_task_id or candidate.id) != root_id:
+                    continue
             if str(candidate_meta.orchestration_id or "").strip() != orchestration_id:
                 continue
             parent_task_id = str(candidate_meta.parent_task_id or "").strip()
