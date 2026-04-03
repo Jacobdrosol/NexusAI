@@ -408,6 +408,10 @@
             semantic excerpt
             {% elif context_strategy == 'excerpt' %}
             bounded transcript excerpt
+            {% elif context_strategy == 'empty' %}
+            new conversation
+            {% elif context_strategy == 'unavailable' %}
+            context unavailable
             {% elif context_strategy %}
             {{ context_strategy }}
             {% else %}
@@ -1057,6 +1061,8 @@ function renderAssignmentContextHtml(meta) {
   if (strategy === 'full') strategyLabel = 'full chat transcript';
   else if (strategy === 'semantic_excerpt') strategyLabel = 'semantic excerpt';
   else if (strategy === 'excerpt') strategyLabel = 'bounded transcript excerpt';
+  else if (strategy === 'empty') strategyLabel = 'new conversation';
+  else if (strategy === 'unavailable') strategyLabel = 'context unavailable';
   else if (strategy) strategyLabel = strategy;
   const parts = ['PM context: ' + esc(strategyLabel)];
   if (messageCount > 0) parts.push(`${messageCount} message${messageCount === 1 ? '' : 's'}`);

@@ -2,10 +2,13 @@ import asyncio
 from collections import Counter
 import base64
 import json
+import logging
 import os
 from pathlib import Path
 import re
 from typing import Any, AsyncGenerator, Dict, List, Literal, Optional
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
@@ -1596,6 +1599,36 @@ def _build_assignment_memory_hits(
 
 
 async def _build_assignment_context_snapshot(
+    chat_manager: Any,
+    *,
+    conversation_id: str,
+    assign_instruction: str,
+    current_assign_message_id: Optional[str],
+) -> Dict[str, Any]:
+    try:
+        return await _build_assignment_context_snapshot_inner(
+            chat_manager,
+            conversation_id=conversation_id,
+            assign_instruction=assign_instruction,
+            current_assign_message_id=current_assign_message_id,
+        )
+    except Exception as _ctx_exc:
+        logger.warning(
+            "[ASSIGN] _build_assignment_context_snapshot failed for conversation %s: %s",
+            conversation_id,
+            _ctx_exc,
+        )
+        return {
+            "conversation_brief": "",
+            "conversation_transcript": "",
+            "conversation_message_count": 0,
+            "conversation_transcript_strategy": "unavailable",
+            "assignment_memory_hits": [],
+            "assignment_memory_hit_count": 0,
+        }
+
+
+async def _build_assignment_context_snapshot_inner(
     chat_manager: Any,
     *,
     conversation_id: str,
