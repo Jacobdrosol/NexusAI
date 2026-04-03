@@ -6018,45 +6018,29 @@ class TaskManager:
                 _fan_out_payload_index = 0
                 for payload in payloads:
                     _fan_out_payload_index += 1
-                    _workstream_idx = payload.get("workstream_index") if isinstance(payload, dict) else None
-                    logger.info(
-                        "[TRIGGER] DISPATCH_ATTEMPT trigger=%s task=%s bot=%s payload=%d/%d workstream_index=%s",
-                        trigger.id,
-                        task.id,
-                        task.bot_id,
-                        _fan_out_payload_index,
-                        len(payloads),
-                        _workstream_idx,
-                    )
-                    payload_target_bot_id = (
-                        self._dynamic_pm_target_bot_id(payload, target_bot_id)
-                        if task.bot_id == "pm-engineer"
-                        else target_bot_id
-                    )
-                    if allowed_bot_ids and payload_target_bot_id not in allowed_bot_ids:
-                        message = (
-                            f"trigger target '{payload_target_bot_id}' is outside the orchestration allowlist for "
-                            f"workflow '{metadata.workflow_graph_id or metadata.orchestration_id or 'unknown'}'"
-                        )
-                        logger.warning(
-                            "[TRIGGER] SKIP trigger=%s task=%s reason=target_not_allowed target=%s",
+                    try:  # per-payload guard: prevents one payload exception from aborting the entire fan-out
+                        _workstream_idx = payload.get("workstream_index") if isinstance(payload, dict) else None
+                        logger.info(
+                            "[TRIGGER] DISPATCH_ATTEMPT trigger=%s task=%s bot=%s payload=%d/%d workstream_index=%s",
                             trigger.id,
                             task.id,
-                            payload_target_bot_id,
+                            task.bot_id,
+                            _fan_out_payload_index,
+                            len(payloads),
+                            _workstream_idx,
                         )
-                        await self._record_trigger_dispatch_error(
-                            source_task=task,
-                            trigger_id=str(getattr(trigger, "id", "") or ""),
-                            target_bot_id=str(payload_target_bot_id or ""),
-                            message=message,
+                        payload_target_bot_id = (
+                            self._dynamic_pm_target_bot_id(payload, target_bot_id)
+                            if task.bot_id == "pm-engineer"
+                            else target_bot_id
                         )
-                        continue
-                    if self._bot_registry is not None:
-                        try:
-                            await self._bot_registry.get(payload_target_bot_id)
-                        except Exception:
+                        if allowed_bot_ids and payload_target_bot_id not in allowed_bot_ids:
+                            message = (
+                                f"trigger target '{payload_target_bot_id}' is outside the orchestration allowlist for "
+                                f"workflow '{metadata.workflow_graph_id or metadata.orchestration_id or 'unknown'}'"
+                            )
                             logger.warning(
-                                "[TRIGGER] SKIP trigger=%s task=%s reason=target_bot_missing target=%s",
+                                "[TRIGGER] SKIP trigger=%s task=%s reason=target_not_allowed target=%s",
                                 trigger.id,
                                 task.id,
                                 payload_target_bot_id,
@@ -6065,128 +6049,161 @@ class TaskManager:
                                 source_task=task,
                                 trigger_id=str(getattr(trigger, "id", "") or ""),
                                 target_bot_id=str(payload_target_bot_id or ""),
-                                message=f"trigger target bot '{payload_target_bot_id}' does not exist or is unavailable",
+                                message=message,
                             )
                             continue
-                    branch_metadata = base_child_metadata
-                    if isinstance(payload, dict):
-                        if str(metadata.run_class or "").strip().lower() == "pm_assignment":
-                            repeat_limit = max(1, _settings_int("workflow_route_repeat_limit", 3))
-                            repeat_count = await self._workflow_route_repeat_count(task, payload_target_bot_id, payload)
-                            if repeat_count >= repeat_limit:
+                        if self._bot_registry is not None:
+                            try:
+                                await self._bot_registry.get(payload_target_bot_id)
+                            except Exception:
                                 logger.warning(
-                                    "[TRIGGER] SKIP trigger=%s task=%s reason=workflow_loop_guard target=%s repeat_count=%s",
+                                    "[TRIGGER] SKIP trigger=%s task=%s reason=target_bot_missing target=%s",
                                     trigger.id,
                                     task.id,
                                     payload_target_bot_id,
-                                    repeat_count,
                                 )
-                                await self._create_pm_assignment_loop_escalation_task(
-                                    source_task=task,
-                                    target_bot_id=str(payload_target_bot_id or ""),
-                                    trigger_id=str(getattr(trigger, "id", "") or ""),
-                                    payload=payload,
-                                    repeat_count=repeat_count,
-                                    repeat_limit=repeat_limit,
-                                    reason="route_repeat_limit",
-                                )
-                                await self._record_workflow_loop_guard_stop(
+                                await self._record_trigger_dispatch_error(
                                     source_task=task,
                                     trigger_id=str(getattr(trigger, "id", "") or ""),
                                     target_bot_id=str(payload_target_bot_id or ""),
-                                    branch_identity=self._workflow_route_branch_identity(task, payload),
-                                    failure_type=self._workflow_route_failure_type(task),
-                                    repeat_count=repeat_count,
-                                    repeat_limit=repeat_limit,
-                                    reason="route_repeat_limit",
+                                    message=f"trigger target bot '{payload_target_bot_id}' does not exist or is unavailable",
                                 )
                                 continue
-                            target_repeat_count = await self._workflow_route_target_bot_repeat_count(
-                                task,
-                                payload_target_bot_id,
-                                payload,
+                        branch_metadata = base_child_metadata
+                        if isinstance(payload, dict):
+                            if str(metadata.run_class or "").strip().lower() == "pm_assignment":
+                                repeat_limit = max(1, _settings_int("workflow_route_repeat_limit", 3))
+                                repeat_count = await self._workflow_route_repeat_count(task, payload_target_bot_id, payload)
+                                if repeat_count >= repeat_limit:
+                                    logger.warning(
+                                        "[TRIGGER] SKIP trigger=%s task=%s reason=workflow_loop_guard target=%s repeat_count=%s",
+                                        trigger.id,
+                                        task.id,
+                                        payload_target_bot_id,
+                                        repeat_count,
+                                    )
+                                    await self._create_pm_assignment_loop_escalation_task(
+                                        source_task=task,
+                                        target_bot_id=str(payload_target_bot_id or ""),
+                                        trigger_id=str(getattr(trigger, "id", "") or ""),
+                                        payload=payload,
+                                        repeat_count=repeat_count,
+                                        repeat_limit=repeat_limit,
+                                        reason="route_repeat_limit",
+                                    )
+                                    await self._record_workflow_loop_guard_stop(
+                                        source_task=task,
+                                        trigger_id=str(getattr(trigger, "id", "") or ""),
+                                        target_bot_id=str(payload_target_bot_id or ""),
+                                        branch_identity=self._workflow_route_branch_identity(task, payload),
+                                        failure_type=self._workflow_route_failure_type(task),
+                                        repeat_count=repeat_count,
+                                        repeat_limit=repeat_limit,
+                                        reason="route_repeat_limit",
+                                    )
+                                    continue
+                                target_repeat_count = await self._workflow_route_target_bot_repeat_count(
+                                    task,
+                                    payload_target_bot_id,
+                                    payload,
+                                )
+                                if target_repeat_count >= repeat_limit:
+                                    logger.warning(
+                                        "[TRIGGER] SKIP trigger=%s task=%s reason=workflow_target_repeat_limit target=%s repeat_count=%s",
+                                        trigger.id,
+                                        task.id,
+                                        payload_target_bot_id,
+                                        target_repeat_count,
+                                    )
+                                    await self._create_pm_assignment_loop_escalation_task(
+                                        source_task=task,
+                                        target_bot_id=str(payload_target_bot_id or ""),
+                                        trigger_id=str(getattr(trigger, "id", "") or ""),
+                                        payload=payload,
+                                        repeat_count=target_repeat_count,
+                                        repeat_limit=repeat_limit,
+                                        reason="target_bot_repeat_limit",
+                                    )
+                                    await self._record_workflow_loop_guard_stop(
+                                        source_task=task,
+                                        trigger_id=str(getattr(trigger, "id", "") or ""),
+                                        target_bot_id=str(payload_target_bot_id or ""),
+                                        branch_identity=self._workflow_route_branch_identity(task, payload),
+                                        failure_type=self._workflow_route_failure_type(task),
+                                        repeat_count=target_repeat_count,
+                                        repeat_limit=repeat_limit,
+                                        reason="target_bot_repeat_limit",
+                                    )
+                                    continue
+                            branch_step_id = self._fanout_step_id(task, trigger, payload)
+                            if branch_step_id:
+                                existing = await self._find_task_by_step_id(branch_step_id, payload_target_bot_id)
+                                if existing is not None and existing.status in {"queued", "running", "blocked", "completed"}:
+                                    logger.warning("[TRIGGER] SKIP trigger=%s branch_step_id=%s reason=already_exists status=%s", trigger.id, branch_step_id, existing.status)
+                                    continue
+                                branch_metadata = base_child_metadata.model_copy(update={"step_id": branch_step_id})
+                            fanout_id = payload.get("fanout_id") if isinstance(payload, dict) else None
+                            fanout_idx = payload.get("fanout_index") if isinstance(payload, dict) else None
+                            if fanout_id is not None:
+                                # Annotate explicit branch identity so join gates and the
+                                # GraphCompletenessEvaluator can reason about convergence
+                                # without parsing the opaque step_id string.
+                                _branch_key = self._fanout_branch_key(trigger, payload)
+                                branch_metadata = branch_metadata.model_copy(update={
+                                    "fan_out_source": fanout_id,
+                                    "branch_id": _branch_key or (f"branch:{fanout_idx}" if fanout_idx is not None else None),
+                                })
+                                logger.info(
+                                    "[FANOUT] trigger=%s source_task=%s fanout_id=%s branch=%s target=%s",
+                                    trigger.id,
+                                    task.id,
+                                    fanout_id,
+                                    fanout_idx,
+                                    payload_target_bot_id,
+                                )
+                        try:
+                            await self.create_task(
+                                bot_id=payload_target_bot_id,
+                                payload=payload,
+                                metadata=branch_metadata,
                             )
-                            if target_repeat_count >= repeat_limit:
-                                logger.warning(
-                                    "[TRIGGER] SKIP trigger=%s task=%s reason=workflow_target_repeat_limit target=%s repeat_count=%s",
-                                    trigger.id,
-                                    task.id,
-                                    payload_target_bot_id,
-                                    target_repeat_count,
-                                )
-                                await self._create_pm_assignment_loop_escalation_task(
-                                    source_task=task,
-                                    target_bot_id=str(payload_target_bot_id or ""),
-                                    trigger_id=str(getattr(trigger, "id", "") or ""),
-                                    payload=payload,
-                                    repeat_count=target_repeat_count,
-                                    repeat_limit=repeat_limit,
-                                    reason="target_bot_repeat_limit",
-                                )
-                                await self._record_workflow_loop_guard_stop(
-                                    source_task=task,
-                                    trigger_id=str(getattr(trigger, "id", "") or ""),
-                                    target_bot_id=str(payload_target_bot_id or ""),
-                                    branch_identity=self._workflow_route_branch_identity(task, payload),
-                                    failure_type=self._workflow_route_failure_type(task),
-                                    repeat_count=target_repeat_count,
-                                    repeat_limit=repeat_limit,
-                                    reason="target_bot_repeat_limit",
-                                )
-                                continue
-                        branch_step_id = self._fanout_step_id(task, trigger, payload)
-                        if branch_step_id:
-                            existing = await self._find_task_by_step_id(branch_step_id, payload_target_bot_id)
-                            if existing is not None and existing.status in {"queued", "running", "blocked", "completed"}:
-                                logger.debug("[TRIGGER] SKIP trigger=%s branch_step_id=%s reason=already_exists status=%s", trigger.id, branch_step_id, existing.status)
-                                continue
-                            branch_metadata = base_child_metadata.model_copy(update={"step_id": branch_step_id})
-                        fanout_id = payload.get("fanout_id") if isinstance(payload, dict) else None
-                        fanout_idx = payload.get("fanout_index") if isinstance(payload, dict) else None
-                        if fanout_id is not None:
-                            # Annotate explicit branch identity so join gates and the
-                            # GraphCompletenessEvaluator can reason about convergence
-                            # without parsing the opaque step_id string.
-                            _branch_key = self._fanout_branch_key(trigger, payload)
-                            branch_metadata = branch_metadata.model_copy(update={
-                                "fan_out_source": fanout_id,
-                                "branch_id": _branch_key or (f"branch:{fanout_idx}" if fanout_idx is not None else None),
-                            })
                             logger.info(
-                                "[FANOUT] trigger=%s source_task=%s fanout_id=%s branch=%s target=%s",
+                                "[TRIGGER] DISPATCH_OK trigger=%s task=%s target=%s workstream_index=%s",
                                 trigger.id,
                                 task.id,
-                                fanout_id,
-                                fanout_idx,
                                 payload_target_bot_id,
+                                payload.get("workstream_index") if isinstance(payload, dict) else None,
                             )
-                    try:
-                        await self.create_task(
-                            bot_id=payload_target_bot_id,
-                            payload=payload,
-                            metadata=branch_metadata,
-                        )
-                        logger.info(
-                            "[TRIGGER] DISPATCH_OK trigger=%s task=%s target=%s workstream_index=%s",
-                            trigger.id,
-                            task.id,
-                            payload_target_bot_id,
-                            payload.get("workstream_index") if isinstance(payload, dict) else None,
-                        )
-                    except Exception as create_exc:
+                        except Exception as create_exc:
+                            logger.exception(
+                                "[TRIGGER] DISPATCH_FAILED trigger=%s task=%s target=%s workstream_index=%s — "
+                                "payload creation failed, continuing to next payload",
+                                trigger.id,
+                                task.id,
+                                payload_target_bot_id,
+                                payload.get("workstream_index") if isinstance(payload, dict) else None,
+                            )
+                            await self._record_trigger_dispatch_error(
+                                source_task=task,
+                                trigger_id=str(getattr(trigger, "id", "") or ""),
+                                target_bot_id=str(payload_target_bot_id or ""),
+                                message=str(create_exc),
+                            )
+                    except Exception as _payload_dispatch_exc:
                         logger.exception(
-                            "[TRIGGER] DISPATCH_FAILED trigger=%s task=%s target=%s workstream_index=%s — "
-                            "payload creation failed, continuing to next payload",
+                            '[TRIGGER] PAYLOAD_DISPATCH_ERROR trigger=%s task=%s payload=%d/%d workstream_index=%s — '
+                            'exception before task creation; skipping to next payload',
                             trigger.id,
                             task.id,
-                            payload_target_bot_id,
-                            payload.get("workstream_index") if isinstance(payload, dict) else None,
+                            _fan_out_payload_index,
+                            len(payloads),
+                            payload.get('workstream_index') if isinstance(payload, dict) else None,
                         )
                         await self._record_trigger_dispatch_error(
                             source_task=task,
-                            trigger_id=str(getattr(trigger, "id", "") or ""),
-                            target_bot_id=str(payload_target_bot_id or ""),
-                            message=str(create_exc),
+                            trigger_id=str(getattr(trigger, 'id', '') or ''),
+                            target_bot_id=str(getattr(trigger, 'target_bot_id', '') or ''),
+                            message=str(_payload_dispatch_exc),
                         )
             except Exception as exc:
                 logger.exception(
