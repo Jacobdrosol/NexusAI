@@ -6,6 +6,11 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from control_plane.api.chat import (
+    _build_assignment_context_snapshot,
+    _assignment_context_message_metadata,
+)
+
 
 router = APIRouter(prefix="/v1/assignments", tags=["assignments"])
 
@@ -92,6 +97,17 @@ async def create_assignment(request: Request, body: CreateAssignmentRequest) -> 
             node_overrides=_dump_overrides(body.node_overrides),
             context_items=list(body.context_items or []),
         )
+        # Build context snapshot so the "PM context: X messages" label shows in the UI
+        try:
+            context_snapshot = await _build_assignment_context_snapshot(
+                chat_manager,
+                conversation_id=body.conversation_id,
+                assign_instruction=body.instruction,
+                current_assign_message_id=None,
+            )
+            context_meta = _assignment_context_message_metadata(context_snapshot)
+        except Exception:
+            context_meta = {}
         user_message = await chat_manager.add_message(
             conversation_id=body.conversation_id,
             role="user",
@@ -104,6 +120,7 @@ async def create_assignment(request: Request, body: CreateAssignmentRequest) -> 
                 "assignment_id": queued.get("assignment_id"),
                 "run_id": queued.get("run_id"),
                 "node_overrides": _dump_overrides(body.node_overrides),
+                **context_meta,
             },
         )
         assistant_message = await chat_manager.add_message(
@@ -124,6 +141,7 @@ async def create_assignment(request: Request, body: CreateAssignmentRequest) -> 
                 "run_id": queued.get("run_id"),
                 "task_count": len(queued.get("tasks") or []),
                 "assigned_pm_bot_id": str(queued.get("pm_bot_id") or ""),
+                **context_meta,
             },
         )
 

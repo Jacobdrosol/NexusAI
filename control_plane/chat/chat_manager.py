@@ -150,7 +150,11 @@ class ChatManager:
         if not isinstance(metadata, dict):
             return True
         mode = str(metadata.get("mode") or "").strip().lower()
-        return mode not in {"assign_request", "assign_pending", "pm_run_report", "assign_summary", "assign_error"}
+        if mode == "assign_error":
+            return False
+        if mode in {"assign_request", "assign_pending", "pm_run_report", "assign_summary"}:
+            return metadata.get("ingest_allowed") is True
+        return True
 
     async def _reindex_message(
         self,
@@ -602,12 +606,18 @@ class ChatManager:
             FROM messages
             WHERE conversation_id = ?
               AND lower(role) IN ('user', 'assistant')
-              AND COALESCE(lower(json_extract(metadata, '$.mode')), '') NOT IN (
-                'assign_request',
-                'assign_pending',
-                'pm_run_report',
-                'assign_summary',
-                'assign_error'
+              AND (
+                COALESCE(lower(json_extract(metadata, '$.mode')), '') NOT IN (
+                  'assign_request',
+                  'assign_pending',
+                  'pm_run_report',
+                  'assign_summary',
+                  'assign_error'
+                )
+                OR (
+                  COALESCE(lower(json_extract(metadata, '$.mode')), '') NOT IN ('assign_error')
+                  AND COALESCE(json_extract(metadata, '$.ingest_allowed'), 0) = 1
+                )
               )
         """
         try:

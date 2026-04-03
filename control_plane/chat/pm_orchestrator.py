@@ -1197,7 +1197,8 @@ class PMOrchestrator:
                 metadata = message.metadata if isinstance(message.metadata, dict) else {}
                 if str(metadata.get("orchestration_id") or "").strip() != orchestration_id:
                     continue
-                if str(metadata.get("mode") or "").strip() != "assign_pending":
+                mode = str(metadata.get("mode") or "").strip()
+                if mode not in {"assign_pending", "assign_request"}:
                     continue
                 updated_metadata = dict(metadata)
                 updated_metadata.update(
@@ -1215,7 +1216,7 @@ class PMOrchestrator:
                 )
         except Exception:
             logger.exception(
-                "Failed to update assign_pending message status for orchestration %s",
+                "Failed to update assign_pending/assign_request message status for orchestration %s",
                 orchestration_id,
             )
         return await self._chat_manager.add_message(

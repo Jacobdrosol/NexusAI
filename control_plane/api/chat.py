@@ -1405,8 +1405,13 @@ def _assignment_context_message_is_eligible(
         return False
     metadata = message.metadata if isinstance(message.metadata, dict) else {}
     mode = str(metadata.get("mode") or "").strip().lower()
-    if mode in {"assign_request", "assign_pending", "pm_run_report", "assign_summary", "assign_error"}:
+    # assign_error messages are never useful context
+    if mode == "assign_error":
         return False
+    # For PM-run messages: include only if the run was accepted for ingestion
+    # (ingest_allowed=True means the run passed and its context is valuable)
+    if mode in {"assign_request", "assign_pending", "pm_run_report", "assign_summary"}:
+        return metadata.get("ingest_allowed") is True
     content = str(message.content or "").strip()
     if not content:
         return False

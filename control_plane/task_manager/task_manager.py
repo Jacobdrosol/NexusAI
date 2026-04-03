@@ -1733,11 +1733,45 @@ def _result_explicit_artifacts(result: Any) -> List[Dict[str, Any]]:
     return [item for item in artifacts if isinstance(item, dict)]
 
 
+def _strip_sql_comments(text: str) -> str:
+    """Strip SQL line comments (-- ...) and block comments (/* ... */) from text."""
+    text = re.sub(r"/\*.*?\*/", " ", text, flags=re.DOTALL)
+    text = re.sub(r"--[^\r\n]*", " ", text)
+    return text
+
+
 def _contains_destructive_sql(text: str) -> bool:
-    normalized = str(text or "").strip()
+    # Strip SQL comments first to avoid matching keywords inside comments
+    # (e.g. "-- DO NOT include DELETE" must not be flagged as destructive)
+    normalized = _strip_sql_comments(str(text or "")).strip()
     if not normalized:
         return False
     if re.search(r"(?im)\b(delete|drop|truncate)\b", normalized):
+        return True
+    return bool(
+        re.search(
+            r"(?ims)\balter\s+table\b.*?\b(drop\s+(?:column|constraint)|alter\s+column\b.*?\btype\b)",
+            normalized,
+        )
+    )
+
+
+def _contains_destructive_sql_statement(text: str) -> bool:
+    """Stricter check for use on LLM prose/raw_text: requires SQL-context keywords.
+
+    Avoids false positives like "no DELETE operations were performed".
+    """
+    normalized = _strip_sql_comments(str(text or "")).strip()
+    if not normalized:
+        return False
+    if re.search(r"(?im)\bdelete\s+from\b", normalized):
+        return True
+    if re.search(
+        r"(?im)\bdrop\s+(?:table|column|constraint|index|schema|database|view|function|trigger)\b",
+        normalized,
+    ):
+        return True
+    if re.search(r"(?im)\btruncate\s+(?:table\s+)?\w", normalized):
         return True
     return bool(
         re.search(
@@ -1851,11 +1885,11 @@ def _database_result_contract_failure(result: Any) -> Optional[Dict[str, Any]]:
 def _database_result_contains_destructive_sql(result: Any) -> bool:
     if not isinstance(result, dict):
         return False
+    # Only check .sql artifacts for destructive SQL — non-SQL files (e.g. .cs) may
+    # legitimately contain the words "delete" / "drop" in ORM/code context.
     for item in _database_result_repo_candidates(result):
         content = str(item.get("content") or "")
         path = str(item.get("path") or "").strip().lower()
-        if _contains_destructive_sql(content):
-            return True
         if path.endswith(".sql") and _contains_destructive_sql(content):
             return True
     for candidate in extract_file_candidates(result):
@@ -1863,8 +1897,10 @@ def _database_result_contains_destructive_sql(result: Any) -> bool:
         content = str(candidate.get("content") or "")
         if path.endswith(".sql") and _contains_destructive_sql(content):
             return True
+    # For raw LLM prose, use the stricter statement-level check to avoid false
+    # positives when the bot describes what it avoided (e.g. "no DELETE operations").
     raw_text = str(result.get("raw_text") or result.get("content") or "").strip()
-    if _contains_destructive_sql(raw_text):
+    if _contains_destructive_sql_statement(raw_text):
         return True
     return False
 
