@@ -5542,14 +5542,24 @@ class TaskManager:
         payload: Any,
     ) -> str:
         metadata = source_task.metadata or TaskMetadata()
-        if (
-            str(metadata.run_class or "").strip().lower() == "pm_assignment"
-            and str(target_bot_id or "").strip() == "pm-coder"
-            and str(source_task.bot_id or "").strip() in {"pm-tester", "pm-security-reviewer"}
-        ):
-            stable_identity = self._pm_assignment_stable_branch_identity(payload)
-            if stable_identity:
-                return stable_identity
+        if str(metadata.run_class or "").strip().lower() == "pm_assignment":
+            if (
+                str(target_bot_id or "").strip() == "pm-coder"
+                and str(source_task.bot_id or "").strip() in {"pm-tester", "pm-security-reviewer"}
+            ):
+                stable_identity = self._pm_assignment_stable_branch_identity(payload)
+                if stable_identity:
+                    return stable_identity
+            # Backward re-orchestration: pm-final-qc firing any non-pass failure type back to
+            # pm-orchestrator.  Each cycle has a unique task.id so the generic fallback in
+            # _workflow_route_branch_identity returns a different string per cycle, making the
+            # loop guard always see repeat_count=0.  Use a stable constant so all cycles of
+            # this route are counted as the same pair and the guard fires correctly.
+            if (
+                str(target_bot_id or "").strip() == "pm-orchestrator"
+                and str(source_task.bot_id or "").strip() == "pm-final-qc"
+            ):
+                return "pm-final-qc:pm-orchestrator:reorchestration"
         return self._workflow_route_branch_identity(source_task, payload)
 
     async def _workflow_route_repeat_count(
