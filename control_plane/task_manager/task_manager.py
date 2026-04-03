@@ -4531,6 +4531,24 @@ class TaskManager:
                 if temp_root:
                     root_str = temp_root
 
+            # If temp_root wasn't in the payload (e.g. pm-tester triggered directly from
+            # pm-coder without assignment_workspace forwarded), look it up from the
+            # orchestration workspace store so we still see the coder-written files.
+            if not root_str and self._orchestration_workspace_store is not None:
+                orch_id = str((task.metadata.orchestration_id if task.metadata else None) or "").strip()
+                if orch_id and project_id:
+                    try:
+                        ws_entry = await self._orchestration_workspace_store.get(
+                            project_id=project_id,
+                            orchestration_id=orch_id,
+                        )
+                        if ws_entry:
+                            tr = str(ws_entry.get("temp_root") or "").strip()
+                            if tr:
+                                root_str = tr
+                    except Exception:
+                        pass
+
             if not root_str:
                 project = await self._project_registry.get(project_id)
                 cfg = _extract_project_repo_workspace(project)
@@ -5079,17 +5097,21 @@ class TaskManager:
             if path and path not in test_files and not path.lower().startswith(("docs/", "issues/", "specification/"))
         ]
         if not test_files:
-            # No test files means this is a non-testable workstream (e.g. documentation-only).
-            # Return a structured skip result so downstream triggers can route correctly
-            # (result_field="outcome", result_equals="skip" or "pass") rather than failing and
-            # sending the coder into an infinite fabrication loop.
+            if source_paths:
+                # Code files exist but no test files — let the bot run as a code reviewer.
+                # The tester's system prompt instructs it to review code logic, acceptance
+                # criteria, patterns, and conventions instead of executing tests when no
+                # test files are provided. Returning None lets the bot dispatch normally.
+                return None
+            # Truly no code and no test files (documentation-only or pure-research workstream).
+            # Inject a structured skip so downstream triggers route correctly.
             workspace_snap = await _repo_status_snapshot(root=root, cfg=cfg)
             return {
                 "outcome": "skip",
                 "failure_type": "not_applicable",
                 "findings": [
-                    "No automated test files were found for this workstream.",
-                    "The workstream appears to be documentation-only or does not require automated test execution.",
+                    "No code or test files were produced for this workstream.",
+                    "The workstream appears to be documentation-only or a research/planning step.",
                 ],
                 "evidence": [
                     "Applied files: " + (", ".join(applied_paths) if applied_paths else "none"),
@@ -5107,7 +5129,7 @@ class TaskManager:
                 "command_results": [],
                 "missing_tools": [],
                 "exit_code": None,
-                "report": "No test files detected. Workstream skipped for automated test execution.",
+                "report": "No code files detected. Workstream skipped for automated test execution.",
             }
 
         usage_parts: List[Dict[str, Any]] = []
