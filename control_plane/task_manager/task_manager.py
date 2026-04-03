@@ -2695,6 +2695,29 @@ def _assignment_validation_failure(task: Task, result: Any) -> Optional[Dict[str
             },
         }
 
+    if task.bot_id == "pm-coder":
+        sql_artifacts = [
+            item
+            for item in (
+                result.get("artifacts") if isinstance(result.get("artifacts"), list) else []
+            )
+            if isinstance(item, dict) and str(item.get("path") or "").strip().lower().endswith(".sql")
+        ]
+        if sql_artifacts:
+            sql_paths = ", ".join(str(item.get("path") or "").strip() for item in sql_artifacts[:5])
+            return {
+                "code": "coder_stage_illegal_sql_artifact",
+                "message": (
+                    "pm-coder must not produce .sql files. SQL migration scripts are exclusively for pm-database-engineer. "
+                    f"Remove the .sql artifact(s) and document required schema changes in handoff_notes instead: {sql_paths}"
+                ),
+                "details": {
+                    "step_kind": step_kind,
+                    "reason_code": "coder_stage_illegal_sql_artifact",
+                    "paths": [str(item.get("path") or "").strip() for item in sql_artifacts],
+                },
+            }
+
     if task.bot_id == "pm-database-engineer" and not _assignment_result_is_skip(result):
         database_contract_failure = _database_result_contract_failure(result)
         if database_contract_failure:
