@@ -2696,6 +2696,13 @@ class Scheduler:
                     headers={"Authorization": f"Bearer {api_key}"},
                     json={"model": model, "stream": False},
                 )
+                content_type = pull_resp.headers.get("content-type", "")
+                if "text/html" in content_type:
+                    raise BackendError(
+                        f"Ollama Cloud pull endpoint returned an HTML page instead of JSON. "
+                        f"The /api/pull endpoint is not supported on this server. "
+                        f"Pull the model manually on the server: `ollama pull {model}`"
+                    )
                 if pull_resp.status_code == 404:
                     raise BackendError(
                         f"Ollama Cloud model '{model}' not found and /api/pull is not supported "
@@ -2704,6 +2711,8 @@ class Scheduler:
                     )
                 pull_resp.raise_for_status()
                 _log.info("Ollama Cloud: model '%s' pulled successfully", model)
+            except BackendError:
+                raise
             except httpx.HTTPStatusError as e:
                 detail = ""
                 try:

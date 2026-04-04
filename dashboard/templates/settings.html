@@ -376,7 +376,14 @@ function mcPull() {
         document.getElementById('mc-btn-add').style.display = 'inline-block';
         btn.style.display = 'none';
       } else {
-        mcSetStatus('❌ Pull failed: ' + escHtml(res.data.detail || res.data.error || 'Unknown error'), '#ef4444');
+        var errMsg = res.data.detail || res.data.error || 'Unknown error';
+        var isHtmlErr = errMsg.indexOf('HTML page') !== -1 || errMsg.indexOf('not supported') !== -1;
+        var display = isHtmlErr
+          ? '❌ This Ollama endpoint does not support remote pulls. SSH into the server and run: ' +
+            '<code style="background:#1a1d27;padding:0.1rem 0.4rem;border-radius:3px;">ollama pull ' + escHtml(model) + '</code>'
+          : '❌ Pull failed: ' + escHtml(errMsg);
+        mcSetStatus(display, '#ef4444');
+        btn.style.display = 'none';
       }
     })
     .catch(function(e){

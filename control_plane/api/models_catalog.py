@@ -106,7 +106,7 @@ async def check_ollama_cloud_model(model: str, request: Request) -> dict:
     except Exception:
         available = False
 
-    # Check whether /api/pull is supported
+    # Check whether /api/pull is supported — look at Content-Type, not just status
     if not available:
         try:
             async with httpx.AsyncClient(timeout=10) as client:
@@ -116,9 +116,14 @@ async def check_ollama_cloud_model(model: str, request: Request) -> dict:
                     json={"model": model, "stream": False},
                     timeout=10,
                 )
-                if probe.status_code == 404:
+                content_type = probe.headers.get("content-type", "")
+                if "text/html" in content_type:
+                    # Server returned an HTML page — /api/pull is not a valid endpoint here
+                    pull_supported = False
+                elif probe.status_code == 404:
                     pull_supported = False
                 elif probe.is_success or probe.status_code in (200, 202):
+                    # Pull succeeded immediately (model was already cached)
                     available = True
         except Exception:
             pull_supported = False
