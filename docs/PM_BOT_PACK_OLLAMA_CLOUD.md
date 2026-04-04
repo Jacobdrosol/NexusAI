@@ -45,6 +45,67 @@ The imported PM bot configs should include explicit workflow triggers on the wor
 - UI scope guard: `pm-ui-tester` can return `skip` when no UI deliverables are present, then continue to final QC.
 - Terminal stage: `pm-final-qc` is the end-of-workflow quality gate and should not be used as a branch-local retry step.
 
+## Model Catalog Setup
+
+Before a bot can use a model, the model **must** be registered in the NexusAI Model Catalog
+(`Settings → Model Catalog`) **and** the model must be present on the Ollama Cloud endpoint.
+
+### Current Workflow (Manual Pull Required)
+
+The Ollama Cloud endpoint used by NexusAI exposes a chat API only. The `/api/pull` endpoint is
+not available on most hosted Ollama Cloud deployments, so models cannot be downloaded
+automatically through the dashboard. Until automated pull support is added (see roadmap below),
+follow this process for any new model:
+
+1. **SSH into the Ollama server** (the machine running your Ollama Cloud endpoint).
+2. Run:
+   ```
+   ollama pull <model-name>
+   ```
+   Example:
+   ```
+   ollama pull qwen3-coder-next:80b-cloud
+   ollama pull kimi-k2.5:cloud
+   ```
+3. Wait for the pull to complete. Large models can take 10–60 minutes depending on size and
+   network speed.
+4. **Register the model in the NexusAI dashboard**:
+   - Go to `Settings → Model Catalog`.
+   - Type the exact model name (e.g. `qwen3-coder-next:80b-cloud`) in the input box.
+   - Select provider `ollama_cloud`.
+   - Click **Find** — it should show ✅ if the pull succeeded.
+   - Click **Add to Catalog**.
+5. Update any bot configs that should use this model to set `"model": "<exact-name>"`.
+
+**Tip:** Use the **List All** button in the Model Catalog to see every model currently pulled on
+your endpoint, with clickable chips to auto-fill the input. This avoids tag typos.
+
+### Discovering Available Model Tags
+
+Model names on Ollama Cloud follow the format `<base-model>:<size>-<tag>`, for example:
+- `qwen3.5:397b-cloud`
+- `gpt-oss:120b-cloud`
+- `qwen3-coder-next:80b-cloud`
+
+The bare model name (e.g. `qwen3-next`) without a tag will be rejected with a 404. Always
+use the full tag. Use **List All** in the Model Catalog to confirm available names before
+assigning them to bot configs.
+
+### Roadmap — Automated Model Management (Future)
+
+The following improvements are planned to remove the need for manual SSH pulls:
+
+| # | Feature | Description |
+|---|---------|-------------|
+| 1 | **Ollama pull API support** | When the Ollama Cloud endpoint implements `POST /api/pull`, NexusAI will automatically pull any model that returns a 404 at chat time. The scheduler already has this retry logic — it just needs the endpoint to exist. |
+| 2 | **Pull-on-demand from dashboard** | The **Pull Model** button in `Settings → Model Catalog` is already wired. Once the Ollama endpoint supports pulls, clicking Pull will download the model without SSH. |
+| 3 | **Auto-pull on first use** | When a bot tries to use a model not yet on the endpoint, the scheduler auto-pulls it (up to 30-min timeout) before retrying the inference request. This is implemented in `scheduler.py:_pull_ollama_cloud_model` and activates automatically when pull support becomes available. |
+| 4 | **Scheduled model sync** | A future settings option will let you define a list of models to keep available. A background job will check `/api/tags` periodically and pull any missing ones, keeping the endpoint in sync without manual intervention. |
+| 5 | **SSH agent for pull** | For deployments where the Ollama server is SSH-accessible from the control plane, NexusAI could trigger pulls via SSH rather than the API. This would work around endpoints that will never expose `/api/pull` directly. |
+
+Until items 1 or 5 are implemented, manual SSH pull is the required path. Once completed, all
+new models can be added and used entirely from the dashboard.
+
 ## Model Policy
 
 All bots use `backends[].type = cloud_api` and `provider = ollama_cloud`.

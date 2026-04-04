@@ -439,6 +439,9 @@ These are confirmed issues that must be fixed before serious testing:
 #### 4g. Settings Additions
 - [x] API Keys tab, Model Catalog tab, Projects tab
 - [x] Fix control plane port setting (Bug #2) — **RESOLVED**
+- [x] Model Catalog: Find/Check/Pull/Add workflow — type a model name, check endpoint availability, pull or SSH-pull, register in catalog
+- [x] Model Catalog: List All button — shows every available model on the Ollama endpoint as clickable chips
+- [x] Model Catalog: robust HTML-response detection for endpoints that don't support `/api/pull`
 
 #### 4h. Overview Page Enhancement
 - [x] Recent activity feed, worker health mini-bars, quick links, system alerts
@@ -465,6 +468,17 @@ These are confirmed issues that must be fixed before serious testing:
 - [x] Structured audit events for privileged actions
 - [x] Session timeout + inactivity enforcement in dashboard auth
 - [x] Hardened deployment docs for reverse proxy/TLS/network segmentation
+
+### Phase 8 — Automated Model Management *(planned)*
+
+> Until this phase is complete, new models must be pulled manually via SSH on the Ollama server.
+> See `docs/PM_BOT_PACK_OLLAMA_CLOUD.md → Model Catalog Setup` for the current manual workflow.
+
+- [ ] **Pull-on-demand via API** — when the Ollama Cloud endpoint exposes `POST /api/pull`, the dashboard **Pull Model** button and the scheduler's auto-pull-on-404 path will work without any code changes. The hooks are already in place (`scheduler.py:_pull_ollama_cloud_model`, `models_catalog.py:pull_ollama_cloud_model`).
+- [ ] **Scheduled model sync** — settings option to declare a list of required models; a background job checks `/api/tags` on a cron schedule and pulls any missing ones automatically.
+- [ ] **SSH-agent pull fallback** — for servers where the control plane has SSH access to the Ollama host: trigger `ollama pull <model>` over SSH when the API pull endpoint is unavailable. Requires an SSH key or agent configured in the control plane environment.
+- [ ] **Pull progress streaming** — stream pull progress back to the dashboard (download %, layer count) using the Ollama streaming pull API (`"stream": true`) so the user sees live progress instead of waiting blindly.
+- [ ] **Model catalog auto-populate** — after a successful pull (via API or SSH), automatically register the model in the catalog with the correct provider, capabilities, and context window, eliminating the manual Add step.
 
 ---
 
