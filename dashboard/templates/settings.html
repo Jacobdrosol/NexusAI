@@ -201,31 +201,242 @@
 <!-- Model Catalog -->
 <section id="section-model-catalog"
          style="display:none;background:#1a1d27;border-radius:8px;padding:1.5rem;margin-bottom:1.5rem;border:1px solid #2d3045;">
-  <h2 style="font-size:1.1rem;margin-bottom:1rem;color:#f0f0f0;">Model Catalog</h2>
-  <form id="form-model" onsubmit="saveModel(event)" style="margin-bottom:1rem;">
-    <div class="form-group"><label>Model ID</label><input class="form-control" name="id" required></div>
-    <div class="form-group"><label>Name</label><input class="form-control" name="name" required></div>
-    <div class="form-group"><label>Provider</label><input class="form-control" name="provider" required></div>
-    <div class="form-group"><label>Capabilities (comma-separated)</label><input class="form-control" name="capabilities" placeholder="chat,embedding"></div>
-    <button class="btn btn-primary" type="submit">Add Model</button>
-  </form>
-  <table>
-    <thead><tr><th>ID</th><th>Name</th><th>Provider</th><th>Enabled</th><th>Actions</th></tr></thead>
-    <tbody>
-      {% for m in model_catalog %}
-      <tr>
-        <td><code>{{ m.id }}</code></td>
-        <td>{{ m.name }}</td>
-        <td>{{ m.provider }}</td>
-        <td>{{ m.enabled }}</td>
-        <td><button class="btn btn-sm btn-danger" onclick="deleteModel('{{ m.id }}')">Delete</button></td>
-      </tr>
-      {% else %}
-      <tr><td colspan="5" style="color:#718096;">No models in catalog</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:1rem;gap:1rem;flex-wrap:wrap;">
+    <div>
+      <h2 style="font-size:1.1rem;margin:0 0 0.25rem;color:#f0f0f0;">Model Catalog</h2>
+      <p style="color:#a0aec0;font-size:0.85rem;margin:0;">
+        Models listed here are validated against bot backend configs. An empty catalog skips validation entirely.
+        Use <strong>Fetch from Ollama Cloud</strong> to discover the exact model IDs available on your endpoint.
+      </p>
+    </div>
+    <div style="display:flex;gap:0.5rem;flex-wrap:wrap;">
+      <button class="btn" type="button" onclick="fetchOllamaModels()" id="btn-fetch-ollama">
+        Fetch from Ollama Cloud
+      </button>
+    </div>
+  </div>
+
+  <!-- Ollama Cloud discovery panel -->
+  <div id="ollama-available-panel" style="display:none;margin-bottom:1.25rem;background:#12141e;
+       border:1px solid #4c1d95;border-radius:6px;padding:1rem;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
+      <span style="color:#c4b5fd;font-weight:600;font-size:0.9rem;">Available on Ollama Cloud endpoint</span>
+      <div style="display:flex;gap:0.5rem;">
+        <button class="btn" type="button" style="font-size:0.78rem;padding:0.25rem 0.65rem;"
+                onclick="selectAllOllamaModels(true)">Select All</button>
+        <button class="btn" type="button" style="font-size:0.78rem;padding:0.25rem 0.65rem;"
+                onclick="selectAllOllamaModels(false)">None</button>
+        <button class="btn btn-primary" type="button" style="font-size:0.78rem;padding:0.25rem 0.75rem;"
+                onclick="importSelectedOllamaModels()">Import Selected</button>
+      </div>
+    </div>
+    <div id="ollama-available-list" style="display:flex;flex-wrap:wrap;gap:0.4rem;max-height:180px;overflow-y:auto;"></div>
+  </div>
+
+  <!-- Add model form -->
+  <details style="margin-bottom:1rem;">
+    <summary style="cursor:pointer;color:#a0aec0;font-size:0.87rem;padding:0.4rem 0;user-select:none;">
+      ＋ Add model manually
+    </summary>
+    <form id="form-model" onsubmit="saveModel(event)"
+          style="margin-top:0.75rem;display:grid;grid-template-columns:1fr 1fr;gap:0.6rem;">
+      <div class="form-group" style="margin:0;">
+        <label style="font-size:0.82rem;">Model ID (catalog key)</label>
+        <input class="form-control" name="id" required placeholder="e.g. qwen3-next-80b-cloud">
+      </div>
+      <div class="form-group" style="margin:0;">
+        <label style="font-size:0.82rem;">Model Name (passed to API)</label>
+        <input class="form-control" name="name" required placeholder="e.g. qwen3-next:80b-cloud">
+      </div>
+      <div class="form-group" style="margin:0;">
+        <label style="font-size:0.82rem;">Provider</label>
+        <select class="form-control" name="provider">
+          <option value="ollama_cloud">ollama_cloud</option>
+          <option value="openai">openai</option>
+          <option value="claude">claude</option>
+          <option value="ollama">ollama</option>
+          <option value="custom">custom</option>
+        </select>
+      </div>
+      <div class="form-group" style="margin:0;">
+        <label style="font-size:0.82rem;">Capabilities (comma-separated)</label>
+        <input class="form-control" name="capabilities" placeholder="chat,tools">
+      </div>
+      <div style="grid-column:1/-1;">
+        <button class="btn btn-primary" type="submit">Add to Catalog</button>
+      </div>
+    </form>
+  </details>
+
+  <!-- Catalog table -->
+  <div id="model-catalog-loading" style="color:#a0aec0;font-size:0.9rem;padding:0.5rem 0;">Loading…</div>
+  <div id="model-catalog-container" style="display:none;">
+    <table style="width:100%;border-collapse:collapse;font-size:0.88rem;">
+      <thead>
+        <tr style="border-bottom:2px solid #2d3045;">
+          <th style="text-align:left;padding:0.5rem 0.75rem;color:#a0aec0;width:28%;">ID</th>
+          <th style="text-align:left;padding:0.5rem 0.75rem;color:#a0aec0;width:28%;">Name (API value)</th>
+          <th style="text-align:left;padding:0.5rem 0.75rem;color:#a0aec0;width:18%;">Provider</th>
+          <th style="text-align:left;padding:0.5rem 0.75rem;color:#a0aec0;width:12%;">Enabled</th>
+          <th style="text-align:left;padding:0.5rem 0.75rem;color:#a0aec0;width:14%;">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="model-catalog-body"></tbody>
+    </table>
+    <div id="model-catalog-empty" style="display:none;color:#718096;padding:0.75rem;font-size:0.88rem;">
+      No models in catalog — use Fetch from Ollama Cloud or add manually.
+    </div>
+  </div>
 </section>
+<script>
+// ── Model Catalog ─────────────────────────────────────────────────────────────
+function loadModelCatalog() {
+  fetch('/api/settings/models')
+    .then(function(r){ return r.json(); })
+    .then(function(data){
+      document.getElementById('model-catalog-loading').style.display = 'none';
+      document.getElementById('model-catalog-container').style.display = 'block';
+      renderModelCatalog(Array.isArray(data) ? data : []);
+    })
+    .catch(function(){ document.getElementById('model-catalog-loading').textContent = 'Failed to load catalog.'; });
+}
+
+function renderModelCatalog(models) {
+  var tbody = document.getElementById('model-catalog-body');
+  var empty = document.getElementById('model-catalog-empty');
+  tbody.innerHTML = '';
+  if (!models.length) { empty.style.display = 'block'; return; }
+  empty.style.display = 'none';
+  models.forEach(function(m){
+    var tr = document.createElement('tr');
+    tr.style.borderBottom = '1px solid #2d3045';
+    tr.innerHTML =
+      '<td style="padding:0.5rem 0.75rem;"><code style="color:#c4b5fd;">' + escHtml(m.id) + '</code></td>' +
+      '<td style="padding:0.5rem 0.75rem;color:#e0e0e0;">' + escHtml(m.name) + '</td>' +
+      '<td style="padding:0.5rem 0.75rem;color:#a0aec0;">' + escHtml(m.provider) + '</td>' +
+      '<td style="padding:0.5rem 0.75rem;">' +
+        '<span style="color:' + (m.enabled ? '#10b981' : '#718096') + ';">' + (m.enabled ? 'Yes' : 'No') + '</span>' +
+      '</td>' +
+      '<td style="padding:0.5rem 0.75rem;">' +
+        '<button class="btn" style="padding:0.2rem 0.55rem;font-size:0.78rem;color:#f87171;" ' +
+          'onclick="deleteModel(\'' + escHtml(m.id) + '\')">Delete</button>' +
+      '</td>';
+    tbody.appendChild(tr);
+  });
+}
+
+function saveModel(evt) {
+  evt.preventDefault();
+  var form = document.getElementById('form-model');
+  var data = Object.fromEntries(new FormData(form));
+  var caps = (data.capabilities || '').split(',').map(function(s){ return s.trim(); }).filter(Boolean);
+  var payload = { id: data.id.trim(), name: data.name.trim(), provider: data.provider, capabilities: caps, enabled: true };
+  fetch('/api/settings/models', {
+    method: 'POST',
+    headers: {'X-CSRFToken': _csrfToken, 'Content-Type': 'application/json'},
+    body: JSON.stringify(payload)
+  }).then(function(r){
+    if (!r.ok) return r.json().then(function(d){ throw new Error(d.error || 'Failed'); });
+    return r.json();
+  }).then(function(){
+    showToast('Model added to catalog', true);
+    form.reset();
+    loadModelCatalog();
+  }).catch(function(e){ showToast(e.message, false); });
+}
+
+function deleteModel(id) {
+  if (!confirm('Remove model "' + id + '" from catalog?')) return;
+  fetch('/api/settings/models/' + encodeURIComponent(id), {
+    method: 'DELETE',
+    headers: {'X-CSRFToken': _csrfToken}
+  }).then(function(r){
+    if (!r.ok && r.status !== 204) return r.json().then(function(d){ throw new Error(d.error || 'Failed'); });
+    showToast('Model removed', true);
+    loadModelCatalog();
+  }).catch(function(e){ showToast(e.message, false); });
+}
+
+// Ollama Cloud discovery
+function fetchOllamaModels() {
+  var btn = document.getElementById('btn-fetch-ollama');
+  btn.disabled = true; btn.textContent = 'Fetching…';
+  fetch('/api/settings/models/ollama-cloud-available')
+    .then(function(r){
+      if (!r.ok) return r.json().then(function(d){ throw new Error(d.error || ('HTTP ' + r.status)); });
+      return r.json();
+    })
+    .then(function(names){
+      btn.disabled = false; btn.textContent = 'Fetch from Ollama Cloud';
+      renderOllamaAvailable(names);
+    })
+    .catch(function(e){
+      btn.disabled = false; btn.textContent = 'Fetch from Ollama Cloud';
+      showToast('Could not fetch Ollama models: ' + e.message, false);
+    });
+}
+
+function renderOllamaAvailable(names) {
+  var panel = document.getElementById('ollama-available-panel');
+  var list = document.getElementById('ollama-available-list');
+  list.innerHTML = '';
+  if (!names || !names.length) {
+    list.innerHTML = '<span style="color:#718096;font-size:0.85rem;">No models returned from endpoint.</span>';
+    panel.style.display = 'block'; return;
+  }
+  names.forEach(function(name){
+    var label = document.createElement('label');
+    label.style.cssText = 'display:inline-flex;align-items:center;gap:0.3rem;padding:0.25rem 0.6rem;' +
+      'border-radius:4px;background:#1e2235;border:1px solid #2d3045;cursor:pointer;font-size:0.8rem;color:#e0e0e0;';
+    var cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.value = name; cb.dataset.modelName = name;
+    cb.style.margin = '0';
+    label.appendChild(cb);
+    label.appendChild(document.createTextNode(name));
+    list.appendChild(label);
+  });
+  panel.style.display = 'block';
+}
+
+function selectAllOllamaModels(checked) {
+  document.querySelectorAll('#ollama-available-list input[type=checkbox]').forEach(function(cb){ cb.checked = checked; });
+}
+
+function importSelectedOllamaModels() {
+  var selected = Array.from(document.querySelectorAll('#ollama-available-list input[type=checkbox]:checked'))
+    .map(function(cb){ return cb.value; });
+  if (!selected.length) { showToast('No models selected', false); return; }
+  var done = 0, errors = 0;
+  var total = selected.length;
+  showToast('Importing ' + total + ' model(s)…', true);
+  selected.forEach(function(name){
+    // Derive a stable ID: replace colons and slashes with dashes
+    var id = name.replace(/[:/]/g, '-');
+    var payload = { id: id, name: name, provider: 'ollama_cloud', capabilities: ['chat'], enabled: true };
+    fetch('/api/settings/models', {
+      method: 'POST',
+      headers: {'X-CSRFToken': _csrfToken, 'Content-Type': 'application/json'},
+      body: JSON.stringify(payload)
+    }).then(function(r){
+      if (!r.ok && r.status !== 409) errors++;
+    }).catch(function(){ errors++; }).finally(function(){
+      done++;
+      if (done === total) {
+        showToast('Imported ' + (total - errors) + '/' + total + ' models', errors === 0);
+        loadModelCatalog();
+      }
+    });
+  });
+}
+
+// Load catalog when tab becomes visible
+document.addEventListener('DOMContentLoaded', function(){
+  var btn = document.querySelector('[data-target="section-model-catalog"]');
+  if (btn) btn.addEventListener('click', function(){
+    if (document.getElementById('model-catalog-loading').style.display !== 'none') loadModelCatalog();
+  });
+});
+</script>
 
 <!-- Projects -->
 <section id="section-projects"

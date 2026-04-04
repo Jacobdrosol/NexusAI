@@ -877,6 +877,22 @@ def delete_catalog_model(model_id: str):
     return "", 204
 
 
+@bp.get("/api/settings/models/ollama-cloud-available")
+@login_required
+def list_ollama_cloud_available_models():
+    """Proxy to /v1/models/ollama-cloud/available on the control plane.
+
+    Returns the list of model name strings actually registered on the Ollama Cloud endpoint.
+    """
+    _require_admin()
+    from dashboard.cp_client import get_cp_client
+
+    result = get_cp_client().fetch_ollama_cloud_available()
+    if result is None:
+        return jsonify({"error": "control plane unavailable"}), 502
+    return jsonify(result)
+
+
 @bp.get("/api/settings/projects")
 @login_required
 def list_projects():

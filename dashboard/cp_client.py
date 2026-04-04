@@ -573,6 +573,9 @@ class CPClient:
     def delete_model(self, model_id: str) -> bool:
         return self._delete(f"/v1/models/{model_id}")
 
+    def fetch_ollama_cloud_available(self) -> Optional[List[str]]:
+        return self._get("/v1/models/ollama-cloud/available")
+
     # Keys
     def list_keys(self) -> Optional[List[Dict[str, Any]]]:
         return self._get("/v1/keys")
