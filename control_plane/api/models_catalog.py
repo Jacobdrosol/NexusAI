@@ -61,6 +61,71 @@ async def list_ollama_cloud_available(request: Request) -> List[str]:
         raise HTTPException(status_code=502, detail=str(exc))
 
 
+@router.get("/ollama-cloud/check")
+async def check_ollama_cloud_model(model: str, request: Request) -> dict:
+    """Check whether a specific model is available on the Ollama Cloud endpoint.
+
+    Returns {model, available, pull_supported} so the UI can decide whether
+    to show an 'Add to catalog' button or a 'Pull model' button first.
+    """
+    import os
+
+    model = model.strip()
+    if not model:
+        raise HTTPException(status_code=400, detail="model query param is required")
+
+    scheduler = getattr(request.app.state, "scheduler", None)
+    if scheduler is None:
+        raise HTTPException(status_code=503, detail="Scheduler not available")
+
+    api_key = await scheduler._resolve_api_key("Ollama_Cloud1", "OLLAMA_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=503, detail="Ollama Cloud API key not configured")
+
+    base_url = os.environ.get("OLLAMA_CLOUD_BASE_URL", "https://ollama.com/api").rstrip("/")
+
+    available = False
+    pull_supported = True
+
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            resp = await client.get(
+                f"{base_url}/tags",
+                headers={"Authorization": f"Bearer {api_key}"},
+            )
+            if resp.is_success:
+                tags_data = resp.json()
+                names = {
+                    (m.get("name") or m.get("model") or "").lower()
+                    for m in tags_data.get("models", [])
+                }
+                available = model.lower() in names
+            else:
+                # /api/tags itself failed — try a probe chat request
+                available = False
+    except Exception:
+        available = False
+
+    # Check whether /api/pull is supported
+    if not available:
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                probe = await client.post(
+                    f"{base_url}/pull",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    json={"model": model, "stream": False},
+                    timeout=10,
+                )
+                if probe.status_code == 404:
+                    pull_supported = False
+                elif probe.is_success or probe.status_code in (200, 202):
+                    available = True
+        except Exception:
+            pull_supported = False
+
+    return {"model": model, "available": available, "pull_supported": pull_supported}
+
+
 @router.post("/ollama-cloud/pull", response_model=OllamaCloudPullResponse)
 async def pull_ollama_cloud_model(request: Request, body: OllamaCloudPullRequest) -> OllamaCloudPullResponse:
     """Trigger an Ollama Cloud pull for the specified model ID.

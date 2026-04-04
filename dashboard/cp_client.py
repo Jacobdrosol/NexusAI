@@ -576,6 +576,12 @@ class CPClient:
     def fetch_ollama_cloud_available(self) -> Optional[List[str]]:
         return self._get("/v1/models/ollama-cloud/available")
 
+    def check_ollama_cloud_model(self, model: str) -> Optional[Dict[str, Any]]:
+        return self._get(f"/v1/models/ollama-cloud/check?model={model}")
+
+    def pull_ollama_cloud_model(self, model: str) -> Optional[Dict[str, Any]]:
+        return self._post("/v1/models/ollama-cloud/pull", {"model": model})
+
     # Keys
     def list_keys(self) -> Optional[List[Dict[str, Any]]]:
         return self._get("/v1/keys")

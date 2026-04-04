@@ -880,10 +880,7 @@ def delete_catalog_model(model_id: str):
 @bp.get("/api/settings/models/ollama-cloud-available")
 @login_required
 def list_ollama_cloud_available_models():
-    """Proxy to /v1/models/ollama-cloud/available on the control plane.
-
-    Returns the list of model name strings actually registered on the Ollama Cloud endpoint.
-    """
+    """Proxy to /v1/models/ollama-cloud/available on the control plane."""
     _require_admin()
     from dashboard.cp_client import get_cp_client
 
@@ -892,6 +889,38 @@ def list_ollama_cloud_available_models():
         return jsonify({"error": "control plane unavailable"}), 502
     return jsonify(result)
 
+
+@bp.get("/api/settings/models/ollama-cloud-check")
+@login_required
+def check_ollama_cloud_model():
+    """Proxy to /v1/models/ollama-cloud/check?model=... on the control plane."""
+    _require_admin()
+    model = request.args.get("model", "").strip()
+    if not model:
+        return jsonify({"error": "model param required"}), 400
+    from dashboard.cp_client import get_cp_client
+
+    result = get_cp_client().check_ollama_cloud_model(model)
+    if result is None:
+        return jsonify({"error": "control plane unavailable"}), 502
+    return jsonify(result)
+
+
+@bp.post("/api/settings/models/ollama-cloud-pull")
+@login_required
+def pull_ollama_cloud_model_route():
+    """Proxy to POST /v1/models/ollama-cloud/pull on the control plane."""
+    _require_admin()
+    body = request.get_json(silent=True) or {}
+    model = (body.get("model") or "").strip()
+    if not model:
+        return jsonify({"error": "model required"}), 400
+    from dashboard.cp_client import get_cp_client
+
+    result = get_cp_client().pull_ollama_cloud_model(model)
+    if result is None:
+        return jsonify({"error": "control plane unavailable"}), 502
+    return jsonify(result)
 
 @bp.get("/api/settings/projects")
 @login_required
