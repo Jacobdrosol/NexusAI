@@ -270,12 +270,16 @@ def _extract_project_repo_workspace(project: Project) -> Dict[str, Any]:
     root_path = str(raw.get("root_path") or "").strip() or None
     clone_url = str(raw.get("clone_url") or "").strip() or None
     default_branch = str(raw.get("default_branch") or "").strip() or None
+    # _raw_root_path is always preserved (even in managed mode) so the resolver
+    # can use it as a read-only fallback when the managed path doesn't exist on disk.
+    raw_root_path = root_path
     if managed_path_mode:
         root_path = None
     return {
         "enabled": bool(raw.get("enabled", False)),
         "managed_path_mode": managed_path_mode,
         "root_path": root_path,
+        "_raw_root_path": raw_root_path,
         "clone_url": clone_url,
         "default_branch": default_branch,
         "allow_push": bool(raw.get("allow_push", False)),
@@ -480,7 +484,19 @@ def _resolve_repo_workspace_root(project_id: str, cfg: Dict[str, Any], *, requir
     if require_enabled and not bool(cfg.get("enabled", False)):
         raise HTTPException(status_code=400, detail="repo workspace is disabled for this project")
     if bool(cfg.get("managed_path_mode", True)):
-        return _managed_repo_workspace_root(project_id)
+        managed = _managed_repo_workspace_root(project_id)
+        if managed.exists():
+            return managed
+        # Managed path doesn't exist yet — fall back to the raw root_path if configured.
+        # This lets projects point at a locally-checked-out repo for read access while
+        # a proper managed workspace hasn't been cloned yet.
+        raw_root = str(cfg.get("_raw_root_path") or "").strip()
+        if raw_root:
+            fallback = normalize_workspace_root(raw_root)
+            if fallback is not None:
+                return fallback
+        # Return the managed path anyway (caller's normalize_workspace_root will fail it)
+        return managed
     root = normalize_workspace_root(str(cfg.get("root_path") or "").strip() or None)
     if root is None:
         raise HTTPException(status_code=400, detail="repo workspace root_path is not configured")
