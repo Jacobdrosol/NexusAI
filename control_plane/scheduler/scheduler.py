@@ -6,7 +6,7 @@ import logging
 import os
 import re
 import time
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any, AsyncGenerator, Dict
 
 import httpx
@@ -27,6 +27,159 @@ from shared.settings_manager import SettingsManager
 logger = logging.getLogger(__name__)
 
 _PAYLOAD_CONTEXT_REDUCTION_TARGET_CHARS = 48000
+
+
+# ---------------------------------------------------------------------------
+# Agent tool-calling helpers (module-level)
+# ---------------------------------------------------------------------------
+
+def _agent_workspace_context(bot: Any, task: "Task") -> tuple["Path | None", bool]:
+    """Return (workspace_root, allow_writes) for agentic tool calling.
+
+    Returns (None, False) when agentic mode should not be used.
+    """
+    from pathlib import Path
+    execution_policy = getattr(bot, "execution_policy", None) or {}
+    if isinstance(execution_policy, dict):
+        ws_injection = execution_policy.get("workspace_context_injection", False)
+        repo_output_mode = str(execution_policy.get("repo_output_mode", "deny")).lower()
+    else:
+        ws_injection = getattr(execution_policy, "workspace_context_injection", False)
+        repo_output_mode = str(getattr(execution_policy, "repo_output_mode", "deny") or "deny").lower()
+
+    if not ws_injection:
+        return None, False
+
+    # The task_manager stores the resolved workspace root in the payload
+    workspace_root_str = (task.payload or {}).get("_injected_workspace_root", "")
+    if not workspace_root_str:
+        # Fallback: look in assignment_workspace
+        aw = (task.payload or {}).get("assignment_workspace") or {}
+        workspace_root_str = str(aw.get("temp_root") or aw.get("root") or "").strip()
+
+    if not workspace_root_str:
+        return None, False
+
+    try:
+        ws_root = Path(workspace_root_str)
+        if not ws_root.exists():
+            return None, False
+        return ws_root, (repo_output_mode == "allow")
+    except Exception:
+        return None, False
+
+
+def _backend_supports_tools(backend: "BackendConfig") -> bool:
+    """Return True if the backend provider supports function/tool calling."""
+    provider = str(getattr(backend, "provider", "") or "").lower()
+    return provider in {"ollama_cloud", "openai", "claude"}
+
+
+def _parse_ollama_tool_calls(raw: list) -> list[dict]:
+    """Normalize Ollama tool_calls to our common format."""
+    result = []
+    for tc in (raw or []):
+        if not isinstance(tc, dict):
+            continue
+        fn = tc.get("function") or {}
+        name = str(fn.get("name") or tc.get("name") or "")
+        raw_args = fn.get("arguments") or tc.get("arguments") or {}
+        if isinstance(raw_args, str):
+            try:
+                raw_args = json.loads(raw_args)
+            except Exception:
+                raw_args = {}
+        result.append({
+            "id": str(tc.get("id") or ""),
+            "name": name,
+            "arguments": raw_args if isinstance(raw_args, dict) else {},
+        })
+    return result
+
+
+def _parse_openai_tool_calls(raw: list) -> list[dict]:
+    """Normalize OpenAI tool_calls to our common format."""
+    result = []
+    for tc in (raw or []):
+        if not isinstance(tc, dict):
+            continue
+        fn = tc.get("function") or {}
+        name = str(fn.get("name") or "")
+        raw_args = fn.get("arguments") or {}
+        if isinstance(raw_args, str):
+            try:
+                raw_args = json.loads(raw_args)
+            except Exception:
+                raw_args = {}
+        result.append({
+            "id": str(tc.get("id") or ""),
+            "name": name,
+            "arguments": raw_args if isinstance(raw_args, dict) else {},
+        })
+    return result
+
+
+def _claude_payload_messages(messages: list[dict]) -> tuple[str, list[dict]]:
+    """Split a messages list into (system_prompt, chat_messages) for Claude."""
+    system_parts = []
+    chat_msgs = []
+    for m in messages:
+        if m.get("role") == "system":
+            system_parts.append(str(m.get("content") or ""))
+        else:
+            chat_msgs.append(m)
+    return "\n\n".join(system_parts), chat_msgs
+
+
+def _convert_tools_for_claude(tools: list[dict]) -> list[dict]:
+    """Convert OpenAI-format tool definitions to Anthropic format."""
+    claude_tools = []
+    for t in (tools or []):
+        fn = t.get("function") or {}
+        claude_tools.append({
+            "name": fn.get("name", ""),
+            "description": fn.get("description", ""),
+            "input_schema": fn.get("parameters") or {"type": "object", "properties": {}},
+        })
+    return claude_tools
+
+
+def _convert_tool_messages_for_claude(messages: list[dict]) -> list[dict]:
+    """Convert our internal tool message format to Anthropic's expected format.
+
+    Anthropic expects tool results as user messages with content type 'tool_result'.
+    """
+    converted = []
+    for m in messages:
+        role = m.get("role", "")
+        if role == "tool":
+            converted.append({
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": m.get("tool_call_id", ""),
+                        "content": str(m.get("content") or ""),
+                    }
+                ],
+            })
+        elif role == "assistant" and m.get("tool_calls"):
+            # Anthropic expects tool_use blocks in the assistant message content
+            content_blocks = []
+            text = m.get("content") or ""
+            if text:
+                content_blocks.append({"type": "text", "text": text})
+            for tc in (m.get("tool_calls") or []):
+                content_blocks.append({
+                    "type": "tool_use",
+                    "id": tc.get("id", ""),
+                    "name": tc.get("name", ""),
+                    "input": tc.get("arguments") or {},
+                })
+            converted.append({"role": "assistant", "content": content_blocks})
+        else:
+            converted.append(m)
+    return converted
 _ASSIGNMENT_TRANSCRIPT_REDUCTION_CHARS = 6000
 _ARTIFACT_CONTENT_REDUCTION_CHARS = 1800
 _LONG_STRING_REDUCTION_CHARS = 1200
@@ -1700,11 +1853,22 @@ class Scheduler:
         last_error: Exception = NoViableBackendError("No backends configured")
         attempts: list[str] = []
         transformed_payload = self._apply_input_transform(bot, task.payload)
+
+        # Determine if this bot should run in agentic tool-calling mode.
+        workspace_root, allow_writes = _agent_workspace_context(bot, task)
+
         for backend in bot.backends:
             try:
                 effective_backend = _backend_with_retry_params(backend, task)
                 prepared_payload = _prepare_payload_for_backend(bot, effective_backend, transformed_payload, task=task)
-                result = await self._dispatch_backend(effective_backend, prepared_payload, task=task)
+
+                if workspace_root is not None and _backend_supports_tools(effective_backend):
+                    result = await self._run_agent_loop(
+                        effective_backend, prepared_payload, workspace_root,
+                        allow_writes=allow_writes, task=task,
+                    )
+                else:
+                    result = await self._dispatch_backend(effective_backend, prepared_payload, task=task)
                 return result
             except Exception as e:
                 attempts.append(f"{backend.provider}/{backend.model}: {str(e or '').strip() or repr(e)}")
@@ -1719,6 +1883,308 @@ class Scheduler:
                 continue
 
         raise NoViableBackendError(_backend_failure_message(task.id, last_error, attempts)) from last_error
+
+    # ------------------------------------------------------------------
+    # Agentic tool-calling loop
+    # ------------------------------------------------------------------
+
+    async def _run_agent_loop(
+        self,
+        backend: "BackendConfig",
+        prepared_payload: Any,
+        workspace_root: "Path",
+        *,
+        allow_writes: bool = False,
+        task: "Task | None" = None,
+        max_iterations: int = 25,
+    ) -> Any:
+        """Execute an agentic loop: call the LLM, run tool calls, feed results back.
+
+        Iterates until the model returns a plain content response (no tool_calls)
+        or until ``max_iterations`` is reached (circuit breaker).  Falls back to
+        a plain one-shot call if the backend doesn't respond with tool_calls on
+        the first iteration.
+        """
+        from control_plane.scheduler.agent_workspace_tools import (
+            execute_tool,
+            get_tool_definitions,
+            parse_tool_call_arguments,
+        )
+        from control_plane.chat.workspace_tools import normalize_workspace_root
+
+        tools = get_tool_definitions(allow_writes=allow_writes)
+        ws_root = normalize_workspace_root(str(workspace_root))
+
+        messages: list[dict] = (
+            list(prepared_payload)
+            if isinstance(prepared_payload, list)
+            else [{"role": "user", "content": str(prepared_payload)}]
+        )
+
+        accumulated_usage: dict = {}
+        last_result: dict = {}
+
+        for iteration in range(max_iterations):
+            raw = await self._call_backend_raw(backend, messages, tools=tools, task=task)
+            # Merge usage
+            for k, v in (raw.get("usage") or {}).items():
+                accumulated_usage[k] = accumulated_usage.get(k, 0) + (v or 0)
+
+            tool_calls = raw.get("tool_calls") or []
+            if not tool_calls:
+                # No more tool calls — model returned final content
+                last_result = raw
+                break
+
+            # Append the assistant message that contains tool_calls
+            assistant_msg: dict = {
+                "role": "assistant",
+                "content": raw.get("output") or "",
+            }
+            # Some backends need tool_calls on the assistant message itself
+            assistant_msg["tool_calls"] = tool_calls
+            messages.append(assistant_msg)
+
+            # Execute each tool and append a tool-result message
+            for tc in tool_calls:
+                tc_id = str(tc.get("id") or "")
+                tc_name = str(tc.get("name") or "")
+                tc_args = parse_tool_call_arguments(tc.get("arguments", {}))
+                logger.debug(
+                    "[AGENT] task=%s iteration=%d tool=%s args=%s",
+                    task.id if task else "?",
+                    iteration,
+                    tc_name,
+                    list(tc_args.keys()),
+                )
+                tool_output = await asyncio.to_thread(
+                    execute_tool, tc_name, tc_args, ws_root, allow_writes=allow_writes
+                )
+                tool_msg: dict = {
+                    "role": "tool",
+                    "name": tc_name,
+                    "content": tool_output,
+                }
+                if tc_id:
+                    tool_msg["tool_call_id"] = tc_id
+                messages.append(tool_msg)
+
+            last_result = raw
+        else:
+            # Circuit breaker hit — still return whatever the last response was
+            logger.warning(
+                "[AGENT] task=%s hit max_iterations=%d — returning last result",
+                task.id if task else "?",
+                max_iterations,
+            )
+
+        # Build the merged result with accumulated usage
+        result = dict(last_result)
+        result["usage"] = accumulated_usage
+        return result
+
+    async def _call_backend_raw(
+        self,
+        backend: "BackendConfig",
+        messages: list[dict],
+        *,
+        tools: list[dict] | None = None,
+        task: "Task | None" = None,
+    ) -> dict:
+        """Single-shot call to a cloud backend with optional tool definitions.
+
+        Returns a dict with keys:
+          - ``output``: str — the text content from the model (may be empty if tool_calls present)
+          - ``tool_calls``: list[dict] — each item has ``id``, ``name``, ``arguments`` (dict)
+          - ``usage``: dict
+          - ``finish_reason``: str
+        """
+        if backend.provider == "ollama_cloud":
+            return await self._call_ollama_cloud_raw(backend, messages, tools=tools)
+        elif backend.provider == "openai":
+            return await self._call_openai_raw(backend, messages, tools=tools)
+        elif backend.provider == "claude":
+            return await self._call_claude_raw(backend, messages, tools=tools)
+        else:
+            # Unsupported provider for raw call — fall back to dispatch (no tools)
+            result = await self._dispatch_backend(backend, messages, task=task)
+            return {**result, "tool_calls": []}
+
+    async def _call_ollama_cloud_raw(
+        self,
+        backend: "BackendConfig",
+        messages: list[dict],
+        *,
+        tools: list[dict] | None = None,
+    ) -> dict:
+        api_key = await self._resolve_api_key(
+            backend.api_key_ref or "OLLAMA_API_KEY", "OLLAMA_API_KEY"
+        )
+        if not api_key:
+            raise BackendError(
+                f"API key not found. Set the environment variable "
+                f"'{backend.api_key_ref or 'OLLAMA_API_KEY'}' with your Ollama API key."
+            )
+        messages = _messages_for_ollama(messages)
+        params_dict = backend.params.model_dump(exclude_none=True) if backend.params else {}
+        body: dict = {
+            "model": backend.model,
+            "messages": messages,
+            "stream": False,
+            "options": _ollama_options(params_dict),
+        }
+        if tools:
+            body["tools"] = tools
+
+        base_url = os.environ.get("OLLAMA_CLOUD_BASE_URL", "https://ollama.com/api").rstrip("/")
+        async with httpx.AsyncClient(timeout=_cloud_timeout()) as client:
+            response = await client.post(
+                f"{base_url}/chat",
+                headers={"Authorization": f"Bearer {api_key}"},
+                json=body,
+            )
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                detail = ""
+                try:
+                    pd = response.json()
+                    if isinstance(pd, dict):
+                        detail = str(pd.get("error") or pd.get("detail") or pd.get("message") or "").strip()
+                except Exception:
+                    detail = (response.text or "").strip()
+                status = response.status_code
+                msg = f"Ollama Cloud request failed ({status})"
+                raise BackendError(f"{msg}: {detail}" if detail else msg) from e
+
+            data = response.json()
+            msg_obj = data.get("message") or {}
+            output = str(msg_obj.get("content") or "")
+            usage = {
+                "prompt_tokens": data.get("prompt_eval_count", 0),
+                "completion_tokens": data.get("eval_count", 0),
+            }
+            finish_reason = str(data.get("done_reason") or data.get("finish_reason") or "").strip()
+
+            # Parse tool_calls from Ollama's format
+            raw_tool_calls = msg_obj.get("tool_calls") or []
+            tool_calls = _parse_ollama_tool_calls(raw_tool_calls)
+
+            result: dict = {"output": output, "tool_calls": tool_calls, "usage": usage}
+            if finish_reason:
+                result["finish_reason"] = finish_reason
+            return result
+
+    async def _call_openai_raw(
+        self,
+        backend: "BackendConfig",
+        messages: list[dict],
+        *,
+        tools: list[dict] | None = None,
+    ) -> dict:
+        api_key = await self._resolve_api_key(
+            backend.api_key_ref or "OPENAI_API_KEY", "OPENAI_API_KEY"
+        )
+        if not api_key:
+            raise BackendError(
+                f"API key not found. Set '{backend.api_key_ref or 'OPENAI_API_KEY'}' env var."
+            )
+        messages = _messages_for_openai(messages)
+        params_dict = backend.params.model_dump(exclude_none=True) if backend.params else {}
+        body: dict = {"model": backend.model, "messages": messages}
+        body.update(params_dict)
+        if tools:
+            body["tools"] = tools
+            body["tool_choice"] = "auto"
+
+        async with httpx.AsyncClient(timeout=_cloud_timeout()) as client:
+            response = await client.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}"},
+                json=body,
+            )
+            response.raise_for_status()
+            data = response.json()
+            choice = (data.get("choices") or [{}])[0]
+            msg_obj = choice.get("message") or {}
+            output = str(msg_obj.get("content") or "")
+            finish_reason = str(choice.get("finish_reason") or "").strip()
+
+            raw_tool_calls = msg_obj.get("tool_calls") or []
+            tool_calls = _parse_openai_tool_calls(raw_tool_calls)
+
+            result: dict = {"output": output, "tool_calls": tool_calls, "usage": data.get("usage") or {}}
+            if finish_reason:
+                result["finish_reason"] = finish_reason
+            return result
+
+    async def _call_claude_raw(
+        self,
+        backend: "BackendConfig",
+        messages: list[dict],
+        *,
+        tools: list[dict] | None = None,
+    ) -> dict:
+        api_key = await self._resolve_api_key(
+            backend.api_key_ref or "ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"
+        )
+        if not api_key:
+            raise BackendError(
+                f"API key not found. Set '{backend.api_key_ref or 'ANTHROPIC_API_KEY'}' env var."
+            )
+        system_prompt, chat_messages = _claude_payload_messages(messages)
+        params_dict = backend.params.model_dump(exclude_none=True) if backend.params else {}
+        max_tokens = params_dict.pop("max_tokens", 4096)
+        body: dict = {
+            "model": backend.model,
+            "max_tokens": max_tokens,
+            "messages": _convert_tool_messages_for_claude(chat_messages),
+        }
+        if system_prompt:
+            body["system"] = system_prompt
+        body.update(params_dict)
+        if tools:
+            # Claude uses slightly different tool format
+            body["tools"] = _convert_tools_for_claude(tools)
+
+        async with httpx.AsyncClient(timeout=_cloud_timeout()) as client:
+            response = await client.post(
+                "https://api.anthropic.com/v1/messages",
+                headers={
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json=body,
+            )
+            response.raise_for_status()
+            data = response.json()
+            stop_reason = str(data.get("stop_reason") or "").strip()
+
+            # Parse content blocks — may include text and tool_use
+            content_blocks = data.get("content") or []
+            output_parts = []
+            tool_calls = []
+            for block in content_blocks:
+                block_type = str(block.get("type") or "")
+                if block_type == "text":
+                    output_parts.append(str(block.get("text") or ""))
+                elif block_type == "tool_use":
+                    tool_calls.append({
+                        "id": str(block.get("id") or ""),
+                        "name": str(block.get("name") or ""),
+                        "arguments": block.get("input") or {},
+                    })
+
+            output = "".join(output_parts)
+            result: dict = {
+                "output": output,
+                "tool_calls": tool_calls,
+                "usage": data.get("usage") or {},
+            }
+            if stop_reason:
+                result["finish_reason"] = stop_reason
+            return result
 
     async def stream(self, task: Task) -> AsyncGenerator[dict[str, Any], None]:
         try:

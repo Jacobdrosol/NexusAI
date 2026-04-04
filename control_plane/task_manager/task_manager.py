@@ -4671,6 +4671,8 @@ class TaskManager:
                 updated["workspace_context_tree"] = tree_str
             if items:
                 updated["workspace_context_items"] = items
+            # Store the resolved workspace root so the scheduler can give it to the agentic loop
+            updated["_injected_workspace_root"] = str(root)
             return updated
         except Exception as _ws_exc:
             logger.debug("Workspace context injection skipped for task %s: %s", task.id if task else "?", _ws_exc)
