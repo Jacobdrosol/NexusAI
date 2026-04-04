@@ -6136,6 +6136,7 @@ class TaskManager:
                         )
                         continue
                 payloads = self._build_trigger_payloads(task, trigger)
+                _pre_routing_count = len(payloads)
                 payloads = await self._apply_dynamic_pm_workstream_routing(
                     task,
                     trigger,
@@ -6144,6 +6145,7 @@ class TaskManager:
                 )
                 if not payloads:
                     skip_details = self._describe_trigger_payload_skip(task, trigger)
+                    skip_details["pre_routing_payload_count"] = _pre_routing_count
                     _fan_out_field = str(getattr(trigger, "fan_out_field", "") or "").strip()
                     _empty_reason = str(skip_details.get("reason") or "")
                     _is_empty_fanout = bool(_fan_out_field) and _empty_reason in {
@@ -6159,8 +6161,9 @@ class TaskManager:
                         )
                     else:
                         logger.warning(
-                            "[TRIGGER] SKIP trigger=%s task=%s reason=no_payloads target=%s",
-                            trigger.id, task.id, target_bot_id,
+                            "[TRIGGER] SKIP trigger=%s task=%s reason=no_payloads "
+                            "pre_routing_count=%d target=%s",
+                            trigger.id, task.id, _pre_routing_count, target_bot_id,
                         )
                     await self._record_trigger_dispatch_skip(
                         source_task=task,
@@ -6215,7 +6218,7 @@ class TaskManager:
                             run_id=task.id,
                             task_id=task.id,
                             bot_id=task.bot_id,
-                            kind="diagnostic",
+                            kind="note",
                             label="Fan-Out Dispatch Diagnostic",
                             content=_json.dumps(_diag_info, indent=2, sort_keys=True),
                             metadata=_diag_info,
@@ -6359,9 +6362,29 @@ class TaskManager:
                                     continue
                             branch_step_id = self._fanout_step_id(task, trigger, payload)
                             if branch_step_id:
-                                existing = await self._find_task_by_step_id(branch_step_id, payload_target_bot_id)
+                                existing = await self._find_task_by_step_id(
+                                    branch_step_id,
+                                    payload_target_bot_id,
+                                    orchestration_id=str(metadata.orchestration_id or "").strip() or None,
+                                )
                                 if existing is not None and existing.status in {"queued", "running", "blocked", "completed"}:
-                                    logger.warning("[TRIGGER] SKIP trigger=%s branch_step_id=%s reason=already_exists status=%s", trigger.id, branch_step_id, existing.status)
+                                    logger.warning(
+                                        "[TRIGGER] SKIP trigger=%s branch_step_id=%s reason=already_exists status=%s",
+                                        trigger.id, branch_step_id, existing.status,
+                                    )
+                                    await self._record_trigger_dispatch_skip(
+                                        source_task=task,
+                                        trigger_id=str(getattr(trigger, "id", "") or ""),
+                                        target_bot_id=str(payload_target_bot_id or ""),
+                                        details={
+                                            "reason": "step_id_already_exists",
+                                            "branch_step_id": branch_step_id,
+                                            "existing_task_id": existing.id,
+                                            "existing_task_status": existing.status,
+                                            "workstream_index": payload.get("workstream_index") if isinstance(payload, dict) else None,
+                                            "workstream_title": str((payload.get("workstream") or payload).get("title") or "")[:80] if isinstance(payload, dict) else None,
+                                        },
+                                    )
                                     continue
                                 branch_metadata = base_child_metadata.model_copy(update={"step_id": branch_step_id})
                             fanout_id = payload.get("fanout_id") if isinstance(payload, dict) else None
@@ -7458,8 +7481,37 @@ class TaskManager:
             task.id,
             len(payloads),
         )
+        _routing_input_count = len(payloads)
         payloads, path_filter_budget = self._prune_pm_assignment_workstream_payloads(payloads)
         if not payloads:
+            logger.error(
+                "[FANOUT] ROUTING trigger=%s task=%s PRUNE_ELIMINATED_ALL input_count=%d",
+                getattr(trigger, "id", ""),
+                task.id,
+                _routing_input_count,
+            )
+            await self._upsert_artifact(
+                BotRunArtifact(
+                    id=f"{task.id}:fanout-routing-prune-empty:{getattr(trigger, 'id', '')}",
+                    run_id=task.id,
+                    task_id=task.id,
+                    bot_id=task.bot_id,
+                    kind="note",
+                    label="Fan-Out Routing Prune Eliminated All Payloads",
+                    content=json.dumps({
+                        "trigger_id": str(getattr(trigger, "id", "") or ""),
+                        "task_id": task.id,
+                        "input_count": _routing_input_count,
+                        "stage": "prune",
+                        "path_filter_budget": path_filter_budget,
+                        "deliverables_sample": [
+                            str((p.get("workstream") or p).get("deliverables") or "")[:120]
+                            for p in payloads[:3] if isinstance(p, dict)
+                        ],
+                    }, indent=2),
+                    created_at=datetime.now(timezone.utc).isoformat(),
+                )
+            )
             return []
         logger.info(
             "[FANOUT] ROUTING trigger=%s task=%s after_prune=%d",
@@ -7469,6 +7521,32 @@ class TaskManager:
         )
         payloads = [self._sanitize_pm_assignment_branch_payload(payload) for payload in payloads]
         payloads, dedupe_budget = self._dedupe_pm_assignment_workstream_payloads(payloads)
+        if not payloads:
+            logger.error(
+                "[FANOUT] ROUTING trigger=%s task=%s DEDUPE_ELIMINATED_ALL input_count=%d",
+                getattr(trigger, "id", ""),
+                task.id,
+                _routing_input_count,
+            )
+            await self._upsert_artifact(
+                BotRunArtifact(
+                    id=f"{task.id}:fanout-routing-dedupe-empty:{getattr(trigger, 'id', '')}",
+                    run_id=task.id,
+                    task_id=task.id,
+                    bot_id=task.bot_id,
+                    kind="note",
+                    label="Fan-Out Routing Dedupe Eliminated All Payloads",
+                    content=json.dumps({
+                        "trigger_id": str(getattr(trigger, "id", "") or ""),
+                        "task_id": task.id,
+                        "input_count": _routing_input_count,
+                        "stage": "dedupe",
+                        "dedupe_budget": dedupe_budget,
+                    }, indent=2),
+                    created_at=datetime.now(timezone.utc).isoformat(),
+                )
+            )
+            return []
         logger.info(
             "[FANOUT] ROUTING trigger=%s task=%s after_dedupe=%d",
             getattr(trigger, "id", ""),
@@ -9164,7 +9242,7 @@ class TaskManager:
             return None
         return parsed if parsed > 0 else None
 
-    async def _find_task_by_step_id(self, step_id: str, bot_id: str) -> Optional[Task]:
+    async def _find_task_by_step_id(self, step_id: str, bot_id: str, orchestration_id: Optional[str] = None) -> Optional[Task]:
         await self._ensure_db()
         latest_match: Optional[Task] = None
         async with self._lock:
@@ -9173,6 +9251,10 @@ class TaskManager:
                     continue
                 metadata = task.metadata or TaskMetadata()
                 if metadata.step_id == step_id:
+                    # Scope match to the current orchestration to prevent cross-cycle
+                    # collisions in meta-loop scenarios where workflow_root_task_id is reused.
+                    if orchestration_id and metadata.orchestration_id and metadata.orchestration_id != orchestration_id:
+                        continue
                     if latest_match is None or self._task_order_token(task) >= self._task_order_token(latest_match):
                         latest_match = task
         return latest_match
