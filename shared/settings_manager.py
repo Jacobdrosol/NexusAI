@@ -282,6 +282,29 @@ class SettingsManager:
                     """,
                     (key, value, vtype, category, label, desc, now, "system"),
                 )
+            # Enforce minimum floors for settings where a stale low value from a
+            # prior code version would break pipeline behaviour.  These UPDATEs only
+            # fire when the stored value is numerically below the floor; they never
+            # reduce a value the operator has deliberately raised above the floor.
+            _INT_MINIMUMS: dict[str, int] = {
+                "pm_assignment_workstream_fanout_limit": 5,
+                "pm_assignment_workstream_fanout_split_limit": 6,
+                "pm_assignment_research_fanout_limit": 3,
+                "pm_assignment_research_fanout_split_limit": 6,
+                "workflow_route_repeat_limit": 3,
+                "bot_trigger_max_depth": 60,
+                "pm_assignment_trigger_max_depth": 120,
+            }
+            for key, floor in _INT_MINIMUMS.items():
+                conn.execute(
+                    """
+                    UPDATE nexus_settings
+                    SET value = ?, updated_at = ?, updated_by = 'system_migration'
+                    WHERE key = ?
+                      AND CAST(value AS INTEGER) < ?
+                    """,
+                    (str(floor), now, key, floor),
+                )
             conn.commit()
 
     # ------------------------------------------------------------------

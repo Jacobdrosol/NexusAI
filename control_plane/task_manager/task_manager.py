@@ -6187,6 +6187,41 @@ class TaskManager:
                     target_bot_id,
                     len(payloads),
                 )
+                # Emit a diagnostic artifact for pm-engineer fan-out triggers so the
+                # dispatch state is visible in review files even without server logs.
+                if is_fanout and task.bot_id == "pm-engineer" and target_bot_id == "pm-coder":
+                    _diag_info = {
+                        "trigger_id": str(getattr(trigger, "id", "") or ""),
+                        "task_id": task.id,
+                        "payloads_to_dispatch": len(payloads),
+                        "workstream_indexes": [
+                            p.get("workstream_index") for p in payloads if isinstance(p, dict)
+                        ],
+                        "fanout_branch_keys": [
+                            p.get("fanout_branch_key") for p in payloads if isinstance(p, dict)
+                        ],
+                        "workstream_titles": [
+                            str(
+                                (p.get("workstream") or {}).get("title") or p.get("title") or ""
+                            )[:80]
+                            for p in payloads if isinstance(p, dict)
+                        ],
+                    }
+                    import json as _json
+                    from datetime import datetime as _dt, timezone as _tz
+                    await self._upsert_artifact(
+                        BotRunArtifact(
+                            id=f"{task.id}:fanout-diagnostic:{getattr(trigger, 'id', '')}",
+                            run_id=task.id,
+                            task_id=task.id,
+                            bot_id=task.bot_id,
+                            kind="diagnostic",
+                            label="Fan-Out Dispatch Diagnostic",
+                            content=_json.dumps(_diag_info, indent=2, sort_keys=True),
+                            metadata=_diag_info,
+                            created_at=_dt.now(_tz.utc).isoformat(),
+                        )
+                    )
                 compatible_join_triggers = (
                     self._compatible_join_triggers(workflow, task, trigger, target_bot_id)
                     if is_join
@@ -7450,23 +7485,28 @@ class TaskManager:
             for payload in payloads
             if isinstance(payload, dict)
         ]
-        payloads, routes, workstream_budget = self._pm_assignment_workstream_budget(payloads, routes)
+        # NOTE: budget is intentionally NOT re-applied here.  The workstream
+        # cap was already enforced on the raw implementation_workstreams items
+        # in _pm_assignment_workstream_trigger_items (before fan-out expansion).
+        # Re-applying it here on the expanded trigger payloads is incorrect: all
+        # payloads have template-resolved title/instruction ("Coder workstream" /
+        # "Implement the assigned workstream."), so the lane classifier assigns
+        # every payload to the same "worker" lane, and the budget selection loop
+        # picks only the first payload — collapsing 4 workstreams to 1.
         logger.info(
-            "[FANOUT] ROUTING trigger=%s task=%s after_budget=%d",
+            "[FANOUT] ROUTING trigger=%s task=%s after_classify=%d",
             getattr(trigger, "id", ""),
             task.id,
             len(payloads),
         )
         payloads = self._refresh_fanout_payload_metadata(payloads)
         combined_budget = None
-        if path_filter_budget or dedupe_budget or workstream_budget:
+        if path_filter_budget or dedupe_budget:
             combined_budget = {}
             if path_filter_budget:
                 combined_budget.update(path_filter_budget)
             if dedupe_budget:
                 combined_budget.update(dedupe_budget)
-            if workstream_budget:
-                combined_budget.update(workstream_budget)
 
         global_tokens: List[str] = []
         branch_specs: List[Dict[str, Any]] = []
