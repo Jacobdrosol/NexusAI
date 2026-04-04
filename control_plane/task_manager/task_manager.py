@@ -388,6 +388,102 @@ def _looks_like_trigger_wrapper_payload(payload: Any) -> bool:
     return bool(keys.intersection({"source_payload", "source_result", "source_task_id", "source_bot_id"}))
 
 
+def _extract_pm_pipeline_stage_summaries(payload: Any) -> List[Dict[str, Any]]:
+    """Walk the nested source_payload chain and build a flat, chronologically-ordered list
+    of pipeline stage summaries for injection into the final QC task. This lets the final QC
+    model easily audit all prior stages without navigating 9+ levels of nested source_payload."""
+    if not isinstance(payload, dict):
+        return []
+    stages: List[Dict[str, Any]] = []
+    seen_task_ids: Set[str] = set()
+
+    def _extract_stage(node: Any) -> Optional[Dict[str, Any]]:
+        if not isinstance(node, dict):
+            return None
+        bot_id = str(node.get("source_bot_id") or "").strip()
+        task_id = str(node.get("source_task_id") or "").strip()
+        if not bot_id:
+            return None
+        if task_id:
+            if task_id in seen_task_ids:
+                return None
+            seen_task_ids.add(task_id)
+        result = node.get("source_result")
+        if not isinstance(result, dict):
+            return None
+        outcome = str(result.get("outcome") or result.get("failure_type") or "").strip()
+        failure_type = str(result.get("failure_type") or "").strip()
+        handoff_notes = str(result.get("handoff_notes") or "")[:500].strip()
+        artifacts_raw = result.get("artifacts")
+        artifact_paths: List[str] = []
+        artifact_previews: List[Dict[str, Any]] = []
+        if isinstance(artifacts_raw, list):
+            for art in artifacts_raw[:40]:
+                if not isinstance(art, dict):
+                    continue
+                path = str(art.get("path") or "").strip()
+                content = str(art.get("content") or "").strip()
+                label = str(art.get("label") or "").strip()
+                if path:
+                    artifact_paths.append(path)
+                    if content:
+                        artifact_previews.append({"path": path, "content_preview": content[:1500]})
+                elif label and content:
+                    artifact_previews.append({"label": label, "content_preview": content[:300]})
+        summary: Dict[str, Any] = {"bot_id": bot_id, "outcome": outcome, "failure_type": failure_type}
+        if task_id:
+            summary["task_id"] = task_id
+        if handoff_notes:
+            summary["handoff_notes"] = handoff_notes
+        if artifact_paths:
+            summary["artifact_paths"] = artifact_paths
+        if artifact_previews:
+            summary["artifacts"] = artifact_previews
+        findings = result.get("findings")
+        if isinstance(findings, list) and findings:
+            summary["findings"] = [str(f)[:250] for f in findings[:6]]
+        evidence = result.get("evidence")
+        if isinstance(evidence, list) and evidence:
+            summary["evidence"] = [str(e)[:200] for e in evidence[:6]]
+        return summary
+
+    def _walk(node: Any, depth: int = 0) -> None:
+        if not isinstance(node, dict) or depth > 15:
+            return
+        stage = _extract_stage(node)
+        if stage:
+            stages.append(stage)
+        # Recurse into join_items (parallel branches, e.g., multiple security reviewers)
+        join_items = node.get("join_items")
+        if isinstance(join_items, list):
+            for item in join_items:
+                if not isinstance(item, dict):
+                    continue
+                join_stage = _extract_stage(item)
+                if join_stage:
+                    stages.append(join_stage)
+                # Also go 2 levels deeper inside join_items to reach coder artifacts
+                # (join_items[i].source_payload = tester, join_items[i].source_payload.source_payload = coder)
+                inner = item.get("source_payload")
+                if isinstance(inner, dict):
+                    inner_stage = _extract_stage(inner)
+                    if inner_stage:
+                        stages.append(inner_stage)
+                    deeper = inner.get("source_payload")
+                    if isinstance(deeper, dict):
+                        deeper_stage = _extract_stage(deeper)
+                        if deeper_stage:
+                            stages.append(deeper_stage)
+        src = node.get("source_payload")
+        if isinstance(src, dict):
+            _walk(src, depth + 1)
+
+    _walk(payload)
+    # Reverse to present in chronological order (earliest bot first)
+    stages.reverse()
+    return stages
+
+
 def _payload_satisfies_output_contract(payload: Any, required_fields: list[str], non_empty_fields: list[str]) -> bool:
     if not isinstance(payload, dict):
         return False
@@ -640,7 +736,6 @@ def _is_retryable_error_message(message: str) -> bool:
         "http 504",
         "documentation output contains broken internal markdown links",
         "documentation workstream emitted markdown files outside its assigned deliverables",
-        "output contract requires non-empty fields",
     ]
     return any(marker in normalized for marker in retryable_markers)
 
@@ -8080,6 +8175,12 @@ class TaskManager:
         payload = self._build_default_trigger_payload(task, final_qc_bot_id)
         payload["title"] = "Final quality control"
         payload["instruction"] = "Perform the terminal final QC pass after implementation and security review are complete."
+        # Inject a flat, chronological summary of all upstream pipeline stages so the
+        # final QC model can evaluate coder artifacts, tester passes, and security passes
+        # without having to navigate 9+ levels of nested source_payload wrappers.
+        pipeline_stages = _extract_pm_pipeline_stage_summaries(task.payload)
+        if pipeline_stages:
+            payload["upstream_pipeline_stages"] = pipeline_stages
         final_context = self._pm_dynamic_global_stage_context(
             context,
             global_stage="final_qc",
