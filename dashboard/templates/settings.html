@@ -221,6 +221,16 @@
         <option value="custom">custom</option>
       </select>
       <button class="btn btn-primary" type="button" onclick="mcFind()" id="mc-find-btn">Find</button>
+      <button class="btn" type="button" onclick="mcListAll()" id="mc-list-btn"
+              title="Show all models available on your Ollama Cloud endpoint">List All</button>
+    </div>
+
+    <!-- available model chips (shown by List All) -->
+    <div id="mc-available-chips" style="display:none;margin-bottom:0.75rem;">
+      <div style="font-size:0.8rem;color:#718096;margin-bottom:0.4rem;">
+        Click a model to auto-fill the input:
+      </div>
+      <div id="mc-chips-container" style="display:flex;flex-wrap:wrap;gap:0.35rem;max-height:130px;overflow-y:auto;"></div>
     </div>
 
     <!-- status row -->
@@ -315,10 +325,64 @@ function mcResetStatus() {
   document.getElementById('mc-btn-pull').style.display = 'none';
 }
 
+function mcListAll() {
+  var btn = document.getElementById('mc-list-btn');
+  btn.disabled = true; btn.textContent = 'Loading…';
+  fetch('/api/settings/models/ollama-cloud-available')
+    .then(function(r){ return _safeJson(r); })
+    .then(function(res){
+      btn.disabled = false; btn.textContent = 'List All';
+      if (!res.ok || !Array.isArray(res.data)) {
+        showToast(res.data && (res.data.detail || res.data.error) || 'Could not list models', false);
+        return;
+      }
+      var names = res.data;
+      var panel = document.getElementById('mc-available-chips');
+      var container = document.getElementById('mc-chips-container');
+      container.innerHTML = '';
+      if (!names.length) {
+        container.innerHTML = '<span style="color:#718096;font-size:0.83rem;">No models returned from endpoint.</span>';
+      } else {
+        names.forEach(function(name){
+          var chip = document.createElement('button');
+          chip.type = 'button';
+          chip.textContent = name;
+          chip.style.cssText = 'padding:0.2rem 0.55rem;border-radius:4px;border:1px solid #2d3045;' +
+            'background:#1e2235;color:#c4b5fd;cursor:pointer;font-size:0.78rem;';
+          chip.onclick = function(){
+            document.getElementById('mc-model-input').value = name;
+            mcResetStatus();
+          };
+          container.appendChild(chip);
+        });
+      }
+      panel.style.display = 'block';
+    })
+    .catch(function(e){ btn.disabled = false; btn.textContent = 'List All'; showToast(e.message, false); });
+}
+
 function mcSetStatus(html, color) {
   var el = document.getElementById('mc-status');
   el.innerHTML = '<span style="font-size:0.88rem;color:' + color + ';">' + html + '</span>';
   el.style.display = 'block';
+}
+
+function _safeJson(r) {
+  // Parse JSON safely — if the response is HTML (e.g. 404 page before route existed,
+  // or a server error page) r.json() throws. We catch that and return a plain error object.
+  var ct = r.headers.get('content-type') || '';
+  if (ct.indexOf('application/json') === -1 && ct.indexOf('text/json') === -1) {
+    return r.text().then(function(body){
+      var hint = body.trim().charAt(0) === '<'
+        ? 'Server returned an HTML page. Make sure the platform is restarted after the latest update.'
+        : (body.slice(0, 120) || 'Non-JSON response');
+      return {ok: false, data: {detail: hint}};
+    });
+  }
+  return r.json().then(function(d){ return {ok: r.ok, data: d}; })
+    .catch(function(){
+      return {ok: false, data: {detail: 'Could not parse server response as JSON.'}};
+    });
 }
 
 function mcFind() {
@@ -328,9 +392,14 @@ function mcFind() {
   btn.disabled = true; btn.textContent = 'Checking…';
   mcResetStatus();
   fetch('/api/settings/models/ollama-cloud-check?model=' + encodeURIComponent(model))
-    .then(function(r){ return r.json(); })
-    .then(function(d){
+    .then(function(r){ return _safeJson(r); })
+    .then(function(res){
       btn.disabled = false; btn.textContent = 'Find';
+      if (!res.ok) {
+        mcSetStatus('❌ Check failed: ' + escHtml(res.data.detail || res.data.error || 'Unknown error'), '#ef4444');
+        return;
+      }
+      var d = res.data;
       _mcLastChecked = d;
       var actions = document.getElementById('mc-actions');
       var btnAdd = document.getElementById('mc-btn-add');
@@ -368,7 +437,7 @@ function mcPull() {
     method: 'POST',
     headers: {'X-CSRFToken': _csrfToken, 'Content-Type': 'application/json'},
     body: JSON.stringify({model: model})
-  }).then(function(r){ return r.json().then(function(d){ return {ok: r.ok, data: d}; }); })
+  }).then(function(r){ return _safeJson(r); })
     .then(function(res){
       btn.disabled = false; btn.textContent = 'Pull Model';
       if (res.ok) {
@@ -377,8 +446,9 @@ function mcPull() {
         btn.style.display = 'none';
       } else {
         var errMsg = res.data.detail || res.data.error || 'Unknown error';
-        var isHtmlErr = errMsg.indexOf('HTML page') !== -1 || errMsg.indexOf('not supported') !== -1;
-        var display = isHtmlErr
+        var isUnsupported = errMsg.indexOf('HTML page') !== -1 || errMsg.indexOf('not supported') !== -1
+          || errMsg.indexOf('HTML') !== -1;
+        var display = isUnsupported
           ? '❌ This Ollama endpoint does not support remote pulls. SSH into the server and run: ' +
             '<code style="background:#1a1d27;padding:0.1rem 0.4rem;border-radius:3px;">ollama pull ' + escHtml(model) + '</code>'
           : '❌ Pull failed: ' + escHtml(errMsg);
