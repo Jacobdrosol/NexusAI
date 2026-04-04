@@ -4506,12 +4506,19 @@ class TaskManager:
         task: "Task",
         payload: dict,
     ) -> dict:
-        """Pre-fetch repo directory tree and relevant file snippets for workspace-aware bots."""
+        """Pre-fetch repo directory tree and relevant file snippets for workspace-aware bots.
+
+        For implementation bots (pm-coder, pm-database-engineer) we also pre-fetch the FULL
+        content of every file mentioned in the workstream deliverables so the bot can see
+        what already exists before writing.  This prevents the bot from re-creating files
+        from scratch with a hallucinated structure instead of editing the real one.
+        """
         try:
             from control_plane.api.projects import _extract_project_repo_workspace, _resolve_repo_workspace_root
             from control_plane.chat.workspace_tools import (
                 list_workspace_tree,
                 normalize_workspace_root,
+                read_workspace_file_snippet,
                 search_workspace_snippets,
             )
             from pathlib import Path
@@ -4582,15 +4589,15 @@ class TaskManager:
             title = str(payload.get("title") or "").strip()
             query = (instruction[:300] + " " + title).strip() or project_id
 
-            # Fetch relevant file snippets
+            # Fetch relevant file snippets — increased size so bots see real content
             snippets = await asyncio.to_thread(
                 search_workspace_snippets,
                 root,
                 query,
-                limit=8,
+                limit=15,
                 max_files=600,
                 max_file_bytes=300_000,
-                max_chars_per_snippet=400,
+                max_chars_per_snippet=3000,
             )
             items: list[str] = []
             for hit in snippets:
@@ -4598,6 +4605,63 @@ class TaskManager:
                 snippet = str(hit.get("snippet") or "").strip()
                 if path and snippet:
                     items.append(f"[workspace:file] {path}\n{snippet}")
+
+            # --- Full-file pre-fetch for implementation bots ---
+            # For pm-coder and pm-database-engineer, pre-fetch the COMPLETE current content
+            # of every file listed in the workstream deliverables.  This lets the bot see
+            # exactly what already exists before deciding how to modify it, preventing it
+            # from hallucinating the file structure from scratch.
+            _FULL_FILE_BOTS = {"pm-coder", "pm-database-engineer", "pm-research-analyst"}
+            bot_id = str(task.bot_id or "").strip()
+            if bot_id in _FULL_FILE_BOTS:
+                deliverable_paths: list[str] = []
+                # From workstream object
+                workstream = payload.get("workstream")
+                if isinstance(workstream, dict):
+                    ws_deliverables = workstream.get("deliverables")
+                    if isinstance(ws_deliverables, list):
+                        for d in ws_deliverables:
+                            p = str(d or "").strip()
+                            if p:
+                                deliverable_paths.append(p)
+                # From top-level deliverables field
+                top_deliverables = payload.get("deliverables")
+                if isinstance(top_deliverables, list):
+                    for d in top_deliverables:
+                        p = str(d or "").strip()
+                        if p and p not in deliverable_paths:
+                            deliverable_paths.append(p)
+                elif isinstance(top_deliverables, str):
+                    # Sometimes deliverables is a space-separated string
+                    for p in top_deliverables.split():
+                        p = p.strip()
+                        if p and "/" in p and p not in deliverable_paths:
+                            deliverable_paths.append(p)
+
+                full_file_items: list[str] = []
+                seen_full: set[str] = set()
+                for path_hint in deliverable_paths[:20]:  # cap at 20 files
+                    norm_hint = path_hint.replace("\\", "/").strip("/")
+                    if norm_hint in seen_full:
+                        continue
+                    seen_full.add(norm_hint)
+                    try:
+                        hit = await asyncio.to_thread(
+                            read_workspace_file_snippet,
+                            root,
+                            norm_hint,
+                            max_file_bytes=500_000,
+                            max_chars=12_000,
+                        )
+                        if hit and str(hit.get("snippet") or "").strip():
+                            full_file_items.append(
+                                f"[workspace:file:FULL] {hit['path']}\n{hit['snippet']}"
+                            )
+                    except Exception:
+                        pass
+
+                if full_file_items:
+                    items = full_file_items + items
 
             if not tree_str and not items:
                 return payload
