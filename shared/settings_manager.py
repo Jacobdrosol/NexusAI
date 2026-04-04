@@ -152,7 +152,7 @@ _DEFAULTS: List[tuple] = [
     ("context_source_limit_large", "50", "int", "context",
      "Large Context Source Limit",
      "Source label limit for models with 100k+ token context windows."),
-    ("large_context_model_patterns", "gpt-oss,qwen3.5,claude-3,gpt-4,o1,o3", "string", "context",
+    ("large_context_model_patterns", "gpt-oss,qwen3.5,qwen3-next,qwen3-coder,kimi-k2,glm-4,glm-5,deepseek-v3,devstral,cogito,nemotron,claude-3,gpt-4,o1,o3", "string", "context",
      "Large Context Model Patterns",
      "Comma-separated model name patterns that indicate 100k+ context windows."),
     ("coding_enhancement_enabled", "true", "bool", "coding",
@@ -483,7 +483,7 @@ def get_context_limits_for_model(model: str, settings: Optional[SettingsManager]
     if settings is None:
         settings = SettingsManager()
     
-    patterns = settings.get("large_context_model_patterns", "gpt-oss,qwen3.5,claude-3,gpt-4,o1,o3")
+    patterns = settings.get("large_context_model_patterns", "gpt-oss,qwen3.5,qwen3-next,qwen3-coder,kimi-k2,glm-4,glm-5,deepseek-v3,devstral,cogito,nemotron,claude-3,gpt-4,o1,o3")
     pattern_list = [p.strip().lower() for p in patterns.split(",") if p.strip()]
     
     model_lower = model.lower()

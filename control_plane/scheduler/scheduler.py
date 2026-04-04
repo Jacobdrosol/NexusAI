@@ -29,6 +29,14 @@ logger = logging.getLogger(__name__)
 _PAYLOAD_CONTEXT_REDUCTION_TARGET_CHARS = 48000
 
 
+class _OllamaModelNotFound(Exception):
+    """Internal sentinel raised when Ollama Cloud returns 404 for a missing model.
+    Caught by the caller to trigger an auto-pull before retrying."""
+    def __init__(self, model: str) -> None:
+        super().__init__(f"Ollama model not found: {model}")
+        self.model = model
+
+
 # ---------------------------------------------------------------------------
 # Agent tool-calling helpers (module-level)
 # ---------------------------------------------------------------------------
@@ -2037,24 +2045,28 @@ class Scheduler:
             body["tools"] = tools
 
         base_url = os.environ.get("OLLAMA_CLOUD_BASE_URL", "https://ollama.com/api").rstrip("/")
-        async with httpx.AsyncClient(timeout=_cloud_timeout()) as client:
+
+        async def _do_chat(client: httpx.AsyncClient) -> dict:
             response = await client.post(
                 f"{base_url}/chat",
                 headers={"Authorization": f"Bearer {api_key}"},
                 json=body,
             )
-            try:
-                response.raise_for_status()
-            except httpx.HTTPStatusError as e:
-                detail = ""
+            detail = ""
+            if not response.is_success:
                 try:
                     pd = response.json()
                     if isinstance(pd, dict):
                         detail = str(pd.get("error") or pd.get("detail") or pd.get("message") or "").strip()
                 except Exception:
                     detail = (response.text or "").strip()
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as e:
                 status = response.status_code
                 msg = f"Ollama Cloud request failed ({status})"
+                if self._is_ollama_model_not_found(status, detail):
+                    raise _OllamaModelNotFound(backend.model) from e
                 raise BackendError(f"{msg}: {detail}" if detail else msg) from e
 
             data = response.json()
@@ -2066,7 +2078,6 @@ class Scheduler:
             }
             finish_reason = str(data.get("done_reason") or data.get("finish_reason") or "").strip()
 
-            # Parse tool_calls from Ollama's format
             raw_tool_calls = msg_obj.get("tool_calls") or []
             tool_calls = _parse_ollama_tool_calls(raw_tool_calls)
 
@@ -2074,6 +2085,13 @@ class Scheduler:
             if finish_reason:
                 result["finish_reason"] = finish_reason
             return result
+
+        async with httpx.AsyncClient(timeout=_cloud_timeout()) as client:
+            try:
+                return await _do_chat(client)
+            except _OllamaModelNotFound as exc:
+                await self._pull_ollama_cloud_model(base_url, api_key, exc.model)
+                return await _do_chat(client)
 
     async def _call_openai_raw(
         self,
@@ -2643,6 +2661,61 @@ class Scheduler:
                 result["finish_reason"] = finish_reason
             return result
 
+    @staticmethod
+    def _is_ollama_model_not_found(status: int, detail: str) -> bool:
+        """Return True when the Ollama API returned a 404 indicating a missing model."""
+        if status != 404:
+            return False
+        lower = detail.lower()
+        return "not found" in lower or "model" in lower or not detail
+
+    @staticmethod
+    async def _pull_ollama_cloud_model(
+        base_url: str,
+        api_key: str,
+        model: str,
+        *,
+        pull_timeout: float = 1800.0,
+    ) -> None:
+        """
+        Ask the Ollama Cloud endpoint to pull/download *model*.
+
+        Ollama exposes POST /api/pull which streams progress lines; we wait
+        for completion (stream=False) or until the pull_timeout elapses.
+        If the endpoint does not support /api/pull this raises BackendError so
+        the caller can surface a clear message.
+        """
+        import logging as _logging
+        _log = _logging.getLogger(__name__)
+        _log.info("Ollama Cloud: model '%s' not found — attempting auto-pull", model)
+        pull_url = f"{base_url}/pull"
+        async with httpx.AsyncClient(timeout=httpx.Timeout(pull_timeout, connect=10.0)) as client:
+            try:
+                pull_resp = await client.post(
+                    pull_url,
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    json={"model": model, "stream": False},
+                )
+                if pull_resp.status_code == 404:
+                    raise BackendError(
+                        f"Ollama Cloud model '{model}' not found and /api/pull is not supported "
+                        f"by this endpoint. Please pull the model manually on the server: "
+                        f"`ollama pull {model}`"
+                    )
+                pull_resp.raise_for_status()
+                _log.info("Ollama Cloud: model '%s' pulled successfully", model)
+            except httpx.HTTPStatusError as e:
+                detail = ""
+                try:
+                    pd = pull_resp.json()
+                    if isinstance(pd, dict):
+                        detail = str(pd.get("error") or pd.get("detail") or "").strip()
+                except Exception:
+                    detail = (pull_resp.text or "").strip()
+                raise BackendError(
+                    f"Ollama Cloud auto-pull of '{model}' failed: {detail or str(e)}"
+                ) from e
+
     async def _call_ollama_cloud(self, backend: BackendConfig, payload: Any) -> Any:
         api_key_ref = backend.api_key_ref or "OLLAMA_API_KEY"
         api_key = await self._resolve_api_key(api_key_ref, "OLLAMA_API_KEY")
@@ -2665,16 +2738,15 @@ class Scheduler:
             "options": _ollama_options(params_dict),
         }
         base_url = os.environ.get("OLLAMA_CLOUD_BASE_URL", "https://ollama.com/api").rstrip("/")
-        async with httpx.AsyncClient(timeout=_cloud_timeout()) as client:
+
+        async def _do_chat(client: httpx.AsyncClient) -> Any:
             response = await client.post(
                 f"{base_url}/chat",
                 headers={"Authorization": f"Bearer {api_key}"},
                 json=body,
             )
-            try:
-                response.raise_for_status()
-            except httpx.HTTPStatusError as e:
-                detail = ""
+            detail = ""
+            if not response.is_success:
                 try:
                     payload_data = response.json()
                     if isinstance(payload_data, dict):
@@ -2686,10 +2758,14 @@ class Scheduler:
                         ).strip()
                 except Exception:
                     detail = (response.text or "").strip()
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as e:
                 status = response.status_code
-                if detail:
-                    raise BackendError(f"Ollama Cloud request failed ({status}): {detail}") from e
-                raise BackendError(f"Ollama Cloud request failed ({status})") from e
+                if self._is_ollama_model_not_found(status, detail):
+                    raise _OllamaModelNotFound(backend.model) from e
+                msg = f"Ollama Cloud request failed ({status})"
+                raise BackendError(f"{msg}: {detail}" if detail else msg) from e
             data = response.json()
             output = data.get("message", {}).get("content", "")
             usage = {
@@ -2697,10 +2773,18 @@ class Scheduler:
                 "completion_tokens": data.get("eval_count", 0),
             }
             finish_reason = str(data.get("done_reason") or data.get("finish_reason") or "").strip()
-            result = {"output": output, "usage": usage}
+            result: dict = {"output": output, "usage": usage}
             if finish_reason:
                 result["finish_reason"] = finish_reason
             return result
+
+        async with httpx.AsyncClient(timeout=_cloud_timeout()) as client:
+            try:
+                return await _do_chat(client)
+            except _OllamaModelNotFound as exc:
+                await self._pull_ollama_cloud_model(base_url, api_key, exc.model)
+                # Retry once after successful pull
+                return await _do_chat(client)
 
     async def _call_claude(self, backend: BackendConfig, payload: Any) -> Any:
         api_key_ref = backend.api_key_ref or "ANTHROPIC_API_KEY"
