@@ -87,6 +87,21 @@ async def check_ollama_cloud_model(model: str, request: Request) -> dict:
     available = False
     pull_supported = True
 
+    # Build lookup candidates: the model name as-is, and also strip common cloud suffixes
+    # so that e.g. "glm-5:cloud" matches the API entry "glm-5" and
+    # "devstral-2:123b-cloud" matches "devstral-2:123b".
+    def _cloud_variants(name: str) -> set[str]:
+        variants = {name.lower()}
+        if name.lower().endswith(":cloud"):
+            variants.add(name[: -len(":cloud")].lower())
+        elif "-cloud" in name.lower():
+            # e.g. "devstral-2:123b-cloud" → "devstral-2:123b"
+            variants.add(name.lower().rsplit("-cloud", 1)[0])
+        # Also add the :cloud suffix form in case the endpoint lists them that way
+        if not name.lower().endswith(":cloud") and "-cloud" not in name.lower():
+            variants.add(name.lower() + ":cloud")
+        return variants
+
     try:
         async with httpx.AsyncClient(timeout=20) as client:
             resp = await client.get(
@@ -99,7 +114,8 @@ async def check_ollama_cloud_model(model: str, request: Request) -> dict:
                     (m.get("name") or m.get("model") or "").lower()
                     for m in tags_data.get("models", [])
                 }
-                available = model.lower() in names
+                candidates = _cloud_variants(model)
+                available = bool(candidates & names)
             else:
                 # /api/tags itself failed — try a probe chat request
                 available = False
