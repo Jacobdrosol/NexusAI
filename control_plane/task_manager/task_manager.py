@@ -142,10 +142,15 @@ def _extract_json_payload(text: str) -> Any:
     raw = str(text or "").strip()
     if not raw:
         raise ValueError("empty output")
-    candidates = [raw]
+    # Strip <think>...</think> blocks emitted by reasoning/thinking models
+    # (e.g. glm-5, kimi-k2-thinking, deepseek-r1) before any JSON search so
+    # that braces inside the thinking section don't confuse the extractor.
+    stripped = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL | re.IGNORECASE).strip()
+    candidates = [stripped, raw] if stripped != raw else [raw]
     fence_matches = re.findall(r"```(?:json)?\s*(.*?)```", raw, flags=re.DOTALL | re.IGNORECASE)
     candidates.extend(match.strip() for match in fence_matches if match.strip())
     decoder = json.JSONDecoder()
+    best_parsed = None
     for candidate in candidates:
         try:
             return json.loads(candidate)
@@ -156,12 +161,17 @@ def _extract_json_payload(text: str) -> Any:
             if start < 0:
                 continue
             try:
-                parsed, end = decoder.raw_decode(candidate[start:])
-                if candidate[start + end :].strip():
-                    continue
+                parsed, _end = decoder.raw_decode(candidate[start:])
+                # Accept the first valid JSON even if there is trailing text
+                # (models often append a closing remark after the JSON block).
+                # Keep the longest parse we find in case there are multiple.
+                if best_parsed is None:
+                    best_parsed = parsed
                 return parsed
             except json.JSONDecodeError:
                 continue
+    if best_parsed is not None:
+        return best_parsed
     raise ValueError("no valid JSON object or array found")
 
 
