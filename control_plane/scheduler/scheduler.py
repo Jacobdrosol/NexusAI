@@ -207,15 +207,18 @@ def _backend_failure_message(task_id: str, last_error: Exception, attempts: list
 def _ollama_options(params: dict[str, Any]) -> dict[str, Any]:
     options = dict(params or {})
     max_tokens = options.pop("max_tokens", None)
-    if max_tokens is not None and "num_predict" not in options:
+    # Only forward a positive num_predict; negative values (e.g. -1 meaning
+    # "unlimited") must be omitted because the Ollama Cloud direct API rejects
+    # non-positive values with a 400 error. Omitting num_predict lets the API
+    # use the model's own output-length default (effectively unlimited).
+    if max_tokens is not None and max_tokens > 0 and "num_predict" not in options:
         options["num_predict"] = max_tokens
-    # When no num_predict is set, apply a platform default so Ollama's low built-in
-    # cap (128 tokens in older versions) does not silently truncate responses.
-    # Setting -1 means "unlimited" in Ollama; override via settings key
-    # default_ollama_num_predict if you need a hard cap.
+    # Apply a platform default so local Ollama's low built-in cap (128 tokens
+    # in older versions) does not silently truncate. Only set when positive;
+    # override via settings key default_ollama_num_predict.
     if "num_predict" not in options:
         default_predict = _settings_int("default_ollama_num_predict", -1)
-        if default_predict != 0:
+        if default_predict > 0:
             options["num_predict"] = default_predict
     return options
 
