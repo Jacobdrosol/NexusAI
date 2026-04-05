@@ -621,22 +621,19 @@ def _looks_like_trigger_wrapper_instruction(value: Any) -> bool:
 
 
 def _looks_like_truncated_result(result: Any) -> bool:
-    finish_reason = _extract_result_finish_reason(result)
-    if finish_reason in {"length", "max_tokens", "max_output_tokens", "token_limit", "max_new_tokens"}:
-        return True
-    completion_tokens = _extract_completion_tokens(result)
-    if completion_tokens is None:
-        return False
     output = _extract_result_output_text(result).strip()
-    # Only flag as truncated if output ends mid-sentence (incomplete syntax)
-    # Don't flag based on token count alone - models can legitimately produce long outputs
-    if not output:
-        return False
+    finish_reason = _extract_result_finish_reason(result)
+    # Open-syntax tail is unambiguous — always truncated regardless of reason.
     if output.endswith(("...", "```", "`", ":", ",", "(", "[", "{", "|")):
         return True
-    # Check if output ends mid-sentence (no proper ending punctuation)
-    # But only flag this if the finish_reason suggests truncation was attempted
-    # Otherwise long but complete outputs are valid
+    # finish_reason alone is not a reliable signal for cloud/remote APIs.
+    # Ollama Cloud reports "length" even when the JSON body is fully formed
+    # because it counts think-block tokens against its internal limit.
+    # Only treat finish_reason as definitive when the output also lacks a
+    # proper closing token — i.e., doesn't end with }, ], ", closing punct.
+    if finish_reason in {"length", "max_tokens", "max_output_tokens", "token_limit", "max_new_tokens"}:
+        if output and not output.endswith(("}", "]", '"', "'", ".", "!", "?")):
+            return True
     return False
 
 
@@ -4979,19 +4976,32 @@ class TaskManager:
                 result = _strip_repo_output_claims_for_deny_policy(result)
             result = self._sanitize_pm_assignment_result(task_for_execution, result)
             if _prefers_truncation_retry(task) and _looks_like_truncated_result(raw_result):
-                task_error = TaskError(
-                    message=(
-                        "Model output likely truncated at token limit; retrying with increased "
-                        "max_tokens/num_predict and num_width/num_ctx."
+                # Only retry if the normalized result is actually empty/unusable.
+                # _normalize_task_result (above) raises on contract failure, so
+                # reaching this line means the result already passed validation —
+                # don't throw it away just because the API reported finish_reason=length.
+                result_is_usable = bool(result) and isinstance(result, (dict, list))
+                if not result_is_usable:
+                    task_error = TaskError(
+                        message=(
+                            "Model output likely truncated at token limit; retrying with increased "
+                            "max_tokens/num_predict and num_width/num_ctx."
+                        )
                     )
-                )
-                if await self._requeue_for_retry(task, task_error):
-                    logger.info("Task %s queued for automatic truncation retry", task_id)
-                    return
-                raise ValueError(
-                    "Model output remained truncated after available retries; increase backend "
-                    "max_tokens/num_predict or num_width/num_ctx."
-                )
+                    if await self._requeue_for_retry(task, task_error):
+                        logger.info("Task %s queued for automatic truncation retry", task_id)
+                        return
+                    raise ValueError(
+                        "Model output remained truncated after available retries; increase backend "
+                        "max_tokens/num_predict or num_width/num_ctx."
+                    )
+                else:
+                    logger.info(
+                        "Task %s raw result has finish_reason=length but normalized result is "
+                        "non-empty (%d keys/items) — skipping truncation retry.",
+                        task_id,
+                        len(result) if isinstance(result, (dict, list)) else 0,
+                    )
             validation_failure = _assignment_validation_failure(task, result)
             if validation_failure:
                 raise _TaskPolicyViolation(
