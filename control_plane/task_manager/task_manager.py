@@ -4381,6 +4381,10 @@ class TaskManager:
                 try:
                     parsed = _extract_json_payload(raw_text)
                 except ValueError:
+                    logger.warning(
+                        "Task %s JSON extraction failed. raw_text head: %s",
+                        task.id, raw_text[:500],
+                    )
                     synthesized = _synthesize_docs_only_repo_change_contract_result(task, result, raw_text=raw_text)
                     if synthesized is not None:
                         parsed = synthesized
@@ -4412,6 +4416,11 @@ class TaskManager:
                     normalized["normalization_notes"] = existing_notes + default_notes
 
         if output_format == "json_object" and not isinstance(normalized, dict):
+            preview = repr(normalized)[:200] if normalized is not None else "None"
+            logger.warning(
+                "Task %s contract violation: expected JSON object, got %s. Preview: %s",
+                task.id, type(normalized).__name__, preview,
+            )
             raise ValueError("output contract requires a JSON object")
         if output_format == "json_array" and not isinstance(normalized, list):
             raise ValueError("output contract requires a JSON array")

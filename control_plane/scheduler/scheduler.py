@@ -271,11 +271,16 @@ def _backend_with_retry_params(backend: BackendConfig, task: Task | None = None)
 
     if max_tokens_increment > 0:
         if "max_tokens" in params_dict:
-            updates["max_tokens"] = _retry_incremented_value(
-                params_dict["max_tokens"],
-                max_tokens_increment,
-                retry_attempt,
-            )
+            current_max = params_dict["max_tokens"]
+            # If max_tokens is -1 (unlimited), don't override it on retry —
+            # incrementing -1 would produce a small positive cap (e.g. 2047)
+            # which is worse than no limit at all.
+            if current_max > 0:
+                updates["max_tokens"] = _retry_incremented_value(
+                    current_max,
+                    max_tokens_increment,
+                    retry_attempt,
+                )
         else:
             updates["max_tokens"] = _retry_incremented_value(
                 fallback_max_tokens,
