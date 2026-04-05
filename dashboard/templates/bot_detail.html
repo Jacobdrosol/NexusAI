@@ -868,19 +868,32 @@ const GLOBAL_MODELS = {{ models|tojson }};
 const API_KEYS = {{ api_keys|tojson }};
 const PROVIDER_MODEL_SUGGESTIONS = {
   ollama_cloud: [
-    'qwen3.5:cloud',
-    'qwen3.5:397b-cloud',
-    'qwen3-vl:235b-cloud',
-    'qwen3-vl:235b-instruct-cloud',
-    'qwen3-coder:480b-cloud',
-    'qwen3-coder-next:cloud',
-    'gpt-oss:20b-cloud',
-    'gpt-oss:120b-cloud',
-    'glm-4.6:cloud',
-    'glm-5:cloud',
-    'deepseek-v3.1:671b-cloud',
-    'cogito-2.1:671b-cloud',
-    'gemma3:27b-cloud'
+    'qwen3.5:397b',
+    'qwen3-coder:480b',
+    'qwen3-next:80b',
+    'qwen3-vl:235b',
+    'qwen3-vl:235b-instruct',
+    'gpt-oss:120b',
+    'gpt-oss:20b',
+    'glm-5',
+    'glm-4.7',
+    'deepseek-v3.2',
+    'devstral-2:123b',
+    'devstral-small-2:24b',
+    'kimi-k2-thinking',
+    'nemotron-3-super',
+    'nemotron-3-nano:30b',
+    'minimax-m2.7',
+    'minimax-m2.5',
+    'minimax-m2',
+    'gemma4:31b',
+    'gemma3:27b',
+    'gemma3:12b',
+    'gemma3:4b',
+    'gemini-3-flash-preview',
+    'ministral-3:14b',
+    'ministral-3:8b',
+    'rnj-1:8b'
   ],
   openai: [
     'gpt-4o',
@@ -1999,9 +2012,11 @@ function saveBackendForm() {
     }
   }
   if (backend.type === 'cloud_api') {
+    const catalogModels = globalModelsForProvider(backend.provider);
     const suggested = suggestedModelsForProvider(backend.provider);
-    if (suggested.length > 0 && !suggested.includes(backend.model)) {
-      alert('Choose a supported model from the dropdown for this cloud provider.');
+    const allAllowed = [...new Set([...catalogModels, ...suggested])];
+    if (allAllowed.length > 0 && !allAllowed.includes(backend.model)) {
+      alert('Choose a supported model from the dropdown for this cloud provider, or add it to the Model Catalog in Settings first.');
       return;
     }
   }
