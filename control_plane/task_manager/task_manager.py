@@ -1849,8 +1849,19 @@ def _contains_destructive_sql(text: str) -> bool:
     normalized = _strip_sql_comments(str(text or "")).strip()
     if not normalized:
         return False
-    if re.search(r"(?im)\b(delete|drop|truncate)\b", normalized):
+    # DELETE FROM is destructive; ON DELETE CASCADE / ON DELETE SET NULL are FK constraints and are safe.
+    if re.search(r"(?im)\bdelete\s+from\b", normalized):
         return True
+    # DROP with a schema object is destructive; bare "drop" in other contexts is not.
+    if re.search(
+        r"(?im)\bdrop\s+(?:table|column|constraint|index|schema|database|view|function|trigger)\b",
+        normalized,
+    ):
+        return True
+    # TRUNCATE is always destructive.
+    if re.search(r"(?im)\btruncate\b", normalized):
+        return True
+    # Destructive ALTER TABLE: dropping a column/constraint or changing a column type.
     return bool(
         re.search(
             r"(?ims)\balter\s+table\b.*?\b(drop\s+(?:column|constraint)|alter\s+column\b.*?\btype\b)",
