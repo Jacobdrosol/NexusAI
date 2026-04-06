@@ -6608,6 +6608,20 @@ class TaskManager:
                                     fanout_idx,
                                     payload_target_bot_id,
                                 )
+                        # For final-qc targets, inject upstream_pipeline_stages by querying
+                        # the task store directly so ALL parallel coder/tester branches are
+                        # included — the normal trigger chain only carries one branch's context.
+                        if payload_target_bot_id == "pm-final-qc" and isinstance(payload, dict):
+                            if not payload.get("upstream_pipeline_stages"):
+                                _fqc_stages = await self._collect_pm_pipeline_stages_for_final_qc(task)
+                                if _fqc_stages:
+                                    payload["upstream_pipeline_stages"] = _fqc_stages
+                                    logger.info(
+                                        "[TRIGGER] INJECTED_PIPELINE_STAGES trigger=%s task=%s stage_count=%s",
+                                        trigger.id,
+                                        task.id,
+                                        len(_fqc_stages),
+                                    )
                         try:
                             await self.create_task(
                                 bot_id=payload_target_bot_id,
@@ -8206,6 +8220,97 @@ class TaskManager:
             payload=payload,
             metadata=child_metadata,
         )
+
+    async def _collect_pm_pipeline_stages_for_final_qc(self, task: Task) -> List[Dict[str, Any]]:
+        """Query the task store for ALL completed PM pipeline tasks in this orchestration
+        and return a flat, chronologically-ordered list of stage summaries.
+
+        This is the correct approach for building ``upstream_pipeline_stages`` for the
+        final-qc task because the normal trigger chain only carries ONE branch's context
+        (the leaf path that reached the ui-tester), not all parallel coder/tester branches.
+        Querying ``self._tasks`` directly gives every completed branch's result."""
+        metadata = task.metadata or TaskMetadata()
+        orchestration_id = str(metadata.orchestration_id or "").strip()
+        if not orchestration_id:
+            return []
+
+        pipeline_bot_ids = {
+            "pm-coder",
+            "pm-tester",
+            "pm-security-reviewer",
+            "pm-database-engineer",
+            "pm-ui-tester",
+        }
+
+        async with self._lock:
+            all_tasks = list(self._tasks.values())
+
+        stage_tasks = [
+            t
+            for t in all_tasks
+            if t.bot_id in pipeline_bot_ids
+            and str(t.status or "").strip().lower() == "completed"
+            and str((t.metadata or TaskMetadata()).orchestration_id or "").strip() == orchestration_id
+        ]
+
+        stage_tasks.sort(key=lambda t: self._task_order_token(t))
+
+        stages: List[Dict[str, Any]] = []
+        for t in stage_tasks:
+            result = t.result if isinstance(t.result, dict) else {}
+            outcome = str(result.get("outcome") or result.get("failure_type") or "").strip()
+            failure_type = str(result.get("failure_type") or "").strip()
+            handoff_notes = str(result.get("handoff_notes") or "")[:600].strip()
+
+            payload_dict = t.payload if isinstance(t.payload, dict) else {}
+            workstream = payload_dict.get("workstream")
+            workstream_dict = workstream if isinstance(workstream, dict) else {}
+            title = (
+                str(workstream_dict.get("title") or "").strip()
+                or str(payload_dict.get("workstream_title") or "").strip()
+                or str(payload_dict.get("title") or "").strip()
+            )
+
+            artifacts_raw = result.get("artifacts")
+            artifact_paths: List[str] = []
+            artifact_previews: List[Dict[str, Any]] = []
+            if isinstance(artifacts_raw, list):
+                for art in artifacts_raw[:40]:
+                    if not isinstance(art, dict):
+                        continue
+                    path = str(art.get("path") or "").strip()
+                    content = str(art.get("content") or "").strip()
+                    label = str(art.get("label") or "").strip()
+                    if path:
+                        artifact_paths.append(path)
+                        if content:
+                            artifact_previews.append({"path": path, "content_preview": content[:1500]})
+                    elif label and content:
+                        artifact_previews.append({"label": label, "content_preview": content[:300]})
+
+            summary: Dict[str, Any] = {
+                "bot_id": t.bot_id,
+                "task_id": t.id,
+                "outcome": outcome,
+                "failure_type": failure_type,
+            }
+            if title:
+                summary["title"] = title
+            if handoff_notes:
+                summary["handoff_notes"] = handoff_notes
+            if artifact_paths:
+                summary["artifact_paths"] = artifact_paths
+            if artifact_previews:
+                summary["artifacts"] = artifact_previews
+            findings = result.get("findings")
+            if isinstance(findings, list) and findings:
+                summary["findings"] = [str(f)[:250] for f in findings[:6]]
+            evidence = result.get("evidence")
+            if isinstance(evidence, list) and evidence:
+                summary["evidence"] = [str(e)[:200] for e in evidence[:6]]
+            stages.append(summary)
+
+        return stages
 
     async def _create_dynamic_pm_final_qc_task(self, task: Task, context: Dict[str, Any]) -> None:
         metadata = task.metadata or TaskMetadata()
