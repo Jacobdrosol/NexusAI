@@ -6499,7 +6499,7 @@ class TaskManager:
                         branch_metadata = base_child_metadata
                         if isinstance(payload, dict):
                             if str(metadata.run_class or "").strip().lower() == "pm_assignment":
-                                repeat_limit = max(1, _settings_int("workflow_route_repeat_limit", 3))
+                                repeat_limit = max(1, _settings_int("workflow_route_repeat_limit", 5))
                                 repeat_count = await self._workflow_route_repeat_count(task, payload_target_bot_id, payload)
                                 if repeat_count >= repeat_limit:
                                     logger.warning(
@@ -8222,13 +8222,18 @@ class TaskManager:
         )
 
     async def _collect_pm_pipeline_stages_for_final_qc(self, task: Task) -> List[Dict[str, Any]]:
-        """Query the task store for ALL completed PM pipeline tasks in this orchestration
-        and return a flat, chronologically-ordered list of stage summaries.
+        """Query the task store for completed PM pipeline tasks in the CURRENT CYCLE only.
 
         This is the correct approach for building ``upstream_pipeline_stages`` for the
         final-qc task because the normal trigger chain only carries ONE branch's context
         (the leaf path that reached the ui-tester), not all parallel coder/tester branches.
-        Querying ``self._tasks`` directly gives every completed branch's result."""
+        Querying ``self._tasks`` directly gives every completed branch's result.
+
+        CYCLE SCOPING: When multiple orchestrator cycles have run (final-qc failure loops),
+        all cycles share the same orchestration_id. We must restrict to the CURRENT CYCLE
+        only, identified by finding the most recently completed pm-orchestrator task and
+        using its creation time as a lower bound.  Without this scoping the final-qc would
+        see conflicting artefacts from previous cycles and hallucinate compile conflicts."""
         metadata = task.metadata or TaskMetadata()
         orchestration_id = str(metadata.orchestration_id or "").strip()
         if not orchestration_id:
@@ -8245,12 +8250,29 @@ class TaskManager:
         async with self._lock:
             all_tasks = list(self._tasks.values())
 
+        # --- Identify the current cycle's start time ---
+        # Find the most recently completed pm-orchestrator task in this orchestration.
+        # That is the orchestrator that spawned the current coder/tester/... wave.
+        # All pipeline tasks created after it belong to the current cycle.
+        orchestrator_tasks = [
+            t for t in all_tasks
+            if t.bot_id == "pm-orchestrator"
+            and str(t.status or "").strip().lower() == "completed"
+            and str((t.metadata or TaskMetadata()).orchestration_id or "").strip() == orchestration_id
+        ]
+        cycle_start_token: Optional[Tuple[str, str]] = None
+        if orchestrator_tasks:
+            orchestrator_tasks.sort(key=lambda t: self._task_order_token(t))
+            cycle_start_token = self._task_order_token(orchestrator_tasks[-1])
+
         stage_tasks = [
             t
             for t in all_tasks
             if t.bot_id in pipeline_bot_ids
             and str(t.status or "").strip().lower() == "completed"
             and str((t.metadata or TaskMetadata()).orchestration_id or "").strip() == orchestration_id
+            # Restrict to tasks created at or after the current cycle's orchestrator
+            and (cycle_start_token is None or self._task_order_token(t) >= cycle_start_token)
         ]
 
         stage_tasks.sort(key=lambda t: self._task_order_token(t))

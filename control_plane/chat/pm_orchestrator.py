@@ -725,10 +725,19 @@ class PMOrchestrator:
         self,
         assignment: Dict[str, Any],
         poll_interval_seconds: float = 0.4,
-        max_wait_seconds: float = 900.0,
+        max_wait_seconds: float = 0.0,
     ) -> Dict[str, Any]:
         import asyncio
         import time
+
+        # Allow override via settings; default 7200s (2 hours) so long-running PM pipelines
+        # are not prematurely marked failed while coders are still executing.
+        if max_wait_seconds <= 0.0:
+            try:
+                from shared.settings_manager import SettingsManager
+                max_wait_seconds = float(SettingsManager.instance().get("pm_assignment_max_wait_seconds", 7200.0))
+            except Exception:
+                max_wait_seconds = 7200.0
 
         task_ids = [str(t.get("id")) for t in assignment.get("tasks", []) if t.get("id")]
         orchestration_id = str(assignment.get("orchestration_id") or "").strip()
