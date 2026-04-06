@@ -3530,11 +3530,11 @@ class TaskManager:
     async def _check_running_tasks_for_stall(self) -> None:
         initial_stall_seconds = max(
             0.1,
-            _settings_float("running_task_watchdog_initial_stall_seconds", 600.0),
+            _settings_float("running_task_watchdog_initial_stall_seconds", 2700.0),
         )
         progress_grace_seconds = max(
             0.1,
-            _settings_float("running_task_watchdog_progress_grace_seconds", 300.0),
+            _settings_float("running_task_watchdog_progress_grace_seconds", 600.0),
         )
         now_monotonic = time.monotonic()
         to_retry: List[Tuple[str, str, float, float, str]] = []
@@ -4509,7 +4509,7 @@ class TaskManager:
                     "last_progress_monotonic": time.monotonic(),
                     "next_deadline_monotonic": time.monotonic() + max(
                         0.1,
-                        _settings_float("running_task_watchdog_initial_stall_seconds", 600.0),
+                        _settings_float("running_task_watchdog_initial_stall_seconds", 2700.0),
                     ),
                     "grace_issued": False,
                 }
@@ -4562,7 +4562,7 @@ class TaskManager:
                     "last_progress_monotonic": time.monotonic(),
                     "next_deadline_monotonic": time.monotonic() + max(
                         0.1,
-                        _settings_float("running_task_watchdog_progress_grace_seconds", 300.0),
+                        _settings_float("running_task_watchdog_progress_grace_seconds", 600.0),
                     ),
                     "grace_issued": False,
                 }
@@ -7316,6 +7316,7 @@ class TaskManager:
         seen: Set[str] = set()
         seen_repo_fingerprints: Set[str] = set()
         for payload in payloads:
+            workstream_dict = payload.get("workstream") if isinstance(payload.get("workstream"), dict) else {}
             fingerprint_payload = {
                 "title": str(payload.get("title") or "").strip().lower(),
                 "instruction": str(payload.get("instruction") or "").strip().lower(),
@@ -7327,6 +7328,15 @@ class TaskManager:
                 ),
                 "target_bot_id": str(payload.get("target_bot_id") or "").strip().lower(),
                 "role_hint": str(payload.get("role_hint") or "").strip().lower(),
+                # Fan-out siblings share the same top-level title/instruction (from the
+                # triggering task). Include workstream-specific fields so each branch
+                # gets a unique fingerprint and is not collapsed by deduplication.
+                "workstream_title": str(workstream_dict.get("title") or "").strip().lower(),
+                "workstream_deliverables": sorted(
+                    str(item or "").strip().replace("\\", "/").lower()
+                    for item in _normalize_string_list(workstream_dict.get("deliverables"))
+                    if str(item or "").strip()
+                ),
             }
             fingerprint = json.dumps(fingerprint_payload, sort_keys=True)
             if fingerprint in seen:
