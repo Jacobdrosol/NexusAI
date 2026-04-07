@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from shared.models import TaskMetadata
 
@@ -17,6 +18,8 @@ router = APIRouter(prefix="/v1/platform-ai", tags=["platform-ai"])
 _PIPELINE_SESSION_CLAIM_LOCK = asyncio.Lock()
 
 _QUALITY_FIELDS = {"summary", "quality_gates", "acceptance_criteria", "tests", "artifacts", "warnings", "errors"}
+_CANONICAL_MODES = {"bot_tuner", "bot_creator", "pipeline_tuner", "pipeline_creator"}
+_CANONICAL_STATUSES = {"ready", "running", "stopped"}
 _TERMINAL_AUTONOMOUS_STATES = {
     "converged",
     "max_iterations_reached",
@@ -129,7 +132,7 @@ def _pipeline_tuner_reset_metadata(
     metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
     current_status = str(session.get("status") or "").strip().lower()
     autonomous_state = str(metadata.get("autonomous_state") or "").strip().lower()
-    should_reset = for_new_target or current_status in {"failed", "completed", "stopped"} or autonomous_state in _TERMINAL_AUTONOMOUS_STATES
+    should_reset = for_new_target or current_status == "stopped" or autonomous_state in _TERMINAL_AUTONOMOUS_STATES
     if not should_reset:
         return {}
     return {
@@ -147,6 +150,20 @@ def _pipeline_tuner_reset_metadata(
         "autonomous_terminalized_at": None,
         "autonomous_terminal_reason": None,
     }
+
+
+def _normalize_mode(value: Any) -> str:
+    mode = str(value or "").strip().lower()
+    if mode in _CANONICAL_MODES:
+        return mode
+    return ""
+
+
+def _normalize_status(value: Any) -> str:
+    status = str(value or "").strip().lower()
+    if status in _CANONICAL_STATUSES:
+        return status
+    return ""
 
 
 def _graph_from_bot(bot: Any) -> Dict[str, Any]:
@@ -685,16 +702,22 @@ async def _wait_for_orchestration_terminal(
 
 class CreatePlatformAISessionRequest(BaseModel):
     mode: str
-    start_paused: bool = False
+    start_running: bool = False
     assignment_id: Optional[str] = None
     run_id: Optional[str] = None
     orchestration_id: Optional[str] = None
+    seed_run_id: Optional[str] = None
+    seed_orchestration_id: Optional[str] = None
     operator_id: Optional[str] = None
     privileged: bool = False
     project_id: Optional[str] = None
     pipeline_bot_id: Optional[str] = None
     pipeline_name: Optional[str] = None
+    pipeline_name_seed: Optional[str] = None
     target_bot_id: Optional[str] = None
+    bot_name_seed: Optional[str] = None
+    reference_bot_ids: List[str] = Field(default_factory=list)
+    reference_pipeline_ids: List[str] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
     provider: Optional[str] = None
     model: Optional[str] = None
@@ -707,11 +730,17 @@ class CreatePlatformAISessionRequest(BaseModel):
 
 class UpdatePlatformAISessionRequest(BaseModel):
     status: Optional[str] = None
+    archived: Optional[bool] = None
+    archived_by: Optional[str] = None
     assignment_id: Optional[str] = None
     run_id: Optional[str] = None
     orchestration_id: Optional[str] = None
     project_id: Optional[str] = None
     target_bot_id: Optional[str] = None
+    pipeline_bot_id: Optional[str] = None
+    pipeline_name: Optional[str] = None
+    pipeline_name_seed: Optional[str] = None
+    bot_name_seed: Optional[str] = None
     metadata: Dict[str, Any] = Field(default_factory=dict)
     provider: Optional[str] = None
     model: Optional[str] = None
@@ -801,21 +830,21 @@ async def _find_or_create_pipeline_session(request: Request, *, pipeline_bot_id:
             or ""
         ).strip()
         if existing_pipeline_bot_id == pipeline_bot_id:
-            if str(session.get("status") or "").strip().lower() == "active" and str(metadata.get("source") or "").strip() in {"pipeline_test_modal", "pipeline_suite_api"}:
-                paused = await store.update_session(
+            if str(session.get("status") or "").strip().lower() == "running" and str(metadata.get("source") or "").strip() in {"pipeline_test_modal", "pipeline_suite_api"}:
+                ready = await store.update_session(
                     str(session.get("id") or ""),
-                    status="paused",
+                    status="ready",
                     metadata={"auto_managed": True},
                 )
-                if paused is not None:
-                    return paused
+                if ready is not None:
+                    return ready
             return session
     created = await store.create_session(
         mode="pipeline_tuner",
         metadata={"source": "pipeline_suite_api", "pipeline_bot_id": pipeline_bot_id, "auto_managed": True},
     )
-    paused = await store.update_session(str(created.get("id") or ""), status="paused")
-    return paused or created
+    ready = await store.update_session(str(created.get("id") or ""), status="ready")
+    return ready or created
 
 
 def _session_pipeline_bot_id(session: Dict[str, Any]) -> str:
@@ -851,6 +880,57 @@ async def _ensure_pipeline_not_already_claimed(
         )
 
 
+async def _resolve_seed_binding(
+    request: Request,
+    *,
+    seed_run_id: Optional[str],
+    seed_orchestration_id: Optional[str],
+    assignment_id: Optional[str],
+    run_id: Optional[str],
+    orchestration_id: Optional[str],
+) -> Dict[str, Any]:
+    run_store = getattr(request.app.state, "run_store", None)
+    effective_assignment_id = str(assignment_id or "").strip() or None
+    effective_run_id = str(run_id or "").strip() or None
+    effective_orchestration_id = str(orchestration_id or "").strip() or None
+    seed_run = None
+    if run_store is not None:
+        safe_seed_run = str(seed_run_id or "").strip()
+        safe_seed_orch = str(seed_orchestration_id or "").strip()
+        try:
+            if safe_seed_run:
+                seed_run = await run_store.get_run(safe_seed_run)
+            elif safe_seed_orch:
+                seed_run = await run_store.get_run_by_orchestration(safe_seed_orch)
+            elif effective_run_id:
+                seed_run = await run_store.get_run(effective_run_id)
+            elif effective_orchestration_id:
+                seed_run = await run_store.get_run_by_orchestration(effective_orchestration_id)
+        except Exception:
+            seed_run = None
+    if isinstance(seed_run, dict):
+        effective_assignment_id = str(seed_run.get("assignment_id") or "").strip() or effective_assignment_id
+        effective_run_id = str(seed_run.get("id") or "").strip() or effective_run_id
+        effective_orchestration_id = str(seed_run.get("orchestration_id") or "").strip() or effective_orchestration_id
+    seed_binding = None
+    if isinstance(seed_run, dict):
+        seed_meta = seed_run.get("metadata") if isinstance(seed_run.get("metadata"), dict) else {}
+        seed_binding = {
+            "seed_run_id": str(seed_run.get("id") or "").strip() or None,
+            "seed_orchestration_id": str(seed_run.get("orchestration_id") or "").strip() or None,
+            "seed_assignment_id": str(seed_run.get("assignment_id") or "").strip() or None,
+            "instruction": str(seed_run.get("instruction") or "").strip() or None,
+            "node_overrides": seed_run.get("node_overrides") if isinstance(seed_run.get("node_overrides"), dict) else {},
+            "trigger_source": str(seed_meta.get("source") or "").strip() or None,
+        }
+    return {
+        "assignment_id": effective_assignment_id,
+        "run_id": effective_run_id,
+        "orchestration_id": effective_orchestration_id,
+        "seed_binding": seed_binding,
+    }
+
+
 @router.post("/sessions")
 async def create_session(request: Request, body: CreatePlatformAISessionRequest) -> Dict[str, Any]:
     store = request.app.state.platform_ai_session_store
@@ -858,14 +938,16 @@ async def create_session(request: Request, body: CreatePlatformAISessionRequest)
     privileged = bool(body.privileged)
     if privileged and not _is_privileged_allowed(operator_id):
         raise HTTPException(status_code=403, detail="privileged Platform AI mode is disabled or operator is not allowlisted")
-    mode = str(body.mode or "").strip()
+    mode = _normalize_mode(body.mode)
     if not mode:
-        raise HTTPException(status_code=400, detail="mode is required")
+        raise HTTPException(status_code=400, detail=f"mode is required and must be one of {sorted(_CANONICAL_MODES)}")
 
     pipeline_bot_id = str(body.pipeline_bot_id or "").strip()
-    pipeline_name = str(body.pipeline_name or "").strip()
+    pipeline_name = str(body.pipeline_name or body.pipeline_name_seed or "").strip()
     project_id = str(body.project_id or "").strip()
     target_bot_id = str(body.target_bot_id or "").strip()
+    bot_name_seed = str(body.bot_name_seed or "").strip()
+    pipeline_name_seed = str(body.pipeline_name_seed or "").strip()
     backend_cfg = _default_backend_config(
         body.provider,
         body.model,
@@ -881,39 +963,61 @@ async def create_session(request: Request, body: CreatePlatformAISessionRequest)
         pipeline_bot_id = str(metadata.get("pipeline_bot_id") or "").strip()
     if str(metadata.get("pipeline_name") or "").strip() and not pipeline_name:
         pipeline_name = str(metadata.get("pipeline_name") or "").strip()
+    if mode == "bot_tuner" and not target_bot_id:
+        raise HTTPException(status_code=400, detail="bot_tuner sessions require target_bot_id")
+    if mode == "bot_creator" and not bot_name_seed:
+        raise HTTPException(status_code=400, detail="bot_creator sessions require bot_name_seed")
     if mode == "pipeline_tuner" and not pipeline_bot_id:
-        has_attach_target = bool(
-            str(body.assignment_id or "").strip()
-            or str(body.orchestration_id or "").strip()
-            or str(body.run_id or "").strip()
-        )
-        if not has_attach_target:
-            raise HTTPException(
-                status_code=400,
-                detail="pipeline_tuner sessions require pipeline_bot_id or an attached assignment/orchestration/run target",
-            )
-    if mode == "bot_designer" and not target_bot_id:
-        raise HTTPException(status_code=400, detail="bot_designer sessions require target_bot_id")
+        raise HTTPException(status_code=400, detail="pipeline_tuner sessions require pipeline_bot_id")
+    if mode == "pipeline_creator" and not pipeline_name_seed:
+        raise HTTPException(status_code=400, detail="pipeline_creator sessions require pipeline_name_seed")
+
+    mutation_policy_by_mode = {
+        "bot_tuner": {"create": False, "update": True, "delete": False},
+        "bot_creator": {"create": True, "update": True, "delete": False},
+        "pipeline_tuner": {"create": True, "update": True, "delete": True},
+        "pipeline_creator": {"create": True, "update": True, "delete": True},
+    }
+
+    seed_context = await _resolve_seed_binding(
+        request,
+        seed_run_id=body.seed_run_id,
+        seed_orchestration_id=body.seed_orchestration_id,
+        assignment_id=body.assignment_id,
+        run_id=body.run_id,
+        orchestration_id=body.orchestration_id,
+    )
     if pipeline_bot_id:
         metadata["pipeline_bot_id"] = pipeline_bot_id
     if pipeline_name:
         metadata["pipeline_name"] = pipeline_name
+    if pipeline_name_seed:
+        metadata["pipeline_name_seed"] = pipeline_name_seed
     if project_id:
         metadata["project_id"] = project_id
     if target_bot_id:
         metadata["target_bot_id"] = target_bot_id
+    if bot_name_seed:
+        metadata["bot_name_seed"] = bot_name_seed
+    if body.reference_bot_ids:
+        metadata["reference_bot_ids"] = [str(item).strip() for item in body.reference_bot_ids if str(item).strip()]
+    if body.reference_pipeline_ids:
+        metadata["reference_pipeline_ids"] = [str(item).strip() for item in body.reference_pipeline_ids if str(item).strip()]
+    metadata["mutation_policy"] = mutation_policy_by_mode.get(mode, {"create": False, "update": True, "delete": False})
+    if isinstance(seed_context.get("seed_binding"), dict):
+        metadata["seed_binding"] = seed_context.get("seed_binding")
     metadata["backend"] = backend_cfg
     metadata.setdefault("current_phase", "observe")
-    initial_status = "paused" if bool(body.start_paused) else "active"
+    initial_status = "running" if bool(body.start_running) else "ready"
     if pipeline_bot_id:
         async with _PIPELINE_SESSION_CLAIM_LOCK:
             await _ensure_pipeline_not_already_claimed(request, pipeline_bot_id=pipeline_bot_id)
             session = await store.create_session(
                 mode=mode,
                 status=initial_status,
-                assignment_id=body.assignment_id,
-                run_id=body.run_id,
-                orchestration_id=body.orchestration_id,
+                assignment_id=seed_context.get("assignment_id"),
+                run_id=seed_context.get("run_id"),
+                orchestration_id=seed_context.get("orchestration_id"),
                 operator_id=operator_id or None,
                 privileged=privileged,
                 metadata=metadata,
@@ -922,9 +1026,9 @@ async def create_session(request: Request, body: CreatePlatformAISessionRequest)
         session = await store.create_session(
             mode=mode,
             status=initial_status,
-            assignment_id=body.assignment_id,
-            run_id=body.run_id,
-            orchestration_id=body.orchestration_id,
+            assignment_id=seed_context.get("assignment_id"),
+            run_id=seed_context.get("run_id"),
+            orchestration_id=seed_context.get("orchestration_id"),
             operator_id=operator_id or None,
             privileged=privileged,
             metadata=metadata,
@@ -932,10 +1036,10 @@ async def create_session(request: Request, body: CreatePlatformAISessionRequest)
     await store.append_event(
         session["id"],
         "action_trace",
-        {"action": "session_backend_configured", "backend": backend_cfg},
+        {"action": "session_backend_configured", "backend": backend_cfg, "seed_binding": seed_context.get("seed_binding")},
     )
     runtime = getattr(request.app.state, "platform_ai_runtime", None)
-    if runtime is not None and str(session.get("status") or "").strip().lower() == "active":
+    if runtime is not None and str(session.get("status") or "").strip().lower() == "running":
         await runtime.ensure_session_loop(session["id"])
     return session
 
@@ -1002,8 +1106,36 @@ async def patch_session(session_id: str, request: Request, body: UpdatePlatformA
         metadata["project_id"] = str(body.project_id or "").strip() or None
     if body.target_bot_id is not None:
         metadata["target_bot_id"] = str(body.target_bot_id or "").strip() or None
-    status = str(body.status or "").strip().lower() or None
+    if body.pipeline_bot_id is not None:
+        metadata["pipeline_bot_id"] = str(body.pipeline_bot_id or "").strip() or None
+    if body.pipeline_name is not None:
+        metadata["pipeline_name"] = str(body.pipeline_name or "").strip() or None
+    if body.pipeline_name_seed is not None:
+        metadata["pipeline_name_seed"] = str(body.pipeline_name_seed or "").strip() or None
+    if body.bot_name_seed is not None:
+        metadata["bot_name_seed"] = str(body.bot_name_seed or "").strip() or None
+    status = _normalize_status(body.status) or None
+    if body.status is not None and not status:
+        raise HTTPException(status_code=400, detail=f"status must be one of {sorted(_CANONICAL_STATUSES)}")
     current_status = str(session.get("status") or "").strip().lower()
+    if status == "stopped" or (current_status == "stopped" and status and status != "stopped"):
+        raise HTTPException(status_code=400, detail="stopped transitions are only allowed via session control actions")
+    session_mode = str(session.get("mode") or "").strip().lower()
+    existing_metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
+    merged_metadata = dict(existing_metadata)
+    merged_metadata.update(metadata)
+    required_target_bot_id = str(merged_metadata.get("target_bot_id") or "").strip()
+    required_pipeline_bot_id = str(merged_metadata.get("pipeline_bot_id") or "").strip()
+    required_bot_name_seed = str(merged_metadata.get("bot_name_seed") or "").strip()
+    required_pipeline_name_seed = str(merged_metadata.get("pipeline_name_seed") or "").strip()
+    if session_mode == "bot_tuner" and not required_target_bot_id:
+        raise HTTPException(status_code=400, detail="bot_tuner sessions require target_bot_id")
+    if session_mode == "bot_creator" and not required_bot_name_seed:
+        raise HTTPException(status_code=400, detail="bot_creator sessions require bot_name_seed")
+    if session_mode == "pipeline_tuner" and not required_pipeline_bot_id:
+        raise HTTPException(status_code=400, detail="pipeline_tuner sessions require pipeline_bot_id")
+    if session_mode == "pipeline_creator" and not required_pipeline_name_seed:
+        raise HTTPException(status_code=400, detail="pipeline_creator sessions require pipeline_name_seed")
     wants_backend_update = any(
         [
             body.provider is not None,
@@ -1015,10 +1147,10 @@ async def patch_session(session_id: str, request: Request, body: UpdatePlatformA
             body.vertex_location is not None,
         ]
     )
-    if wants_backend_update and current_status not in {"paused", "stopped", "completed", "failed"}:
+    if wants_backend_update and current_status not in {"ready", "stopped"}:
         raise HTTPException(
             status_code=400,
-            detail="session backend/model can only be changed when paused, stopped, or completed",
+            detail="session backend/model can only be changed when session status is ready or stopped",
         )
     if wants_backend_update:
         existing_meta = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
@@ -1044,6 +1176,8 @@ async def patch_session(session_id: str, request: Request, body: UpdatePlatformA
     updated = await store.update_session(
         session_id,
         status=status,
+        archived=body.archived,
+        archived_by=(str(body.archived_by or "").strip() or None) if body.archived else None,
         assignment_id=body.assignment_id,
         run_id=body.run_id,
         orchestration_id=body.orchestration_id,
@@ -1052,7 +1186,7 @@ async def patch_session(session_id: str, request: Request, body: UpdatePlatformA
     if updated is None:
         raise HTTPException(status_code=404, detail="session not found")
     runtime = getattr(request.app.state, "platform_ai_runtime", None)
-    if runtime is not None and str(updated.get("status") or "").strip().lower() == "active":
+    if runtime is not None and not bool(updated.get("archived")) and str(updated.get("status") or "").strip().lower() == "running":
         await runtime.ensure_session_loop(session_id)
     await store.append_event(
         session_id,
@@ -1091,15 +1225,63 @@ async def post_session_message(session_id: str, request: Request, body: SessionM
     session = await store.get_session(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="session not found")
+    if bool(session.get("archived")):
+        raise HTTPException(status_code=409, detail="session is archived; restore it before messaging")
     content = str(body.content or "").strip()
     if not content:
         raise HTTPException(status_code=400, detail="content is required")
     role = str(body.role or "operator").strip().lower() or "operator"
+    if role == "operator" and str(session.get("status") or "").strip().lower() == "ready":
+        session = await store.update_session(session_id, status="running") or session
+        if runtime is not None:
+            await runtime.ensure_session_loop(session_id)
     if runtime is not None:
         message = await runtime.post_message(session_id, role=role, content=content, metadata=body.metadata)
     else:
         message = await store.append_message(session_id, role=role, content=content, metadata=body.metadata)
     return {"session_id": session_id, "message": message}
+
+
+@router.get("/sessions/{session_id}/messages/stream")
+async def stream_session_messages(session_id: str, request: Request, since: Optional[str] = None) -> StreamingResponse:
+    store = request.app.state.platform_ai_session_store
+    session = await store.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="session not found")
+
+    since_text = str(since or "").strip()
+
+    async def _events() -> Any:
+        seen: set[str] = set()
+        started = time.monotonic()
+        timeout_seconds = 120.0
+        while True:
+            current = await store.get_session(session_id)
+            if current is None:
+                yield "event: end\ndata: {\"reason\":\"session_not_found\"}\n\n"
+                break
+            rows = await store.list_messages(session_id, limit=300)
+            for row in rows:
+                msg_id = str(row.get("id") or "").strip()
+                created_at = str(row.get("created_at") or "").strip()
+                role = str(row.get("role") or "").strip().lower()
+                if not msg_id or msg_id in seen or role != "assistant":
+                    continue
+                if since_text and created_at and created_at <= since_text:
+                    seen.add(msg_id)
+                    continue
+                seen.add(msg_id)
+                payload = json.dumps({"type": "assistant_message", "message": row}, ensure_ascii=False)
+                yield f"data: {payload}\n\n"
+            if str(current.get("status") or "").strip().lower() != "running":
+                yield "event: end\ndata: {\"reason\":\"not_running\"}\n\n"
+                break
+            if time.monotonic() - started >= timeout_seconds:
+                yield "event: end\ndata: {\"reason\":\"timeout\"}\n\n"
+                break
+            await asyncio.sleep(0.8)
+
+    return StreamingResponse(_events(), media_type="text/event-stream")
 
 
 @router.post("/sessions/{session_id}/control")
@@ -1117,23 +1299,33 @@ async def control_session(session_id: str, request: Request, body: ControlPlatfo
         raise HTTPException(status_code=403, detail="privileged control action denied")
 
     next_status: Optional[str] = None
+    next_archived: Optional[bool] = None
+    next_archived_by: Optional[str] = None
     result: Dict[str, Any] = {}
     control_metadata: Dict[str, Any] = dict(body.metadata or {})
+    is_archived = bool(session.get("archived"))
+    current_status = str(session.get("status") or "").strip().lower()
+    if is_archived and action not in {"restore", "unarchive"}:
+        raise HTTPException(status_code=409, detail="session is archived; restore it before executing actions")
+
     if action in {"start", "resume", "continue"}:
-        next_status = "active"
-        result = {"status": "active"}
+        next_status = "running"
+        result = {"status": "running"}
         control_metadata.update(_pipeline_tuner_reset_metadata(session, for_new_target=False))
         if runtime is not None:
             await runtime.ensure_session_loop(session_id)
     elif action in {"archive", "close"}:
-        next_status = "archived"
-        result = {"status": "archived"}
+        next_archived = True
+        next_archived_by = operator_id or None
+        next_status = "ready"
+        result = {"status": "ready", "archived": True}
     elif action in {"restore", "unarchive"}:
-        next_status = "paused"
-        result = {"status": "paused"}
+        next_archived = False
+        next_status = "ready"
+        result = {"status": "ready", "archived": False}
     elif action in {"pause", "hold"}:
-        next_status = "paused"
-        result = {"status": "paused"}
+        next_status = "ready"
+        result = {"status": "ready"}
     elif action in {"stop", "cancel"}:
         next_status = "stopped"
         result = {"status": "stopped"}
@@ -1192,6 +1384,20 @@ async def control_session(session_id: str, request: Request, body: ControlPlatfo
         if not orch_id or not node_id:
             raise HTTPException(status_code=400, detail="rerun_node requires orchestration_id and node_id")
         result = await assignment_service.rerun_node(orchestration_id=orch_id, node_id=node_id, payload_override=body.payload)
+    elif action in {"project_code_edit", "public_project_edit"}:
+        _require_feature_flag("NEXUS_PLATFORM_AI_PROJECT_EDIT_ENABLED", action=action)
+        if runtime is None:
+            raise HTTPException(status_code=503, detail="platform ai runtime unavailable")
+        result = await runtime.start_project_edit_run(
+            session_id,
+            requested_by=operator_id or "platform-ai",
+            instruction=_instruction_from_payload(body.payload),
+        )
+        status_raw = str(result.get("status") or "").strip().lower()
+        if status_raw in {"disabled", "denied"}:
+            raise HTTPException(status_code=403, detail=str(result.get("detail") or "project code edit denied"))
+        if status_raw == "error":
+            raise HTTPException(status_code=400, detail=str(result.get("detail") or "project code edit error"))
     elif action in {"code_edit", "hotfix"}:
         _require_feature_flag("NEXUS_PLATFORM_AI_REPO_EDIT_ENABLED", action=action)
         if runtime is None:
@@ -1235,8 +1441,16 @@ async def control_session(session_id: str, request: Request, body: ControlPlatfo
     else:
         raise HTTPException(status_code=400, detail=f"unsupported control action: {action}")
 
-    if next_status is not None:
-        session = await store.update_session(session_id, status=next_status, metadata=control_metadata) or session
+    if next_status is not None or next_archived is not None:
+        session = await store.update_session(
+            session_id,
+            status=next_status,
+            archived=next_archived,
+            archived_by=next_archived_by,
+            metadata=control_metadata,
+        ) or session
+        if runtime is not None and not bool(session.get("archived")) and str(session.get("status") or "").strip().lower() == "running":
+            await runtime.ensure_session_loop(session_id)
     elif control_metadata and action not in {"attach_assignment", "attach_orchestration"}:
         session = await store.update_session(session_id, metadata=control_metadata) or session
     event = await store.append_event(

@@ -164,7 +164,12 @@ async def test_assignment_splice_posts_messages_to_origin_chat(cp_client):
 async def test_platform_ai_session_control_flow(cp_client):
     create_resp = await cp_client.post(
         "/v1/platform-ai/sessions",
-        json={"mode": "assignment_follower", "operator_id": "owner@example.com", "privileged": False},
+        json={
+            "mode": "bot_creator",
+            "bot_name_seed": "Control Flow Bot",
+            "operator_id": "owner@example.com",
+            "privileged": False,
+        },
     )
     assert create_resp.status_code == 200
     session = create_resp.json()
@@ -175,14 +180,14 @@ async def test_platform_ai_session_control_flow(cp_client):
         json={"action": "pause", "operator_id": "owner@example.com"},
     )
     assert pause_resp.status_code == 200
-    assert pause_resp.json()["result"]["status"] == "paused"
+    assert pause_resp.json()["result"]["status"] == "ready"
 
     resume_resp = await cp_client.post(
         f"/v1/platform-ai/sessions/{session_id}/control",
         json={"action": "resume", "operator_id": "owner@example.com"},
     )
     assert resume_resp.status_code == 200
-    assert resume_resp.json()["result"]["status"] == "active"
+    assert resume_resp.json()["result"]["status"] == "running"
 
     events_resp = await cp_client.get(f"/v1/platform-ai/sessions/{session_id}/events")
     assert events_resp.status_code == 200
@@ -198,7 +203,8 @@ async def test_platform_ai_code_edit_control_requires_runtime_when_enabled(cp_cl
     create_resp = await cp_client.post(
         "/v1/platform-ai/sessions",
         json={
-            "mode": "assignment_follower",
+            "mode": "bot_creator",
+            "bot_name_seed": "Repo Edit Bot",
             "operator_id": "owner@example.com",
             "privileged": False,
         },
@@ -216,6 +222,61 @@ async def test_platform_ai_code_edit_control_requires_runtime_when_enabled(cp_cl
         },
     )
     assert code_edit_resp.status_code == 503
+
+
+@pytest.mark.anyio
+async def test_platform_ai_project_code_edit_control_requires_runtime_when_enabled(cp_client, monkeypatch):
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_PROJECT_EDIT_ENABLED", "1")
+    create_resp = await cp_client.post(
+        "/v1/platform-ai/sessions",
+        json={
+            "mode": "bot_creator",
+            "bot_name_seed": "Project Edit Bot",
+            "operator_id": "owner@example.com",
+            "privileged": False,
+        },
+    )
+    assert create_resp.status_code == 200
+    session_id = str((create_resp.json() or {}).get("id") or "")
+    assert session_id
+
+    project_edit_resp = await cp_client.post(
+        f"/v1/platform-ai/sessions/{session_id}/control",
+        json={
+            "action": "project_code_edit",
+            "operator_id": "owner@example.com",
+            "payload": {"instruction": "Apply patch and run tests"},
+        },
+    )
+    assert project_edit_resp.status_code == 503
+
+
+@pytest.mark.anyio
+async def test_platform_ai_patch_cannot_move_stopped_state_without_control_action(cp_client):
+    create_resp = await cp_client.post(
+        "/v1/platform-ai/sessions",
+        json={
+            "mode": "bot_creator",
+            "bot_name_seed": "Stopped Guard Bot",
+            "operator_id": "owner@example.com",
+            "start_running": False,
+        },
+    )
+    assert create_resp.status_code == 200
+    session_id = str((create_resp.json() or {}).get("id") or "")
+    assert session_id
+
+    stop_resp = await cp_client.post(
+        f"/v1/platform-ai/sessions/{session_id}/control",
+        json={"action": "stop", "operator_id": "owner@example.com"},
+    )
+    assert stop_resp.status_code == 200
+
+    invalid_patch = await cp_client.patch(
+        f"/v1/platform-ai/sessions/{session_id}",
+        json={"status": "running"},
+    )
+    assert invalid_patch.status_code == 400
 
 
 @pytest.mark.anyio
@@ -244,6 +305,8 @@ async def test_platform_ai_quality_suite_design_and_rerun(cp_client):
         json={
             "mode": "pipeline_tuner",
             "assignment_id": assignment_id,
+            "pipeline_bot_id": pm_bot_id,
+            "pipeline_name": "PM Quality Pipeline",
             "operator_id": "owner@example.com",
             "privileged": False,
         },
@@ -319,7 +382,7 @@ async def test_platform_ai_pipeline_entry_suite_catalog_and_run(cp_client):
         json={"name": "Pipeline Entry Suite", "set_default": True},
     )
     assert design_resp.status_code == 200
-    assert str((design_resp.json().get("session") or {}).get("status") or "") == "paused"
+    assert str((design_resp.json().get("session") or {}).get("status") or "") == "ready"
     suite = design_resp.json().get("suite") or {}
     suite_id = str(suite.get("id") or "")
     assert suite_id
@@ -350,7 +413,7 @@ async def test_platform_ai_pipeline_session_lock_requires_archive(cp_client):
             "operator_id": "owner@example.com",
             "pipeline_bot_id": "pm-orchestrator",
             "pipeline_name": "PM Workflow",
-            "start_paused": True,
+            "start_running": False,
         },
     )
     assert first.status_code == 200
@@ -373,7 +436,9 @@ async def test_platform_ai_pipeline_session_lock_requires_archive(cp_client):
         json={"action": "archive", "operator_id": "owner@example.com"},
     )
     assert archive_resp.status_code == 200
-    assert str((archive_resp.json().get("session") or {}).get("status") or "") == "archived"
+    archived_session = archive_resp.json().get("session") or {}
+    assert bool(archived_session.get("archived")) is True
+    assert str(archived_session.get("status") or "") == "ready"
 
     third = await cp_client.post(
         "/v1/platform-ai/sessions",
@@ -382,7 +447,7 @@ async def test_platform_ai_pipeline_session_lock_requires_archive(cp_client):
             "operator_id": "owner@example.com",
             "pipeline_bot_id": "pm-orchestrator",
             "pipeline_name": "PM Workflow",
-            "start_paused": True,
+            "start_running": False,
         },
     )
     assert third.status_code == 200
@@ -402,7 +467,7 @@ async def test_platform_ai_pipeline_session_lock_requires_archive(cp_client):
 async def test_platform_ai_session_export_bundle(cp_client):
     create_resp = await cp_client.post(
         "/v1/platform-ai/sessions",
-        json={"mode": "assignment_follower", "operator_id": "owner@example.com", "start_paused": True},
+        json={"mode": "bot_creator", "bot_name_seed": "Export Bot", "operator_id": "owner@example.com", "start_running": False},
     )
     assert create_resp.status_code == 200
     session_id = str((create_resp.json() or {}).get("id") or "")
@@ -433,7 +498,7 @@ async def test_platform_ai_resume_resets_exhausted_pipeline_tuner_state(cp_clien
             "operator_id": "owner@example.com",
             "pipeline_bot_id": "pm-orchestrator",
             "pipeline_name": "PM Workflow",
-            "start_paused": True,
+            "start_running": False,
         },
     )
     assert create_resp.status_code == 200
@@ -443,7 +508,6 @@ async def test_platform_ai_resume_resets_exhausted_pipeline_tuner_state(cp_clien
     patch_resp = await cp_client.patch(
         f"/v1/platform-ai/sessions/{session_id}",
         json={
-            "status": "failed",
             "metadata": {
                 "autonomous_iteration": 6,
                 "autonomous_state": "max_iterations_reached",
@@ -455,6 +519,11 @@ async def test_platform_ai_resume_resets_exhausted_pipeline_tuner_state(cp_clien
         },
     )
     assert patch_resp.status_code == 200
+    stop_resp = await cp_client.post(
+        f"/v1/platform-ai/sessions/{session_id}/control",
+        json={"action": "stop", "operator_id": "owner@example.com"},
+    )
+    assert stop_resp.status_code == 200
 
     resume_resp = await cp_client.post(
         f"/v1/platform-ai/sessions/{session_id}/control",
@@ -463,7 +532,7 @@ async def test_platform_ai_resume_resets_exhausted_pipeline_tuner_state(cp_clien
     assert resume_resp.status_code == 200
     session = resume_resp.json().get("session") or {}
     metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
-    assert str(session.get("status") or "") == "active"
+    assert str(session.get("status") or "") == "running"
     assert int(metadata.get("autonomous_iteration") or 0) == 0
     assert str(metadata.get("autonomous_state") or "") == "observe"
     assert metadata.get("autonomous_last_eval_signature") is None
@@ -498,7 +567,7 @@ async def test_platform_ai_attach_assignment_resets_exhausted_pipeline_tuner_sta
             "operator_id": "owner@example.com",
             "pipeline_bot_id": pm_bot_id,
             "pipeline_name": "PM Workflow",
-            "start_paused": True,
+            "start_running": False,
         },
     )
     assert session_resp.status_code == 200
@@ -576,20 +645,20 @@ async def test_platform_catalog_includes_project_manager_pipeline_fallback(cp_cl
 
 
 @pytest.mark.anyio
-async def test_platform_ai_bot_designer_requires_target_bot(cp_client):
+async def test_platform_ai_bot_tuner_requires_target_bot(cp_client):
     missing_target = await cp_client.post(
         "/v1/platform-ai/sessions",
-        json={"mode": "bot_designer", "operator_id": "owner@example.com"},
+        json={"mode": "bot_tuner", "operator_id": "owner@example.com"},
     )
     assert missing_target.status_code == 400
 
     valid = await cp_client.post(
         "/v1/platform-ai/sessions",
         json={
-            "mode": "bot_designer",
+            "mode": "bot_tuner",
             "operator_id": "owner@example.com",
             "target_bot_id": "pm-orchestrator",
-            "start_paused": True,
+            "start_running": False,
         },
     )
     assert valid.status_code == 200
@@ -602,7 +671,7 @@ async def test_platform_ai_bot_designer_requires_target_bot(cp_client):
 async def test_platform_ai_session_patch_project_and_target_context(cp_client):
     create_resp = await cp_client.post(
         "/v1/platform-ai/sessions",
-        json={"mode": "assignment_follower", "operator_id": "owner@example.com", "start_paused": True},
+        json={"mode": "bot_creator", "bot_name_seed": "Patch Bot", "operator_id": "owner@example.com", "start_running": False},
     )
     assert create_resp.status_code == 200
     session_id = str((create_resp.json() or {}).get("id") or "")
@@ -610,13 +679,20 @@ async def test_platform_ai_session_patch_project_and_target_context(cp_client):
 
     patch_resp = await cp_client.patch(
         f"/v1/platform-ai/sessions/{session_id}",
-        json={"project_id": "proj-a", "target_bot_id": "bot-a"},
+        json={
+            "project_id": "proj-a",
+            "target_bot_id": "bot-a",
+            "pipeline_bot_id": "pm-orchestrator",
+            "pipeline_name": "PM Orchestrator Flow",
+        },
     )
     assert patch_resp.status_code == 200
     updated = patch_resp.json()
     metadata = updated.get("metadata") if isinstance(updated.get("metadata"), dict) else {}
     assert str(metadata.get("project_id") or "") == "proj-a"
     assert str(metadata.get("target_bot_id") or "") == "bot-a"
+    assert str(metadata.get("pipeline_bot_id") or "") == "pm-orchestrator"
+    assert str(metadata.get("pipeline_name") or "") == "PM Orchestrator Flow"
 
 
 @pytest.mark.anyio

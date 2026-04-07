@@ -127,9 +127,9 @@
         <label for="platform-ai-session-mode">Mode</label>
         <select id="platform-ai-session-mode" class="form-control">
           <option value="pipeline_tuner">pipeline_tuner</option>
-          <option value="pipeline_designer">pipeline_designer</option>
-          <option value="bot_designer">bot_designer</option>
-          <option value="assignment_follower">assignment_follower</option>
+          <option value="pipeline_creator">pipeline_creator</option>
+          <option value="bot_tuner">bot_tuner</option>
+          <option value="bot_creator">bot_creator</option>
         </select>
       </div>
       <div>
@@ -163,13 +163,23 @@
         </select>
       </div>
       <div>
-        <label for="platform-ai-session-target-bot">Target Bot (for bot_designer)</label>
+        <label for="platform-ai-session-target-bot">Target Bot (for bot_tuner)</label>
         <select id="platform-ai-session-target-bot" class="form-control">
           <option value="">No bot selected</option>
           {% for bot in bots %}
           <option value="{{ bot.id }}">{{ bot.name }} ({{ bot.id }})</option>
           {% endfor %}
         </select>
+      </div>
+    </div>
+    <div class="split-grid" style="grid-template-columns:1fr 1fr;gap:0.75rem;margin-bottom:0.75rem;">
+      <div>
+        <label for="platform-ai-session-bot-name-seed">Bot Name Seed (for bot_creator)</label>
+        <input id="platform-ai-session-bot-name-seed" class="form-control" placeholder="e.g., Course Rubric Grader">
+      </div>
+      <div>
+        <label for="platform-ai-session-pipeline-name-seed">Pipeline Name Seed (for pipeline_creator)</label>
+        <input id="platform-ai-session-pipeline-name-seed" class="form-control" placeholder="e.g., AI Project Pipeline">
       </div>
     </div>
     <details style="margin-bottom:0.75rem;">
@@ -189,7 +199,7 @@
       </div>
     </div>
     <div style="margin-bottom:0.75rem;">
-      <label><input id="platform-ai-session-start-paused" type="checkbox" checked> Start paused (recommended)</label>
+      <label><input id="platform-ai-session-start-running" type="checkbox"> Start running immediately</label>
     </div>
     <div id="platform-ai-session-create-status" class="mini-note" style="margin-bottom:0.75rem;"></div>
     <div class="modal-actions">
@@ -525,10 +535,12 @@ async function createPlatformAISession() {
   const operatorId = String(document.getElementById('platform-ai-session-operator')?.value || '').trim() || undefined;
   const pipelineBotId = String(document.getElementById('platform-ai-session-pipeline')?.value || '').trim() || undefined;
   const pipelineName = String(document.getElementById('platform-ai-session-pipeline-name')?.value || '').trim() || undefined;
+  const pipelineNameSeed = String(document.getElementById('platform-ai-session-pipeline-name-seed')?.value || '').trim() || undefined;
   const projectId = String(document.getElementById('platform-ai-session-project')?.value || '').trim() || undefined;
   const targetBotId = String(document.getElementById('platform-ai-session-target-bot')?.value || '').trim() || undefined;
+  const botNameSeed = String(document.getElementById('platform-ai-session-bot-name-seed')?.value || '').trim() || undefined;
   const orchestrationId = String(document.getElementById('platform-ai-session-orchestration')?.value || '').trim() || undefined;
-  const startPaused = !!document.getElementById('platform-ai-session-start-paused')?.checked;
+  const startRunning = !!document.getElementById('platform-ai-session-start-running')?.checked;
 
   if (!mode) {
     setCreateSessionStatus('Mode is required.', true);
@@ -538,12 +550,16 @@ async function createPlatformAISession() {
     setCreateSessionStatus('Pipeline tuner requires selecting a pipeline.', true);
     return;
   }
-  if (mode === 'pipeline_designer' && !pipelineBotId && !pipelineName) {
-    setCreateSessionStatus('Pipeline designer requires a selected pipeline or pipeline name.', true);
+  if (mode === 'pipeline_creator' && !pipelineNameSeed) {
+    setCreateSessionStatus('pipeline_creator requires pipeline_name_seed.', true);
     return;
   }
-  if (mode === 'bot_designer' && !targetBotId) {
-    setCreateSessionStatus('Bot designer requires selecting a target bot.', true);
+  if (mode === 'bot_tuner' && !targetBotId) {
+    setCreateSessionStatus('bot_tuner requires selecting a target bot.', true);
+    return;
+  }
+  if (mode === 'bot_creator' && !botNameSeed) {
+    setCreateSessionStatus('bot_creator requires bot_name_seed.', true);
     return;
   }
   if (!NEW_SESSION_BACKEND) {
@@ -557,13 +573,15 @@ async function createPlatformAISession() {
 
   const body = {
     mode: mode,
-    start_paused: startPaused,
+    start_running: startRunning,
     operator_id: operatorId,
     orchestration_id: orchestrationId,
     project_id: projectId,
     pipeline_bot_id: pipelineBotId,
     pipeline_name: pipelineName,
+    pipeline_name_seed: pipelineNameSeed,
     target_bot_id: targetBotId,
+    bot_name_seed: botNameSeed,
     provider: NEW_SESSION_BACKEND.provider || undefined,
     model: NEW_SESSION_BACKEND.model || undefined,
     backend_type: NEW_SESSION_BACKEND.type || undefined,

@@ -13,11 +13,17 @@ from control_plane.sqlite_helpers import open_sqlite
 
 _DEFAULT_DB_PATH = str(Path(__file__).parent.parent.parent / "data" / "nexusai.db")
 
+_CANONICAL_SESSION_MODES = {"bot_tuner", "bot_creator", "pipeline_tuner", "pipeline_creator"}
+_CANONICAL_SESSION_STATUSES = {"ready", "running", "stopped"}
+
 _CREATE_SESSIONS = """
 CREATE TABLE IF NOT EXISTS platform_ai_sessions (
     id TEXT PRIMARY KEY,
     mode TEXT NOT NULL,
     status TEXT NOT NULL,
+    archived INTEGER NOT NULL DEFAULT 0,
+    archived_at TEXT,
+    archived_by TEXT,
     assignment_id TEXT,
     run_id TEXT,
     orchestration_id TEXT,
@@ -142,6 +148,7 @@ CREATE TABLE IF NOT EXISTS platform_ai_patch_proposals (
 
 _CREATE_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_platform_ai_sessions_assignment ON platform_ai_sessions(assignment_id, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_platform_ai_sessions_archived ON platform_ai_sessions(archived, updated_at)",
     "CREATE INDEX IF NOT EXISTS idx_platform_ai_events_session ON platform_ai_events(session_id, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_platform_ai_messages_session ON platform_ai_messages(session_id, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_platform_ai_test_suites_session ON platform_ai_test_suites(session_id, created_at)",
@@ -181,6 +188,37 @@ def _loads(raw: Any, default: Any) -> Any:
         return default
 
 
+def _normalize_session_mode(value: Any) -> str:
+    mode = str(value or "").strip().lower()
+    if mode in _CANONICAL_SESSION_MODES:
+        return mode
+    legacy = {
+        "bot_designer": "bot_tuner",
+        "pipeline_designer": "pipeline_creator",
+        "assignment_follower": "pipeline_tuner",
+        "copilot": "pipeline_tuner",
+    }
+    mapped = legacy.get(mode)
+    if mapped:
+        return mapped
+    return "pipeline_tuner"
+
+
+def _normalize_session_status(value: Any) -> str:
+    status = str(value or "").strip().lower()
+    if status in _CANONICAL_SESSION_STATUSES:
+        return status
+    legacy = {
+        "active": "running",
+        "paused": "ready",
+        "completed": "ready",
+        "failed": "ready",
+        "archived": "ready",
+        "stalled": "ready",
+    }
+    return legacy.get(status, "ready")
+
+
 class PlatformAISessionStore:
     def __init__(self, db_path: Optional[str] = None) -> None:
         self._db_path = db_path or _db_path()
@@ -204,13 +242,53 @@ class PlatformAISessionStore:
             await db.execute(_CREATE_PATCH_PROPOSALS)
             await self._ensure_column(db, "platform_ai_sessions", "brief_synthesized_at", "TEXT")
             await self._ensure_column(db, "platform_ai_sessions", "no_progress_count", "INTEGER NOT NULL DEFAULT 0")
+            await self._ensure_column(db, "platform_ai_sessions", "archived", "INTEGER NOT NULL DEFAULT 0")
+            await self._ensure_column(db, "platform_ai_sessions", "archived_at", "TEXT")
+            await self._ensure_column(db, "platform_ai_sessions", "archived_by", "TEXT")
+            await db.execute(
+                """
+                UPDATE platform_ai_sessions
+                SET
+                    mode = CASE
+                        WHEN LOWER(TRIM(mode)) = 'bot_designer' THEN 'bot_tuner'
+                        WHEN LOWER(TRIM(mode)) = 'pipeline_designer' THEN 'pipeline_creator'
+                        WHEN LOWER(TRIM(mode)) = 'assignment_follower' THEN 'pipeline_tuner'
+                        WHEN LOWER(TRIM(mode)) = 'copilot' THEN 'pipeline_tuner'
+                        ELSE mode
+                    END
+                """
+            )
+            await db.execute(
+                """
+                UPDATE platform_ai_sessions
+                SET
+                    archived = CASE WHEN LOWER(TRIM(status)) = 'archived' THEN 1 ELSE archived END,
+                    archived_at = CASE
+                        WHEN LOWER(TRIM(status)) = 'archived' AND (archived_at IS NULL OR TRIM(archived_at) = '')
+                        THEN updated_at
+                        ELSE archived_at
+                    END
+                """
+            )
+            await db.execute(
+                """
+                UPDATE platform_ai_sessions
+                SET
+                    status = CASE
+                        WHEN LOWER(TRIM(status)) = 'active' THEN 'running'
+                        WHEN LOWER(TRIM(status)) IN ('paused', 'completed', 'failed', 'archived', 'stalled') THEN 'ready'
+                        WHEN LOWER(TRIM(status)) = 'stopped' THEN 'stopped'
+                        ELSE status
+                    END
+                """
+            )
             # Auto-managed pipeline test sessions should not stay active across restarts.
             await db.execute(
                 """
                 UPDATE platform_ai_sessions
-                SET status = 'paused', updated_at = ?
+                SET status = 'ready', updated_at = ?
                 WHERE mode = 'pipeline_tuner'
-                  AND status = 'active'
+                  AND status = 'running'
                   AND (operator_id IS NULL OR TRIM(operator_id) = '')
                   AND (
                     metadata_json LIKE '%"source":"pipeline_test_modal"%'
@@ -238,7 +316,9 @@ class PlatformAISessionStore:
         self,
         *,
         mode: str,
-        status: str = "active",
+        status: str = "ready",
+        archived: bool = False,
+        archived_by: Optional[str] = None,
         assignment_id: Optional[str] = None,
         run_id: Optional[str] = None,
         orchestration_id: Optional[str] = None,
@@ -253,14 +333,17 @@ class PlatformAISessionStore:
             await db.execute(
                 """
                 INSERT INTO platform_ai_sessions (
-                    id, mode, status, assignment_id, run_id, orchestration_id, operator_id,
+                    id, mode, status, archived, archived_at, archived_by, assignment_id, run_id, orchestration_id, operator_id,
                     privileged, metadata_json, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session_id,
-                    str(mode or "").strip(),
-                    str(status or "active").strip() or "active",
+                    _normalize_session_mode(mode),
+                    _normalize_session_status(status),
+                    1 if archived else 0,
+                    now if archived else None,
+                    str(archived_by or "").strip() or None,
                     str(assignment_id or "").strip() or None,
                     str(run_id or "").strip() or None,
                     str(orchestration_id or "").strip() or None,
@@ -290,8 +373,11 @@ class PlatformAISessionStore:
             return None
         return {
             "id": str(row["id"]),
-            "mode": str(row["mode"] or ""),
-            "status": str(row["status"] or "active"),
+            "mode": _normalize_session_mode(row["mode"]),
+            "status": _normalize_session_status(row["status"]),
+            "archived": bool(row["archived"]),
+            "archived_at": str(row["archived_at"] or "") or None,
+            "archived_by": str(row["archived_by"] or "") or None,
             "assignment_id": str(row["assignment_id"] or "") or None,
             "run_id": str(row["run_id"] or "") or None,
             "orchestration_id": str(row["orchestration_id"] or "") or None,
@@ -323,14 +409,12 @@ class PlatformAISessionStore:
             params.append(str(orchestration_id or "").strip())
         if str(mode or "").strip():
             clauses.append("mode = ?")
-            params.append(str(mode or "").strip())
+            params.append(_normalize_session_mode(mode))
         archived_mode = str(archived or "active").strip().lower()
         if archived_mode == "archived":
-            clauses.append("status = ?")
-            params.append("archived")
+            clauses.append("archived = 1")
         elif archived_mode == "active":
-            clauses.append("status != ?")
-            params.append("archived")
+            clauses.append("archived = 0")
         where_sql = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         query = (
             "SELECT * FROM platform_ai_sessions "
@@ -346,8 +430,11 @@ class PlatformAISessionStore:
         return [
             {
                 "id": str(row["id"]),
-                "mode": str(row["mode"] or ""),
-                "status": str(row["status"] or "active"),
+                "mode": _normalize_session_mode(row["mode"]),
+                "status": _normalize_session_status(row["status"]),
+                "archived": bool(row["archived"]),
+                "archived_at": str(row["archived_at"] or "") or None,
+                "archived_by": str(row["archived_by"] or "") or None,
                 "assignment_id": str(row["assignment_id"] or "") or None,
                 "run_id": str(row["run_id"] or "") or None,
                 "orchestration_id": str(row["orchestration_id"] or "") or None,
@@ -365,6 +452,8 @@ class PlatformAISessionStore:
         session_id: str,
         *,
         status: Optional[str] = None,
+        archived: Optional[bool] = None,
+        archived_by: Optional[str] = None,
         assignment_id: Optional[str] = None,
         run_id: Optional[str] = None,
         orchestration_id: Optional[str] = None,
@@ -377,7 +466,20 @@ class PlatformAISessionStore:
         merged_metadata = dict(current.get("metadata") or {})
         if isinstance(metadata, dict):
             merged_metadata.update(metadata)
-        next_status = str(status or current.get("status") or "active").strip() or "active"
+        next_status = _normalize_session_status(status or current.get("status") or "ready")
+        next_archived = bool(current.get("archived"))
+        if archived is not None:
+            next_archived = bool(archived)
+        next_archived_at = str(current.get("archived_at") or "").strip() or None
+        next_archived_by = str(current.get("archived_by") or "").strip() or None
+        if next_archived:
+            if not next_archived_at:
+                next_archived_at = _now()
+            if str(archived_by or "").strip():
+                next_archived_by = str(archived_by or "").strip()
+        else:
+            next_archived_at = None
+            next_archived_by = None
         next_assignment_id = str(assignment_id or current.get("assignment_id") or "").strip() or None
         next_run_id = str(run_id or current.get("run_id") or "").strip() or None
         next_orchestration_id = str(orchestration_id or current.get("orchestration_id") or "").strip() or None
@@ -385,11 +487,14 @@ class PlatformAISessionStore:
             await db.execute(
                 """
                 UPDATE platform_ai_sessions
-                SET status = ?, assignment_id = ?, run_id = ?, orchestration_id = ?, metadata_json = ?, updated_at = ?
+                SET status = ?, archived = ?, archived_at = ?, archived_by = ?, assignment_id = ?, run_id = ?, orchestration_id = ?, metadata_json = ?, updated_at = ?
                 WHERE id = ?
                 """,
                 (
                     next_status,
+                    1 if next_archived else 0,
+                    next_archived_at,
+                    next_archived_by,
                     next_assignment_id,
                     next_run_id,
                     next_orchestration_id,

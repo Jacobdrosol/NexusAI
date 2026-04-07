@@ -203,12 +203,13 @@
   </div>
   <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-top:0.75rem;">
     <button class="btn btn-primary" type="button" onclick="controlSession('start')">Start</button>
-    <button class="btn" type="button" onclick="controlSession('pause')">Pause</button>
+    <button class="btn" type="button" onclick="controlSession('pause')">Set Ready</button>
     <button class="btn" type="button" onclick="controlSession('resume')">Resume</button>
     <button class="btn btn-danger" type="button" onclick="controlSession('stop')">Stop</button>
     <button class="btn" type="button" onclick="controlSession('archive')">Archive</button>
     <button class="btn" type="button" onclick="controlSession('restore')">Restore</button>
     <button class="btn" type="button" onclick="controlSession('deploy')">Deploy</button>
+    <button class="btn" type="button" onclick="controlSession('project_code_edit')">Run Project Edit Path</button>
     <button class="btn" type="button" onclick="controlSession('code_edit')">Enable Repo Edit Path</button>
   </div>
   <div style="margin-top:0.75rem;">
@@ -314,6 +315,7 @@
   <div class="split-grid" style="grid-template-columns:2fr 1fr;gap:0.75rem;">
     <div>
       <input id="context-files-input" class="form-control" type="file" multiple>
+      <input id="context-folder-input" class="form-control" type="file" webkitdirectory directory multiple style="margin-top:0.45rem;">
       <div class="mini-note" style="margin-top:0.35rem;">Attach sample outputs/spec files so Platform AI can tune toward expected quality and structure.</div>
     </div>
     <div style="display:flex;align-items:flex-end;">
@@ -326,7 +328,11 @@
     <div style="padding:0.35rem 0;border-bottom:1px solid rgba(148,163,184,0.15);">
       <strong>{{ row.name }}</strong>
       <div class="mini-note">{{ row.size_bytes }} bytes • {{ row.content_type or "unknown" }} • {{ (row.uploaded_at[:19] if row.uploaded_at else "") | replace('T',' ') }}</div>
-      <div class="mini-note"><code>{{ row.path }}</code></div>
+      <div class="mini-note"><code>{{ row.relative_path or row.path }}</code></div>
+      <div style="display:flex;gap:0.45rem;margin-top:0.3rem;">
+        <a class="btn btn-sm" href="{{ row.url }}" target="_blank" rel="noopener">Download</a>
+        <button class="btn btn-sm" type="button" onclick="deleteSessionFile('{{ row.id }}')">Delete</button>
+      </div>
     </div>
     {% else %}
     <div class="empty">No context files attached yet</div>
@@ -344,6 +350,10 @@
     <div style="padding:0.35rem 0;border-bottom:1px solid rgba(148,163,184,0.15);">
       <a href="{{ row.url }}" target="_blank" rel="noopener">{{ row.name }}</a>
       <div class="mini-note">{{ row.size_bytes }} bytes • {{ row.content_type or "unknown" }} • {{ (row.uploaded_at[:19] if row.uploaded_at else "") | replace('T',' ') }}</div>
+      <div class="mini-note"><code>{{ row.relative_path or row.path }}</code></div>
+      <div style="display:flex;gap:0.45rem;margin-top:0.3rem;">
+        <button class="btn btn-sm" type="button" onclick="deleteSessionFile('{{ row.id }}')">Delete</button>
+      </div>
     </div>
     {% else %}
     <div class="empty">No uploaded message files yet</div>
@@ -471,6 +481,8 @@ const INITIAL_EVENTS = {{ events|default([], true)|tojson }};
 let EVENTS_CURSOR = 0;
 let MESSAGES_CURSOR = 0;
 let AUTO_POLL_HANDLE = null;
+let MESSAGE_STREAM = null;
+let LAST_ASSISTANT_MESSAGE_AT = '';
 let LAST_MESSAGES = Array.isArray(INITIAL_MESSAGES) ? INITIAL_MESSAGES : [];
 let LAST_EVENTS = Array.isArray(INITIAL_EVENTS) ? INITIAL_EVENTS : [];
 let LAST_CONTEXT_FILES = {{ context_files|default([], true)|tojson }};
@@ -521,6 +533,18 @@ function formatBytes(value) {
 
 function displayTs(raw) {
   return String(raw || '').replace('T', ' ').slice(0, 19);
+}
+
+function computeLastAssistantTimestamp(rows) {
+  const list = Array.isArray(rows) ? rows : [];
+  let latest = '';
+  for (const row of list) {
+    const role = String(row?.role || '').trim().toLowerCase();
+    if (role !== 'assistant') continue;
+    const createdAt = String(row?.created_at || '').trim();
+    if (createdAt && (!latest || createdAt > latest)) latest = createdAt;
+  }
+  return latest;
 }
 
 function reloadWorkspace() {
@@ -727,7 +751,7 @@ function removeSessionComposerAttachment(index) {
 }
 
 async function uploadPendingSessionMessageFiles() {
-  if (!pendingSessionAttachments.length) return [];
+  if (!pendingSessionAttachments.length) return {files: [], warnings: []};
   const form = new FormData();
   pendingSessionAttachments.forEach((attachment) => {
     if (attachment?.file) form.append('files', attachment.file);
@@ -739,7 +763,10 @@ async function uploadPendingSessionMessageFiles() {
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || 'Failed to upload message attachments');
-  return Array.isArray(data.files) ? data.files : [];
+  return {
+    files: Array.isArray(data.files) ? data.files : [],
+    warnings: Array.isArray(data.warnings) ? data.warnings.filter((row) => String(row || '').trim()) : [],
+  };
 }
 
 function renderMessageAttachmentsHtml(meta) {
@@ -784,7 +811,8 @@ async function sendOperatorMessage() {
   }
   setStatus('operator-chat-status', 'Sending...', false);
   try {
-    const uploaded = await uploadPendingSessionMessageFiles();
+    const uploadedResult = await uploadPendingSessionMessageFiles();
+    const uploaded = Array.isArray(uploadedResult.files) ? uploadedResult.files : [];
     const attachments = uploaded.map((row) => {
       const contentType = String(row?.content_type || '').trim();
       return {
@@ -808,7 +836,8 @@ async function sendOperatorMessage() {
     if (!res.ok) throw new Error(data.error || 'Failed to send message');
     if (input) input.value = '';
     clearPendingSessionAttachments();
-    setStatus('operator-chat-status', 'Message sent', false);
+    const softWarnings = Array.isArray(uploadedResult.warnings) ? uploadedResult.warnings : [];
+    setStatus('operator-chat-status', softWarnings.length ? `Message sent. ${softWarnings.join(' ')}` : 'Message sent', false);
     await refreshMessages(true);
     await refreshEvents(true);
     await refreshSessionHeader();
@@ -891,6 +920,7 @@ async function refreshSessionHeader() {
     const pipelineName = String(metadata.pipeline_name || runtimeState.pipeline_name || '');
     if (pipelineName) pipelineNameInput.value = pipelineName;
   }
+  ensureMessageStream(status, Boolean(data.archived));
   renderContextFiles();
   renderMessageFileLibrary();
 }
@@ -901,6 +931,7 @@ function renderMessages(messages) {
   if (!root) return;
   const rows = Array.isArray(messages) ? messages : [];
   LAST_MESSAGES = rows;
+  LAST_ASSISTANT_MESSAGE_AT = computeLastAssistantTimestamp(rows);
   if (count) count.textContent = String(rows.length);
   if (!rows.length) {
     root.innerHTML = '<div class="empty">No messages yet</div>';
@@ -1033,6 +1064,8 @@ async function updateTargetContext() {
       body: JSON.stringify({
         project_id: projectId || null,
         target_bot_id: targetBotId || null,
+        pipeline_bot_id: pipelineBotId || null,
+        pipeline_name: pipelineName || (pipelineBotId || null),
         metadata: metadata,
       }),
     });
@@ -1261,8 +1294,10 @@ function renderContextFiles() {
     const size = Number(row.size_bytes || 0);
     const type = htmlEscape(row.content_type || 'unknown');
     const when = htmlEscape(displayTs(row.uploaded_at || ''));
-    const path = htmlEscape(row.path || '');
-    return `<div style="padding:0.35rem 0;border-bottom:1px solid rgba(148,163,184,0.15);"><strong>${name}</strong><div class="mini-note">${size} bytes • ${type} • ${when}</div><div class="mini-note"><code>${path}</code></div></div>`;
+    const path = htmlEscape(row.relative_path || row.path || '');
+    const fileId = String(row.id || '');
+    const url = htmlEscape(row.url || '#');
+    return `<div style="padding:0.35rem 0;border-bottom:1px solid rgba(148,163,184,0.15);"><strong>${name}</strong><div class="mini-note">${size} bytes • ${type} • ${when}</div><div class="mini-note"><code>${path}</code></div><div style="display:flex;gap:0.45rem;margin-top:0.3rem;"><a class="btn btn-sm" href="${url}" target="_blank" rel="noopener">Download</a><button class="btn btn-sm" type="button" onclick="deleteSessionFile('${htmlEscape(fileId)}')">Delete</button></div></div>`;
   }).join('');
 }
 
@@ -1282,20 +1317,28 @@ function renderMessageFileLibrary() {
     const type = htmlEscape(row.content_type || 'unknown');
     const when = htmlEscape(displayTs(row.uploaded_at || ''));
     const url = htmlEscape(row.url || '#');
-    return `<div style="padding:0.35rem 0;border-bottom:1px solid rgba(148,163,184,0.15);"><a href="${url}" target="_blank" rel="noopener">${name}</a><div class="mini-note">${size} bytes • ${type} • ${when}</div></div>`;
+    const path = htmlEscape(row.relative_path || row.path || '');
+    const fileId = String(row.id || '');
+    return `<div style="padding:0.35rem 0;border-bottom:1px solid rgba(148,163,184,0.15);"><a href="${url}" target="_blank" rel="noopener">${name}</a><div class="mini-note">${size} bytes • ${type} • ${when}</div><div class="mini-note"><code>${path}</code></div><div style="display:flex;gap:0.45rem;margin-top:0.3rem;"><button class="btn btn-sm" type="button" onclick="deleteSessionFile('${htmlEscape(fileId)}')">Delete</button></div></div>`;
   }).join('');
 }
 
 async function uploadContextFiles() {
   if (!SESSION_ID) return;
   const input = document.getElementById('context-files-input');
-  const files = input && input.files ? Array.from(input.files) : [];
+  const folderInput = document.getElementById('context-folder-input');
+  const directFiles = input && input.files ? Array.from(input.files) : [];
+  const folderFiles = folderInput && folderInput.files ? Array.from(folderInput.files) : [];
+  const files = directFiles.concat(folderFiles);
   if (!files.length) {
     setStatus('context-files-status', 'Select one or more files first.', true);
     return;
   }
   const form = new FormData();
-  for (const file of files) form.append('files', file);
+  for (const file of files) {
+    form.append('files', file);
+    form.append('relative_paths', String(file.webkitRelativePath || file.name || ''));
+  }
   setStatus('context-files-status', `Uploading ${files.length} file(s)...`, false);
   try {
     const res = await fetch('/api/platform-ai/sessions/' + encodeURIComponent(SESSION_ID) + '/context-files', {
@@ -1305,13 +1348,72 @@ async function uploadContextFiles() {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || 'Failed to upload context files');
-    setStatus('context-files-status', `Uploaded ${Number(data.files?.length || 0)} file(s).`, false);
+    const warnings = Array.isArray(data.warnings) ? data.warnings.filter((row) => String(row || '').trim()) : [];
+    const message = `Uploaded ${Number(data.files?.length || 0)} file(s).`;
+    setStatus('context-files-status', warnings.length ? `${message} ${warnings.join(' ')}` : message, false);
     if (input) input.value = '';
+    if (folderInput) folderInput.value = '';
     await refreshSessionHeader();
     await refreshMessages(true);
     await refreshEvents(true);
   } catch (error) {
     setStatus('context-files-status', error.message || 'Failed to upload context files', true);
+  }
+}
+
+async function deleteSessionFile(fileId) {
+  const safeId = String(fileId || '').trim();
+  if (!safeId || !SESSION_ID) return;
+  try {
+    const res = await fetch('/api/platform-ai/sessions/' + encodeURIComponent(SESSION_ID) + '/files/' + encodeURIComponent(safeId), {
+      method: 'DELETE',
+      headers: {'X-CSRFToken': getCsrf()},
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Failed to delete file');
+    await refreshSessionHeader();
+    await refreshMessages(true);
+    await refreshEvents(true);
+  } catch (error) {
+    setStatus('context-files-status', error.message || 'Failed to delete file', true);
+  }
+}
+
+function stopMessageStream() {
+  if (MESSAGE_STREAM) {
+    try { MESSAGE_STREAM.close(); } catch (error) {}
+    MESSAGE_STREAM = null;
+  }
+}
+
+function startMessageStream() {
+  if (!SESSION_ID || MESSAGE_STREAM) return;
+  const params = new URLSearchParams();
+  if (LAST_ASSISTANT_MESSAGE_AT) params.set('since', LAST_ASSISTANT_MESSAGE_AT);
+  const query = params.toString();
+  const streamUrl = '/api/platform-ai/sessions/' + encodeURIComponent(SESSION_ID) + '/messages/stream' + (query ? ('?' + query) : '');
+  const source = new EventSource(streamUrl);
+  MESSAGE_STREAM = source;
+  source.onmessage = () => {
+    refreshMessages(true).catch(() => {});
+    refreshEvents(true).catch(() => {});
+  };
+  source.addEventListener('end', () => {
+    stopMessageStream();
+    refreshSessionHeader().catch(() => {});
+  });
+  source.addEventListener('error', () => {
+    stopMessageStream();
+    setTimeout(() => { refreshSessionHeader().catch(() => {}); }, 1200);
+  });
+}
+
+function ensureMessageStream(status, archived) {
+  const isRunning = String(status || '').trim().toLowerCase() === 'running';
+  if (isRunning && !archived) {
+    startMessageStream();
+  } else {
+    stopMessageStream();
   }
 }
 
@@ -1331,6 +1433,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   setupSessionComposerDragDrop();
   await refreshMessages(true);
   await refreshEvents(true);
+  await refreshSessionHeader();
   AUTO_POLL_HANDLE = setInterval(pollWorkspace, 4000);
   const suiteSelect = document.getElementById('suite-id');
   if (suiteSelect) {
@@ -1338,6 +1441,10 @@ document.addEventListener('DOMContentLoaded', async () => {
       renderRecentRuns();
     });
   }
+});
+
+window.addEventListener('beforeunload', () => {
+  stopMessageStream();
 });
 </script>
 {% endblock %}

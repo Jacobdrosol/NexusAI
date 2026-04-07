@@ -6,6 +6,7 @@ from contextlib import suppress
 from control_plane.platform_ai.runtime import PlatformAISessionRuntime
 from control_plane.platform_ai.session_store import PlatformAISessionStore
 from control_plane.registry.bot_registry import BotRegistry
+from shared.models import Bot
 
 
 @pytest.mark.anyio
@@ -14,7 +15,7 @@ async def test_pipeline_tuner_terminal_failure_stops_session(tmp_path):
     runtime = PlatformAISessionRuntime(store)
     session = await store.create_session(
         mode="pipeline_tuner",
-        status="active",
+        status="running",
         metadata={
             "autonomous_enabled": True,
             "pipeline_name": "Coding Pipeline",
@@ -38,7 +39,7 @@ async def test_pipeline_tuner_terminal_failure_stops_session(tmp_path):
     )
 
     assert updated is not None
-    assert str(updated.get("status") or "") == "failed"
+    assert str(updated.get("status") or "") == "running"
     metadata = updated.get("metadata") if isinstance(updated.get("metadata"), dict) else {}
     assert str(metadata.get("autonomous_terminal_reason") or "") == "autonomous_stalled_after_evaluation"
 
@@ -48,7 +49,7 @@ async def test_pipeline_tuner_terminal_failure_stops_session(tmp_path):
         for event in events
     )
     messages = await store.list_messages(session["id"], limit=20)
-    assert any("no new remediation iteration was launched" in str(message.get("content") or "") for message in messages)
+    assert any("stalled refinement path" in str(message.get("content") or "") for message in messages)
 
 
 @pytest.mark.anyio
@@ -57,7 +58,7 @@ async def test_pipeline_tuner_converged_session_completes(tmp_path):
     runtime = PlatformAISessionRuntime(store)
     session = await store.create_session(
         mode="pipeline_tuner",
-        status="active",
+        status="running",
         metadata={
             "autonomous_enabled": True,
             "pipeline_name": "Coding Pipeline",
@@ -80,7 +81,7 @@ async def test_pipeline_tuner_converged_session_completes(tmp_path):
     )
 
     assert updated is not None
-    assert str(updated.get("status") or "") == "completed"
+    assert str(updated.get("status") or "") == "running"
     metadata = updated.get("metadata") if isinstance(updated.get("metadata"), dict) else {}
     assert str(metadata.get("autonomous_terminal_reason") or "") == "autonomous_converged"
 
@@ -90,7 +91,7 @@ async def test_process_operator_message_upserts_bot_from_json_block(tmp_path):
     store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
     bot_registry = BotRegistry(db_path=str(tmp_path / "bots.db"))
     runtime = PlatformAISessionRuntime(store, bot_registry=bot_registry)
-    session = await store.create_session(mode="bot_designer", status="active", metadata={})
+    session = await store.create_session(mode="bot_creator", status="running", metadata={"bot_name_seed": "Designer Created Bot"})
     message = """
 Please create this bot config.
 ```json
@@ -121,7 +122,7 @@ async def test_process_operator_message_applies_tuning_overrides(tmp_path):
     runtime = PlatformAISessionRuntime(store)
     session = await store.create_session(
         mode="pipeline_tuner",
-        status="active",
+        status="running",
         metadata={"pipeline_bot_id": "pm-orchestrator"},
     )
     await store.append_message(
@@ -143,8 +144,8 @@ async def test_repo_edit_runner_executes_command_and_reports_terminal_event(tmp_
     store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
     runtime = PlatformAISessionRuntime(store)
     session = await store.create_session(
-        mode="copilot",
-        status="active",
+        mode="bot_creator",
+        status="running",
         operator_id="tester@example.com",
         privileged=True,
         metadata={},
@@ -187,8 +188,8 @@ async def test_repo_edit_runner_denies_non_allowlisted_operator(tmp_path, monkey
     store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
     runtime = PlatformAISessionRuntime(store)
     session = await store.create_session(
-        mode="copilot",
-        status="active",
+        mode="bot_creator",
+        status="running",
         operator_id="other@example.com",
         privileged=True,
         metadata={},
@@ -207,10 +208,92 @@ async def test_repo_edit_runner_denies_non_allowlisted_operator(tmp_path, monkey
 
 
 @pytest.mark.anyio
+async def test_project_edit_runner_completes_and_checkpoints_ready(tmp_path, monkeypatch):
+    store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+    runtime = PlatformAISessionRuntime(store)
+    session = await store.create_session(
+        mode="bot_creator",
+        status="running",
+        operator_id="owner@example.com",
+        privileged=False,
+        metadata={},
+    )
+    cmd = f"\"{sys.executable}\" -c \"print('project-edit-ok')\""
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_PROJECT_EDIT_ENABLED", "1")
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_PROJECT_EDIT_RUN_CMD", cmd)
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_PROJECT_EDIT_CWD", str(tmp_path))
+    result = await runtime.start_project_edit_run(
+        session["id"],
+        requested_by="owner@example.com",
+        instruction="Apply patch and run tests",
+    )
+    assert str(result.get("status") or "") == "started"
+
+    for _ in range(120):
+        events = await store.list_events(session["id"], limit=400)
+        if any(
+            str((event.get("payload") or {}).get("action") or "") == "project_edit_finished"
+            for event in events
+            if isinstance(event, dict)
+        ):
+            break
+        await asyncio.sleep(0.05)
+    updated = await store.get_session(session["id"])
+    assert str((updated or {}).get("status") or "") == "ready"
+    metadata = (updated or {}).get("metadata") if isinstance((updated or {}).get("metadata"), dict) else {}
+    report = metadata.get("project_edit_report") if isinstance(metadata.get("project_edit_report"), dict) else {}
+    assert "suggested_commit_message" in report
+    assert isinstance(report.get("alternatives"), list)
+    messages = await store.list_messages(session["id"], limit=50)
+    assert any("No commit/push was performed by Platform AI" in str(row.get("content") or "") for row in messages)
+
+
+@pytest.mark.anyio
+async def test_reference_scope_bot_is_read_only_for_mutation(tmp_path):
+    store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+    bot_registry = BotRegistry(db_path=str(tmp_path / "bots.db"))
+    runtime = PlatformAISessionRuntime(store, bot_registry=bot_registry)
+    session = await store.create_session(
+        mode="pipeline_tuner",
+        status="running",
+        metadata={
+            "pipeline_bot_id": "pipeline-bot",
+            "reference_bot_ids": ["reference-bot"],
+            "mutable_bot_ids": ["pipeline-bot"],
+        },
+    )
+    await bot_registry.register(
+        Bot.model_validate(
+            {
+                "id": "reference-bot",
+                "name": "Reference Bot",
+                "role": "assistant",
+                "enabled": True,
+                "backends": [{"type": "cloud_api", "provider": "openai", "model": "gpt-4o-mini"}],
+            }
+        )
+    )
+    result = await runtime._upsert_bot_payload(
+        {
+            "id": "reference-bot",
+            "name": "Reference Bot Updated",
+            "role": "assistant",
+            "enabled": True,
+            "backends": [{"type": "cloud_api", "provider": "openai", "model": "gpt-4o-mini"}],
+        },
+        session_id=session["id"],
+        session=session,
+        allow_scope_expansion=True,
+    )
+    assert bool(result.get("ok")) is False
+    assert str(result.get("detail") or "") == "reference_scope_read_only"
+
+
+@pytest.mark.anyio
 async def test_ensure_session_loop_is_singleton_under_concurrency(tmp_path):
     store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
     runtime = PlatformAISessionRuntime(store)
-    session = await store.create_session(mode="copilot", status="active", metadata={})
+    session = await store.create_session(mode="bot_creator", status="running", metadata={})
 
     call_counter = {"count": 0}
 
@@ -232,7 +315,7 @@ async def test_session_loop_does_not_halt_as_stalled_while_orchestration_running
     runtime = PlatformAISessionRuntime(store)
     session = await store.create_session(
         mode="pipeline_tuner",
-        status="active",
+        status="running",
         metadata={
             "autonomous_enabled": False,
             "pipeline_bot_id": "pm-orchestrator",
@@ -287,5 +370,80 @@ async def test_session_loop_does_not_halt_as_stalled_while_orchestration_running
     with suppress(asyncio.CancelledError):
         await loop_task
 
+    assert check_calls["count"] == 0
+    assert halt_calls["count"] == 0
+
+
+@pytest.mark.anyio
+async def test_session_loop_finalizes_terminal_state_before_stall_guard(tmp_path):
+    store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+    runtime = PlatformAISessionRuntime(store)
+    session = await store.create_session(
+        mode="pipeline_tuner",
+        status="running",
+        metadata={"autonomous_enabled": True, "pipeline_bot_id": "pm-orchestrator"},
+        orchestration_id="orch-terminal",
+    )
+
+    check_calls = {"count": 0}
+    halt_calls = {"count": 0}
+    finalize_calls = {"count": 0}
+
+    async def fake_check(_: str, **__: object) -> str | None:
+        check_calls["count"] += 1
+        return "stalled_duplicate_actions"
+
+    async def fake_snapshot(_: dict) -> dict:
+        return {
+            "tick": 1,
+            "phase": "evaluate",
+            "active_action": "monitor_orchestration",
+            "detail": "terminal",
+            "heartbeat_detail": "terminal",
+            "signature": "sig-terminal",
+            "orchestration_id": "orch-terminal",
+            "status_counts": {"completed": 1, "running": 0, "failed": 0},
+            "active_tasks": [],
+            "runtime_state": {
+                "orchestration_id": "orch-terminal",
+                "task_total": 1,
+                "status_counts": {"completed": 1},
+                "active_tasks": [],
+            },
+        }
+
+    async def fake_tuner(session_id: str, *, session: dict, snapshot: dict) -> None:
+        _ = (session_id, session, snapshot)
+        return None
+
+    async def fake_finalize(
+        session_id: str,
+        *,
+        session: dict,
+        snapshot: dict,
+    ) -> dict | None:
+        _ = (session, snapshot)
+        finalize_calls["count"] += 1
+        await store.update_session(session_id, status="ready")
+        return {"status": "ready"}
+
+    async def fake_halt(session_id: str, *, reason: str, message: str) -> None:
+        _ = (reason, message)
+        halt_calls["count"] += 1
+        await store.update_session(session_id, status="stopped")
+
+    runtime._check_should_halt_as_stalled = fake_check  # type: ignore[method-assign]
+    runtime._build_progress_snapshot = fake_snapshot  # type: ignore[method-assign]
+    runtime._run_autonomous_pipeline_tuner = fake_tuner  # type: ignore[method-assign]
+    runtime._finalize_autonomous_session_if_terminal = fake_finalize  # type: ignore[method-assign]
+    runtime._halt_session = fake_halt  # type: ignore[method-assign]
+
+    loop_task = asyncio.create_task(runtime._session_loop(session["id"]))
+    await asyncio.sleep(0.2)
+    loop_task.cancel()
+    with suppress(asyncio.CancelledError):
+        await loop_task
+
+    assert finalize_calls["count"] >= 1
     assert check_calls["count"] == 0
     assert halt_calls["count"] == 0

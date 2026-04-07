@@ -23,6 +23,7 @@ def _now() -> str:
 
 _TERMINAL_STATUSES = {"completed", "failed", "cancelled", "retried"}
 _QUALITY_FIELDS = {"summary", "quality_gates", "acceptance_criteria", "tests", "artifacts", "warnings", "errors"}
+_SESSION_STATUSES = {"ready", "running", "stopped"}
 
 
 def _env_enabled(name: str) -> bool:
@@ -507,6 +508,7 @@ class PlatformAISessionRuntime:
         self._session_tasks: Dict[str, asyncio.Task[None]] = {}
         self._deploy_tasks: Dict[str, asyncio.Task[None]] = {}
         self._repo_edit_tasks: Dict[str, asyncio.Task[None]] = {}
+        self._project_edit_tasks: Dict[str, asyncio.Task[None]] = {}
         self._processed_operator_messages: Dict[str, set[str]] = {}
         self._last_progress_signature: Dict[str, str] = {}
         self._last_heartbeat_ts: Dict[str, float] = {}
@@ -683,18 +685,77 @@ class PlatformAISessionRuntime:
         reason: str,
         message: str,
     ) -> None:
-        await self._store.update_session(session_id, status="stopped")
+        await self._store.update_session(session_id, status="ready")
         await self._store.append_event(
             session_id,
             "action_trace",
-            {"action": "session_halted", "reason": reason, "halted_at": _now()},
+            {"action": "session_checkpoint_ready", "reason": reason, "checkpoint_at": _now()},
         )
         await self._store.append_message(
             session_id,
             role="assistant",
             content=message,
-            metadata={"source": "halt_guard", "halt_reason": reason},
+            metadata={"source": "checkpoint_guard", "checkpoint_reason": reason},
         )
+
+    async def _handle_stall_without_halt(
+        self,
+        session_id: str,
+        *,
+        session: Dict[str, Any],
+        snapshot: Dict[str, Any],
+        reason: str,
+    ) -> None:
+        metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
+        mode = str(session.get("mode") or "").strip().lower()
+        replan_count = int(metadata.get("autonomous_replan_count") or 0) + 1
+        await self._store.update_session(
+            session_id,
+            metadata={
+                "autonomous_state": "replanning",
+                "autonomous_replan_count": replan_count,
+                "autonomous_launch_state": None,
+                "autonomous_last_eval_signature": None,
+                "autonomous_last_refine_signature": None,
+            },
+        )
+        action = await self._create_action_record(
+            session_id,
+            action_type="autonomous_replan",
+            snapshot={
+                "reason": reason,
+                "orchestration_id": snapshot.get("orchestration_id"),
+                "mode": mode,
+            },
+            rationale="Adaptive replan triggered after repeated no-op cycle",
+        )
+        await self._complete_action_record(
+            action["id"],
+            output_snapshot={"reason": reason, "replan_count": replan_count},
+            had_effect=True,
+            summary=f"Adaptive replan #{replan_count} triggered ({reason}).",
+        )
+        await self._store.append_event(
+            session_id,
+            "action_trace",
+            {
+                "action": "autonomous_replan",
+                "reason": reason,
+                "replan_count": replan_count,
+                "orchestration_id": snapshot.get("orchestration_id"),
+            },
+        )
+        should_announce = replan_count <= 2 or (replan_count % 3 == 0)
+        if should_announce:
+            await self._store.append_message(
+                session_id,
+                role="assistant",
+                content=(
+                    f"No-progress safeguard triggered (`{reason}`). Platform AI is applying an adaptive replan "
+                    f"(count {replan_count}) and continuing autonomously."
+                ),
+                metadata={"source": "autonomous_tuner", "state": "replanning", "replan_count": replan_count},
+            )
 
     def _snapshot_is_terminal(self, snapshot: Dict[str, Any]) -> bool:
         if not str(snapshot.get("orchestration_id") or "").strip():
@@ -743,29 +804,29 @@ class PlatformAISessionRuntime:
 
         if state == "converged":
             return {
-                "status": "completed",
+                "status": "running",
                 "reason": "autonomous_converged",
                 "message": (
-                    f"Autonomous tuner finished cleanly for `{pipeline_name}` after orchestration "
-                    f"`{orchestration_id}` reached the target quality score {score:.3f}."
+                    f"Autonomous tuner converged for `{pipeline_name}` on orchestration `{orchestration_id}` "
+                    f"with score {score:.3f}. Awaiting quality-gate pass streak confirmation."
                 ),
             }
         if state == "max_iterations_reached":
             return {
-                "status": "failed",
+                "status": "running",
                 "reason": "autonomous_max_iterations_reached",
                 "message": (
-                    f"Autonomous tuner stopped for `{pipeline_name}` after {current_iteration} iteration(s) "
-                    f"without reaching target score {target_score:.3f}. Last score: {score:.3f}."
+                    f"Autonomous tuner reached iteration cap for `{pipeline_name}` at {current_iteration} iteration(s) "
+                    f"(target {target_score:.3f}, last score {score:.3f}). Applying adaptive strategy shift."
                 ),
             }
         if state in {"launch_failed", "refinement_launch_failed"}:
             return {
-                "status": "failed",
+                "status": "running",
                 "reason": state,
                 "message": (
-                    f"Autonomous tuner stopped for `{pipeline_name}` because it could not launch the next "
-                    f"remediation iteration after orchestration `{orchestration_id}` finished."
+                    f"Autonomous tuner launch step failed for `{pipeline_name}` after orchestration "
+                    f"`{orchestration_id}`. Retrying with alternate strategy."
                 ),
             }
         if (
@@ -775,20 +836,20 @@ class PlatformAISessionRuntime:
             and last_refine_signature == last_eval_signature
         ):
             return {
-                "status": "failed",
+                "status": "running",
                 "reason": "autonomous_stalled_after_evaluation",
                 "message": (
-                    f"Autonomous tuner stopped for `{pipeline_name}` because orchestration `{orchestration_id}` "
-                    f"is terminal with {failed_tasks} failed task(s), but no new remediation iteration was launched."
+                    f"Autonomous tuner detected a stalled refinement path for `{pipeline_name}` on orchestration "
+                    f"`{orchestration_id}` ({failed_tasks} failed task(s)); triggering replanning."
                 ),
             }
         if failed_tasks > 0 and current_iteration >= max_iterations:
             return {
-                "status": "failed",
+                "status": "running",
                 "reason": "autonomous_max_iterations_reached",
                 "message": (
-                    f"Autonomous tuner stopped for `{pipeline_name}` after hitting the iteration cap with "
-                    f"{failed_tasks} failed task(s) remaining in orchestration `{orchestration_id}`."
+                    f"Autonomous tuner hit iteration cap with {failed_tasks} failed task(s) for `{pipeline_name}` "
+                    f"on orchestration `{orchestration_id}`; continuing with strategy shift."
                 ),
             }
         return None
@@ -804,15 +865,13 @@ class PlatformAISessionRuntime:
         if resolution is None:
             return None
         reason = str(resolution.get("reason") or "autonomous_terminalized")
-        next_status = str(resolution.get("status") or "failed")
         message = str(resolution.get("message") or "").strip()
         updated = await self._store.update_session(
             session_id,
-            status=next_status,
             metadata={
                 "autonomous_terminalized_at": _now(),
                 "autonomous_terminal_reason": reason,
-                "autonomous_state": "converged" if next_status == "completed" else "stopped",
+                "autonomous_state": str(reason or "").strip() or "observe",
             },
         )
         await self._store.append_event(
@@ -821,7 +880,7 @@ class PlatformAISessionRuntime:
             {
                 "action": "autonomous_session_terminalized",
                 "reason": reason,
-                "status": next_status,
+                "status": str((updated or {}).get("status") or "running"),
                 "orchestration_id": snapshot.get("orchestration_id"),
                 "runtime_state": snapshot.get("runtime_state"),
             },
@@ -861,14 +920,14 @@ class PlatformAISessionRuntime:
         )
         session = await self._store.get_session(session_id)
         status = str((session or {}).get("status") or "").strip().lower()
-        if session is not None and status == "active":
+        if session is not None and status == "running":
             await self.ensure_session_loop(session_id)
         elif str(role or "").strip().lower() == "operator":
             await self._store.append_message(
                 session_id,
                 role="assistant",
                 content=(
-                    "Message received. Session is not active right now. "
+                    "Message received. Session is not running right now. "
                     "Resume/start the session to execute actions from this instruction."
                 ),
                 metadata={"source": "session_state_ack", "session_status": status or "unknown"},
@@ -899,6 +958,38 @@ class PlatformAISessionRuntime:
             },
         )
         self._deploy_tasks[sid] = asyncio.create_task(self._deploy_loop(sid, requested_by=requested_by))
+        return {"status": "started"}
+
+    async def start_project_edit_run(
+        self,
+        session_id: str,
+        *,
+        requested_by: str,
+        instruction: str = "",
+    ) -> Dict[str, Any]:
+        sid = str(session_id or "").strip()
+        if not sid:
+            return {"status": "error", "detail": "session_id is required"}
+        if not _env_enabled("NEXUS_PLATFORM_AI_PROJECT_EDIT_ENABLED"):
+            return {"status": "disabled", "detail": "project_code_edit is disabled (NEXUS_PLATFORM_AI_PROJECT_EDIT_ENABLED not enabled)"}
+        existing = self._project_edit_tasks.get(sid)
+        if existing is not None and not existing.done():
+            return {"status": "running", "detail": "project edit runner already active"}
+        await self._store.update_session(
+            sid,
+            metadata={
+                "project_edit_runner_state": "starting",
+                "project_edit_runner_requested_by": str(requested_by or "").strip() or None,
+                "project_edit_runner_requested_at": _now(),
+            },
+        )
+        self._project_edit_tasks[sid] = asyncio.create_task(
+            self._project_edit_loop(
+                sid,
+                requested_by=requested_by,
+                instruction=instruction,
+            )
+        )
         return {"status": "started"}
 
     async def start_repo_edit_run(
@@ -981,7 +1072,120 @@ class PlatformAISessionRuntime:
         backends = payload.get("backends")
         return bool(bot_id and role and isinstance(backends, list))
 
-    async def _upsert_bot_payload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def _mode_mutation_policy(self, *, mode: str, metadata: Dict[str, Any]) -> Dict[str, bool]:
+        defaults = {
+            "bot_tuner": {"create": False, "update": True, "delete": False},
+            "bot_creator": {"create": True, "update": True, "delete": False},
+            "pipeline_tuner": {"create": True, "update": True, "delete": True},
+            "pipeline_creator": {"create": True, "update": True, "delete": True},
+        }
+        merged = dict(defaults.get(mode, {"create": False, "update": True, "delete": False}))
+        override = metadata.get("mutation_policy") if isinstance(metadata.get("mutation_policy"), dict) else {}
+        for key in ("create", "update", "delete"):
+            if key in override:
+                merged[key] = bool(override.get(key))
+        return merged
+
+    async def _editable_bot_scope(self, *, session: Dict[str, Any]) -> set[str]:
+        metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
+        mode = str(session.get("mode") or "").strip().lower()
+        scope: set[str] = set()
+        for key in ("editable_bot_ids", "mutable_bot_ids", "pipeline_mutable_bot_ids"):
+            values = metadata.get(key) if isinstance(metadata.get(key), list) else []
+            for item in values:
+                safe = str(item or "").strip()
+                if safe:
+                    scope.add(safe)
+        target_bot_id = str(metadata.get("target_bot_id") or "").strip()
+        pipeline_bot_id = str(metadata.get("pipeline_bot_id") or "").strip()
+        if mode == "bot_tuner" and target_bot_id:
+            scope.add(target_bot_id)
+        if mode in {"pipeline_tuner", "pipeline_creator"} and pipeline_bot_id:
+            scope.add(pipeline_bot_id)
+            context = await self._resolve_context(session)
+            graph = context.get("graph") if isinstance(context.get("graph"), dict) else {}
+            nodes = graph.get("nodes") if isinstance(graph.get("nodes"), list) else []
+            for node in nodes:
+                if not isinstance(node, dict):
+                    continue
+                bot_id = str(node.get("bot_id") or node.get("id") or "").strip()
+                if bot_id:
+                    scope.add(bot_id)
+        return scope
+
+    async def _reference_bot_scope(self, *, session: Dict[str, Any]) -> set[str]:
+        metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
+        read_only: set[str] = set()
+        for key in ("reference_bot_ids", "reference_scope_bot_ids"):
+            values = metadata.get(key) if isinstance(metadata.get(key), list) else []
+            for item in values:
+                safe = str(item or "").strip()
+                if safe:
+                    read_only.add(safe)
+        referenced_pipelines = metadata.get("reference_pipeline_ids") if isinstance(metadata.get("reference_pipeline_ids"), list) else []
+        for item in referenced_pipelines:
+            pipeline_bot_id = str(item or "").strip()
+            if not pipeline_bot_id:
+                continue
+            read_only.add(pipeline_bot_id)
+            if self._bot_registry is None:
+                continue
+            try:
+                bot = await self._bot_registry.get(pipeline_bot_id)
+            except Exception:
+                continue
+            workflow = getattr(bot, "workflow", None)
+            reference_graph = getattr(workflow, "reference_graph", None) if workflow is not None else None
+            nodes = getattr(reference_graph, "nodes", None) if reference_graph is not None else None
+            for node in nodes or []:
+                bot_id = str(getattr(node, "bot_id", "") or "").strip()
+                if bot_id:
+                    read_only.add(bot_id)
+        return read_only
+
+    async def _record_scope_denied(
+        self,
+        *,
+        session_id: str,
+        action: str,
+        bot_id: str,
+        allowed_scope: List[str],
+        reason: str = "out_of_scope",
+    ) -> None:
+        await self._store.append_event(
+            session_id,
+            "action_trace",
+            {
+                "action": "scope_denied",
+                "attempted_action": action,
+                "bot_id": bot_id,
+                "allowed_scope": allowed_scope,
+                "reason": reason,
+            },
+        )
+        if reason == "reference_scope_read_only":
+            warning = (
+                f"Scope warning: denied `{action}` for bot `{bot_id}` because it is inside read-only reference scope."
+            )
+        else:
+            warning = (
+                f"Scope warning: denied `{action}` for bot `{bot_id}` because it is outside the editable scope for this session."
+            )
+        await self._store.append_message(
+            session_id,
+            role="assistant",
+            content=warning,
+            metadata={"source": "scope_guard", "bot_id": bot_id, "attempted_action": action, "reason": reason},
+        )
+
+    async def _upsert_bot_payload(
+        self,
+        payload: Dict[str, Any],
+        *,
+        session_id: str,
+        session: Dict[str, Any],
+        allow_scope_expansion: bool,
+    ) -> Dict[str, Any]:
         if self._bot_registry is None:
             return {"ok": False, "detail": "bot_registry_unavailable"}
         try:
@@ -991,6 +1195,11 @@ class PlatformAISessionRuntime:
         safe_id = str(bot.id or "").strip()
         if not safe_id:
             return {"ok": False, "detail": "bot_id_missing"}
+        metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
+        mode = str(session.get("mode") or "").strip().lower()
+        policy = self._mode_mutation_policy(mode=mode, metadata=metadata)
+        scope = await self._editable_bot_scope(session=session)
+        reference_scope = await self._reference_bot_scope(session=session)
         existed = True
         try:
             await self._bot_registry.get(safe_id)
@@ -998,6 +1207,27 @@ class PlatformAISessionRuntime:
             existed = False
         except Exception:
             existed = False
+        if existed and not bool(policy.get("update")):
+            return {"ok": False, "detail": "update_denied_by_policy", "bot_id": safe_id}
+        if not existed and not bool(policy.get("create")):
+            return {"ok": False, "detail": "create_denied_by_policy", "bot_id": safe_id}
+        if safe_id in reference_scope:
+            await self._record_scope_denied(
+                session_id=session_id,
+                action="update_bot" if existed else "create_bot",
+                bot_id=safe_id,
+                allowed_scope=sorted(scope),
+                reason="reference_scope_read_only",
+            )
+            return {"ok": False, "detail": "reference_scope_read_only", "bot_id": safe_id, "allowed_scope": sorted(scope)}
+        if scope and safe_id not in scope and not (allow_scope_expansion and not existed and bool(policy.get("create"))):
+            await self._record_scope_denied(
+                session_id=session_id,
+                action="update_bot" if existed else "create_bot",
+                bot_id=safe_id,
+                allowed_scope=sorted(scope),
+            )
+            return {"ok": False, "detail": "out_of_scope", "bot_id": safe_id, "allowed_scope": sorted(scope)}
         try:
             if existed:
                 await self._bot_registry.update(safe_id, bot)
@@ -1005,6 +1235,11 @@ class PlatformAISessionRuntime:
                 await self._bot_registry.register(bot)
         except Exception as exc:
             return {"ok": False, "detail": f"bot_upsert_failed:{safe_id}:{exc}"}
+        if not existed and allow_scope_expansion:
+            mutable = metadata.get("mutable_bot_ids") if isinstance(metadata.get("mutable_bot_ids"), list) else []
+            if safe_id not in mutable:
+                mutable = list(mutable) + [safe_id]
+                await self._store.update_session(session_id, metadata={"mutable_bot_ids": mutable})
         return {"ok": True, "bot_id": safe_id, "operation": "updated" if existed else "created"}
 
     async def _configure_linear_pipeline_entry(
@@ -1129,6 +1364,7 @@ class PlatformAISessionRuntime:
         actions_taken: List[Dict[str, Any]] = []
         mode = str(session.get("mode") or "").strip().lower()
         metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
+        allow_scope_expansion = mode in {"bot_creator", "pipeline_creator", "pipeline_tuner"}
         payloads = _extract_json_chunks(content)
         directives: List[Any] = []
         for payload in payloads:
@@ -1150,15 +1386,60 @@ class PlatformAISessionRuntime:
                 action = "upsert_bot"
             if action == "upsert_bot":
                 bot_payload = directive.get("bot") if isinstance(directive.get("bot"), dict) else directive
-                result = await self._upsert_bot_payload(bot_payload if isinstance(bot_payload, dict) else {})
+                result = await self._upsert_bot_payload(
+                    bot_payload if isinstance(bot_payload, dict) else {},
+                    session_id=session_id,
+                    session=session,
+                    allow_scope_expansion=allow_scope_expansion,
+                )
                 actions_taken.append({"action": "upsert_bot", "result": result})
             elif action == "upsert_bots":
                 bots = directive.get("bots") if isinstance(directive.get("bots"), list) else []
                 for item in bots:
                     if not isinstance(item, dict):
                         continue
-                    result = await self._upsert_bot_payload(item)
+                    result = await self._upsert_bot_payload(
+                        item,
+                        session_id=session_id,
+                        session=session,
+                        allow_scope_expansion=allow_scope_expansion,
+                    )
                     actions_taken.append({"action": "upsert_bot", "result": result})
+            elif action in {"delete_bot", "remove_bot"}:
+                bot_id = str(directive.get("bot_id") or directive.get("id") or "").strip()
+                if not bot_id:
+                    actions_taken.append({"action": action, "result": {"ok": False, "detail": "bot_id_required"}})
+                elif self._bot_registry is None:
+                    actions_taken.append({"action": action, "result": {"ok": False, "detail": "bot_registry_unavailable"}})
+                else:
+                    policy = self._mode_mutation_policy(mode=mode, metadata=metadata)
+                    scope = await self._editable_bot_scope(session=session)
+                    reference_scope = await self._reference_bot_scope(session=session)
+                    if not bool(policy.get("delete")):
+                        actions_taken.append({"action": action, "result": {"ok": False, "detail": "delete_denied_by_policy", "bot_id": bot_id}})
+                    elif bot_id in reference_scope:
+                        await self._record_scope_denied(
+                            session_id=session_id,
+                            action="delete_bot",
+                            bot_id=bot_id,
+                            allowed_scope=sorted(scope),
+                            reason="reference_scope_read_only",
+                        )
+                        actions_taken.append({"action": action, "result": {"ok": False, "detail": "reference_scope_read_only", "bot_id": bot_id}})
+                    elif scope and bot_id not in scope:
+                        await self._record_scope_denied(
+                            session_id=session_id,
+                            action="delete_bot",
+                            bot_id=bot_id,
+                            allowed_scope=sorted(scope),
+                        )
+                        actions_taken.append({"action": action, "result": {"ok": False, "detail": "out_of_scope", "bot_id": bot_id}})
+                    else:
+                        try:
+                            await self._bot_registry.remove(bot_id)
+                            actions_taken.append({"action": action, "result": {"ok": True, "bot_id": bot_id, "operation": "deleted"}})
+                        except Exception as exc:
+                            actions_taken.append({"action": action, "result": {"ok": False, "detail": f"bot_delete_failed:{exc}", "bot_id": bot_id}})
             elif action == "configure_pipeline_entry":
                 stage_ids = [str(item) for item in (directive.get("stage_bot_ids") or [])]
                 result = await self._configure_linear_pipeline_entry(
@@ -1199,6 +1480,14 @@ class PlatformAISessionRuntime:
                         iteration=int(metadata.get("autonomous_iteration") or 0) + 1,
                     )
                     actions_taken.append({"action": "launch_pipeline", "result": {"ok": bool(launched), "orchestration_id": launched}})
+            elif action in {"project_code_edit", "public_project_edit"}:
+                instruction = str(directive.get("instruction") or content).strip()
+                project_result = await self.start_project_edit_run(
+                    session_id,
+                    requested_by=str(session.get("operator_id") or "platform-ai"),
+                    instruction=instruction,
+                )
+                actions_taken.append({"action": "project_code_edit", "result": project_result})
             elif action == "deploy":
                 deploy_result = await self.start_deploy_run(session_id, requested_by=str(session.get("operator_id") or "platform-ai"))
                 actions_taken.append({"action": "deploy", "result": deploy_result})
@@ -1222,6 +1511,13 @@ class PlatformAISessionRuntime:
             if any(token in lowered for token in ("deploy now", "run deployment", "build deployment", "deploy latest")):
                 deploy_result = await self.start_deploy_run(session_id, requested_by=str(session.get("operator_id") or "platform-ai"))
                 actions_taken.append({"action": "deploy", "result": deploy_result})
+            if any(token in lowered for token in ("project code edit", "edit project code", "patch project", "apply project patch")):
+                project_result = await self.start_project_edit_run(
+                    session_id,
+                    requested_by=str(session.get("operator_id") or "platform-ai"),
+                    instruction=str(content or ""),
+                )
+                actions_taken.append({"action": "project_code_edit", "result": project_result})
             if any(token in lowered for token in ("code edit", "hotfix", "commit and push", "edit platform code")):
                 repo_result = await self.start_repo_edit_run(
                     session_id,
@@ -1245,48 +1541,58 @@ class PlatformAISessionRuntime:
                 if session is None:
                     break
                 status = str(session.get("status") or "").strip().lower()
-                if status in {"stopped", "completed", "failed", "archived"}:
+                if bool(session.get("archived")):
+                    await self._store.append_event(
+                        session_id,
+                        "action_trace",
+                        {"action": "runtime_loop_stopped", "status": "archived", "stopped_at": _now()},
+                    )
+                    break
+                if status == "stopped":
                     await self._store.append_event(
                         session_id,
                         "action_trace",
                         {"action": "runtime_loop_stopped", "status": status, "stopped_at": _now()},
                     )
                     break
-                if status == "paused":
+                if status != "running":
                     await asyncio.sleep(1.0)
                     continue
 
                 await self._process_operator_messages(session_id)
 
                 session_meta = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
-
-                # Check for stall condition
-                halt_reason = None
-                if not self._session_has_inflight_runtime(session=session, session_meta=session_meta):
-                    halt_reason = await self._check_should_halt_as_stalled(session_id)
-                if halt_reason:
-                    await self._halt_session(
-                        session_id,
-                        reason=halt_reason,
-                        message=(
-                            "Platform AI has halted this session: no measurable state change has occurred "
-                            "after repeated action attempts. Possible causes: no pipeline selected, ambiguous "
-                            "session brief, no writable config, graph state unchanged, or waiting on an active run. "
-                            "Review session brief and restart to resume."
-                        ),
-                    )
-                    break
-
-                _has_target = bool(str(session_meta.get("pipeline_bot_id") or "").strip()) or bool(str(session.get("orchestration_id") or "").strip())
+                mode = str(session.get("mode") or "").strip().lower()
+                if mode == "pipeline_tuner":
+                    _has_target = bool(str(session_meta.get("pipeline_bot_id") or "").strip()) or bool(str(session.get("orchestration_id") or "").strip())
+                elif mode == "bot_tuner":
+                    _has_target = bool(str(session_meta.get("target_bot_id") or "").strip())
+                elif mode == "bot_creator":
+                    _has_target = bool(str(session_meta.get("bot_name_seed") or "").strip())
+                elif mode == "pipeline_creator":
+                    _has_target = bool(str(session_meta.get("pipeline_name_seed") or session_meta.get("pipeline_name") or "").strip())
+                else:
+                    _has_target = True
                 if not _has_target:
                     _waiting_emitted = bool(session_meta.get("_waiting_for_target_emitted"))
                     if not _waiting_emitted:
                         await self._store.append_event(
                             session_id,
                             "action_trace",
-                            {"action": "waiting_for_target", "detail": "No pipeline_bot_id or orchestration_id set. Waiting for operator to provide a target."},
+                            {"action": "waiting_for_target", "detail": f"Missing required target/config seed for mode `{mode}`. Waiting for operator input."},
                         )
-                        await self._store.update_session(session_id, metadata={"_waiting_for_target_emitted": True})
+                    await self._store.update_session(
+                        session_id,
+                        status="ready",
+                        metadata={"_waiting_for_target_emitted": True, "checkpoint_reason": "missing_target"},
+                    )
+                    await self._store.append_message(
+                        session_id,
+                        role="assistant",
+                        content=f"Session moved to ready state: provide required context for mode `{mode}` and resume to continue autonomous execution.",
+                        metadata={"source": "checkpoint_guard", "checkpoint_reason": "missing_target"},
+                    )
+                    break
 
                 snapshot = await self._build_progress_snapshot(session)
                 signature = str(snapshot.get("signature") or "")
@@ -1312,6 +1618,22 @@ class PlatformAISessionRuntime:
                 session = await self._store.get_session(session_id) or session
                 if await self._finalize_autonomous_session_if_terminal(session_id, session=session, snapshot=snapshot):
                     continue
+
+                # Check for stall condition after the latest snapshot/tuner pass.
+                # This avoids false halts when an orchestration has just become terminal
+                # and the loop is about to evaluate/finalize that transition.
+                snapshot_runtime = snapshot.get("runtime_state") if isinstance(snapshot.get("runtime_state"), dict) else {}
+                if not self._session_has_inflight_runtime(session=session, session_meta={"runtime_state": snapshot_runtime}):
+                    halt_reason = await self._check_should_halt_as_stalled(session_id)
+                    if halt_reason:
+                        await self._handle_stall_without_halt(
+                            session_id,
+                            session=session,
+                            snapshot=snapshot,
+                            reason=halt_reason,
+                        )
+                        await asyncio.sleep(1.5)
+                        continue
                 now_mono = time.monotonic()
                 changed = bool(signature) and signature != previous_signature
                 heartbeat_due = (now_mono - float(self._last_heartbeat_ts.get(session_id) or 0.0)) >= 30.0
@@ -1749,9 +2071,23 @@ class PlatformAISessionRuntime:
             or safe_bot_id
         )
 
-    async def _pipeline_launch_payload(self, *, pipeline_bot_id: str, goal: str) -> Dict[str, Any]:
+    async def _pipeline_launch_payload(
+        self,
+        *,
+        pipeline_bot_id: str,
+        goal: str,
+        seed_binding: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         safe_bot_id = str(pipeline_bot_id or "").strip()
-        fallback = {"instruction": (goal[:2000] if goal else f"Run pipeline test for {safe_bot_id}")}
+        seed_data = seed_binding if isinstance(seed_binding, dict) else {}
+        seed_instruction = str(seed_data.get("instruction") or "").strip()
+        seed_overrides = seed_data.get("node_overrides") if isinstance(seed_data.get("node_overrides"), dict) else {}
+        instruction = seed_instruction or (goal[:2000] if goal else f"Run pipeline test for {safe_bot_id}")
+        fallback: Dict[str, Any] = {"instruction": instruction}
+        if goal and seed_instruction:
+            fallback["platform_ai_goal"] = goal[:2000]
+        if seed_overrides:
+            fallback["node_overrides"] = copy.deepcopy(seed_overrides)
         if self._bot_registry is None:
             return fallback
         try:
@@ -1765,8 +2101,14 @@ class PlatformAISessionRuntime:
         if not launch_payload:
             return fallback
         merged = dict(launch_payload)
-        if goal and not str(merged.get("instruction") or "").strip():
+        if seed_instruction:
+            merged["instruction"] = seed_instruction
+            if goal:
+                merged["platform_ai_goal"] = goal[:2000]
+        elif goal and not str(merged.get("instruction") or "").strip():
             merged["instruction"] = goal[:2000]
+        if seed_overrides and not isinstance(merged.get("node_overrides"), dict):
+            merged["node_overrides"] = copy.deepcopy(seed_overrides)
         return merged
 
     def _derive_pipeline_bot_id(self, *, context: Dict[str, Any], session_metadata: Dict[str, Any]) -> Optional[str]:
@@ -1988,13 +2330,21 @@ class PlatformAISessionRuntime:
         if self._task_manager is None:
             return None
         launch_orchestration_id = str(uuid.uuid4())
-        payload = await self._pipeline_launch_payload(pipeline_bot_id=pipeline_bot_id, goal=goal)
+        live_session = await self._store.get_session(session_id)
+        live_meta = live_session.get("metadata") if isinstance((live_session or {}).get("metadata"), dict) else {}
+        seed_binding = live_meta.get("seed_binding") if isinstance(live_meta.get("seed_binding"), dict) else {}
+        payload = await self._pipeline_launch_payload(
+            pipeline_bot_id=pipeline_bot_id,
+            goal=goal,
+            seed_binding=seed_binding,
+        )
+        trigger_source = str(seed_binding.get("trigger_source") or "").strip() or "platform_ai_autonomous_tuner"
         try:
             created = await self._task_manager.create_task(
                 bot_id=pipeline_bot_id,
                 payload=payload,
                 metadata=TaskMetadata(
-                    source="platform_ai_autonomous_tuner",
+                    source=trigger_source,
                     orchestration_id=launch_orchestration_id,
                     pipeline_name=pipeline_name or pipeline_bot_id,
                     pipeline_entry_bot_id=pipeline_bot_id,
@@ -2017,6 +2367,8 @@ class PlatformAISessionRuntime:
                 "autonomous_iteration": int(iteration),
                 "autonomous_state": "running_iteration",
                 "autonomous_current_reason": reason,
+                "autonomous_terminalized_at": None,
+                "autonomous_terminal_reason": None,
             },
         )
         await self._store.append_event(
@@ -2030,6 +2382,11 @@ class PlatformAISessionRuntime:
                 "pipeline_name": pipeline_name or pipeline_bot_id,
                 "orchestration_id": launch_orchestration_id,
                 "task_id": str(getattr(created, "id", "") or ""),
+                "seed_binding": {
+                    "seed_run_id": str(seed_binding.get("seed_run_id") or "").strip() or None,
+                    "seed_orchestration_id": str(seed_binding.get("seed_orchestration_id") or "").strip() or None,
+                    "trigger_source": trigger_source,
+                },
             },
         )
         await self._store.append_message(
@@ -2277,6 +2634,8 @@ class PlatformAISessionRuntime:
         eval_status = str(evaluation.get("status") or "failed").strip().lower()
         eval_score = float(evaluation.get("score") or 0.0)
         passed_target = eval_status == "passed" and eval_score >= target_score
+        previous_consecutive = int(metadata.get("autonomous_consecutive_passes") or 0)
+        consecutive_passes = (previous_consecutive + 1) if passed_target else 0
         last_eval_status = str(metadata.get("autonomous_last_eval_status") or "").strip().lower()
         await self._store.update_session(
             session_id,
@@ -2287,6 +2646,7 @@ class PlatformAISessionRuntime:
                 "autonomous_last_eval_run_id": str((final_run or {}).get("id") or ""),
                 "autonomous_last_eval_at": _now(),
                 "autonomous_state": "converged" if passed_target else "needs_refinement",
+                "autonomous_consecutive_passes": consecutive_passes,
             },
         )
         await self._store.append_event(
@@ -2357,7 +2717,7 @@ class PlatformAISessionRuntime:
                 "target_config": _patch_proposal["target_config"],
             })
 
-        if passed_target:
+        if passed_target and consecutive_passes >= 3:
             await self._store.append_event(
                 session_id,
                 "action_trace",
@@ -2366,14 +2726,33 @@ class PlatformAISessionRuntime:
                     "target_score": target_score,
                     "score": eval_score,
                     "iteration": current_iteration,
+                    "consecutive_passes": consecutive_passes,
                 },
+            )
+            completion_report = {
+                "completed_at": _now(),
+                "pipeline_bot_id": pipeline_bot_id,
+                "pipeline_name": pipeline_name or pipeline_bot_id,
+                "target_score": target_score,
+                "latest_score": eval_score,
+                "required_consecutive_passes": 3,
+                "achieved_consecutive_passes": consecutive_passes,
+                "suite_id": str(suite.get("id") or ""),
+                "latest_suite_run_id": str((final_run or {}).get("id") or ""),
+                "orchestration_id": orchestration_id,
+            }
+            await self._store.update_session(
+                session_id,
+                status="ready",
+                metadata={"autonomous_completion_report": completion_report, "checkpoint_reason": "quality_gate_passed"},
             )
             await self._store.append_message(
                 session_id,
                 role="assistant",
                 content=(
                     f"Autonomous tuner reached target quality for `{pipeline_name or pipeline_bot_id}`: "
-                    f"score {eval_score:.3f} (target {target_score:.3f})."
+                    f"score {eval_score:.3f} (target {target_score:.3f}) with {consecutive_passes}/3 consecutive passes. "
+                    "Session moved to ready."
                 ),
                 metadata={"source": "autonomous_tuner", "state": "converged"},
             )
@@ -2382,6 +2761,39 @@ class PlatformAISessionRuntime:
                 output_snapshot={"eval_status": eval_status, "eval_score": eval_score, "launched": False},
                 had_effect=eval_status != last_eval_status,
                 summary=f"Converged: {eval_status} score={eval_score:.3f}",
+            )
+            return
+        if passed_target and consecutive_passes < 3:
+            validation_iteration = current_iteration + 1
+            launched_validation = await self._launch_autonomous_orchestration(
+                session_id=session_id,
+                pipeline_bot_id=pipeline_bot_id or "",
+                pipeline_name=pipeline_name or (pipeline_bot_id or ""),
+                goal=goal,
+                reason="quality_gate_validation",
+                iteration=validation_iteration,
+            )
+            await self._store.update_session(
+                session_id,
+                metadata={
+                    "autonomous_iteration": validation_iteration,
+                    "autonomous_state": "quality_gate_validation",
+                },
+            )
+            await self._store.append_message(
+                session_id,
+                role="assistant",
+                content=(
+                    f"Quality gate pass {consecutive_passes}/3 achieved for `{pipeline_name or pipeline_bot_id}`. "
+                    f"Launching validation run `{launched_validation}`."
+                ),
+                metadata={"source": "autonomous_tuner", "state": "quality_gate_validation"},
+            )
+            await self._complete_action_record(
+                action["id"],
+                output_snapshot={"eval_status": eval_status, "eval_score": eval_score, "launched": bool(launched_validation)},
+                had_effect=True,
+                summary=f"Quality gate streak {consecutive_passes}/3; launched validation={bool(launched_validation)}",
             )
             return
 
@@ -2394,41 +2806,40 @@ class PlatformAISessionRuntime:
                 summary="Refinement signature already processed; no new action taken.",
             )
             return
+        strategy_shift = False
         if current_iteration >= max_iterations:
+            strategy_shift = True
+            strategy_shift_count = int(metadata.get("autonomous_strategy_shift_count") or 0) + 1
             await self._store.update_session(
                 session_id,
                 metadata={
-                    "autonomous_state": "max_iterations_reached",
-                    "autonomous_last_refine_signature": eval_signature,
+                    "autonomous_state": "strategy_shift",
+                    "autonomous_strategy_shift_count": strategy_shift_count,
+                    "autonomous_last_refine_signature": None,
                 },
             )
             await self._store.append_event(
                 session_id,
                 "action_trace",
                 {
-                    "action": "autonomous_max_iterations_reached",
+                    "action": "autonomous_strategy_shift",
                     "iteration": current_iteration,
                     "max_iterations": max_iterations,
                     "score": eval_score,
                     "target_score": target_score,
+                    "strategy_shift_count": strategy_shift_count,
                 },
             )
             await self._store.append_message(
                 session_id,
                 role="assistant",
                 content=(
-                    f"Autonomous tuner stopped after {current_iteration} iteration(s) without hitting target "
-                    f"{target_score:.3f}. Last score: {eval_score:.3f}. Review latest suite run and bot refinements."
+                    f"Autonomous tuner hit the configured max iterations ({max_iterations}) with score {eval_score:.3f}. "
+                    "Applying strategy shift and continuing refinement."
                 ),
-                metadata={"source": "autonomous_tuner", "state": "max_iterations_reached"},
+                metadata={"source": "autonomous_tuner", "state": "strategy_shift"},
             )
-            await self._complete_action_record(
-                action["id"],
-                output_snapshot={"eval_status": eval_status, "eval_score": eval_score, "launched": False},
-                had_effect=eval_status != last_eval_status,
-                summary=f"Max iterations reached: {eval_status} score={eval_score:.3f}",
-            )
-            return
+            current_iteration = 0
 
         next_iteration = current_iteration + 1
         refined_suite_payload = await self._refine_suite_definition(
@@ -2481,7 +2892,7 @@ class PlatformAISessionRuntime:
             pipeline_bot_id=pipeline_bot_id or "",
             pipeline_name=pipeline_name or (pipeline_bot_id or ""),
             goal=goal,
-            reason="refinement_iteration",
+            reason="strategy_shift_iteration" if strategy_shift else "refinement_iteration",
             iteration=next_iteration,
         )
         await self._store.update_session(
@@ -2491,7 +2902,7 @@ class PlatformAISessionRuntime:
                 "autonomous_suite_id": str(refined_suite.get("id") or ""),
                 "autonomous_last_refine_signature": eval_signature,
                 "autonomous_last_bot_refine_result": bot_refine,
-                "autonomous_state": "running_iteration" if launched else "refinement_launch_failed",
+                "autonomous_state": "running_iteration" if launched else "needs_replan",
             },
         )
         if launched:
@@ -2503,6 +2914,21 @@ class PlatformAISessionRuntime:
                     f"Suite `{refined_suite.get('id')}` and bot tuning updated; launched orchestration `{launched}`."
                 ),
                 metadata={"source": "autonomous_tuner", "iteration": next_iteration},
+            )
+        else:
+            await self._store.update_session(
+                session_id,
+                status="ready",
+                metadata={"checkpoint_reason": "launch_failed_after_refinement"},
+            )
+            await self._store.append_message(
+                session_id,
+                role="assistant",
+                content=(
+                    "Autonomous refinement updated the suite/config but could not launch the next orchestration. "
+                    "Session moved to ready; verify runtime dependencies and resume."
+                ),
+                metadata={"source": "autonomous_tuner", "state": "ready_checkpoint"},
             )
         await self._complete_action_record(
             action["id"],
@@ -2615,6 +3041,188 @@ class PlatformAISessionRuntime:
                 await asyncio.sleep(2.0)
         finally:
             self._deploy_tasks.pop(session_id, None)
+
+    async def _project_edit_loop(
+        self,
+        session_id: str,
+        *,
+        requested_by: str,
+        instruction: str,
+    ) -> None:
+        cmd_env = "NEXUS_PLATFORM_AI_PROJECT_EDIT_RUN_CMD"
+        run_cmd = str(os.environ.get(cmd_env, "") or "").strip()
+        kind = "project_code_edit"
+        await self._store.append_event(
+            session_id,
+            "action_trace",
+            {"action": "project_edit_runner_started", "requested_by": requested_by, "started_at": _now()},
+        )
+        await self._store.update_session(
+            session_id,
+            metadata={
+                "project_edit_runner_state": "running",
+                "project_edit_runner_started_at": _now(),
+                "project_edit_runner_last_error": None,
+            },
+        )
+        if not run_cmd:
+            await self._store.append_event(
+                session_id,
+                "action_trace",
+                {"action": "project_edit_runner_error", "detail": f"{cmd_env} is not configured"},
+            )
+            await self._store.update_session(
+                session_id,
+                status="ready",
+                metadata={
+                    "project_edit_runner_state": "failed",
+                    "project_edit_runner_last_error": f"{cmd_env} is not configured",
+                    "project_edit_runner_finished_at": _now(),
+                    "checkpoint_reason": "project_edit_runner_unavailable",
+                },
+            )
+            await self._store.append_message(
+                session_id,
+                role="assistant",
+                content=f"Project code edit runner is unavailable: `{cmd_env}` is not configured.",
+                metadata={"source": "project_edit_runner", "state": "failed"},
+            )
+            return
+
+        default_cwd = Path(__file__).resolve().parents[2]
+        configured_cwd = str(os.environ.get("NEXUS_PLATFORM_AI_PROJECT_EDIT_CWD", "") or "").strip()
+        cwd_path = Path(configured_cwd).resolve() if configured_cwd else default_cwd
+        if not cwd_path.exists() or not cwd_path.is_dir():
+            cwd_path = default_cwd
+
+        env = os.environ.copy()
+        env["NEXUS_PLATFORM_AI_SESSION_ID"] = str(session_id)
+        env["NEXUS_PLATFORM_AI_REQUESTED_BY"] = str(requested_by or "")
+        env["NEXUS_PLATFORM_AI_OPERATOR_INSTRUCTION"] = str(instruction or "")
+        env["NEXUS_PLATFORM_AI_REPO_EDIT_KIND"] = kind
+        timeout_seconds = _safe_timeout_seconds(
+            "NEXUS_PLATFORM_AI_PROJECT_EDIT_TIMEOUT_SECONDS",
+            1800.0,
+            min_value=30.0,
+            max_value=14400.0,
+        )
+        try:
+            proc = await asyncio.create_subprocess_shell(
+                run_cmd,
+                cwd=str(cwd_path),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                env=env,
+            )
+            assert proc.stdout is not None
+            await self._store.append_event(
+                session_id,
+                "action_trace",
+                {"action": "project_edit_requested", "cwd": str(cwd_path), "command_env": cmd_env},
+            )
+            lines: List[str] = []
+            async def _stream_lines() -> None:
+                while True:
+                    line = await proc.stdout.readline()
+                    if not line:
+                        break
+                    text = line.decode(errors="replace").rstrip()
+                    if not text:
+                        continue
+                    if len(lines) < 200:
+                        lines.append(text)
+                    await self._store.append_event(
+                        session_id,
+                        "action_trace",
+                        {"action": "project_edit_log", "line": text},
+                    )
+
+            stream_task = asyncio.create_task(_stream_lines())
+            timed_out = False
+            try:
+                rc = await asyncio.wait_for(proc.wait(), timeout=timeout_seconds)
+            except asyncio.TimeoutError:
+                timed_out = True
+                proc.kill()
+                rc = await proc.wait()
+            await stream_task
+            succeeded = rc == 0
+            suggested_commit = f"project-edit: apply platform ai patch set ({session_id[:8]})"
+            alternatives = [
+                "Split change into infra vs product commits",
+                "Squash into one patch-only commit after human review",
+                "Discard and rerun with tighter scope if quality gates fail",
+            ]
+            await self._store.update_session(
+                session_id,
+                status="ready",
+                metadata={
+                    "project_edit_runner_state": "succeeded" if succeeded else "failed",
+                    "project_edit_runner_exit_code": rc,
+                    "project_edit_runner_timed_out": timed_out,
+                    "project_edit_runner_finished_at": _now(),
+                    "project_edit_runner_last_error": None if succeeded else ("runner timed out" if timed_out else f"exit_code={rc}"),
+                    "checkpoint_reason": "project_edit_complete",
+                    "project_edit_report": {
+                        "exit_code": rc,
+                        "timed_out": timed_out,
+                        "suggested_commit_message": suggested_commit,
+                        "alternatives": alternatives,
+                        "log_preview": lines[-20:],
+                    },
+                },
+            )
+            await self._store.append_event(
+                session_id,
+                "action_trace",
+                {
+                    "action": "project_edit_finished",
+                    "state": "succeeded" if succeeded else "failed",
+                    "exit_code": rc,
+                    "timed_out": timed_out,
+                },
+            )
+            await self._store.append_message(
+                session_id,
+                role="assistant",
+                content=(
+                    (
+                        "Public project edit run completed (patch+tests). Session moved to ready for operator review. "
+                        f"Suggested commit message: {suggested_commit}. "
+                        f"Alternatives: {', '.join(alternatives)}. No commit/push was performed by Platform AI."
+                    )
+                    if succeeded
+                    else (
+                        "Public project edit run failed and session moved to ready for review. "
+                        f"exit_code={rc} timed_out={timed_out}. No commit/push was performed by Platform AI."
+                    )
+                ),
+                metadata={"source": "project_edit_runner", "state": "succeeded" if succeeded else "failed"},
+            )
+        except Exception as exc:
+            await self._store.update_session(
+                session_id,
+                status="ready",
+                metadata={
+                    "project_edit_runner_state": "failed",
+                    "project_edit_runner_last_error": str(exc),
+                    "project_edit_runner_finished_at": _now(),
+                    "checkpoint_reason": "project_edit_error",
+                },
+            )
+            await self._store.append_event(
+                session_id,
+                "action_trace",
+                {"action": "project_edit_runner_error", "detail": str(exc)},
+            )
+            await self._store.append_message(
+                session_id,
+                role="assistant",
+                content=f"Project code edit runner crashed: {exc}",
+                metadata={"source": "project_edit_runner", "state": "failed"},
+            )
+        finally:
+            self._project_edit_tasks.pop(session_id, None)
 
     async def _repo_edit_loop(
         self,
@@ -2820,7 +3428,14 @@ class PlatformAISessionRuntime:
     async def list_patch_proposals(self, session_id: str, *, limit: int = 50) -> List[Dict[str, Any]]:
         return await self._store.list_patch_proposals(session_id, limit=limit)
 
-    async def approve_patch_proposal(self, session_id: str, proposal_id: str) -> Dict[str, Any]:
+    async def approve_patch_proposal(
+        self,
+        session_id: str,
+        proposal_id: str,
+        *,
+        operator_id: Optional[str] = None,
+        notes: Optional[str] = None,
+    ) -> Dict[str, Any]:
         updated = await self._store.update_patch_proposal_status(proposal_id, "approved")
         if updated is None:
             return {"status": "error", "detail": "proposal_not_found"}
@@ -2828,16 +3443,69 @@ class PlatformAISessionRuntime:
             "action": "patch_proposal_approved",
             "proposal_id": proposal_id,
             "target_config": updated.get("target_config"),
+            "operator_id": str(operator_id or "").strip() or None,
+            "notes": str(notes or "").strip() or None,
         })
         return {"status": "approved", "proposal": updated}
 
-    async def halt_session(self, session_id: str, *, reason: str = "operator_halt") -> Dict[str, Any]:
-        await self._halt_session(session_id, reason=reason, message=f"Session halted by operator (reason: {reason}).")
-        return {"status": "stopped", "reason": reason}
+    async def halt_session(
+        self,
+        session_id: str,
+        *,
+        reason: str = "operator_halt",
+        operator_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        updated = await self._store.update_session(
+            session_id,
+            status="stopped",
+            metadata={
+                "stopped_reason": reason,
+                "stopped_at": _now(),
+                "stopped_by": str(operator_id or "").strip() or None,
+            },
+        )
+        await self._store.append_event(
+            session_id,
+            "action_trace",
+            {
+                "action": "session_stopped_by_operator",
+                "reason": reason,
+                "stopped_at": _now(),
+                "operator_id": str(operator_id or "").strip() or None,
+            },
+        )
+        await self._store.append_message(
+            session_id,
+            role="assistant",
+            content=f"Session stopped by operator (reason: {reason}).",
+            metadata={"source": "operator_stop", "reason": reason, "operator_id": str(operator_id or "").strip() or None},
+        )
+        return updated or {"status": "stopped", "reason": reason}
 
-    async def refresh_session_brief(self, session_id: str, *, content: str) -> Dict[str, Any]:
+    async def refresh_session_brief(self, session_id: str, *, operator_id: Optional[str] = None) -> Dict[str, Any]:
         session = await self._store.get_session(session_id)
         if session is None:
             return {"status": "error", "detail": "session_not_found"}
-        brief = await self._synthesize_session_brief(session_id, session=session, message_content=content)
+        messages = await self._store.list_messages(session_id, limit=400)
+        latest_operator_content = ""
+        for row in reversed(messages):
+            if str(row.get("role") or "").strip().lower() != "operator":
+                continue
+            latest_operator_content = str(row.get("content") or "").strip()
+            if latest_operator_content:
+                break
+        brief = await self._synthesize_session_brief(
+            session_id,
+            session=session,
+            message_content=latest_operator_content,
+        )
+        await self._store.append_event(
+            session_id,
+            "action_trace",
+            {
+                "action": "session_brief_refreshed",
+                "operator_id": str(operator_id or "").strip() or None,
+                "used_operator_message_preview": latest_operator_content[:240],
+            },
+        )
         return {"status": "ok", "brief": brief}

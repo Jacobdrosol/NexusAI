@@ -7,7 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from flask import Blueprint, abort, jsonify, render_template, request, send_file
+import requests
+from flask import Blueprint, Response, abort, jsonify, render_template, request, send_file, stream_with_context
 from flask_login import login_required
 from werkzeug.utils import secure_filename
 
@@ -29,12 +30,53 @@ def _cp_error_response(cp, fallback: str = "control plane unavailable"):
     return jsonify({"error": detail or fallback}), (status_code or 502)
 
 
+def _stream_cp_headers(cp) -> Dict[str, str]:
+    headers: Dict[str, str] = {}
+    token = ""
+    if hasattr(cp, "api_token"):
+        token = str(getattr(cp, "api_token") or "").strip()
+    if not token:
+        token = (os.environ.get("CONTROL_PLANE_API_TOKEN", "") or "").strip()
+    if token:
+        headers["X-Nexus-API-Key"] = token
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
 def _safe_int(value: Any, default: int, min_value: int = 1, max_value: int = 2000) -> int:
     try:
         parsed = int(value)
     except Exception:
         parsed = default
     return max(min_value, min(max_value, parsed))
+
+
+def _soft_threshold(name: str, default: int) -> int:
+    raw = str(os.environ.get(name, "") or "").strip()
+    if not raw:
+        return int(default)
+    try:
+        parsed = int(raw)
+    except Exception:
+        return int(default)
+    return parsed if parsed > 0 else int(default)
+
+
+def _upload_soft_warnings(*, file_count: int, total_bytes: int, label: str) -> List[str]:
+    warnings: List[str] = []
+    soft_max_files = _soft_threshold("NEXUS_PLATFORM_AI_UPLOAD_SOFT_MAX_FILES", 250)
+    soft_max_bytes = _soft_threshold("NEXUS_PLATFORM_AI_UPLOAD_SOFT_MAX_BYTES", 5 * 1024 * 1024 * 1024)
+    if file_count > soft_max_files:
+        warnings.append(
+            f"{label} library now has {file_count} files, above soft threshold {soft_max_files}. "
+            "Uploads remain allowed; consider pruning older files."
+        )
+    if total_bytes > soft_max_bytes:
+        warnings.append(
+            f"{label} library now uses {total_bytes} bytes, above soft threshold {soft_max_bytes}. "
+            "Uploads remain allowed; consider reducing pack size."
+        )
+    return warnings
 
 
 def _as_list(value: Any) -> List[Dict[str, Any]]:
@@ -74,10 +116,12 @@ def _session_context_files(session: Dict[str, Any]) -> List[Dict[str, Any]]:
             {
                 "id": str(row.get("id") or "").strip() or None,
                 "name": str(row.get("name") or Path(path).name).strip(),
+                "relative_path": str(row.get("relative_path") or "").strip() or None,
                 "path": path,
                 "size_bytes": int(row.get("size_bytes") or 0),
                 "content_type": str(row.get("content_type") or "").strip() or None,
                 "uploaded_at": str(row.get("uploaded_at") or "").strip() or None,
+                "url": f"/api/platform-ai/sessions/{secure_filename(str(session.get('id') or ''))}/files/{str(row.get('id') or '').strip()}",
             }
         )
     return normalized
@@ -100,6 +144,7 @@ def _session_message_files(session: Dict[str, Any]) -> List[Dict[str, Any]]:
             {
                 "id": file_id,
                 "name": str(row.get("name") or Path(path).name).strip(),
+                "relative_path": str(row.get("relative_path") or "").strip() or None,
                 "path": path,
                 "size_bytes": int(row.get("size_bytes") or 0),
                 "content_type": str(row.get("content_type") or "").strip() or None,
@@ -122,6 +167,12 @@ def _safe_session_file_path(session_id: str, path: str) -> Optional[Path]:
     except Exception:
         return None
     return candidate if candidate.exists() and candidate.is_file() else None
+
+
+def _sanitize_relative_path(raw: str) -> str:
+    parts = [secure_filename(part) for part in str(raw or "").replace("\\", "/").split("/") if str(part).strip()]
+    parts = [part for part in parts if part not in {"", ".", ".."}]
+    return "/".join(parts)
 
 
 @bp.get("/platform-ai")
@@ -308,6 +359,45 @@ def api_list_platform_ai_session_messages(session_id: str):
     return jsonify(data)
 
 
+@bp.get("/api/platform-ai/sessions/<session_id>/messages/stream")
+@login_required
+def api_stream_platform_ai_session_messages(session_id: str):
+    cp = get_cp_client()
+    cp_base = cp.base_url if hasattr(cp, "base_url") else os.environ.get("CONTROL_PLANE_URL", "http://localhost:8000")
+    safe_session_id = requests.utils.quote(str(session_id), safe="")
+    since = str(request.args.get("since") or "").strip()
+    stream_url = f"{cp_base.rstrip('/')}/v1/platform-ai/sessions/{safe_session_id}/messages/stream"
+    if since:
+        stream_url += f"?since={requests.utils.quote(since, safe='')}"
+
+    def generate():
+        try:
+            with requests.get(
+                stream_url,
+                headers=_stream_cp_headers(cp),
+                stream=True,
+                timeout=(10, None),
+            ) as upstream:
+                upstream.raise_for_status()
+                for line in upstream.iter_lines(decode_unicode=True, keepempty_lines=True):
+                    if line is None:
+                        continue
+                    yield f"{line}\n"
+        except Exception as exc:
+            escaped = str(exc).replace('"', '\\"')
+            yield "event: error\n"
+            yield f'data: {{"error": "{escaped}"}}\n\n'
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @bp.post("/api/platform-ai/sessions/<session_id>/messages")
 @login_required
 def api_post_platform_ai_session_message(session_id: str):
@@ -328,6 +418,7 @@ def api_upload_platform_ai_context_files(session_id: str):
         return _cp_error_response(cp, "failed to load platform ai session")
 
     files = request.files.getlist("files")
+    relative_paths = request.form.getlist("relative_paths")
     if not files:
         return jsonify({"error": "at least one file is required"}), 400
     root = _upload_root()
@@ -336,28 +427,35 @@ def api_upload_platform_ai_context_files(session_id: str):
 
     existing = _session_context_files(session)
     saved_rows: List[Dict[str, Any]] = []
-    for file_storage in files:
+    for idx, file_storage in enumerate(files):
         if file_storage is None:
             continue
         original_name = str(file_storage.filename or "").strip()
-        safe_name = secure_filename(original_name) or f"file-{len(existing) + len(saved_rows) + 1}.bin"
-        target = session_dir / safe_name
+        rel_hint = _sanitize_relative_path(relative_paths[idx] if idx < len(relative_paths) else "")
+        safe_name = secure_filename(Path(rel_hint or original_name).name) or f"file-{len(existing) + len(saved_rows) + 1}.bin"
+        rel_parent = _sanitize_relative_path(str(Path(rel_hint).parent)) if rel_hint else ""
+        target_dir = session_dir / rel_parent if rel_parent else session_dir
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / safe_name
         suffix = 1
         while target.exists():
             stem = target.stem
             ext = target.suffix
-            target = session_dir / f"{stem}({suffix}){ext}"
+            target = target_dir / f"{stem}({suffix}){ext}"
             suffix += 1
         file_storage.save(target)
         stat = target.stat()
+        file_id = f"ctx-{int(datetime.now(timezone.utc).timestamp() * 1000)}-{len(saved_rows)+1}"
         saved_rows.append(
             {
-                "id": f"ctx-{int(datetime.now(timezone.utc).timestamp() * 1000)}-{len(saved_rows)+1}",
+                "id": file_id,
                 "name": original_name or target.name,
+                "relative_path": rel_hint or None,
                 "path": str(target),
                 "size_bytes": int(stat.st_size),
                 "content_type": str(file_storage.mimetype or "").strip() or None,
                 "uploaded_at": _now_iso(),
+                "url": f"/api/platform-ai/sessions/{secure_filename(str(session_id))}/files/{file_id}",
             }
         )
     if not saved_rows:
@@ -367,6 +465,8 @@ def api_upload_platform_ai_context_files(session_id: str):
     patched = cp.patch_platform_ai_session(session_id, {"metadata": {"context_files": merged}})
     if patched is None:
         return _cp_error_response(cp, "failed to persist context files")
+    total_bytes = sum(int(row.get("size_bytes") or 0) for row in merged if isinstance(row, dict))
+    warnings = _upload_soft_warnings(file_count=len(merged), total_bytes=total_bytes, label="Context")
     cp.post_platform_ai_message(
         session_id,
         {
@@ -375,7 +475,15 @@ def api_upload_platform_ai_context_files(session_id: str):
             "metadata": {"source": "context_upload", "files": saved_rows},
         },
     )
-    return jsonify({"session_id": session_id, "files": saved_rows, "total_files": len(merged)})
+    return jsonify(
+        {
+            "session_id": session_id,
+            "files": saved_rows,
+            "total_files": len(merged),
+            "total_bytes": total_bytes,
+            "warnings": warnings,
+        }
+    )
 
 
 @bp.post("/api/platform-ai/sessions/<session_id>/message-files")
@@ -387,6 +495,7 @@ def api_upload_platform_ai_message_files(session_id: str):
         return _cp_error_response(cp, "failed to load platform ai session")
 
     files = request.files.getlist("files")
+    relative_paths = request.form.getlist("relative_paths")
     if not files:
         return jsonify({"error": "at least one file is required"}), 400
     root = _upload_root()
@@ -396,18 +505,22 @@ def api_upload_platform_ai_message_files(session_id: str):
     metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
     existing = metadata.get("message_files") if isinstance(metadata.get("message_files"), list) else []
     saved_rows: List[Dict[str, Any]] = []
-    for file_storage in files:
+    for idx, file_storage in enumerate(files):
         if file_storage is None:
             continue
         original_name = str(file_storage.filename or "").strip()
         file_id = f"msg-{int(datetime.now(timezone.utc).timestamp() * 1000)}-{len(saved_rows)+1}"
-        safe_name = secure_filename(original_name) or f"{file_id}.bin"
-        target = session_dir / safe_name
+        rel_hint = _sanitize_relative_path(relative_paths[idx] if idx < len(relative_paths) else "")
+        safe_name = secure_filename(Path(rel_hint or original_name).name) or f"{file_id}.bin"
+        rel_parent = _sanitize_relative_path(str(Path(rel_hint).parent)) if rel_hint else ""
+        target_dir = session_dir / rel_parent if rel_parent else session_dir
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / safe_name
         suffix = 1
         while target.exists():
             stem = target.stem
             ext = target.suffix
-            target = session_dir / f"{stem}({suffix}){ext}"
+            target = target_dir / f"{stem}({suffix}){ext}"
             suffix += 1
         file_storage.save(target)
         stat = target.stat()
@@ -415,6 +528,7 @@ def api_upload_platform_ai_message_files(session_id: str):
             {
                 "id": file_id,
                 "name": original_name or target.name,
+                "relative_path": rel_hint or None,
                 "path": str(target),
                 "size_bytes": int(stat.st_size),
                 "content_type": str(file_storage.mimetype or "").strip() or None,
@@ -429,7 +543,17 @@ def api_upload_platform_ai_message_files(session_id: str):
     patched = cp.patch_platform_ai_session(session_id, {"metadata": {"message_files": merged}})
     if patched is None:
         return _cp_error_response(cp, "failed to persist message files")
-    return jsonify({"session_id": session_id, "files": saved_rows, "total_files": len(merged)})
+    total_bytes = sum(int(row.get("size_bytes") or 0) for row in merged if isinstance(row, dict))
+    warnings = _upload_soft_warnings(file_count=len(merged), total_bytes=total_bytes, label="Message")
+    return jsonify(
+        {
+            "session_id": session_id,
+            "files": saved_rows,
+            "total_files": len(merged),
+            "total_bytes": total_bytes,
+            "warnings": warnings,
+        }
+    )
 
 
 @bp.get("/api/platform-ai/sessions/<session_id>/files/<file_id>")
@@ -451,6 +575,43 @@ def api_get_platform_ai_session_file(session_id: str, file_id: str):
         abort(404)
     mimetype = str(match.get("content_type") or "").strip() or None
     return send_file(safe_path, mimetype=mimetype, as_attachment=False, download_name=str(match.get("name") or safe_path.name))
+
+
+@bp.delete("/api/platform-ai/sessions/<session_id>/files/<file_id>")
+@login_required
+def api_delete_platform_ai_session_file(session_id: str, file_id: str):
+    cp = get_cp_client()
+    session = cp.get_platform_ai_session(session_id)
+    if session is None:
+        return _cp_error_response(cp, "failed to load platform ai session")
+    safe_file_id = str(file_id or "").strip()
+    if not safe_file_id:
+        return jsonify({"error": "file_id required"}), 400
+
+    context_rows = _session_context_files(session)
+    message_rows = _session_message_files(session)
+    target_row = next((row for row in context_rows if str(row.get("id") or "") == safe_file_id), None)
+    target_key = "context_files"
+    if target_row is None:
+        target_row = next((row for row in message_rows if str(row.get("id") or "") == safe_file_id), None)
+        target_key = "message_files"
+    if target_row is None:
+        return jsonify({"error": "file not found"}), 404
+
+    safe_path = _safe_session_file_path(session_id, str(target_row.get("path") or ""))
+    if safe_path is not None:
+        try:
+            safe_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
+    rows = metadata.get(target_key) if isinstance(metadata.get(target_key), list) else []
+    updated_rows = [row for row in rows if isinstance(row, dict) and str(row.get("id") or "").strip() != safe_file_id]
+    patched = cp.patch_platform_ai_session(session_id, {"metadata": {target_key: updated_rows}})
+    if patched is None:
+        return _cp_error_response(cp, "failed to persist file deletion")
+    return jsonify({"session_id": session_id, "deleted_file_id": safe_file_id, "file_type": target_key})
 
 
 @bp.get("/api/platform-ai/pipelines")
