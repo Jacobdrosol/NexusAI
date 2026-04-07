@@ -273,7 +273,7 @@
           <input class="form-control" type="number" name="max_tokens">
         </div>
       </div>
-      <div class="split-grid" style="grid-template-columns:1fr 1fr;gap:0.75rem;">
+      <div id="session-backend-vertex-fields" class="split-grid" style="grid-template-columns:1fr 1fr;gap:0.75rem;display:none;">
         <div class="form-group">
           <label>Vertex Project ID</label>
           <input class="form-control" name="vertex_project_id" placeholder="gcp-project-id">
@@ -350,6 +350,7 @@ function openSessionBackendModal() {
     form.type.value = 'cloud_api';
     refreshSessionApiKeyOptions('');
     refreshSessionModelOptions('');
+    toggleSessionVertexFields();
   } else {
     form.worker_id.value = NEW_SESSION_BACKEND.worker_id || '';
     form.type.value = NEW_SESSION_BACKEND.type || 'cloud_api';
@@ -368,6 +369,7 @@ function openSessionBackendModal() {
     form.vertex_location.value = NEW_SESSION_BACKEND.vertex_location || '';
     refreshSessionApiKeyOptions(NEW_SESSION_BACKEND.api_key_ref || '');
     refreshSessionModelOptions(NEW_SESSION_BACKEND.model || '');
+    toggleSessionVertexFields();
   }
   document.getElementById('modal-session-backend').style.display = 'flex';
 }
@@ -475,17 +477,29 @@ function refreshSessionModelOptions(preferredValue='') {
   }
 }
 
+function toggleSessionVertexFields() {
+  const form = document.getElementById('form-session-backend');
+  if (!form) return;
+  const provider = String(form.provider?.value || '').trim().toLowerCase();
+  const type = String(form.type?.value || '').trim().toLowerCase();
+  const show = provider === 'vertex' && type === 'cloud_api';
+  const wrap = document.getElementById('session-backend-vertex-fields');
+  if (wrap) wrap.style.display = show ? 'grid' : 'none';
+}
+
 function applySessionBackendForm() {
   const form = document.getElementById('form-session-backend');
   const fd = new FormData(form);
+  const provider = String(fd.get('provider') || '').trim();
+  const isVertexProvider = provider.toLowerCase() === 'vertex';
   const backend = {
     type: String(fd.get('type') || '').trim(),
-    provider: String(fd.get('provider') || '').trim(),
+    provider: provider,
     model: String(fd.get('model') || '').trim(),
     worker_id: String(fd.get('worker_id') || '').trim() || null,
     api_key_ref: String(fd.get('api_key_ref') || '').trim() || null,
-    vertex_project_id: String(fd.get('vertex_project_id') || '').trim() || null,
-    vertex_location: String(fd.get('vertex_location') || '').trim() || null,
+    vertex_project_id: isVertexProvider ? (String(fd.get('vertex_project_id') || '').trim() || null) : null,
+    vertex_location: isVertexProvider ? (String(fd.get('vertex_location') || '').trim() || null) : null,
   };
   if (!backend.type || !backend.provider || !backend.model) {
     setCreateSessionStatus('Model config needs type, provider, and model.', true);
@@ -660,8 +674,13 @@ document.addEventListener('DOMContentLoaded', () => {
   form.provider?.addEventListener('change', () => {
     refreshSessionApiKeyOptions();
     refreshSessionModelOptions();
+    toggleSessionVertexFields();
   });
-  form.type?.addEventListener('change', () => refreshSessionModelOptions());
+  form.type?.addEventListener('change', () => {
+    refreshSessionModelOptions();
+    toggleSessionVertexFields();
+  });
+  toggleSessionVertexFields();
   renderBackendSummary();
 });
 </script>

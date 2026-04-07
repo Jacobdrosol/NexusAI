@@ -290,11 +290,11 @@
       <label for="session-credential-ref">Credential Ref</label>
       <input id="session-credential-ref" class="form-control" value="{{ ((session.metadata or {}).get('backend') or {}).get('credential_ref') or '' }}">
     </div>
-    <div>
+    <div id="session-vertex-project-wrap">
       <label for="session-vertex-project">Vertex Project ID</label>
       <input id="session-vertex-project" class="form-control" value="{{ ((session.metadata or {}).get('backend') or {}).get('vertex_project_id') or '' }}">
     </div>
-    <div>
+    <div id="session-vertex-location-wrap">
       <label for="session-vertex-location">Vertex Location</label>
       <input id="session-vertex-location" class="form-control" value="{{ ((session.metadata or {}).get('backend') or {}).get('vertex_location') or '' }}">
     </div>
@@ -1094,6 +1094,19 @@ async function updateTargetContext() {
   }
 }
 
+function isSessionVertexProviderSelected() {
+  const provider = String(document.getElementById('session-provider')?.value || '').trim().toLowerCase();
+  return provider === 'vertex';
+}
+
+function toggleSessionVertexConfigFields() {
+  const show = isSessionVertexProviderSelected();
+  const projectWrap = document.getElementById('session-vertex-project-wrap');
+  const locationWrap = document.getElementById('session-vertex-location-wrap');
+  if (projectWrap) projectWrap.style.display = show ? '' : 'none';
+  if (locationWrap) locationWrap.style.display = show ? '' : 'none';
+}
+
 async function updateBackendConfig() {
   if (!SESSION_ID) return;
   let params = {};
@@ -1108,10 +1121,14 @@ async function updateBackendConfig() {
     model: String(document.getElementById('session-model')?.value || '').trim() || null,
     backend_type: String(document.getElementById('session-backend-type')?.value || '').trim() || null,
     credential_ref: String(document.getElementById('session-credential-ref')?.value || '').trim() || null,
-    vertex_project_id: String(document.getElementById('session-vertex-project')?.value || '').trim() || null,
-    vertex_location: String(document.getElementById('session-vertex-location')?.value || '').trim() || null,
+    vertex_project_id: null,
+    vertex_location: null,
     params: params,
   };
+  if (isSessionVertexProviderSelected()) {
+    body.vertex_project_id = String(document.getElementById('session-vertex-project')?.value || '').trim() || null;
+    body.vertex_location = String(document.getElementById('session-vertex-location')?.value || '').trim() || null;
+  }
   setStatus('backend-update-status', 'Updating backend config...', false);
   try {
     const res = await fetch('/api/platform-ai/sessions/' + encodeURIComponent(SESSION_ID), {
@@ -1436,6 +1453,12 @@ async function pollWorkspace() {
 
 document.addEventListener('DOMContentLoaded', async () => {
   if (!SESSION_ID) return;
+  const providerInput = document.getElementById('session-provider');
+  if (providerInput) {
+    providerInput.addEventListener('change', toggleSessionVertexConfigFields);
+    providerInput.addEventListener('input', toggleSessionVertexConfigFields);
+  }
+  toggleSessionVertexConfigFields();
   renderSessionComposerAttachments();
   renderContextFiles();
   renderMessageFileLibrary();

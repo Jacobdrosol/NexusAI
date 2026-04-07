@@ -497,3 +497,46 @@ async def test_session_loop_finalizes_terminal_state_before_stall_guard(tmp_path
     assert finalize_calls["count"] >= 1
     assert check_calls["count"] == 0
     assert halt_calls["count"] == 0
+
+
+@pytest.mark.anyio
+async def test_resolve_context_prefers_explicit_orchestration_over_stale_run_id(tmp_path):
+    store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+    runtime = PlatformAISessionRuntime(store)
+    session = await store.create_session(
+        mode="pipeline_tuner",
+        status="running",
+        assignment_id="assign-old",
+        run_id="run-old",
+        orchestration_id="orch-new",
+        metadata={"pipeline_bot_id": "pm-orchestrator"},
+    )
+
+    calls = {"by_orch": 0, "by_run": 0, "by_assignment": 0}
+
+    class FakeRunStore:
+        async def get_run_by_orchestration(self, orchestration_id: str):
+            _ = orchestration_id
+            calls["by_orch"] += 1
+            return None
+
+        async def get_run(self, run_id: str):
+            _ = run_id
+            calls["by_run"] += 1
+            return {
+                "id": "run-old",
+                "assignment_id": "assign-old",
+                "orchestration_id": "orch-old",
+            }
+
+        async def get_latest_run_for_assignment(self, assignment_id: str):
+            _ = assignment_id
+            calls["by_assignment"] += 1
+            return None
+
+    runtime._run_store = FakeRunStore()  # type: ignore[assignment]
+    context = await runtime._resolve_context(session)
+    assert str(context.get("orchestration_id") or "") == "orch-new"
+    assert context.get("run_id") is None
+    assert calls["by_orch"] == 1
+    assert calls["by_run"] == 0

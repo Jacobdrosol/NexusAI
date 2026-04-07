@@ -1960,13 +1960,18 @@ class PlatformAISessionRuntime:
     async def _resolve_context(self, session: Dict[str, Any]) -> Dict[str, Any]:
         resolved_assignment_id = str(session.get("assignment_id") or "").strip() or None
         resolved_run_id = str(session.get("run_id") or "").strip() or None
-        resolved_orchestration_id = str(session.get("orchestration_id") or "").strip() or None
+        explicit_orchestration_id = str(session.get("orchestration_id") or "").strip() or None
+        resolved_orchestration_id = explicit_orchestration_id
         metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
 
         run: Optional[Dict[str, Any]] = None
         if self._run_store is not None:
             try:
-                if resolved_run_id:
+                # Prefer an explicitly attached orchestration over stale run_id pointers.
+                # This keeps autonomous tuner context aligned with the active orchestration.
+                if explicit_orchestration_id:
+                    run = await self._run_store.get_run_by_orchestration(explicit_orchestration_id)
+                elif resolved_run_id:
                     run = await self._run_store.get_run(resolved_run_id)
                 elif resolved_orchestration_id:
                     run = await self._run_store.get_run_by_orchestration(resolved_orchestration_id)
@@ -1975,9 +1980,22 @@ class PlatformAISessionRuntime:
             except Exception:
                 run = None
         if isinstance(run, dict):
-            resolved_assignment_id = str(run.get("assignment_id") or "").strip() or resolved_assignment_id
-            resolved_run_id = str(run.get("id") or "").strip() or resolved_run_id
-            resolved_orchestration_id = str(run.get("orchestration_id") or "").strip() or resolved_orchestration_id
+            run_assignment_id = str(run.get("assignment_id") or "").strip() or None
+            run_id = str(run.get("id") or "").strip() or None
+            run_orchestration_id = str(run.get("orchestration_id") or "").strip() or None
+            if explicit_orchestration_id and run_orchestration_id and run_orchestration_id != explicit_orchestration_id:
+                # Defensive fallback: ignore stale run bindings when they disagree
+                # with the session's explicit orchestration attachment.
+                run = None
+            else:
+                resolved_assignment_id = run_assignment_id or resolved_assignment_id
+                resolved_run_id = run_id or resolved_run_id
+                resolved_orchestration_id = run_orchestration_id or resolved_orchestration_id
+        if explicit_orchestration_id:
+            resolved_orchestration_id = explicit_orchestration_id
+            if run is None:
+                # Prevent stale run pointers from overriding explicit orchestration scope.
+                resolved_run_id = None
 
         graph: Dict[str, Any] = {"nodes": [], "edges": []}
         tasks: List[Dict[str, Any]] = []
