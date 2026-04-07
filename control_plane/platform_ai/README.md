@@ -40,11 +40,20 @@ dashboard/routes/platform_ai.py
 
 | Mode | Description |
 |------|-------------|
-| `pipeline_tuner` | Autonomous mode: monitors a pipeline execution, evaluates quality, refines the entry bot, and relaunches until convergence or max iterations |
-| `bot_designer` | Interactive mode: operator asks questions about bot configs, Platform AI suggests improvements |
-| `copilot` | General assistant mode: answers questions about platform state |
+| `bot_tuner` | Tunes one selected bot only. Requires `target_bot_id` and allows update-only mutations in scope. |
+| `bot_creator` | Creates a new bot from `bot_name_seed`, then tunes it. Allows create+update mutations in scope. |
+| `pipeline_tuner` | Tunes one selected pipeline (`pipeline_bot_id`) and can retest/replan continuously. Allows create+update+delete inside pipeline scope. |
+| `pipeline_creator` | Creates and tunes a new pipeline from `pipeline_name_seed`. Allows create+update+delete inside that pipeline scope. |
 
-The `pipeline_tuner` mode is the primary focus and the subject of current testing.
+Session runtime statuses are canonical and limited to:
+
+| Status | Meaning |
+|--------|---------|
+| `ready` | Active session, waiting for work/input/checkpoint resume |
+| `running` | Session is executing chat/tool/test/tuning work |
+| `stopped` | Operator emergency stop only |
+
+Archive is separate from status (`archived`, `archived_at`, `archived_by`). Archived sessions cannot execute until restored.
 
 ---
 
@@ -95,15 +104,14 @@ The runtime inserts autotuning directives into the target bot's `system_prompt` 
 ```
 Previous directives are replaced on each iteration.
 
-**Convergence conditions:**
+**Completion gate (pipeline tuning):**
 
 | Condition | Result |
 |-----------|--------|
-| `eval_score >= target_score` (default 0.9) | `completed` |
-| Identical eval signature as previous iteration (stalled) | `stalled` → stop |
-| Max iterations reached (default 6) | `max_iterations_reached` |
-| Launch failed repeatedly | `launch_failed` |
-| Terminal run has unresolved failed tasks | `failed` |
+| Suite run meets target quality | Increments consecutive pass streak |
+| 3 consecutive full end-to-end passes | Posts completion report, transitions to `ready` |
+| No measurable change detected repeatedly | Adaptive replan (non-terminal), continue running |
+| Human checkpoint needed (for example manual deploy dependency) | Transition to `ready` with checkpoint report |
 
 ### `session_store.py` (722 lines)
 
@@ -119,7 +127,7 @@ SQLite-backed persistence for all Platform AI state.
 | `platform_ai_test_suites` | Quality test definitions |
 | `platform_ai_test_runs` | Test execution results with scores |
 
-**Key behavior:** On startup, any sessions with `status=auto_managed` are automatically paused to prevent state leaks across restarts. This uses a fragile LIKE pattern on JSON strings (known issue — see below).
+**Key behavior:** startup migration normalizes legacy modes/statuses to canonical values and preserves archived lifecycle independently from runtime status.
 
 ---
 
@@ -160,7 +168,7 @@ Routes at `/platform-ai/` (Flask blueprint):
 - **`/platform-ai/sessions/<id>`** — Session detail: messages, events, test suite results, progress timeline
 - **`/platform-ai/sessions/<id>/context-files`** — Upload context documents for the session
 
-Context files are stored under `data/platform_ai/session_uploads/<session_id>/`. No file size limits are enforced (known issue).
+Context files are stored under `data/platform_ai/session_uploads/<session_id>/`. The dashboard applies soft guardrails (warning thresholds) for file count and total bytes; uploads are not hard-blocked by default.
 
 ---
 
@@ -194,7 +202,7 @@ Example:
 
 ---
 
-## Privileged Repo Edit Runner
+## Edit Runners
 
 Control actions `code_edit`, `hotfix`, and `external_repo_edit` now execute real asynchronous runner jobs instead of returning stub acceptance responses.
 
@@ -208,6 +216,14 @@ Environment variables:
 - `NEXUS_PLATFORM_AI_PRIVILEGED_ENABLED=1` + `NEXUS_PLATFORM_AI_OWNER_ALLOWLIST` are required; runtime now enforces these checks even when actions are triggered from chat directives.
 
 The runner executes in a separate subprocess, streams logs into `action_trace` events, posts completion status back into the session chat, and releases control to the main Platform AI loop when done.
+
+Public project-edit path (`project_code_edit`) is separate:
+
+- `NEXUS_PLATFORM_AI_PROJECT_EDIT_ENABLED=1`
+- `NEXUS_PLATFORM_AI_PROJECT_EDIT_RUN_CMD` (for example `bash /opt/NexusAI/scripts/platform_ai_project_edit_runner.sh`)
+- `NEXUS_PLATFORM_AI_PROJECT_EDIT_REQUIRE_PROJECT_ID=1` and optional `NEXUS_PLATFORM_AI_PROJECT_EDIT_PROJECT_ALLOWLIST`
+
+Public project-edit is patch+tests+report only and intentionally does not commit/push. The session checkpoints back to `ready` after runner completion.
 
 ---
 
@@ -245,7 +261,7 @@ The runtime holds references to the shared task manager, bot registry, assignmen
 | 7 | 🟡 Low | `_deploy_loop` imports `DeployManager` at runtime; unavailable manager is now surfaced via action trace + session metadata, but still depends on dashboard module presence in control-plane runtime | `runtime.py` |
 | 8 | 🟡 Low | Auto-migration on startup uses fragile LIKE patterns on JSON strings | `session_store.py` ~lines 143-158 |
 | 9 | 🟡 Low | Test suite and run records grow without cleanup (no TTL or pruning) | `session_store.py` |
-| 10 | 🟡 Low | File uploads: no size limit, no cleanup, path traversal via symlinks possible | `dashboard/routes/platform_ai.py` |
+| 10 | 🟡 Low | File uploads are guarded by soft thresholds only (no hard cap by default), and long-term cleanup/retention is still manual | `dashboard/routes/platform_ai.py` |
 
 ---
 

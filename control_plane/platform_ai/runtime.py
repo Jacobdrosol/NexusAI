@@ -35,6 +35,29 @@ def _owner_allowlist() -> set[str]:
     return {item.strip().lower() for item in raw.split(",") if item.strip()}
 
 
+def _csv_env_values(*names: str) -> set[str]:
+    values: set[str] = set()
+    for name in names:
+        raw = str(os.environ.get(name, "") or "")
+        for item in raw.split(","):
+            safe = str(item or "").strip()
+            if safe:
+                values.add(safe)
+    return values
+
+
+def _platform_project_allowlist() -> set[str]:
+    values = _csv_env_values("NEXUS_PLATFORM_AI_PLATFORM_PROJECT_ALLOWLIST")
+    single = str(os.environ.get("NEXUS_PLATFORM_AI_PLATFORM_PROJECT_ID", "") or "").strip()
+    if single:
+        values.add(single)
+    return values
+
+
+def _project_edit_project_allowlist() -> set[str]:
+    return _csv_env_values("NEXUS_PLATFORM_AI_PROJECT_EDIT_PROJECT_ALLOWLIST")
+
+
 def _safe_timeout_seconds(env_name: str, default: float, *, min_value: float, max_value: float) -> float:
     raw = str(os.environ.get(env_name, "") or "").strip()
     if not raw:
@@ -972,6 +995,16 @@ class PlatformAISessionRuntime:
             return {"status": "error", "detail": "session_id is required"}
         if not _env_enabled("NEXUS_PLATFORM_AI_PROJECT_EDIT_ENABLED"):
             return {"status": "disabled", "detail": "project_code_edit is disabled (NEXUS_PLATFORM_AI_PROJECT_EDIT_ENABLED not enabled)"}
+        project_allowlist = _project_edit_project_allowlist()
+        require_project_id = _env_enabled("NEXUS_PLATFORM_AI_PROJECT_EDIT_REQUIRE_PROJECT_ID") or bool(project_allowlist)
+        scope_gate = await self._enforce_project_scope_policy(
+            session_id=sid,
+            action="project_code_edit",
+            require_project_id=require_project_id,
+            allowed_project_ids=project_allowlist,
+        )
+        if not bool(scope_gate.get("ok")):
+            return {"status": str(scope_gate.get("status") or "denied"), "detail": str(scope_gate.get("detail") or "project scope denied")}
         existing = self._project_edit_tasks.get(sid)
         if existing is not None and not existing.done():
             return {"status": "running", "detail": "project edit runner already active"}
@@ -981,6 +1014,7 @@ class PlatformAISessionRuntime:
                 "project_edit_runner_state": "starting",
                 "project_edit_runner_requested_by": str(requested_by or "").strip() or None,
                 "project_edit_runner_requested_at": _now(),
+                "project_edit_runner_project_id": str(scope_gate.get("project_id") or "").strip() or None,
             },
         )
         self._project_edit_tasks[sid] = asyncio.create_task(
@@ -1019,6 +1053,31 @@ class PlatformAISessionRuntime:
                 "status": str(gate.get("status") or "denied"),
                 "detail": str(gate.get("detail") or "repo edit denied"),
             }
+        if not external:
+            enforce_project_scope = _env_enabled("NEXUS_PLATFORM_AI_ENFORCE_PROJECT_ID")
+            platform_allowlist = _platform_project_allowlist()
+            if enforce_project_scope and not platform_allowlist:
+                return {
+                    "status": "denied",
+                    "detail": (
+                        "NEXUS_PLATFORM_AI_ENFORCE_PROJECT_ID is enabled but platform project allowlist is empty; "
+                        "set NEXUS_PLATFORM_AI_PLATFORM_PROJECT_ID or NEXUS_PLATFORM_AI_PLATFORM_PROJECT_ALLOWLIST"
+                    ),
+                }
+            require_project_id = enforce_project_scope or bool(platform_allowlist)
+            scope_gate = await self._enforce_project_scope_policy(
+                session_id=sid,
+                action="repo_edit",
+                require_project_id=require_project_id,
+                allowed_project_ids=platform_allowlist,
+            )
+            if not bool(scope_gate.get("ok")):
+                return {
+                    "status": str(scope_gate.get("status") or "denied"),
+                    "detail": str(scope_gate.get("detail") or "repo edit project scope denied"),
+                }
+        else:
+            scope_gate = {"project_id": None}
         existing = self._repo_edit_tasks.get(sid)
         if existing is not None and not existing.done():
             return {"status": "running", "detail": "repo edit runner already active"}
@@ -1029,6 +1088,7 @@ class PlatformAISessionRuntime:
                 "repo_edit_runner_kind": "external_repo_edit" if external else "repo_edit",
                 "repo_edit_runner_requested_by": str(requested_by or "").strip() or None,
                 "repo_edit_runner_requested_at": _now(),
+                "repo_edit_runner_project_id": str(scope_gate.get("project_id") or "").strip() or None,
             },
         )
         self._repo_edit_tasks[sid] = asyncio.create_task(
@@ -1063,6 +1123,90 @@ class PlatformAISessionRuntime:
         if candidate not in allowlist:
             return {"ok": False, "status": "denied", "detail": f"operator '{candidate or 'unknown'}' is not allowlisted"}
         return {"ok": True, "status": "ok"}
+
+    async def _record_project_scope_denied(
+        self,
+        *,
+        session_id: str,
+        action: str,
+        project_id: str,
+        allowed_project_ids: List[str],
+        detail: str,
+    ) -> None:
+        await self._store.append_event(
+            session_id,
+            "action_trace",
+            {
+                "action": "project_scope_denied",
+                "attempted_action": action,
+                "project_id": project_id or None,
+                "allowed_project_ids": allowed_project_ids,
+                "detail": detail,
+            },
+        )
+        await self._store.append_message(
+            session_id,
+            role="assistant",
+            content=(
+                f"Project scope guard denied `{action}`. "
+                f"session project_id=`{project_id or 'unset'}`; detail: {detail}"
+            ),
+            metadata={
+                "source": "project_scope_guard",
+                "attempted_action": action,
+                "project_id": project_id or None,
+                "allowed_project_ids": allowed_project_ids,
+            },
+        )
+
+    async def _enforce_project_scope_policy(
+        self,
+        *,
+        session_id: str,
+        action: str,
+        require_project_id: bool,
+        allowed_project_ids: set[str],
+    ) -> Dict[str, Any]:
+        session = await self._store.get_session(session_id)
+        if session is None:
+            return {"ok": False, "status": "error", "detail": "session_not_found"}
+        metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
+        project_id = str(metadata.get("project_id") or "").strip()
+        allowed = sorted({str(item or "").strip() for item in allowed_project_ids if str(item or "").strip()})
+
+        if require_project_id and not project_id:
+            detail = "session metadata.project_id is required"
+            await self._record_project_scope_denied(
+                session_id=session_id,
+                action=action,
+                project_id=project_id,
+                allowed_project_ids=allowed,
+                detail=detail,
+            )
+            return {"ok": False, "status": "denied", "detail": detail}
+
+        if allowed:
+            if not project_id:
+                detail = "session metadata.project_id is required because an allowlist is configured"
+                await self._record_project_scope_denied(
+                    session_id=session_id,
+                    action=action,
+                    project_id=project_id,
+                    allowed_project_ids=allowed,
+                    detail=detail,
+                )
+                return {"ok": False, "status": "denied", "detail": detail}
+            if project_id not in allowed:
+                detail = f"session project_id '{project_id}' is not in allowlist"
+                await self._record_project_scope_denied(
+                    session_id=session_id,
+                    action=action,
+                    project_id=project_id,
+                    allowed_project_ids=allowed,
+                    detail=detail,
+                )
+                return {"ok": False, "status": "denied", "detail": detail}
+        return {"ok": True, "status": "ok", "project_id": project_id, "allowed_project_ids": allowed}
 
     def _looks_like_bot_payload(self, payload: Any) -> bool:
         if not isinstance(payload, dict):
@@ -3095,11 +3239,17 @@ class PlatformAISessionRuntime:
         if not cwd_path.exists() or not cwd_path.is_dir():
             cwd_path = default_cwd
 
+        live_session = await self._store.get_session(session_id)
+        live_metadata = live_session.get("metadata") if isinstance((live_session or {}).get("metadata"), dict) else {}
+        session_project_id = str(live_metadata.get("project_id") or "").strip()
+        session_mode = str((live_session or {}).get("mode") or "").strip()
         env = os.environ.copy()
         env["NEXUS_PLATFORM_AI_SESSION_ID"] = str(session_id)
         env["NEXUS_PLATFORM_AI_REQUESTED_BY"] = str(requested_by or "")
         env["NEXUS_PLATFORM_AI_OPERATOR_INSTRUCTION"] = str(instruction or "")
         env["NEXUS_PLATFORM_AI_REPO_EDIT_KIND"] = kind
+        env["NEXUS_PLATFORM_AI_SESSION_PROJECT_ID"] = session_project_id
+        env["NEXUS_PLATFORM_AI_SESSION_MODE"] = session_mode
         timeout_seconds = _safe_timeout_seconds(
             "NEXUS_PLATFORM_AI_PROJECT_EDIT_TIMEOUT_SECONDS",
             1800.0,
@@ -3286,11 +3436,17 @@ class PlatformAISessionRuntime:
         if not cwd_path.exists() or not cwd_path.is_dir():
             cwd_path = default_cwd
 
+        live_session = await self._store.get_session(session_id)
+        live_metadata = live_session.get("metadata") if isinstance((live_session or {}).get("metadata"), dict) else {}
+        session_project_id = str(live_metadata.get("project_id") or "").strip()
+        session_mode = str((live_session or {}).get("mode") or "").strip()
         env = os.environ.copy()
         env["NEXUS_PLATFORM_AI_SESSION_ID"] = str(session_id)
         env["NEXUS_PLATFORM_AI_REQUESTED_BY"] = str(requested_by or "")
         env["NEXUS_PLATFORM_AI_OPERATOR_INSTRUCTION"] = str(instruction or "")
         env["NEXUS_PLATFORM_AI_REPO_EDIT_KIND"] = kind
+        env["NEXUS_PLATFORM_AI_SESSION_PROJECT_ID"] = session_project_id
+        env["NEXUS_PLATFORM_AI_SESSION_MODE"] = session_mode
         timeout_seconds = _safe_timeout_seconds(
             "NEXUS_PLATFORM_AI_REPO_EDIT_TIMEOUT_SECONDS",
             1800.0,

@@ -202,15 +202,17 @@
     <div style="grid-column:1 / -1;" class="mini-note">Assignment ID is internal lineage metadata. Primary runtime target is orchestration ID.</div>
   </div>
   <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin-top:0.75rem;">
-    <button class="btn btn-primary" type="button" onclick="controlSession('start')">Start</button>
+    <button class="btn btn-primary" type="button" onclick="controlSession('start')">Start / Resume</button>
     <button class="btn" type="button" onclick="controlSession('pause')">Set Ready</button>
-    <button class="btn" type="button" onclick="controlSession('resume')">Resume</button>
     <button class="btn btn-danger" type="button" onclick="controlSession('stop')">Stop</button>
     <button class="btn" type="button" onclick="controlSession('archive')">Archive</button>
     <button class="btn" type="button" onclick="controlSession('restore')">Restore</button>
     <button class="btn" type="button" onclick="controlSession('deploy')">Deploy</button>
     <button class="btn" type="button" onclick="controlSession('project_code_edit')">Run Project Edit Path</button>
     <button class="btn" type="button" onclick="controlSession('code_edit')">Enable Repo Edit Path</button>
+  </div>
+  <div class="mini-note" style="margin-top:0.55rem;">
+    `ready` waits for work, `running` executes work, `stopped` is operator emergency stop only.
   </div>
   <div style="margin-top:0.75rem;">
     <label for="control-orchestration-id">Attach Orchestration</label>
@@ -255,7 +257,7 @@
       </select>
     </div>
     <div>
-      <label for="session-target-bot-id">Target Bot</label>
+      <label for="session-target-bot-id">Target Bot (bot_tuner only)</label>
       <select id="session-target-bot-id" class="form-control">
         <option value="">No bot selected</option>
         {% for bot in bots %}
@@ -404,6 +406,9 @@
     <div class="mini-note session-attachment-hint">Drag files here or use +. Max 15 files, 1 GB total per message.</div>
   </div>
   <div id="operator-chat-status" class="mini-note" style="margin-top:0.5rem;"></div>
+  <div class="mini-note" style="margin-top:0.35rem;">
+    In `stopped`, messages are stored but execution will not continue until Start / Resume.
+  </div>
 </section>
 
 <div class="split-grid" style="grid-template-columns:1fr 1fr;gap:1rem;margin-top:1rem;">
@@ -837,10 +842,15 @@ async function sendOperatorMessage() {
     if (input) input.value = '';
     clearPendingSessionAttachments();
     const softWarnings = Array.isArray(uploadedResult.warnings) ? uploadedResult.warnings : [];
-    setStatus('operator-chat-status', softWarnings.length ? `Message sent. ${softWarnings.join(' ')}` : 'Message sent', false);
+    let sentMessage = softWarnings.length ? `Message sent. ${softWarnings.join(' ')}` : 'Message sent';
     await refreshMessages(true);
     await refreshEvents(true);
-    await refreshSessionHeader();
+    const refreshed = await refreshSessionHeader();
+    const currentStatus = String((refreshed && refreshed.status) || '').trim().toLowerCase();
+    if (currentStatus === 'stopped') {
+      sentMessage = `${sentMessage} Session is stopped; use Start / Resume to continue execution.`;
+    }
+    setStatus('operator-chat-status', sentMessage, currentStatus === 'stopped');
   } catch (error) {
     setStatus('operator-chat-status', error.message || 'Failed to send message', true);
   }
@@ -849,7 +859,7 @@ async function sendOperatorMessage() {
 async function refreshSessionHeader() {
   const res = await fetch('/api/platform-ai/sessions/' + encodeURIComponent(SESSION_ID));
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) return;
+  if (!res.ok) return null;
   const status = String(data.status || '');
   const badge = document.getElementById('session-status');
   if (badge) {
@@ -923,6 +933,7 @@ async function refreshSessionHeader() {
   ensureMessageStream(status, Boolean(data.archived));
   renderContextFiles();
   renderMessageFileLibrary();
+  return data;
 }
 
 function renderMessages(messages) {

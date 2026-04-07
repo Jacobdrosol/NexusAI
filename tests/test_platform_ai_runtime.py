@@ -208,6 +208,56 @@ async def test_repo_edit_runner_denies_non_allowlisted_operator(tmp_path, monkey
 
 
 @pytest.mark.anyio
+async def test_repo_edit_runner_denies_when_platform_project_scope_mismatch(tmp_path, monkeypatch):
+    store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+    runtime = PlatformAISessionRuntime(store)
+    session = await store.create_session(
+        mode="bot_creator",
+        status="running",
+        operator_id="owner@example.com",
+        privileged=True,
+        metadata={"project_id": "wrong-project"},
+    )
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_PRIVILEGED_ENABLED", "1")
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_OWNER_ALLOWLIST", "owner@example.com")
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_REPO_EDIT_ENABLED", "1")
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_ENFORCE_PROJECT_ID", "1")
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_PLATFORM_PROJECT_ID", "globalagent-platform")
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_REPO_EDIT_RUN_CMD", "echo should-not-run")
+    denied = await runtime.start_repo_edit_run(
+        session["id"],
+        requested_by="owner@example.com",
+        instruction="Apply change",
+        external=False,
+    )
+    assert str(denied.get("status") or "") == "denied"
+    assert "allowlist" in str(denied.get("detail") or "").lower() or "project_id" in str(denied.get("detail") or "").lower()
+
+
+@pytest.mark.anyio
+async def test_project_edit_runner_denies_missing_project_id_when_required(tmp_path, monkeypatch):
+    store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+    runtime = PlatformAISessionRuntime(store)
+    session = await store.create_session(
+        mode="bot_creator",
+        status="running",
+        operator_id="owner@example.com",
+        privileged=False,
+        metadata={},
+    )
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_PROJECT_EDIT_ENABLED", "1")
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_PROJECT_EDIT_REQUIRE_PROJECT_ID", "1")
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_PROJECT_EDIT_RUN_CMD", "echo should-not-run")
+    denied = await runtime.start_project_edit_run(
+        session["id"],
+        requested_by="owner@example.com",
+        instruction="Apply patch and run tests",
+    )
+    assert str(denied.get("status") or "") == "denied"
+    assert "project_id" in str(denied.get("detail") or "")
+
+
+@pytest.mark.anyio
 async def test_project_edit_runner_completes_and_checkpoints_ready(tmp_path, monkeypatch):
     store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
     runtime = PlatformAISessionRuntime(store)
