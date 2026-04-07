@@ -697,15 +697,55 @@ def settings_page() -> str:
     from dashboard.cp_client import get_cp_client
 
     cp = get_cp_client()
-    if cp.health():
-        api_keys = cp.list_keys() or []
-        model_catalog = cp.list_models() or []
-        projects = cp.list_projects() or []
-    else:
-        api_keys = []
-        model_catalog = []
-        projects = []
-    deploy_status = DeployManager.instance().status(refresh_remote=False)
+    raw_api_keys: list[Any] = []
+    raw_model_catalog: list[Any] = []
+    raw_projects: list[Any] = []
+    try:
+        if cp.health():
+            raw_api_keys = cp.list_keys() or []
+            raw_model_catalog = cp.list_models() or []
+            raw_projects = cp.list_projects() or []
+    except Exception:
+        logger.exception("Failed to load control-plane data for settings page")
+
+    api_keys: list[dict[str, Any]] = []
+    for item in raw_api_keys if isinstance(raw_api_keys, list) else []:
+        if not isinstance(item, dict):
+            continue
+        updated_at = item.get("updated_at")
+        updated_at_text = str(updated_at or "")
+        api_keys.append(
+            {
+                "name": str(item.get("name") or ""),
+                "provider": str(item.get("provider") or ""),
+                "updated_at": updated_at_text,
+                "updated_at_display": (updated_at_text[:19].replace("T", " ") if updated_at_text else ""),
+            }
+        )
+
+    model_catalog = raw_model_catalog if isinstance(raw_model_catalog, list) else []
+    projects: list[dict[str, Any]] = []
+    for item in raw_projects if isinstance(raw_projects, list) else []:
+        if not isinstance(item, dict):
+            continue
+        bridges = item.get("bridge_project_ids")
+        if not isinstance(bridges, list):
+            bridges = []
+        projects.append(
+            {
+                "id": str(item.get("id") or ""),
+                "name": str(item.get("name") or ""),
+                "mode": str(item.get("mode") or ""),
+                "enabled": bool(item.get("enabled")),
+                "bridge_project_ids": bridges,
+            }
+        )
+
+    try:
+        deploy_status = DeployManager.instance().status(refresh_remote=False)
+    except Exception:
+        logger.exception("Failed to load deploy status for settings page")
+        deploy_status = {}
     return render_template(
         "settings.html",
         groups=groups,

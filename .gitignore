@@ -8,11 +8,16 @@ __pycache__/
 *.log
 data/*.log
 data/*.db
+data/*.db-shm
+data/*.db-wal
+data/*.db-journal
 **/data/*.db
 data/active_color.txt
 data/deploy_status.json
 data/tool_installs/
 data/nginx/
+data/platform_ai/
+data/repo_workspaces/
 data.backup.*/
 .venv/
 venv/

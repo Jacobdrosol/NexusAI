@@ -188,7 +188,7 @@
       <tr>
         <td><code>{{ k.name }}</code></td>
         <td>{{ k.provider }}</td>
-        <td>{{ (k.updated_at[:19] if k.updated_at else '') | replace('T',' ') }}</td>
+        <td>{{ k.updated_at_display or '' }}</td>
         <td><button class="btn btn-sm btn-danger" onclick="deleteApiKey('{{ k.name }}')">Delete</button></td>
       </tr>
       {% else %}
@@ -507,7 +507,7 @@ document.addEventListener('DOMContentLoaded', function(){
         <td>{{ p.name }}</td>
         <td>{{ p.mode }}</td>
         <td>{{ p.enabled }}</td>
-        <td>{{ p.bridge_project_ids|length }}</td>
+        <td>{{ (p.bridge_project_ids or [])|length }}</td>
       </tr>
       {% else %}
       <tr><td colspan="5" style="color:#718096;">No projects configured</td></tr>

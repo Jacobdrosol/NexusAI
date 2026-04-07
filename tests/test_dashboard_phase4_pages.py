@@ -1949,6 +1949,38 @@ def test_settings_page_loads_for_admin(dashboard_client):
     assert b"Task Provider Concurrency Limits" in resp.data
 
 
+def test_settings_page_handles_noncanonical_cp_payloads(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def health(self):
+            return True
+
+        def list_keys(self):
+            return [{"name": "vertex-main", "provider": "vertex", "updated_at": 1234567890}]
+
+        def list_models(self):
+            return []
+
+        def list_projects(self):
+            return [
+                {
+                    "id": "globeiq",
+                    "name": "GlobeIQ",
+                    "mode": "isolated",
+                    "enabled": True,
+                    "bridge_project_ids": None,
+                }
+            ]
+
+    with patch("dashboard.cp_client.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/settings")
+
+    assert resp.status_code == 200
+    assert b"Projects" in resp.data
+    assert b"GlobeIQ" in resp.data
+
+
 def test_settings_tools_api_reports_install_support(dashboard_client):
     _login_admin(dashboard_client)
     resp = dashboard_client.get("/api/settings/tools")
