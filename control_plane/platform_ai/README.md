@@ -164,6 +164,53 @@ Context files are stored under `data/platform_ai/session_uploads/<session_id>/`.
 
 ---
 
+## Operator Directive Actions (Chat-Driven)
+
+Platform AI now supports structured JSON directives embedded in operator chat messages (use fenced `json` blocks). These directives are applied inside the runtime loop and recorded in session action traces.
+
+Supported directive actions:
+
+- `upsert_bot` / `upsert_bots` — create or update bot configs in `BotRegistry`
+- `configure_pipeline_entry` — generate a linear pipeline graph/triggers on an entry bot
+- `set_pipeline_target` — update `pipeline_bot_id` / `pipeline_name` and autonomous goal context
+- `launch_pipeline` — start a new orchestration run for a pipeline entry bot
+- `repo_edit` / `code_edit` / `external_repo_edit` — start privileged repo-edit runner jobs
+- `deploy` — trigger the deployment runner
+
+Example:
+
+```json
+{
+  "platform_ai_action": "upsert_bot",
+  "bot": {
+    "id": "pm-coder-v2",
+    "name": "PM Coder v2",
+    "role": "assistant",
+    "enabled": true,
+    "backends": [{"type":"cloud_api","provider":"openai","model":"gpt-4o-mini"}]
+  }
+}
+```
+
+---
+
+## Privileged Repo Edit Runner
+
+Control actions `code_edit`, `hotfix`, and `external_repo_edit` now execute real asynchronous runner jobs instead of returning stub acceptance responses.
+
+Environment variables:
+
+- `NEXUS_PLATFORM_AI_REPO_EDIT_RUN_CMD` (required for `code_edit`/`hotfix`)
+- `NEXUS_PLATFORM_AI_EXTERNAL_REPO_EDIT_RUN_CMD` (required for `external_repo_edit`)
+- `NEXUS_PLATFORM_AI_REPO_EDIT_CWD` (optional working directory)
+- `NEXUS_PLATFORM_AI_REPO_EDIT_TIMEOUT_SECONDS` (runner hard timeout; default `1800`)
+- `NEXUS_PLATFORM_AI_REPO_EDIT_AUTO_DEPLOY=1` (optional; auto-start deploy after successful internal repo edit)
+- `NEXUS_PLATFORM_AI_PRIVILEGED_ENABLED=1` + `NEXUS_PLATFORM_AI_OWNER_ALLOWLIST` are required; runtime now enforces these checks even when actions are triggered from chat directives.
+
+The runner executes in a separate subprocess, streams logs into `action_trace` events, posts completion status back into the session chat, and releases control to the main Platform AI loop when done.
+
+---
+
 ## Wiring
 
 Platform AI is initialized in `control_plane/main.py` during the lifespan context:
@@ -189,13 +236,13 @@ The runtime holds references to the shared task manager, bot registry, assignmen
 
 | # | Severity | Issue | Location |
 |---|----------|-------|----------|
-| 1 | 🔴 High | Race condition: two concurrent `ensure_session_loop()` calls can spawn duplicate loops | `runtime.py` ~line 294 |
+| 1 | 🟡 Low | Session-loop duplication is guarded in-process with an async lock; cross-process duplicate loops are still possible if multiple control-plane workers share the same DB without distributed locking | `runtime.py` |
 | 2 | 🔴 High | Stalled detection incomplete: if refinement changes don't alter eval signature, loop terminates prematurely | `runtime.py` ~lines 381-394 |
-| 3 | 🔴 High | Race condition: two concurrent create-session requests can claim same pipeline | `api/platform_ai.py` ~lines 674-700 |
-| 4 | 🟠 Medium | Many `control` actions are stubs: not fully implemented | `api/platform_ai.py` ~line 1100+ |
+| 3 | 🟡 Low | Pipeline session claiming is serialized per process; cross-process duplicate claims remain possible without a database-level unique constraint | `api/platform_ai.py` |
+| 4 | 🟠 Medium | `control` actions are partially implemented; repo-edit/deploy now execute runners, but autonomous code planning still depends on operator directives or custom runner scripts | `api/platform_ai.py` + `runtime.py` |
 | 5 | 🟠 Medium | No wait/backoff between tuner iterations: launches immediately after refinement | `runtime.py` `_run_autonomous_pipeline_tuner` |
 | 6 | 🟠 Medium | Session metadata JSON grows unbounded each iteration without cleanup | `runtime.py` `_run_autonomous_pipeline_tuner` |
-| 7 | 🟠 Medium | `_deploy_loop` imports `DeployManager` at runtime, will fail silently if unavailable | `runtime.py` ~line 1582 |
+| 7 | 🟡 Low | `_deploy_loop` imports `DeployManager` at runtime; unavailable manager is now surfaced via action trace + session metadata, but still depends on dashboard module presence in control-plane runtime | `runtime.py` |
 | 8 | 🟡 Low | Auto-migration on startup uses fragile LIKE patterns on JSON strings | `session_store.py` ~lines 143-158 |
 | 9 | 🟡 Low | Test suite and run records grow without cleanup (no TTL or pruning) | `session_store.py` |
 | 10 | 🟡 Low | File uploads: no size limit, no cleanup, path traversal via symlinks possible | `dashboard/routes/platform_ai.py` |

@@ -4,14 +4,17 @@ import asyncio
 import copy
 import hashlib
 import json
+import os
 import re
 import time
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from control_plane.platform_ai.session_store import PlatformAISessionStore
-from shared.models import TaskMetadata
+from shared.exceptions import BotNotFoundError
+from shared.models import Bot, TaskMetadata
 
 
 def _now() -> str:
@@ -20,6 +23,48 @@ def _now() -> str:
 
 _TERMINAL_STATUSES = {"completed", "failed", "cancelled", "retried"}
 _QUALITY_FIELDS = {"summary", "quality_gates", "acceptance_criteria", "tests", "artifacts", "warnings", "errors"}
+
+
+def _env_enabled(name: str) -> bool:
+    return str(os.environ.get(name, "") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _owner_allowlist() -> set[str]:
+    raw = str(os.environ.get("NEXUS_PLATFORM_AI_OWNER_ALLOWLIST", "") or "")
+    return {item.strip().lower() for item in raw.split(",") if item.strip()}
+
+
+def _safe_timeout_seconds(env_name: str, default: float, *, min_value: float, max_value: float) -> float:
+    raw = str(os.environ.get(env_name, "") or "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except Exception:
+        return default
+    return max(min_value, min(max_value, value))
+
+
+def _extract_json_chunks(text: str) -> List[Any]:
+    chunks: List[Any] = []
+    raw = str(text or "")
+    fence_pattern = re.compile(r"```(?:json)?\s*([\s\S]*?)```", re.IGNORECASE)
+    for match in fence_pattern.finditer(raw):
+        candidate = str(match.group(1) or "").strip()
+        if not candidate:
+            continue
+        try:
+            chunks.append(json.loads(candidate))
+        except Exception:
+            continue
+    if not chunks:
+        direct = raw.strip()
+        if direct and (direct.startswith("{") or direct.startswith("[")):
+            try:
+                chunks.append(json.loads(direct))
+            except Exception:
+                pass
+    return chunks
 
 
 def _task_text(task: Dict[str, Any]) -> str:
@@ -461,19 +506,22 @@ class PlatformAISessionRuntime:
         self._bot_registry = bot_registry
         self._session_tasks: Dict[str, asyncio.Task[None]] = {}
         self._deploy_tasks: Dict[str, asyncio.Task[None]] = {}
+        self._repo_edit_tasks: Dict[str, asyncio.Task[None]] = {}
         self._processed_operator_messages: Dict[str, set[str]] = {}
         self._last_progress_signature: Dict[str, str] = {}
         self._last_heartbeat_ts: Dict[str, float] = {}
         self._bot_name_cache: Dict[str, str] = {}
+        self._session_task_lock = asyncio.Lock()
 
     async def ensure_session_loop(self, session_id: str) -> None:
         sid = str(session_id or "").strip()
         if not sid:
             return
-        task = self._session_tasks.get(sid)
-        if task is not None and not task.done():
-            return
-        self._session_tasks[sid] = asyncio.create_task(self._session_loop(sid))
+        async with self._session_task_lock:
+            task = self._session_tasks.get(sid)
+            if task is not None and not task.done():
+                return
+            self._session_tasks[sid] = asyncio.create_task(self._session_loop(sid))
 
     async def stop_session_loop(self, session_id: str) -> None:
         sid = str(session_id or "").strip()
@@ -797,11 +845,358 @@ class PlatformAISessionRuntime:
         sid = str(session_id or "").strip()
         if not sid:
             return {"status": "error", "detail": "session_id is required"}
+        gate = await self._authorize_privileged_action(
+            sid,
+            requested_by=requested_by,
+            feature_flag="NEXUS_PLATFORM_AI_DEPLOY_ENABLED",
+            action="deploy",
+        )
+        if not bool(gate.get("ok")):
+            return {"status": str(gate.get("status") or "denied"), "detail": str(gate.get("detail") or "deploy denied")}
         existing = self._deploy_tasks.get(sid)
         if existing is not None and not existing.done():
             return {"status": "running", "detail": "deploy runner already active"}
+        await self._store.update_session(
+            sid,
+            metadata={
+                "deploy_runner_state": "starting",
+                "deploy_runner_requested_by": str(requested_by or "").strip() or None,
+                "deploy_runner_requested_at": _now(),
+            },
+        )
         self._deploy_tasks[sid] = asyncio.create_task(self._deploy_loop(sid, requested_by=requested_by))
         return {"status": "started"}
+
+    async def start_repo_edit_run(
+        self,
+        session_id: str,
+        *,
+        requested_by: str,
+        instruction: str = "",
+        external: bool = False,
+    ) -> Dict[str, Any]:
+        sid = str(session_id or "").strip()
+        if not sid:
+            return {"status": "error", "detail": "session_id is required"}
+        feature_flag = (
+            "NEXUS_PLATFORM_AI_EXTERNAL_REPO_EDIT_ENABLED"
+            if external
+            else "NEXUS_PLATFORM_AI_REPO_EDIT_ENABLED"
+        )
+        gate = await self._authorize_privileged_action(
+            sid,
+            requested_by=requested_by,
+            feature_flag=feature_flag,
+            action="external_repo_edit" if external else "repo_edit",
+        )
+        if not bool(gate.get("ok")):
+            return {
+                "status": str(gate.get("status") or "denied"),
+                "detail": str(gate.get("detail") or "repo edit denied"),
+            }
+        existing = self._repo_edit_tasks.get(sid)
+        if existing is not None and not existing.done():
+            return {"status": "running", "detail": "repo edit runner already active"}
+        await self._store.update_session(
+            sid,
+            metadata={
+                "repo_edit_runner_state": "starting",
+                "repo_edit_runner_kind": "external_repo_edit" if external else "repo_edit",
+                "repo_edit_runner_requested_by": str(requested_by or "").strip() or None,
+                "repo_edit_runner_requested_at": _now(),
+            },
+        )
+        self._repo_edit_tasks[sid] = asyncio.create_task(
+            self._repo_edit_loop(
+                sid,
+                requested_by=requested_by,
+                instruction=instruction,
+                external=external,
+            )
+        )
+        return {"status": "started"}
+
+    async def _authorize_privileged_action(
+        self,
+        session_id: str,
+        *,
+        requested_by: str,
+        feature_flag: str,
+        action: str,
+    ) -> Dict[str, Any]:
+        if not _env_enabled(feature_flag):
+            return {"ok": False, "status": "disabled", "detail": f"{action} is disabled ({feature_flag} not enabled)"}
+        if not _env_enabled("NEXUS_PLATFORM_AI_PRIVILEGED_ENABLED"):
+            return {"ok": False, "status": "denied", "detail": "privileged platform ai actions are disabled"}
+        allowlist = _owner_allowlist()
+        if not allowlist:
+            return {"ok": False, "status": "denied", "detail": "owner allowlist is empty"}
+        session = await self._store.get_session(session_id)
+        operator_id = str((session or {}).get("operator_id") or "").strip().lower()
+        requested = str(requested_by or "").strip().lower()
+        candidate = requested or operator_id
+        if candidate not in allowlist:
+            return {"ok": False, "status": "denied", "detail": f"operator '{candidate or 'unknown'}' is not allowlisted"}
+        return {"ok": True, "status": "ok"}
+
+    def _looks_like_bot_payload(self, payload: Any) -> bool:
+        if not isinstance(payload, dict):
+            return False
+        bot_id = str(payload.get("id") or "").strip()
+        role = str(payload.get("role") or "").strip()
+        backends = payload.get("backends")
+        return bool(bot_id and role and isinstance(backends, list))
+
+    async def _upsert_bot_payload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        if self._bot_registry is None:
+            return {"ok": False, "detail": "bot_registry_unavailable"}
+        try:
+            bot = Bot.model_validate(payload)
+        except Exception as exc:
+            return {"ok": False, "detail": f"invalid_bot_payload:{exc}"}
+        safe_id = str(bot.id or "").strip()
+        if not safe_id:
+            return {"ok": False, "detail": "bot_id_missing"}
+        existed = True
+        try:
+            await self._bot_registry.get(safe_id)
+        except BotNotFoundError:
+            existed = False
+        except Exception:
+            existed = False
+        try:
+            if existed:
+                await self._bot_registry.update(safe_id, bot)
+            else:
+                await self._bot_registry.register(bot)
+        except Exception as exc:
+            return {"ok": False, "detail": f"bot_upsert_failed:{safe_id}:{exc}"}
+        return {"ok": True, "bot_id": safe_id, "operation": "updated" if existed else "created"}
+
+    async def _configure_linear_pipeline_entry(
+        self,
+        *,
+        entry_bot_id: str,
+        stage_bot_ids: List[str],
+        pipeline_name: str,
+        launch_instruction: str,
+    ) -> Dict[str, Any]:
+        if self._bot_registry is None:
+            return {"ok": False, "detail": "bot_registry_unavailable"}
+        safe_entry = str(entry_bot_id or "").strip()
+        if not safe_entry:
+            return {"ok": False, "detail": "entry_bot_id_required"}
+        cleaned_stages: List[str] = []
+        for item in stage_bot_ids:
+            sid = str(item or "").strip()
+            if sid and sid not in cleaned_stages:
+                cleaned_stages.append(sid)
+        if not cleaned_stages:
+            cleaned_stages = [safe_entry]
+        if cleaned_stages[0] != safe_entry:
+            cleaned_stages.insert(0, safe_entry)
+
+        try:
+            entry_bot = await self._bot_registry.get(safe_entry)
+        except Exception as exc:
+            return {"ok": False, "detail": f"entry_bot_not_found:{exc}"}
+
+        triggers: List[Dict[str, Any]] = []
+        edges: List[Dict[str, Any]] = []
+        for idx in range(len(cleaned_stages) - 1):
+            source = cleaned_stages[idx]
+            target = cleaned_stages[idx + 1]
+            trigger_id = f"auto-{source}-to-{target}"
+            triggers.append(
+                {
+                    "id": trigger_id,
+                    "event": "task_completed",
+                    "target_bot_id": target,
+                    "enabled": True,
+                    "condition": "always",
+                }
+            )
+            edges.append({"source_bot_id": source, "target_bot_id": target, "route_kind": "forward"})
+
+        nodes = [{"bot_id": bot_id, "title": bot_id, "stage_kind": "stage"} for bot_id in cleaned_stages]
+        workflow = {
+            "triggers": triggers,
+            "reference_graph": {
+                "graph_id": f"{safe_entry}-pipeline",
+                "entry_bot_id": safe_entry,
+                "current_bot_id": safe_entry,
+                "nodes": nodes,
+                "edges": edges,
+            },
+        }
+        routing_rules = dict(getattr(entry_bot, "routing_rules", None) or {})
+        launch_profile = dict(routing_rules.get("launch_profile") or {})
+        launch_profile.update(
+            {
+                "enabled": True,
+                "is_pipeline": True,
+                "label": pipeline_name or safe_entry,
+                "pipeline_name": pipeline_name or safe_entry,
+                "payload": {"instruction": launch_instruction or f"Execute pipeline {pipeline_name or safe_entry}"},
+            }
+        )
+        routing_rules["launch_profile"] = launch_profile
+        assignment_capabilities = dict(getattr(entry_bot, "assignment_capabilities", None) or {})
+        assignment_capabilities.update(
+            {
+                "is_pipeline_entry": True,
+                "pipeline": True,
+                "pipeline_name": pipeline_name or safe_entry,
+            }
+        )
+        try:
+            updated = entry_bot.model_copy(
+                update={
+                    "workflow": workflow,
+                    "routing_rules": routing_rules,
+                    "assignment_capabilities": assignment_capabilities,
+                }
+            )
+            await self._bot_registry.update(safe_entry, updated)
+        except Exception as exc:
+            return {"ok": False, "detail": f"pipeline_entry_update_failed:{exc}"}
+        return {"ok": True, "entry_bot_id": safe_entry, "stage_count": len(cleaned_stages)}
+
+    def _extract_tuning_overrides(self, content: str) -> Dict[str, Any]:
+        text = str(content or "")
+        lower = text.lower()
+        updates: Dict[str, Any] = {}
+        score_match = re.search(r"(?:target\s+score|score\s+target)\s*(?:to|=|:)?\s*(0(?:\.\d+)?|1(?:\.0+)?)", lower)
+        if score_match:
+            try:
+                score = float(score_match.group(1))
+                updates["autonomous_target_score"] = max(0.6, min(0.99, score))
+            except Exception:
+                pass
+        iter_match = re.search(r"(?:max(?:imum)?\s+iterations?)\s*(?:to|=|:)?\s*(\d+)", lower)
+        if iter_match:
+            try:
+                max_iterations = int(iter_match.group(1))
+                updates["autonomous_max_iterations"] = max(1, min(25, max_iterations))
+            except Exception:
+                pass
+        pipeline_match = re.search(r"(?:pipeline\s+bot(?:\s+id)?)\s*(?:to|=|:)?\s*([a-z0-9._:-]+)", lower)
+        if pipeline_match:
+            updates["pipeline_bot_id"] = str(pipeline_match.group(1) or "").strip()
+        return updates
+
+    async def _apply_operator_directives(
+        self,
+        session_id: str,
+        *,
+        session: Dict[str, Any],
+        content: str,
+    ) -> Dict[str, Any]:
+        actions_taken: List[Dict[str, Any]] = []
+        mode = str(session.get("mode") or "").strip().lower()
+        metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
+        payloads = _extract_json_chunks(content)
+        directives: List[Any] = []
+        for payload in payloads:
+            if isinstance(payload, dict) and isinstance(payload.get("actions"), list):
+                directives.extend(payload.get("actions") or [])
+            else:
+                directives.append(payload)
+
+        for directive in directives:
+            if isinstance(directive, list):
+                if all(self._looks_like_bot_payload(item) for item in directive if isinstance(item, dict)):
+                    directive = {"platform_ai_action": "upsert_bots", "bots": directive}
+                else:
+                    continue
+            if not isinstance(directive, dict):
+                continue
+            action = str(directive.get("platform_ai_action") or directive.get("action") or "").strip().lower()
+            if not action and self._looks_like_bot_payload(directive):
+                action = "upsert_bot"
+            if action == "upsert_bot":
+                bot_payload = directive.get("bot") if isinstance(directive.get("bot"), dict) else directive
+                result = await self._upsert_bot_payload(bot_payload if isinstance(bot_payload, dict) else {})
+                actions_taken.append({"action": "upsert_bot", "result": result})
+            elif action == "upsert_bots":
+                bots = directive.get("bots") if isinstance(directive.get("bots"), list) else []
+                for item in bots:
+                    if not isinstance(item, dict):
+                        continue
+                    result = await self._upsert_bot_payload(item)
+                    actions_taken.append({"action": "upsert_bot", "result": result})
+            elif action == "configure_pipeline_entry":
+                stage_ids = [str(item) for item in (directive.get("stage_bot_ids") or [])]
+                result = await self._configure_linear_pipeline_entry(
+                    entry_bot_id=str(directive.get("entry_bot_id") or "").strip(),
+                    stage_bot_ids=stage_ids,
+                    pipeline_name=str(directive.get("pipeline_name") or "").strip(),
+                    launch_instruction=str(directive.get("launch_instruction") or "").strip(),
+                )
+                actions_taken.append({"action": "configure_pipeline_entry", "result": result})
+            elif action == "set_pipeline_target":
+                pipeline_bot_id = str(directive.get("pipeline_bot_id") or "").strip()
+                pipeline_name = str(directive.get("pipeline_name") or "").strip()
+                updates: Dict[str, Any] = {}
+                if pipeline_bot_id:
+                    updates["pipeline_bot_id"] = pipeline_bot_id
+                if pipeline_name:
+                    updates["pipeline_name"] = pipeline_name
+                if mode == "pipeline_tuner":
+                    updates["autonomous_enabled"] = True
+                    updates["autonomous_goal"] = str(directive.get("goal") or content)[:4000]
+                if updates:
+                    await self._store.update_session(session_id, metadata=updates)
+                    actions_taken.append({"action": "set_pipeline_target", "result": {"ok": True, **updates}})
+            elif action == "launch_pipeline":
+                pipeline_bot_id = str(
+                    directive.get("pipeline_bot_id")
+                    or metadata.get("pipeline_bot_id")
+                    or ""
+                ).strip()
+                if pipeline_bot_id:
+                    pipeline_name = str(directive.get("pipeline_name") or metadata.get("pipeline_name") or "").strip()
+                    launched = await self._launch_autonomous_orchestration(
+                        session_id=session_id,
+                        pipeline_bot_id=pipeline_bot_id,
+                        pipeline_name=pipeline_name or pipeline_bot_id,
+                        goal=str(directive.get("goal") or content)[:2000],
+                        reason="operator_directive",
+                        iteration=int(metadata.get("autonomous_iteration") or 0) + 1,
+                    )
+                    actions_taken.append({"action": "launch_pipeline", "result": {"ok": bool(launched), "orchestration_id": launched}})
+            elif action == "deploy":
+                deploy_result = await self.start_deploy_run(session_id, requested_by=str(session.get("operator_id") or "platform-ai"))
+                actions_taken.append({"action": "deploy", "result": deploy_result})
+            elif action in {"repo_edit", "code_edit", "hotfix", "external_repo_edit"}:
+                instruction = str(directive.get("instruction") or content).strip()
+                repo_result = await self.start_repo_edit_run(
+                    session_id,
+                    requested_by=str(session.get("operator_id") or "platform-ai"),
+                    instruction=instruction,
+                    external=(action == "external_repo_edit"),
+                )
+                actions_taken.append({"action": action, "result": repo_result})
+
+        if not actions_taken:
+            overrides = self._extract_tuning_overrides(content)
+            if mode == "pipeline_tuner" and overrides:
+                overrides["autonomous_enabled"] = True
+                await self._store.update_session(session_id, metadata=overrides)
+                actions_taken.append({"action": "tuning_override", "result": {"ok": True, **overrides}})
+            lowered = str(content or "").lower()
+            if any(token in lowered for token in ("deploy now", "run deployment", "build deployment", "deploy latest")):
+                deploy_result = await self.start_deploy_run(session_id, requested_by=str(session.get("operator_id") or "platform-ai"))
+                actions_taken.append({"action": "deploy", "result": deploy_result})
+            if any(token in lowered for token in ("code edit", "hotfix", "commit and push", "edit platform code")):
+                repo_result = await self.start_repo_edit_run(
+                    session_id,
+                    requested_by=str(session.get("operator_id") or "platform-ai"),
+                    instruction=str(content or ""),
+                    external=False,
+                )
+                actions_taken.append({"action": "repo_edit", "result": repo_result})
+        return {"actions": actions_taken}
 
     async def _session_loop(self, session_id: str) -> None:
         await self._store.append_event(
@@ -1014,6 +1409,30 @@ class PlatformAISessionRuntime:
                     "tuning_goal_preview": brief.get("tuning_goal", "")[:240],
                 },
             )
+            directive_result = await self._apply_operator_directives(
+                session_id,
+                session=session or {},
+                content=content,
+            )
+            actions = directive_result.get("actions") if isinstance(directive_result, dict) else []
+            if isinstance(actions, list) and actions:
+                action_names = ", ".join(str(item.get("action") or "action") for item in actions[:6] if isinstance(item, dict))
+                await self._store.append_event(
+                    session_id,
+                    "action_trace",
+                    {
+                        "action": "operator_directives_applied",
+                        "message_id": mid,
+                        "applied_count": len(actions),
+                        "applied_actions": [item.get("action") for item in actions if isinstance(item, dict)],
+                    },
+                )
+                await self._store.append_message(
+                    session_id,
+                    role="assistant",
+                    content=f"Executed operator directives: {action_names}.",
+                    metadata={"source": "operator_directive_executor", "operator_message_id": mid},
+                )
             await self._store.update_session(session_id, metadata={"no_progress_count": 0})
 
     async def _bot_label(self, bot_id: str) -> str:
@@ -2062,6 +2481,14 @@ class PlatformAISessionRuntime:
             "action_trace",
             {"action": "deploy_runner_started", "requested_by": requested_by, "started_at": _now()},
         )
+        await self._store.update_session(
+            session_id,
+            metadata={
+                "deploy_runner_state": "running",
+                "deploy_runner_started_at": _now(),
+                "deploy_runner_last_error": None,
+            },
+        )
         try:
             try:
                 from dashboard.deploy_manager import DeployManager
@@ -2070,6 +2497,14 @@ class PlatformAISessionRuntime:
                     session_id,
                     "action_trace",
                     {"action": "deploy_runner_error", "detail": f"deploy manager unavailable: {exc}"},
+                )
+                await self._store.update_session(
+                    session_id,
+                    metadata={
+                        "deploy_runner_state": "failed",
+                        "deploy_runner_last_error": f"deploy manager unavailable: {exc}",
+                        "deploy_runner_finished_at": _now(),
+                    },
                 )
                 return
 
@@ -2081,6 +2516,14 @@ class PlatformAISessionRuntime:
                 {"action": "deploy_requested", "ok": bool(ok), "message": str(message or "")},
             )
             if not ok:
+                await self._store.update_session(
+                    session_id,
+                    metadata={
+                        "deploy_runner_state": "failed",
+                        "deploy_runner_last_error": str(message or "deploy start rejected"),
+                        "deploy_runner_finished_at": _now(),
+                    },
+                )
                 return
             while True:
                 status = manager.status(refresh_remote=False)
@@ -2104,6 +2547,14 @@ class PlatformAISessionRuntime:
                             "finished_at": status.get("finished_at"),
                         },
                     )
+                    await self._store.update_session(
+                        session_id,
+                        metadata={
+                            "deploy_runner_state": "succeeded" if state == "succeeded" else "failed",
+                            "deploy_runner_last_error": status.get("last_error"),
+                            "deploy_runner_finished_at": _now(),
+                        },
+                    )
                     if state == "failed":
                         await self._store.append_message(
                             session_id,
@@ -2114,10 +2565,211 @@ class PlatformAISessionRuntime:
                             ),
                             metadata={"source": "deploy_runner", "state": "failed"},
                         )
+                    else:
+                        await self._store.append_message(
+                            session_id,
+                            role="assistant",
+                            content=(
+                                "Deployment completed successfully. The deploy runner has finished and session automation can continue."
+                            ),
+                            metadata={"source": "deploy_runner", "state": "succeeded"},
+                        )
                     break
                 await asyncio.sleep(2.0)
         finally:
             self._deploy_tasks.pop(session_id, None)
+
+    async def _repo_edit_loop(
+        self,
+        session_id: str,
+        *,
+        requested_by: str,
+        instruction: str,
+        external: bool,
+    ) -> None:
+        cmd_env = "NEXUS_PLATFORM_AI_EXTERNAL_REPO_EDIT_RUN_CMD" if external else "NEXUS_PLATFORM_AI_REPO_EDIT_RUN_CMD"
+        run_cmd = str(os.environ.get(cmd_env, "") or "").strip()
+        kind = "external_repo_edit" if external else "repo_edit"
+        await self._store.append_event(
+            session_id,
+            "action_trace",
+            {
+                "action": "repo_edit_runner_started",
+                "requested_by": requested_by,
+                "kind": kind,
+                "started_at": _now(),
+            },
+        )
+        await self._store.update_session(
+            session_id,
+            metadata={
+                "repo_edit_runner_state": "running",
+                "repo_edit_runner_kind": kind,
+                "repo_edit_runner_started_at": _now(),
+                "repo_edit_runner_last_error": None,
+            },
+        )
+        if not run_cmd:
+            await self._store.append_event(
+                session_id,
+                "action_trace",
+                {
+                    "action": "repo_edit_runner_error",
+                    "kind": kind,
+                    "detail": f"{cmd_env} is not configured",
+                },
+            )
+            await self._store.append_message(
+                session_id,
+                role="assistant",
+                content=f"Repo edit runner is unavailable: `{cmd_env}` is not configured.",
+                metadata={"source": "repo_edit_runner", "state": "failed", "kind": kind},
+            )
+            await self._store.update_session(
+                session_id,
+                metadata={
+                    "repo_edit_runner_state": "failed",
+                    "repo_edit_runner_last_error": f"{cmd_env} is not configured",
+                    "repo_edit_runner_finished_at": _now(),
+                },
+            )
+            return
+
+        default_cwd = Path(__file__).resolve().parents[2]
+        configured_cwd = str(os.environ.get("NEXUS_PLATFORM_AI_REPO_EDIT_CWD", "") or "").strip()
+        cwd_path = Path(configured_cwd).resolve() if configured_cwd else default_cwd
+        if not cwd_path.exists() or not cwd_path.is_dir():
+            cwd_path = default_cwd
+
+        env = os.environ.copy()
+        env["NEXUS_PLATFORM_AI_SESSION_ID"] = str(session_id)
+        env["NEXUS_PLATFORM_AI_REQUESTED_BY"] = str(requested_by or "")
+        env["NEXUS_PLATFORM_AI_OPERATOR_INSTRUCTION"] = str(instruction or "")
+        env["NEXUS_PLATFORM_AI_REPO_EDIT_KIND"] = kind
+        timeout_seconds = _safe_timeout_seconds(
+            "NEXUS_PLATFORM_AI_REPO_EDIT_TIMEOUT_SECONDS",
+            1800.0,
+            min_value=30.0,
+            max_value=14400.0,
+        )
+
+        try:
+            proc = await asyncio.create_subprocess_shell(
+                run_cmd,
+                cwd=str(cwd_path),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                env=env,
+            )
+            assert proc.stdout is not None
+            await self._store.append_event(
+                session_id,
+                "action_trace",
+                {
+                    "action": "repo_edit_requested",
+                    "kind": kind,
+                    "cwd": str(cwd_path),
+                    "command_env": cmd_env,
+                },
+            )
+            async def _stream_lines() -> None:
+                while True:
+                    line = await proc.stdout.readline()
+                    if not line:
+                        break
+                    text = line.decode(errors="replace").rstrip()
+                    if not text:
+                        continue
+                    await self._store.append_event(
+                        session_id,
+                        "action_trace",
+                        {"action": "repo_edit_log", "kind": kind, "line": text},
+                    )
+
+            stream_task = asyncio.create_task(_stream_lines())
+            timed_out = False
+            try:
+                rc = await asyncio.wait_for(proc.wait(), timeout=timeout_seconds)
+            except asyncio.TimeoutError:
+                timed_out = True
+                proc.kill()
+                rc = await proc.wait()
+            await stream_task
+            succeeded = rc == 0
+            await self._store.append_event(
+                session_id,
+                "action_trace",
+                {
+                    "action": "repo_edit_finished",
+                    "kind": kind,
+                    "state": "succeeded" if succeeded else "failed",
+                    "exit_code": rc,
+                    "timed_out": timed_out,
+                },
+            )
+            await self._store.update_session(
+                session_id,
+                metadata={
+                    "repo_edit_runner_state": "succeeded" if succeeded else "failed",
+                    "repo_edit_runner_exit_code": rc,
+                    "repo_edit_runner_timed_out": timed_out,
+                    "repo_edit_runner_finished_at": _now(),
+                    "repo_edit_runner_last_error": (
+                        f"runner timed out after {int(timeout_seconds)}s" if timed_out else None
+                    ),
+                },
+            )
+            if succeeded:
+                await self._store.append_message(
+                    session_id,
+                    role="assistant",
+                    content=(
+                        "Repo edit runner completed successfully. Code update/commit/push automation finished and control returned to Platform AI."
+                    ),
+                    metadata={"source": "repo_edit_runner", "state": "succeeded", "kind": kind},
+                )
+                if not external and _env_enabled("NEXUS_PLATFORM_AI_REPO_EDIT_AUTO_DEPLOY"):
+                    deploy = await self.start_deploy_run(session_id, requested_by=requested_by or "platform-ai")
+                    await self._store.append_event(
+                        session_id,
+                        "action_trace",
+                        {"action": "repo_edit_auto_deploy", "result": deploy},
+                    )
+            else:
+                await self._store.append_message(
+                    session_id,
+                    role="assistant",
+                    content=(
+                        (
+                            f"Repo edit runner failed with exit code {rc}. Review the action trace logs, then retry after fixing the runner command."
+                            if not timed_out
+                            else f"Repo edit runner timed out after {int(timeout_seconds)}s and was terminated."
+                        )
+                    ),
+                    metadata={"source": "repo_edit_runner", "state": "failed", "kind": kind, "exit_code": rc},
+                )
+        except Exception as exc:
+            await self._store.append_event(
+                session_id,
+                "action_trace",
+                {"action": "repo_edit_runner_error", "kind": kind, "detail": str(exc)},
+            )
+            await self._store.append_message(
+                session_id,
+                role="assistant",
+                content=f"Repo edit runner crashed: {exc}",
+                metadata={"source": "repo_edit_runner", "state": "failed", "kind": kind},
+            )
+            await self._store.update_session(
+                session_id,
+                metadata={
+                    "repo_edit_runner_state": "failed",
+                    "repo_edit_runner_last_error": str(exc),
+                    "repo_edit_runner_finished_at": _now(),
+                },
+            )
+        finally:
+            self._repo_edit_tasks.pop(session_id, None)
 
     async def get_session_brief(self, session_id: str) -> Optional[Dict[str, Any]]:
         return await self._store.get_session_brief(session_id)

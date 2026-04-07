@@ -190,6 +190,35 @@ async def test_platform_ai_session_control_flow(cp_client):
 
 
 @pytest.mark.anyio
+async def test_platform_ai_code_edit_control_requires_runtime_when_enabled(cp_client, monkeypatch):
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_PRIVILEGED_ENABLED", "1")
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_OWNER_ALLOWLIST", "owner@example.com")
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_REPO_EDIT_ENABLED", "1")
+
+    create_resp = await cp_client.post(
+        "/v1/platform-ai/sessions",
+        json={
+            "mode": "assignment_follower",
+            "operator_id": "owner@example.com",
+            "privileged": False,
+        },
+    )
+    assert create_resp.status_code == 200
+    session_id = str((create_resp.json() or {}).get("id") or "")
+    assert session_id
+
+    code_edit_resp = await cp_client.post(
+        f"/v1/platform-ai/sessions/{session_id}/control",
+        json={
+            "action": "code_edit",
+            "operator_id": "owner@example.com",
+            "payload": {"instruction": "Apply small fix and commit"},
+        },
+    )
+    assert code_edit_resp.status_code == 503
+
+
+@pytest.mark.anyio
 async def test_platform_ai_quality_suite_design_and_rerun(cp_client):
     create_conversation = await cp_client.post("/v1/chat/conversations", json={"title": "Quality Suite"})
     conversation_id = create_conversation.json()["id"]

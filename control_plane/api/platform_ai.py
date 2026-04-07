@@ -14,6 +14,7 @@ from shared.models import TaskMetadata
 
 
 router = APIRouter(prefix="/v1/platform-ai", tags=["platform-ai"])
+_PIPELINE_SESSION_CLAIM_LOCK = asyncio.Lock()
 
 _QUALITY_FIELDS = {"summary", "quality_gates", "acceptance_criteria", "tests", "artifacts", "warnings", "errors"}
 _TERMINAL_AUTONOMOUS_STATES = {
@@ -51,6 +52,17 @@ def _require_feature_flag(flag: str, *, action: str) -> None:
     if _env_enabled(flag):
         return
     raise HTTPException(status_code=403, detail=f"{action} is disabled ({flag} not enabled)")
+
+
+def _instruction_from_payload(payload: Any) -> str:
+    if isinstance(payload, str):
+        return str(payload).strip()
+    if isinstance(payload, dict):
+        for key in ("instruction", "prompt", "message", "content"):
+            value = str(payload.get(key) or "").strip()
+            if value:
+                return value
+    return ""
 
 
 def _bot_assignment_capabilities(bot: Any) -> Dict[str, Any]:
@@ -883,7 +895,6 @@ async def create_session(request: Request, body: CreatePlatformAISessionRequest)
     if mode == "bot_designer" and not target_bot_id:
         raise HTTPException(status_code=400, detail="bot_designer sessions require target_bot_id")
     if pipeline_bot_id:
-        await _ensure_pipeline_not_already_claimed(request, pipeline_bot_id=pipeline_bot_id)
         metadata["pipeline_bot_id"] = pipeline_bot_id
     if pipeline_name:
         metadata["pipeline_name"] = pipeline_name
@@ -894,16 +905,30 @@ async def create_session(request: Request, body: CreatePlatformAISessionRequest)
     metadata["backend"] = backend_cfg
     metadata.setdefault("current_phase", "observe")
     initial_status = "paused" if bool(body.start_paused) else "active"
-    session = await store.create_session(
-        mode=mode,
-        status=initial_status,
-        assignment_id=body.assignment_id,
-        run_id=body.run_id,
-        orchestration_id=body.orchestration_id,
-        operator_id=operator_id or None,
-        privileged=privileged,
-        metadata=metadata,
-    )
+    if pipeline_bot_id:
+        async with _PIPELINE_SESSION_CLAIM_LOCK:
+            await _ensure_pipeline_not_already_claimed(request, pipeline_bot_id=pipeline_bot_id)
+            session = await store.create_session(
+                mode=mode,
+                status=initial_status,
+                assignment_id=body.assignment_id,
+                run_id=body.run_id,
+                orchestration_id=body.orchestration_id,
+                operator_id=operator_id or None,
+                privileged=privileged,
+                metadata=metadata,
+            )
+    else:
+        session = await store.create_session(
+            mode=mode,
+            status=initial_status,
+            assignment_id=body.assignment_id,
+            run_id=body.run_id,
+            orchestration_id=body.orchestration_id,
+            operator_id=operator_id or None,
+            privileged=privileged,
+            metadata=metadata,
+        )
     await store.append_event(
         session["id"],
         "action_trace",
@@ -1169,15 +1194,44 @@ async def control_session(session_id: str, request: Request, body: ControlPlatfo
         result = await assignment_service.rerun_node(orchestration_id=orch_id, node_id=node_id, payload_override=body.payload)
     elif action in {"code_edit", "hotfix"}:
         _require_feature_flag("NEXUS_PLATFORM_AI_REPO_EDIT_ENABLED", action=action)
-        result = {"status": "accepted", "action": action}
+        if runtime is None:
+            raise HTTPException(status_code=503, detail="platform ai runtime unavailable")
+        result = await runtime.start_repo_edit_run(
+            session_id,
+            requested_by=operator_id or "platform-ai",
+            instruction=_instruction_from_payload(body.payload),
+            external=False,
+        )
+        status_raw = str(result.get("status") or "").strip().lower()
+        if status_raw in {"disabled", "denied"}:
+            raise HTTPException(status_code=403, detail=str(result.get("detail") or "repo edit denied"))
+        if status_raw == "error":
+            raise HTTPException(status_code=400, detail=str(result.get("detail") or "repo edit error"))
     elif action == "external_repo_edit":
         _require_feature_flag("NEXUS_PLATFORM_AI_EXTERNAL_REPO_EDIT_ENABLED", action=action)
-        result = {"status": "accepted", "action": action}
+        if runtime is None:
+            raise HTTPException(status_code=503, detail="platform ai runtime unavailable")
+        result = await runtime.start_repo_edit_run(
+            session_id,
+            requested_by=operator_id or "platform-ai",
+            instruction=_instruction_from_payload(body.payload),
+            external=True,
+        )
+        status_raw = str(result.get("status") or "").strip().lower()
+        if status_raw in {"disabled", "denied"}:
+            raise HTTPException(status_code=403, detail=str(result.get("detail") or "external repo edit denied"))
+        if status_raw == "error":
+            raise HTTPException(status_code=400, detail=str(result.get("detail") or "external repo edit error"))
     elif action == "deploy":
         _require_feature_flag("NEXUS_PLATFORM_AI_DEPLOY_ENABLED", action=action)
         if runtime is None:
             raise HTTPException(status_code=503, detail="platform ai runtime unavailable")
         result = await runtime.start_deploy_run(session_id, requested_by=operator_id or "platform-ai")
+        status_raw = str(result.get("status") or "").strip().lower()
+        if status_raw in {"disabled", "denied"}:
+            raise HTTPException(status_code=403, detail=str(result.get("detail") or "deploy denied"))
+        if status_raw == "error":
+            raise HTTPException(status_code=400, detail=str(result.get("detail") or "deploy error"))
     else:
         raise HTTPException(status_code=400, detail=f"unsupported control action: {action}")
 
