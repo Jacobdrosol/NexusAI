@@ -1,6 +1,7 @@
 import asyncio
 import pytest
 import sys
+from contextlib import suppress
 
 from control_plane.platform_ai.runtime import PlatformAISessionRuntime
 from control_plane.platform_ai.session_store import PlatformAISessionStore
@@ -223,3 +224,68 @@ async def test_ensure_session_loop_is_singleton_under_concurrency(tmp_path):
     assert len(runtime._session_tasks) == 1
     await asyncio.sleep(0.25)
     assert call_counter["count"] == 1
+
+
+@pytest.mark.anyio
+async def test_session_loop_does_not_halt_as_stalled_while_orchestration_running(tmp_path):
+    store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+    runtime = PlatformAISessionRuntime(store)
+    session = await store.create_session(
+        mode="pipeline_tuner",
+        status="active",
+        metadata={
+            "autonomous_enabled": False,
+            "pipeline_bot_id": "pm-orchestrator",
+            "runtime_state": {
+                "orchestration_id": "orch-live",
+                "task_total": 1,
+                "status_counts": {"running": 1},
+                "active_tasks": [{"task_id": "task-live", "status": "running"}],
+            },
+        },
+        orchestration_id="orch-live",
+    )
+
+    check_calls = {"count": 0}
+    halt_calls = {"count": 0}
+
+    async def fake_check(_: str, **__: object) -> str | None:
+        check_calls["count"] += 1
+        return "stalled_duplicate_actions"
+
+    async def fake_snapshot(_: dict) -> dict:
+        return {
+            "tick": 1,
+            "phase": "evaluate",
+            "active_action": "monitor_orchestration",
+            "detail": "waiting",
+            "heartbeat_detail": "waiting",
+            "signature": "sig-live",
+            "orchestration_id": "orch-live",
+            "status_counts": {"running": 1},
+            "active_tasks": [{"task_id": "task-live", "status": "running"}],
+            "runtime_state": {
+                "orchestration_id": "orch-live",
+                "task_total": 1,
+                "status_counts": {"running": 1},
+                "active_tasks": [{"task_id": "task-live", "status": "running"}],
+            },
+        }
+
+    async def fake_halt(session_id: str, *, reason: str, message: str) -> None:
+        _ = (reason, message)
+        halt_calls["count"] += 1
+        await store.update_session(session_id, status="stopped")
+
+    runtime._check_should_halt_as_stalled = fake_check  # type: ignore[method-assign]
+    runtime._build_progress_snapshot = fake_snapshot  # type: ignore[method-assign]
+    runtime._halt_session = fake_halt  # type: ignore[method-assign]
+
+    loop_task = asyncio.create_task(runtime._session_loop(session["id"]))
+    await asyncio.sleep(0.2)
+    loop_task.cancel()
+    with suppress(asyncio.CancelledError):
+        await loop_task
+
+    assert check_calls["count"] == 0
+    assert halt_calls["count"] == 0

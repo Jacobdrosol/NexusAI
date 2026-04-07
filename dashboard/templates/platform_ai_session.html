@@ -264,6 +264,10 @@
         {% endfor %}
       </select>
     </div>
+    <div>
+      <label for="session-pipeline-name">Pipeline Name</label>
+      <input id="session-pipeline-name" class="form-control" value="{{ (session.metadata or {}).get('pipeline_name') or '' }}" placeholder="Optional display name">
+    </div>
     <div style="display:flex;align-items:flex-end;">
       <button class="btn" type="button" onclick="updateTargetContext()">Update Session Context</button>
     </div>
@@ -877,6 +881,16 @@ async function refreshSessionHeader() {
   if (projectSelect) projectSelect.value = String(metadata.project_id || '');
   const targetBotSelect = document.getElementById('session-target-bot-id');
   if (targetBotSelect) targetBotSelect.value = String(metadata.target_bot_id || '');
+  const pipelineBotInput = document.getElementById('pipeline-bot-id');
+  if (pipelineBotInput) {
+    const pipelineBotId = String(metadata.pipeline_bot_id || runtimeState.pipeline_bot_id || '');
+    if (pipelineBotId) pipelineBotInput.value = pipelineBotId;
+  }
+  const pipelineNameInput = document.getElementById('session-pipeline-name');
+  if (pipelineNameInput) {
+    const pipelineName = String(metadata.pipeline_name || runtimeState.pipeline_name || '');
+    if (pipelineName) pipelineNameInput.value = pipelineName;
+  }
   renderContextFiles();
   renderMessageFileLibrary();
 }
@@ -1003,6 +1017,15 @@ async function refreshEvents(force) {
 async function updateTargetContext() {
   const projectId = String(document.getElementById('session-project-id')?.value || '').trim();
   const targetBotId = String(document.getElementById('session-target-bot-id')?.value || '').trim();
+  const pipelineBotId = activePipelineBotId();
+  const pipelineName = String(document.getElementById('session-pipeline-name')?.value || '').trim();
+  const metadata = {
+    project_id: projectId || null,
+    target_bot_id: targetBotId || null,
+  };
+  if (pipelineBotId) metadata.pipeline_bot_id = pipelineBotId;
+  if (pipelineName) metadata.pipeline_name = pipelineName;
+  else if (pipelineBotId) metadata.pipeline_name = pipelineBotId;
   try {
     const res = await fetch('/api/platform-ai/sessions/' + encodeURIComponent(SESSION_ID), {
       method: 'PATCH',
@@ -1010,15 +1033,16 @@ async function updateTargetContext() {
       body: JSON.stringify({
         project_id: projectId || null,
         target_bot_id: targetBotId || null,
-        metadata: {
-          project_id: projectId || null,
-          target_bot_id: targetBotId || null,
-        },
+        metadata: metadata,
       }),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || 'Failed to update target context');
-    setStatus('backend-update-status', 'Session context updated.', false);
+    const bits = [];
+    if (projectId) bits.push(`project=${projectId}`);
+    if (targetBotId) bits.push(`target_bot=${targetBotId}`);
+    if (pipelineBotId) bits.push(`pipeline_bot=${pipelineBotId}`);
+    setStatus('backend-update-status', `Session context updated${bits.length ? ': ' + bits.join(' · ') : '.'}`, false);
     await refreshSessionHeader();
     await refreshEvents(true);
   } catch (error) {

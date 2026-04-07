@@ -642,6 +642,40 @@ class PlatformAISessionRuntime:
             return "stalled_duplicate_actions"
         return None
 
+    def _session_has_inflight_runtime(
+        self,
+        *,
+        session: Dict[str, Any],
+        session_meta: Dict[str, Any],
+    ) -> bool:
+        runtime_state = session_meta.get("runtime_state") if isinstance(session_meta.get("runtime_state"), dict) else {}
+        active_tasks = runtime_state.get("active_tasks") if isinstance(runtime_state.get("active_tasks"), list) else []
+        if active_tasks:
+            return True
+        status_counts = runtime_state.get("status_counts") if isinstance(runtime_state.get("status_counts"), dict) else {}
+        for key in ("running", "queued", "blocked"):
+            try:
+                if int(status_counts.get(key) or 0) > 0:
+                    return True
+            except Exception:
+                continue
+        orchestration_id = str(runtime_state.get("orchestration_id") or session.get("orchestration_id") or "").strip()
+        if not orchestration_id:
+            return False
+        try:
+            task_total = int(runtime_state.get("task_total") or 0)
+        except Exception:
+            task_total = 0
+        if task_total <= 0:
+            return False
+        completed_like = 0
+        for key in ("completed", "failed", "cancelled", "retried"):
+            try:
+                completed_like += int(status_counts.get(key) or 0)
+            except Exception:
+                continue
+        return completed_like < task_total
+
     async def _halt_session(
         self,
         session_id: str,
@@ -1224,8 +1258,12 @@ class PlatformAISessionRuntime:
 
                 await self._process_operator_messages(session_id)
 
+                session_meta = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
+
                 # Check for stall condition
-                halt_reason = await self._check_should_halt_as_stalled(session_id)
+                halt_reason = None
+                if not self._session_has_inflight_runtime(session=session, session_meta=session_meta):
+                    halt_reason = await self._check_should_halt_as_stalled(session_id)
                 if halt_reason:
                     await self._halt_session(
                         session_id,
@@ -1239,7 +1277,6 @@ class PlatformAISessionRuntime:
                     )
                     break
 
-                session_meta = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
                 _has_target = bool(str(session_meta.get("pipeline_bot_id") or "").strip()) or bool(str(session.get("orchestration_id") or "").strip())
                 if not _has_target:
                     _waiting_emitted = bool(session_meta.get("_waiting_for_target_emitted"))
