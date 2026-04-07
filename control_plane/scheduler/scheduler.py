@@ -188,6 +188,23 @@ def _convert_tool_messages_for_claude(messages: list[dict]) -> list[dict]:
         else:
             converted.append(m)
     return converted
+
+
+def _vertex_anthropic_model_ref(model_ref: str) -> str | None:
+    """Return a Claude model id if model_ref targets Vertex Anthropic partner models."""
+    raw = str(model_ref or "").strip()
+    if not raw:
+        return None
+    lowered = raw.lower()
+    if lowered.startswith("claude-"):
+        return raw
+    marker = "publishers/anthropic/models/"
+    if marker in lowered:
+        idx = lowered.find(marker)
+        return raw[idx + len(marker):].strip()
+    if lowered.startswith("anthropic/claude-"):
+        return raw.split("/", 1)[1].strip()
+    return None
 _ASSIGNMENT_TRANSCRIPT_REDUCTION_CHARS = 6000
 _ARTIFACT_CONTENT_REDUCTION_CHARS = 1800
 _LONG_STRING_REDUCTION_CHARS = 1200
@@ -2991,18 +3008,36 @@ class Scheduler:
         model_ref = str(backend.model or "").strip()
         if not model_ref:
             raise BackendError("Vertex backend model is required")
-        if model_ref.startswith("projects/"):
-            path = f"{model_ref}:generateContent"
-        elif model_ref.startswith("publishers/"):
-            path = f"projects/{project_id}/locations/{location}/{model_ref}:generateContent"
-        else:
-            path = f"projects/{project_id}/locations/{location}/publishers/google/models/{model_ref}:generateContent"
 
         messages = payload if isinstance(payload, list) else [{"role": "user", "content": str(payload)}]
-        body: Dict[str, Any] = {"contents": _gemini_contents(messages)}
         params_dict = backend.params.model_dump(exclude_none=True) if backend.params else {}
-        if params_dict:
-            body["generationConfig"] = params_dict
+        anthropic_model = _vertex_anthropic_model_ref(model_ref)
+        body: Dict[str, Any]
+        if anthropic_model:
+            path = f"projects/{project_id}/locations/{location}/publishers/anthropic/models/{anthropic_model}:rawPredict"
+            system_prompt, chat_messages = _claude_payload_messages(messages)
+            max_tokens = int(params_dict.pop("max_tokens", 1024) or 1024)
+            body = {
+                "anthropic_version": "vertex-2023-10-16",
+                "messages": _convert_tool_messages_for_claude(chat_messages),
+                "max_tokens": max_tokens,
+            }
+            if system_prompt:
+                body["system"] = system_prompt
+            for key in ("temperature", "top_p", "top_k", "stop_sequences", "thinking", "stream"):
+                if key in params_dict:
+                    body[key] = params_dict[key]
+        else:
+            if model_ref.startswith("projects/"):
+                path = f"{model_ref}:generateContent"
+            elif model_ref.startswith("publishers/"):
+                path = f"projects/{project_id}/locations/{location}/{model_ref}:generateContent"
+            else:
+                path = f"projects/{project_id}/locations/{location}/publishers/google/models/{model_ref}:generateContent"
+            body = {"contents": _gemini_contents(messages)}
+            if params_dict:
+                body["generationConfig"] = params_dict
+
         url = f"https://{location}-aiplatform.googleapis.com/v1/{path}"
         async with httpx.AsyncClient(timeout=_cloud_timeout()) as client:
             response = await client.post(
@@ -3013,16 +3048,32 @@ class Scheduler:
             response.raise_for_status()
             data = response.json()
         output = ""
-        try:
-            output = str((data.get("candidates") or [{}])[0]["content"]["parts"][0].get("text") or "")
-        except Exception:
-            output = ""
         finish_reason = ""
-        try:
-            finish_reason = str((data.get("candidates") or [{}])[0].get("finishReason") or "").strip()
-        except Exception:
-            finish_reason = ""
-        result = {"output": output, "usage": data.get("usageMetadata", {})}
+        usage: Dict[str, Any] = {}
+        if anthropic_model:
+            try:
+                blocks = data.get("content") or []
+                texts = [str(block.get("text") or "") for block in blocks if isinstance(block, dict) and str(block.get("type") or "") == "text"]
+                output = "\n".join([t for t in texts if t]).strip()
+            except Exception:
+                output = ""
+            finish_reason = str(data.get("stop_reason") or data.get("finish_reason") or "").strip()
+            usage_raw = data.get("usage")
+            if isinstance(usage_raw, dict):
+                usage = usage_raw
+        else:
+            try:
+                output = str((data.get("candidates") or [{}])[0]["content"]["parts"][0].get("text") or "")
+            except Exception:
+                output = ""
+            try:
+                finish_reason = str((data.get("candidates") or [{}])[0].get("finishReason") or "").strip()
+            except Exception:
+                finish_reason = ""
+            usage_raw = data.get("usageMetadata")
+            if isinstance(usage_raw, dict):
+                usage = usage_raw
+        result = {"output": output, "usage": usage}
         if finish_reason:
             result["finish_reason"] = finish_reason
         return result

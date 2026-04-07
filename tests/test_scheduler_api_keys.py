@@ -235,6 +235,108 @@ async def test_scheduler_ollama_cloud_maps_max_tokens_to_num_predict():
     assert kwargs["json"]["options"]["temperature"] == 0.3
 
 
+@pytest.mark.anyio
+async def test_scheduler_vertex_claude_uses_rawpredict_partner_endpoint():
+    from control_plane.scheduler.scheduler import Scheduler
+
+    key_vault = AsyncMock()
+    key_vault.get_secret.return_value = (
+        '{"project_id":"demo-project","client_email":"svc@example.com","private_key":"-----BEGIN PRIVATE KEY-----\\nabc\\n-----END PRIVATE KEY-----\\n"}'
+    )
+    scheduler = Scheduler(bot_registry=AsyncMock(), worker_registry=AsyncMock(), key_vault=key_vault)
+    scheduler._vertex_access_token = AsyncMock(return_value="vertex-token")  # type: ignore[method-assign]
+
+    backend = BackendConfig(
+        type="cloud_api",
+        model="claude-opus-4-6",
+        provider="vertex",
+        api_key_ref="VERTEX_SERVICE_ACCOUNT_JSON",
+        params={"max_tokens": 128000, "temperature": 0.1, "num_ctx": 50000},
+    )
+    payload = [
+        {"role": "system", "content": "be strict"},
+        {"role": "user", "content": "hello"},
+    ]
+
+    fake_response = MagicMock()
+    fake_response.raise_for_status.return_value = None
+    fake_response.json.return_value = {
+        "id": "msg_123",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "ok"}],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 4, "output_tokens": 2},
+    }
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__.return_value = mock_client
+    mock_client.__aexit__.return_value = False
+    mock_client.post.return_value = fake_response
+
+    with patch("control_plane.scheduler.scheduler.httpx.AsyncClient", return_value=mock_client):
+        result = await scheduler._call_vertex(backend, payload)
+
+    args, kwargs = mock_client.post.call_args
+    assert args[0].endswith(
+        "/v1/projects/demo-project/locations/us-central1/publishers/anthropic/models/claude-opus-4-6:rawPredict"
+    )
+    assert kwargs["headers"]["Authorization"] == "Bearer vertex-token"
+    assert kwargs["json"]["anthropic_version"] == "vertex-2023-10-16"
+    assert kwargs["json"]["max_tokens"] == 128000
+    assert kwargs["json"]["temperature"] == 0.1
+    assert kwargs["json"]["system"] == "be strict"
+    assert "generationConfig" not in kwargs["json"]
+    assert "num_ctx" not in kwargs["json"]
+    assert result["output"] == "ok"
+    assert result["finish_reason"] == "end_turn"
+
+
+@pytest.mark.anyio
+async def test_scheduler_vertex_google_model_still_uses_generate_content():
+    from control_plane.scheduler.scheduler import Scheduler
+
+    key_vault = AsyncMock()
+    key_vault.get_secret.return_value = (
+        '{"project_id":"demo-project","client_email":"svc@example.com","private_key":"-----BEGIN PRIVATE KEY-----\\nabc\\n-----END PRIVATE KEY-----\\n"}'
+    )
+    scheduler = Scheduler(bot_registry=AsyncMock(), worker_registry=AsyncMock(), key_vault=key_vault)
+    scheduler._vertex_access_token = AsyncMock(return_value="vertex-token")  # type: ignore[method-assign]
+
+    backend = BackendConfig(
+        type="cloud_api",
+        model="gemini-2.5-pro",
+        provider="vertex",
+        api_key_ref="VERTEX_SERVICE_ACCOUNT_JSON",
+        params={"max_tokens": 4096, "temperature": 0.2},
+    )
+    payload = [{"role": "user", "content": "hello"}]
+
+    fake_response = MagicMock()
+    fake_response.raise_for_status.return_value = None
+    fake_response.json.return_value = {
+        "candidates": [{"content": {"parts": [{"text": "ok"}]}, "finishReason": "STOP"}],
+        "usageMetadata": {"promptTokenCount": 3, "candidatesTokenCount": 2},
+    }
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__.return_value = mock_client
+    mock_client.__aexit__.return_value = False
+    mock_client.post.return_value = fake_response
+
+    with patch("control_plane.scheduler.scheduler.httpx.AsyncClient", return_value=mock_client):
+        result = await scheduler._call_vertex(backend, payload)
+
+    args, kwargs = mock_client.post.call_args
+    assert args[0].endswith(
+        "/v1/projects/demo-project/locations/us-central1/publishers/google/models/gemini-2.5-pro:generateContent"
+    )
+    assert "generationConfig" in kwargs["json"]
+    assert kwargs["json"]["generationConfig"]["max_tokens"] == 4096
+    assert result["output"] == "ok"
+    assert result["finish_reason"] == "STOP"
+
+
 def test_scheduler_retry_attempt_increases_max_tokens_and_num_width(monkeypatch):
     from control_plane.scheduler import scheduler as scheduler_module
     from control_plane.scheduler.scheduler import _backend_with_retry_params
