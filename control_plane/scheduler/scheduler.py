@@ -263,6 +263,22 @@ def _settings_int(name: str, default: int) -> int:
         return default
 
 
+def _google_generation_config(params: dict[str, Any]) -> dict[str, Any]:
+    """Map internal backend params to Gemini generationConfig keys."""
+    raw = dict(params or {})
+    config: dict[str, Any] = {}
+    if raw.get("temperature") is not None:
+        config["temperature"] = raw.get("temperature")
+    if raw.get("top_p") is not None:
+        config["topP"] = raw.get("top_p")
+    if raw.get("max_tokens") is not None:
+        try:
+            config["maxOutputTokens"] = int(raw.get("max_tokens"))
+        except Exception:
+            pass
+    return config
+
+
 def _retry_incremented_value(value: Any, increment: int, retry_attempt: int) -> Any:
     try:
         return int(value) + (max(0, increment) * max(0, retry_attempt))
@@ -2880,8 +2896,9 @@ class Scheduler:
             "contents": _gemini_contents(messages),
         }
         params_dict = backend.params.model_dump(exclude_none=True) if backend.params else {}
-        if params_dict:
-            body["generationConfig"] = params_dict
+        generation_config = _google_generation_config(params_dict)
+        if generation_config:
+            body["generationConfig"] = generation_config
         url = (
             f"https://generativelanguage.googleapis.com/v1beta/models/"
             f"{backend.model}:generateContent"
@@ -3047,8 +3064,9 @@ class Scheduler:
             else:
                 path = f"projects/{project_id}/locations/{location}/publishers/google/models/{model_ref}:generateContent"
             body = {"contents": _gemini_contents(messages)}
-            if params_dict:
-                body["generationConfig"] = params_dict
+            generation_config = _google_generation_config(params_dict)
+            if generation_config:
+                body["generationConfig"] = generation_config
 
         url = f"https://{location}-aiplatform.googleapis.com/v1/{path}"
         async with httpx.AsyncClient(timeout=_cloud_timeout()) as client:
