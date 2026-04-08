@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import time
 import uuid
 from datetime import datetime, timezone
@@ -234,6 +235,16 @@ def _validate_backend_config(config: Dict[str, Any]) -> None:
     credential_ref = str(config.get("credential_ref") or "").strip()
     if not credential_ref:
         raise HTTPException(status_code=400, detail="vertex sessions require credential_ref (service-account JSON key reference)")
+    project_id = str(config.get("vertex_project_id") or "").strip()
+    if project_id:
+        if not re.fullmatch(r"[a-z][a-z0-9-]{4,28}[a-z0-9]", project_id):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "vertex_project_id must be a valid Google Cloud project ID "
+                    "(6-30 chars, lowercase letters/digits/hyphens; not display name)."
+                ),
+            )
 
 def _task_text(task: Dict[str, Any]) -> str:
     value = task.get("result")

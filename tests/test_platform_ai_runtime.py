@@ -299,6 +299,91 @@ async def test_platform_brain_uses_catalog_fallback_when_model_not_registered(tm
         for event in events
     )
 
+
+@pytest.mark.anyio
+async def test_autonomous_tuner_pauses_when_platform_brain_unavailable(tmp_path, monkeypatch):
+    store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+    runtime = PlatformAISessionRuntime(store)
+    session = await store.create_session(
+        mode="pipeline_tuner",
+        status="running",
+        metadata={
+            "autonomous_enabled": True,
+            "pipeline_bot_id": "pm-orchestrator",
+            "pipeline_name": "Coding Pipeline",
+            "backend": {
+                "provider": "vertex",
+                "model": "claude-opus-4-6",
+                "backend_type": "cloud_api",
+                "credential_ref": "Vertex-cocopepia",
+                "vertex_project_id": "nexusai-audit",
+                "vertex_location": "global",
+            },
+        },
+        assignment_id="assign-1",
+        run_id="run-1",
+        orchestration_id="orch-1",
+    )
+
+    async def fake_resolve_context(_session):  # noqa: ANN001
+        return {
+            "assignment_id": "assign-1",
+            "run_id": "run-1",
+            "orchestration_id": "orch-1",
+            "graph": {"nodes": [{"id": "pm-orchestrator", "title": "PM Orchestrator"}], "edges": []},
+            "tasks": [
+                {
+                    "id": "task-1",
+                    "bot_id": "pm-orchestrator",
+                    "status": "failed",
+                    "updated_at": "2026-04-08T14:00:00+00:00",
+                    "result": {"errors": ["failure"]},
+                }
+            ],
+        }
+
+    async def fake_backfill(session_id, *, context, session_metadata):  # noqa: ANN001
+        _ = (session_id, context)
+        return dict(session_metadata)
+
+    async def fake_pipeline_name(bot_id):  # noqa: ANN001
+        return "Coding Pipeline"
+
+    async def fake_invoke(session_id, *, session, operator_message, recent_messages):  # noqa: ANN001
+        _ = (session_id, session, operator_message, recent_messages)
+        return {"ok": False, "error": "vertex 404", "hint": "Platform brain backend failed."}
+
+    launch_calls = {"count": 0}
+
+    async def fake_launch(**kwargs):  # noqa: ANN001
+        _ = kwargs
+        launch_calls["count"] += 1
+        return "orch-next"
+
+    runtime._resolve_context = fake_resolve_context  # type: ignore[method-assign]
+    runtime._backfill_seed_binding_from_context = fake_backfill  # type: ignore[method-assign]
+    runtime._pipeline_name_for_bot_id = fake_pipeline_name  # type: ignore[method-assign]
+    runtime._invoke_platform_brain = fake_invoke  # type: ignore[method-assign]
+    runtime._launch_autonomous_orchestration = fake_launch  # type: ignore[method-assign]
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_REQUIRE_BRAIN_FOR_AUTONOMY", "1")
+
+    await runtime._run_autonomous_pipeline_tuner(
+        session["id"],
+        session=session,
+        snapshot={
+            "orchestration_id": "orch-1",
+            "status_counts": {"failed": 1},
+            "active_tasks": [],
+            "runtime_state": {"task_total": 1},
+        },
+    )
+
+    updated = await store.get_session(session["id"])
+    assert str((updated or {}).get("status") or "") == "ready"
+    metadata = (updated or {}).get("metadata") if isinstance((updated or {}).get("metadata"), dict) else {}
+    assert str(metadata.get("checkpoint_reason") or "") == "platform_brain_unavailable"
+    assert launch_calls["count"] == 0
+
 @pytest.mark.anyio
 async def test_repo_edit_runner_executes_command_and_reports_terminal_event(tmp_path, monkeypatch):
     store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))

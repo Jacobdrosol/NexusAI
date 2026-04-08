@@ -724,6 +724,38 @@ class PlatformAISessionRuntime:
         detail = str(exc or "").strip().lower()
         return "not present/enabled in the model catalog" in detail
 
+    @staticmethod
+    def _require_platform_brain_for_autonomy() -> bool:
+        raw = str(os.environ.get("NEXUS_PLATFORM_AI_REQUIRE_BRAIN_FOR_AUTONOMY", "1") or "").strip().lower()
+        return raw not in {"0", "false", "no", "off"}
+
+    @staticmethod
+    def _platform_brain_error_hint(*, provider: str, model: str, error: str, session_backend: Dict[str, Any]) -> str:
+        safe_provider = str(provider or "").strip().lower()
+        detail = str(error or "").strip()
+        if safe_provider != "vertex":
+            return (
+                f"Platform brain backend `{provider}:{model}` failed. "
+                "Verify provider credentials and model identifier."
+            )
+        project_id = str(session_backend.get("vertex_project_id") or "").strip()
+        location = str(session_backend.get("vertex_location") or "").strip() or "us-central1"
+        notes: List[str] = []
+        if project_id and project_id.lower() != project_id:
+            notes.append(
+                "vertex_project_id appears to be a display name or invalid casing; use the real lowercase GCP project ID"
+            )
+        if "404" in detail or "rawpredict" in detail.lower():
+            notes.append("model endpoint returned 404 from Vertex")
+            notes.append("ensure the Anthropic model is enabled for this project/location in Vertex Model Garden")
+            notes.append("try a regional location such as us-east5 or us-central1 if global is unavailable")
+        if not notes:
+            notes.append("verify service-account access, project ID, location, and model availability")
+        return (
+            f"Platform brain backend `vertex:{model}` failed for project `{project_id or 'unset'}` "
+            f"location `{location}`. " + "; ".join(notes) + "."
+        )
+
     async def _dispatch_platform_brain_with_fallback(
         self,
         *,
@@ -831,17 +863,25 @@ class PlatformAISessionRuntime:
             )
             return {"ok": True, "reply": parsed.get("assistant_reply"), "actions": parsed.get("actions") or []}
         except Exception as exc:
+            backend_meta = metadata.get("backend") if isinstance(metadata.get("backend"), dict) else {}
+            hint = self._platform_brain_error_hint(
+                provider=str(backend.provider or ""),
+                model=str(backend.model or ""),
+                error=str(exc),
+                session_backend=backend_meta,
+            )
             await self._store.append_event(
                 session_id,
                 "action_trace",
                 {
                     "action": "platform_brain_error",
                     "detail": str(exc),
+                    "hint": hint,
                     "provider": str(backend.provider or ""),
                     "model": str(backend.model or ""),
                 },
             )
-            return {"ok": False, "error": str(exc)}
+            return {"ok": False, "error": str(exc), "hint": hint}
 
     async def _create_action_record(
         self,
@@ -1176,8 +1216,8 @@ class PlatformAISessionRuntime:
                 session_id,
                 role="assistant",
                 content=(
-                    "Message received. Session is not running right now. "
-                    "Resume/start the session to execute actions from this instruction."
+                    "Message received and queued. Session is not running right now. "
+                    "Resume/start the session to process queued instructions."
                 ),
                 metadata={"source": "session_state_ack", "session_status": status or "unknown"},
             )
@@ -2189,6 +2229,23 @@ class PlatformAISessionRuntime:
                             "applied_actions": [item.get("action") for item in model_actions or [] if isinstance(item, dict)],
                         },
                     )
+            else:
+                await self._store.append_message(
+                    session_id,
+                    role="assistant",
+                    content=(
+                        str(brain_result.get("hint") or "").strip()
+                        or (
+                            "Platform brain backend is unavailable right now. "
+                            "Fix backend configuration to enable AI-driven investigation."
+                        )
+                    ),
+                    metadata={
+                        "source": "platform_brain_error",
+                        "operator_message_id": mid,
+                        "error": str(brain_result.get("error") or "").strip() or None,
+                    },
+                )
 
             if applied_actions:
                 action_names = ", ".join(str(item.get("action") or "action") for item in applied_actions[:6] if isinstance(item, dict))
@@ -3324,6 +3381,43 @@ class PlatformAISessionRuntime:
                         "applied_actions": [item.get("action") for item in applied or [] if isinstance(item, dict)],
                     },
                 )
+        elif self._require_platform_brain_for_autonomy():
+            hint = str(brain_result.get("hint") or "").strip() or (
+                "Platform brain backend is unavailable; pausing autonomy to avoid blind reruns."
+            )
+            await self._store.update_session(
+                session_id,
+                status="ready",
+                metadata={
+                    "checkpoint_reason": "platform_brain_unavailable",
+                    "autonomous_state": "ready_checkpoint",
+                    "autonomous_last_brain_error": str(brain_result.get("error") or "").strip() or None,
+                },
+            )
+            await self._store.append_message(
+                session_id,
+                role="assistant",
+                content=(
+                    f"{hint} Session moved to ready. Fix backend config and resume to continue AI-driven tuning."
+                ),
+                metadata={
+                    "source": "platform_brain_error",
+                    "state": "ready_checkpoint",
+                    "suite_run_id": (final_run or {}).get("id"),
+                },
+            )
+            await self._complete_action_record(
+                action["id"],
+                output_snapshot={
+                    "eval_status": eval_status,
+                    "eval_score": eval_score,
+                    "launched": False,
+                    "platform_brain_available": False,
+                },
+                had_effect=True,
+                summary="Paused autonomous refinement because platform brain backend is unavailable.",
+            )
+            return
 
         if not passed_target:
             _existing_prompt_preview = ""

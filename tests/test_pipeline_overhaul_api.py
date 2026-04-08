@@ -223,6 +223,26 @@ async def test_platform_ai_operator_message_does_not_auto_start_session(cp_clien
 
 
 @pytest.mark.anyio
+async def test_platform_ai_rejects_invalid_vertex_project_id(cp_client):
+    create_resp = await cp_client.post(
+        "/v1/platform-ai/sessions",
+        json={
+            "mode": "pipeline_tuner",
+            "pipeline_bot_id": "pm-orchestrator",
+            "operator_id": "owner@example.com",
+            "provider": "vertex",
+            "model": "claude-opus-4-6",
+            "backend_type": "cloud_api",
+            "credential_ref": "Vertex-cocopepia",
+            "vertex_project_id": "NexusAI-Audit",
+            "vertex_location": "global",
+        },
+    )
+    assert create_resp.status_code == 400
+    assert "vertex_project_id" in str(create_resp.text or "")
+
+
+@pytest.mark.anyio
 async def test_platform_ai_code_edit_control_requires_runtime_when_enabled(cp_client, monkeypatch):
     monkeypatch.setenv("NEXUS_PLATFORM_AI_PRIVILEGED_ENABLED", "1")
     monkeypatch.setenv("NEXUS_PLATFORM_AI_OWNER_ALLOWLIST", "owner@example.com")
