@@ -2234,6 +2234,150 @@ class PlatformAISessionRuntime:
             or safe_bot_id
         )
 
+    def _derive_seed_binding_from_context(
+        self,
+        *,
+        context: Dict[str, Any],
+        session_metadata: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        tasks = context.get("tasks") if isinstance(context.get("tasks"), list) else []
+        task_rows = [row for row in tasks if isinstance(row, dict)]
+        if not task_rows and not isinstance(context, dict):
+            return {}
+
+        def _task_key(task: Dict[str, Any]) -> tuple[str, str]:
+            return (str(task.get("created_at") or ""), str(task.get("id") or ""))
+
+        ordered_tasks = sorted(task_rows, key=_task_key)
+        root_task: Optional[Dict[str, Any]] = None
+        for task in ordered_tasks:
+            metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+            task_id = str(task.get("id") or "").strip()
+            workflow_root_task_id = str(metadata.get("workflow_root_task_id") or "").strip()
+            if task_id and workflow_root_task_id and workflow_root_task_id == task_id:
+                root_task = task
+                break
+        if root_task is None:
+            for task in ordered_tasks:
+                metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+                parent_task_id = str(metadata.get("parent_task_id") or "").strip()
+                if not parent_task_id:
+                    root_task = task
+                    break
+
+        def _metadata_value(key: str) -> str:
+            for source in [root_task, *ordered_tasks]:
+                if not isinstance(source, dict):
+                    continue
+                metadata = source.get("metadata") if isinstance(source.get("metadata"), dict) else {}
+                value = str(metadata.get(key) or "").strip()
+                if value:
+                    return value
+            return ""
+
+        candidate_tasks: List[Dict[str, Any]] = []
+        if isinstance(root_task, dict):
+            candidate_tasks.append(root_task)
+        candidate_tasks.extend(task for task in ordered_tasks if task is not root_task)
+
+        instruction = ""
+        node_overrides: Dict[str, Any] = {}
+        for task in candidate_tasks:
+            payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
+            if not instruction:
+                instruction = (
+                    str(payload.get("instruction") or "").strip()
+                    or str(payload.get("prompt") or "").strip()
+                )
+            if not node_overrides and isinstance(payload.get("node_overrides"), dict):
+                node_overrides = copy.deepcopy(payload.get("node_overrides") or {})
+            if instruction and node_overrides:
+                break
+
+        project_id = (
+            str(session_metadata.get("project_id") or "").strip()
+            or _metadata_value("project_id")
+        )
+        conversation_id = (
+            str(session_metadata.get("conversation_id") or "").strip()
+            or _metadata_value("conversation_id")
+        )
+        trigger_source = _metadata_value("source")
+
+        seed_binding: Dict[str, Any] = {}
+        assignment_id = str(context.get("assignment_id") or "").strip()
+        run_id = str(context.get("run_id") or "").strip()
+        orchestration_id = str(context.get("orchestration_id") or "").strip()
+        if assignment_id:
+            seed_binding["seed_assignment_id"] = assignment_id
+        if run_id:
+            seed_binding["seed_run_id"] = run_id
+        if orchestration_id:
+            seed_binding["seed_orchestration_id"] = orchestration_id
+        if project_id:
+            seed_binding["seed_project_id"] = project_id
+        if conversation_id:
+            seed_binding["seed_conversation_id"] = conversation_id
+        if instruction:
+            seed_binding["instruction"] = instruction[:4000]
+        if node_overrides:
+            seed_binding["node_overrides"] = node_overrides
+        if trigger_source:
+            seed_binding["trigger_source"] = trigger_source
+        return seed_binding
+
+    async def _backfill_seed_binding_from_context(
+        self,
+        session_id: str,
+        *,
+        context: Dict[str, Any],
+        session_metadata: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        metadata = dict(session_metadata or {})
+        derived = self._derive_seed_binding_from_context(context=context, session_metadata=metadata)
+        if not derived:
+            return metadata
+        existing = metadata.get("seed_binding") if isinstance(metadata.get("seed_binding"), dict) else {}
+        merged = dict(existing)
+        changed = False
+        for key, value in derived.items():
+            if key == "node_overrides":
+                if not isinstance(merged.get("node_overrides"), dict) or not merged.get("node_overrides"):
+                    if isinstance(value, dict) and value:
+                        merged["node_overrides"] = copy.deepcopy(value)
+                        changed = True
+                continue
+            current_value = str(merged.get(key) or "").strip()
+            next_value = str(value or "").strip()
+            if not current_value and next_value:
+                merged[key] = value
+                changed = True
+        updates: Dict[str, Any] = {}
+        if changed:
+            updates["seed_binding"] = merged
+        if not str(metadata.get("project_id") or "").strip():
+            project_id = str(derived.get("seed_project_id") or "").strip()
+            if project_id:
+                updates["project_id"] = project_id
+        if not str(metadata.get("conversation_id") or "").strip():
+            conversation_id = str(derived.get("seed_conversation_id") or "").strip()
+            if conversation_id:
+                updates["conversation_id"] = conversation_id
+        if not updates:
+            return metadata
+        await self._store.update_session(session_id, metadata=updates)
+        metadata.update(updates)
+        await self._store.append_event(
+            session_id,
+            "action_trace",
+            {
+                "action": "seed_binding_backfilled",
+                "keys": sorted(updates.keys()),
+                "has_instruction": bool(str((updates.get("seed_binding") or {}).get("instruction") or "").strip()),
+            },
+        )
+        return metadata
+
     async def _pipeline_launch_payload(
         self,
         *,
@@ -2589,6 +2733,11 @@ class PlatformAISessionRuntime:
         if not bool(metadata.get("autonomous_enabled")):
             return
         context = await self._resolve_context(session)
+        metadata = await self._backfill_seed_binding_from_context(
+            session_id,
+            context=context,
+            session_metadata=metadata,
+        )
         pipeline_bot_id = self._derive_pipeline_bot_id(context=context, session_metadata=metadata)
         pipeline_name = str(metadata.get("pipeline_name") or "").strip()
         if not pipeline_name and pipeline_bot_id:

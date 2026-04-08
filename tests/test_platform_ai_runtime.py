@@ -587,3 +587,86 @@ async def test_launch_autonomous_orchestration_propagates_project_and_conversati
     assert metadata is not None
     assert str(getattr(metadata, "project_id", "") or "") == "globeiq"
     assert str(getattr(metadata, "conversation_id", "") or "") == "conv-123"
+
+
+@pytest.mark.anyio
+async def test_derive_seed_binding_from_context_extracts_lineage_instruction(tmp_path):
+    store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+    runtime = PlatformAISessionRuntime(store)
+    context = {
+        "assignment_id": "assign-1",
+        "run_id": "run-1",
+        "orchestration_id": "orch-1",
+        "tasks": [
+            {
+                "id": "task-root",
+                "created_at": "2026-04-08T01:00:00+00:00",
+                "metadata": {
+                    "workflow_root_task_id": "task-root",
+                    "source": "chat_assign",
+                    "project_id": "globeiq",
+                    "conversation_id": "conv-root",
+                },
+                "payload": {
+                    "instruction": "please go the repo as context and go through everything we have built...",
+                    "node_overrides": {"pm-ui-tester": {"skip": False}},
+                },
+            }
+        ],
+    }
+    derived = runtime._derive_seed_binding_from_context(context=context, session_metadata={})
+    assert str(derived.get("seed_assignment_id") or "") == "assign-1"
+    assert str(derived.get("seed_run_id") or "") == "run-1"
+    assert str(derived.get("seed_orchestration_id") or "") == "orch-1"
+    assert str(derived.get("seed_project_id") or "") == "globeiq"
+    assert str(derived.get("seed_conversation_id") or "") == "conv-root"
+    assert "please go the repo as context" in str(derived.get("instruction") or "").lower()
+    assert isinstance(derived.get("node_overrides"), dict)
+    assert str(derived.get("trigger_source") or "") == "chat_assign"
+
+
+@pytest.mark.anyio
+async def test_backfill_seed_binding_merges_missing_fields_only(tmp_path):
+    store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+    runtime = PlatformAISessionRuntime(store)
+    session = await store.create_session(
+        mode="pipeline_tuner",
+        status="running",
+        metadata={
+            "autonomous_enabled": True,
+            "seed_binding": {
+                "instruction": "keep this original seed instruction",
+                "seed_assignment_id": "assign-existing",
+            },
+        },
+    )
+    context = {
+        "assignment_id": "assign-new",
+        "run_id": "run-new",
+        "orchestration_id": "orch-new",
+        "tasks": [
+            {
+                "id": "task-root",
+                "created_at": "2026-04-08T01:00:00+00:00",
+                "metadata": {
+                    "workflow_root_task_id": "task-root",
+                    "source": "chat_assign",
+                    "project_id": "globeiq",
+                    "conversation_id": "conv-root",
+                },
+                "payload": {"instruction": "new instruction should not overwrite existing"},
+            }
+        ],
+    }
+    merged = await runtime._backfill_seed_binding_from_context(
+        session["id"],
+        context=context,
+        session_metadata=session.get("metadata") if isinstance(session.get("metadata"), dict) else {},
+    )
+    binding = merged.get("seed_binding") if isinstance(merged.get("seed_binding"), dict) else {}
+    assert str(binding.get("instruction") or "") == "keep this original seed instruction"
+    assert str(binding.get("seed_assignment_id") or "") == "assign-existing"
+    assert str(binding.get("seed_run_id") or "") == "run-new"
+    assert str(binding.get("seed_orchestration_id") or "") == "orch-new"
+    assert str(binding.get("seed_project_id") or "") == "globeiq"
+    assert str(binding.get("seed_conversation_id") or "") == "conv-root"
