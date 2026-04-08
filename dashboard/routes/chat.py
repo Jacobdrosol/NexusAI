@@ -788,7 +788,7 @@ def api_send_message_stream():
                 timeout=(10, None),
             ) as upstream:
                 upstream.raise_for_status()
-                for line in upstream.iter_lines(decode_unicode=True, keepempty_lines=True):
+                for line in upstream.iter_lines(decode_unicode=True):
                     if line is None:
                         continue
                     yield f"{line}\n"
