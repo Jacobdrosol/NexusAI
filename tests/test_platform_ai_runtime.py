@@ -301,6 +301,138 @@ async def test_platform_brain_uses_catalog_fallback_when_model_not_registered(tm
 
 
 @pytest.mark.anyio
+async def test_platform_brain_auto_registers_catalog_model_before_fallback(tmp_path):
+    store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+
+    class FakeModelRegistry:
+        def __init__(self) -> None:
+            self.registered = False
+            self.register_calls = 0
+
+        async def exists(self, provider, name):  # noqa: ANN001
+            _ = (provider, name)
+            return self.registered
+
+        async def register(self, model):  # noqa: ANN001
+            _ = model
+            self.register_calls += 1
+            self.registered = True
+
+    class FakeScheduler:
+        def __init__(self) -> None:
+            self.model_registry = FakeModelRegistry()
+            self.dispatch_calls = 0
+            self.vertex_calls = 0
+
+        async def _dispatch_backend(self, backend, payload, task=None):  # noqa: ANN001
+            _ = (backend, payload, task)
+            self.dispatch_calls += 1
+            if not self.model_registry.registered:
+                raise Exception("Model 'gemini-2.5-pro' (provider 'vertex') is not present/enabled in the model catalog.")
+            return {
+                "output": "{\"assistant_reply\":\"catalog auto-register worked\",\"actions\":[]}",
+                "usage": {"prompt_tokens": 5, "completion_tokens": 3},
+            }
+
+        async def _call_vertex(self, backend, payload):  # noqa: ANN001
+            _ = (backend, payload)
+            self.vertex_calls += 1
+            return {"output": "{\"assistant_reply\":\"fallback path\",\"actions\":[]}"}
+
+    scheduler = FakeScheduler()
+    runtime = PlatformAISessionRuntime(store, scheduler=scheduler)
+    session = await store.create_session(
+        mode="pipeline_tuner",
+        status="running",
+        metadata={
+            "pipeline_bot_id": "pm-orchestrator",
+            "backend": {
+                "provider": "vertex",
+                "model": "gemini-2.5-pro",
+                "backend_type": "cloud_api",
+                "credential_ref": "VERTEX_SERVICE_ACCOUNT_JSON",
+                "vertex_project_id": "nexusai-prod",
+                "vertex_location": "global",
+            },
+        },
+    )
+    await store.append_message(session["id"], role="operator", content="Run catalog auto-register check.", metadata={})
+    await runtime._process_operator_messages(session["id"])
+
+    assert scheduler.model_registry.register_calls == 1
+    assert scheduler.dispatch_calls >= 2
+    assert scheduler.vertex_calls == 0
+    events = await store.list_events(session["id"], limit=120)
+    assert any(
+        str((event.get("payload") or {}).get("action") or "") == "platform_brain_catalog_autoregistered"
+        for event in events
+    )
+    assert not any(
+        str((event.get("payload") or {}).get("action") or "") == "platform_brain_catalog_fallback"
+        for event in events
+    )
+    assert any(
+        str((event.get("payload") or {}).get("action") or "") == "platform_brain_invoked"
+        and bool((event.get("payload") or {}).get("catalog_fallback_used")) is False
+        for event in events
+    )
+
+
+@pytest.mark.anyio
+async def test_operator_message_in_ready_state_is_processed_without_resume(tmp_path):
+    store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+
+    class FakeScheduler:
+        async def _dispatch_backend(self, backend, payload, task=None):  # noqa: ANN001
+            _ = (backend, payload, task)
+            return {
+                "output": "{\"assistant_reply\":\"Ready-state instruction processed.\",\"actions\":[]}",
+                "usage": {"prompt_tokens": 4, "completion_tokens": 2},
+            }
+
+    runtime = PlatformAISessionRuntime(store, scheduler=FakeScheduler())
+    session = await store.create_session(
+        mode="bot_creator",
+        status="ready",
+        metadata={
+            "bot_name_seed": "ready-bot",
+            "backend": {
+                "provider": "openai",
+                "model": "gpt-4o-mini",
+                "backend_type": "cloud_api",
+                "credential_ref": "OPENAI_API_KEY",
+            },
+        },
+    )
+
+    await runtime.post_message(
+        session["id"],
+        role="operator",
+        content="Please inspect and suggest next actions.",
+        metadata={},
+    )
+
+    for _ in range(60):
+        rows = await store.list_messages(session["id"], limit=50)
+        if any(str((row.get("metadata") or {}).get("source") or "") == "platform_brain" for row in rows):
+            break
+        await asyncio.sleep(0.05)
+
+    rows = await store.list_messages(session["id"], limit=80)
+    assert any(str((row.get("metadata") or {}).get("source") or "") == "runtime_ack" for row in rows)
+    assert any(
+        str((row.get("metadata") or {}).get("source") or "") == "platform_brain"
+        and "Ready-state instruction processed." in str(row.get("content") or "")
+        for row in rows
+    )
+    assert not any(
+        "Resume/start the session" in str(row.get("content") or "")
+        for row in rows
+        if str(row.get("role") or "").strip().lower() == "assistant"
+    )
+
+
+@pytest.mark.anyio
 async def test_autonomous_tuner_pauses_when_platform_brain_unavailable(tmp_path, monkeypatch):
     store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
     runtime = PlatformAISessionRuntime(store)

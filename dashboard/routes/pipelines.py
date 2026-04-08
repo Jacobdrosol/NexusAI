@@ -153,12 +153,32 @@ def _pipeline_detail(cp, orchestration_id: str) -> dict[str, Any] | None:
     root_meta = (root or {}).get("metadata") or {}
     project_id = str(root_meta.get("project_id") or "").strip()
     conversation_id = str(root_meta.get("conversation_id") or "").strip()
+
+    def _extract_seed(meta: dict[str, Any], key: str) -> str:
+        seed_binding = meta.get("seed_binding") if isinstance(meta.get("seed_binding"), dict) else {}
+        return str(seed_binding.get(key) or "").strip()
+
     for task in tasks:
         meta = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+        payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
+        assignment_workspace = (
+            payload.get("assignment_workspace")
+            if isinstance(payload.get("assignment_workspace"), dict)
+            else {}
+        )
         if not project_id:
-            project_id = str(meta.get("project_id") or "").strip()
+            project_id = (
+                str(meta.get("project_id") or "").strip()
+                or _extract_seed(meta, "seed_project_id")
+                or str(payload.get("project_id") or "").strip()
+                or str(assignment_workspace.get("project_id") or "").strip()
+            )
         if not conversation_id:
-            conversation_id = str(meta.get("conversation_id") or "").strip()
+            conversation_id = (
+                str(meta.get("conversation_id") or "").strip()
+                or _extract_seed(meta, "seed_conversation_id")
+                or str(payload.get("conversation_id") or "").strip()
+            )
         if project_id and conversation_id:
             break
     if (not project_id or not conversation_id) and hasattr(cp, "list_platform_ai_sessions"):

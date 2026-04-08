@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from control_plane.platform_ai.session_store import PlatformAISessionStore
 from shared.exceptions import BotNotFoundError
-from shared.models import BackendConfig, BackendParams, Bot, TaskMetadata
+from shared.models import BackendConfig, BackendParams, Bot, CatalogModel, TaskMetadata
 
 
 def _now() -> str:
@@ -538,6 +538,7 @@ class PlatformAISessionRuntime:
         self._last_progress_signature: Dict[str, str] = {}
         self._last_heartbeat_ts: Dict[str, float] = {}
         self._bot_name_cache: Dict[str, str] = {}
+        self._session_wake_events: Dict[str, asyncio.Event] = {}
         self._session_task_lock = asyncio.Lock()
 
     async def ensure_session_loop(self, session_id: str) -> None:
@@ -547,7 +548,15 @@ class PlatformAISessionRuntime:
         async with self._session_task_lock:
             task = self._session_tasks.get(sid)
             if task is not None and not task.done():
+                wake = self._session_wake_events.get(sid)
+                if wake is not None:
+                    wake.set()
                 return
+            wake = self._session_wake_events.get(sid)
+            if wake is None:
+                wake = asyncio.Event()
+                self._session_wake_events[sid] = wake
+            wake.clear()
             self._session_tasks[sid] = asyncio.create_task(self._session_loop(sid))
 
     async def stop_session_loop(self, session_id: str) -> None:
@@ -555,11 +564,30 @@ class PlatformAISessionRuntime:
         task = self._session_tasks.get(sid)
         if task is None:
             return
+        wake = self._session_wake_events.get(sid)
+        if wake is not None:
+            wake.set()
         task.cancel()
         try:
             await task
         except asyncio.CancelledError:
             pass
+
+    async def _sleep_until_poked(self, session_id: str, delay_seconds: float) -> None:
+        sid = str(session_id or "").strip()
+        if delay_seconds <= 0:
+            await asyncio.sleep(0)
+            return
+        wake = self._session_wake_events.get(sid)
+        if wake is None:
+            await asyncio.sleep(delay_seconds)
+            return
+        try:
+            await asyncio.wait_for(wake.wait(), timeout=delay_seconds)
+        except asyncio.TimeoutError:
+            pass
+        finally:
+            wake.clear()
 
     def _compute_state_hash(self, data: Dict[str, Any]) -> str:
         return hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
@@ -756,6 +784,47 @@ class PlatformAISessionRuntime:
             f"location `{location}`. " + "; ".join(notes) + "."
         )
 
+    async def _auto_register_platform_brain_model(
+        self,
+        *,
+        session_id: str,
+        backend: BackendConfig,
+    ) -> bool:
+        scheduler = self._scheduler
+        registry = getattr(scheduler, "model_registry", None) if scheduler is not None else None
+        if registry is None:
+            return False
+        provider = str(getattr(backend, "provider", "") or "").strip().lower()
+        model = str(getattr(backend, "model", "") or "").strip()
+        if not provider or not model:
+            return False
+        try:
+            exists = await registry.exists(provider, model)
+            if exists:
+                return False
+            digest = hashlib.sha1(f"{provider}:{model}".encode("utf-8")).hexdigest()[:16]
+            catalog_model = CatalogModel(
+                id=f"platform-ai-auto:{provider}:{digest}",
+                provider=provider,
+                name=model,
+                capabilities=["chat"],
+                enabled=True,
+                notes="Auto-registered from Platform AI runtime backend config.",
+            )
+            await registry.register(catalog_model)
+            await self._store.append_event(
+                session_id,
+                "action_trace",
+                {
+                    "action": "platform_brain_catalog_autoregistered",
+                    "provider": provider,
+                    "model": model,
+                },
+            )
+            return True
+        except Exception:
+            return False
+
     async def _dispatch_platform_brain_with_fallback(
         self,
         *,
@@ -770,6 +839,18 @@ class PlatformAISessionRuntime:
         except Exception as exc:
             if not self._is_model_catalog_block_error(exc):
                 raise
+            auto_registered = await self._auto_register_platform_brain_model(
+                session_id=session_id,
+                backend=backend,
+            )
+            if auto_registered:
+                try:
+                    raw = await self._scheduler._dispatch_backend(backend, payload, task=None)
+                    return {"raw": raw, "catalog_fallback_used": False}
+                except Exception as retry_exc:
+                    if not self._is_model_catalog_block_error(retry_exc):
+                        raise
+                    exc = retry_exc
             provider = str(backend.provider or "").strip().lower()
             method_map = {
                 "vertex": "_call_vertex",
@@ -791,6 +872,7 @@ class PlatformAISessionRuntime:
                     "model": str(backend.model or ""),
                     "detail": str(exc),
                     "fallback_method": method_name,
+                    "catalog_auto_registered": bool(auto_registered),
                 },
             )
             raw = await method(backend, payload)
@@ -1231,9 +1313,12 @@ class PlatformAISessionRuntime:
         )
         session = await self._store.get_session(session_id)
         status = str((session or {}).get("status") or "").strip().lower()
+        role_text = str(role or "").strip().lower()
         if session is not None and status == "running":
             await self.ensure_session_loop(session_id)
-        elif str(role or "").strip().lower() == "operator":
+        elif session is not None and role_text == "operator" and status == "ready":
+            await self.ensure_session_loop(session_id)
+        elif role_text == "operator":
             await self._store.append_message(
                 session_id,
                 role="assistant",
@@ -1987,11 +2072,19 @@ class PlatformAISessionRuntime:
                         {"action": "runtime_loop_stopped", "status": status, "stopped_at": _now()},
                     )
                     break
-                if status != "running":
-                    await asyncio.sleep(1.0)
-                    continue
-
                 await self._process_operator_messages(session_id)
+                session = await self._store.get_session(session_id) or session
+                status = str(session.get("status") or "").strip().lower()
+                if status in {"stopped"}:
+                    await self._store.append_event(
+                        session_id,
+                        "action_trace",
+                        {"action": "runtime_loop_stopped", "status": status, "stopped_at": _now()},
+                    )
+                    break
+                if status != "running":
+                    await self._sleep_until_poked(session_id, 1.0)
+                    continue
 
                 session_meta = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
                 mode = str(session.get("mode") or "").strip().lower()
@@ -2051,7 +2144,7 @@ class PlatformAISessionRuntime:
                 if str(session.get("status") or "").strip().lower() != "running":
                     # Runtime transitioned to ready/stopped during autonomous step;
                     # skip further evaluation/replan logic in this tick.
-                    await asyncio.sleep(0.2)
+                    await self._sleep_until_poked(session_id, 0.2)
                     continue
                 if await self._finalize_autonomous_session_if_terminal(session_id, session=session, snapshot=snapshot):
                     continue
@@ -2069,7 +2162,7 @@ class PlatformAISessionRuntime:
                             snapshot=snapshot,
                             reason=halt_reason,
                         )
-                        await asyncio.sleep(1.5)
+                        await self._sleep_until_poked(session_id, 1.5)
                         continue
                 now_mono = time.monotonic()
                 changed = bool(signature) and signature != previous_signature
@@ -2108,11 +2201,11 @@ class PlatformAISessionRuntime:
                     )
 
                 if not snapshot.get("orchestration_id"):
-                    await asyncio.sleep(4.0)
+                    await self._sleep_until_poked(session_id, 4.0)
                 elif bool(status_counts.get("running")) or bool(active_tasks):
-                    await asyncio.sleep(1.5)
+                    await self._sleep_until_poked(session_id, 1.5)
                 else:
-                    await asyncio.sleep(3.0)
+                    await self._sleep_until_poked(session_id, 3.0)
         except asyncio.CancelledError:
             await self._store.append_event(
                 session_id,
@@ -2126,6 +2219,7 @@ class PlatformAISessionRuntime:
                 self._session_tasks.pop(session_id, None)
             self._last_progress_signature.pop(session_id, None)
             self._last_heartbeat_ts.pop(session_id, None)
+            self._session_wake_events.pop(session_id, None)
 
     async def _process_operator_messages(self, session_id: str) -> None:
         seen = self._processed_operator_messages.setdefault(session_id, set())
@@ -2158,11 +2252,14 @@ class PlatformAISessionRuntime:
                     "kind": "decision",
                 },
             )
-            ack_excerpt = content[:4000]
+            preview = content.replace("\n", " ").strip()[:280]
+            summary = f"Acknowledged. Applying operator direction ({len(content)} chars)."
+            if preview:
+                summary = f"{summary} Preview: {preview}"
             await self._store.append_message(
                 session_id,
                 role="assistant",
-                content=f"Acknowledged. Applying operator direction: {ack_excerpt}",
+                content=summary,
                 metadata={"source": "runtime_ack", "operator_message_id": mid},
             )
             session = await self._store.get_session(session_id)

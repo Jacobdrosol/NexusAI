@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from shared.models import TaskMetadata
+from shared.models import CatalogModel, TaskMetadata
 
 
 router = APIRouter(prefix="/v1/platform-ai", tags=["platform-ai"])
@@ -245,6 +245,34 @@ def _validate_backend_config(config: Dict[str, Any]) -> None:
                     "(6-30 chars, lowercase letters/digits/hyphens; not display name)."
                 ),
             )
+
+
+async def _ensure_backend_model_catalog_entry(request: Request, config: Dict[str, Any]) -> None:
+    provider = str(config.get("provider") or "").strip().lower()
+    model = str(config.get("model") or "").strip()
+    if not provider or not model:
+        return
+    registry = getattr(request.app.state, "model_registry", None)
+    if registry is None:
+        return
+    try:
+        exists = await registry.exists(provider, model)
+        if exists:
+            return
+        model_id = f"platform-ai-session:{provider}:{model}"
+        await registry.register(
+            CatalogModel(
+                id=model_id,
+                provider=provider,
+                name=model,
+                capabilities=["chat"],
+                enabled=True,
+                notes="Auto-registered from Platform AI session backend configuration.",
+            )
+        )
+    except Exception:
+        # Never block session creation/update on catalog maintenance.
+        return
 
 def _task_text(task: Dict[str, Any]) -> str:
     value = task.get("result")
@@ -979,6 +1007,7 @@ async def create_session(request: Request, body: CreatePlatformAISessionRequest)
         body.vertex_location,
     )
     _validate_backend_config(backend_cfg)
+    await _ensure_backend_model_catalog_entry(request, backend_cfg)
     metadata = dict(body.metadata or {})
     if str(metadata.get("pipeline_bot_id") or "").strip() and not pipeline_bot_id:
         pipeline_bot_id = str(metadata.get("pipeline_bot_id") or "").strip()
@@ -1196,6 +1225,7 @@ async def patch_session(session_id: str, request: Request, body: UpdatePlatformA
         if body.vertex_location is not None:
             backend_cfg["vertex_location"] = str(body.vertex_location or "").strip() or None
         _validate_backend_config(backend_cfg)
+        await _ensure_backend_model_catalog_entry(request, backend_cfg)
         metadata["backend"] = backend_cfg
 
     updated = await store.update_session(
