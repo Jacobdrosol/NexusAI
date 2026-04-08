@@ -154,7 +154,8 @@ _ACCESS_DENIAL_LINE_RE = re.compile(
 )
 _IMAGE_CAPABILITY_MARKERS = {"image", "images", "vision", "multimodal"}
 _INLINE_CODE_TRIGGER_RE = re.compile(
-    r"^\s*(please\s+code\s+this|code\s+this|please\s+implement\s+this|implement\s+this)\b",
+    r"(?:^|\b)(?:please\s+code\s+this|code\s+this|can\s+you\s+code\s+this|"
+    r"please\s+implement\s+this|implement\s+this|can\s+you\s+implement\s+this)\b",
     re.IGNORECASE,
 )
 
@@ -1363,7 +1364,7 @@ def _inline_code_requested(content: str) -> bool:
         return False
     if _extract_assign_instruction(text) is not None:
         return False
-    return bool(_INLINE_CODE_TRIGGER_RE.match(text))
+    return bool(_INLINE_CODE_TRIGGER_RE.search(text))
 
 
 def _inline_code_unavailable_message() -> str:

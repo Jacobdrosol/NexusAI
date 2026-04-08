@@ -2305,7 +2305,10 @@ async def test_post_message_inline_code_uses_task_manager_temp_workspace(cp_app,
         resp = await client.post(
             f"/v1/chat/conversations/{conversation_id}/messages",
             json={
-                "content": "please code this: update README",
+                "content": (
+                    "Can you look into GlobeIQ's repo and sketch month-end accounting reporting support? "
+                    "Can you code this?"
+                ),
                 "bot_id": "bot-inline-post",
             },
         )
