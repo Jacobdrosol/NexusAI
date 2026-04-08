@@ -140,6 +140,116 @@ async def test_process_operator_message_applies_tuning_overrides(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_process_operator_message_invokes_platform_brain_backend(tmp_path):
+    store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+
+    class FakeScheduler:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        async def _dispatch_backend(self, backend, payload, task=None):  # noqa: ANN001
+            self.calls.append({"backend": backend, "payload": payload, "task": task})
+            return {
+                "output": "{\"assistant_reply\":\"Platform brain online.\",\"actions\":[]}",
+                "usage": {"prompt_tokens": 11, "completion_tokens": 7},
+            }
+
+    scheduler = FakeScheduler()
+    runtime = PlatformAISessionRuntime(store, scheduler=scheduler)
+    session = await store.create_session(
+        mode="pipeline_tuner",
+        status="running",
+        metadata={
+            "pipeline_bot_id": "pm-orchestrator",
+            "backend": {
+                "provider": "vertex",
+                "model": "claude-opus-4-6",
+                "backend_type": "cloud_api",
+                "credential_ref": "VERTEX_SERVICE_ACCOUNT_JSON",
+                "params": {"max_tokens": 2048, "temperature": 0.1},
+                "vertex_project_id": "nexusai-prod",
+                "vertex_location": "global",
+            },
+        },
+    )
+    await store.append_message(session["id"], role="operator", content="Tune this pipeline carefully.", metadata={})
+    await runtime._process_operator_messages(session["id"])
+
+    assert len(scheduler.calls) == 1
+    call = scheduler.calls[0]
+    backend = call["backend"]
+    payload = call["payload"]
+    assert str(getattr(backend, "provider", "") or "") == "vertex"
+    assert str(getattr(backend, "model", "") or "") == "claude-opus-4-6"
+    assert isinstance(payload, dict)
+    assert str(payload.get("vertex_project_id") or "") == "nexusai-prod"
+    assert str(payload.get("vertex_location") or "") == "global"
+    assert isinstance(payload.get("messages"), list)
+
+    messages = await store.list_messages(session["id"], limit=50)
+    assert any(
+        str((row.get("metadata") or {}).get("source") or "") == "platform_brain"
+        and "Platform brain online." in str(row.get("content") or "")
+        for row in messages
+    )
+    events = await store.list_events(session["id"], limit=100)
+    assert any(
+        str((event.get("payload") or {}).get("action") or "") == "platform_brain_invoked"
+        for event in events
+    )
+
+
+@pytest.mark.anyio
+async def test_platform_brain_actions_can_upsert_bot_within_mode_policy(tmp_path):
+    store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+    bot_registry = BotRegistry(db_path=str(tmp_path / "bots.db"))
+
+    class FakeScheduler:
+        async def _dispatch_backend(self, backend, payload, task=None):  # noqa: ANN001
+            _ = (backend, payload, task)
+            return {
+                "output": (
+                    "{"
+                    "\"assistant_reply\":\"Creating requested bot.\","
+                    "\"actions\":["
+                    "{"
+                    "\"platform_ai_action\":\"upsert_bot\","
+                    "\"bot\":{"
+                    "\"id\":\"platform-brain-bot\","
+                    "\"name\":\"Platform Brain Bot\","
+                    "\"role\":\"assistant\","
+                    "\"enabled\":true,"
+                    "\"backends\":[{\"type\":\"cloud_api\",\"provider\":\"openai\",\"model\":\"gpt-4o-mini\"}]"
+                    "}"
+                    "}"
+                    "]"
+                    "}"
+                ),
+                "usage": {"prompt_tokens": 20, "completion_tokens": 14},
+            }
+
+    runtime = PlatformAISessionRuntime(store, bot_registry=bot_registry, scheduler=FakeScheduler())
+    session = await store.create_session(
+        mode="bot_creator",
+        status="running",
+        metadata={
+            "bot_name_seed": "Platform Brain Bot",
+            "backend": {
+                "provider": "openai",
+                "model": "gpt-4.1",
+                "backend_type": "cloud_api",
+                "credential_ref": "OPENAI_API_KEY",
+            },
+        },
+    )
+    await store.append_message(session["id"], role="operator", content="Please create a new helper bot.", metadata={})
+    await runtime._process_operator_messages(session["id"])
+
+    created = await bot_registry.get("platform-brain-bot")
+    assert created.id == "platform-brain-bot"
+    assert str(created.name) == "Platform Brain Bot"
+
+@pytest.mark.anyio
 async def test_repo_edit_runner_executes_command_and_reports_terminal_event(tmp_path, monkeypatch):
     store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
     runtime = PlatformAISessionRuntime(store)

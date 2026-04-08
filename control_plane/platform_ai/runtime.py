@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from control_plane.platform_ai.session_store import PlatformAISessionStore
 from shared.exceptions import BotNotFoundError
-from shared.models import Bot, TaskMetadata
+from shared.models import BackendConfig, BackendParams, Bot, TaskMetadata
 
 
 def _now() -> str:
@@ -522,12 +522,14 @@ class PlatformAISessionRuntime:
         run_store: Any = None,
         task_manager: Any = None,
         bot_registry: Any = None,
+        scheduler: Any = None,
     ) -> None:
         self._store = store
         self._assignment_service = assignment_service
         self._run_store = run_store
         self._task_manager = task_manager
         self._bot_registry = bot_registry
+        self._scheduler = scheduler
         self._session_tasks: Dict[str, asyncio.Task[None]] = {}
         self._deploy_tasks: Dict[str, asyncio.Task[None]] = {}
         self._repo_edit_tasks: Dict[str, asyncio.Task[None]] = {}
@@ -616,6 +618,178 @@ class PlatformAISessionRuntime:
             metadata={"brief_synthesized_at": _now()},
         )
         return brief
+
+    def _platform_backend_from_session(self, session: Dict[str, Any]) -> Optional[BackendConfig]:
+        metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
+        backend = metadata.get("backend") if isinstance(metadata.get("backend"), dict) else {}
+        provider = str(backend.get("provider") or "").strip().lower()
+        model = str(backend.get("model") or "").strip()
+        backend_type = str(backend.get("backend_type") or "").strip() or "cloud_api"
+        if not provider or not model:
+            return None
+        params_raw = backend.get("params") if isinstance(backend.get("params"), dict) else {}
+        allowed_param_keys = set(getattr(BackendParams, "model_fields", {}).keys())
+        params_filtered = {key: params_raw.get(key) for key in params_raw.keys() if key in allowed_param_keys}
+        payload: Dict[str, Any] = {
+            "type": backend_type,
+            "provider": provider,
+            "model": model,
+            "api_key_ref": str(backend.get("credential_ref") or "").strip() or None,
+        }
+        if params_filtered:
+            payload["params"] = params_filtered
+        try:
+            return BackendConfig.model_validate(payload)
+        except Exception:
+            return None
+
+    def _build_platform_brain_messages(
+        self,
+        *,
+        session: Dict[str, Any],
+        operator_message: str,
+        recent_messages: List[Dict[str, Any]],
+    ) -> List[Dict[str, str]]:
+        metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
+        runtime_state = metadata.get("runtime_state") if isinstance(metadata.get("runtime_state"), dict) else {}
+        status_counts = runtime_state.get("status_counts") if isinstance(runtime_state.get("status_counts"), dict) else {}
+        transcript_lines: List[str] = []
+        for row in recent_messages[-14:]:
+            role = str(row.get("role") or "").strip().lower() or "operator"
+            content = str(row.get("content") or "").strip()
+            if not content:
+                continue
+            transcript_lines.append(f"{role}: {content[:1200]}")
+        transcript = "\n".join(transcript_lines[-12:])
+        mode = str(session.get("mode") or "").strip().lower()
+        status = str(session.get("status") or "").strip().lower()
+        session_scope = {
+            "mode": mode,
+            "status": status,
+            "pipeline_bot_id": str(metadata.get("pipeline_bot_id") or "").strip() or None,
+            "target_bot_id": str(metadata.get("target_bot_id") or "").strip() or None,
+            "project_id": str(metadata.get("project_id") or "").strip() or None,
+            "conversation_id": str(metadata.get("conversation_id") or "").strip() or None,
+            "orchestration_id": str(session.get("orchestration_id") or "").strip() or None,
+            "runtime_status_counts": status_counts,
+        }
+        system_prompt = (
+            "You are Platform AI, an autonomous operator for NexusAI sessions. "
+            "Session mode decides scope: bot_tuner edits only target_bot_id, pipeline_tuner edits only pipeline graph bots. "
+            "Keep responses concise and actionable. "
+            "If a concrete tool action is needed, return JSON with actions using `platform_ai_action` values. "
+            "Allowed actions include upsert_bot, upsert_bots, delete_bot, set_pipeline_target, launch_pipeline, "
+            "project_code_edit, repo_edit, external_repo_edit, deploy. "
+            "Never produce actions outside scope."
+        )
+        user_prompt = (
+            f"Session scope:\n{json.dumps(session_scope, ensure_ascii=False)}\n\n"
+            f"Conversation excerpt:\n{transcript}\n\n"
+            f"Latest operator message:\n{operator_message[:6000]}\n\n"
+            "Respond with JSON only. Schema:\n"
+            "{\"assistant_reply\":\"...\", \"actions\":[...]}.\n"
+            "Use an empty actions array when no immediate action is required."
+        )
+        return [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+
+    def _parse_platform_brain_output(self, raw_output: str) -> Dict[str, Any]:
+        text = str(raw_output or "").strip()
+        reply = text
+        actions: List[Dict[str, Any]] = []
+        chunks = _extract_json_chunks(text)
+        for chunk in chunks:
+            if not isinstance(chunk, dict):
+                continue
+            parsed_reply = str(
+                chunk.get("assistant_reply")
+                or chunk.get("reply")
+                or chunk.get("message")
+                or ""
+            ).strip()
+            parsed_actions = chunk.get("actions") if isinstance(chunk.get("actions"), list) else []
+            clean_actions = [item for item in parsed_actions if isinstance(item, dict)]
+            if parsed_reply:
+                reply = parsed_reply
+            if clean_actions:
+                actions = clean_actions
+            if parsed_reply or clean_actions:
+                break
+        return {"assistant_reply": reply[:12000], "actions": actions}
+
+    async def _invoke_platform_brain(
+        self,
+        session_id: str,
+        *,
+        session: Dict[str, Any],
+        operator_message: str,
+        recent_messages: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        if self._scheduler is None:
+            return {"ok": False, "skipped": "scheduler_unavailable"}
+        backend = self._platform_backend_from_session(session)
+        if backend is None:
+            return {"ok": False, "skipped": "session_backend_unconfigured"}
+        messages = self._build_platform_brain_messages(
+            session=session,
+            operator_message=operator_message,
+            recent_messages=recent_messages,
+        )
+        metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
+        payload: Any = messages
+        if str(backend.provider or "").strip().lower() == "vertex":
+            payload = {
+                "messages": messages,
+                "vertex_project_id": str(
+                    (metadata.get("backend") or {}).get("vertex_project_id")
+                    if isinstance(metadata.get("backend"), dict)
+                    else ""
+                ).strip()
+                or None,
+                "vertex_location": str(
+                    (metadata.get("backend") or {}).get("vertex_location")
+                    if isinstance(metadata.get("backend"), dict)
+                    else ""
+                ).strip()
+                or None,
+            }
+        try:
+            raw = await self._scheduler._dispatch_backend(backend, payload, task=None)
+            output = ""
+            usage: Dict[str, Any] = {}
+            if isinstance(raw, dict):
+                output = str(raw.get("output") or raw.get("content") or "").strip()
+                usage = raw.get("usage") if isinstance(raw.get("usage"), dict) else {}
+            else:
+                output = str(raw or "").strip()
+            parsed = self._parse_platform_brain_output(output)
+            await self._store.append_event(
+                session_id,
+                "action_trace",
+                {
+                    "action": "platform_brain_invoked",
+                    "provider": str(backend.provider or ""),
+                    "model": str(backend.model or ""),
+                    "backend_type": str(backend.type or ""),
+                    "usage": usage,
+                    "output_preview": output[:400],
+                },
+            )
+            return {"ok": True, "reply": parsed.get("assistant_reply"), "actions": parsed.get("actions") or []}
+        except Exception as exc:
+            await self._store.append_event(
+                session_id,
+                "action_trace",
+                {
+                    "action": "platform_brain_error",
+                    "detail": str(exc),
+                    "provider": str(backend.provider or ""),
+                    "model": str(backend.model or ""),
+                },
+            )
+            return {"ok": False, "error": str(exc)}
 
     async def _create_action_record(
         self,
@@ -1913,22 +2087,67 @@ class PlatformAISessionRuntime:
                     "tuning_goal_preview": brief.get("tuning_goal", "")[:240],
                 },
             )
+            applied_actions: List[Dict[str, Any]] = []
             directive_result = await self._apply_operator_directives(
                 session_id,
                 session=session or {},
                 content=content,
             )
             actions = directive_result.get("actions") if isinstance(directive_result, dict) else []
-            if isinstance(actions, list) and actions:
-                action_names = ", ".join(str(item.get("action") or "action") for item in actions[:6] if isinstance(item, dict))
+            if isinstance(actions, list):
+                applied_actions.extend([item for item in actions if isinstance(item, dict)])
+
+            brain_result = await self._invoke_platform_brain(
+                session_id,
+                session=session or {},
+                operator_message=content,
+                recent_messages=messages,
+            )
+            if bool(brain_result.get("ok")):
+                brain_reply = str(brain_result.get("reply") or "").strip()
+                if brain_reply:
+                    await self._store.append_message(
+                        session_id,
+                        role="assistant",
+                        content=brain_reply,
+                        metadata={
+                            "source": "platform_brain",
+                            "operator_message_id": mid,
+                        },
+                    )
+                brain_actions = brain_result.get("actions") if isinstance(brain_result.get("actions"), list) else []
+                clean_brain_actions = [item for item in brain_actions if isinstance(item, dict)]
+                if clean_brain_actions:
+                    brain_directive_result = await self._apply_operator_directives(
+                        session_id,
+                        session=session or {},
+                        content=json.dumps({"actions": clean_brain_actions}, ensure_ascii=False),
+                    )
+                    model_actions = brain_directive_result.get("actions") if isinstance(brain_directive_result, dict) else []
+                    if isinstance(model_actions, list):
+                        applied_actions.extend([item for item in model_actions if isinstance(item, dict)])
+                    await self._store.append_event(
+                        session_id,
+                        "action_trace",
+                        {
+                            "action": "platform_brain_actions_applied",
+                            "message_id": mid,
+                            "requested_count": len(clean_brain_actions),
+                            "applied_count": len(model_actions or []),
+                            "applied_actions": [item.get("action") for item in model_actions or [] if isinstance(item, dict)],
+                        },
+                    )
+
+            if applied_actions:
+                action_names = ", ".join(str(item.get("action") or "action") for item in applied_actions[:6] if isinstance(item, dict))
                 await self._store.append_event(
                     session_id,
                     "action_trace",
                     {
                         "action": "operator_directives_applied",
                         "message_id": mid,
-                        "applied_count": len(actions),
-                        "applied_actions": [item.get("action") for item in actions if isinstance(item, dict)],
+                        "applied_count": len(applied_actions),
+                        "applied_actions": [item.get("action") for item in applied_actions if isinstance(item, dict)],
                     },
                 )
                 await self._store.append_message(
@@ -3004,6 +3223,55 @@ class PlatformAISessionRuntime:
             content=summary,
             metadata={"source": "autonomous_tuner", "suite_run_id": (final_run or {}).get("id")},
         )
+        recent_messages = await self._store.list_messages(session_id, limit=120)
+        brain_prompt = (
+            "Autonomous tuning iteration decision point.\n"
+            f"Pipeline: {pipeline_name or pipeline_bot_id}\n"
+            f"Orchestration: {orchestration_id}\n"
+            f"Evaluation status: {eval_status}\n"
+            f"Evaluation score: {eval_score:.3f} (target {target_score:.3f})\n"
+            f"Consecutive passes: {consecutive_passes}/3\n"
+            f"Failed checks: {', '.join(str(item.get('id') or item.get('name') or 'test') for item in failed_tests[:6]) or 'none'}\n"
+            "Decide whether to emit actionable directives to improve the pipeline."
+        )
+        brain_result = await self._invoke_platform_brain(
+            session_id,
+            session=session,
+            operator_message=brain_prompt,
+            recent_messages=recent_messages,
+        )
+        if bool(brain_result.get("ok")):
+            brain_reply = str(brain_result.get("reply") or "").strip()
+            if brain_reply:
+                await self._store.append_message(
+                    session_id,
+                    role="assistant",
+                    content=brain_reply[:4000],
+                    metadata={
+                        "source": "platform_brain_autonomous",
+                        "suite_run_id": (final_run or {}).get("id"),
+                    },
+                )
+            model_actions = brain_result.get("actions") if isinstance(brain_result.get("actions"), list) else []
+            clean_model_actions = [item for item in model_actions if isinstance(item, dict)]
+            if clean_model_actions:
+                model_directive_result = await self._apply_operator_directives(
+                    session_id,
+                    session=session,
+                    content=json.dumps({"actions": clean_model_actions}, ensure_ascii=False),
+                )
+                applied = model_directive_result.get("actions") if isinstance(model_directive_result, dict) else []
+                await self._store.append_event(
+                    session_id,
+                    "action_trace",
+                    {
+                        "action": "platform_brain_autonomous_actions_applied",
+                        "suite_run_id": (final_run or {}).get("id"),
+                        "requested_count": len(clean_model_actions),
+                        "applied_count": len(applied or []),
+                        "applied_actions": [item.get("action") for item in applied or [] if isinstance(item, dict)],
+                    },
+                )
 
         if not passed_target:
             _existing_prompt_preview = ""

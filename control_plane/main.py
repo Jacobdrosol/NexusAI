@@ -138,6 +138,7 @@ async def lifespan(app: FastAPI):
         run_store=orchestration_run_store,
         task_manager=task_manager,
         bot_registry=bot_registry,
+        scheduler=scheduler,
     )
     agent_schedule_engine = AgentScheduleEngine(
         assignment_service=assignment_service,

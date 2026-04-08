@@ -7,7 +7,7 @@ import os
 import re
 import time
 from pathlib import Path, PurePosixPath
-from typing import Any, AsyncGenerator, Dict
+from typing import Any, AsyncGenerator, Dict, Optional
 
 import httpx
 from cryptography.hazmat.primitives import hashes, serialization
@@ -2992,24 +2992,36 @@ class Scheduler:
             raise BackendError("Vertex credential must be a service-account JSON string or path to a JSON file")
 
         access_token = await self._vertex_access_token(service_account)
+        payload_messages: Any = payload
+        payload_project_id: Optional[str] = None
+        payload_location: Optional[str] = None
+        if isinstance(payload, dict):
+            payload_messages = payload.get("messages")
+            payload_project_id = str(payload.get("vertex_project_id") or "").strip() or None
+            payload_location = str(payload.get("vertex_location") or "").strip() or None
+
         project_id = (
             str(service_account.get("project_id") or "").strip()
             or str(os.environ.get("VERTEX_PROJECT_ID", "") or "").strip()
         )
-        if isinstance(payload, dict):
-            project_id = str(payload.get("vertex_project_id") or project_id).strip()
+        if payload_project_id:
+            project_id = payload_project_id
         if not project_id:
             raise BackendError("Vertex project_id is required (service-account project_id or VERTEX_PROJECT_ID)")
 
         location = str(os.environ.get("VERTEX_LOCATION", "us-central1") or "us-central1").strip()
-        if isinstance(payload, dict):
-            location = str(payload.get("vertex_location") or location).strip() or "us-central1"
+        if payload_location:
+            location = payload_location
+        location = str(location or "us-central1").strip() or "us-central1"
 
         model_ref = str(backend.model or "").strip()
         if not model_ref:
             raise BackendError("Vertex backend model is required")
 
-        messages = payload if isinstance(payload, list) else [{"role": "user", "content": str(payload)}]
+        if isinstance(payload_messages, list):
+            messages = payload_messages
+        else:
+            messages = [{"role": "user", "content": str(payload_messages if payload_messages is not None else payload)}]
         params_dict = backend.params.model_dump(exclude_none=True) if backend.params else {}
         anthropic_model = _vertex_anthropic_model_ref(model_ref)
         body: Dict[str, Any]
