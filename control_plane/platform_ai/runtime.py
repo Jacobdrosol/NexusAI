@@ -861,6 +861,10 @@ class PlatformAISessionRuntime:
                     "output_preview": output[:400],
                 },
             )
+            await self._store.update_session(
+                session_id,
+                metadata={"autonomous_last_brain_error": None},
+            )
             return {"ok": True, "reply": parsed.get("assistant_reply"), "actions": parsed.get("actions") or []}
         except Exception as exc:
             backend_meta = metadata.get("backend") if isinstance(metadata.get("backend"), dict) else {}
@@ -880,6 +884,10 @@ class PlatformAISessionRuntime:
                     "provider": str(backend.provider or ""),
                     "model": str(backend.model or ""),
                 },
+            )
+            await self._store.update_session(
+                session_id,
+                metadata={"autonomous_last_brain_error": str(exc)},
             )
             return {"ok": False, "error": str(exc), "hint": hint}
 
@@ -997,6 +1005,20 @@ class PlatformAISessionRuntime:
     ) -> None:
         metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
         mode = str(session.get("mode") or "").strip().lower()
+        if (
+            mode == "pipeline_tuner"
+            and self._require_platform_brain_for_autonomy()
+            and str(metadata.get("autonomous_last_brain_error") or "").strip()
+        ):
+            await self._halt_session(
+                session_id,
+                reason="platform_brain_unavailable",
+                message=(
+                    "No-progress safeguard detected while Platform brain backend is unavailable. "
+                    "Session moved to ready to avoid blind rerun loops. Fix backend configuration and resume."
+                ),
+            )
+            return
         replan_count = int(metadata.get("autonomous_replan_count") or 0) + 1
         await self._store.update_session(
             session_id,
@@ -2026,6 +2048,11 @@ class PlatformAISessionRuntime:
                 )
                 await self._run_autonomous_pipeline_tuner(session_id, session=session, snapshot=snapshot)
                 session = await self._store.get_session(session_id) or session
+                if str(session.get("status") or "").strip().lower() != "running":
+                    # Runtime transitioned to ready/stopped during autonomous step;
+                    # skip further evaluation/replan logic in this tick.
+                    await asyncio.sleep(0.2)
+                    continue
                 if await self._finalize_autonomous_session_if_terminal(session_id, session=session, snapshot=snapshot):
                     continue
 

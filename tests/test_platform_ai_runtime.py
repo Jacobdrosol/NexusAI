@@ -384,6 +384,93 @@ async def test_autonomous_tuner_pauses_when_platform_brain_unavailable(tmp_path,
     assert str(metadata.get("checkpoint_reason") or "") == "platform_brain_unavailable"
     assert launch_calls["count"] == 0
 
+
+@pytest.mark.anyio
+async def test_handle_stall_without_halt_checkpoints_ready_when_brain_unavailable(tmp_path, monkeypatch):
+    store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+    runtime = PlatformAISessionRuntime(store)
+    session = await store.create_session(
+        mode="pipeline_tuner",
+        status="running",
+        metadata={
+            "autonomous_enabled": True,
+            "pipeline_bot_id": "pm-orchestrator",
+            "autonomous_last_brain_error": "vertex 404",
+        },
+        orchestration_id="orch-1",
+    )
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_REQUIRE_BRAIN_FOR_AUTONOMY", "1")
+    await runtime._handle_stall_without_halt(
+        session["id"],
+        session=session,
+        snapshot={"orchestration_id": "orch-1", "runtime_state": {"task_total": 1}, "status_counts": {"failed": 1}},
+        reason="stalled_duplicate_actions",
+    )
+    updated = await store.get_session(session["id"])
+    assert str((updated or {}).get("status") or "") == "ready"
+    events = await store.list_events(session["id"], limit=100)
+    actions = [str((row.get("payload") or {}).get("action") or "") for row in events if isinstance(row, dict)]
+    assert "session_checkpoint_ready" in actions
+    assert "autonomous_replan" not in actions
+
+
+@pytest.mark.anyio
+async def test_session_loop_skips_stall_logic_after_autonomous_step_moves_ready(tmp_path):
+    store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+    runtime = PlatformAISessionRuntime(store)
+    session = await store.create_session(
+        mode="pipeline_tuner",
+        status="running",
+        metadata={"autonomous_enabled": True, "pipeline_bot_id": "pm-orchestrator"},
+        orchestration_id="orch-1",
+    )
+
+    check_calls = {"count": 0}
+
+    async def fake_process(_sid):  # noqa: ANN001
+        return None
+
+    async def fake_snapshot(_session):  # noqa: ANN001
+        return {
+            "tick": 1,
+            "phase": "evaluate",
+            "active_action": "terminal_failure_detected",
+            "detail": "terminal failure",
+            "heartbeat_detail": "terminal failure",
+            "signature": "sig-1",
+            "orchestration_id": "orch-1",
+            "status_counts": {"failed": 1},
+            "active_tasks": [],
+            "runtime_state": {"orchestration_id": "orch-1", "task_total": 1, "status_counts": {"failed": 1}, "active_tasks": []},
+        }
+
+    async def fake_run_tuner(session_id, *, session, snapshot):  # noqa: ANN001
+        _ = (session, snapshot)
+        await store.update_session(session_id, status="ready", metadata={"checkpoint_reason": "platform_brain_unavailable"})
+
+    async def fake_finalize(**kwargs):  # noqa: ANN001
+        _ = kwargs
+        return None
+
+    async def fake_check(_sid, **kwargs):  # noqa: ANN001
+        _ = kwargs
+        check_calls["count"] += 1
+        return "stalled_duplicate_actions"
+
+    runtime._process_operator_messages = fake_process  # type: ignore[method-assign]
+    runtime._build_progress_snapshot = fake_snapshot  # type: ignore[method-assign]
+    runtime._run_autonomous_pipeline_tuner = fake_run_tuner  # type: ignore[method-assign]
+    runtime._finalize_autonomous_session_if_terminal = fake_finalize  # type: ignore[method-assign]
+    runtime._check_should_halt_as_stalled = fake_check  # type: ignore[method-assign]
+
+    loop_task = asyncio.create_task(runtime._session_loop(session["id"]))
+    await asyncio.sleep(0.25)
+    loop_task.cancel()
+    with suppress(asyncio.CancelledError):
+        await loop_task
+
+    assert check_calls["count"] == 0
+
 @pytest.mark.anyio
 async def test_repo_edit_runner_executes_command_and_reports_terminal_event(tmp_path, monkeypatch):
     store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
