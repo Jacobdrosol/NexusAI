@@ -2188,6 +2188,294 @@ async def test_chat_workspace_tools_blocked_when_chat_switch_off(cp_app, tmp_pat
 
 
 @pytest.mark.anyio
+async def test_post_message_inline_code_uses_task_manager_temp_workspace(cp_app, tmp_path, monkeypatch):
+    from control_plane.api import chat as chat_module
+    from shared.models import Task, TaskMetadata
+
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "scheduler fallback"})
+    workspace_root = tmp_path / "workspace-inline-post"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    temp_root = tmp_path / "workspace-inline-post-temp"
+    temp_root.mkdir(parents=True, exist_ok=True)
+
+    created_task = Task(
+        id="inline-task-post",
+        bot_id="bot-inline-post",
+        payload=[],
+        metadata=TaskMetadata(source="chat_assign"),
+        status="queued",
+        created_at="2026-01-01T00:00:00Z",
+        updated_at="2026-01-01T00:00:00Z",
+    )
+    terminal_task = created_task.model_copy(
+        update={
+            "status": "completed",
+            "result": {"output": "Inline coding complete."},
+            "updated_at": "2026-01-01T00:00:02Z",
+        }
+    )
+    cp_app.state.task_manager.create_task = AsyncMock(return_value=created_task)
+
+    async def _fake_prepare(**_kwargs):
+        return {"temp_root": str(temp_root), "repo_root": str(workspace_root)}
+
+    async def _fake_wait(_task_manager, *, task_id: str, max_wait_seconds: float = 1800.0):
+        assert task_id == "inline-task-post"
+        return terminal_task
+
+    async def _fake_collect(_temp_root):
+        return (
+            [
+                {
+                    "kind": "file",
+                    "label": "README.md",
+                    "path": "README.md",
+                    "content": "updated",
+                    "status": "updated",
+                    "source": "inline_temp_workspace",
+                    "truncated": False,
+                }
+            ],
+            ["README.md"],
+            [],
+        )
+
+    async def _fake_persist(_task_manager, *, task: Task, result: dict):
+        return task.model_copy(update={"result": result, "updated_at": "2026-01-01T00:00:03Z"})
+
+    monkeypatch.setattr(chat_module, "_inline_code_prepare_temp_workspace", _fake_prepare)
+    monkeypatch.setattr(chat_module, "_inline_code_wait_for_task", _fake_wait)
+    monkeypatch.setattr(chat_module, "_inline_code_collect_workspace_artifacts", _fake_collect)
+    monkeypatch.setattr(chat_module, "_inline_code_persist_result_without_trigger_dispatch", _fake_persist)
+
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-inline-post"
+        create_project = await client.post(
+            "/v1/projects",
+            json={
+                "id": project_id,
+                "name": "Inline Post",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "filesystem": True,
+                        "repo_search": False,
+                        "workspace_root": str(workspace_root),
+                    }
+                },
+            },
+        )
+        assert create_project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Inline Post Chat",
+                "project_id": project_id,
+                "tool_access_enabled": True,
+                "tool_access_filesystem": True,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        bot = await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-inline-post",
+                "name": "Inline Post Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "execution_policy": {
+                    "workspace_context_injection": True,
+                    "repo_output_mode": "allow",
+                },
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "filesystem": True,
+                        "repo_search": False,
+                    }
+                },
+            },
+        )
+        assert bot.status_code == 200
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": "please code this: update README",
+                "bot_id": "bot-inline-post",
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assistant = body["assistant_message"]
+        assert assistant["metadata"]["mode"] == "pm_run_report"
+        assert assistant["metadata"]["run_status"] == "passed"
+        assert assistant["metadata"]["inline_code"] is True
+        assert assistant["metadata"]["orchestration_id"]
+        assert "Files touched in temp workspace:" in assistant["content"]
+        assert "README.md" in assistant["content"]
+
+    assert cp_app.state.scheduler.schedule.await_count == 0
+    cp_app.state.task_manager.create_task.assert_awaited_once()
+    create_kwargs = cp_app.state.task_manager.create_task.await_args.kwargs
+    assert create_kwargs["metadata"].source == "chat_assign"
+    assert create_kwargs["metadata"].orchestration_id == assistant["metadata"]["orchestration_id"]
+    payload = create_kwargs["payload"]
+    assert any(isinstance(item, dict) and str(item.get("_workspace_root") or "") == str(temp_root) for item in payload)
+
+
+@pytest.mark.anyio
+async def test_stream_message_inline_code_uses_task_manager_temp_workspace(cp_app, tmp_path, monkeypatch):
+    from control_plane.api import chat as chat_module
+    from shared.models import Task, TaskMetadata
+
+    workspace_root = tmp_path / "workspace-inline-stream"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    temp_root = tmp_path / "workspace-inline-stream-temp"
+    temp_root.mkdir(parents=True, exist_ok=True)
+
+    created_task = Task(
+        id="inline-task-stream",
+        bot_id="bot-inline-stream",
+        payload=[],
+        metadata=TaskMetadata(source="chat_assign"),
+        status="queued",
+        created_at="2026-01-01T00:00:00Z",
+        updated_at="2026-01-01T00:00:00Z",
+    )
+    running_task = created_task.model_copy(update={"status": "running", "updated_at": "2026-01-01T00:00:01Z"})
+    completed_task = created_task.model_copy(
+        update={
+            "status": "completed",
+            "result": {"output": "Inline stream coding complete."},
+            "updated_at": "2026-01-01T00:00:02Z",
+        }
+    )
+    cp_app.state.task_manager.create_task = AsyncMock(return_value=created_task)
+    cp_app.state.task_manager.get_task = AsyncMock(side_effect=[running_task, completed_task])
+
+    async def _fake_prepare(**_kwargs):
+        return {"temp_root": str(temp_root), "repo_root": str(workspace_root)}
+
+    async def _fake_collect(_temp_root):
+        return (
+            [
+                {
+                    "kind": "file",
+                    "label": "src/app.ts",
+                    "path": "src/app.ts",
+                    "content": "console.log('ok');",
+                    "status": "updated",
+                    "source": "inline_temp_workspace",
+                    "truncated": False,
+                }
+            ],
+            ["src/app.ts"],
+            [],
+        )
+
+    async def _fake_persist(_task_manager, *, task: Task, result: dict):
+        return task.model_copy(update={"result": result, "updated_at": "2026-01-01T00:00:03Z"})
+
+    monkeypatch.setattr(chat_module, "_inline_code_prepare_temp_workspace", _fake_prepare)
+    monkeypatch.setattr(chat_module, "_inline_code_collect_workspace_artifacts", _fake_collect)
+    monkeypatch.setattr(chat_module, "_inline_code_persist_result_without_trigger_dispatch", _fake_persist)
+
+    async def _unexpected_stream(_task):
+        raise AssertionError("scheduler.stream should not run for inline coding mode")
+        yield  # pragma: no cover
+
+    cp_app.state.scheduler.stream = _unexpected_stream
+
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-inline-stream"
+        create_project = await client.post(
+            "/v1/projects",
+            json={
+                "id": project_id,
+                "name": "Inline Stream",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "filesystem": True,
+                        "repo_search": False,
+                        "workspace_root": str(workspace_root),
+                    }
+                },
+            },
+        )
+        assert create_project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Inline Stream Chat",
+                "project_id": project_id,
+                "tool_access_enabled": True,
+                "tool_access_filesystem": True,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        bot = await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-inline-stream",
+                "name": "Inline Stream Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "execution_policy": {
+                    "workspace_context_injection": True,
+                    "repo_output_mode": "allow",
+                },
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "filesystem": True,
+                        "repo_search": False,
+                    }
+                },
+            },
+        )
+        assert bot.status_code == 200
+
+        stream_resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/stream",
+            json={
+                "content": "please implement this in the project",
+                "bot_id": "bot-inline-stream",
+            },
+        )
+        assert stream_resp.status_code == 200
+        assert "Preparing temp workspace for inline coding" in stream_resp.text
+        assert "event: assistant_message" in stream_resp.text
+        assert "event: done" in stream_resp.text
+
+        messages_resp = await client.get(f"/v1/chat/conversations/{conversation_id}/messages")
+        assert messages_resp.status_code == 200
+        messages = messages_resp.json()
+        assert len(messages) == 2
+        assistant = messages[-1]
+        assert assistant["metadata"]["mode"] == "pm_run_report"
+        assert assistant["metadata"]["run_status"] == "passed"
+        assert assistant["metadata"]["inline_code"] is True
+        assert "src/app.ts" in str(assistant["metadata"]["files_touched"])
+
+    cp_app.state.task_manager.create_task.assert_awaited_once()
+    assert cp_app.state.task_manager.get_task.await_count >= 1
+    create_kwargs = cp_app.state.task_manager.create_task.await_args.kwargs
+    assert create_kwargs["metadata"].source == "chat_assign"
+    payload = create_kwargs["payload"]
+    assert any(isinstance(item, dict) and str(item.get("_workspace_root") or "") == str(temp_root) for item in payload)
+
+
+@pytest.mark.anyio
 async def test_stream_message_emits_context_summary_event_when_repo_context_loaded(cp_app):
     async def _stream(_task):
         yield {"event": "backend_selected", "provider": "ollama", "model": "llama3.1:8b", "worker_id": "w1"}

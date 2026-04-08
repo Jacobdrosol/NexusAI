@@ -1,12 +1,14 @@
 import asyncio
 from collections import Counter
 import base64
+from datetime import datetime, timezone
 import json
 import logging
 import os
 from pathlib import Path
 import re
-from typing import Any, AsyncGenerator, Dict, List, Literal, Optional
+from typing import Any, AsyncGenerator, Dict, List, Literal, Optional, Tuple
+import uuid
 
 logger = logging.getLogger(__name__)
 
@@ -1393,6 +1395,253 @@ def _inject_inline_workspace_marker(payload: List[dict], *, workspace_root: str)
     return marked
 
 
+def _inline_code_requires_project_message() -> str:
+    return (
+        "Inline coding mode requires a project-scoped conversation with repo workspace enabled.\n\n"
+        "Create this chat under a project, then retry the same message."
+    )
+
+
+def _inline_code_bot_policy_message() -> str:
+    return (
+        "Inline coding mode requires bot execution policy support for writable workspace tools.\n\n"
+        "Set both values on the selected bot and retry:\n"
+        "1. execution_policy.workspace_context_injection = true\n"
+        "2. execution_policy.repo_output_mode = allow"
+    )
+
+
+def _inline_code_terminal_error_message(task: Task) -> str:
+    error_text = ""
+    if task.error is not None:
+        error_text = str(task.error.message or "").strip()
+    if not error_text:
+        error_text = "Inline coding task failed before a result was produced."
+    return f"Inline coding run failed.\n\n{error_text}"
+
+
+def _inline_code_merge_paths(*path_sets: List[str]) -> List[str]:
+    merged: List[str] = []
+    seen: set[str] = set()
+    for group in path_sets:
+        for raw_path in group:
+            normalized = str(raw_path or "").strip().replace("\\", "/")
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            merged.append(normalized)
+    return merged
+
+
+def _inline_code_read_file_text(path: Path, *, max_bytes: int = 500_000, max_chars: int = 160_000) -> Tuple[str, bool] | None:
+    try:
+        data = path.read_bytes()
+    except Exception:
+        return None
+    if b"\x00" in data:
+        return None
+    if len(data) > max_bytes:
+        data = data[:max_bytes]
+    text = data.decode("utf-8", errors="replace")
+    truncated = len(text) > max_chars
+    if truncated:
+        text = text[:max_chars]
+    return text, truncated
+
+
+async def _inline_code_collect_workspace_artifacts(temp_root: Path) -> tuple[List[Dict[str, Any]], List[str], List[str]]:
+    from control_plane.api.projects import _decode_git_porcelain_path, _run_repo_command
+
+    status = await _run_repo_command(
+        ["git", "status", "--porcelain", "--untracked-files=all"],
+        cwd=temp_root,
+        timeout_seconds=20,
+    )
+    if not bool(status.get("ok")):
+        return [], [], []
+
+    lines = [str(line).rstrip("\n\r") for line in str(status.get("stdout") or "").splitlines() if str(line).strip()]
+    changed_codes: Dict[str, str] = {}
+    deleted_paths: List[str] = []
+    for line in lines:
+        if line.startswith("##") or len(line) < 4:
+            continue
+        code = line[:2]
+        raw_path = line[3:].strip()
+        if not raw_path:
+            continue
+        if " -> " in raw_path:
+            raw_path = raw_path.split(" -> ", 1)[1].strip()
+        normalized = _decode_git_porcelain_path(raw_path).strip().replace("\\", "/").lstrip("./")
+        if not normalized or normalized.startswith(".git/"):
+            continue
+        if "D" in code and not code.startswith("??"):
+            deleted_paths.append(normalized)
+            continue
+        changed_codes[normalized] = code
+
+    artifacts: List[Dict[str, Any]] = []
+    files_touched: List[str] = []
+    for relative_path, code in sorted(changed_codes.items()):
+        target = (temp_root / relative_path).resolve(strict=False)
+        if not target.exists() or not target.is_file():
+            continue
+        read_result = _inline_code_read_file_text(target)
+        if read_result is None:
+            continue
+        content, truncated = read_result
+        if not content and target.stat().st_size > 0:
+            continue
+        status_label = "changed"
+        if code.startswith("??") or "A" in code:
+            status_label = "created"
+        elif any(flag in code for flag in ("M", "R", "C")):
+            status_label = "updated"
+        artifacts.append(
+            {
+                "kind": "file",
+                "label": relative_path,
+                "path": relative_path,
+                "content": content,
+                "status": status_label,
+                "source": "inline_temp_workspace",
+                "truncated": truncated,
+            }
+        )
+        files_touched.append(relative_path)
+    return artifacts, files_touched, _inline_code_merge_paths(deleted_paths)
+
+
+def _inline_code_normalize_task_result(
+    *,
+    result: Any,
+    artifacts: List[Dict[str, Any]],
+    files_touched: List[str],
+    deleted_paths: List[str],
+    workspace_entry: Dict[str, Any] | None,
+) -> Dict[str, Any]:
+    if isinstance(result, dict):
+        normalized: Dict[str, Any] = dict(result)
+    else:
+        normalized = {"output": _extract_task_output(result)}
+
+    existing_artifacts = normalized.get("artifacts")
+    merged_artifacts: List[Dict[str, Any]] = [item for item in existing_artifacts if isinstance(item, dict)] if isinstance(existing_artifacts, list) else []
+    existing_paths = {str(item.get("path") or "").strip().replace("\\", "/") for item in merged_artifacts}
+    for item in artifacts:
+        path = str(item.get("path") or "").strip().replace("\\", "/")
+        if not path or path in existing_paths:
+            continue
+        existing_paths.add(path)
+        merged_artifacts.append(item)
+    if merged_artifacts:
+        normalized["artifacts"] = merged_artifacts
+
+    merged_paths = _inline_code_merge_paths(
+        [str(path) for path in (normalized.get("files_touched") or []) if str(path).strip()] if isinstance(normalized.get("files_touched"), list) else [],
+        files_touched,
+    )
+    if merged_paths:
+        normalized["files_touched"] = merged_paths
+    if merged_paths and not normalized.get("change_summary"):
+        normalized["change_summary"] = [f"Updated {len(merged_paths)} file(s) in temp workspace: {', '.join(merged_paths[:8])}"]
+    if deleted_paths:
+        deleted_note = (
+            "Deleted files in temp workspace are not auto-applied by artifact replay: "
+            + ", ".join(deleted_paths[:8])
+            + "."
+        )
+        handoff = str(normalized.get("handoff_notes") or "").strip()
+        normalized["handoff_notes"] = f"{handoff}\n{deleted_note}".strip() if handoff else deleted_note
+    if workspace_entry:
+        normalized["assignment_workspace"] = workspace_entry
+    return normalized
+
+
+async def _inline_code_wait_for_task(task_manager: Any, *, task_id: str, max_wait_seconds: float = 1800.0) -> Task:
+    deadline = asyncio.get_event_loop().time() + max(1.0, float(max_wait_seconds))
+    while True:
+        task = await task_manager.get_task(task_id)
+        if str(task.status or "").strip().lower() in {"completed", "failed", "cancelled", "retried"}:
+            return task
+        if asyncio.get_event_loop().time() >= deadline:
+            raise HTTPException(status_code=504, detail="inline coding task timed out")
+        await asyncio.sleep(0.25)
+
+
+async def _inline_code_persist_result_without_trigger_dispatch(task_manager: Any, *, task: Task, result: Dict[str, Any]) -> Task:
+    now = datetime.now(timezone.utc).isoformat()
+    updated = task.model_copy(update={"result": result, "updated_at": now})
+    lock = getattr(task_manager, "_lock", None)
+    tasks_map = getattr(task_manager, "_tasks", None)
+    if lock is not None and isinstance(tasks_map, dict):
+        async with lock:
+            if task.id in tasks_map:
+                tasks_map[task.id] = updated
+    await task_manager._persist_task(updated)
+    await task_manager._upsert_bot_run(updated)
+    await task_manager._record_artifacts_for_task(updated)
+    return updated
+
+
+async def _inline_code_prepare_temp_workspace(
+    *,
+    request: Request,
+    project_id: str,
+    orchestration_id: str,
+) -> Dict[str, Any]:
+    from control_plane.api.projects import _ensure_orchestration_temp_workspace
+
+    project_registry = getattr(request.app.state, "project_registry", None)
+    if project_registry is None:
+        raise HTTPException(status_code=500, detail="project registry unavailable for inline coding")
+    workspace_entry = await _ensure_orchestration_temp_workspace(
+        project_id=project_id,
+        orchestration_id=orchestration_id,
+        project_registry=project_registry,
+        workspace_store=getattr(request.app.state, "orchestration_workspace_store", None),
+        strict=True,
+    )
+    if workspace_entry is None:
+        raise HTTPException(status_code=409, detail="inline coding temp workspace is unavailable")
+    temp_root = Path(str(workspace_entry.get("temp_root") or "").strip())
+    if not str(temp_root).strip() or not temp_root.exists():
+        raise HTTPException(status_code=409, detail="inline coding temp workspace path does not exist")
+    return workspace_entry
+
+
+def _inline_code_assistant_metadata(
+    *,
+    orchestration_id: str,
+    task: Task,
+    run_status: str,
+    files_touched: List[str],
+) -> Dict[str, Any]:
+    passed = str(run_status).strip().lower() == "passed"
+    return {
+        "mode": "pm_run_report",
+        "orchestration_id": orchestration_id,
+        "task_count": 1,
+        "completed": 1 if passed else 0,
+        "failed": 0 if passed else 1,
+        "run_status": "passed" if passed else "failed",
+        "ingest_allowed": passed,
+        "workflow_complete": passed,
+        "final_qc_required": False,
+        "final_qc_completed": passed,
+        "deliverables_complete": bool(files_touched),
+        "missing_deliverables": [],
+        "missing_stages": [],
+        "skipped_stages": [],
+        "intentionally_excluded_stages": [],
+        "intentionally_skipped_stages": [],
+        "workflow_policy_codes": [],
+        "failed_task_summaries": [] if passed else [_inline_code_terminal_error_message(task)],
+        "inline_code": True,
+        "files_touched": files_touched,
+    }
+
+
 def _build_assignment_conversation_brief(
     messages: List[ChatMessage],
     *,
@@ -2041,6 +2290,7 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
     )
     chat_manager = request.app.state.chat_manager
     scheduler = request.app.state.scheduler
+    task_manager = request.app.state.task_manager
     pm_orchestrator = request.app.state.pm_orchestrator
     assignment_service = getattr(request.app.state, "assignment_service", None)
     try:
@@ -2205,6 +2455,7 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
 
         # Get bot to determine model-aware context limits
         ns_bot_registry = getattr(request.app.state, "bot_registry", None)
+        ns_bot = None
         ns_item_limit, ns_source_limit = 30, 12  # defaults
         if ns_bot_registry:
             try:
@@ -2237,6 +2488,29 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                     bot_id=target_bot_id,
                 )
                 return {"user_message": user_message, "assistant_message": assistant_message}
+            if not str(conversation.project_id or "").strip():
+                assistant_message = await chat_manager.add_message(
+                    conversation_id=conversation_id,
+                    role="assistant",
+                    content=_inline_code_requires_project_message(),
+                    bot_id=target_bot_id,
+                )
+                return {"user_message": user_message, "assistant_message": assistant_message}
+            exec_policy = getattr(ns_bot, "execution_policy", None) if ns_bot is not None else None
+            if isinstance(exec_policy, dict):
+                ws_injection = bool(exec_policy.get("workspace_context_injection", False))
+                repo_output_mode = str(exec_policy.get("repo_output_mode", "deny") or "deny").strip().lower()
+            else:
+                ws_injection = bool(getattr(exec_policy, "workspace_context_injection", False))
+                repo_output_mode = str(getattr(exec_policy, "repo_output_mode", "deny") or "deny").strip().lower()
+            if not ws_injection or repo_output_mode != "allow":
+                assistant_message = await chat_manager.add_message(
+                    conversation_id=conversation_id,
+                    role="assistant",
+                    content=_inline_code_bot_policy_message(),
+                    bot_id=target_bot_id,
+                )
+                return {"user_message": user_message, "assistant_message": assistant_message}
         resolved_context = await _resolve_context_items(
             request,
             body,
@@ -2263,10 +2537,102 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
             require_repo_evidence=require_repo_evidence,
         )
         if inline_code_mode:
-            payload = _inject_inline_workspace_marker(
-                payload,
-                workspace_root=str(tool_access.get("workspace_root") or ""),
-            )
+            orchestration_id = str(uuid.uuid4())
+            try:
+                workspace_entry = await _inline_code_prepare_temp_workspace(
+                    request=request,
+                    project_id=str(conversation.project_id or "").strip(),
+                    orchestration_id=orchestration_id,
+                )
+                temp_root = str(workspace_entry.get("temp_root") or "").strip()
+                payload = _inject_inline_workspace_marker(payload, workspace_root=temp_root)
+                inline_task = await task_manager.create_task(
+                    bot_id=target_bot_id,
+                    payload=payload,
+                    metadata=TaskMetadata(
+                        source="chat_assign",
+                        project_id=conversation.project_id,
+                        conversation_id=conversation_id,
+                        orchestration_id=orchestration_id,
+                    ),
+                )
+                terminal_task = await _inline_code_wait_for_task(task_manager, task_id=inline_task.id)
+                files_touched: List[str] = []
+                if str(terminal_task.status or "").strip().lower() == "completed":
+                    artifacts, files_touched, deleted_paths = await _inline_code_collect_workspace_artifacts(Path(temp_root))
+                    normalized_result = _inline_code_normalize_task_result(
+                        result=terminal_task.result,
+                        artifacts=artifacts,
+                        files_touched=files_touched,
+                        deleted_paths=deleted_paths,
+                        workspace_entry=workspace_entry,
+                    )
+                    if normalized_result != terminal_task.result:
+                        try:
+                            terminal_task = await _inline_code_persist_result_without_trigger_dispatch(
+                                task_manager,
+                                task=terminal_task,
+                                result=normalized_result,
+                            )
+                        except Exception:
+                            logger.exception("Failed to persist normalized inline coding result for task %s", terminal_task.id)
+                    assistant_output = _extract_task_output(terminal_task.result)
+                    assistant_output = _apply_repo_evidence_envelope(
+                        assistant_output,
+                        require_repo_evidence=require_repo_evidence,
+                        context_sources=context_sources,
+                    )
+                    if files_touched and "Files touched in temp workspace:" not in assistant_output:
+                        preview = "\n".join(f"- {path}" for path in files_touched[:8])
+                        assistant_output = (
+                            f"{assistant_output}\n\nFiles touched in temp workspace:\n{preview}".strip()
+                            if assistant_output.strip()
+                            else f"Files touched in temp workspace:\n{preview}"
+                        )
+                    assistant_message = await chat_manager.add_message(
+                        conversation_id=conversation_id,
+                        role="assistant",
+                        content=assistant_output,
+                        bot_id=target_bot_id,
+                        metadata=_inline_code_assistant_metadata(
+                            orchestration_id=orchestration_id,
+                            task=terminal_task,
+                            run_status="passed",
+                            files_touched=files_touched,
+                        ),
+                    )
+                    return {"user_message": user_message, "assistant_message": assistant_message}
+
+                assistant_message = await chat_manager.add_message(
+                    conversation_id=conversation_id,
+                    role="assistant",
+                    content=_inline_code_terminal_error_message(terminal_task),
+                    bot_id=target_bot_id,
+                    metadata=_inline_code_assistant_metadata(
+                        orchestration_id=orchestration_id,
+                        task=terminal_task,
+                        run_status="failed",
+                        files_touched=[],
+                    ),
+                )
+                return {"user_message": user_message, "assistant_message": assistant_message}
+            except HTTPException as exc:
+                assistant_message = await chat_manager.add_message(
+                    conversation_id=conversation_id,
+                    role="assistant",
+                    content=f"Inline coding mode could not start: {exc.detail}",
+                    bot_id=target_bot_id,
+                )
+                return {"user_message": user_message, "assistant_message": assistant_message}
+            except Exception as exc:
+                assistant_message = await chat_manager.add_message(
+                    conversation_id=conversation_id,
+                    role="assistant",
+                    content=f"Inline coding run failed before completion: {exc}",
+                    bot_id=target_bot_id,
+                    metadata={"mode": "assign_error", "orchestration_id": orchestration_id},
+                )
+                return {"user_message": user_message, "assistant_message": assistant_message}
         task = Task(
             id=f"chat-{user_message.id}",
             bot_id=target_bot_id,
@@ -2506,6 +2872,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
 
             # Get bot to determine model-aware context limits
             bot_registry = getattr(request.app.state, "bot_registry", None)
+            bot = None
             item_limit, source_limit = 30, 12  # defaults
             if bot_registry:
                 try:
@@ -2535,6 +2902,33 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                         conversation_id=conversation_id,
                         role="assistant",
                         content=_inline_code_unavailable_message(),
+                        bot_id=target_bot_id,
+                    )
+                    yield f"event: assistant_message\ndata: {assistant_message.model_dump_json()}\n\n"
+                    yield "event: done\ndata: {}\n\n"
+                    return
+                if not str(conversation.project_id or "").strip():
+                    assistant_message = await chat_manager.add_message(
+                        conversation_id=conversation_id,
+                        role="assistant",
+                        content=_inline_code_requires_project_message(),
+                        bot_id=target_bot_id,
+                    )
+                    yield f"event: assistant_message\ndata: {assistant_message.model_dump_json()}\n\n"
+                    yield "event: done\ndata: {}\n\n"
+                    return
+                exec_policy = getattr(bot, "execution_policy", None) if bot is not None else None
+                if isinstance(exec_policy, dict):
+                    ws_injection = bool(exec_policy.get("workspace_context_injection", False))
+                    repo_output_mode = str(exec_policy.get("repo_output_mode", "deny") or "deny").strip().lower()
+                else:
+                    ws_injection = bool(getattr(exec_policy, "workspace_context_injection", False))
+                    repo_output_mode = str(getattr(exec_policy, "repo_output_mode", "deny") or "deny").strip().lower()
+                if not ws_injection or repo_output_mode != "allow":
+                    assistant_message = await chat_manager.add_message(
+                        conversation_id=conversation_id,
+                        role="assistant",
+                        content=_inline_code_bot_policy_message(),
                         bot_id=target_bot_id,
                     )
                     yield f"event: assistant_message\ndata: {assistant_message.model_dump_json()}\n\n"
@@ -2586,10 +2980,158 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                 require_repo_evidence=require_repo_evidence,
             )
             if inline_code_mode:
-                payload = _inject_inline_workspace_marker(
-                    payload,
-                    workspace_root=str(tool_access.get("workspace_root") or ""),
-                )
+                orchestration_id = str(uuid.uuid4())
+                try:
+                    yield (
+                        'event: status\ndata: '
+                        '{"phase":"workspace","label":"Preparing temp workspace for inline coding..."}\n\n'
+                    )
+                    workspace_entry = await _inline_code_prepare_temp_workspace(
+                        request=request,
+                        project_id=str(conversation.project_id or "").strip(),
+                        orchestration_id=orchestration_id,
+                    )
+                    temp_root = str(workspace_entry.get("temp_root") or "").strip()
+                    payload = _inject_inline_workspace_marker(payload, workspace_root=temp_root)
+                    inline_task = await task_manager.create_task(
+                        bot_id=target_bot_id,
+                        payload=payload,
+                        metadata=TaskMetadata(
+                            source="chat_assign",
+                            project_id=conversation.project_id,
+                            conversation_id=conversation_id,
+                            orchestration_id=orchestration_id,
+                        ),
+                    )
+                    yield (
+                        'event: status\ndata: '
+                        f'{json.dumps({"phase":"queued","label":"Inline coding task queued.","task_id":inline_task.id})}\n\n'
+                    )
+
+                    last_status: Optional[str] = None
+                    deadline = asyncio.get_event_loop().time() + 1800.0
+                    terminal_task: Optional[Task] = None
+                    while True:
+                        current = await task_manager.get_task(inline_task.id)
+                        status_value = str(current.status or "").strip().lower()
+                        if status_value != last_status:
+                            if status_value == "queued":
+                                label = "Waiting for execution slot..."
+                                phase = "queued"
+                            elif status_value in {"running", "blocked"}:
+                                label = "Executing inline coding task..."
+                                phase = "running"
+                            elif status_value == "completed":
+                                label = "Inline coding task completed."
+                                phase = "completed"
+                            elif status_value in {"failed", "cancelled", "retried"}:
+                                label = f"Inline coding task ended with status: {status_value}."
+                                phase = "failed"
+                            else:
+                                label = f"Inline coding task status: {status_value or 'unknown'}."
+                                phase = "running"
+                            yield f'event: status\ndata: {json.dumps({"phase": phase, "label": label, "task_id": current.id})}\n\n'
+                            last_status = status_value
+                        if status_value in {"completed", "failed", "cancelled", "retried"}:
+                            terminal_task = current
+                            break
+                        if asyncio.get_event_loop().time() >= deadline:
+                            raise HTTPException(status_code=504, detail="inline coding task timed out")
+                        await asyncio.sleep(0.35)
+
+                    if terminal_task is None:
+                        raise HTTPException(status_code=504, detail="inline coding task did not reach terminal state")
+
+                    files_touched: List[str] = []
+                    if str(terminal_task.status or "").strip().lower() == "completed":
+                        artifacts, files_touched, deleted_paths = await _inline_code_collect_workspace_artifacts(Path(temp_root))
+                        normalized_result = _inline_code_normalize_task_result(
+                            result=terminal_task.result,
+                            artifacts=artifacts,
+                            files_touched=files_touched,
+                            deleted_paths=deleted_paths,
+                            workspace_entry=workspace_entry,
+                        )
+                        if normalized_result != terminal_task.result:
+                            try:
+                                terminal_task = await _inline_code_persist_result_without_trigger_dispatch(
+                                    task_manager,
+                                    task=terminal_task,
+                                    result=normalized_result,
+                                )
+                            except Exception:
+                                logger.exception(
+                                    "Failed to persist normalized inline coding result for task %s",
+                                    terminal_task.id,
+                                )
+
+                        assistant_output = _extract_task_output(terminal_task.result)
+                        assistant_output = _apply_repo_evidence_envelope(
+                            assistant_output,
+                            require_repo_evidence=require_repo_evidence,
+                            context_sources=context_sources,
+                        )
+                        if files_touched and "Files touched in temp workspace:" not in assistant_output:
+                            preview = "\n".join(f"- {path}" for path in files_touched[:8])
+                            assistant_output = (
+                                f"{assistant_output}\n\nFiles touched in temp workspace:\n{preview}".strip()
+                                if assistant_output.strip()
+                                else f"Files touched in temp workspace:\n{preview}"
+                            )
+                        yield 'event: status\ndata: {"phase":"persisting","label":"Saving inline coding recap..."}\n\n'
+                        assistant_message = await chat_manager.add_message(
+                            conversation_id=conversation_id,
+                            role="assistant",
+                            content=assistant_output,
+                            bot_id=target_bot_id,
+                            metadata=_inline_code_assistant_metadata(
+                                orchestration_id=orchestration_id,
+                                task=terminal_task,
+                                run_status="passed",
+                                files_touched=files_touched,
+                            ),
+                        )
+                        yield f"event: assistant_message\ndata: {assistant_message.model_dump_json()}\n\n"
+                        yield "event: done\ndata: {}\n\n"
+                        return
+
+                    assistant_message = await chat_manager.add_message(
+                        conversation_id=conversation_id,
+                        role="assistant",
+                        content=_inline_code_terminal_error_message(terminal_task),
+                        bot_id=target_bot_id,
+                        metadata=_inline_code_assistant_metadata(
+                            orchestration_id=orchestration_id,
+                            task=terminal_task,
+                            run_status="failed",
+                            files_touched=[],
+                        ),
+                    )
+                    yield f"event: assistant_message\ndata: {assistant_message.model_dump_json()}\n\n"
+                    yield "event: done\ndata: {}\n\n"
+                    return
+                except HTTPException as exc:
+                    assistant_message = await chat_manager.add_message(
+                        conversation_id=conversation_id,
+                        role="assistant",
+                        content=f"Inline coding mode could not start: {exc.detail}",
+                        bot_id=target_bot_id,
+                    )
+                    yield f"event: assistant_message\ndata: {assistant_message.model_dump_json()}\n\n"
+                    yield "event: done\ndata: {}\n\n"
+                    return
+                except Exception as exc:
+                    assistant_message = await chat_manager.add_message(
+                        conversation_id=conversation_id,
+                        role="assistant",
+                        content=f"Inline coding run failed before completion: {exc}",
+                        bot_id=target_bot_id,
+                        metadata={"mode": "assign_error", "orchestration_id": orchestration_id},
+                    )
+                    yield f"event: assistant_message\ndata: {assistant_message.model_dump_json()}\n\n"
+                    yield "event: done\ndata: {}\n\n"
+                    return
+
             yield f'event: status\ndata: {json.dumps({"phase":"queued","label":"Queued on selected backend...","conversation_id":conversation_id,"message_count":len(messages)})}\n\n'
             task = Task(
                 id=f"chat-{user_message.id}",
