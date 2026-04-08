@@ -719,6 +719,51 @@ class PlatformAISessionRuntime:
                 break
         return {"assistant_reply": reply[:12000], "actions": actions}
 
+    @staticmethod
+    def _is_model_catalog_block_error(exc: Exception) -> bool:
+        detail = str(exc or "").strip().lower()
+        return "not present/enabled in the model catalog" in detail
+
+    async def _dispatch_platform_brain_with_fallback(
+        self,
+        *,
+        session_id: str,
+        backend: BackendConfig,
+        payload: Any,
+    ) -> Dict[str, Any]:
+        assert self._scheduler is not None
+        try:
+            raw = await self._scheduler._dispatch_backend(backend, payload, task=None)
+            return {"raw": raw, "catalog_fallback_used": False}
+        except Exception as exc:
+            if not self._is_model_catalog_block_error(exc):
+                raise
+            provider = str(backend.provider or "").strip().lower()
+            method_map = {
+                "vertex": "_call_vertex",
+                "openai": "_call_openai",
+                "claude": "_call_claude",
+                "gemini": "_call_gemini",
+                "ollama_cloud": "_call_ollama_cloud",
+            }
+            method_name = method_map.get(provider, "")
+            method = getattr(self._scheduler, method_name, None) if method_name else None
+            if method is None:
+                raise
+            await self._store.append_event(
+                session_id,
+                "action_trace",
+                {
+                    "action": "platform_brain_catalog_fallback",
+                    "provider": provider,
+                    "model": str(backend.model or ""),
+                    "detail": str(exc),
+                    "fallback_method": method_name,
+                },
+            )
+            raw = await method(backend, payload)
+            return {"raw": raw, "catalog_fallback_used": True}
+
     async def _invoke_platform_brain(
         self,
         session_id: str,
@@ -756,7 +801,13 @@ class PlatformAISessionRuntime:
                 or None,
             }
         try:
-            raw = await self._scheduler._dispatch_backend(backend, payload, task=None)
+            dispatch = await self._dispatch_platform_brain_with_fallback(
+                session_id=session_id,
+                backend=backend,
+                payload=payload,
+            )
+            raw = dispatch.get("raw")
+            catalog_fallback_used = bool(dispatch.get("catalog_fallback_used"))
             output = ""
             usage: Dict[str, Any] = {}
             if isinstance(raw, dict):
@@ -773,6 +824,7 @@ class PlatformAISessionRuntime:
                     "provider": str(backend.provider or ""),
                     "model": str(backend.model or ""),
                     "backend_type": str(backend.type or ""),
+                    "catalog_fallback_used": catalog_fallback_used,
                     "usage": usage,
                     "output_preview": output[:400],
                 },

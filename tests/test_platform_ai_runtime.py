@@ -249,6 +249,56 @@ async def test_platform_brain_actions_can_upsert_bot_within_mode_policy(tmp_path
     assert created.id == "platform-brain-bot"
     assert str(created.name) == "Platform Brain Bot"
 
+
+@pytest.mark.anyio
+async def test_platform_brain_uses_catalog_fallback_when_model_not_registered(tmp_path):
+    store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+
+    class FakeScheduler:
+        def __init__(self) -> None:
+            self.vertex_calls = 0
+
+        async def _dispatch_backend(self, backend, payload, task=None):  # noqa: ANN001
+            _ = (backend, payload, task)
+            raise Exception("Model 'claude-opus-4-6' (provider 'vertex') is not present/enabled in the model catalog.")
+
+        async def _call_vertex(self, backend, payload):  # noqa: ANN001
+            _ = (backend, payload)
+            self.vertex_calls += 1
+            return {"output": "{\"assistant_reply\":\"fallback worked\",\"actions\":[]}", "usage": {"prompt_tokens": 3, "completion_tokens": 2}}
+
+    scheduler = FakeScheduler()
+    runtime = PlatformAISessionRuntime(store, scheduler=scheduler)
+    session = await store.create_session(
+        mode="pipeline_tuner",
+        status="running",
+        metadata={
+            "pipeline_bot_id": "pm-orchestrator",
+            "backend": {
+                "provider": "vertex",
+                "model": "claude-opus-4-6",
+                "backend_type": "cloud_api",
+                "credential_ref": "VERTEX_SERVICE_ACCOUNT_JSON",
+                "vertex_project_id": "nexusai-prod",
+                "vertex_location": "global",
+            },
+        },
+    )
+    await store.append_message(session["id"], role="operator", content="Run fallback check.", metadata={})
+    await runtime._process_operator_messages(session["id"])
+
+    assert scheduler.vertex_calls == 1
+    events = await store.list_events(session["id"], limit=100)
+    assert any(
+        str((event.get("payload") or {}).get("action") or "") == "platform_brain_catalog_fallback"
+        for event in events
+    )
+    assert any(
+        str((event.get("payload") or {}).get("action") or "") == "platform_brain_invoked"
+        and bool((event.get("payload") or {}).get("catalog_fallback_used")) is True
+        for event in events
+    )
+
 @pytest.mark.anyio
 async def test_repo_edit_runner_executes_command_and_reports_terminal_event(tmp_path, monkeypatch):
     store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))

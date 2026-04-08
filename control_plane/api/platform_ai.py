@@ -1245,7 +1245,8 @@ async def post_session_message(session_id: str, request: Request, body: SessionM
     if not content:
         raise HTTPException(status_code=400, detail="content is required")
     role = str(body.role or "operator").strip().lower() or "operator"
-    if role == "operator" and str(session.get("status") or "").strip().lower() == "ready":
+    auto_start_on_message = _env_enabled("NEXUS_PLATFORM_AI_AUTO_START_ON_OPERATOR_MESSAGE")
+    if auto_start_on_message and role == "operator" and str(session.get("status") or "").strip().lower() == "ready":
         session = await store.update_session(session_id, status="running") or session
         if runtime is not None:
             await runtime.ensure_session_loop(session_id)

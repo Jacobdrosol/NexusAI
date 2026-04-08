@@ -195,6 +195,34 @@ async def test_platform_ai_session_control_flow(cp_client):
 
 
 @pytest.mark.anyio
+async def test_platform_ai_operator_message_does_not_auto_start_session(cp_client):
+    create_resp = await cp_client.post(
+        "/v1/platform-ai/sessions",
+        json={
+            "mode": "bot_creator",
+            "bot_name_seed": "No Auto Start Bot",
+            "operator_id": "owner@example.com",
+            "start_running": False,
+        },
+    )
+    assert create_resp.status_code == 200
+    session = create_resp.json()
+    session_id = str(session.get("id") or "")
+    assert str(session.get("status") or "") == "ready"
+
+    msg_resp = await cp_client.post(
+        f"/v1/platform-ai/sessions/{session_id}/messages",
+        json={"role": "operator", "content": "prepare changes but wait for explicit start"},
+    )
+    assert msg_resp.status_code == 200
+
+    fetch_resp = await cp_client.get(f"/v1/platform-ai/sessions/{session_id}")
+    assert fetch_resp.status_code == 200
+    fetched = fetch_resp.json()
+    assert str(fetched.get("status") or "") == "ready"
+
+
+@pytest.mark.anyio
 async def test_platform_ai_code_edit_control_requires_runtime_when_enabled(cp_client, monkeypatch):
     monkeypatch.setenv("NEXUS_PLATFORM_AI_PRIVILEGED_ENABLED", "1")
     monkeypatch.setenv("NEXUS_PLATFORM_AI_OWNER_ALLOWLIST", "owner@example.com")
