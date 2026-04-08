@@ -46,6 +46,38 @@ def test_cloud_timeout_prefers_settings_manager(monkeypatch):
     assert scheduler_module._cloud_timeout() == 2400.0
 
 
+def test_agent_workspace_context_reads_hidden_chat_marker(tmp_path):
+    from control_plane.scheduler.scheduler import _agent_workspace_context
+
+    workspace_root = tmp_path / "repo"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+
+    bot = Bot(
+        id="inline-coder",
+        name="Inline Coder",
+        role="coder",
+        backends=[],
+        execution_policy={
+            "repo_output_mode": "allow",
+            "workspace_context_injection": True,
+        },
+    )
+    task = Task(
+        id="chat-1",
+        bot_id=bot.id,
+        payload=[
+            {"role": "user", "content": "please code this"},
+            {"role": "system", "content": "", "_workspace_root": str(workspace_root)},
+        ],
+        created_at="2026-04-08T00:00:00Z",
+        updated_at="2026-04-08T00:00:00Z",
+    )
+
+    resolved_root, allow_writes = _agent_workspace_context(bot, task)
+    assert resolved_root == workspace_root
+    assert allow_writes is True
+
+
 @pytest.mark.anyio
 async def test_scheduler_unpinned_backend_prefers_lower_weight_worker():
     from control_plane.scheduler.scheduler import Scheduler

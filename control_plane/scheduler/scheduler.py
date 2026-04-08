@@ -46,7 +46,6 @@ def _agent_workspace_context(bot: Any, task: "Task") -> tuple["Path | None", boo
 
     Returns (None, False) when agentic mode should not be used.
     """
-    from pathlib import Path
     execution_policy = getattr(bot, "execution_policy", None) or {}
     if isinstance(execution_policy, dict):
         ws_injection = execution_policy.get("workspace_context_injection", False)
@@ -58,12 +57,25 @@ def _agent_workspace_context(bot: Any, task: "Task") -> tuple["Path | None", boo
     if not ws_injection:
         return None, False
 
-    # The task_manager stores the resolved workspace root in the payload
-    workspace_root_str = (task.payload or {}).get("_injected_workspace_root", "")
-    if not workspace_root_str:
-        # Fallback: look in assignment_workspace
-        aw = (task.payload or {}).get("assignment_workspace") or {}
-        workspace_root_str = str(aw.get("temp_root") or aw.get("root") or "").strip()
+    workspace_root_str = ""
+    payload = task.payload
+    if isinstance(payload, dict):
+        # The task_manager stores the resolved workspace root in the payload.
+        workspace_root_str = str(payload.get("_injected_workspace_root") or "").strip()
+        if not workspace_root_str:
+            # Fallback: look in assignment_workspace.
+            aw = payload.get("assignment_workspace") or {}
+            if isinstance(aw, dict):
+                workspace_root_str = str(aw.get("temp_root") or aw.get("root") or "").strip()
+    elif isinstance(payload, list):
+        # Chat payloads can carry a hidden marker message with _workspace_root.
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            candidate = str(item.get("_workspace_root") or "").strip()
+            if candidate:
+                workspace_root_str = candidate
+                break
 
     if not workspace_root_str:
         return None, False
@@ -2257,6 +2269,7 @@ class Scheduler:
         last_error: Exception = NoViableBackendError("No backends configured")
         attempts: list[str] = []
         transformed_payload = self._apply_input_transform(bot, task.payload)
+        workspace_root, allow_writes = _agent_workspace_context(bot, task)
         for backend in bot.backends:
             try:
                 effective_backend = _backend_with_retry_params(backend, task)
@@ -2267,8 +2280,18 @@ class Scheduler:
                     "model": effective_backend.model,
                     "worker_id": effective_backend.worker_id,
                 }
-                async for event in self._dispatch_backend_stream(effective_backend, prepared_payload, task=task):
-                    yield event
+                if workspace_root is not None and _backend_supports_tools(effective_backend):
+                    result = await self._run_agent_loop(
+                        effective_backend,
+                        prepared_payload,
+                        workspace_root,
+                        allow_writes=allow_writes,
+                        task=task,
+                    )
+                    yield {"event": "final", **(result if isinstance(result, dict) else {"output": str(result)})}
+                else:
+                    async for event in self._dispatch_backend_stream(effective_backend, prepared_payload, task=task):
+                        yield event
                 return
             except Exception as e:
                 attempts.append(f"{backend.provider}/{backend.model}: {str(e or '').strip() or repr(e)}")

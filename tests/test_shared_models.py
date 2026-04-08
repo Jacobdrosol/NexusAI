@@ -142,3 +142,22 @@ def test_bot_workflow_trigger_supports_join_fields():
     assert trigger.join_result_field == "source_result.approved_lesson"
     assert trigger.join_result_items_alias == "approved_lessons"
     assert trigger.join_sort_field == "lesson_output.lesson_number"
+
+
+def test_bot_execution_policy_supports_workspace_context_injection():
+    from shared.models import Bot
+
+    bot = Bot(
+        id="bot-inline-coder",
+        name="Inline Coder",
+        role="coder",
+        backends=[],
+        execution_policy={
+            "repo_output_mode": "allow",
+            "workspace_context_injection": True,
+        },
+    )
+
+    assert bot.execution_policy is not None
+    assert bot.execution_policy.repo_output_mode == "allow"
+    assert bot.execution_policy.workspace_context_injection is True

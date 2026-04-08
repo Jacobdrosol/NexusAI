@@ -151,6 +151,10 @@ _ACCESS_DENIAL_LINE_RE = re.compile(
     re.IGNORECASE,
 )
 _IMAGE_CAPABILITY_MARKERS = {"image", "images", "vision", "multimodal"}
+_INLINE_CODE_TRIGGER_RE = re.compile(
+    r"^\s*(please\s+code\s+this|code\s+this|please\s+implement\s+this|implement\s+this)\b",
+    re.IGNORECASE,
+)
 
 
 def _attachment_size_bytes(item: ChatAttachmentInput) -> int:
@@ -1351,6 +1355,44 @@ def _extract_assign_instruction(content: str) -> Optional[str]:
     return instruction or None
 
 
+def _inline_code_requested(content: str) -> bool:
+    text = str(content or "").strip()
+    if not text:
+        return False
+    if _extract_assign_instruction(text) is not None:
+        return False
+    return bool(_INLINE_CODE_TRIGGER_RE.match(text))
+
+
+def _inline_code_unavailable_message() -> str:
+    return (
+        "Inline coding mode was requested, but workspace editing tools are not available for this chat turn.\n\n"
+        "Enable all three switches and retry the same message:\n"
+        "1. Project -> Chat Workspace Tools -> filesystem\n"
+        "2. Bot -> Chat Tool Access -> filesystem\n"
+        "3. Conversation -> Chat Tool Access -> enabled + filesystem"
+    )
+
+
+def _inject_inline_workspace_marker(payload: List[dict], *, workspace_root: str) -> List[dict]:
+    marker_root = str(workspace_root or "").strip()
+    if not marker_root:
+        return payload
+    marked: List[dict] = list(payload)
+    marked.append(
+        {
+            "role": "system",
+            "content": (
+                "Inline coding mode is enabled for this turn. Use available workspace tools to inspect and edit files "
+                "directly in the connected project workspace, then summarize exactly what you changed."
+            ),
+        }
+    )
+    # Hidden scheduler marker for agentic workspace tool loop.
+    marked.append({"role": "system", "content": "", "_workspace_root": marker_root})
+    return marked
+
+
 def _build_assignment_conversation_brief(
     messages: List[ChatMessage],
     *,
@@ -2173,13 +2215,28 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
 
         require_repo_evidence = _repo_evidence_requested(body)
         repo_intent = _repo_intent_requested(body.content)
-        force_project_context = repo_intent
-        force_workspace_context = repo_intent
+        inline_code_mode = _inline_code_requested(body.content)
+        force_project_context = repo_intent or inline_code_mode
+        force_workspace_context = repo_intent or inline_code_mode
         tool_access = await _effective_tool_access(
             request,
             conversation=conversation,
             target_bot_id=target_bot_id,
         )
+        if inline_code_mode:
+            inline_coding_allowed = bool(
+                tool_access.get("enabled")
+                and tool_access.get("filesystem")
+                and str(tool_access.get("workspace_root") or "").strip()
+            )
+            if not inline_coding_allowed:
+                assistant_message = await chat_manager.add_message(
+                    conversation_id=conversation_id,
+                    role="assistant",
+                    content=_inline_code_unavailable_message(),
+                    bot_id=target_bot_id,
+                )
+                return {"user_message": user_message, "assistant_message": assistant_message}
         resolved_context = await _resolve_context_items(
             request,
             body,
@@ -2205,6 +2262,11 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
             context_items=resolved_context,
             require_repo_evidence=require_repo_evidence,
         )
+        if inline_code_mode:
+            payload = _inject_inline_workspace_marker(
+                payload,
+                workspace_root=str(tool_access.get("workspace_root") or ""),
+            )
         task = Task(
             id=f"chat-{user_message.id}",
             bot_id=target_bot_id,
@@ -2454,13 +2516,30 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
 
             require_repo_evidence = _repo_evidence_requested(body)
             repo_intent = _repo_intent_requested(body.content)
-            force_project_context = repo_intent
-            force_workspace_context = repo_intent
+            inline_code_mode = _inline_code_requested(body.content)
+            force_project_context = repo_intent or inline_code_mode
+            force_workspace_context = repo_intent or inline_code_mode
             tool_access = await _effective_tool_access(
                 request,
                 conversation=conversation,
                 target_bot_id=target_bot_id,
             )
+            if inline_code_mode:
+                inline_coding_allowed = bool(
+                    tool_access.get("enabled")
+                    and tool_access.get("filesystem")
+                    and str(tool_access.get("workspace_root") or "").strip()
+                )
+                if not inline_coding_allowed:
+                    assistant_message = await chat_manager.add_message(
+                        conversation_id=conversation_id,
+                        role="assistant",
+                        content=_inline_code_unavailable_message(),
+                        bot_id=target_bot_id,
+                    )
+                    yield f"event: assistant_message\ndata: {assistant_message.model_dump_json()}\n\n"
+                    yield "event: done\ndata: {}\n\n"
+                    return
             if require_repo_evidence:
                 yield 'event: status\ndata: {"phase":"context","label":"Collecting repository context..."}\n\n'
             resolved_context = await _resolve_context_items(
@@ -2506,6 +2585,11 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                 context_items=resolved_context,
                 require_repo_evidence=require_repo_evidence,
             )
+            if inline_code_mode:
+                payload = _inject_inline_workspace_marker(
+                    payload,
+                    workspace_root=str(tool_access.get("workspace_root") or ""),
+                )
             yield f'event: status\ndata: {json.dumps({"phase":"queued","label":"Queued on selected backend...","conversation_id":conversation_id,"message_count":len(messages)})}\n\n'
             task = Task(
                 id=f"chat-{user_message.id}",
