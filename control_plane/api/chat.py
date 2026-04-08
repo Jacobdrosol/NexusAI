@@ -1387,7 +1387,10 @@ def _inject_inline_workspace_marker(payload: List[dict], *, workspace_root: str)
             "role": "system",
             "content": (
                 "Inline coding mode is enabled for this turn. Use available workspace tools to inspect and edit files "
-                "directly in the connected project workspace, then summarize exactly what you changed."
+                "directly in the connected project workspace, then summarize exactly what you changed.\n\n"
+                "Because this turn explicitly requested coding, you must make best-effort repository edits now. "
+                "Do not ask the user to re-specify what to build unless you are blocked by missing permissions or "
+                "missing repository context. If scope is broad, implement a minimal first slice and state assumptions."
             ),
         }
     )
@@ -1419,6 +1422,19 @@ def _inline_code_terminal_error_message(task: Task) -> str:
     if not error_text:
         error_text = "Inline coding task failed before a result was produced."
     return f"Inline coding run failed.\n\n{error_text}"
+
+
+def _inline_code_no_changes_message(task: Task) -> str:
+    output = _extract_task_output(task.result).strip()
+    if len(output) > 2400:
+        output = f"{output[:2400].rstrip()}..."
+    base = (
+        "Inline coding run completed but produced no file edits in the temp workspace.\n\n"
+        "This turn requested coding, so at least one concrete file change is required."
+    )
+    if not output:
+        return base
+    return f"{base}\n\nModel output:\n{output}"
 
 
 def _inline_code_merge_paths(*path_sets: List[str]) -> List[str]:
@@ -2577,6 +2593,20 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                             )
                         except Exception:
                             logger.exception("Failed to persist normalized inline coding result for task %s", terminal_task.id)
+                    if not files_touched:
+                        assistant_message = await chat_manager.add_message(
+                            conversation_id=conversation_id,
+                            role="assistant",
+                            content=_inline_code_no_changes_message(terminal_task),
+                            bot_id=target_bot_id,
+                            metadata=_inline_code_assistant_metadata(
+                                orchestration_id=orchestration_id,
+                                task=terminal_task,
+                                run_status="failed",
+                                files_touched=[],
+                            ),
+                        )
+                        return {"user_message": user_message, "assistant_message": assistant_message}
                     assistant_output = _extract_task_output(terminal_task.result)
                     assistant_output = _apply_repo_evidence_envelope(
                         assistant_output,
@@ -3065,6 +3095,22 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                                     "Failed to persist normalized inline coding result for task %s",
                                     terminal_task.id,
                                 )
+                        if not files_touched:
+                            assistant_message = await chat_manager.add_message(
+                                conversation_id=conversation_id,
+                                role="assistant",
+                                content=_inline_code_no_changes_message(terminal_task),
+                                bot_id=target_bot_id,
+                                metadata=_inline_code_assistant_metadata(
+                                    orchestration_id=orchestration_id,
+                                    task=terminal_task,
+                                    run_status="failed",
+                                    files_touched=[],
+                                ),
+                            )
+                            yield f"event: assistant_message\ndata: {assistant_message.model_dump_json()}\n\n"
+                            yield "event: done\ndata: {}\n\n"
+                            return
 
                         assistant_output = _extract_task_output(terminal_task.result)
                         assistant_output = _apply_repo_evidence_envelope(
