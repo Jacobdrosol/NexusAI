@@ -540,3 +540,50 @@ async def test_resolve_context_prefers_explicit_orchestration_over_stale_run_id(
     assert context.get("run_id") is None
     assert calls["by_orch"] == 1
     assert calls["by_run"] == 0
+
+
+@pytest.mark.anyio
+async def test_launch_autonomous_orchestration_propagates_project_and_conversation_scope(tmp_path):
+    store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+    runtime = PlatformAISessionRuntime(store)
+    session = await store.create_session(
+        mode="pipeline_tuner",
+        status="running",
+        metadata={
+            "pipeline_bot_id": "pm-orchestrator",
+            "project_id": "globeiq",
+            "conversation_id": "conv-123",
+            "seed_binding": {
+                "seed_project_id": "globeiq",
+                "seed_conversation_id": "conv-123",
+            },
+        },
+    )
+
+    captured = {"metadata": None}
+
+    class _Created:
+        id = "task-created-1"
+
+    class FakeTaskManager:
+        async def create_task(self, *, bot_id, payload, metadata):  # noqa: ANN001
+            _ = (bot_id, payload)
+            captured["metadata"] = metadata
+            return _Created()
+
+    runtime._task_manager = FakeTaskManager()  # type: ignore[assignment]
+    runtime._bot_registry = None  # force fallback payload path
+
+    launched = await runtime._launch_autonomous_orchestration(
+        session_id=session["id"],
+        pipeline_bot_id="pm-orchestrator",
+        pipeline_name="Coding Pipeline",
+        goal="Run and refine.",
+        reason="refinement_iteration",
+        iteration=1,
+    )
+    assert launched
+    metadata = captured.get("metadata")
+    assert metadata is not None
+    assert str(getattr(metadata, "project_id", "") or "") == "globeiq"
+    assert str(getattr(metadata, "conversation_id", "") or "") == "conv-123"

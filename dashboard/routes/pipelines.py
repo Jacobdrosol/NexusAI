@@ -151,8 +151,8 @@ def _pipeline_detail(cp, orchestration_id: str) -> dict[str, Any] | None:
     tasks = sorted(tasks, key=_task_sort_key)
     root = _root_task(tasks)
     root_meta = (root or {}).get("metadata") or {}
-    project_id = ""
-    conversation_id = ""
+    project_id = str(root_meta.get("project_id") or "").strip()
+    conversation_id = str(root_meta.get("conversation_id") or "").strip()
     for task in tasks:
         meta = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
         if not project_id:
@@ -161,6 +161,28 @@ def _pipeline_detail(cp, orchestration_id: str) -> dict[str, Any] | None:
             conversation_id = str(meta.get("conversation_id") or "").strip()
         if project_id and conversation_id:
             break
+    if (not project_id or not conversation_id) and hasattr(cp, "list_platform_ai_sessions"):
+        sessions_resp = cp.list_platform_ai_sessions(orchestration_id=orchestration_id, archived="all", limit=50)
+        sessions = (
+            sessions_resp.get("sessions")
+            if isinstance(sessions_resp, dict) and isinstance(sessions_resp.get("sessions"), list)
+            else []
+        )
+        if sessions:
+            ordered = sorted(
+                [row for row in sessions if isinstance(row, dict)],
+                key=lambda row: (str(row.get("updated_at") or ""), str(row.get("created_at") or "")),
+                reverse=True,
+            )
+            latest = ordered[0] if ordered else {}
+            latest_meta = latest.get("metadata") if isinstance(latest.get("metadata"), dict) else {}
+            seed_binding = latest_meta.get("seed_binding") if isinstance(latest_meta.get("seed_binding"), dict) else {}
+            if not project_id:
+                project_id = str(latest_meta.get("project_id") or seed_binding.get("seed_project_id") or "").strip()
+            if not conversation_id:
+                conversation_id = str(
+                    latest_meta.get("conversation_id") or seed_binding.get("seed_conversation_id") or ""
+                ).strip()
 
     task_ids = {str(task.get("id") or "") for task in tasks}
     artifacts: list[dict[str, Any]] = []

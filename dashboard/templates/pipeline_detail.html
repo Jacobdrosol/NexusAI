@@ -10,6 +10,7 @@
     <button class="btn" type="button" onclick="openDagViewer('{{ pipeline.id }}')">View DAG</button>
     <button class="btn" type="button" onclick="openAssignmentRecap('{{ pipeline.id }}')">Full Recap</button>
     <button class="btn" type="button" onclick="reviewAssignmentFiles('{{ pipeline.id }}', this)" {% if not pipeline.project_id %}disabled title="No project repo workspace is attached to this pipeline."{% endif %}>Review Files</button>
+    <button class="btn" type="button" onclick="applyAssignmentFiles('{{ pipeline.id }}', this)" {% if not pipeline.project_id %}disabled title="No project repo workspace is attached to this pipeline."{% endif %}>Apply Files to Repo</button>
     <button class="btn" type="button" onclick="openPipelineTestModal()">Test</button>
     {% endif %}
   </div>
@@ -20,6 +21,11 @@
 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 <section class="panel" style="margin-bottom:1rem;">
   <h2 class="panel-title">{{ pipeline.name }}</h2>
+  {% if not pipeline.project_id %}
+  <div class="mini-note" style="margin-bottom:0.75rem;">
+    This orchestration does not expose a project context in task metadata. Review/apply actions require project linkage.
+  </div>
+  {% endif %}
   <div class="split-grid" style="grid-template-columns:1fr 1fr 1fr;gap:1rem;">
     <div><strong>Status:</strong> <span class="badge badge-{{ pipeline.status }}">{{ pipeline.status }}</span></div>
     <div><strong>Entry Bot:</strong> {{ pipeline.entry_bot_id or "—" }}</div>
@@ -133,6 +139,17 @@
   </div>
 </div>
 
+<div id="modal-assign-apply" class="modal" style="display:none;">
+  <div class="modal-content" style="max-width:960px;">
+    <h2>Assignment Apply Result</h2>
+    <div id="assign-apply-state" class="state-info" style="margin-bottom:0.75rem;">No assignment apply result yet.</div>
+    <pre id="assign-apply-pre" style="max-height:60vh;overflow:auto;white-space:pre-wrap;"></pre>
+    <div class="modal-actions">
+      <button class="btn" type="button" onclick="hideModal('modal-assign-apply')">Close</button>
+    </div>
+  </div>
+</div>
+
 <div id="modal-assign-recap" class="modal" style="display:none;">
   <div class="modal-content" style="max-width:960px;">
     <h2>Assignment Full Recap</h2>
@@ -177,6 +194,7 @@
 <script>
 const selectedConversationProjectId = {{ (pipeline.project_id if pipeline and pipeline.project_id else "")|tojson }};
 let lastAssignmentReviewResult = null;
+let lastAssignmentApplyResult = null;
 let lastAssignmentRecapText = '';
 let lastAssignmentRecapOrchestrationId = '';
 let activeDagGraph = null;
@@ -417,6 +435,54 @@ function renderAssignmentReviewSummary(result) {
   return lines.join('\n');
 }
 
+function renderAssignmentApplySummary(result) {
+  const applied = Array.isArray(result?.applied_files) ? result.applied_files : [];
+  const workspace = result?.workspace && typeof result.workspace === 'object' ? result.workspace : {};
+  const lines = [
+    `Orchestration: ${result?.orchestration_id || 'unknown'}`,
+    `Applied files: ${applied.length}`,
+    '',
+  ];
+  if (applied.length) {
+    lines.push('Files:');
+    applied.forEach((item) => {
+      const path = item?.path || 'unknown';
+      const status = item?.status || 'updated';
+      const botId = item?.bot_id ? ` (${item.bot_id})` : '';
+      lines.push(`- [${status}] ${path}${botId}`);
+    });
+    lines.push('');
+  }
+  if (result?.commit_sha) {
+    lines.push(`Committed: ${String(result.commit_sha).slice(0, 12)}`);
+  }
+  if (result?.commit_error) {
+    lines.push(`Commit warning: ${result.commit_error}`);
+  }
+  const branch = workspace?.branch || 'unknown';
+  const porcelain = Array.isArray(workspace?.porcelain) ? workspace.porcelain : [];
+  const rows = porcelain.filter((line) => !String(line || '').startsWith('##'));
+  lines.push(`Git branch: ${branch}`);
+  lines.push(`Changed files after apply: ${rows.length}`);
+  if (rows.length) {
+    lines.push('');
+    lines.push('Git status:');
+    rows.forEach((line) => lines.push(`- ${line}`));
+  }
+  return lines.join('\n');
+}
+
+function showAssignmentApplyResult(result) {
+  lastAssignmentApplyResult = result || null;
+  const state = document.getElementById('assign-apply-state');
+  const pre = document.getElementById('assign-apply-pre');
+  const committed = result?.commit_sha ? ` Committed: ${String(result.commit_sha).slice(0, 12)}.` : '';
+  if (state) state.textContent = `Assignment files applied to the project repo workspace.${committed}`;
+  if (pre) pre.textContent = renderAssignmentApplySummary(result);
+  const modal = document.getElementById('modal-assign-apply');
+  if (modal) modal.style.display = 'flex';
+}
+
 function showAssignmentReviewResult(result) {
   lastAssignmentReviewResult = result || null;
   const state = document.getElementById('assign-review-state');
@@ -532,6 +598,43 @@ async function reviewAssignmentFiles(orchestrationId, buttonEl) {
       state.className = 'state-error';
       state.textContent = error.message || 'Assignment review failed';
     }
+  } finally {
+    if (buttonEl) {
+      buttonEl.disabled = false;
+      buttonEl.textContent = originalLabel;
+    }
+  }
+}
+
+async function applyAssignmentFiles(orchestrationId, buttonEl) {
+  if (!selectedConversationProjectId) {
+    alert('This pipeline is not attached to a project repo workspace.');
+    return;
+  }
+  if (!orchestrationId) {
+    alert('Missing orchestration ID.');
+    return;
+  }
+  const originalLabel = buttonEl ? buttonEl.textContent : 'Apply Files to Repo';
+  if (buttonEl) {
+    buttonEl.disabled = true;
+    buttonEl.textContent = 'Applying...';
+  }
+  try {
+    const res = await fetch('/api/chat/assignments/apply', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
+      body: JSON.stringify({
+        project_id: selectedConversationProjectId,
+        orchestration_id: orchestrationId,
+        overwrite: true,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Assignment apply failed');
+    showAssignmentApplyResult(data);
+  } catch (error) {
+    alert(error.message || 'Assignment apply failed');
   } finally {
     if (buttonEl) {
       buttonEl.disabled = false;

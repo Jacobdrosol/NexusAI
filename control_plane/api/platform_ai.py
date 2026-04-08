@@ -893,6 +893,8 @@ async def _resolve_seed_binding(
     effective_assignment_id = str(assignment_id or "").strip() or None
     effective_run_id = str(run_id or "").strip() or None
     effective_orchestration_id = str(orchestration_id or "").strip() or None
+    effective_project_id: Optional[str] = None
+    effective_conversation_id: Optional[str] = None
     seed_run = None
     if run_store is not None:
         safe_seed_run = str(seed_run_id or "").strip()
@@ -906,12 +908,16 @@ async def _resolve_seed_binding(
                 seed_run = await run_store.get_run(effective_run_id)
             elif effective_orchestration_id:
                 seed_run = await run_store.get_run_by_orchestration(effective_orchestration_id)
+            elif effective_assignment_id:
+                seed_run = await run_store.get_latest_run_for_assignment(effective_assignment_id)
         except Exception:
             seed_run = None
     if isinstance(seed_run, dict):
         effective_assignment_id = str(seed_run.get("assignment_id") or "").strip() or effective_assignment_id
         effective_run_id = str(seed_run.get("id") or "").strip() or effective_run_id
         effective_orchestration_id = str(seed_run.get("orchestration_id") or "").strip() or effective_orchestration_id
+        effective_project_id = str(seed_run.get("project_id") or "").strip() or None
+        effective_conversation_id = str(seed_run.get("conversation_id") or "").strip() or None
     seed_binding = None
     if isinstance(seed_run, dict):
         seed_meta = seed_run.get("metadata") if isinstance(seed_run.get("metadata"), dict) else {}
@@ -919,6 +925,8 @@ async def _resolve_seed_binding(
             "seed_run_id": str(seed_run.get("id") or "").strip() or None,
             "seed_orchestration_id": str(seed_run.get("orchestration_id") or "").strip() or None,
             "seed_assignment_id": str(seed_run.get("assignment_id") or "").strip() or None,
+            "seed_project_id": str(seed_run.get("project_id") or "").strip() or None,
+            "seed_conversation_id": str(seed_run.get("conversation_id") or "").strip() or None,
             "instruction": str(seed_run.get("instruction") or "").strip() or None,
             "node_overrides": seed_run.get("node_overrides") if isinstance(seed_run.get("node_overrides"), dict) else {},
             "trigger_source": str(seed_meta.get("source") or "").strip() or None,
@@ -927,6 +935,8 @@ async def _resolve_seed_binding(
         "assignment_id": effective_assignment_id,
         "run_id": effective_run_id,
         "orchestration_id": effective_orchestration_id,
+        "project_id": effective_project_id,
+        "conversation_id": effective_conversation_id,
         "seed_binding": seed_binding,
     }
 
@@ -995,6 +1005,10 @@ async def create_session(request: Request, body: CreatePlatformAISessionRequest)
         metadata["pipeline_name_seed"] = pipeline_name_seed
     if project_id:
         metadata["project_id"] = project_id
+    elif str(seed_context.get("project_id") or "").strip():
+        metadata["project_id"] = str(seed_context.get("project_id") or "").strip()
+    if str(seed_context.get("conversation_id") or "").strip():
+        metadata["conversation_id"] = str(seed_context.get("conversation_id") or "").strip()
     if target_bot_id:
         metadata["target_bot_id"] = target_bot_id
     if bot_name_seed:
@@ -1336,36 +1350,68 @@ async def control_session(session_id: str, request: Request, body: ControlPlatfo
         if not assignment_id:
             raise HTTPException(status_code=400, detail="attach_assignment requires assignment_id")
         context = await _resolve_context(request, assignment_id=assignment_id, run_id=None, orchestration_id=None)
-        control_metadata.update(_pipeline_tuner_reset_metadata(session, for_new_target=True))
-        session = await store.update_session(
-            session_id,
+        seed_context = await _resolve_seed_binding(
+            request,
+            seed_run_id=None,
+            seed_orchestration_id=None,
             assignment_id=context.get("assignment_id"),
             run_id=context.get("run_id"),
             orchestration_id=context.get("orchestration_id"),
+        )
+        control_metadata.update(_pipeline_tuner_reset_metadata(session, for_new_target=True))
+        if isinstance(seed_context.get("seed_binding"), dict):
+            control_metadata["seed_binding"] = seed_context.get("seed_binding")
+        if str(seed_context.get("project_id") or "").strip():
+            control_metadata["project_id"] = str(seed_context.get("project_id") or "").strip()
+        if str(seed_context.get("conversation_id") or "").strip():
+            control_metadata["conversation_id"] = str(seed_context.get("conversation_id") or "").strip()
+        session = await store.update_session(
+            session_id,
+            assignment_id=seed_context.get("assignment_id"),
+            run_id=seed_context.get("run_id"),
+            orchestration_id=seed_context.get("orchestration_id"),
             metadata=control_metadata,
         ) or session
         result = {
-            "assignment_id": context.get("assignment_id"),
-            "run_id": context.get("run_id"),
-            "orchestration_id": context.get("orchestration_id"),
+            "assignment_id": seed_context.get("assignment_id"),
+            "run_id": seed_context.get("run_id"),
+            "orchestration_id": seed_context.get("orchestration_id"),
+            "project_id": seed_context.get("project_id"),
+            "conversation_id": seed_context.get("conversation_id"),
         }
     elif action == "attach_orchestration":
         orch_id = str(body.orchestration_id or "").strip()
         if not orch_id:
             raise HTTPException(status_code=400, detail="attach_orchestration requires orchestration_id")
         context = await _resolve_context(request, assignment_id=None, run_id=None, orchestration_id=orch_id)
-        control_metadata.update(_pipeline_tuner_reset_metadata(session, for_new_target=True))
-        session = await store.update_session(
-            session_id,
+        seed_context = await _resolve_seed_binding(
+            request,
+            seed_run_id=None,
+            seed_orchestration_id=None,
             assignment_id=context.get("assignment_id"),
             run_id=context.get("run_id"),
             orchestration_id=context.get("orchestration_id"),
+        )
+        control_metadata.update(_pipeline_tuner_reset_metadata(session, for_new_target=True))
+        if isinstance(seed_context.get("seed_binding"), dict):
+            control_metadata["seed_binding"] = seed_context.get("seed_binding")
+        if str(seed_context.get("project_id") or "").strip():
+            control_metadata["project_id"] = str(seed_context.get("project_id") or "").strip()
+        if str(seed_context.get("conversation_id") or "").strip():
+            control_metadata["conversation_id"] = str(seed_context.get("conversation_id") or "").strip()
+        session = await store.update_session(
+            session_id,
+            assignment_id=seed_context.get("assignment_id"),
+            run_id=seed_context.get("run_id"),
+            orchestration_id=seed_context.get("orchestration_id"),
             metadata=control_metadata,
         ) or session
         result = {
-            "assignment_id": context.get("assignment_id"),
-            "run_id": context.get("run_id"),
-            "orchestration_id": context.get("orchestration_id"),
+            "assignment_id": seed_context.get("assignment_id"),
+            "run_id": seed_context.get("run_id"),
+            "orchestration_id": seed_context.get("orchestration_id"),
+            "project_id": seed_context.get("project_id"),
+            "conversation_id": seed_context.get("conversation_id"),
         }
     elif action == "splice":
         run_id = str(body.run_id or session.get("run_id") or "").strip()

@@ -1865,10 +1865,11 @@ class PlatformAISessionRuntime:
                     "kind": "decision",
                 },
             )
+            ack_excerpt = content[:4000]
             await self._store.append_message(
                 session_id,
                 role="assistant",
-                content=f"Acknowledged. Applying operator direction: {content[:500]}",
+                content=f"Acknowledged. Applying operator direction: {ack_excerpt}",
                 metadata={"source": "runtime_ack", "operator_message_id": mid},
             )
             session = await self._store.get_session(session_id)
@@ -2495,6 +2496,16 @@ class PlatformAISessionRuntime:
         live_session = await self._store.get_session(session_id)
         live_meta = live_session.get("metadata") if isinstance((live_session or {}).get("metadata"), dict) else {}
         seed_binding = live_meta.get("seed_binding") if isinstance(live_meta.get("seed_binding"), dict) else {}
+        session_project_id = str(
+            live_meta.get("project_id")
+            or seed_binding.get("seed_project_id")
+            or ""
+        ).strip()
+        session_conversation_id = str(
+            live_meta.get("conversation_id")
+            or seed_binding.get("seed_conversation_id")
+            or ""
+        ).strip()
         payload = await self._pipeline_launch_payload(
             pipeline_bot_id=pipeline_bot_id,
             goal=goal,
@@ -2507,6 +2518,8 @@ class PlatformAISessionRuntime:
                 payload=payload,
                 metadata=TaskMetadata(
                     source=trigger_source,
+                    project_id=session_project_id or None,
+                    conversation_id=session_conversation_id or None,
                     orchestration_id=launch_orchestration_id,
                     pipeline_name=pipeline_name or pipeline_bot_id,
                     pipeline_entry_bot_id=pipeline_bot_id,
