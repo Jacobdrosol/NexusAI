@@ -2329,6 +2329,13 @@ async def test_post_message_inline_code_uses_task_manager_temp_workspace(cp_app,
     assert create_kwargs["metadata"].orchestration_id == assistant["metadata"]["orchestration_id"]
     payload = create_kwargs["payload"]
     assert any(isinstance(item, dict) and str(item.get("_workspace_root") or "") == str(temp_root) for item in payload)
+    assert any(
+        isinstance(item, dict)
+        and item.get("role") == "system"
+        and "Coding task for this turn (execute now):" in str(item.get("content") or "")
+        and "Can you look into GlobeIQ's repo and sketch month-end accounting reporting support?" in str(item.get("content") or "")
+        for item in payload
+    )
 
 
 @pytest.mark.anyio
@@ -2476,6 +2483,13 @@ async def test_stream_message_inline_code_uses_task_manager_temp_workspace(cp_ap
     assert create_kwargs["metadata"].source == "chat_assign"
     payload = create_kwargs["payload"]
     assert any(isinstance(item, dict) and str(item.get("_workspace_root") or "") == str(temp_root) for item in payload)
+    assert any(
+        isinstance(item, dict)
+        and item.get("role") == "system"
+        and "Coding task for this turn (execute now):" in str(item.get("content") or "")
+        and "please implement this in the project" in str(item.get("content") or "")
+        for item in payload
+    )
 
 
 @pytest.mark.anyio

@@ -1377,11 +1377,26 @@ def _inline_code_unavailable_message() -> str:
     )
 
 
-def _inject_inline_workspace_marker(payload: List[dict], *, workspace_root: str) -> List[dict]:
+def _inject_inline_workspace_marker(payload: List[dict], *, workspace_root: str, requested_task: str = "") -> List[dict]:
     marker_root = str(workspace_root or "").strip()
     if not marker_root:
         return payload
     marked: List[dict] = list(payload)
+    normalized_task = str(requested_task or "").strip()
+    if normalized_task:
+        if len(normalized_task) > 4000:
+            normalized_task = f"{normalized_task[:4000].rstrip()}..."
+        marked.append(
+            {
+                "role": "system",
+                "content": (
+                    "Coding task for this turn (execute now):\n"
+                    f"{normalized_task}\n\n"
+                    "This task is already specific enough to begin implementation. "
+                    "Choose a minimal first slice if scope is broad, then implement concrete file edits."
+                ),
+            }
+        )
     marked.append(
         {
             "role": "system",
@@ -2562,7 +2577,11 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                     orchestration_id=orchestration_id,
                 )
                 temp_root = str(workspace_entry.get("temp_root") or "").strip()
-                payload = _inject_inline_workspace_marker(payload, workspace_root=temp_root)
+                payload = _inject_inline_workspace_marker(
+                    payload,
+                    workspace_root=temp_root,
+                    requested_task=body.content,
+                )
                 inline_task = await task_manager.create_task(
                     bot_id=target_bot_id,
                     payload=payload,
@@ -3023,7 +3042,11 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                         orchestration_id=orchestration_id,
                     )
                     temp_root = str(workspace_entry.get("temp_root") or "").strip()
-                    payload = _inject_inline_workspace_marker(payload, workspace_root=temp_root)
+                    payload = _inject_inline_workspace_marker(
+                        payload,
+                        workspace_root=temp_root,
+                        requested_task=body.content,
+                    )
                     inline_task = await task_manager.create_task(
                         bot_id=target_bot_id,
                         payload=payload,
