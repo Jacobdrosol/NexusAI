@@ -1,6 +1,7 @@
 """Tests for dashboard deploy API endpoints."""
 
 import bcrypt
+from datetime import datetime, timedelta, timezone
 
 
 def _login_admin(dashboard_client):
@@ -80,3 +81,57 @@ def test_deploy_log_clear_endpoint_returns_ok(dashboard_client):
     data = resp.get_json()
     assert data["status"] == "ok"
     assert data["deploy_status"]["log_tail"] == []
+
+
+def test_deploy_status_recovers_stale_running_state(dashboard_client):
+    from dashboard.deploy_manager import DeployManager
+
+    _login_admin(dashboard_client)
+    manager = DeployManager.instance()
+    stale_at = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+    with manager._lock:
+        manager._state["state"] = "running"
+        manager._state["run_id"] = "stale-run"
+        manager._state["started_at"] = stale_at
+        manager._state["log_updated_at"] = stale_at
+        manager._state["finished_at"] = None
+        manager._state["last_error"] = None
+        manager._state["log_tail"] = ["[old] still running"]
+        manager._thread = None
+        manager._save_state()
+
+    resp = dashboard_client.get("/api/settings/deploy/status")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["state"] == "failed"
+    assert "no longer active" in str(data.get("last_error") or "").lower()
+    assert any("stale running state detected" in str(line) for line in (data.get("log_tail") or []))
+
+
+def test_deploy_runner_forces_stop_previous_off_by_default(monkeypatch):
+    from dashboard.deploy_manager import DeployManager
+
+    manager = DeployManager.instance()
+    captured: dict[str, object] = {}
+
+    class _FakeProc:
+        def __init__(self, **kwargs):
+            env = kwargs.get("env")
+            if isinstance(env, dict):
+                captured["env"] = env
+            self.stdout = iter(["ok\n"])
+
+        def wait(self):
+            return 0
+
+    def _fake_popen(*args, **kwargs):
+        return _FakeProc(**kwargs)
+
+    monkeypatch.setattr("dashboard.deploy_manager.subprocess.Popen", _fake_popen)
+    monkeypatch.setenv("NEXUSAI_DEPLOY_RUN_CMD", "echo deploy")
+    monkeypatch.delenv("NEXUSAI_DEPLOY_STOP_PREVIOUS_COLOR_FROM_DASHBOARD", raising=False)
+
+    manager._run_deploy("tester")
+    env = captured.get("env")
+    assert isinstance(env, dict)
+    assert env.get("NEXUSAI_STOP_PREVIOUS_COLOR") == "0"

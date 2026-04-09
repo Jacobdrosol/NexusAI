@@ -16,6 +16,19 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _parse_iso_utc(value: Any) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except Exception:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 @dataclass
 class DeployGate:
     ok: bool
@@ -166,9 +179,34 @@ class DeployManager:
             pass
         return "unknown"
 
+    def _recover_stale_running_state(self) -> None:
+        if str(self._state.get("state") or "").strip().lower() != "running":
+            return
+        if self._thread and self._thread.is_alive():
+            return
+        now = datetime.now(timezone.utc)
+        started_at = _parse_iso_utc(self._state.get("started_at"))
+        log_updated_at = _parse_iso_utc(self._state.get("log_updated_at"))
+        last_activity = log_updated_at or started_at
+        # If there has been no runner activity for 90s and no live thread,
+        # treat the run as stale so the UI is no longer stuck in "running".
+        if last_activity is not None:
+            stale_seconds = (now - last_activity).total_seconds()
+            if stale_seconds < 90:
+                return
+        self._state["state"] = "failed"
+        self._state["finished_at"] = _utc_now()
+        if not str(self._state.get("last_error") or "").strip():
+            self._state["last_error"] = (
+                "Deploy runner process is no longer active. "
+                "This usually means the runner container terminated before completion."
+            )
+        self._append_log("deploy: stale running state detected; marked as failed")
+
     def status(self, refresh_remote: bool = False) -> dict[str, Any]:
         with self._lock:
             self._refresh_state_from_disk()
+            self._recover_stale_running_state()
             local_commit = self._current_commit()
             remote_commit, remote_error = self._origin_main_commit(refresh_remote)
             deployed_commit = self._state.get("deployed_commit")
@@ -199,6 +237,7 @@ class DeployManager:
     def start(self, requested_by: str) -> tuple[bool, str]:
         with self._lock:
             self._refresh_state_from_disk()
+            self._recover_stale_running_state()
             if self._thread and self._thread.is_alive():
                 return False, "Deploy already running."
             gate = self._deploy_gate()
@@ -231,6 +270,17 @@ class DeployManager:
             self._append_log("deploy: strategy=bluegreen")
 
         try:
+            deploy_env = os.environ.copy()
+            allow_stop_previous = str(
+                os.environ.get("NEXUSAI_DEPLOY_STOP_PREVIOUS_COLOR_FROM_DASHBOARD", "0")
+            ).strip().lower() in {"1", "true", "yes", "on"}
+            if not allow_stop_previous:
+                deploy_env["NEXUSAI_STOP_PREVIOUS_COLOR"] = "0"
+                with self._lock:
+                    self._append_log(
+                        "[deploy-manager] dashboard mode: forcing NEXUSAI_STOP_PREVIOUS_COLOR=0 "
+                        "to avoid terminating the running deploy container"
+                    )
             proc = subprocess.Popen(
                 run_cmd,
                 cwd=str(self._repo_root),
@@ -238,6 +288,7 @@ class DeployManager:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                env=deploy_env,
             )
             assert proc.stdout is not None
             for line in proc.stdout:
