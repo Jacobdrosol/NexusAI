@@ -1962,9 +1962,12 @@ class Scheduler:
         """Execute an agentic loop: call the LLM, run tool calls, feed results back.
 
         Iterates until the model returns a plain content response (no tool_calls)
-        or until ``max_iterations`` is reached (circuit breaker).  Falls back to
-        a plain one-shot call if the backend doesn't respond with tool_calls on
-        the first iteration.
+        or until ``max_iterations`` is reached (circuit breaker).
+
+        For writable runs (``allow_writes=True``), the loop performs forced follow-up
+        retries when the model returns plain text before any tool call has occurred.
+        This prevents "ask-for-clarification" non-actions from being accepted as
+        completed coding runs.
         """
         from control_plane.scheduler.agent_workspace_tools import (
             execute_tool,
@@ -1984,6 +1987,12 @@ class Scheduler:
 
         accumulated_usage: dict = {}
         last_result: dict = {}
+        observed_tool_call = False
+        forced_tool_followups = 0
+        max_forced_tool_followups = max(
+            1,
+            int(os.environ.get("NEXUSAI_AGENT_FORCE_TOOL_FOLLOWUPS", "4") or "4"),
+        )
 
         for iteration in range(max_iterations):
             raw = await self._call_backend_raw(backend, messages, tools=tools, task=task)
@@ -1993,10 +2002,40 @@ class Scheduler:
 
             tool_calls = raw.get("tool_calls") or []
             if not tool_calls:
+                if allow_writes and not observed_tool_call and forced_tool_followups < max_forced_tool_followups:
+                    forced_tool_followups += 1
+                    output_text = str(raw.get("output") or "").strip()
+                    if output_text:
+                        messages.append({"role": "assistant", "content": output_text})
+                    messages.append(
+                        {
+                            "role": "system",
+                            "content": (
+                                "Tool-use requirement (mandatory for this writable coding run):\n"
+                                "- You must call at least one workspace tool now (for example list_tree, read_file, write_file).\n"
+                                "- Your next response must contain at least one tool call; do not return plain-text-only output.\n"
+                                "- Do not ask the user to restate the task.\n"
+                                "- Start implementing a minimal first slice immediately, then continue with additional edits as needed."
+                            ),
+                        }
+                    )
+                    logger.warning(
+                        "[AGENT] task=%s forcing tool-call followup attempt=%d (no tool calls observed yet)",
+                        task.id if task else "?",
+                        forced_tool_followups,
+                    )
+                    continue
+                if allow_writes and not observed_tool_call:
+                    logger.warning(
+                        "[AGENT] task=%s writable run ended without any tool calls (forced_followups=%d)",
+                        task.id if task else "?",
+                        forced_tool_followups,
+                    )
                 # No more tool calls — model returned final content
                 last_result = raw
                 break
 
+            observed_tool_call = True
             # Append the assistant message that contains tool_calls
             assistant_msg: dict = {
                 "role": "assistant",
@@ -2131,7 +2170,13 @@ class Scheduler:
             }
             finish_reason = str(data.get("done_reason") or data.get("finish_reason") or "").strip()
 
-            raw_tool_calls = msg_obj.get("tool_calls") or []
+            raw_tool_calls = (
+                msg_obj.get("tool_calls")
+                or msg_obj.get("toolCalls")
+                or data.get("tool_calls")
+                or data.get("toolCalls")
+                or []
+            )
             tool_calls = _parse_ollama_tool_calls(raw_tool_calls)
 
             result: dict = {"output": output, "tool_calls": tool_calls, "usage": usage}

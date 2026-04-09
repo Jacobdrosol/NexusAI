@@ -1,5 +1,6 @@
 import json
 import json
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -242,6 +243,66 @@ async def test_scheduler_injects_bot_system_prompt_into_payload():
     assert "validation-only or planning-only" in system_message["content"]
     assert result["payload"][1]["role"] == "user"
     assert '"instruction": "build outline"' in result["payload"][1]["content"]
+
+
+@pytest.mark.anyio
+async def test_run_agent_loop_forces_tool_followup_for_writable_runs(monkeypatch, tmp_path):
+    from control_plane.scheduler.scheduler import Scheduler
+
+    workspace_root = tmp_path / "repo"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    backend = BackendConfig(type="cloud_api", provider="ollama_cloud", model="qwen3-coder:480b")
+    scheduler = Scheduler(bot_registry=AsyncMock(), worker_registry=AsyncMock())
+
+    call_messages: list[list[dict[str, Any]]] = []
+    state = {"count": 0}
+
+    async def _fake_call_backend_raw(_backend, messages, *, tools=None, task=None):
+        state["count"] += 1
+        call_messages.append([dict(item) for item in messages])
+        if state["count"] == 1:
+            return {"output": "Please tell me the specific task.", "tool_calls": [], "usage": {}}
+        if state["count"] == 2:
+            return {
+                "output": "",
+                "tool_calls": [{"id": "tc-1", "name": "list_tree", "arguments": {}}],
+                "usage": {},
+            }
+        return {"output": "Implemented changes.", "tool_calls": [], "usage": {}}
+
+    monkeypatch.setattr(scheduler, "_call_backend_raw", _fake_call_backend_raw)
+    monkeypatch.setattr(
+        "control_plane.scheduler.agent_workspace_tools.get_tool_definitions",
+        lambda allow_writes=False: [{"type": "function", "function": {"name": "list_tree"}}],
+    )
+    monkeypatch.setattr(
+        "control_plane.scheduler.agent_workspace_tools.parse_tool_call_arguments",
+        lambda value: value if isinstance(value, dict) else {},
+    )
+    monkeypatch.setattr(
+        "control_plane.scheduler.agent_workspace_tools.execute_tool",
+        lambda name, args, root, allow_writes=False: f"tool={name}",
+    )
+    monkeypatch.setattr(
+        "control_plane.chat.workspace_tools.normalize_workspace_root",
+        lambda value: workspace_root,
+    )
+
+    result = await scheduler._run_agent_loop(
+        backend=backend,
+        prepared_payload=[{"role": "user", "content": "Can you code this?"}],
+        workspace_root=workspace_root,
+        allow_writes=True,
+        max_iterations=6,
+    )
+
+    assert result.get("output") == "Implemented changes."
+    assert state["count"] == 3
+    assert any(
+        str(message.get("role") or "") == "system"
+        and "Tool-use requirement (mandatory for this writable coding run)" in str(message.get("content") or "")
+        for message in call_messages[1]
+    )
 
 
 @pytest.mark.anyio
