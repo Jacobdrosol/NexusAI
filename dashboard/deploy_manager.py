@@ -73,6 +73,7 @@ class DeployManager:
             "runner_container_name": None,
             "runner_log_line_count": 0,
             "runner_log_since": None,
+            "initial_active_color": None,
         }
 
     def _normalize_state(self, raw: Any) -> dict[str, Any]:
@@ -287,6 +288,10 @@ class DeployManager:
                 continue
             if key.startswith("NEXUSAI_") or key == "COMPOSE_PROJECT_NAME":
                 cmd.extend(["-e", f"{key}={value}"])
+        # In sub-container mode, avoid stopping previous color from inside the runner
+        # process. Cleanup is handled by DeployManager after successful completion.
+        cmd.extend(["-e", "NEXUSAI_STOP_PREVIOUS_COLOR=0"])
+        cmd.extend(["-e", "NEXUSAI_REMOVE_PREVIOUS_COLOR_CONTAINER=0"])
         cmd.extend([runner_image, "sh", "-lc", run_cmd])
         cp = subprocess.run(cmd, capture_output=True, text=True, check=False)
         if cp.returncode != 0:
@@ -325,6 +330,7 @@ class DeployManager:
             if int(exit_code or 1) == 0 and local_commit:
                 self._state["deployed_commit"] = local_commit
                 self._state["last_error"] = None
+                self._cleanup_previous_color_after_success()
             else:
                 detail = f"Deploy runner exited with code {int(exit_code or 1)}."
                 if last_log_line:
@@ -335,10 +341,44 @@ class DeployManager:
             self._state["runner_container_name"] = None
             self._state["runner_log_line_count"] = 0
             self._state["runner_log_since"] = None
+            self._state["initial_active_color"] = None
             self._save_state()
             return
         if inspect_err:
             self._append_log(f"deploy: runner inspect warning: {inspect_err}")
+
+    def _cleanup_previous_color_after_success(self) -> None:
+        previous_color = str(self._state.get("initial_active_color") or "").strip().lower()
+        if previous_color not in {"blue", "green"}:
+            return
+        compose_project = str(os.environ.get("NEXUSAI_COMPOSE_PROJECT_NAME", "nexusai") or "nexusai").strip() or "nexusai"
+        compose_file = "docker-compose.bluegreen.yml"
+        service = f"dashboard_{previous_color}"
+        container_name = f"nexus-dashboard-{previous_color}"
+        self._append_log(f"[deploy-manager] post-success cleanup: stopping previous color {previous_color}")
+        stop_cp = subprocess.run(
+            ["docker", "compose", "-p", compose_project, "-f", compose_file, "--profile", previous_color, "stop", service],
+            cwd=str(self._repo_root),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if stop_cp.returncode != 0:
+            detail = (stop_cp.stderr or stop_cp.stdout or "").strip()
+            if detail:
+                self._append_log(f"[deploy-manager] cleanup warning (stop): {detail}")
+        rm_cp = subprocess.run(
+            ["docker", "compose", "-p", compose_project, "-f", compose_file, "rm", "-sf", service],
+            cwd=str(self._repo_root),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if rm_cp.returncode != 0:
+            subprocess.run(["docker", "rm", "-f", container_name], capture_output=True, text=True, check=False)
+            detail = (rm_cp.stderr or rm_cp.stdout or "").strip()
+            if detail:
+                self._append_log(f"[deploy-manager] cleanup warning (rm): {detail}")
 
     def _recover_stale_running_state(self) -> None:
         if str(self._state.get("state") or "").strip().lower() != "running":
@@ -437,6 +477,7 @@ class DeployManager:
                 self._state["runner_container_name"] = None
                 self._state["runner_log_line_count"] = 0
                 self._state["runner_log_since"] = None
+                self._state["initial_active_color"] = self._active_color()
                 self._save_state()
                 self._append_log(f"deploy: started run_id={run_id}")
                 self._append_log(f"deploy: requested_by={requested_by}")

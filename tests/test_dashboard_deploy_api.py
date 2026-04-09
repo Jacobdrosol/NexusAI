@@ -2,6 +2,7 @@
 
 import bcrypt
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 
 def _login_admin(dashboard_client):
@@ -135,3 +136,55 @@ def test_deploy_runner_forces_stop_previous_off_by_default(monkeypatch):
     env = captured.get("env")
     assert isinstance(env, dict)
     assert env.get("NEXUSAI_STOP_PREVIOUS_COLOR") == "0"
+
+
+def test_subcontainer_runner_forces_safe_cleanup_flags(monkeypatch):
+    from dashboard.deploy_manager import DeployManager
+
+    manager = DeployManager.instance()
+    monkeypatch.setattr(manager, "_detect_runner_image", lambda: "nexusai-dashboard_blue:latest")
+    monkeypatch.setenv("NEXUSAI_DEPLOY_HOST_REPO_ROOT", "/opt/NexusAI")
+
+    calls: list[list[str]] = []
+
+    def _fake_run(args, **kwargs):
+        calls.append([str(part) for part in args])
+        if len(calls) == 1:
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        return SimpleNamespace(returncode=0, stdout="runner-container-id", stderr="")
+
+    monkeypatch.setattr("dashboard.deploy_manager.subprocess.run", _fake_run)
+
+    runner_name, err = manager._launch_subcontainer_runner(run_id="1234567890ab", run_cmd="echo deploy")
+    assert err is None
+    assert runner_name == "nexus-deploy-runner-1234567890ab"
+    assert len(calls) >= 2
+    run_cmd = calls[1]
+    assert "-e" in run_cmd
+    assert "NEXUSAI_STOP_PREVIOUS_COLOR=0" in run_cmd
+    assert "NEXUSAI_REMOVE_PREVIOUS_COLOR_CONTAINER=0" in run_cmd
+
+
+def test_post_success_cleanup_targets_previous_color(monkeypatch):
+    from dashboard.deploy_manager import DeployManager
+
+    manager = DeployManager.instance()
+    with manager._lock:
+        manager._state["initial_active_color"] = "blue"
+        manager._save_state()
+
+    calls: list[list[str]] = []
+
+    def _fake_run(args, **kwargs):
+        calls.append([str(part) for part in args])
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("dashboard.deploy_manager.subprocess.run", _fake_run)
+    manager._cleanup_previous_color_after_success()
+
+    assert len(calls) >= 2
+    assert calls[0][0:3] == ["docker", "compose", "-p"]
+    assert "stop" in calls[0]
+    assert "dashboard_blue" in calls[0]
+    assert "rm" in calls[1]
+    assert "dashboard_blue" in calls[1]
