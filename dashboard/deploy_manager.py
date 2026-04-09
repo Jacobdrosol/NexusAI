@@ -72,6 +72,7 @@ class DeployManager:
             "log_cleared_at": None,
             "runner_container_name": None,
             "runner_log_line_count": 0,
+            "runner_log_since": None,
         }
 
     def _normalize_state(self, raw: Any) -> dict[str, Any]:
@@ -297,20 +298,20 @@ class DeployManager:
         runner_name = self._runner_container_name()
         if not runner_name:
             return
+        sync_started_at = _utc_now()
+        since = str(self._state.get("runner_log_since") or "").strip()
         logs_cp = subprocess.run(
-            ["docker", "logs", "--tail", "400", runner_name],
+            ["docker", "logs", "--timestamps", *(["--since", since] if since else []), runner_name],
             capture_output=True,
             text=True,
             check=False,
         )
         raw_logs = (logs_cp.stdout or "") + ("\n" + logs_cp.stderr if logs_cp.stderr else "")
         lines = [str(line).rstrip() for line in raw_logs.splitlines() if str(line).strip()]
-        seen_count = int(self._state.get("runner_log_line_count") or 0)
-        if seen_count < 0 or seen_count > len(lines):
-            seen_count = 0
-        for line in lines[seen_count:]:
+        for line in lines:
             self._append_log(line)
-        self._state["runner_log_line_count"] = len(lines)
+        self._state["runner_log_line_count"] = int(self._state.get("runner_log_line_count") or 0) + len(lines)
+        self._state["runner_log_since"] = sync_started_at
         self._save_state()
 
         status, exit_code, inspect_err = self._runner_status(runner_name)
@@ -318,17 +319,22 @@ class DeployManager:
             return
         if status in {"exited", "dead"}:
             local_commit = self._current_commit()
+            last_log_line = lines[-1] if lines else ""
             self._state["state"] = "succeeded" if int(exit_code or 1) == 0 else "failed"
             self._state["finished_at"] = _utc_now()
             if int(exit_code or 1) == 0 and local_commit:
                 self._state["deployed_commit"] = local_commit
                 self._state["last_error"] = None
             else:
-                self._state["last_error"] = f"Deploy runner exited with code {int(exit_code or 1)}."
+                detail = f"Deploy runner exited with code {int(exit_code or 1)}."
+                if last_log_line:
+                    detail = f"{detail} Last log: {last_log_line}"
+                self._state["last_error"] = detail
             self._append_log(f"deploy: runner container exited with code {int(exit_code or 1)}")
             subprocess.run(["docker", "rm", "-f", runner_name], capture_output=True, text=True, check=False)
             self._state["runner_container_name"] = None
             self._state["runner_log_line_count"] = 0
+            self._state["runner_log_since"] = None
             self._save_state()
             return
         if inspect_err:
@@ -430,6 +436,7 @@ class DeployManager:
                 self._state["log_cleared_at"] = None
                 self._state["runner_container_name"] = None
                 self._state["runner_log_line_count"] = 0
+                self._state["runner_log_since"] = None
                 self._save_state()
                 self._append_log(f"deploy: started run_id={run_id}")
                 self._append_log(f"deploy: requested_by={requested_by}")
@@ -444,6 +451,7 @@ class DeployManager:
                     return False, self._state["last_error"]
                 self._state["runner_container_name"] = runner_name
                 self._state["runner_log_line_count"] = 0
+                self._state["runner_log_since"] = None
                 self._append_log(f"deploy: runner container launched: {runner_name}")
                 self._save_state()
                 return True, "Deploy started."
