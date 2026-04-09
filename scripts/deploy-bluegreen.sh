@@ -11,6 +11,9 @@ POST_SWITCH_MONITOR_SECONDS="${NEXUSAI_POST_SWITCH_MONITOR_SECONDS:-90}"
 POST_SWITCH_MONITOR_INTERVAL_SECONDS="${NEXUSAI_POST_SWITCH_MONITOR_INTERVAL_SECONDS:-10}"
 PRUNE_CONTAINERS="${NEXUSAI_DEPLOY_PRUNE_CONTAINERS:-1}"
 PRUNE_DANGLING_IMAGES="${NEXUSAI_DEPLOY_PRUNE_DANGLING_IMAGES:-1}"
+FIX_RUNTIME_PERMISSIONS="${NEXUSAI_DEPLOY_FIX_RUNTIME_PERMISSIONS:-1}"
+RUNTIME_OWNER_UID="${NEXUSAI_DEPLOY_RUNTIME_OWNER_UID:-1000}"
+RUNTIME_OWNER_GID="${NEXUSAI_DEPLOY_RUNTIME_OWNER_GID:-1000}"
 
 echo "[deploy] checking DB drift guard"
 sh ./scripts/check_db_drift.sh
@@ -246,6 +249,18 @@ cleanup_stale_runtime_artifacts() {
   fi
 }
 
+fix_runtime_file_permissions() {
+  if [ "$FIX_RUNTIME_PERMISSIONS" != "1" ]; then
+    echo "[deploy] skipping runtime permission fix (NEXUSAI_DEPLOY_FIX_RUNTIME_PERMISSIONS=$FIX_RUNTIME_PERMISSIONS)"
+    return 0
+  fi
+
+  if command -v chown >/dev/null 2>&1; then
+    echo "[deploy] fixing runtime file ownership to ${RUNTIME_OWNER_UID}:${RUNTIME_OWNER_GID}"
+    chown -R "${RUNTIME_OWNER_UID}:${RUNTIME_OWNER_GID}" data/nginx "$CURRENT_COLOR_FILE" || true
+  fi
+}
+
 echo "[deploy] fetching latest main"
 git fetch origin main
 git checkout main
@@ -339,6 +354,7 @@ else
 fi
 
 cleanup_stale_runtime_artifacts
+fix_runtime_file_permissions
 
 echo "[deploy] completed"
 trap - EXIT
