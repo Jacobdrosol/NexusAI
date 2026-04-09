@@ -1477,7 +1477,7 @@ def _inline_code_payload_stats(payload: List[dict]) -> Dict[str, int]:
 
 
 def _inline_code_integration_repair_attempt_limit() -> int:
-    return _env_int("NEXUSAI_INLINE_CODE_INTEGRATION_REPAIR_ATTEMPTS", 1, minimum=0, maximum=2)
+    return _env_int("NEXUSAI_INLINE_CODE_INTEGRATION_REPAIR_ATTEMPTS", 2, minimum=0, maximum=4)
 
 
 def _inline_code_integration_repair_prompt(created_paths: List[str]) -> str:
@@ -1486,10 +1486,62 @@ def _inline_code_integration_repair_prompt(created_paths: List[str]) -> str:
         "Quality remediation pass: the previous coding pass created only new files and did not integrate with existing code.\n"
         f"Created files from prior pass: {preview}\n\n"
         "Now make concrete integration edits by modifying at least one existing tracked file to wire this feature in.\n"
+        "Use write_file/edit_file tooling to make real repository edits directly.\n"
+        "Do not ask the user to share files.\n"
         "Typical integration targets include Program.cs (DI registration), ApplicationDbContext.cs (DbSet/config), "
         "existing controllers/services, and existing scheduler registration.\n"
         "Do not ask for clarification. Implement directly and keep previous new files intact."
     )
+
+
+def _inline_code_no_change_repair_attempt_limit() -> int:
+    return _env_int("NEXUSAI_INLINE_CODE_NO_CHANGE_REPAIR_ATTEMPTS", 1, minimum=0, maximum=3)
+
+
+def _inline_code_no_change_repair_prompt() -> str:
+    return (
+        "No file edits were produced in the previous run.\n\n"
+        "Now execute the coding task by making concrete repository edits immediately.\n"
+        "- Use workspace tools to inspect and modify files directly.\n"
+        "- Do not ask the user for files or clarification.\n"
+        "- Make at least one write operation (write_file or edit_file).\n"
+        "- If this is existing-repo feature work, integrate through existing files (not only brand-new files)."
+    )
+
+
+async def _inline_code_attempt_no_change_repair(
+    *,
+    task_manager: Any,
+    target_bot_id: str,
+    conversation_id: str,
+    project_id: str,
+    orchestration_id: str,
+    temp_root: str,
+    requested_task: str,
+    workspace_tree_preview: str = "",
+) -> Task | None:
+    remediation_payload: List[dict] = [
+        {"role": "system", "content": _inline_code_no_change_repair_prompt()},
+        {"role": "user", "content": str(requested_task or "").strip()},
+    ]
+    remediation_payload = _inject_inline_workspace_marker(
+        remediation_payload,
+        workspace_root=temp_root,
+        requested_task=requested_task,
+        workspace_tree_preview=workspace_tree_preview,
+    )
+    remediation_payload = _inline_code_compact_payload(remediation_payload, max_messages=10, max_chars=20_000)
+    remediation_task = await task_manager.create_task(
+        bot_id=target_bot_id,
+        payload=remediation_payload,
+        metadata=TaskMetadata(
+            source="chat_assign",
+            project_id=project_id or None,
+            conversation_id=conversation_id or None,
+            orchestration_id=orchestration_id,
+        ),
+    )
+    return await _inline_code_wait_for_task(task_manager, task_id=remediation_task.id)
 
 
 async def _inline_code_attempt_integration_repair(
@@ -1640,6 +1692,7 @@ def _inject_inline_workspace_marker(
                 "Because this turn explicitly requested coding, you must make best-effort repository edits now. "
                 "Do not ask the user to re-specify what to build unless you are blocked by missing permissions or "
                 "missing repository context. If scope is broad, implement a minimal first slice and state assumptions.\n\n"
+                "Do not ask the user to send files or point to file paths; discover and read relevant files via workspace tools.\n\n"
                 "For feature requests in an existing repo, include integration edits to existing files (not only newly-created files) "
                 "unless the repo is genuinely empty.\n"
                 "You may read files, infer architecture, make inline edits, add files, and delete files via workspace tools."
@@ -2886,12 +2939,40 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                 if str(terminal_task.status or "").strip().lower() == "completed":
                     artifacts, files_touched, deleted_paths = await _inline_code_collect_workspace_artifacts(Path(temp_root))
                     change_breakdown = _inline_code_change_breakdown(artifacts, deleted_paths)
+                    quality_warnings: List[str] = []
+                    no_change_repair_attempts = _inline_code_no_change_repair_attempt_limit()
+                    if not files_touched and no_change_repair_attempts > 0:
+                        for _ in range(no_change_repair_attempts):
+                            try:
+                                repaired_task = await _inline_code_attempt_no_change_repair(
+                                    task_manager=task_manager,
+                                    target_bot_id=target_bot_id,
+                                    conversation_id=conversation_id,
+                                    project_id=str(conversation.project_id or "").strip(),
+                                    orchestration_id=orchestration_id,
+                                    temp_root=temp_root,
+                                    requested_task=body.content,
+                                    workspace_tree_preview=workspace_tree_preview,
+                                )
+                            except Exception:
+                                logger.exception("Inline no-change remediation attempt failed before task completion")
+                                break
+                            if repaired_task is None:
+                                break
+                            if str(repaired_task.status or "").strip().lower() != "completed":
+                                quality_warnings.append(_inline_code_terminal_error_message(repaired_task))
+                                break
+                            terminal_task = repaired_task
+                            artifacts, files_touched, deleted_paths = await _inline_code_collect_workspace_artifacts(Path(temp_root))
+                            change_breakdown = _inline_code_change_breakdown(artifacts, deleted_paths)
+                            if files_touched:
+                                quality_warnings.append("No-change remediation pass executed and produced concrete file edits.")
+                                break
                     integration_passed = bool(
                         not integration_required
                         or int(change_breakdown.get("updated_count") or 0) > 0
                         or int(change_breakdown.get("deleted_count") or 0) > 0
                     )
-                    quality_warnings: List[str] = []
                     repair_attempts = _inline_code_integration_repair_attempt_limit()
                     if integration_required and not integration_passed and repair_attempts > 0:
                         for _ in range(repair_attempts):
@@ -3453,12 +3534,40 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                     if str(terminal_task.status or "").strip().lower() == "completed":
                         artifacts, files_touched, deleted_paths = await _inline_code_collect_workspace_artifacts(Path(temp_root))
                         change_breakdown = _inline_code_change_breakdown(artifacts, deleted_paths)
+                        quality_warnings: List[str] = []
+                        no_change_repair_attempts = _inline_code_no_change_repair_attempt_limit()
+                        if not files_touched and no_change_repair_attempts > 0:
+                            for _ in range(no_change_repair_attempts):
+                                try:
+                                    repaired_task = await _inline_code_attempt_no_change_repair(
+                                        task_manager=task_manager,
+                                        target_bot_id=target_bot_id,
+                                        conversation_id=conversation_id,
+                                        project_id=str(conversation.project_id or "").strip(),
+                                        orchestration_id=orchestration_id,
+                                        temp_root=temp_root,
+                                        requested_task=body.content,
+                                        workspace_tree_preview=workspace_tree_preview,
+                                    )
+                                except Exception:
+                                    logger.exception("Inline no-change remediation attempt failed before task completion")
+                                    break
+                                if repaired_task is None:
+                                    break
+                                if str(repaired_task.status or "").strip().lower() != "completed":
+                                    quality_warnings.append(_inline_code_terminal_error_message(repaired_task))
+                                    break
+                                terminal_task = repaired_task
+                                artifacts, files_touched, deleted_paths = await _inline_code_collect_workspace_artifacts(Path(temp_root))
+                                change_breakdown = _inline_code_change_breakdown(artifacts, deleted_paths)
+                                if files_touched:
+                                    quality_warnings.append("No-change remediation pass executed and produced concrete file edits.")
+                                    break
                         integration_passed = bool(
                             not integration_required
                             or int(change_breakdown.get("updated_count") or 0) > 0
                             or int(change_breakdown.get("deleted_count") or 0) > 0
                         )
-                        quality_warnings: List[str] = []
                         repair_attempts = _inline_code_integration_repair_attempt_limit()
                         if integration_required and not integration_passed and repair_attempts > 0:
                             for _ in range(repair_attempts):

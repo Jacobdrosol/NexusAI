@@ -138,6 +138,39 @@ _WRITE_TOOLS: list[dict] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "edit_file",
+            "description": (
+                "Apply a targeted text replacement inside an existing file. "
+                "Use this for small/medium edits to existing files without rewriting the whole file. "
+                "Fails if the target text is not found."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Relative path for the file (e.g. 'GlobeIQ.Server/Program.cs').",
+                    },
+                    "old_text": {
+                        "type": "string",
+                        "description": "Exact text to find in the file.",
+                    },
+                    "new_text": {
+                        "type": "string",
+                        "description": "Replacement text.",
+                    },
+                    "replace_all": {
+                        "type": "boolean",
+                        "description": "When true, replace all occurrences; when false, replace only the first.",
+                    },
+                },
+                "required": ["path", "old_text", "new_text"],
+            },
+        },
+    },
 ]
 
 
@@ -182,6 +215,10 @@ def execute_tool(
             if not allow_writes:
                 return "ERROR: write_file is not permitted for this bot (repo_output_mode is not 'allow')."
             return _tool_write_file(workspace_root, arguments)
+        elif name == "edit_file":
+            if not allow_writes:
+                return "ERROR: edit_file is not permitted for this bot (repo_output_mode is not 'allow')."
+            return _tool_edit_file(workspace_root, arguments)
         else:
             return f"ERROR: Unknown tool '{name}'."
     except Exception as exc:
@@ -291,6 +328,51 @@ def _tool_write_file(root: Path, args: dict) -> str:
         return f"OK: wrote {len(content_str)} characters to {rel}"
     except Exception as exc:
         return f"ERROR writing file: {exc}"
+
+
+def _tool_edit_file(root: Path, args: dict) -> str:
+    path_hint = str(args.get("path") or "").strip()
+    old_text = args.get("old_text")
+    new_text = args.get("new_text")
+    replace_all = bool(args.get("replace_all"))
+    if not path_hint:
+        return "ERROR: 'path' argument is required."
+    if old_text is None:
+        return "ERROR: 'old_text' argument is required."
+    if new_text is None:
+        return "ERROR: 'new_text' argument is required."
+    old_text_str = str(old_text)
+    new_text_str = str(new_text)
+    if not old_text_str:
+        return "ERROR: 'old_text' cannot be empty."
+    resolved = _safe_resolve_under_root(root, path_hint)
+    if resolved is None:
+        return f"ERROR: Path '{path_hint}' is outside the workspace root or invalid."
+    if not resolved.exists():
+        return f"File not found: {path_hint}"
+    if not resolved.is_file():
+        return f"'{path_hint}' is a directory, not a file."
+    if not _is_probably_text_file(resolved, max_file_bytes=1_500_000):
+        return f"'{path_hint}' appears to be a binary file and cannot be edited as text."
+    try:
+        content = resolved.read_text(encoding="utf-8", errors="replace")
+    except Exception as exc:
+        return f"ERROR reading file for edit: {exc}"
+    match_count = content.count(old_text_str)
+    if match_count <= 0:
+        return "ERROR: old_text not found in target file."
+    if replace_all:
+        updated = content.replace(old_text_str, new_text_str)
+        replaced = match_count
+    else:
+        updated = content.replace(old_text_str, new_text_str, 1)
+        replaced = 1
+    try:
+        resolved.write_text(updated, encoding="utf-8")
+        rel = str(resolved.relative_to(root)).replace("\\", "/")
+    except Exception as exc:
+        return f"ERROR writing edited file: {exc}"
+    return f"OK: replaced {replaced} occurrence(s) in {rel}"
 
 
 # ---------------------------------------------------------------------------

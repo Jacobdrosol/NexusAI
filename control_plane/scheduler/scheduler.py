@@ -1988,6 +1988,7 @@ class Scheduler:
         accumulated_usage: dict = {}
         last_result: dict = {}
         observed_tool_call = False
+        observed_write_tool_call = False
         executed_tool_calls: list[dict] = []
         forced_tool_followups = 0
         max_forced_tool_followups = max(
@@ -2012,8 +2013,8 @@ class Scheduler:
                         {
                             "role": "system",
                             "content": (
-                                "Tool-use requirement (mandatory for this writable coding run):\n"
-                                "- You must call at least one workspace tool now (for example list_tree, read_file, write_file).\n"
+                            "Tool-use requirement (mandatory for this writable coding run):\n"
+                                "- You must call at least one workspace tool now (for example workspace_tree, list_directory, read_file, search_files, write_file, edit_file).\n"
                                 "- Your next response must contain at least one tool call; do not return plain-text-only output.\n"
                                 "- Do not ask the user to restate the task.\n"
                                 "- Start implementing a minimal first slice immediately, then continue with additional edits as needed."
@@ -2026,9 +2027,38 @@ class Scheduler:
                         forced_tool_followups,
                     )
                     continue
+                if allow_writes and observed_tool_call and not observed_write_tool_call and forced_tool_followups < max_forced_tool_followups:
+                    forced_tool_followups += 1
+                    output_text = str(raw.get("output") or "").strip()
+                    if output_text:
+                        messages.append({"role": "assistant", "content": output_text})
+                    messages.append(
+                        {
+                            "role": "system",
+                            "content": (
+                                "Write requirement (mandatory for this writable coding run):\n"
+                                "- You have used tools, but have not made any file edits yet.\n"
+                                "- Your next response must include at least one write operation via write_file or edit_file.\n"
+                                "- Modify existing files when integrating into an existing codebase.\n"
+                                "- Do not ask the user for files; read and edit files directly via tools."
+                            ),
+                        }
+                    )
+                    logger.warning(
+                        "[AGENT] task=%s forcing write followup attempt=%d (no write/edit tool calls observed yet)",
+                        task.id if task else "?",
+                        forced_tool_followups,
+                    )
+                    continue
                 if allow_writes and not observed_tool_call:
                     logger.warning(
                         "[AGENT] task=%s writable run ended without any tool calls (forced_followups=%d)",
+                        task.id if task else "?",
+                        forced_tool_followups,
+                    )
+                if allow_writes and observed_tool_call and not observed_write_tool_call:
+                    logger.warning(
+                        "[AGENT] task=%s writable run ended without any write/edit tool calls (forced_followups=%d)",
                         task.id if task else "?",
                         forced_tool_followups,
                     )
@@ -2040,10 +2070,13 @@ class Scheduler:
             for tc in tool_calls:
                 if not isinstance(tc, dict):
                     continue
+                tool_name = str(tc.get("name") or "")
+                if allow_writes and tool_name in {"write_file", "edit_file"}:
+                    observed_write_tool_call = True
                 executed_tool_calls.append(
                     {
                         "id": str(tc.get("id") or ""),
-                        "name": str(tc.get("name") or ""),
+                        "name": tool_name,
                         "arguments": tc.get("arguments") if isinstance(tc.get("arguments"), dict) else {},
                     }
                 )

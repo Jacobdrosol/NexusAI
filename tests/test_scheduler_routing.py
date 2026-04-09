@@ -268,12 +268,20 @@ async def test_run_agent_loop_forces_tool_followup_for_writable_runs(monkeypatch
                 "tool_calls": [{"id": "tc-1", "name": "list_tree", "arguments": {}}],
                 "usage": {},
             }
+        if state["count"] == 3:
+            return {
+                "output": "",
+                "tool_calls": [
+                    {"id": "tc-2", "name": "write_file", "arguments": {"path": "demo.txt", "content": "ok"}}
+                ],
+                "usage": {},
+            }
         return {"output": "Implemented changes.", "tool_calls": [], "usage": {}}
 
     monkeypatch.setattr(scheduler, "_call_backend_raw", _fake_call_backend_raw)
     monkeypatch.setattr(
         "control_plane.scheduler.agent_workspace_tools.get_tool_definitions",
-        lambda allow_writes=False: [{"type": "function", "function": {"name": "list_tree"}}],
+        lambda allow_writes=False: [{"type": "function", "function": {"name": "list_tree"}}, {"type": "function", "function": {"name": "write_file"}}],
     )
     monkeypatch.setattr(
         "control_plane.scheduler.agent_workspace_tools.parse_tool_call_arguments",
@@ -297,8 +305,9 @@ async def test_run_agent_loop_forces_tool_followup_for_writable_runs(monkeypatch
     )
 
     assert result.get("output") == "Implemented changes."
-    assert state["count"] == 3
+    assert state["count"] == 4
     assert any(str(item.get("name") or "") == "list_tree" for item in (result.get("tool_calls_executed") or []))
+    assert any(str(item.get("name") or "") == "write_file" for item in (result.get("tool_calls_executed") or []))
     assert any(
         str(message.get("role") or "") == "system"
         and "Tool-use requirement (mandatory for this writable coding run)" in str(message.get("content") or "")
