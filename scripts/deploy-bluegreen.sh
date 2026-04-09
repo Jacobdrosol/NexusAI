@@ -15,7 +15,7 @@ PRUNE_DANGLING_IMAGES="${NEXUSAI_DEPLOY_PRUNE_DANGLING_IMAGES:-1}"
 FIX_RUNTIME_PERMISSIONS="${NEXUSAI_DEPLOY_FIX_RUNTIME_PERMISSIONS:-1}"
 RUNTIME_OWNER_UID="${NEXUSAI_DEPLOY_RUNTIME_OWNER_UID:-1000}"
 RUNTIME_OWNER_GID="${NEXUSAI_DEPLOY_RUNTIME_OWNER_GID:-1000}"
-FIX_REPO_OWNERSHIP="${NEXUSAI_DEPLOY_FIX_REPO_OWNERSHIP:-1}"
+FIX_REPO_OWNERSHIP="${NEXUSAI_DEPLOY_FIX_REPO_OWNERSHIP:-0}"
 REMOVE_PREVIOUS_COLOR_CONTAINER="${NEXUSAI_REMOVE_PREVIOUS_COLOR_CONTAINER:-1}"
 STOP_PREVIOUS_COLOR_TIMEOUT_SECONDS="${NEXUSAI_STOP_PREVIOUS_COLOR_TIMEOUT_SECONDS:-25}"
 
@@ -333,9 +333,10 @@ fix_runtime_file_permissions() {
 }
 
 echo "[deploy] fetching latest main"
-git fetch origin main
-git checkout main
-git pull --ff-only origin main
+REPO_ROOT="$(pwd -P 2>/dev/null || pwd)"
+git -c "safe.directory=$REPO_ROOT" fetch origin main
+git -c "safe.directory=$REPO_ROOT" checkout main
+git -c "safe.directory=$REPO_ROOT" pull --ff-only origin main
 
 if [ "$CORE_RECREATE" = "1" ] && [ -f "docker-compose.yml" ]; then
   echo "[deploy] recreating core runtime services against persistent ./data state"
