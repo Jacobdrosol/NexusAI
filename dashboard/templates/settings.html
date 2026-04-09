@@ -904,13 +904,16 @@ function clearDeployLog() {
   .catch(function(e){ showToast('Network error: ' + e, false); });
 }
 
+var _deployStatusPollInFlight = false;
 setInterval(function() {
   var section = document.getElementById('section-deploy');
-  if (section && section.style.display !== 'none') {
+  if (section && section.style.display !== 'none' && !_deployStatusPollInFlight) {
+    _deployStatusPollInFlight = true;
     fetch('/api/settings/deploy/status', {headers: {'X-CSRFToken': _csrfToken}})
       .then(function(r){ return r.json(); })
       .then(function(data){ renderDeployStatus(data); })
-      .catch(function(){});
+      .catch(function(){})
+      .finally(function(){ _deployStatusPollInFlight = false; });
   }
 }, 5000);
 

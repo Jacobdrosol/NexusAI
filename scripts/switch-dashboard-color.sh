@@ -24,7 +24,12 @@ fi
 
 echo "[switch] applying nginx route config for $TARGET_COLOR"
 mkdir -p "$ACTIVE_CONF_DIR"
-cp "$SOURCE_CONF" "$ACTIVE_CONF"
+if cp "$SOURCE_CONF" "$ACTIVE_CONF" 2>/dev/null; then
+  echo "[switch] updated host runtime nginx config"
+else
+  echo "[switch] host runtime config not writable; applying config directly in gateway container"
+  docker cp "$SOURCE_CONF" nexus-dashboard-gateway:/etc/nginx/conf.d/default.conf
+fi
 
 echo "[switch] reloading gateway"
 docker compose $COMPOSE_ARGS exec -T dashboard_gateway nginx -s reload

@@ -7,6 +7,10 @@ export COMPOSE_PROJECT_NAME
 COMPOSE_ARGS="-p $COMPOSE_PROJECT_NAME -f docker-compose.bluegreen.yml"
 CORE_COMPOSE_ARGS="-p $COMPOSE_PROJECT_NAME -f docker-compose.yml"
 STOP_PREVIOUS_COLOR="${NEXUSAI_STOP_PREVIOUS_COLOR:-0}"
+POST_SWITCH_MONITOR_SECONDS="${NEXUSAI_POST_SWITCH_MONITOR_SECONDS:-90}"
+POST_SWITCH_MONITOR_INTERVAL_SECONDS="${NEXUSAI_POST_SWITCH_MONITOR_INTERVAL_SECONDS:-10}"
+PRUNE_CONTAINERS="${NEXUSAI_DEPLOY_PRUNE_CONTAINERS:-1}"
+PRUNE_DANGLING_IMAGES="${NEXUSAI_DEPLOY_PRUNE_DANGLING_IMAGES:-1}"
 
 echo "[deploy] checking DB drift guard"
 sh ./scripts/check_db_drift.sh
@@ -190,6 +194,58 @@ wait_for_dashboard_control_plane_health() {
   done
 }
 
+monitor_post_switch_stability() {
+  MONITOR_SECONDS="$1"
+  INTERVAL_SECONDS="$2"
+  if [ "$MONITOR_SECONDS" -le 0 ]; then
+    return 0
+  fi
+  if [ "$INTERVAL_SECONDS" -le 0 ]; then
+    INTERVAL_SECONDS=5
+  fi
+
+  echo "[deploy] monitoring post-switch stability for ${MONITOR_SECONDS}s"
+  ELAPSED=0
+  while [ "$ELAPSED" -lt "$MONITOR_SECONDS" ]; do
+    if ! docker compose $COMPOSE_ARGS exec -T dashboard_gateway sh -lc "wget -q -O - http://127.0.0.1:5000/health | grep -q '\"status\"'"; then
+      echo "[deploy] gateway health probe failed during post-switch monitoring"
+      return 1
+    fi
+
+    ACTIVE_ID="$(docker compose $COMPOSE_ARGS ps -q "dashboard_$NEXT_COLOR" 2>/dev/null || true)"
+    if [ -z "$ACTIVE_ID" ]; then
+      echo "[deploy] active dashboard container missing during post-switch monitoring"
+      return 1
+    fi
+
+    ACTIVE_HEALTH="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$ACTIVE_ID" 2>/dev/null || true)"
+    if [ "$ACTIVE_HEALTH" != "healthy" ] && [ "$ACTIVE_HEALTH" != "running" ]; then
+      echo "[deploy] active dashboard_$NEXT_COLOR health degraded: $ACTIVE_HEALTH"
+      docker compose $COMPOSE_ARGS logs --tail=120 "dashboard_$NEXT_COLOR" || true
+      return 1
+    fi
+
+    sleep "$INTERVAL_SECONDS"
+    ELAPSED=$((ELAPSED + INTERVAL_SECONDS))
+  done
+}
+
+cleanup_stale_runtime_artifacts() {
+  if [ "$PRUNE_CONTAINERS" = "1" ]; then
+    echo "[deploy] pruning exited containers"
+    docker container prune -f || true
+  else
+    echo "[deploy] skipping exited container prune (NEXUSAI_DEPLOY_PRUNE_CONTAINERS=$PRUNE_CONTAINERS)"
+  fi
+
+  if [ "$PRUNE_DANGLING_IMAGES" = "1" ]; then
+    echo "[deploy] pruning dangling images"
+    docker image prune -f || true
+  else
+    echo "[deploy] skipping dangling image prune (NEXUSAI_DEPLOY_PRUNE_DANGLING_IMAGES=$PRUNE_DANGLING_IMAGES)"
+  fi
+}
+
 echo "[deploy] fetching latest main"
 git fetch origin main
 git checkout main
@@ -271,6 +327,8 @@ until docker compose $COMPOSE_ARGS exec -T dashboard_gateway sh -lc "wget -q -O 
   sleep 1
 done
 
+monitor_post_switch_stability "$POST_SWITCH_MONITOR_SECONDS" "$POST_SWITCH_MONITOR_INTERVAL_SECONDS"
+
 echo "$NEXT_COLOR" > "$CURRENT_COLOR_FILE"
 
 if [ "$STOP_PREVIOUS_COLOR" = "1" ]; then
@@ -279,6 +337,8 @@ if [ "$STOP_PREVIOUS_COLOR" = "1" ]; then
 else
   echo "[deploy] leaving previous color running (NEXUSAI_STOP_PREVIOUS_COLOR=$STOP_PREVIOUS_COLOR)"
 fi
+
+cleanup_stale_runtime_artifacts
 
 echo "[deploy] completed"
 trap - EXIT

@@ -714,6 +714,7 @@ let pendingComposerAttachments = [];
 const taskEventMap = new Map();
 const messageMap = new Map((initialMessages || []).map((m) => [String(m.id), m]));
 let refreshTimer = null;
+let refreshInFlight = false;
 let activeDagGraph = null;
 let activeDagSelectedNodeId = '';
 let activeDagOrchestrationId = '';
@@ -1745,6 +1746,8 @@ function processChatStreamEventBlock(block, pending, tempUser) {
 
 async function refreshMessages() {
   if (!selectedConversationId) return;
+  if (refreshInFlight) return;
+  refreshInFlight = true;
   try {
     const res = await fetch('/api/chat/conversations/' + encodeURIComponent(selectedConversationId) + '/messages');
     if (!res.ok) return;
@@ -1753,6 +1756,8 @@ async function refreshMessages() {
     messages.forEach((message) => upsertMessage(message));
   } catch (_) {
     // leave current view intact; next poll can recover
+  } finally {
+    refreshInFlight = false;
   }
 }
 

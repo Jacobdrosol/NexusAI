@@ -10,4 +10,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 ENV PYTHONPATH=/app
 EXPOSE 5000
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "--timeout", "0", "--graceful-timeout", "30", "--keep-alive", "300", "dashboard.app:create_app()"]
+CMD ["sh", "-lc", "exec gunicorn --bind 0.0.0.0:5000 --worker-class \"${DASHBOARD_GUNICORN_WORKER_CLASS:-gthread}\" --workers \"${DASHBOARD_GUNICORN_WORKERS:-4}\" --threads \"${DASHBOARD_GUNICORN_THREADS:-8}\" --timeout \"${DASHBOARD_GUNICORN_TIMEOUT:-0}\" --graceful-timeout \"${DASHBOARD_GUNICORN_GRACEFUL_TIMEOUT:-30}\" --keep-alive \"${DASHBOARD_GUNICORN_KEEP_ALIVE:-300}\" 'dashboard.app:create_app()'"]
