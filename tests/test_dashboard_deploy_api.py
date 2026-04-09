@@ -257,3 +257,16 @@ def test_sync_subcontainer_runner_treats_completed_marker_as_success(monkeypatch
         manager._sync_subcontainer_runner()
         assert manager._state["state"] == "succeeded"
         assert manager._state["last_error"] is None
+
+
+def test_subcontainer_run_cmd_normalizes_nested_docker_wrapper():
+    from dashboard.deploy_manager import DeployManager
+
+    manager = DeployManager.instance()
+    raw = (
+        "docker run --rm -v /var/run/docker.sock:/var/run/docker.sock "
+        "-v /opt/NexusAI:/opt/NexusAI -w /opt/NexusAI docker:27-cli "
+        "sh -lc \"sh ./scripts/deploy-bluegreen.sh\""
+    )
+    normalized = manager._normalize_subcontainer_run_cmd(raw)
+    assert normalized == "sh ./scripts/deploy-bluegreen.sh"

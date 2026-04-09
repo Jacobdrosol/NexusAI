@@ -195,6 +195,13 @@ class DeployManager:
     def _runner_container_name(self) -> str:
         return str(self._state.get("runner_container_name") or "").strip()
 
+    def _normalize_subcontainer_run_cmd(self, run_cmd: str) -> str:
+        cmd = str(run_cmd or "").strip()
+        lowered = cmd.lower()
+        if "deploy-bluegreen.sh" in lowered and ("docker run" in lowered or "docker container run" in lowered):
+            return "sh ./scripts/deploy-bluegreen.sh"
+        return cmd
+
     def _runner_status(self, runner_name: str) -> tuple[str | None, int | None, str | None]:
         if not runner_name:
             return None, None, None
@@ -485,7 +492,8 @@ class DeployManager:
             if not gate.ok:
                 return False, gate.reason or "Deploy is blocked."
             if self._use_subcontainer_runner():
-                run_cmd = os.environ.get("NEXUSAI_DEPLOY_RUN_CMD", "").strip()
+                configured_run_cmd = os.environ.get("NEXUSAI_DEPLOY_RUN_CMD", "").strip()
+                run_cmd = self._normalize_subcontainer_run_cmd(configured_run_cmd)
                 run_id = str(uuid.uuid4())
                 self._state["state"] = "running"
                 self._state["run_id"] = run_id
@@ -503,6 +511,10 @@ class DeployManager:
                 self._append_log(f"deploy: started run_id={run_id}")
                 self._append_log(f"deploy: requested_by={requested_by}")
                 self._append_log("deploy: strategy=bluegreen")
+                if run_cmd != configured_run_cmd:
+                    self._append_log(
+                        "[deploy-manager] normalized sub-container command to avoid nested docker-run wrapper"
+                    )
                 runner_name, launch_error = self._launch_subcontainer_runner(run_id=run_id, run_cmd=run_cmd)
                 if not runner_name:
                     self._state["state"] = "failed"
