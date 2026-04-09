@@ -16,6 +16,7 @@ FIX_RUNTIME_PERMISSIONS="${NEXUSAI_DEPLOY_FIX_RUNTIME_PERMISSIONS:-1}"
 RUNTIME_OWNER_UID="${NEXUSAI_DEPLOY_RUNTIME_OWNER_UID:-1000}"
 RUNTIME_OWNER_GID="${NEXUSAI_DEPLOY_RUNTIME_OWNER_GID:-1000}"
 REMOVE_PREVIOUS_COLOR_CONTAINER="${NEXUSAI_REMOVE_PREVIOUS_COLOR_CONTAINER:-1}"
+STOP_PREVIOUS_COLOR_TIMEOUT_SECONDS="${NEXUSAI_STOP_PREVIOUS_COLOR_TIMEOUT_SECONDS:-25}"
 
 echo "[deploy] checking DB drift guard"
 sh ./scripts/check_db_drift.sh
@@ -252,6 +253,33 @@ monitor_post_switch_stability() {
   done
 }
 
+stop_previous_color_service() {
+  PREV_SERVICE="dashboard_$CURRENT_COLOR"
+  PREV_CONTAINER_NAME="nexus-dashboard-$CURRENT_COLOR"
+  if [ "$STOP_PREVIOUS_COLOR" != "1" ]; then
+    echo "[deploy] leaving previous color running (NEXUSAI_STOP_PREVIOUS_COLOR=$STOP_PREVIOUS_COLOR)"
+    return 0
+  fi
+
+  echo "[deploy] stopping previous color: $CURRENT_COLOR"
+  if command -v timeout >/dev/null 2>&1; then
+    if ! timeout "${STOP_PREVIOUS_COLOR_TIMEOUT_SECONDS}s" docker compose $COMPOSE_ARGS --profile "$CURRENT_COLOR" stop "$PREV_SERVICE"; then
+      echo "[deploy] stop command timed out or failed for $PREV_SERVICE; forcing container removal"
+      docker rm -f "$PREV_CONTAINER_NAME" >/dev/null 2>&1 || true
+    fi
+  else
+    if ! docker compose $COMPOSE_ARGS --profile "$CURRENT_COLOR" stop --timeout "$STOP_PREVIOUS_COLOR_TIMEOUT_SECONDS" "$PREV_SERVICE"; then
+      echo "[deploy] stop command failed for $PREV_SERVICE; forcing container removal"
+      docker rm -f "$PREV_CONTAINER_NAME" >/dev/null 2>&1 || true
+    fi
+  fi
+
+  if [ "$REMOVE_PREVIOUS_COLOR_CONTAINER" = "1" ]; then
+    echo "[deploy] removing previous color container: $PREV_SERVICE"
+    docker compose $COMPOSE_ARGS rm -sf "$PREV_SERVICE" || docker rm -f "$PREV_CONTAINER_NAME" >/dev/null 2>&1 || true
+  fi
+}
+
 cleanup_stale_runtime_artifacts() {
   if [ "$PRUNE_CONTAINERS" = "1" ]; then
     echo "[deploy] pruning exited containers"
@@ -365,16 +393,7 @@ monitor_post_switch_stability "$POST_SWITCH_MONITOR_SECONDS" "$POST_SWITCH_MONIT
 
 echo "$NEXT_COLOR" > "$CURRENT_COLOR_FILE"
 
-if [ "$STOP_PREVIOUS_COLOR" = "1" ]; then
-  echo "[deploy] stopping previous color: $CURRENT_COLOR"
-  docker compose $COMPOSE_ARGS --profile "$CURRENT_COLOR" stop "dashboard_$CURRENT_COLOR" || true
-  if [ "$REMOVE_PREVIOUS_COLOR_CONTAINER" = "1" ]; then
-    echo "[deploy] removing previous color container: dashboard_$CURRENT_COLOR"
-    docker compose $COMPOSE_ARGS rm -sf "dashboard_$CURRENT_COLOR" || true
-  fi
-else
-  echo "[deploy] leaving previous color running (NEXUSAI_STOP_PREVIOUS_COLOR=$STOP_PREVIOUS_COLOR)"
-fi
+stop_previous_color_service
 
 cleanup_stale_runtime_artifacts
 fix_runtime_file_permissions
