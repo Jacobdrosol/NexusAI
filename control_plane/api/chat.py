@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 from control_plane.chat.workspace_tools import (
     build_focus_query,
     extract_path_hints,
+    list_workspace_tree,
     normalize_workspace_root,
     read_workspace_file_snippet,
     search_workspace_snippets,
@@ -1437,7 +1438,34 @@ def _inline_code_failed_new_files_only_message(task: Task, breakdown: Dict[str, 
     return f"{base}\n\n{details}\n\nModel output:\n{output}"
 
 
-def _inject_inline_workspace_marker(payload: List[dict], *, workspace_root: str, requested_task: str = "") -> List[dict]:
+async def _inline_code_workspace_tree_preview(workspace_root: str | None) -> str:
+    root = normalize_workspace_root(workspace_root)
+    if root is None:
+        return ""
+    try:
+        tree = await asyncio.to_thread(
+            list_workspace_tree,
+            root,
+            max_depth=4,
+            max_entries=320,
+        )
+    except Exception:
+        return ""
+    text = str(tree or "").strip()
+    if not text:
+        return ""
+    if len(text) > 12_000:
+        text = f"{text[:12_000].rstrip()}\n... (workspace tree preview truncated)"
+    return text
+
+
+def _inject_inline_workspace_marker(
+    payload: List[dict],
+    *,
+    workspace_root: str,
+    requested_task: str = "",
+    workspace_tree_preview: str = "",
+) -> List[dict]:
     marker_root = str(workspace_root or "").strip()
     if not marker_root:
         return payload
@@ -1472,6 +1500,16 @@ def _inject_inline_workspace_marker(payload: List[dict], *, workspace_root: str,
             ),
         }
     )
+    if str(workspace_tree_preview or "").strip():
+        marked.append(
+            {
+                "role": "system",
+                "content": (
+                    "Workspace tree snapshot (source-of-truth for existing structure):\n"
+                    f"{workspace_tree_preview}"
+                ),
+            }
+        )
     # Hidden scheduler marker for agentic workspace tool loop.
     marked.append({"role": "system", "content": "", "_workspace_root": marker_root})
     return marked
@@ -2665,10 +2703,12 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                     orchestration_id=orchestration_id,
                 )
                 temp_root = str(workspace_entry.get("temp_root") or "").strip()
+                workspace_tree_preview = await _inline_code_workspace_tree_preview(temp_root)
                 payload = _inject_inline_workspace_marker(
                     payload,
                     workspace_root=temp_root,
                     requested_task=body.content,
+                    workspace_tree_preview=workspace_tree_preview,
                 )
                 inline_task = await task_manager.create_task(
                     bot_id=target_bot_id,
@@ -3157,10 +3197,12 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                         orchestration_id=orchestration_id,
                     )
                     temp_root = str(workspace_entry.get("temp_root") or "").strip()
+                    workspace_tree_preview = await _inline_code_workspace_tree_preview(temp_root)
                     payload = _inject_inline_workspace_marker(
                         payload,
                         workspace_root=temp_root,
                         requested_task=body.content,
+                        workspace_tree_preview=workspace_tree_preview,
                     )
                     inline_task = await task_manager.create_task(
                         bot_id=target_bot_id,
