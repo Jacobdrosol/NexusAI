@@ -70,6 +70,8 @@ class DeployManager:
             "last_run_by": None,
             "log_tail": [],
             "log_cleared_at": None,
+            "runner_container_name": None,
+            "runner_log_line_count": 0,
         }
 
     def _normalize_state(self, raw: Any) -> dict[str, Any]:
@@ -179,9 +181,167 @@ class DeployManager:
             pass
         return "unknown"
 
+    def _use_subcontainer_runner(self) -> bool:
+        return str(os.environ.get("NEXUSAI_DEPLOY_RUN_IN_SUBCONTAINER", "1")).strip().lower() not in {
+            "",
+            "0",
+            "false",
+            "no",
+            "off",
+        }
+
+    def _runner_container_name(self) -> str:
+        return str(self._state.get("runner_container_name") or "").strip()
+
+    def _runner_status(self, runner_name: str) -> tuple[str | None, int | None, str | None]:
+        if not runner_name:
+            return None, None, None
+        try:
+            cp = subprocess.run(
+                ["docker", "inspect", "-f", "{{.State.Status}}|{{.State.ExitCode}}", runner_name],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except Exception as exc:
+            return None, None, str(exc)
+        if cp.returncode != 0:
+            err = (cp.stderr or cp.stdout or "").strip() or "runner inspect failed"
+            return None, None, err
+        raw = (cp.stdout or "").strip()
+        status = raw
+        exit_code: int | None = None
+        if "|" in raw:
+            status_part, exit_part = raw.split("|", 1)
+            status = status_part.strip()
+            try:
+                exit_code = int(str(exit_part or "").strip())
+            except Exception:
+                exit_code = None
+        return status or None, exit_code, None
+
+    def _detect_runner_image(self) -> str | None:
+        explicit = str(os.environ.get("NEXUSAI_DEPLOY_RUNNER_IMAGE", "") or "").strip()
+        if explicit:
+            return explicit
+        hostname = str(os.environ.get("HOSTNAME", "") or "").strip()
+        if hostname:
+            try:
+                cp = subprocess.run(
+                    ["docker", "inspect", "-f", "{{.Config.Image}}", hostname],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if cp.returncode == 0:
+                    detected = str(cp.stdout or "").strip()
+                    if detected:
+                        return detected
+            except Exception:
+                pass
+        active = self._active_color()
+        candidates = []
+        if active in {"blue", "green"}:
+            candidates.append(f"nexusai-dashboard_{active}:latest")
+        candidates.extend(["nexusai-dashboard-blue:latest", "nexusai-dashboard-green:latest"])
+        seen: set[str] = set()
+        for image in candidates:
+            if image in seen:
+                continue
+            seen.add(image)
+            cp = subprocess.run(
+                ["docker", "image", "inspect", image],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if cp.returncode == 0:
+                return image
+        return None
+
+    def _launch_subcontainer_runner(self, *, run_id: str, run_cmd: str) -> tuple[str | None, str | None]:
+        runner_image = self._detect_runner_image()
+        if not runner_image:
+            return None, "could not determine deploy runner image (set NEXUSAI_DEPLOY_RUNNER_IMAGE)"
+        host_repo_root = str(os.environ.get("NEXUSAI_DEPLOY_HOST_REPO_ROOT", "/opt/NexusAI") or "").strip() or "/opt/NexusAI"
+        runner_name = f"nexus-deploy-runner-{run_id[:12]}"
+        subprocess.run(["docker", "rm", "-f", runner_name], capture_output=True, text=True, check=False)
+        cmd = [
+            "docker",
+            "run",
+            "-d",
+            "--name",
+            runner_name,
+            "--label",
+            f"nexusai.deploy.run_id={run_id}",
+            "-v",
+            "/var/run/docker.sock:/var/run/docker.sock",
+            "-v",
+            f"{host_repo_root}:{host_repo_root}",
+            "-w",
+            host_repo_root,
+        ]
+        for key, value in os.environ.items():
+            if key == "NEXUSAI_DEPLOY_RUN_IN_SUBCONTAINER":
+                continue
+            if key.startswith("NEXUSAI_") or key == "COMPOSE_PROJECT_NAME":
+                cmd.extend(["-e", f"{key}={value}"])
+        cmd.extend([runner_image, "sh", "-lc", run_cmd])
+        cp = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        if cp.returncode != 0:
+            detail = (cp.stderr or cp.stdout or "").strip() or "failed to launch deploy runner container"
+            return None, detail
+        return runner_name, None
+
+    def _sync_subcontainer_runner(self) -> None:
+        runner_name = self._runner_container_name()
+        if not runner_name:
+            return
+        logs_cp = subprocess.run(
+            ["docker", "logs", "--tail", "400", runner_name],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        raw_logs = (logs_cp.stdout or "") + ("\n" + logs_cp.stderr if logs_cp.stderr else "")
+        lines = [str(line).rstrip() for line in raw_logs.splitlines() if str(line).strip()]
+        seen_count = int(self._state.get("runner_log_line_count") or 0)
+        if seen_count < 0 or seen_count > len(lines):
+            seen_count = 0
+        for line in lines[seen_count:]:
+            self._append_log(line)
+        self._state["runner_log_line_count"] = len(lines)
+        self._save_state()
+
+        status, exit_code, inspect_err = self._runner_status(runner_name)
+        if status in {"running", "created", "restarting"}:
+            return
+        if status in {"exited", "dead"}:
+            local_commit = self._current_commit()
+            self._state["state"] = "succeeded" if int(exit_code or 1) == 0 else "failed"
+            self._state["finished_at"] = _utc_now()
+            if int(exit_code or 1) == 0 and local_commit:
+                self._state["deployed_commit"] = local_commit
+                self._state["last_error"] = None
+            else:
+                self._state["last_error"] = f"Deploy runner exited with code {int(exit_code or 1)}."
+            self._append_log(f"deploy: runner container exited with code {int(exit_code or 1)}")
+            subprocess.run(["docker", "rm", "-f", runner_name], capture_output=True, text=True, check=False)
+            self._state["runner_container_name"] = None
+            self._state["runner_log_line_count"] = 0
+            self._save_state()
+            return
+        if inspect_err:
+            self._append_log(f"deploy: runner inspect warning: {inspect_err}")
+
     def _recover_stale_running_state(self) -> None:
         if str(self._state.get("state") or "").strip().lower() != "running":
             return
+        runner_name = self._runner_container_name()
+        if runner_name:
+            status, _exit_code, _err = self._runner_status(runner_name)
+            if status in {"running", "created", "restarting"}:
+                return
         if self._thread and self._thread.is_alive():
             return
         now = datetime.now(timezone.utc)
@@ -206,11 +366,18 @@ class DeployManager:
     def status(self, refresh_remote: bool = False) -> dict[str, Any]:
         with self._lock:
             self._refresh_state_from_disk()
+            if self._use_subcontainer_runner():
+                self._sync_subcontainer_runner()
             self._recover_stale_running_state()
             local_commit = self._current_commit()
             remote_commit, remote_error = self._origin_main_commit(refresh_remote)
             deployed_commit = self._state.get("deployed_commit")
             running = bool(self._thread and self._thread.is_alive())
+            runner_name = self._runner_container_name()
+            if runner_name:
+                status, _exit_code, _err = self._runner_status(runner_name)
+                if status in {"running", "created", "restarting"}:
+                    running = True
             gate = self._deploy_gate()
             active_color = self._active_color()
             if active_color == "blue":
@@ -237,12 +404,49 @@ class DeployManager:
     def start(self, requested_by: str) -> tuple[bool, str]:
         with self._lock:
             self._refresh_state_from_disk()
+            if self._use_subcontainer_runner():
+                self._sync_subcontainer_runner()
             self._recover_stale_running_state()
             if self._thread and self._thread.is_alive():
                 return False, "Deploy already running."
+            runner_name = self._runner_container_name()
+            if runner_name:
+                status, _exit_code, _err = self._runner_status(runner_name)
+                if status in {"running", "created", "restarting"}:
+                    return False, "Deploy already running."
             gate = self._deploy_gate()
             if not gate.ok:
                 return False, gate.reason or "Deploy is blocked."
+            if self._use_subcontainer_runner():
+                run_cmd = os.environ.get("NEXUSAI_DEPLOY_RUN_CMD", "").strip()
+                run_id = str(uuid.uuid4())
+                self._state["state"] = "running"
+                self._state["run_id"] = run_id
+                self._state["started_at"] = _utc_now()
+                self._state["finished_at"] = None
+                self._state["last_error"] = None
+                self._state["last_run_by"] = requested_by
+                self._state["log_tail"] = []
+                self._state["log_cleared_at"] = None
+                self._state["runner_container_name"] = None
+                self._state["runner_log_line_count"] = 0
+                self._save_state()
+                self._append_log(f"deploy: started run_id={run_id}")
+                self._append_log(f"deploy: requested_by={requested_by}")
+                self._append_log("deploy: strategy=bluegreen")
+                runner_name, launch_error = self._launch_subcontainer_runner(run_id=run_id, run_cmd=run_cmd)
+                if not runner_name:
+                    self._state["state"] = "failed"
+                    self._state["finished_at"] = _utc_now()
+                    self._state["last_error"] = launch_error or "failed to launch deploy runner"
+                    self._append_log(f"deploy: failed to launch runner: {self._state['last_error']}")
+                    self._save_state()
+                    return False, self._state["last_error"]
+                self._state["runner_container_name"] = runner_name
+                self._state["runner_log_line_count"] = 0
+                self._append_log(f"deploy: runner container launched: {runner_name}")
+                self._save_state()
+                return True, "Deploy started."
             thread = threading.Thread(
                 target=self._run_deploy,
                 kwargs={"requested_by": requested_by},
