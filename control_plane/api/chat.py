@@ -1464,6 +1464,58 @@ def _inline_code_payload_stats(payload: List[dict]) -> Dict[str, int]:
     }
 
 
+def _inline_code_integration_repair_attempt_limit() -> int:
+    return _env_int("NEXUSAI_INLINE_CODE_INTEGRATION_REPAIR_ATTEMPTS", 1, minimum=0, maximum=2)
+
+
+def _inline_code_integration_repair_prompt(created_paths: List[str]) -> str:
+    preview = ", ".join((created_paths or [])[:8]) if created_paths else "(none)"
+    return (
+        "Quality remediation pass: the previous coding pass created only new files and did not integrate with existing code.\n"
+        f"Created files from prior pass: {preview}\n\n"
+        "Now make concrete integration edits by modifying at least one existing tracked file to wire this feature in.\n"
+        "Typical integration targets include Program.cs (DI registration), ApplicationDbContext.cs (DbSet/config), "
+        "existing controllers/services, and existing scheduler registration.\n"
+        "Do not ask for clarification. Implement directly and keep previous new files intact."
+    )
+
+
+async def _inline_code_attempt_integration_repair(
+    *,
+    task_manager: Any,
+    target_bot_id: str,
+    conversation_id: str,
+    project_id: str,
+    orchestration_id: str,
+    temp_root: str,
+    requested_task: str,
+    created_paths: List[str],
+    workspace_tree_preview: str = "",
+) -> Task | None:
+    remediation_payload: List[dict] = [
+        {"role": "system", "content": _inline_code_integration_repair_prompt(created_paths)},
+        {"role": "user", "content": str(requested_task or "").strip()},
+    ]
+    remediation_payload = _inject_inline_workspace_marker(
+        remediation_payload,
+        workspace_root=temp_root,
+        requested_task=requested_task,
+        workspace_tree_preview=workspace_tree_preview,
+    )
+    remediation_payload = _inline_code_compact_payload(remediation_payload, max_messages=10, max_chars=20_000)
+    remediation_task = await task_manager.create_task(
+        bot_id=target_bot_id,
+        payload=remediation_payload,
+        metadata=TaskMetadata(
+            source="chat_assign",
+            project_id=project_id or None,
+            conversation_id=conversation_id or None,
+            orchestration_id=orchestration_id,
+        ),
+    )
+    return await _inline_code_wait_for_task(task_manager, task_id=remediation_task.id)
+
+
 def _inline_code_compact_payload(
     payload: List[dict],
     *,
@@ -2806,6 +2858,45 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                         or int(change_breakdown.get("updated_count") or 0) > 0
                         or int(change_breakdown.get("deleted_count") or 0) > 0
                     )
+                    quality_warnings: List[str] = []
+                    repair_attempts = _inline_code_integration_repair_attempt_limit()
+                    if integration_required and not integration_passed and repair_attempts > 0:
+                        for _ in range(repair_attempts):
+                            try:
+                                repaired_task = await _inline_code_attempt_integration_repair(
+                                    task_manager=task_manager,
+                                    target_bot_id=target_bot_id,
+                                    conversation_id=conversation_id,
+                                    project_id=str(conversation.project_id or "").strip(),
+                                    orchestration_id=orchestration_id,
+                                    temp_root=temp_root,
+                                    requested_task=body.content,
+                                    created_paths=list(change_breakdown.get("created_paths") or []),
+                                    workspace_tree_preview=workspace_tree_preview,
+                                )
+                            except Exception:
+                                logger.exception("Inline integration remediation attempt failed before task completion")
+                                break
+                            if repaired_task is None:
+                                break
+                            if str(repaired_task.status or "").strip().lower() != "completed":
+                                quality_warnings.append(_inline_code_terminal_error_message(repaired_task))
+                                break
+                            terminal_task = repaired_task
+                            artifacts, files_touched, deleted_paths = await _inline_code_collect_workspace_artifacts(Path(temp_root))
+                            change_breakdown = _inline_code_change_breakdown(artifacts, deleted_paths)
+                            integration_passed = bool(
+                                not integration_required
+                                or int(change_breakdown.get("updated_count") or 0) > 0
+                                or int(change_breakdown.get("deleted_count") or 0) > 0
+                            )
+                            if integration_passed:
+                                quality_warnings.append(
+                                    "Integration remediation pass executed and added edits to existing tracked files."
+                                )
+                                break
+                        if integration_required and not integration_passed:
+                            quality_warnings.append(_inline_code_new_files_only_warning_message(terminal_task, change_breakdown))
                     normalized_result = _inline_code_normalize_task_result(
                         result=terminal_task.result,
                         artifacts=artifacts,
@@ -2819,11 +2910,7 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                         context_item_count=len(resolved_context),
                         tool_access=tool_access,
                         payload_stats=payload_stats,
-                        quality_warnings=(
-                            [_inline_code_new_files_only_warning_message(terminal_task, change_breakdown)]
-                            if integration_required and not integration_passed
-                            else []
-                        ),
+                        quality_warnings=quality_warnings,
                     )
                     if normalized_result != terminal_task.result:
                         try:
@@ -3338,6 +3425,45 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                             or int(change_breakdown.get("updated_count") or 0) > 0
                             or int(change_breakdown.get("deleted_count") or 0) > 0
                         )
+                        quality_warnings: List[str] = []
+                        repair_attempts = _inline_code_integration_repair_attempt_limit()
+                        if integration_required and not integration_passed and repair_attempts > 0:
+                            for _ in range(repair_attempts):
+                                try:
+                                    repaired_task = await _inline_code_attempt_integration_repair(
+                                        task_manager=task_manager,
+                                        target_bot_id=target_bot_id,
+                                        conversation_id=conversation_id,
+                                        project_id=str(conversation.project_id or "").strip(),
+                                        orchestration_id=orchestration_id,
+                                        temp_root=temp_root,
+                                        requested_task=body.content,
+                                        created_paths=list(change_breakdown.get("created_paths") or []),
+                                        workspace_tree_preview=workspace_tree_preview,
+                                    )
+                                except Exception:
+                                    logger.exception("Inline integration remediation attempt failed before task completion")
+                                    break
+                                if repaired_task is None:
+                                    break
+                                if str(repaired_task.status or "").strip().lower() != "completed":
+                                    quality_warnings.append(_inline_code_terminal_error_message(repaired_task))
+                                    break
+                                terminal_task = repaired_task
+                                artifacts, files_touched, deleted_paths = await _inline_code_collect_workspace_artifacts(Path(temp_root))
+                                change_breakdown = _inline_code_change_breakdown(artifacts, deleted_paths)
+                                integration_passed = bool(
+                                    not integration_required
+                                    or int(change_breakdown.get("updated_count") or 0) > 0
+                                    or int(change_breakdown.get("deleted_count") or 0) > 0
+                                )
+                                if integration_passed:
+                                    quality_warnings.append(
+                                        "Integration remediation pass executed and added edits to existing tracked files."
+                                    )
+                                    break
+                            if integration_required and not integration_passed:
+                                quality_warnings.append(_inline_code_new_files_only_warning_message(terminal_task, change_breakdown))
                         normalized_result = _inline_code_normalize_task_result(
                             result=terminal_task.result,
                             artifacts=artifacts,
@@ -3351,11 +3477,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                             context_item_count=len(resolved_context),
                             tool_access=tool_access,
                             payload_stats=payload_stats,
-                            quality_warnings=(
-                                [_inline_code_new_files_only_warning_message(terminal_task, change_breakdown)]
-                                if integration_required and not integration_passed
-                                else []
-                            ),
+                            quality_warnings=quality_warnings,
                         )
                         if normalized_result != terminal_task.result:
                             try:

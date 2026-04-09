@@ -2847,6 +2847,175 @@ async def test_post_message_inline_code_warns_when_only_new_files_for_integratio
         assert "Quality warning: this run created new files but did not modify existing tracked files." in assistant["content"]
 
 
+@pytest.mark.anyio
+async def test_post_message_inline_code_runs_integration_remediation_pass(cp_app, tmp_path, monkeypatch):
+    from control_plane.api import chat as chat_module
+    from shared.models import Task, TaskMetadata
+
+    workspace_root = tmp_path / "workspace-inline-remediate"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    temp_root = tmp_path / "workspace-inline-remediate-temp"
+    temp_root.mkdir(parents=True, exist_ok=True)
+
+    created_task = Task(
+        id="inline-task-remediate-first",
+        bot_id="bot-inline-remediate",
+        payload=[],
+        metadata=TaskMetadata(source="chat_assign"),
+        status="queued",
+        created_at="2026-01-01T00:00:00Z",
+        updated_at="2026-01-01T00:00:00Z",
+    )
+    first_completed = created_task.model_copy(
+        update={
+            "status": "completed",
+            "result": {"output": "Created initial reporting files."},
+            "updated_at": "2026-01-01T00:00:01Z",
+        }
+    )
+    remediation_completed = created_task.model_copy(
+        update={
+            "id": "inline-task-remediate-second",
+            "status": "completed",
+            "result": {"output": "Integrated into existing program startup and scheduler wiring."},
+            "updated_at": "2026-01-01T00:00:02Z",
+        }
+    )
+    cp_app.state.task_manager.create_task = AsyncMock(return_value=created_task)
+
+    async def _fake_prepare(**_kwargs):
+        return {"temp_root": str(temp_root), "repo_root": str(workspace_root)}
+
+    async def _fake_wait(_task_manager, *, task_id: str, max_wait_seconds: float = 1800.0):
+        assert task_id == "inline-task-remediate-first"
+        return first_completed
+
+    collect_state = {"count": 0}
+
+    async def _fake_collect(_temp_root):
+        collect_state["count"] += 1
+        if collect_state["count"] == 1:
+            return (
+                [
+                    {
+                        "kind": "file",
+                        "label": "GlobeIQ.Server/Services/MonthEndReportService.cs",
+                        "path": "GlobeIQ.Server/Services/MonthEndReportService.cs",
+                        "content": "public class MonthEndReportService {}",
+                        "status": "created",
+                        "source": "inline_temp_workspace",
+                        "truncated": False,
+                    }
+                ],
+                ["GlobeIQ.Server/Services/MonthEndReportService.cs"],
+                [],
+            )
+        return (
+            [
+                {
+                    "kind": "file",
+                    "label": "GlobeIQ.Server/Services/MonthEndReportService.cs",
+                    "path": "GlobeIQ.Server/Services/MonthEndReportService.cs",
+                    "content": "public class MonthEndReportService {}",
+                    "status": "created",
+                    "source": "inline_temp_workspace",
+                    "truncated": False,
+                },
+                {
+                    "kind": "file",
+                    "label": "GlobeIQ.Server/Program.cs",
+                    "path": "GlobeIQ.Server/Program.cs",
+                    "content": "builder.Services.AddScoped<IMonthEndReportService, MonthEndReportService>();",
+                    "status": "updated",
+                    "source": "inline_temp_workspace",
+                    "truncated": False,
+                },
+            ],
+            ["GlobeIQ.Server/Services/MonthEndReportService.cs", "GlobeIQ.Server/Program.cs"],
+            [],
+        )
+
+    async def _fake_repair(**_kwargs):
+        return remediation_completed
+
+    async def _fake_persist(_task_manager, *, task: Task, result: dict):
+        return task.model_copy(update={"result": result})
+
+    monkeypatch.setattr(chat_module, "_inline_code_prepare_temp_workspace", _fake_prepare)
+    monkeypatch.setattr(chat_module, "_inline_code_wait_for_task", _fake_wait)
+    monkeypatch.setattr(chat_module, "_inline_code_collect_workspace_artifacts", _fake_collect)
+    monkeypatch.setattr(chat_module, "_inline_code_attempt_integration_repair", _fake_repair)
+    monkeypatch.setattr(chat_module, "_inline_code_persist_result_without_trigger_dispatch", _fake_persist)
+
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-inline-remediate"
+        project = await client.post(
+            "/v1/projects",
+            json={
+                "id": project_id,
+                "name": "Inline Remediation",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "filesystem": True,
+                        "repo_search": False,
+                        "workspace_root": str(workspace_root),
+                    }
+                },
+            },
+        )
+        assert project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Inline Remediation Chat",
+                "project_id": project_id,
+                "tool_access_enabled": True,
+                "tool_access_filesystem": True,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        bot = await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-inline-remediate",
+                "name": "Inline Remediation Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "execution_policy": {
+                    "workspace_context_injection": True,
+                    "repo_output_mode": "allow",
+                },
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "filesystem": True,
+                        "repo_search": False,
+                    }
+                },
+            },
+        )
+        assert bot.status_code == 200
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": "Can you add a feature to the existing accounting view and code this?",
+                "bot_id": "bot-inline-remediate",
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assistant = body["assistant_message"]
+        assert assistant["metadata"]["run_status"] == "passed"
+        assert "GlobeIQ.Server/Program.cs" in assistant["content"]
+        assert "Quality warning: this run created new files but did not modify existing tracked files." not in assistant["content"]
+
+
 def test_inline_code_compact_payload_preserves_context_and_limits_size():
     from control_plane.api import chat as chat_module
 
