@@ -15,6 +15,7 @@ PRUNE_DANGLING_IMAGES="${NEXUSAI_DEPLOY_PRUNE_DANGLING_IMAGES:-1}"
 FIX_RUNTIME_PERMISSIONS="${NEXUSAI_DEPLOY_FIX_RUNTIME_PERMISSIONS:-1}"
 RUNTIME_OWNER_UID="${NEXUSAI_DEPLOY_RUNTIME_OWNER_UID:-1000}"
 RUNTIME_OWNER_GID="${NEXUSAI_DEPLOY_RUNTIME_OWNER_GID:-1000}"
+FIX_REPO_OWNERSHIP="${NEXUSAI_DEPLOY_FIX_REPO_OWNERSHIP:-1}"
 REMOVE_PREVIOUS_COLOR_CONTAINER="${NEXUSAI_REMOVE_PREVIOUS_COLOR_CONTAINER:-1}"
 STOP_PREVIOUS_COLOR_TIMEOUT_SECONDS="${NEXUSAI_STOP_PREVIOUS_COLOR_TIMEOUT_SECONDS:-25}"
 
@@ -219,6 +220,11 @@ monitor_post_switch_stability() {
   echo "[deploy] monitoring post-switch stability for ${MONITOR_SECONDS}s"
   ELAPSED=0
   while [ "$ELAPSED" -lt "$MONITOR_SECONDS" ]; do
+    REMAINING=$((MONITOR_SECONDS - ELAPSED))
+    if [ "$REMAINING" -lt 0 ]; then
+      REMAINING=0
+    fi
+
     if ! docker compose $COMPOSE_ARGS exec -T dashboard_gateway sh -lc "wget -q -O - http://127.0.0.1:5000/health | grep -q '\"status\"'"; then
       echo "[deploy] gateway health probe failed during post-switch monitoring"
       return 1
@@ -235,6 +241,7 @@ monitor_post_switch_stability() {
       :
     elif [ "$ACTIVE_HEALTH" = "starting" ] || [ -z "$ACTIVE_HEALTH" ]; then
       if [ "$ELAPSED" -lt "$POST_SWITCH_STARTING_GRACE_SECONDS" ]; then
+        echo "[deploy] post-switch monitor: t=${ELAPSED}s remaining=${REMAINING}s active=dashboard_$NEXT_COLOR health=${ACTIVE_HEALTH:-starting} (within startup grace)"
         sleep "$INTERVAL_SECONDS"
         ELAPSED=$((ELAPSED + INTERVAL_SECONDS))
         continue
@@ -248,8 +255,19 @@ monitor_post_switch_stability() {
       return 1
     fi
 
-    sleep "$INTERVAL_SECONDS"
-    ELAPSED=$((ELAPSED + INTERVAL_SECONDS))
+    echo "[deploy] post-switch monitor: t=${ELAPSED}s remaining=${REMAINING}s active=dashboard_$NEXT_COLOR health=${ACTIVE_HEALTH:-unknown}"
+
+    SLEEP_SECONDS="$INTERVAL_SECONDS"
+    if [ "$SLEEP_SECONDS" -gt "$REMAINING" ]; then
+      SLEEP_SECONDS="$REMAINING"
+    fi
+
+    if [ "$SLEEP_SECONDS" -gt 0 ]; then
+      sleep "$SLEEP_SECONDS"
+      ELAPSED=$((ELAPSED + SLEEP_SECONDS))
+    else
+      ELAPSED="$MONITOR_SECONDS"
+    fi
   done
 }
 
@@ -305,6 +323,12 @@ fix_runtime_file_permissions() {
   if command -v chown >/dev/null 2>&1; then
     echo "[deploy] fixing runtime file ownership to ${RUNTIME_OWNER_UID}:${RUNTIME_OWNER_GID}"
     chown -R "${RUNTIME_OWNER_UID}:${RUNTIME_OWNER_GID}" data/nginx "$CURRENT_COLOR_FILE" || true
+    if [ "$FIX_REPO_OWNERSHIP" = "1" ]; then
+      echo "[deploy] fixing repository ownership to ${RUNTIME_OWNER_UID}:${RUNTIME_OWNER_GID}"
+      chown -R "${RUNTIME_OWNER_UID}:${RUNTIME_OWNER_GID}" . || true
+    else
+      echo "[deploy] skipping repository ownership fix (NEXUSAI_DEPLOY_FIX_REPO_OWNERSHIP=$FIX_REPO_OWNERSHIP)"
+    fi
   fi
 }
 
