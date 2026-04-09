@@ -284,7 +284,11 @@ class DeployManager:
             host_repo_root,
         ]
         for key, value in os.environ.items():
-            if key == "NEXUSAI_DEPLOY_RUN_IN_SUBCONTAINER":
+            if key in {
+                "NEXUSAI_DEPLOY_RUN_IN_SUBCONTAINER",
+                "NEXUSAI_STOP_PREVIOUS_COLOR",
+                "NEXUSAI_REMOVE_PREVIOUS_COLOR_CONTAINER",
+            }:
                 continue
             if key.startswith("NEXUSAI_") or key == "COMPOSE_PROJECT_NAME":
                 cmd.extend(["-e", f"{key}={value}"])
@@ -360,13 +364,22 @@ class DeployManager:
         previous_color = str(self._state.get("initial_active_color") or "").strip().lower()
         if previous_color not in {"blue", "green"}:
             return
-        compose_project = str(os.environ.get("NEXUSAI_COMPOSE_PROJECT_NAME", "nexusai") or "nexusai").strip() or "nexusai"
-        compose_file = "docker-compose.bluegreen.yml"
-        service = f"dashboard_{previous_color}"
         container_name = f"nexus-dashboard-{previous_color}"
         self._append_log(f"[deploy-manager] post-success cleanup: stopping previous color {previous_color}")
+
+        inspect_cp = subprocess.run(
+            ["docker", "inspect", container_name],
+            cwd=str(self._repo_root),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if inspect_cp.returncode != 0:
+            return
+
+        stop_timeout = max(1, int(str(os.environ.get("NEXUSAI_STOP_PREVIOUS_COLOR_TIMEOUT_SECONDS", "25") or "25")))
         stop_cp = subprocess.run(
-            ["docker", "compose", "-p", compose_project, "-f", compose_file, "--profile", previous_color, "stop", service],
+            ["docker", "stop", "--time", str(stop_timeout), container_name],
             cwd=str(self._repo_root),
             capture_output=True,
             text=True,
@@ -377,14 +390,13 @@ class DeployManager:
             if detail:
                 self._append_log(f"[deploy-manager] cleanup warning (stop): {detail}")
         rm_cp = subprocess.run(
-            ["docker", "compose", "-p", compose_project, "-f", compose_file, "rm", "-sf", service],
+            ["docker", "rm", "-f", container_name],
             cwd=str(self._repo_root),
             capture_output=True,
             text=True,
             check=False,
         )
         if rm_cp.returncode != 0:
-            subprocess.run(["docker", "rm", "-f", container_name], capture_output=True, text=True, check=False)
             detail = (rm_cp.stderr or rm_cp.stdout or "").strip()
             if detail:
                 self._append_log(f"[deploy-manager] cleanup warning (rm): {detail}")

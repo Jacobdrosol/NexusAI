@@ -177,17 +177,21 @@ def test_post_success_cleanup_targets_previous_color(monkeypatch):
 
     def _fake_run(args, **kwargs):
         calls.append([str(part) for part in args])
+        cmd = [str(part) for part in args]
+        if cmd[:2] == ["docker", "inspect"]:
+            return SimpleNamespace(returncode=0, stdout="[]", stderr="")
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr("dashboard.deploy_manager.subprocess.run", _fake_run)
     manager._cleanup_previous_color_after_success()
 
-    assert len(calls) >= 2
-    assert calls[0][0:3] == ["docker", "compose", "-p"]
-    assert "stop" in calls[0]
-    assert "dashboard_blue" in calls[0]
-    assert "rm" in calls[1]
-    assert "dashboard_blue" in calls[1]
+    assert len(calls) >= 3
+    assert calls[0][0:2] == ["docker", "inspect"]
+    assert "nexus-dashboard-blue" in calls[0]
+    assert calls[1][0:2] == ["docker", "stop"]
+    assert "nexus-dashboard-blue" in calls[1]
+    assert calls[2][0:2] == ["docker", "rm"]
+    assert "nexus-dashboard-blue" in calls[2]
 
 
 def test_sync_subcontainer_runner_succeeds_without_local_commit(monkeypatch):
