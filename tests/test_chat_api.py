@@ -1,6 +1,7 @@
 """Integration tests for chat API routes."""
 
 import asyncio
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -2598,6 +2599,128 @@ async def test_post_message_inline_code_marks_failed_when_no_file_changes(cp_app
         assert assistant["metadata"]["mode"] == "pm_run_report"
         assert assistant["metadata"]["run_status"] == "failed"
         assert "produced no file edits" in assistant["content"]
+
+
+@pytest.mark.anyio
+async def test_post_message_inline_code_forwards_user_prompt_to_scheduler(cp_app, tmp_path, monkeypatch):
+    from control_plane.api import chat as chat_module
+
+    workspace_root = tmp_path / "workspace-inline-forward"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    temp_root = tmp_path / "workspace-inline-forward-temp"
+    temp_root.mkdir(parents=True, exist_ok=True)
+
+    captured: dict[str, Any] = {}
+
+    async def _capture_schedule(task):
+        captured["payload"] = task.payload
+        return {"output": "Applied first implementation slice."}
+
+    cp_app.state.scheduler.schedule = _capture_schedule
+
+    async def _fake_prepare(**_kwargs):
+        return {"temp_root": str(temp_root), "repo_root": str(workspace_root)}
+
+    async def _fake_collect(_temp_root):
+        return (
+            [
+                {
+                    "kind": "file",
+                    "label": "GlobeIQ.Server/Controllers/MonthEndController.cs",
+                    "path": "GlobeIQ.Server/Controllers/MonthEndController.cs",
+                    "content": "public class MonthEndController {}",
+                    "status": "created",
+                    "source": "inline_temp_workspace",
+                    "truncated": False,
+                }
+            ],
+            ["GlobeIQ.Server/Controllers/MonthEndController.cs"],
+            [],
+        )
+
+    monkeypatch.setattr(chat_module, "_inline_code_prepare_temp_workspace", _fake_prepare)
+    monkeypatch.setattr(chat_module, "_inline_code_collect_workspace_artifacts", _fake_collect)
+
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-inline-forward"
+        create_project = await client.post(
+            "/v1/projects",
+            json={
+                "id": project_id,
+                "name": "Inline Forward",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "filesystem": True,
+                        "repo_search": False,
+                        "workspace_root": str(workspace_root),
+                    }
+                },
+            },
+        )
+        assert create_project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Inline Forward Chat",
+                "project_id": project_id,
+                "tool_access_enabled": True,
+                "tool_access_filesystem": True,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        bot = await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-inline-forward",
+                "name": "Inline Forward Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "execution_policy": {
+                    "workspace_context_injection": True,
+                    "repo_output_mode": "allow",
+                },
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "filesystem": True,
+                        "repo_search": False,
+                    }
+                },
+            },
+        )
+        assert bot.status_code == 200
+
+        prompt = (
+            "Can you look into GlobeIQ's repo and add month-end scheduling/reporting? "
+            "Can you code this?"
+        )
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={"content": prompt, "bot_id": "bot-inline-forward"},
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["assistant_message"]["metadata"]["run_status"] == "passed"
+
+    scheduled_payload = captured.get("payload")
+    assert isinstance(scheduled_payload, list)
+    assert any(
+        isinstance(item, dict)
+        and item.get("role") == "user"
+        and "month-end scheduling/reporting" in str(item.get("content") or "")
+        for item in scheduled_payload
+    )
+    assert any(
+        isinstance(item, dict)
+        and item.get("role") == "system"
+        and "Coding task for this turn (execute now):" in str(item.get("content") or "")
+        for item in scheduled_payload
+    )
 
 
 @pytest.mark.anyio

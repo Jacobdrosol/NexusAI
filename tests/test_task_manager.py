@@ -76,6 +76,54 @@ async def test_task_runs_and_completes():
 
 
 @pytest.mark.anyio
+async def test_task_manager_preserves_non_dict_payload_for_scheduler(tmp_path):
+    import asyncio
+
+    from control_plane.task_manager.task_manager import TaskManager
+
+    class StubRegistry:
+        def __init__(self):
+            self._bots = {
+                "bot-list-payload": Bot(
+                    id="bot-list-payload",
+                    name="List Payload Bot",
+                    role="assistant",
+                    backends=[],
+                    execution_policy={"workspace_context_injection": True, "repo_output_mode": "allow"},
+                )
+            }
+
+        async def get(self, bot_id):
+            return self._bots[bot_id]
+
+    mock_scheduler = AsyncMock()
+    mock_scheduler.schedule.return_value = {"output": "ok"}
+    tm = TaskManager(mock_scheduler, db_path=str(tmp_path / "list-payload.db"), bot_registry=StubRegistry())
+    original_payload = [
+        {"role": "user", "content": "Can you code this feature?"},
+        {"role": "system", "content": "Inline coding mode is enabled."},
+    ]
+    task = await tm.create_task(
+        bot_id="bot-list-payload",
+        payload=original_payload,
+        metadata=TaskMetadata(source="chat_assign", project_id="proj-1", conversation_id="conv-1"),
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.05)
+
+    updated = await tm.get_task(task.id)
+    assert updated.status == "completed"
+    assert mock_scheduler.schedule.await_count == 1
+    scheduled_task = mock_scheduler.schedule.await_args[0][0]
+    assert isinstance(scheduled_task.payload, list)
+    assert scheduled_task.payload == original_payload
+
+
+@pytest.mark.anyio
 async def test_task_manager_fails_deny_policy_bot_that_emits_repo_file(tmp_path):
     import asyncio
 

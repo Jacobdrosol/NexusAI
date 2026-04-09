@@ -4864,7 +4864,8 @@ class TaskManager:
                     bot = await self._bot_registry.get(task.bot_id)
                 except Exception:
                     bot = None
-            payload = task.payload if isinstance(task.payload, dict) else {}
+            original_payload = copy.deepcopy(task.payload)
+            payload = original_payload if isinstance(original_payload, dict) else {}
             runtime_payload = copy.deepcopy(payload)
             node_override = _select_task_node_override(task, payload)
             if node_override:
@@ -4934,9 +4935,14 @@ class TaskManager:
                     runtime_payload["deterministic_signals"].update(deterministic)
                 else:
                     runtime_payload["deterministic_signals"] = deterministic
-            task_for_execution = task.model_copy(update={"payload": runtime_payload})
+            if isinstance(original_payload, dict):
+                task_for_execution = task.model_copy(update={"payload": runtime_payload})
+            else:
+                # Preserve non-dict payloads (for example chat message arrays) exactly as
+                # created by the caller. Coercing these to {} drops user intent.
+                task_for_execution = task
             bot_allows_repo_output_for_task = bool(bot is not None and self._bot_allows_repo_output_for_task(task, bot))
-            if bot is not None and not bot_allows_repo_output_for_task:
+            if bot is not None and not bot_allows_repo_output_for_task and isinstance(task_for_execution.payload, dict):
                 # Inject bot role as role_hint if not already present in payload
                 if "role_hint" not in runtime_payload and bot.role:
                     runtime_payload = dict(runtime_payload)
@@ -4970,7 +4976,7 @@ class TaskManager:
                 _exec_policy = {}
                 if bot is not None:
                     _exec_policy = dict(getattr(bot, "execution_policy", None) or {})
-                if bool(_exec_policy.get("workspace_context_injection", False)):
+                if bool(_exec_policy.get("workspace_context_injection", False)) and isinstance(task_for_execution.payload, dict):
                     _injected_payload = await self._inject_workspace_context_into_payload(
                         task_for_execution,
                         dict(runtime_payload),
