@@ -266,13 +266,14 @@ def _validate_requested_project_chat_tool_access(body: UpdateProjectChatToolAcce
 def _extract_project_repo_workspace(project: Project) -> Dict[str, Any]:
     settings = project.settings_overrides if isinstance(project.settings_overrides, dict) else {}
     raw = settings.get("repo_workspace") if isinstance(settings.get("repo_workspace"), dict) else {}
+    chat_tool_access = _extract_project_chat_tool_access(project)
     managed_path_mode = bool(raw.get("managed_path_mode", True))
     root_path = str(raw.get("root_path") or "").strip() or None
     clone_url = str(raw.get("clone_url") or "").strip() or None
     default_branch = str(raw.get("default_branch") or "").strip() or None
     # _raw_root_path is always preserved (even in managed mode) so the resolver
     # can use it as a read-only fallback when the managed path doesn't exist on disk.
-    raw_root_path = root_path
+    raw_root_path = root_path or str(chat_tool_access.get("workspace_root") or "").strip() or None
     if managed_path_mode:
         root_path = None
     return {
@@ -285,6 +286,68 @@ def _extract_project_repo_workspace(project: Project) -> Dict[str, Any]:
         "allow_push": bool(raw.get("allow_push", False)),
         "allow_command_execution": bool(raw.get("allow_command_execution", False)),
     }
+
+
+async def _maybe_auto_clone_repo_workspace(
+    *,
+    project_id: str,
+    project: Project,
+    cfg: Dict[str, Any],
+    root: Path,
+    project_registry: Any,
+    key_vault: Any = None,
+) -> Dict[str, Any]:
+    clone_url = str(cfg.get("clone_url") or "").strip()
+    if not clone_url:
+        settings = project.settings_overrides if isinstance(project.settings_overrides, dict) else {}
+        github_cfg = settings.get("github") if isinstance(settings.get("github"), dict) else {}
+        repo_full_name = str(github_cfg.get("repo_full_name") or "").strip()
+        if repo_full_name:
+            clone_url = f"https://github.com/{repo_full_name}.git"
+    if not clone_url:
+        return {"attempted": False, "reason": "clone_url_unconfigured"}
+
+    if root.exists():
+        if (root / ".git").exists():
+            return {"attempted": False, "reason": "already_repo"}
+        try:
+            has_contents = any(root.iterdir())
+        except PermissionError:
+            return {"attempted": False, "reason": "workspace_inaccessible"}
+        if has_contents:
+            if bool(cfg.get("managed_path_mode", True)):
+                try:
+                    shutil.rmtree(root, ignore_errors=False)
+                except Exception as exc:
+                    return {"attempted": True, "ok": False, "error": str(exc)}
+            else:
+                return {"attempted": False, "reason": "custom_workspace_not_empty"}
+
+    root.parent.mkdir(parents=True, exist_ok=True)
+    branch = str(cfg.get("default_branch") or "").strip() or None
+    cmd: List[str] = ["git"]
+    token = await _project_github_pat(project, key_vault) if key_vault is not None else None
+    if token and "github.com" in clone_url.lower():
+        cmd.extend(["-c", f"http.extraHeader={build_github_http_auth_header(token)}"])
+    cmd.extend(["clone"])
+    if branch:
+        cmd.extend(["--branch", branch])
+    cmd.extend([clone_url, str(root)])
+
+    res = await _run_repo_command(cmd, cwd=root.parent, timeout_seconds=900)
+    if not bool(res.get("ok")):
+        detail = str(res.get("stderr") or res.get("error") or "clone failed").strip() or "clone failed"
+        return {"attempted": True, "ok": False, "error": detail}
+
+    if clone_url != cfg.get("clone_url"):
+        merged_cfg = dict(cfg)
+        merged_cfg["clone_url"] = clone_url
+        updated = project.model_copy(
+            update={"settings_overrides": _merge_settings(project, {"repo_workspace": merged_cfg})}
+        )
+        await project_registry.update(project_id, updated)
+        cfg["clone_url"] = clone_url
+    return {"attempted": True, "ok": True}
 
 
 def _project_workspace_slug(project_id: str) -> str:
@@ -1396,6 +1459,7 @@ async def _ensure_orchestration_temp_workspace(
     project_registry: Any,
     workspace_store: Optional[OrchestrationWorkspaceStore],
     strict: bool,
+    key_vault: Any = None,
 ) -> Optional[Dict[str, Any]]:
     if workspace_store is None:
         return None
@@ -1408,7 +1472,18 @@ async def _ensure_orchestration_temp_workspace(
         root = _resolve_repo_workspace_root(project_id, cfg, require_enabled=False)
         snapshot = await _repo_status_snapshot(root=root, cfg=cfg)
         if not bool(snapshot.get("is_repo")):
-            raise HTTPException(status_code=400, detail="repo workspace is not a git repository")
+            clone_outcome = await _maybe_auto_clone_repo_workspace(
+                project_id=project_id,
+                project=project,
+                cfg=cfg,
+                root=root,
+                project_registry=project_registry,
+                key_vault=key_vault,
+            )
+            if bool(clone_outcome.get("attempted")) and bool(clone_outcome.get("ok")):
+                snapshot = await _repo_status_snapshot(root=root, cfg=cfg)
+            if not bool(snapshot.get("is_repo")):
+                raise HTTPException(status_code=400, detail="repo workspace is not a git repository")
         temp_ctx = await _prepare_temp_workspace(project_id=project_id, root=root)
     except HTTPException:
         if strict:

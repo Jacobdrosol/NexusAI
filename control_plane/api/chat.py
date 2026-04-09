@@ -1970,6 +1970,7 @@ async def _inline_code_prepare_temp_workspace(
         project_registry=project_registry,
         workspace_store=getattr(request.app.state, "orchestration_workspace_store", None),
         strict=True,
+        key_vault=getattr(request.app.state, "key_vault", None),
     )
     if workspace_entry is None:
         raise HTTPException(status_code=409, detail="inline coding temp workspace is unavailable")

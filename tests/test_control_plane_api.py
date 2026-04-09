@@ -1092,6 +1092,30 @@ async def test_project_repo_workspace_update_and_get(cp_client):
     assert got["allow_command_execution"] is True
 
 
+def test_extract_project_repo_workspace_uses_chat_workspace_root_fallback():
+    from control_plane.api.projects import _extract_project_repo_workspace
+    from shared.models import Project
+
+    workspace_root = "C:\\repo\\workspace"
+    project = Project(
+        id="p-repo-fallback",
+        name="Repo Fallback",
+        mode="isolated",
+        settings_overrides={
+            "chat_tool_access": {
+                "enabled": True,
+                "filesystem": True,
+                "repo_search": True,
+                "workspace_root": workspace_root,
+            }
+        },
+    )
+
+    cfg = _extract_project_repo_workspace(project)
+    assert cfg["_raw_root_path"] == workspace_root
+    assert cfg["root_path"] is None
+
+
 @pytest.mark.anyio
 async def test_project_repo_workspace_redacts_and_preserves_clone_url_when_omitted(cp_client):
     await cp_client.post(
