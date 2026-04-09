@@ -2626,15 +2626,15 @@ async def test_post_message_inline_code_forwards_user_prompt_to_scheduler(cp_app
             [
                 {
                     "kind": "file",
-                    "label": "GlobeIQ.Server/Controllers/MonthEndController.cs",
-                    "path": "GlobeIQ.Server/Controllers/MonthEndController.cs",
-                    "content": "public class MonthEndController {}",
-                    "status": "created",
+                    "label": "GlobeIQ.Server/Program.cs",
+                    "path": "GlobeIQ.Server/Program.cs",
+                    "content": "builder.Services.AddScoped<IMonthEndReportService, MonthEndReportService>();",
+                    "status": "updated",
                     "source": "inline_temp_workspace",
                     "truncated": False,
                 }
             ],
-            ["GlobeIQ.Server/Controllers/MonthEndController.cs"],
+            ["GlobeIQ.Server/Program.cs"],
             [],
         )
 
@@ -2721,6 +2721,130 @@ async def test_post_message_inline_code_forwards_user_prompt_to_scheduler(cp_app
         and "Coding task for this turn (execute now):" in str(item.get("content") or "")
         for item in scheduled_payload
     )
+
+
+@pytest.mark.anyio
+async def test_post_message_inline_code_marks_failed_when_only_new_files_for_integration_request(cp_app, tmp_path, monkeypatch):
+    from control_plane.api import chat as chat_module
+    from shared.models import Task, TaskMetadata
+
+    workspace_root = tmp_path / "workspace-inline-new-only"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    temp_root = tmp_path / "workspace-inline-new-only-temp"
+    temp_root.mkdir(parents=True, exist_ok=True)
+
+    created_task = Task(
+        id="inline-task-new-only",
+        bot_id="bot-inline-new-only",
+        payload=[],
+        metadata=TaskMetadata(source="chat_assign"),
+        status="queued",
+        created_at="2026-01-01T00:00:00Z",
+        updated_at="2026-01-01T00:00:00Z",
+    )
+    terminal_task = created_task.model_copy(
+        update={
+            "status": "completed",
+            "result": {"output": "Implemented by adding report services and DTO files."},
+            "updated_at": "2026-01-01T00:00:02Z",
+        }
+    )
+    cp_app.state.task_manager.create_task = AsyncMock(return_value=created_task)
+
+    async def _fake_prepare(**_kwargs):
+        return {"temp_root": str(temp_root), "repo_root": str(workspace_root)}
+
+    async def _fake_wait(_task_manager, *, task_id: str, max_wait_seconds: float = 1800.0):
+        assert task_id == "inline-task-new-only"
+        return terminal_task
+
+    async def _fake_collect(_temp_root):
+        return (
+            [
+                {
+                    "kind": "file",
+                    "label": "GlobeIQ.Server/Services/MonthEndReportService.cs",
+                    "path": "GlobeIQ.Server/Services/MonthEndReportService.cs",
+                    "content": "public class MonthEndReportService {}",
+                    "status": "created",
+                    "source": "inline_temp_workspace",
+                    "truncated": False,
+                }
+            ],
+            ["GlobeIQ.Server/Services/MonthEndReportService.cs"],
+            [],
+        )
+
+    monkeypatch.setattr(chat_module, "_inline_code_prepare_temp_workspace", _fake_prepare)
+    monkeypatch.setattr(chat_module, "_inline_code_wait_for_task", _fake_wait)
+    monkeypatch.setattr(chat_module, "_inline_code_collect_workspace_artifacts", _fake_collect)
+
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-inline-new-only"
+        project = await client.post(
+            "/v1/projects",
+            json={
+                "id": project_id,
+                "name": "Inline New Only",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "filesystem": True,
+                        "repo_search": False,
+                        "workspace_root": str(workspace_root),
+                    }
+                },
+            },
+        )
+        assert project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Inline New Only Chat",
+                "project_id": project_id,
+                "tool_access_enabled": True,
+                "tool_access_filesystem": True,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        bot = await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-inline-new-only",
+                "name": "Inline New Only Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "execution_policy": {
+                    "workspace_context_injection": True,
+                    "repo_output_mode": "allow",
+                },
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "filesystem": True,
+                        "repo_search": False,
+                    }
+                },
+            },
+        )
+        assert bot.status_code == 200
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": "Can you add a feature to the existing accounting view and code this?",
+                "bot_id": "bot-inline-new-only",
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assistant = body["assistant_message"]
+        assert assistant["metadata"]["run_status"] == "failed"
+        assert "did not integrate the feature into existing code" in assistant["content"]
 
 
 @pytest.mark.anyio

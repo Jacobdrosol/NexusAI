@@ -158,6 +158,15 @@ _INLINE_CODE_TRIGGER_RE = re.compile(
     r"please\s+implement\s+this|implement\s+this|can\s+you\s+implement\s+this)\b",
     re.IGNORECASE,
 )
+_INLINE_INTEGRATION_EXPECTED_RE = re.compile(
+    r"\b(add(?:\s+(?:a|an|the))?\s+feature|extend|modify|update|integrat(?:e|ion)|wire(?:\s+up)?|"
+    r"hook(?:\s+up)?|existing|we(?:'ve|\s+have)\s+built|in\s+the\s+\w+\s+view|programs?\s+view)\b",
+    re.IGNORECASE,
+)
+_INLINE_NEW_FILES_ONLY_OK_RE = re.compile(
+    r"\b(new\s+file|new\s+module|from\s+scratch|scaffold|skeleton|prototype\s+only)\b",
+    re.IGNORECASE,
+)
 
 
 def _attachment_size_bytes(item: ChatAttachmentInput) -> int:
@@ -1377,6 +1386,57 @@ def _inline_code_unavailable_message() -> str:
     )
 
 
+def _inline_code_existing_edits_expected(requested_task: str) -> bool:
+    text = str(requested_task or "").strip()
+    if not text:
+        return False
+    if _INLINE_NEW_FILES_ONLY_OK_RE.search(text):
+        return False
+    return bool(_INLINE_INTEGRATION_EXPECTED_RE.search(text))
+
+
+def _inline_code_change_breakdown(artifacts: List[Dict[str, Any]], deleted_paths: List[str]) -> Dict[str, Any]:
+    created_paths: List[str] = []
+    updated_paths: List[str] = []
+    for item in artifacts:
+        if not isinstance(item, dict):
+            continue
+        path = str(item.get("path") or "").strip().replace("\\", "/")
+        if not path:
+            continue
+        status = str(item.get("status") or "").strip().lower()
+        if status == "created":
+            created_paths.append(path)
+        else:
+            updated_paths.append(path)
+    deleted = [str(path or "").strip().replace("\\", "/") for path in (deleted_paths or []) if str(path or "").strip()]
+    return {
+        "created_count": len(created_paths),
+        "updated_count": len(updated_paths),
+        "deleted_count": len(deleted),
+        "created_paths": created_paths[:24],
+        "updated_paths": updated_paths[:24],
+        "deleted_paths": deleted[:24],
+    }
+
+
+def _inline_code_failed_new_files_only_message(task: Task, breakdown: Dict[str, Any]) -> str:
+    created_paths = list(breakdown.get("created_paths") or [])
+    created_preview = ", ".join(created_paths[:8]) if created_paths else "(none)"
+    output = _extract_task_output(task.result).strip()
+    if len(output) > 1800:
+        output = f"{output[:1800].rstrip()}..."
+    base = (
+        "Inline coding run created new files but did not integrate the feature into existing code.\n\n"
+        "For feature work in an existing repository, at least one existing tracked file must be modified "
+        "(for example wiring DI/service registration, route/controller binding, startup config, or existing UI integration)."
+    )
+    details = f"Created files: {created_preview}"
+    if not output:
+        return f"{base}\n\n{details}"
+    return f"{base}\n\n{details}\n\nModel output:\n{output}"
+
+
 def _inject_inline_workspace_marker(payload: List[dict], *, workspace_root: str, requested_task: str = "") -> List[dict]:
     marker_root = str(workspace_root or "").strip()
     if not marker_root:
@@ -1405,7 +1465,10 @@ def _inject_inline_workspace_marker(payload: List[dict], *, workspace_root: str,
                 "directly in the connected project workspace, then summarize exactly what you changed.\n\n"
                 "Because this turn explicitly requested coding, you must make best-effort repository edits now. "
                 "Do not ask the user to re-specify what to build unless you are blocked by missing permissions or "
-                "missing repository context. If scope is broad, implement a minimal first slice and state assumptions."
+                "missing repository context. If scope is broad, implement a minimal first slice and state assumptions.\n\n"
+                "For feature requests in an existing repo, include integration edits to existing files (not only newly-created files) "
+                "unless the repo is genuinely empty.\n"
+                "You may read files, infer architecture, make inline edits, add files, and delete files via workspace tools."
             ),
         }
     )
@@ -1551,6 +1614,12 @@ def _inline_code_normalize_task_result(
     files_touched: List[str],
     deleted_paths: List[str],
     workspace_entry: Dict[str, Any] | None,
+    change_breakdown: Dict[str, Any] | None = None,
+    integration_required: bool | None = None,
+    integration_passed: bool | None = None,
+    context_sources: List[str] | None = None,
+    context_item_count: int | None = None,
+    tool_access: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     if isinstance(result, dict):
         normalized: Dict[str, Any] = dict(result)
@@ -1587,6 +1656,24 @@ def _inline_code_normalize_task_result(
         normalized["handoff_notes"] = f"{handoff}\n{deleted_note}".strip() if handoff else deleted_note
     if workspace_entry:
         normalized["assignment_workspace"] = workspace_entry
+    if isinstance(change_breakdown, dict) and change_breakdown:
+        normalized["change_breakdown"] = dict(change_breakdown)
+    if integration_required is not None:
+        normalized["integration_quality_gate"] = {
+            "existing_file_edits_required": bool(integration_required),
+            "passed": bool(integration_passed) if integration_passed is not None else None,
+        }
+    if context_sources is not None or context_item_count is not None or isinstance(tool_access, dict):
+        normalized["inline_context"] = {
+            "context_item_count": int(context_item_count or 0),
+            "context_sources": list(context_sources or []),
+            "tool_access": {
+                "enabled": bool((tool_access or {}).get("enabled", False)),
+                "filesystem": bool((tool_access or {}).get("filesystem", False)),
+                "repo_search": bool((tool_access or {}).get("repo_search", False)),
+                "workspace_root": str((tool_access or {}).get("workspace_root") or "").strip() or None,
+            },
+        }
     return normalized
 
 
@@ -2569,6 +2656,7 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
             require_repo_evidence=require_repo_evidence,
         )
         if inline_code_mode:
+            integration_required = _inline_code_existing_edits_expected(body.content)
             orchestration_id = str(uuid.uuid4())
             try:
                 workspace_entry = await _inline_code_prepare_temp_workspace(
@@ -2596,12 +2684,24 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                 files_touched: List[str] = []
                 if str(terminal_task.status or "").strip().lower() == "completed":
                     artifacts, files_touched, deleted_paths = await _inline_code_collect_workspace_artifacts(Path(temp_root))
+                    change_breakdown = _inline_code_change_breakdown(artifacts, deleted_paths)
+                    integration_passed = bool(
+                        not integration_required
+                        or int(change_breakdown.get("updated_count") or 0) > 0
+                        or int(change_breakdown.get("deleted_count") or 0) > 0
+                    )
                     normalized_result = _inline_code_normalize_task_result(
                         result=terminal_task.result,
                         artifacts=artifacts,
                         files_touched=files_touched,
                         deleted_paths=deleted_paths,
                         workspace_entry=workspace_entry,
+                        change_breakdown=change_breakdown,
+                        integration_required=integration_required,
+                        integration_passed=integration_passed,
+                        context_sources=context_sources,
+                        context_item_count=len(resolved_context),
+                        tool_access=tool_access,
                     )
                     if normalized_result != terminal_task.result:
                         try:
@@ -2623,6 +2723,20 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                                 task=terminal_task,
                                 run_status="failed",
                                 files_touched=[],
+                            ),
+                        )
+                        return {"user_message": user_message, "assistant_message": assistant_message}
+                    if not integration_passed:
+                        assistant_message = await chat_manager.add_message(
+                            conversation_id=conversation_id,
+                            role="assistant",
+                            content=_inline_code_failed_new_files_only_message(terminal_task, change_breakdown),
+                            bot_id=target_bot_id,
+                            metadata=_inline_code_assistant_metadata(
+                                orchestration_id=orchestration_id,
+                                task=terminal_task,
+                                run_status="failed",
+                                files_touched=files_touched,
                             ),
                         )
                         return {"user_message": user_message, "assistant_message": assistant_message}
@@ -3030,6 +3144,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                 require_repo_evidence=require_repo_evidence,
             )
             if inline_code_mode:
+                integration_required = _inline_code_existing_edits_expected(body.content)
                 orchestration_id = str(uuid.uuid4())
                 try:
                     yield (
@@ -3099,12 +3214,24 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                     files_touched: List[str] = []
                     if str(terminal_task.status or "").strip().lower() == "completed":
                         artifacts, files_touched, deleted_paths = await _inline_code_collect_workspace_artifacts(Path(temp_root))
+                        change_breakdown = _inline_code_change_breakdown(artifacts, deleted_paths)
+                        integration_passed = bool(
+                            not integration_required
+                            or int(change_breakdown.get("updated_count") or 0) > 0
+                            or int(change_breakdown.get("deleted_count") or 0) > 0
+                        )
                         normalized_result = _inline_code_normalize_task_result(
                             result=terminal_task.result,
                             artifacts=artifacts,
                             files_touched=files_touched,
                             deleted_paths=deleted_paths,
                             workspace_entry=workspace_entry,
+                            change_breakdown=change_breakdown,
+                            integration_required=integration_required,
+                            integration_passed=integration_passed,
+                            context_sources=context_sources,
+                            context_item_count=len(resolved_context),
+                            tool_access=tool_access,
                         )
                         if normalized_result != terminal_task.result:
                             try:
@@ -3129,6 +3256,22 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                                     task=terminal_task,
                                     run_status="failed",
                                     files_touched=[],
+                                ),
+                            )
+                            yield f"event: assistant_message\ndata: {assistant_message.model_dump_json()}\n\n"
+                            yield "event: done\ndata: {}\n\n"
+                            return
+                        if not integration_passed:
+                            assistant_message = await chat_manager.add_message(
+                                conversation_id=conversation_id,
+                                role="assistant",
+                                content=_inline_code_failed_new_files_only_message(terminal_task, change_breakdown),
+                                bot_id=target_bot_id,
+                                metadata=_inline_code_assistant_metadata(
+                                    orchestration_id=orchestration_id,
+                                    task=terminal_task,
+                                    run_status="failed",
+                                    files_touched=files_touched,
                                 ),
                             )
                             yield f"event: assistant_message\ndata: {assistant_message.model_dump_json()}\n\n"

@@ -1988,6 +1988,7 @@ class Scheduler:
         accumulated_usage: dict = {}
         last_result: dict = {}
         observed_tool_call = False
+        executed_tool_calls: list[dict] = []
         forced_tool_followups = 0
         max_forced_tool_followups = max(
             1,
@@ -2036,6 +2037,16 @@ class Scheduler:
                 break
 
             observed_tool_call = True
+            for tc in tool_calls:
+                if not isinstance(tc, dict):
+                    continue
+                executed_tool_calls.append(
+                    {
+                        "id": str(tc.get("id") or ""),
+                        "name": str(tc.get("name") or ""),
+                        "arguments": tc.get("arguments") if isinstance(tc.get("arguments"), dict) else {},
+                    }
+                )
             # Append the assistant message that contains tool_calls
             assistant_msg: dict = {
                 "role": "assistant",
@@ -2081,6 +2092,8 @@ class Scheduler:
         # Build the merged result with accumulated usage
         result = dict(last_result)
         result["usage"] = accumulated_usage
+        if executed_tool_calls:
+            result["tool_calls_executed"] = executed_tool_calls
         return result
 
     async def _call_backend_raw(

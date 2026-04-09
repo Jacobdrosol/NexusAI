@@ -298,6 +298,7 @@ async def test_run_agent_loop_forces_tool_followup_for_writable_runs(monkeypatch
 
     assert result.get("output") == "Implemented changes."
     assert state["count"] == 3
+    assert any(str(item.get("name") or "") == "list_tree" for item in (result.get("tool_calls_executed") or []))
     assert any(
         str(message.get("role") or "") == "system"
         and "Tool-use requirement (mandatory for this writable coding run)" in str(message.get("content") or "")
