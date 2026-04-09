@@ -1421,21 +1421,82 @@ def _inline_code_change_breakdown(artifacts: List[Dict[str, Any]], deleted_paths
     }
 
 
-def _inline_code_failed_new_files_only_message(task: Task, breakdown: Dict[str, Any]) -> str:
+def _inline_code_new_files_only_warning_message(task: Task, breakdown: Dict[str, Any]) -> str:
     created_paths = list(breakdown.get("created_paths") or [])
     created_preview = ", ".join(created_paths[:8]) if created_paths else "(none)"
     output = _extract_task_output(task.result).strip()
     if len(output) > 1800:
         output = f"{output[:1800].rstrip()}..."
     base = (
-        "Inline coding run created new files but did not integrate the feature into existing code.\n\n"
-        "For feature work in an existing repository, at least one existing tracked file must be modified "
+        "Quality warning: this run created new files but did not modify existing tracked files.\n\n"
+        "For feature work in an existing repository, quality is usually better when at least one existing file is integrated "
         "(for example wiring DI/service registration, route/controller binding, startup config, or existing UI integration)."
     )
     details = f"Created files: {created_preview}"
     if not output:
         return f"{base}\n\n{details}"
     return f"{base}\n\n{details}\n\nModel output:\n{output}"
+
+
+def _inline_code_payload_stats(payload: List[dict]) -> Dict[str, int]:
+    total_chars = 0
+    user_messages = 0
+    assistant_messages = 0
+    system_messages = 0
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").strip().lower()
+        content = str(item.get("content") or "")
+        total_chars += len(content)
+        if role == "user":
+            user_messages += 1
+        elif role == "assistant":
+            assistant_messages += 1
+        elif role == "system":
+            system_messages += 1
+    return {
+        "message_count": len(payload),
+        "total_chars": total_chars,
+        "user_messages": user_messages,
+        "assistant_messages": assistant_messages,
+        "system_messages": system_messages,
+    }
+
+
+def _inline_code_compact_payload(
+    payload: List[dict],
+    *,
+    max_messages: int = 14,
+    max_chars: int = 55_000,
+) -> List[dict]:
+    if not isinstance(payload, list) or len(payload) <= max_messages:
+        return payload
+
+    context_system: dict | None = None
+    remaining: List[dict] = []
+    for index, item in enumerate(payload):
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").strip().lower()
+        if index == 0 and role == "system" and str(item.get("content") or "").strip().startswith("Context:"):
+            context_system = dict(item)
+            continue
+        if role in {"system", "user", "assistant"}:
+            remaining.append(dict(item))
+
+    keep_slots = max(1, max_messages - (1 if context_system is not None else 0))
+    selected = remaining[-keep_slots:]
+    total_chars = sum(len(str(item.get("content") or "")) for item in selected)
+    while selected and total_chars > max_chars:
+        removed = selected.pop(0)
+        total_chars -= len(str(removed.get("content") or ""))
+
+    compacted: List[dict] = []
+    if context_system is not None:
+        compacted.append(context_system)
+    compacted.extend(selected)
+    return compacted or payload[-max_messages:]
 
 
 async def _inline_code_workspace_tree_preview(workspace_root: str | None) -> str:
@@ -1658,6 +1719,8 @@ def _inline_code_normalize_task_result(
     context_sources: List[str] | None = None,
     context_item_count: int | None = None,
     tool_access: Dict[str, Any] | None = None,
+    payload_stats: Dict[str, int] | None = None,
+    quality_warnings: List[str] | None = None,
 ) -> Dict[str, Any]:
     if isinstance(result, dict):
         normalized: Dict[str, Any] = dict(result)
@@ -1712,6 +1775,17 @@ def _inline_code_normalize_task_result(
                 "workspace_root": str((tool_access or {}).get("workspace_root") or "").strip() or None,
             },
         }
+    if isinstance(payload_stats, dict) and payload_stats:
+        normalized["inline_payload"] = {
+            "message_count": int(payload_stats.get("message_count") or 0),
+            "total_chars": int(payload_stats.get("total_chars") or 0),
+            "user_messages": int(payload_stats.get("user_messages") or 0),
+            "assistant_messages": int(payload_stats.get("assistant_messages") or 0),
+            "system_messages": int(payload_stats.get("system_messages") or 0),
+        }
+    warnings = [str(item).strip() for item in (quality_warnings or []) if str(item).strip()]
+    if warnings:
+        normalized["quality_warnings"] = warnings
     return normalized
 
 
@@ -2695,6 +2769,8 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
         )
         if inline_code_mode:
             integration_required = _inline_code_existing_edits_expected(body.content)
+            payload = _inline_code_compact_payload(payload)
+            payload_stats = _inline_code_payload_stats(payload)
             orchestration_id = str(uuid.uuid4())
             try:
                 workspace_entry = await _inline_code_prepare_temp_workspace(
@@ -2742,6 +2818,12 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                         context_sources=context_sources,
                         context_item_count=len(resolved_context),
                         tool_access=tool_access,
+                        payload_stats=payload_stats,
+                        quality_warnings=(
+                            [_inline_code_new_files_only_warning_message(terminal_task, change_breakdown)]
+                            if integration_required and not integration_passed
+                            else []
+                        ),
                     )
                     if normalized_result != terminal_task.result:
                         try:
@@ -2766,26 +2848,18 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                             ),
                         )
                         return {"user_message": user_message, "assistant_message": assistant_message}
-                    if not integration_passed:
-                        assistant_message = await chat_manager.add_message(
-                            conversation_id=conversation_id,
-                            role="assistant",
-                            content=_inline_code_failed_new_files_only_message(terminal_task, change_breakdown),
-                            bot_id=target_bot_id,
-                            metadata=_inline_code_assistant_metadata(
-                                orchestration_id=orchestration_id,
-                                task=terminal_task,
-                                run_status="failed",
-                                files_touched=files_touched,
-                            ),
-                        )
-                        return {"user_message": user_message, "assistant_message": assistant_message}
                     assistant_output = _extract_task_output(terminal_task.result)
                     assistant_output = _apply_repo_evidence_envelope(
                         assistant_output,
                         require_repo_evidence=require_repo_evidence,
                         context_sources=context_sources,
                     )
+                    if integration_required and not integration_passed:
+                        assistant_output = (
+                            f"{assistant_output}\n\n{_inline_code_new_files_only_warning_message(terminal_task, change_breakdown)}".strip()
+                            if assistant_output.strip()
+                            else _inline_code_new_files_only_warning_message(terminal_task, change_breakdown)
+                        )
                     if files_touched and "Files touched in temp workspace:" not in assistant_output:
                         preview = "\n".join(f"- {path}" for path in files_touched[:8])
                         assistant_output = (
@@ -3185,6 +3259,8 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
             )
             if inline_code_mode:
                 integration_required = _inline_code_existing_edits_expected(body.content)
+                payload = _inline_code_compact_payload(payload)
+                payload_stats = _inline_code_payload_stats(payload)
                 orchestration_id = str(uuid.uuid4())
                 try:
                     yield (
@@ -3274,6 +3350,12 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                             context_sources=context_sources,
                             context_item_count=len(resolved_context),
                             tool_access=tool_access,
+                            payload_stats=payload_stats,
+                            quality_warnings=(
+                                [_inline_code_new_files_only_warning_message(terminal_task, change_breakdown)]
+                                if integration_required and not integration_passed
+                                else []
+                            ),
                         )
                         if normalized_result != terminal_task.result:
                             try:
@@ -3303,22 +3385,6 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                             yield f"event: assistant_message\ndata: {assistant_message.model_dump_json()}\n\n"
                             yield "event: done\ndata: {}\n\n"
                             return
-                        if not integration_passed:
-                            assistant_message = await chat_manager.add_message(
-                                conversation_id=conversation_id,
-                                role="assistant",
-                                content=_inline_code_failed_new_files_only_message(terminal_task, change_breakdown),
-                                bot_id=target_bot_id,
-                                metadata=_inline_code_assistant_metadata(
-                                    orchestration_id=orchestration_id,
-                                    task=terminal_task,
-                                    run_status="failed",
-                                    files_touched=files_touched,
-                                ),
-                            )
-                            yield f"event: assistant_message\ndata: {assistant_message.model_dump_json()}\n\n"
-                            yield "event: done\ndata: {}\n\n"
-                            return
 
                         assistant_output = _extract_task_output(terminal_task.result)
                         assistant_output = _apply_repo_evidence_envelope(
@@ -3326,6 +3392,12 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                             require_repo_evidence=require_repo_evidence,
                             context_sources=context_sources,
                         )
+                        if integration_required and not integration_passed:
+                            assistant_output = (
+                                f"{assistant_output}\n\n{_inline_code_new_files_only_warning_message(terminal_task, change_breakdown)}".strip()
+                                if assistant_output.strip()
+                                else _inline_code_new_files_only_warning_message(terminal_task, change_breakdown)
+                            )
                         if files_touched and "Files touched in temp workspace:" not in assistant_output:
                             preview = "\n".join(f"- {path}" for path in files_touched[:8])
                             assistant_output = (

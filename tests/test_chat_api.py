@@ -2724,7 +2724,7 @@ async def test_post_message_inline_code_forwards_user_prompt_to_scheduler(cp_app
 
 
 @pytest.mark.anyio
-async def test_post_message_inline_code_marks_failed_when_only_new_files_for_integration_request(cp_app, tmp_path, monkeypatch):
+async def test_post_message_inline_code_warns_when_only_new_files_for_integration_request(cp_app, tmp_path, monkeypatch):
     from control_plane.api import chat as chat_module
     from shared.models import Task, TaskMetadata
 
@@ -2843,8 +2843,26 @@ async def test_post_message_inline_code_marks_failed_when_only_new_files_for_int
         assert resp.status_code == 200
         body = resp.json()
         assistant = body["assistant_message"]
-        assert assistant["metadata"]["run_status"] == "failed"
-        assert "did not integrate the feature into existing code" in assistant["content"]
+        assert assistant["metadata"]["run_status"] == "passed"
+        assert "Quality warning: this run created new files but did not modify existing tracked files." in assistant["content"]
+
+
+def test_inline_code_compact_payload_preserves_context_and_limits_size():
+    from control_plane.api import chat as chat_module
+
+    payload = [{"role": "system", "content": "Context:\nrepo profile"}]
+    for idx in range(30):
+        role = "user" if idx % 2 == 0 else "assistant"
+        payload.append({"role": role, "content": f"message-{idx}-" + ("x" * 2000)})
+
+    compacted = chat_module._inline_code_compact_payload(payload, max_messages=12, max_chars=12000)
+    assert isinstance(compacted, list)
+    assert len(compacted) <= 12
+    assert compacted[0]["role"] == "system"
+    assert str(compacted[0]["content"]).startswith("Context:")
+    total_chars = sum(len(str(item.get("content") or "")) for item in compacted if isinstance(item, dict))
+    assert total_chars <= 12000 + len("Context:\nrepo profile")
+    assert any(str(item.get("content") or "").startswith("message-29-") for item in compacted if isinstance(item, dict))
 
 
 @pytest.mark.anyio
