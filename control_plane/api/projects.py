@@ -1484,6 +1484,113 @@ async def _fetch_github_identity(token: str, repo_full_name: Optional[str] = Non
         return out
 
 
+def _github_error_detail(resp: httpx.Response) -> str:
+    try:
+        payload = resp.json()
+    except Exception:
+        payload = None
+    if isinstance(payload, dict):
+        message = str(payload.get("message") or "").strip()
+        if message:
+            return message
+    return str(resp.text or "").strip()[:400]
+
+
+async def _validate_github_ingest_access(
+    token: str,
+    repo_full_name: str,
+    *,
+    branch: Optional[str] = None,
+) -> Dict[str, Any]:
+    headers = _github_headers(token)
+    checks: List[Dict[str, Any]] = []
+    target_repo = str(repo_full_name or "").strip()
+    if not target_repo:
+        return {
+            "ok": False,
+            "repo_full_name": target_repo,
+            "default_branch": None,
+            "checks": [],
+            "error": "repo_full_name is required for ingest validation",
+        }
+
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        repo_resp = await client.get(f"https://api.github.com/repos/{target_repo}", headers=headers)
+        repo_detail = _github_error_detail(repo_resp) if repo_resp.status_code >= 400 else ""
+        checks.append(
+            {
+                "name": "repo_metadata",
+                "method": "GET",
+                "endpoint": f"/repos/{target_repo}",
+                "status_code": int(repo_resp.status_code),
+                "ok": repo_resp.status_code < 400,
+                "detail": repo_detail or None,
+            }
+        )
+        if repo_resp.status_code >= 400:
+            return {
+                "ok": False,
+                "repo_full_name": target_repo,
+                "default_branch": None,
+                "checks": checks,
+                "error": "failed to access repository metadata",
+            }
+
+        repo_data = repo_resp.json() if isinstance(repo_resp.json(), dict) else {}
+        ref = str(branch or repo_data.get("default_branch") or "main").strip() or "main"
+
+        probe_calls = [
+            {
+                "name": "repo_tree",
+                "endpoint": f"/repos/{target_repo}/git/trees/{ref}",
+                "params": {"recursive": 1},
+            },
+            {
+                "name": "commits",
+                "endpoint": f"/repos/{target_repo}/commits",
+                "params": {"sha": ref, "per_page": 1},
+            },
+            {
+                "name": "pull_requests",
+                "endpoint": f"/repos/{target_repo}/pulls",
+                "params": {"state": "all", "per_page": 1},
+            },
+            {
+                "name": "issues",
+                "endpoint": f"/repos/{target_repo}/issues",
+                "params": {"state": "all", "per_page": 1},
+            },
+        ]
+
+        for probe in probe_calls:
+            endpoint = str(probe["endpoint"])
+            params = probe["params"] if isinstance(probe.get("params"), dict) else None
+            resp = await client.get(f"https://api.github.com{endpoint}", headers=headers, params=params)
+            checks.append(
+                {
+                    "name": str(probe["name"]),
+                    "method": "GET",
+                    "endpoint": endpoint,
+                    "status_code": int(resp.status_code),
+                    "ok": resp.status_code < 400,
+                    "detail": _github_error_detail(resp) if resp.status_code >= 400 else None,
+                }
+            )
+
+    ok = all(bool(item.get("ok")) for item in checks)
+    result: Dict[str, Any] = {
+        "ok": ok,
+        "repo_full_name": target_repo,
+        "default_branch": ref,
+        "checks": checks,
+    }
+    if not ok:
+        failures = [item for item in checks if not bool(item.get("ok"))]
+        missing = ", ".join(str(item.get("name") or "unknown") for item in failures) or "unknown"
+        result["error"] = f"missing required ingest access on: {missing}"
+    return result
+
+
 def _is_probably_text_path(path: str) -> bool:
     lowered = path.lower()
     blocked_suffixes = {
@@ -2078,10 +2185,21 @@ async def connect_github_pat(project_id: str, request: Request, body: ConnectGit
         raise HTTPException(status_code=400, detail="token is required")
 
     identity: Dict[str, Any] = {}
+    ingest_validation: Dict[str, Any] = {}
     if body.validate_token:
         try:
             identity = await _fetch_github_identity(token, repo_full_name=body.repo_full_name)
+            if body.repo_full_name:
+                ingest_validation = await _validate_github_ingest_access(
+                    token,
+                    repo_full_name=body.repo_full_name,
+                )
+                if not bool(ingest_validation.get("ok")):
+                    detail = str(ingest_validation.get("error") or "PAT lacks required repository ingest permissions")
+                    raise HTTPException(status_code=400, detail=f"GitHub validation failed: {detail}")
         except Exception as e:
+            if isinstance(e, HTTPException):
+                raise
             raise HTTPException(status_code=400, detail=f"GitHub validation failed: {e}")
 
     key_name = f"github_pat::{project_id}"
@@ -2111,6 +2229,7 @@ async def connect_github_pat(project_id: str, request: Request, body: ConnectGit
         "project_id": project_id,
         "repo_full_name": github_settings.get("repo_full_name"),
         "user_login": github_settings.get("user_login"),
+        "ingest_validated": bool(ingest_validation.get("ok")) if ingest_validation else None,
     }
 
 
@@ -2169,6 +2288,23 @@ async def github_status(project_id: str, request: Request, validate: bool = Fals
             result["validated"] = True
             if identity.get("user_login"):
                 result["user_login"] = identity.get("user_login")
+            repo_full_name = str(github_cfg.get("repo_full_name") or "").strip()
+            if repo_full_name:
+                ingest_validation = await _validate_github_ingest_access(
+                    secret,
+                    repo_full_name=repo_full_name,
+                    branch=(result.get("context_sync") or {}).get("branch")
+                    if isinstance(result.get("context_sync"), dict)
+                    else None,
+                )
+                result["ingest_validation"] = ingest_validation
+                result["ingest_validated"] = bool(ingest_validation.get("ok"))
+                if not result["ingest_validated"]:
+                    result["validated"] = False
+                    result["validation_error"] = str(
+                        ingest_validation.get("error")
+                        or "ingest permission check failed"
+                    )
         except Exception as e:
             result["validated"] = False
             result["validation_error"] = str(e)

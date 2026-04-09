@@ -62,6 +62,116 @@ def _task_truncation_note(result: Any) -> str:
     return ""
 
 
+def _json_text(value: Any) -> str:
+    try:
+        return json.dumps(value, indent=2, sort_keys=True, default=str)
+    except Exception:
+        return str(value)
+
+
+def _append_indented(lines: list[str], text: str, *, indent: str = "  ") -> None:
+    raw = str(text or "")
+    if not raw:
+        lines.append(f"{indent}(empty)")
+        return
+    for line in raw.splitlines():
+        lines.append(f"{indent}{line}")
+
+
+def _append_json_section(lines: list[str], label: str, value: Any) -> None:
+    lines.append(f"- {label}:")
+    _append_indented(lines, _json_text(value))
+
+
+def _payload_messages(payload: Any) -> list[dict[str, Any]]:
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if isinstance(payload, dict):
+        messages = payload.get("messages")
+        if isinstance(messages, list):
+            return [item for item in messages if isinstance(item, dict)]
+    return []
+
+
+def _content_part_text(part: Any) -> str:
+    if isinstance(part, str):
+        return part
+    if not isinstance(part, dict):
+        return _json_text(part)
+    part_type = str(part.get("type") or "").strip().lower()
+    if part_type == "text":
+        return str(part.get("text") or "")
+    if part_type == "image_url":
+        image_obj = part.get("image_url")
+        if isinstance(image_obj, dict):
+            return f"[image_url] {str(image_obj.get('url') or '').strip()}"
+        return "[image_url]"
+    if part_type:
+        return f"[{part_type}] {_json_text(part)}"
+    return _json_text(part)
+
+
+def _message_content_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        chunks: list[str] = []
+        for part in content:
+            text = _content_part_text(part).strip()
+            if text:
+                chunks.append(text)
+        return "\n".join(chunks)
+    if content is None:
+        return ""
+    return _json_text(content)
+
+
+def _append_prompt_transcript(lines: list[str], payload: Any) -> None:
+    messages = _payload_messages(payload)
+    if not messages:
+        return
+    lines.append(f"- Prompt Messages: {len(messages)}")
+    for index, message in enumerate(messages, start=1):
+        role = str(message.get("role") or "unknown").strip() or "unknown"
+        lines.append(f"  - [{index}] role={role}")
+        content_text = _message_content_text(message.get("content"))
+        _append_indented(lines, content_text, indent="      ")
+        tool_calls = message.get("tool_calls")
+        if isinstance(tool_calls, list) and tool_calls:
+            lines.append("      tool_calls:")
+            _append_indented(lines, _json_text(tool_calls), indent="        ")
+        tool_call_id = str(message.get("tool_call_id") or "").strip()
+        if tool_call_id:
+            lines.append(f"      tool_call_id: {tool_call_id}")
+
+
+def _append_reasoning_sections(lines: list[str], result_obj: Any) -> None:
+    if not isinstance(result_obj, dict):
+        lines.append("- Model Thinking / Reasoning: not present in backend result.")
+        return
+    reasoning_keys = (
+        "thinking",
+        "reasoning",
+        "reasoning_content",
+        "reasoning_text",
+        "analysis",
+        "thoughts",
+        "thinking_trace",
+    )
+    found = False
+    for key in reasoning_keys:
+        value = result_obj.get(key)
+        if value in (None, "", [], {}):
+            continue
+        if not found:
+            lines.append("- Model Thinking / Reasoning:")
+            found = True
+        lines.append(f"  - {key}:")
+        _append_indented(lines, _json_text(value), indent="    ")
+    if not found:
+        lines.append("- Model Thinking / Reasoning: not present in backend result.")
+
+
 def _assignment_full_recap(orchestration_id: str, tasks: list[dict[str, Any]]) -> str:
     ordered = sorted([task for task in tasks if isinstance(task, dict)], key=_task_sort_key)
     lines: list[str] = [
@@ -70,7 +180,8 @@ def _assignment_full_recap(orchestration_id: str, tasks: list[dict[str, Any]]) -
         "",
     ]
     for task in ordered:
-        payload = task.get("payload") if isinstance(task.get("payload"), dict) else {}
+        payload_value = task.get("payload")
+        payload = payload_value if isinstance(payload_value, dict) else {}
         metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
         bot_id = str(task.get("bot_id") or "unknown")
         workstream = str(payload.get("workstream") or payload.get("title") or "").strip()
@@ -90,9 +201,16 @@ def _assignment_full_recap(orchestration_id: str, tasks: list[dict[str, Any]]) -
             [
                 f"{step_label}: {title}",
                 f"- Status: {status}",
+                f"- Task ID: {str(task.get('id') or '').strip() or 'unknown'}",
                 f"- Bot: {bot_id}",
             ]
         )
+        created_at = str(task.get("created_at") or "").strip()
+        updated_at = str(task.get("updated_at") or "").strip()
+        if created_at:
+            lines.append(f"- Created At: {created_at}")
+        if updated_at:
+            lines.append(f"- Updated At: {updated_at}")
         if source:
             lines.append(f"- Source: {source}")
         deliverables = payload.get("deliverables") if isinstance(payload.get("deliverables"), list) else []
@@ -100,13 +218,34 @@ def _assignment_full_recap(orchestration_id: str, tasks: list[dict[str, Any]]) -
             lines.append("- Deliverables:")
             for item in deliverables:
                 lines.append(f"  - {item}")
+        _append_json_section(lines, "Task JSON", task)
+        _append_json_section(lines, "Payload JSON", payload_value)
+        _append_prompt_transcript(lines, payload_value)
+        _append_json_section(lines, "Metadata JSON", metadata)
+        result_obj = task.get("result")
+        _append_json_section(lines, "Result JSON", result_obj)
+        _append_reasoning_sections(lines, result_obj)
+        if isinstance(result_obj, dict):
+            if isinstance(result_obj.get("tool_calls"), list):
+                lines.append(f"- Tool Calls Requested: {len(result_obj.get('tool_calls') or [])}")
+                _append_json_section(lines, "Tool Calls Requested JSON", result_obj.get("tool_calls"))
+            if isinstance(result_obj.get("tool_calls_executed"), list):
+                lines.append(f"- Tool Calls Executed: {len(result_obj.get('tool_calls_executed') or [])}")
+                _append_json_section(lines, "Tool Calls Executed JSON", result_obj.get("tool_calls_executed"))
+            if isinstance(result_obj.get("usage"), dict):
+                _append_json_section(lines, "Usage JSON", result_obj.get("usage"))
+            finish_reason = str(result_obj.get("finish_reason") or "").strip()
+            if finish_reason:
+                lines.append(f"- Finish Reason: {finish_reason}")
         output = _task_output_text(task.get("result"))
         if output:
             lines.append("- Full Output:")
             lines.append(output)
         error = task.get("error")
-        if isinstance(error, dict) and error.get("message"):
-            lines.append(f"- Error: {error.get('message')}")
+        if error is not None:
+            if isinstance(error, dict) and error.get("message"):
+                lines.append(f"- Error: {error.get('message')}")
+            _append_json_section(lines, "Error JSON", error)
         note = _task_truncation_note(task.get("result"))
         if note:
             lines.append(f"- Note: {note}")

@@ -2140,18 +2140,19 @@ class Scheduler:
             )
         messages = _messages_for_ollama(messages)
         params_dict = backend.params.model_dump(exclude_none=True) if backend.params else {}
-        body: dict = {
-            "model": backend.model,
+        base_body: dict = {
             "messages": messages,
             "stream": False,
             "options": _ollama_options(params_dict),
         }
         if tools:
-            body["tools"] = tools
+            base_body["tools"] = tools
 
         base_url = os.environ.get("OLLAMA_CLOUD_BASE_URL", "https://ollama.com/api").rstrip("/")
 
-        async def _do_chat(client: httpx.AsyncClient) -> dict:
+        async def _do_chat(client: httpx.AsyncClient, model_name: str) -> dict:
+            body = dict(base_body)
+            body["model"] = model_name
             response = await client.post(
                 f"{base_url}/chat",
                 headers={"Authorization": f"Bearer {api_key}"},
@@ -2195,14 +2196,35 @@ class Scheduler:
             result: dict = {"output": output, "tool_calls": tool_calls, "usage": usage}
             if finish_reason:
                 result["finish_reason"] = finish_reason
+            if model_name != str(backend.model or "").strip():
+                result["resolved_model"] = model_name
+            for key in ("thinking", "reasoning", "reasoning_content", "analysis"):
+                value = msg_obj.get(key)
+                if value in (None, "", [], {}):
+                    value = data.get(key)
+                if value not in (None, "", [], {}):
+                    result[key] = value
             return result
 
+        model_variants = self._ollama_cloud_model_variants(backend.model)
+        if not model_variants:
+            model_variants = [str(backend.model or "").strip()]
+
         async with httpx.AsyncClient(timeout=_cloud_timeout()) as client:
-            try:
-                return await _do_chat(client)
-            except _OllamaModelNotFound as exc:
-                await self._pull_ollama_cloud_model(base_url, api_key, exc.model)
-                return await _do_chat(client)
+            for model_name in model_variants:
+                try:
+                    return await _do_chat(client, model_name)
+                except _OllamaModelNotFound:
+                    continue
+            await self._pull_ollama_cloud_model(base_url, api_key, str(backend.model or "").strip())
+            for model_name in model_variants:
+                try:
+                    return await _do_chat(client, model_name)
+                except _OllamaModelNotFound:
+                    continue
+        raise BackendError(
+            f"Ollama Cloud model not found for configured name '{backend.model}' and aliases: {', '.join(model_variants)}"
+        )
 
     async def _call_openai_raw(
         self,
@@ -2792,6 +2814,34 @@ class Scheduler:
         return "not found" in lower or "model" in lower or not detail
 
     @staticmethod
+    def _ollama_cloud_model_variants(model: str) -> list[str]:
+        raw = str(model or "").strip()
+        if not raw:
+            return []
+        candidates: list[str] = [raw]
+        lowered = raw.lower()
+        prefixes = ("ollama_cloud/", "ollama/")
+        for prefix in prefixes:
+            if lowered.startswith(prefix):
+                candidates.append(raw[len(prefix):].strip())
+                break
+        if raw.endswith("-cloud"):
+            candidates.append(raw[: -len("-cloud")].strip())
+        if raw.endswith(":cloud"):
+            candidates.append(raw[: -len(":cloud")].strip())
+        if raw.endswith("/cloud"):
+            candidates.append(raw[: -len("/cloud")].strip())
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for item in candidates:
+            value = str(item or "").strip()
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            ordered.append(value)
+        return ordered
+
+    @staticmethod
     async def _pull_ollama_cloud_model(
         base_url: str,
         api_key: str,
@@ -2862,15 +2912,16 @@ class Scheduler:
         )
         messages = _messages_for_ollama(messages)
         params_dict = backend.params.model_dump(exclude_none=True) if backend.params else {}
-        body: dict = {
-            "model": backend.model,
+        base_body: dict = {
             "messages": messages,
             "stream": False,
             "options": _ollama_options(params_dict),
         }
         base_url = os.environ.get("OLLAMA_CLOUD_BASE_URL", "https://ollama.com/api").rstrip("/")
 
-        async def _do_chat(client: httpx.AsyncClient) -> Any:
+        async def _do_chat(client: httpx.AsyncClient, model_name: str) -> Any:
+            body = dict(base_body)
+            body["model"] = model_name
             response = await client.post(
                 f"{base_url}/chat",
                 headers={"Authorization": f"Bearer {api_key}"},
@@ -2907,15 +2958,35 @@ class Scheduler:
             result: dict = {"output": output, "usage": usage}
             if finish_reason:
                 result["finish_reason"] = finish_reason
+            if model_name != str(backend.model or "").strip():
+                result["resolved_model"] = model_name
+            for key in ("thinking", "reasoning", "reasoning_content", "analysis"):
+                value = data.get("message", {}).get(key) if isinstance(data.get("message"), dict) else None
+                if value in (None, "", [], {}):
+                    value = data.get(key)
+                if value not in (None, "", [], {}):
+                    result[key] = value
             return result
 
+        model_variants = self._ollama_cloud_model_variants(backend.model)
+        if not model_variants:
+            model_variants = [str(backend.model or "").strip()]
+
         async with httpx.AsyncClient(timeout=_cloud_timeout()) as client:
-            try:
-                return await _do_chat(client)
-            except _OllamaModelNotFound as exc:
-                await self._pull_ollama_cloud_model(base_url, api_key, exc.model)
-                # Retry once after successful pull
-                return await _do_chat(client)
+            for model_name in model_variants:
+                try:
+                    return await _do_chat(client, model_name)
+                except _OllamaModelNotFound:
+                    continue
+            await self._pull_ollama_cloud_model(base_url, api_key, str(backend.model or "").strip())
+            for model_name in model_variants:
+                try:
+                    return await _do_chat(client, model_name)
+                except _OllamaModelNotFound:
+                    continue
+        raise BackendError(
+            f"Ollama Cloud model not found for configured name '{backend.model}' and aliases: {', '.join(model_variants)}"
+        )
 
     async def _call_claude(self, backend: BackendConfig, payload: Any) -> Any:
         api_key_ref = backend.api_key_ref or "ANTHROPIC_API_KEY"

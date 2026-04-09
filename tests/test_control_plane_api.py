@@ -777,6 +777,100 @@ async def test_project_github_pat_connect_status_disconnect(cp_client):
 
 
 @pytest.mark.anyio
+async def test_project_github_status_validate_reports_ingest_permission_failures(cp_client, monkeypatch):
+    from control_plane.api import projects as projects_api
+
+    create_resp = await cp_client.post(
+        "/v1/projects",
+        json={"id": "gh-proj-validate", "name": "GitHub Validate Project", "mode": "isolated"},
+    )
+    assert create_resp.status_code == 200
+
+    connect_resp = await cp_client.post(
+        "/v1/projects/gh-proj-validate/github/pat",
+        json={
+            "token": "ghp_example_token_for_tests_only",
+            "repo_full_name": "owner/repo",
+            "validate": False,
+        },
+    )
+    assert connect_resp.status_code == 200
+
+    async def _fake_identity(token: str, repo_full_name: str | None = None):
+        return {"user_login": "octocat", "user_id": 1, "repo": {"full_name": repo_full_name}}
+
+    async def _fake_ingest_validation(token: str, repo_full_name: str, *, branch: str | None = None):
+        return {
+            "ok": False,
+            "repo_full_name": repo_full_name,
+            "default_branch": "main",
+            "checks": [
+                {
+                    "name": "issues",
+                    "method": "GET",
+                    "endpoint": f"/repos/{repo_full_name}/issues",
+                    "status_code": 401,
+                    "ok": False,
+                    "detail": "Bad credentials",
+                }
+            ],
+            "error": "missing required ingest access on: issues",
+        }
+
+    monkeypatch.setattr(projects_api, "_fetch_github_identity", _fake_identity)
+    monkeypatch.setattr(projects_api, "_validate_github_ingest_access", _fake_ingest_validation)
+
+    status_resp = await cp_client.get("/v1/projects/gh-proj-validate/github/status?validate=true")
+    assert status_resp.status_code == 200
+    body = status_resp.json()
+    assert body["connected"] is True
+    assert body["validated"] is False
+    assert body["ingest_validated"] is False
+    assert "missing required ingest access" in str(body.get("validation_error") or "").lower()
+    ingest_validation = body.get("ingest_validation") or {}
+    assert ingest_validation.get("ok") is False
+    checks = ingest_validation.get("checks") or []
+    assert checks and checks[0].get("status_code") == 401
+
+
+@pytest.mark.anyio
+async def test_project_github_pat_connect_rejects_when_ingest_validation_fails(cp_client, monkeypatch):
+    from control_plane.api import projects as projects_api
+
+    create_resp = await cp_client.post(
+        "/v1/projects",
+        json={"id": "gh-proj-connect-fail", "name": "GitHub Connect Fail", "mode": "isolated"},
+    )
+    assert create_resp.status_code == 200
+
+    async def _fake_identity(token: str, repo_full_name: str | None = None):
+        return {"user_login": "octocat", "user_id": 1, "repo": {"full_name": repo_full_name}}
+
+    async def _fake_ingest_validation(token: str, repo_full_name: str, *, branch: str | None = None):
+        return {
+            "ok": False,
+            "repo_full_name": repo_full_name,
+            "default_branch": "main",
+            "checks": [],
+            "error": "missing required ingest access on: commits",
+        }
+
+    monkeypatch.setattr(projects_api, "_fetch_github_identity", _fake_identity)
+    monkeypatch.setattr(projects_api, "_validate_github_ingest_access", _fake_ingest_validation)
+
+    connect_resp = await cp_client.post(
+        "/v1/projects/gh-proj-connect-fail/github/pat",
+        json={
+            "token": "ghp_example_token_for_tests_only",
+            "repo_full_name": "owner/repo",
+            "validate": True,
+        },
+    )
+    assert connect_resp.status_code == 400
+    assert "missing required ingest access" in str(connect_resp.json().get("detail") or "").lower()
+
+
+@pytest.mark.anyio
 async def test_project_cloud_context_policy_update_and_get(cp_client):
     await cp_client.post(
         "/v1/projects",

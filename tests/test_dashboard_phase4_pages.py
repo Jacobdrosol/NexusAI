@@ -1203,13 +1203,17 @@ def test_chat_orchestration_recap_api_builds_full_recap(dashboard_client):
                     "id": "task-1",
                     "bot_id": "pm-coder",
                     "status": "completed",
-                    "payload": {
-                        "title": "Implement Geometry Lesson Block Code",
-                        "step_number": 3,
-                        "step_count": 5,
-                        "deliverables": ["src/lessons/geometry/theorem_block.py"],
+                    "payload": [
+                        {"role": "system", "content": "Context:\n[workspace:file] src/main.py"},
+                        {"role": "user", "content": "Please code this feature in the repo."},
+                    ],
+                    "result": {
+                        "output": "full implementation output",
+                        "tool_calls": [{"id": "call-1", "name": "read_file", "arguments": {"path": "src/main.py"}}],
+                        "tool_calls_executed": [{"id": "call-1", "name": "read_file", "arguments": {"path": "src/main.py"}}],
+                        "usage": {"prompt_tokens": 1234, "completion_tokens": 456},
+                        "finish_reason": "stop",
                     },
-                    "result": {"output": "full implementation output"},
                     "error": None,
                     "created_at": "2026-03-17T00:00:00+00:00",
                     "updated_at": "2026-03-17T00:05:00+00:00",
@@ -1228,6 +1232,13 @@ def test_chat_orchestration_recap_api_builds_full_recap(dashboard_client):
     assert body["orchestration_id"] == "orch-1"
     assert "Assignment Full Recap" in body["recap"]
     assert "full implementation output" in body["recap"]
+    assert "Task JSON" in body["recap"]
+    assert "Payload JSON" in body["recap"]
+    assert "Prompt Messages: 2" in body["recap"]
+    assert "Please code this feature in the repo." in body["recap"]
+    assert "Metadata JSON" in body["recap"]
+    assert "Result JSON" in body["recap"]
+    assert "Tool Calls Executed" in body["recap"]
 
 
 def test_chat_delete_conversation_api_surfaces_success(dashboard_client):

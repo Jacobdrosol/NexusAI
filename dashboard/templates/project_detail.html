@@ -1544,8 +1544,12 @@ async function refreshGithubStatus(validate) {
   if (botSelect) botSelect.value = (prCfg.bot_id || '');
   if (enabledCheck) enabledCheck.checked = !!prCfg.enabled;
   if (data.connected) {
-    const suffix = data.validated === false ? ' (validation failed)' : '';
-    setGithubState('state-info', 'GitHub PAT connected' + suffix + '.');
+    if (data.validated === false && data.ingest_validated === false) {
+      setGithubState('state-error', 'GitHub PAT connected, but ingest permission validation failed. Open Current Status for endpoint details.');
+    } else {
+      const suffix = data.validated === false ? ' (validation failed)' : '';
+      setGithubState('state-info', 'GitHub PAT connected' + suffix + '.');
+    }
   } else {
     setGithubState('state-empty', 'No GitHub PAT connected.');
   }

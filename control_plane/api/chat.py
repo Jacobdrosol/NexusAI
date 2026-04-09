@@ -1534,7 +1534,7 @@ def _inline_code_compact_payload(
     max_messages: int = 14,
     max_chars: int = 55_000,
 ) -> List[dict]:
-    if not isinstance(payload, list) or len(payload) <= max_messages:
+    if not isinstance(payload, list) or not payload:
         return payload
 
     context_system: dict | None = None
@@ -1549,18 +1549,39 @@ def _inline_code_compact_payload(
         if role in {"system", "user", "assistant"}:
             remaining.append(dict(item))
 
+    max_chars = max(2_000, int(max_chars))
+    if context_system is not None:
+        context_content = context_system.get("content")
+        if isinstance(context_content, str):
+            max_context_chars = max(1_500, int(max_chars * 0.6))
+            if len(context_content) > max_context_chars:
+                context_system["content"] = (
+                    f"{context_content[:max_context_chars].rstrip()}\n... (inline context truncated for prompt budget)"
+                )
+
     keep_slots = max(1, max_messages - (1 if context_system is not None else 0))
     selected = remaining[-keep_slots:]
     total_chars = sum(len(str(item.get("content") or "")) for item in selected)
-    while selected and total_chars > max_chars:
+    context_chars = len(str((context_system or {}).get("content") or "")) if context_system is not None else 0
+    while selected and (total_chars + context_chars) > max_chars:
         removed = selected.pop(0)
         total_chars -= len(str(removed.get("content") or ""))
+
+    if not selected and remaining:
+        fallback = dict(remaining[-1])
+        fallback_content = fallback.get("content")
+        if isinstance(fallback_content, str) and len(fallback_content) > max_chars:
+            fallback["content"] = f"...{fallback_content[-max_chars:]}"
+        selected = [fallback]
+        total_chars = len(str(fallback.get("content") or ""))
 
     compacted: List[dict] = []
     if context_system is not None:
         compacted.append(context_system)
     compacted.extend(selected)
-    return compacted or payload[-max_messages:]
+    if compacted:
+        return compacted
+    return payload[-max_messages:]
 
 
 async def _inline_code_workspace_tree_preview(workspace_root: str | None) -> str:

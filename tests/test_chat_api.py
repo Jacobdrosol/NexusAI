@@ -3116,6 +3116,22 @@ def test_inline_code_compact_payload_preserves_context_and_limits_size():
     assert any(str(item.get("content") or "").startswith("message-29-") for item in compacted if isinstance(item, dict))
 
 
+def test_inline_code_compact_payload_limits_chars_even_with_few_messages():
+    from control_plane.api import chat as chat_module
+
+    payload = [
+        {"role": "system", "content": "Context:\n" + ("repo-line\n" * 5000)},
+        {"role": "user", "content": "please code this in the connected workspace"},
+    ]
+
+    compacted = chat_module._inline_code_compact_payload(payload, max_messages=12, max_chars=9000)
+    assert isinstance(compacted, list)
+    assert len(compacted) <= 12
+    total_chars = sum(len(str(item.get("content") or "")) for item in compacted if isinstance(item, dict))
+    assert total_chars <= 9000
+    assert "truncated for prompt budget" in str(compacted[0].get("content") or "")
+
+
 @pytest.mark.anyio
 async def test_stream_message_emits_context_summary_event_when_repo_context_loaded(cp_app):
     async def _stream(_task):

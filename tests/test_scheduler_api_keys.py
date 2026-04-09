@@ -235,6 +235,76 @@ async def test_scheduler_ollama_cloud_maps_max_tokens_to_num_predict():
     assert kwargs["json"]["options"]["temperature"] == 0.3
 
 
+def test_scheduler_ollama_cloud_model_variants_include_cloud_alias():
+    from control_plane.scheduler.scheduler import Scheduler
+
+    variants = Scheduler._ollama_cloud_model_variants("qwen3.5:397b-cloud")
+    assert variants == ["qwen3.5:397b-cloud", "qwen3.5:397b"]
+
+
+@pytest.mark.anyio
+async def test_scheduler_ollama_cloud_tries_alias_before_pull():
+    from control_plane.scheduler.scheduler import Scheduler
+
+    key_vault = AsyncMock()
+    key_vault.get_secret.return_value = "ollama-secret"
+    scheduler = Scheduler(bot_registry=AsyncMock(), worker_registry=AsyncMock(), key_vault=key_vault)
+    backend = BackendConfig(
+        type="cloud_api",
+        model="qwen3.5:397b-cloud",
+        provider="ollama_cloud",
+        api_key_ref="OLLAMA_API_KEY",
+    )
+    payload = [{"role": "user", "content": "hello"}]
+
+    def _response(status_code: int, body: dict):
+        fake = MagicMock()
+        fake.status_code = status_code
+        fake.is_success = status_code < 400
+        fake.json.return_value = body
+        fake.text = str(body)
+        if status_code >= 400:
+            request = MagicMock()
+            fake.raise_for_status.side_effect = httpx.HTTPStatusError(
+                "request failed",
+                request=request,
+                response=fake,
+            )
+        else:
+            fake.raise_for_status.return_value = None
+        return fake
+
+    async def _post(_url, headers=None, json=None):  # noqa: ANN001
+        model_name = str((json or {}).get("model") or "")
+        if model_name == "qwen3.5:397b-cloud":
+            return _response(404, {"error": "model not found"})
+        if model_name == "qwen3.5:397b":
+            return _response(
+                200,
+                {
+                    "message": {"content": "ok"},
+                    "prompt_eval_count": 10,
+                    "eval_count": 4,
+                    "done_reason": "stop",
+                },
+            )
+        return _response(404, {"error": "model not found"})
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__.return_value = mock_client
+    mock_client.__aexit__.return_value = False
+    mock_client.post.side_effect = _post
+
+    pull_mock = AsyncMock()
+    with patch("control_plane.scheduler.scheduler.httpx.AsyncClient", return_value=mock_client):
+        with patch.object(Scheduler, "_pull_ollama_cloud_model", pull_mock):
+            result = await scheduler._call_ollama_cloud(backend, payload)
+
+    assert result["output"] == "ok"
+    assert result["resolved_model"] == "qwen3.5:397b"
+    assert pull_mock.await_count == 0
+
+
 @pytest.mark.anyio
 async def test_scheduler_vertex_claude_uses_rawpredict_partner_endpoint():
     from control_plane.scheduler.scheduler import Scheduler
@@ -515,7 +585,7 @@ async def test_scheduler_ollama_cloud_surfaces_provider_error_detail():
     mock_client.post.return_value = fake_response
 
     with patch("control_plane.scheduler.scheduler.httpx.AsyncClient", return_value=mock_client):
-        with pytest.raises(BackendError, match="Ollama Cloud request failed \\(404\\): model not found"):
+        with pytest.raises(BackendError, match="Ollama Cloud model 'qwen3.5:cloud' not found"):
             await scheduler._call_ollama_cloud(backend, payload)
 
 
