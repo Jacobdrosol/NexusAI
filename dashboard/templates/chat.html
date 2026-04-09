@@ -763,7 +763,7 @@ function applyConversationProjectFilter() {
   });
 }
 
-async function refreshMessagesUntilSettled(maxAttempts = 6, delayMs = 600) {
+async function refreshMessagesUntilSettled(maxAttempts = 20, delayMs = 1000) {
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     await refreshMessages();
     const pending = document.querySelector('.message[data-pending-assistant="true"]');
@@ -1728,6 +1728,7 @@ function processChatStreamEventBlock(block, pending, tempUser) {
     } else if (eventType === 'error') {
       setPendingAssistantStatus(parsed.error || 'Stream error', pending);
       alert(parsed.error || 'Stream error');
+      return {sawDone: true};
     } else if (eventType === 'done') {
       setTimeout(refreshMessages, 150);
       return {sawDone: true};

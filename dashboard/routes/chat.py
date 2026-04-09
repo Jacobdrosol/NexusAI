@@ -11,6 +11,7 @@ from flask import Blueprint, Response, jsonify, render_template, request, stream
 from flask_login import login_required
 
 from dashboard.cp_client import get_cp_client
+from dashboard.routes._sse_proxy import proxy_upstream_sse_lines
 from shared.chat_attachments import CHAT_ATTACHMENT_MAX_FILES, CHAT_ATTACHMENT_MAX_TOTAL_BYTES
 
 bp = Blueprint("chat", __name__)
@@ -778,24 +779,19 @@ def api_send_message_stream():
         "use_workspace_tools": data.get("use_workspace_tools", False),
     }
 
+    heartbeat_seconds = os.environ.get("CHAT_STREAM_HEARTBEAT_SECONDS", "15")
+
+    def _open_upstream():
+        return requests.post(
+            stream_url,
+            json=payload,
+            headers=_stream_cp_headers(cp),
+            stream=True,
+            timeout=(10, None),
+        )
+
     def generate() -> Iterable[str]:
-        try:
-            with requests.post(
-                stream_url,
-                json=payload,
-                headers=_stream_cp_headers(cp),
-                stream=True,
-                timeout=(10, None),
-            ) as upstream:
-                upstream.raise_for_status()
-                for line in upstream.iter_lines(decode_unicode=True):
-                    if line is None:
-                        continue
-                    yield f"{line}\n"
-        except Exception as e:
-            escaped = str(e).replace('"', '\\"')
-            yield "event: error\n"
-            yield f'data: {{"error": "{escaped}"}}\n\n'
+        yield from proxy_upstream_sse_lines(_open_upstream, heartbeat_seconds=heartbeat_seconds)
 
     return Response(
         stream_with_context(generate()),

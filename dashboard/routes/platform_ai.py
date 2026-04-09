@@ -13,6 +13,7 @@ from flask_login import login_required
 from werkzeug.utils import secure_filename
 
 from dashboard.cp_client import get_cp_client
+from dashboard.routes._sse_proxy import proxy_upstream_sse_lines
 
 
 bp = Blueprint("platform_ai", __name__)
@@ -370,23 +371,18 @@ def api_stream_platform_ai_session_messages(session_id: str):
     if since:
         stream_url += f"?since={requests.utils.quote(since, safe='')}"
 
+    heartbeat_seconds = os.environ.get("PLATFORM_AI_STREAM_HEARTBEAT_SECONDS", "15")
+
+    def _open_upstream():
+        return requests.get(
+            stream_url,
+            headers=_stream_cp_headers(cp),
+            stream=True,
+            timeout=(10, None),
+        )
+
     def generate():
-        try:
-            with requests.get(
-                stream_url,
-                headers=_stream_cp_headers(cp),
-                stream=True,
-                timeout=(10, None),
-            ) as upstream:
-                upstream.raise_for_status()
-                for line in upstream.iter_lines(decode_unicode=True):
-                    if line is None:
-                        continue
-                    yield f"{line}\n"
-        except Exception as exc:
-            escaped = str(exc).replace('"', '\\"')
-            yield "event: error\n"
-            yield f'data: {{"error": "{escaped}"}}\n\n'
+        yield from proxy_upstream_sse_lines(_open_upstream, heartbeat_seconds=heartbeat_seconds)
 
     return Response(
         stream_with_context(generate()),
