@@ -1079,12 +1079,14 @@ def test_chat_message_api_proxies_attachments(dashboard_client):
             json={
                 "conversation_id": "c1",
                 "content": "review this",
+                "inline_coding_enabled": True,
                 "attachments": [{"name": "notes.md", "mime_type": "text/markdown", "kind": "text", "text_content": "# Notes"}],
             },
         )
 
     assert resp.status_code == 200
     assert seen["conversation_id"] == "c1"
+    assert seen["body"]["inline_coding_enabled"] is True
     assert seen["body"]["attachments"][0]["name"] == "notes.md"
 
 

@@ -2189,6 +2189,84 @@ async def test_chat_workspace_tools_blocked_when_chat_switch_off(cp_app, tmp_pat
 
 
 @pytest.mark.anyio
+async def test_post_message_code_phrase_does_not_trigger_inline_without_flag(cp_app, tmp_path):
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "non-inline reply"})
+    workspace_root = tmp_path / "workspace-inline-require-flag"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    cp_app.state.task_manager.create_task = AsyncMock()
+
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-inline-require-flag"
+        create_project = await client.post(
+            "/v1/projects",
+            json={
+                "id": project_id,
+                "name": "Inline Require Flag",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "filesystem": True,
+                        "repo_search": False,
+                        "workspace_root": str(workspace_root),
+                    }
+                },
+            },
+        )
+        assert create_project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Inline Require Flag Chat",
+                "project_id": project_id,
+                "tool_access_enabled": True,
+                "tool_access_filesystem": True,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        bot = await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-inline-require-flag",
+                "name": "Inline Require Flag Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "execution_policy": {
+                    "workspace_context_injection": True,
+                    "repo_output_mode": "allow",
+                },
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "filesystem": True,
+                        "repo_search": False,
+                    }
+                },
+            },
+        )
+        assert bot.status_code == 200
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": "Can you code this?",
+                "bot_id": "bot-inline-require-flag",
+                # inline_coding_enabled intentionally omitted
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["assistant_message"]["content"] == "non-inline reply"
+        assert body["assistant_message"].get("metadata") in (None, {})
+
+    assert cp_app.state.scheduler.schedule.await_count == 1
+    cp_app.state.task_manager.create_task.assert_not_awaited()
+
+
+@pytest.mark.anyio
 async def test_post_message_inline_code_uses_task_manager_temp_workspace(cp_app, tmp_path, monkeypatch):
     from control_plane.api import chat as chat_module
     from shared.models import Task, TaskMetadata
@@ -2311,6 +2389,7 @@ async def test_post_message_inline_code_uses_task_manager_temp_workspace(cp_app,
                     "Can you code this?"
                 ),
                 "bot_id": "bot-inline-post",
+                "inline_coding_enabled": True,
             },
         )
         assert resp.status_code == 200
@@ -2461,6 +2540,7 @@ async def test_stream_message_inline_code_uses_task_manager_temp_workspace(cp_ap
             json={
                 "content": "please implement this in the project",
                 "bot_id": "bot-inline-stream",
+                "inline_coding_enabled": True,
             },
         )
         assert stream_resp.status_code == 200
@@ -2591,7 +2671,7 @@ async def test_post_message_inline_code_marks_failed_when_no_file_changes(cp_app
 
         resp = await client.post(
             f"/v1/chat/conversations/{conversation_id}/messages",
-            json={"content": "Can you code this?", "bot_id": "bot-inline-no-changes"},
+            json={"content": "Can you code this?", "bot_id": "bot-inline-no-changes", "inline_coding_enabled": True},
         )
         assert resp.status_code == 200
         body = resp.json()
@@ -2701,7 +2781,7 @@ async def test_post_message_inline_code_forwards_user_prompt_to_scheduler(cp_app
         )
         resp = await client.post(
             f"/v1/chat/conversations/{conversation_id}/messages",
-            json={"content": prompt, "bot_id": "bot-inline-forward"},
+            json={"content": prompt, "bot_id": "bot-inline-forward", "inline_coding_enabled": True},
         )
         assert resp.status_code == 200
         body = resp.json()
@@ -2838,6 +2918,7 @@ async def test_post_message_inline_code_warns_when_only_new_files_for_integratio
             json={
                 "content": "Can you add a feature to the existing accounting view and code this?",
                 "bot_id": "bot-inline-new-only",
+                "inline_coding_enabled": True,
             },
         )
         assert resp.status_code == 200
@@ -3006,6 +3087,7 @@ async def test_post_message_inline_code_runs_integration_remediation_pass(cp_app
             json={
                 "content": "Can you add a feature to the existing accounting view and code this?",
                 "bot_id": "bot-inline-remediate",
+                "inline_coding_enabled": True,
             },
         )
         assert resp.status_code == 200

@@ -75,6 +75,7 @@ class PostMessageRequest(BaseModel):
     context_item_ids: Optional[List[str]] = None
     include_project_context: bool = False
     use_workspace_tools: bool = False
+    inline_coding_enabled: bool = False
     attachments: List["ChatAttachmentInput"] = Field(default_factory=list)
 
 
@@ -1375,6 +1376,17 @@ def _inline_code_requested(content: str) -> bool:
     if _extract_assign_instruction(text) is not None:
         return False
     return bool(_INLINE_CODE_TRIGGER_RE.search(text))
+
+
+def _inline_code_mode_requested(body: PostMessageRequest) -> bool:
+    requested = _inline_code_requested(body.content)
+    if not requested:
+        return False
+    require_flag_raw = str(os.environ.get("NEXUSAI_INLINE_CODE_REQUIRE_FLAG", "1") or "1").strip().lower()
+    require_flag = require_flag_raw not in {"0", "false", "no", "off"}
+    if not require_flag:
+        return True
+    return bool(getattr(body, "inline_coding_enabled", False))
 
 
 def _inline_code_unavailable_message() -> str:
@@ -2749,7 +2761,7 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
 
         require_repo_evidence = _repo_evidence_requested(body)
         repo_intent = _repo_intent_requested(body.content)
-        inline_code_mode = _inline_code_requested(body.content)
+        inline_code_mode = _inline_code_mode_requested(body)
         force_project_context = repo_intent or inline_code_mode
         force_workspace_context = repo_intent or inline_code_mode
         tool_access = await _effective_tool_access(
@@ -3248,7 +3260,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
 
             require_repo_evidence = _repo_evidence_requested(body)
             repo_intent = _repo_intent_requested(body.content)
-            inline_code_mode = _inline_code_requested(body.content)
+            inline_code_mode = _inline_code_mode_requested(body)
             force_project_context = repo_intent or inline_code_mode
             force_workspace_context = repo_intent or inline_code_mode
             tool_access = await _effective_tool_access(

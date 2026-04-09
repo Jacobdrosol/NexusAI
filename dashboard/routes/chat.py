@@ -576,6 +576,7 @@ def api_send_message():
             "context_item_ids": data.get("context_item_ids"),
             "include_project_context": data.get("include_project_context", False),
             "use_workspace_tools": data.get("use_workspace_tools", False),
+            "inline_coding_enabled": data.get("inline_coding_enabled", False),
         },
     )
     if resp is None:
@@ -777,6 +778,7 @@ def api_send_message_stream():
         "context_item_ids": data.get("context_item_ids"),
         "include_project_context": data.get("include_project_context", False),
         "use_workspace_tools": data.get("use_workspace_tools", False),
+        "inline_coding_enabled": data.get("inline_coding_enabled", False),
     }
 
     heartbeat_seconds = os.environ.get("CHAT_STREAM_HEARTBEAT_SECONDS", "15")

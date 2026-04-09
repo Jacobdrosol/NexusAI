@@ -513,6 +513,10 @@
         <div class="mini-note chat-attachment-hint">Drag files here or use +. Max {{ chat_attachment_limits.max_files }} files, 1 GB total.</div>
         <div class="chat-compose-footer">
           <label class="context-item chat-message-tools-toggle">
+            <input type="checkbox" id="enable-inline-coding-message">
+            <span>Enable Coding Chat for this message (required for inline coding)</span>
+          </label>
+          <label class="context-item chat-message-tools-toggle">
             <input type="checkbox" id="use-workspace-tools-message">
             <span>Use workspace tools for this message (if policy allows)</span>
           </label>
@@ -1929,6 +1933,7 @@ async function sendMessage(streamMode) {
         context_item_ids: ctx.contextItemIds,
         include_project_context: includeProjectContext ? includeProjectContext.checked : false,
         use_workspace_tools: !!document.getElementById('use-workspace-tools-message')?.checked,
+        inline_coding_enabled: !!document.getElementById('enable-inline-coding-message')?.checked,
       };
     })(),
     conversation_id: fd.get('conversation_id'),
@@ -1947,6 +1952,8 @@ async function sendMessage(streamMode) {
       pending.dataset.pendingAssistant = 'true';
     }
     form.querySelector('textarea[name=content]').value = '';
+    const codingToggle = document.getElementById('enable-inline-coding-message');
+    if (codingToggle) codingToggle.checked = false;
     pendingComposerAttachments = [];
     renderComposerAttachments();
     startMessagePolling();
