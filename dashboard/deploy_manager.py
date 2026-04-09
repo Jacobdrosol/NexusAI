@@ -325,18 +325,27 @@ class DeployManager:
         if status in {"exited", "dead"}:
             local_commit = self._current_commit()
             last_log_line = lines[-1] if lines else ""
-            self._state["state"] = "succeeded" if int(exit_code or 1) == 0 else "failed"
+            exit_code_int = int(exit_code or 1)
+            saw_completed_marker = any("[deploy] completed" in str(line).lower() for line in (self._state.get("log_tail") or []))
+            run_succeeded = exit_code_int == 0 or saw_completed_marker
+            self._state["state"] = "succeeded" if run_succeeded else "failed"
             self._state["finished_at"] = _utc_now()
-            if int(exit_code or 1) == 0 and local_commit:
-                self._state["deployed_commit"] = local_commit
+            if run_succeeded:
+                if local_commit:
+                    self._state["deployed_commit"] = local_commit
                 self._state["last_error"] = None
                 self._cleanup_previous_color_after_success()
+                if exit_code_int != 0 and saw_completed_marker:
+                    self._append_log(
+                        "[deploy-manager] runner reported non-zero exit code, "
+                        "but deploy completed marker was observed; treating run as successful"
+                    )
             else:
-                detail = f"Deploy runner exited with code {int(exit_code or 1)}."
+                detail = f"Deploy runner exited with code {exit_code_int}."
                 if last_log_line:
                     detail = f"{detail} Last log: {last_log_line}"
                 self._state["last_error"] = detail
-            self._append_log(f"deploy: runner container exited with code {int(exit_code or 1)}")
+            self._append_log(f"deploy: runner container exited with code {exit_code_int}")
             subprocess.run(["docker", "rm", "-f", runner_name], capture_output=True, text=True, check=False)
             self._state["runner_container_name"] = None
             self._state["runner_log_line_count"] = 0

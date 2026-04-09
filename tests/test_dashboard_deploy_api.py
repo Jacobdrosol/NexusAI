@@ -188,3 +188,68 @@ def test_post_success_cleanup_targets_previous_color(monkeypatch):
     assert "dashboard_blue" in calls[0]
     assert "rm" in calls[1]
     assert "dashboard_blue" in calls[1]
+
+
+def test_sync_subcontainer_runner_succeeds_without_local_commit(monkeypatch):
+    from dashboard.deploy_manager import DeployManager
+
+    manager = DeployManager.instance()
+    with manager._lock:
+        manager._state["runner_container_name"] = "runner-test"
+        manager._state["runner_log_since"] = None
+        manager._state["runner_log_line_count"] = 0
+        manager._state["state"] = "running"
+        manager._save_state()
+
+    calls: list[list[str]] = []
+
+    def _fake_run(args, **kwargs):
+        cmd = [str(part) for part in args]
+        calls.append(cmd)
+        if cmd[:2] == ["docker", "logs"]:
+            return SimpleNamespace(returncode=0, stdout="[deploy] completed\n", stderr="")
+        if cmd[:2] == ["docker", "rm"]:
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("dashboard.deploy_manager.subprocess.run", _fake_run)
+    monkeypatch.setattr(manager, "_runner_status", lambda _name: ("exited", 0, None))
+    monkeypatch.setattr(manager, "_current_commit", lambda: None)
+    monkeypatch.setattr(manager, "_cleanup_previous_color_after_success", lambda: None)
+
+    with manager._lock:
+        manager._sync_subcontainer_runner()
+        assert manager._state["state"] == "succeeded"
+        assert manager._state["runner_container_name"] is None
+        assert manager._state["last_error"] is None
+
+
+def test_sync_subcontainer_runner_treats_completed_marker_as_success(monkeypatch):
+    from dashboard.deploy_manager import DeployManager
+
+    manager = DeployManager.instance()
+    with manager._lock:
+        manager._state["runner_container_name"] = "runner-test-2"
+        manager._state["runner_log_since"] = None
+        manager._state["runner_log_line_count"] = 0
+        manager._state["state"] = "running"
+        manager._state["log_tail"] = ["[deploy] completed"]
+        manager._save_state()
+
+    def _fake_run(args, **kwargs):
+        cmd = [str(part) for part in args]
+        if cmd[:2] == ["docker", "logs"]:
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        if cmd[:2] == ["docker", "rm"]:
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("dashboard.deploy_manager.subprocess.run", _fake_run)
+    monkeypatch.setattr(manager, "_runner_status", lambda _name: ("exited", 1, None))
+    monkeypatch.setattr(manager, "_current_commit", lambda: None)
+    monkeypatch.setattr(manager, "_cleanup_previous_color_after_success", lambda: None)
+
+    with manager._lock:
+        manager._sync_subcontainer_runner()
+        assert manager._state["state"] == "succeeded"
+        assert manager._state["last_error"] is None
