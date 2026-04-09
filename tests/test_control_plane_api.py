@@ -871,6 +871,95 @@ async def test_project_github_pat_connect_rejects_when_ingest_validation_fails(c
 
 
 @pytest.mark.anyio
+async def test_project_github_pat_connect_normalizes_prefixed_token(cp_client, monkeypatch):
+    from control_plane.api import projects as projects_api
+
+    create_resp = await cp_client.post(
+        "/v1/projects",
+        json={"id": "gh-proj-normalize", "name": "GitHub Normalize", "mode": "isolated"},
+    )
+    assert create_resp.status_code == 200
+
+    captured: dict[str, str] = {}
+
+    async def _fake_identity(token: str, repo_full_name: str | None = None):
+        captured["token"] = token
+        return {"user_login": "octocat", "user_id": 1}
+
+    monkeypatch.setattr(projects_api, "_fetch_github_identity", _fake_identity)
+
+    connect_resp = await cp_client.post(
+        "/v1/projects/gh-proj-normalize/github/pat",
+        json={
+            "token": "Bearer ghp_example_token_for_tests_only",
+            "repo_full_name": None,
+            "validate": True,
+        },
+    )
+    assert connect_resp.status_code == 200
+    assert captured.get("token") == "ghp_example_token_for_tests_only"
+
+
+@pytest.mark.anyio
+async def test_project_github_context_sync_fails_fast_on_auth_validation(cp_client, monkeypatch):
+    from control_plane.api import projects as projects_api
+
+    await cp_client.post(
+        "/v1/projects",
+        json={"id": "gh-sync-auth-fail", "name": "GitHub Sync Auth Fail", "mode": "isolated"},
+    )
+    await cp_client.post(
+        "/v1/projects/gh-sync-auth-fail/github/pat",
+        json={
+            "token": "ghp_example_token_for_tests_only",
+            "repo_full_name": "owner/repo",
+            "validate": False,
+        },
+    )
+
+    async def _fake_ingest_validation(token: str, repo_full_name: str, *, branch: str | None = None):
+        return {
+            "ok": False,
+            "repo_full_name": repo_full_name,
+            "default_branch": branch or "main",
+            "checks": [
+                {
+                    "name": "repo_metadata",
+                    "method": "GET",
+                    "endpoint": f"/repos/{repo_full_name}",
+                    "status_code": 401,
+                    "ok": False,
+                    "detail": "Bad credentials",
+                }
+            ],
+            "error": "missing required ingest access on: repo_metadata",
+        }
+
+    async def _never_fetch_files(*args, **kwargs):
+        raise AssertionError("repo file fetch should not run after failed ingest auth validation")
+
+    monkeypatch.setattr(projects_api, "_validate_github_ingest_access", _fake_ingest_validation)
+    monkeypatch.setattr(projects_api, "_fetch_repo_context_files", _never_fetch_files)
+
+    sync_resp = await cp_client.post(
+        "/v1/projects/gh-sync-auth-fail/github/context/sync",
+        json={"sync_mode": "update"},
+    )
+    assert sync_resp.status_code == 200
+    for _ in range(30):
+        status_resp = await cp_client.get("/v1/projects/gh-sync-auth-fail/github/context/sync")
+        assert status_resp.status_code == 200
+        body = status_resp.json()
+        if body.get("status") == "failed":
+            break
+        await asyncio.sleep(0.1)
+    assert body["status"] == "failed"
+    assert "missing required ingest access" in str(body.get("error") or "").lower()
+    assert "/repos/owner/repo" in str(body.get("error") or "")
+    assert "status=401" in str(body.get("error") or "")
+
+
+@pytest.mark.anyio
 async def test_project_cloud_context_policy_update_and_get(cp_client):
     await cp_client.post(
         "/v1/projects",
@@ -1633,6 +1722,15 @@ async def test_project_github_context_sync_ingests_vault_items(cp_client, monkey
             ],
         }
 
+    async def _fake_validate_ingest(token: str, repo_full_name: str, *, branch: str | None = None):
+        return {
+            "ok": True,
+            "repo_full_name": repo_full_name,
+            "default_branch": branch or "main",
+            "checks": [],
+        }
+
+    monkeypatch.setattr("control_plane.api.projects._validate_github_ingest_access", _fake_validate_ingest)
     monkeypatch.setattr("control_plane.api.projects._fetch_repo_context_files", _fake_fetch)
 
     sync_resp = await cp_client.post(
@@ -1723,6 +1821,15 @@ async def test_project_github_context_sync_can_ingest_commits_prs_and_issues(cp_
             }
         ]
 
+    async def _fake_validate_ingest(token: str, repo_full_name: str, *, branch: str | None = None):
+        return {
+            "ok": True,
+            "repo_full_name": repo_full_name,
+            "default_branch": branch or "main",
+            "checks": [],
+        }
+
+    monkeypatch.setattr("control_plane.api.projects._validate_github_ingest_access", _fake_validate_ingest)
     monkeypatch.setattr("control_plane.api.projects._fetch_repo_context_files", _fake_fetch_files)
     monkeypatch.setattr("control_plane.api.projects._fetch_repo_commits", _fake_fetch_commits)
     monkeypatch.setattr("control_plane.api.projects._fetch_repo_pull_requests", _fake_fetch_pulls)
@@ -1800,6 +1907,15 @@ async def test_project_github_context_update_ingests_only_newer_items(cp_client,
     async def _fake_fetch_issues(token, repo_full_name, include_conversations, updated_after=None):
         return issue_versions[state["index"]]
 
+    async def _fake_validate_ingest(token: str, repo_full_name: str, *, branch: str | None = None):
+        return {
+            "ok": True,
+            "repo_full_name": repo_full_name,
+            "default_branch": branch or "main",
+            "checks": [],
+        }
+
+    monkeypatch.setattr("control_plane.api.projects._validate_github_ingest_access", _fake_validate_ingest)
     monkeypatch.setattr("control_plane.api.projects._fetch_repo_context_files", _fake_fetch_files)
     monkeypatch.setattr("control_plane.api.projects._fetch_repo_commits", _fake_fetch_commits)
     monkeypatch.setattr("control_plane.api.projects._fetch_repo_pull_requests", _fake_fetch_pulls)

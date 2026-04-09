@@ -510,7 +510,7 @@ async def _project_github_pat(project: Project, key_vault) -> Optional[str]:
     if not key_ref:
         return None
     try:
-        return await key_vault.get_secret(key_ref)
+        return _normalize_github_token(await key_vault.get_secret(key_ref))
     except Exception:
         return None
 
@@ -1456,11 +1456,8 @@ async def _cleanup_orchestration_temp_workspace(
 
 
 async def _fetch_github_identity(token: str, repo_full_name: Optional[str] = None) -> Dict[str, Any]:
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
+    normalized_token = _normalize_github_token(token)
+    headers = _github_headers(normalized_token)
     async with httpx.AsyncClient(timeout=20.0) as client:
         user_resp = await client.get("https://api.github.com/user", headers=headers)
         user_resp.raise_for_status()
@@ -1607,11 +1604,8 @@ async def _fetch_repo_context_files(
     repo_full_name: str,
     branch: Optional[str],
 ) -> Dict[str, Any]:
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
+    normalized_token = _normalize_github_token(token)
+    headers = _github_headers(normalized_token)
     async with httpx.AsyncClient(timeout=30.0) as client:
         repo_resp = await client.get(f"https://api.github.com/repos/{repo_full_name}", headers=headers)
         repo_resp.raise_for_status()
@@ -1681,11 +1675,23 @@ async def _fetch_repo_context_files(
 
 
 def _github_headers(token: str) -> Dict[str, str]:
+    normalized = _normalize_github_token(token)
     return {
-        "Authorization": f"Bearer {token}",
+        # PATs are most reliably accepted with the `token` auth scheme.
+        "Authorization": f"token {normalized}",
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
+
+
+def _normalize_github_token(token: Optional[str]) -> str:
+    raw = str(token or "").strip()
+    lowered = raw.lower()
+    if lowered.startswith("bearer "):
+        raw = raw[7:].strip()
+    elif lowered.startswith("token "):
+        raw = raw[6:].strip()
+    return raw
 
 
 async def _github_get_all_pages(
@@ -2180,7 +2186,7 @@ async def connect_github_pat(project_id: str, request: Request, body: ConnectGit
     except ProjectNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
-    token = body.token.strip()
+    token = _normalize_github_token(body.token)
     if not token:
         raise HTTPException(status_code=400, detail="token is required")
 
@@ -2584,9 +2590,11 @@ async def _perform_github_context_sync(
         raise HTTPException(status_code=400, detail="repo_full_name is not configured for this project")
 
     try:
-        token = await key_vault.get_secret(str(key_ref))
+        token = _normalize_github_token(await key_vault.get_secret(str(key_ref)))
     except APIKeyNotFoundError:
         raise HTTPException(status_code=400, detail="configured PAT key not found")
+    if not token:
+        raise HTTPException(status_code=400, detail="configured PAT token is empty")
 
     sync_mode = (body.sync_mode or "full").strip().lower()
     namespace = (body.namespace or f"project:{project_id}:repo").strip() or f"project:{project_id}:repo"
@@ -2601,6 +2609,25 @@ async def _perform_github_context_sync(
 
     repo_full_name_str = str(repo_full_name)
     branch_name = body.branch
+    ingest_validation = await _validate_github_ingest_access(
+        token=token,
+        repo_full_name=repo_full_name_str,
+        branch=branch_name,
+    )
+    if not bool(ingest_validation.get("ok")):
+        checks = ingest_validation.get("checks") if isinstance(ingest_validation.get("checks"), list) else []
+        first_failure = next((item for item in checks if isinstance(item, dict) and not bool(item.get("ok"))), None)
+        detail = str(ingest_validation.get("error") or "GitHub ingest permission validation failed").strip()
+        if isinstance(first_failure, dict):
+            endpoint = str(first_failure.get("endpoint") or "").strip()
+            status_code = int(first_failure.get("status_code") or 0)
+            reason = str(first_failure.get("detail") or "").strip()
+            detail = (
+                f"{detail}; endpoint={endpoint or 'unknown'} status={status_code or 'unknown'}"
+                + (f" detail={reason}" if reason else "")
+            )
+        raise HTTPException(status_code=401, detail=detail)
+
     latest_commit_at: Optional[datetime] = _parse_iso8601(sync_state.get("latest_commit_at"))
     latest_pr_updated_at: Optional[datetime] = _parse_iso8601(sync_state.get("latest_pr_updated_at"))
     latest_issue_updated_at: Optional[datetime] = _parse_iso8601(sync_state.get("latest_issue_updated_at"))
