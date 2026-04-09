@@ -270,3 +270,25 @@ def test_subcontainer_run_cmd_normalizes_nested_docker_wrapper():
     )
     normalized = manager._normalize_subcontainer_run_cmd(raw)
     assert normalized == "sh ./scripts/deploy-bluegreen.sh"
+
+
+def test_run_git_forces_safe_directory(monkeypatch):
+    from dashboard.deploy_manager import DeployManager
+
+    manager = DeployManager.instance()
+    calls: list[list[str]] = []
+
+    def _fake_run(args, **kwargs):
+        calls.append([str(part) for part in args])
+        return SimpleNamespace(returncode=0, stdout="ok\n", stderr="")
+
+    monkeypatch.setattr("dashboard.deploy_manager.subprocess.run", _fake_run)
+    out, err = manager._run_git(["rev-parse", "HEAD"])
+    assert err is None
+    assert out == "ok"
+    assert calls
+    cmd = calls[0]
+    assert cmd[0] == "git"
+    assert cmd[1] == "-c"
+    assert str(cmd[2]).startswith("safe.directory=")
+    assert cmd[3:] == ["rev-parse", "HEAD"]

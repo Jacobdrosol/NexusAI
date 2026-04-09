@@ -127,9 +127,10 @@ class DeployManager:
             self._save_state()
 
     def _run_git(self, args: list[str]) -> tuple[str | None, str | None]:
+        safe_repo_root = str(self._repo_root)
         try:
             cp = subprocess.run(
-                ["git", *args],
+                ["git", "-c", f"safe.directory={safe_repo_root}", *args],
                 cwd=str(self._repo_root),
                 capture_output=True,
                 text=True,
