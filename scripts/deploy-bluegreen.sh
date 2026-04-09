@@ -6,14 +6,16 @@ COMPOSE_PROJECT_NAME="${NEXUSAI_COMPOSE_PROJECT_NAME:-nexusai}"
 export COMPOSE_PROJECT_NAME
 COMPOSE_ARGS="-p $COMPOSE_PROJECT_NAME -f docker-compose.bluegreen.yml"
 CORE_COMPOSE_ARGS="-p $COMPOSE_PROJECT_NAME -f docker-compose.yml"
-STOP_PREVIOUS_COLOR="${NEXUSAI_STOP_PREVIOUS_COLOR:-0}"
+STOP_PREVIOUS_COLOR="${NEXUSAI_STOP_PREVIOUS_COLOR:-1}"
 POST_SWITCH_MONITOR_SECONDS="${NEXUSAI_POST_SWITCH_MONITOR_SECONDS:-90}"
 POST_SWITCH_MONITOR_INTERVAL_SECONDS="${NEXUSAI_POST_SWITCH_MONITOR_INTERVAL_SECONDS:-10}"
+POST_SWITCH_STARTING_GRACE_SECONDS="${NEXUSAI_POST_SWITCH_STARTING_GRACE_SECONDS:-75}"
 PRUNE_CONTAINERS="${NEXUSAI_DEPLOY_PRUNE_CONTAINERS:-1}"
 PRUNE_DANGLING_IMAGES="${NEXUSAI_DEPLOY_PRUNE_DANGLING_IMAGES:-1}"
 FIX_RUNTIME_PERMISSIONS="${NEXUSAI_DEPLOY_FIX_RUNTIME_PERMISSIONS:-1}"
 RUNTIME_OWNER_UID="${NEXUSAI_DEPLOY_RUNTIME_OWNER_UID:-1000}"
 RUNTIME_OWNER_GID="${NEXUSAI_DEPLOY_RUNTIME_OWNER_GID:-1000}"
+REMOVE_PREVIOUS_COLOR_CONTAINER="${NEXUSAI_REMOVE_PREVIOUS_COLOR_CONTAINER:-1}"
 
 echo "[deploy] checking DB drift guard"
 sh ./scripts/check_db_drift.sh
@@ -111,6 +113,12 @@ remove_legacy_dashboard_bindings() {
   if [ -n "$EXISTING_GATEWAY_ID" ]; then
     echo "[deploy] removing existing dashboard gateway container"
     docker rm -f nexus-dashboard-gateway >/dev/null 2>&1 || true
+  fi
+
+  LEGACY_DASHBOARD_CONTAINER_ID="$(docker ps -aq -f name=^nexusai-dashboard-1$ 2>/dev/null || true)"
+  if [ -n "$LEGACY_DASHBOARD_CONTAINER_ID" ]; then
+    echo "[deploy] removing legacy standalone dashboard container nexusai-dashboard-1"
+    docker rm -f nexusai-dashboard-1 >/dev/null 2>&1 || true
   fi
 }
 
@@ -222,7 +230,18 @@ monitor_post_switch_stability() {
     fi
 
     ACTIVE_HEALTH="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$ACTIVE_ID" 2>/dev/null || true)"
-    if [ "$ACTIVE_HEALTH" != "healthy" ] && [ "$ACTIVE_HEALTH" != "running" ]; then
+    if [ "$ACTIVE_HEALTH" = "healthy" ] || [ "$ACTIVE_HEALTH" = "running" ]; then
+      :
+    elif [ "$ACTIVE_HEALTH" = "starting" ] || [ -z "$ACTIVE_HEALTH" ]; then
+      if [ "$ELAPSED" -lt "$POST_SWITCH_STARTING_GRACE_SECONDS" ]; then
+        sleep "$INTERVAL_SECONDS"
+        ELAPSED=$((ELAPSED + INTERVAL_SECONDS))
+        continue
+      fi
+      echo "[deploy] active dashboard_$NEXT_COLOR remained in startup state beyond grace window (${POST_SWITCH_STARTING_GRACE_SECONDS}s): ${ACTIVE_HEALTH:-unknown}"
+      docker compose $COMPOSE_ARGS logs --tail=120 "dashboard_$NEXT_COLOR" || true
+      return 1
+    else
       echo "[deploy] active dashboard_$NEXT_COLOR health degraded: $ACTIVE_HEALTH"
       docker compose $COMPOSE_ARGS logs --tail=120 "dashboard_$NEXT_COLOR" || true
       return 1
@@ -349,6 +368,10 @@ echo "$NEXT_COLOR" > "$CURRENT_COLOR_FILE"
 if [ "$STOP_PREVIOUS_COLOR" = "1" ]; then
   echo "[deploy] stopping previous color: $CURRENT_COLOR"
   docker compose $COMPOSE_ARGS --profile "$CURRENT_COLOR" stop "dashboard_$CURRENT_COLOR" || true
+  if [ "$REMOVE_PREVIOUS_COLOR_CONTAINER" = "1" ]; then
+    echo "[deploy] removing previous color container: dashboard_$CURRENT_COLOR"
+    docker compose $COMPOSE_ARGS rm -sf "dashboard_$CURRENT_COLOR" || true
+  fi
 else
   echo "[deploy] leaving previous color running (NEXUSAI_STOP_PREVIOUS_COLOR=$STOP_PREVIOUS_COLOR)"
 fi
