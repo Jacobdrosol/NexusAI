@@ -297,6 +297,19 @@ async def _maybe_auto_clone_repo_workspace(
     project_registry: Any,
     key_vault: Any = None,
 ) -> Dict[str, Any]:
+    if bool(cfg.get("managed_path_mode", True)):
+        expected_root = _managed_repo_workspace_root(project_id)
+        try:
+            root_resolved = root.resolve(strict=False)
+        except Exception:
+            root_resolved = root
+        try:
+            expected_resolved = expected_root.resolve(strict=False)
+        except Exception:
+            expected_resolved = expected_root
+        if root_resolved != expected_resolved:
+            return {"attempted": False, "reason": "managed_workspace_path_mismatch"}
+
     clone_url = str(cfg.get("clone_url") or "").strip()
     if not clone_url:
         settings = project.settings_overrides if isinstance(project.settings_overrides, dict) else {}
@@ -543,21 +556,27 @@ def _validate_requested_project_repo_workspace(body: UpdateProjectRepoWorkspaceR
     }
 
 
-def _resolve_repo_workspace_root(project_id: str, cfg: Dict[str, Any], *, require_enabled: bool = True) -> Path:
+def _resolve_repo_workspace_root(
+    project_id: str,
+    cfg: Dict[str, Any],
+    *,
+    require_enabled: bool = True,
+    allow_raw_fallback: bool = True,
+) -> Path:
     if require_enabled and not bool(cfg.get("enabled", False)):
         raise HTTPException(status_code=400, detail="repo workspace is disabled for this project")
     if bool(cfg.get("managed_path_mode", True)):
         managed = _managed_repo_workspace_root(project_id)
         if managed.exists():
             return managed
-        # Managed path doesn't exist yet — fall back to the raw root_path if configured.
-        # This lets projects point at a locally-checked-out repo for read access while
-        # a proper managed workspace hasn't been cloned yet.
-        raw_root = str(cfg.get("_raw_root_path") or "").strip()
-        if raw_root:
-            fallback = normalize_workspace_root(raw_root)
-            if fallback is not None:
-                return fallback
+        if allow_raw_fallback:
+            # Managed path doesn't exist yet — optionally fall back to the raw root_path.
+            # This is intended for read-only status/profile contexts.
+            raw_root = str(cfg.get("_raw_root_path") or "").strip()
+            if raw_root:
+                fallback = normalize_workspace_root(raw_root)
+                if fallback is not None:
+                    return fallback
         # Return the managed path anyway (caller's normalize_workspace_root will fail it)
         return managed
     root = normalize_workspace_root(str(cfg.get("root_path") or "").strip() or None)
@@ -1061,7 +1080,7 @@ async def _project_assignment_scope(
         raise HTTPException(status_code=404, detail=str(e))
 
     cfg = _extract_project_repo_workspace(project)
-    root = _resolve_repo_workspace_root(project_id, cfg, require_enabled=True)
+    root = _resolve_repo_workspace_root(project_id, cfg, require_enabled=True, allow_raw_fallback=False)
     snapshot = await _repo_status_snapshot(root=root, cfg=cfg)
     if not bool(snapshot.get("is_repo")):
         raise HTTPException(status_code=400, detail="repo workspace is not a git repository; clone it before reviewing or applying files")
@@ -1469,8 +1488,9 @@ async def _ensure_orchestration_temp_workspace(
     try:
         project = await project_registry.get(project_id)
         cfg = _extract_project_repo_workspace(project)
-        root = _resolve_repo_workspace_root(project_id, cfg, require_enabled=False)
+        root = _resolve_repo_workspace_root(project_id, cfg, require_enabled=False, allow_raw_fallback=False)
         snapshot = await _repo_status_snapshot(root=root, cfg=cfg)
+        clone_outcome: Dict[str, Any] = {"attempted": False}
         if not bool(snapshot.get("is_repo")):
             clone_outcome = await _maybe_auto_clone_repo_workspace(
                 project_id=project_id,
@@ -1483,7 +1503,14 @@ async def _ensure_orchestration_temp_workspace(
             if bool(clone_outcome.get("attempted")) and bool(clone_outcome.get("ok")):
                 snapshot = await _repo_status_snapshot(root=root, cfg=cfg)
             if not bool(snapshot.get("is_repo")):
-                raise HTTPException(status_code=400, detail="repo workspace is not a git repository")
+                detail = "repo workspace is not a git repository"
+                error = str(clone_outcome.get("error") or "").strip()
+                reason = str(clone_outcome.get("reason") or "").strip()
+                if error:
+                    detail = f"{detail}: {error}"
+                elif reason:
+                    detail = f"{detail}: {reason}"
+                raise HTTPException(status_code=400, detail=detail)
         temp_ctx = await _prepare_temp_workspace(project_id=project_id, root=root)
     except HTTPException:
         if strict:
@@ -3181,7 +3208,7 @@ async def discard_project_repo_workspace_untracked(
         raise HTTPException(status_code=404, detail=str(e))
 
     cfg = _extract_project_repo_workspace(project)
-    root = _resolve_repo_workspace_root(project_id, cfg, require_enabled=True)
+    root = _resolve_repo_workspace_root(project_id, cfg, require_enabled=True, allow_raw_fallback=False)
     snapshot = await _repo_status_snapshot(root=root, cfg=cfg)
     if not bool(snapshot.get("is_repo")):
         raise HTTPException(status_code=400, detail="repo workspace is not a git repository")
@@ -3484,7 +3511,7 @@ async def clone_project_repo_workspace(
         raise HTTPException(status_code=404, detail=str(e))
 
     cfg = _extract_project_repo_workspace(project)
-    root = _resolve_repo_workspace_root(project_id, cfg, require_enabled=True)
+    root = _resolve_repo_workspace_root(project_id, cfg, require_enabled=True, allow_raw_fallback=False)
 
     clone_url = str(body.clone_url or "").strip() or str(cfg.get("clone_url") or "").strip()
     if not clone_url:
@@ -3615,7 +3642,7 @@ async def pull_project_repo_workspace(
         raise HTTPException(status_code=404, detail=str(e))
 
     cfg = _extract_project_repo_workspace(project)
-    root = _resolve_repo_workspace_root(project_id, cfg, require_enabled=True)
+    root = _resolve_repo_workspace_root(project_id, cfg, require_enabled=True, allow_raw_fallback=False)
     snapshot = await _repo_status_snapshot(root=root, cfg=cfg)
     if not snapshot.get("is_repo"):
         raise HTTPException(status_code=400, detail="workspace is not a git repository")
@@ -3683,7 +3710,7 @@ async def commit_project_repo_workspace(
         raise HTTPException(status_code=404, detail=str(e))
 
     cfg = _extract_project_repo_workspace(project)
-    root = _resolve_repo_workspace_root(project_id, cfg, require_enabled=True)
+    root = _resolve_repo_workspace_root(project_id, cfg, require_enabled=True, allow_raw_fallback=False)
     snapshot = await _repo_status_snapshot(root=root, cfg=cfg)
     if not snapshot.get("is_repo"):
         raise HTTPException(status_code=400, detail="workspace is not a git repository")
@@ -3809,7 +3836,7 @@ async def push_project_repo_workspace(
     cfg = _extract_project_repo_workspace(project)
     if not bool(cfg.get("allow_push", False)):
         raise HTTPException(status_code=403, detail="push is disabled by project repo workspace policy")
-    root = _resolve_repo_workspace_root(project_id, cfg, require_enabled=True)
+    root = _resolve_repo_workspace_root(project_id, cfg, require_enabled=True, allow_raw_fallback=False)
     snapshot = await _repo_status_snapshot(root=root, cfg=cfg)
     if not snapshot.get("is_repo"):
         raise HTTPException(status_code=400, detail="workspace is not a git repository")
@@ -3875,7 +3902,7 @@ async def run_project_repo_workspace_command(
     cfg = _extract_project_repo_workspace(project)
     if not bool(cfg.get("allow_command_execution", False)):
         raise HTTPException(status_code=403, detail="command execution is disabled by project repo workspace policy")
-    root = _resolve_repo_workspace_root(project_id, cfg, require_enabled=True)
+    root = _resolve_repo_workspace_root(project_id, cfg, require_enabled=True, allow_raw_fallback=False)
     if not root.exists():
         if bool(cfg.get("managed_path_mode", True)):
             root.mkdir(parents=True, exist_ok=True)

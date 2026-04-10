@@ -1116,6 +1116,113 @@ def test_extract_project_repo_workspace_uses_chat_workspace_root_fallback():
     assert cfg["root_path"] is None
 
 
+def test_resolve_repo_workspace_root_managed_can_disable_raw_fallback(tmp_path, monkeypatch):
+    from control_plane.api.projects import _resolve_repo_workspace_root
+
+    base_root = tmp_path / "repo-workspaces"
+    raw_root = tmp_path / "chat-workspace"
+    monkeypatch.setenv("NEXUSAI_REPO_WORKSPACE_ROOT", str(base_root))
+
+    cfg = {
+        "enabled": True,
+        "managed_path_mode": True,
+        "_raw_root_path": str(raw_root),
+    }
+
+    managed_root = _resolve_repo_workspace_root(
+        "p-managed-strict",
+        cfg,
+        require_enabled=True,
+        allow_raw_fallback=False,
+    )
+    fallback_root = _resolve_repo_workspace_root(
+        "p-managed-strict",
+        cfg,
+        require_enabled=True,
+        allow_raw_fallback=True,
+    )
+
+    assert managed_root == (base_root / "p-managed-strict" / "repo").resolve(strict=False)
+    assert fallback_root == raw_root.resolve(strict=False)
+
+
+@pytest.mark.anyio
+async def test_ensure_orchestration_temp_workspace_uses_managed_root_not_chat_workspace_root(tmp_path, monkeypatch):
+    from control_plane.api.projects import _ensure_orchestration_temp_workspace
+    from shared.models import Project
+
+    base_root = tmp_path / "repo-workspaces"
+    chat_workspace_root = tmp_path / "chat-workspace"
+    chat_workspace_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("NEXUSAI_REPO_WORKSPACE_ROOT", str(base_root))
+
+    project = Project(
+        id="p-inline-managed",
+        name="Inline Managed",
+        mode="isolated",
+        settings_overrides={
+            "chat_tool_access": {
+                "enabled": True,
+                "filesystem": True,
+                "repo_search": True,
+                "workspace_root": str(chat_workspace_root),
+            },
+            "repo_workspace": {
+                "enabled": True,
+                "managed_path_mode": True,
+            },
+        },
+    )
+
+    class _ProjectRegistry:
+        async def get(self, project_id):
+            assert project_id == "p-inline-managed"
+            return project
+
+    class _WorkspaceStore:
+        async def get(self, *, project_id, orchestration_id):
+            return None
+
+        async def register(self, **kwargs):
+            return {
+                **kwargs,
+                "lifecycle_state": "retained",
+                "path_exists": True,
+                "temp_root": kwargs.get("temp_root"),
+            }
+
+    seen = {"root": None}
+    temp_root = tmp_path / "temp-workspace"
+    temp_root.mkdir(parents=True, exist_ok=True)
+
+    async def _fake_snapshot(*, root, cfg):
+        seen["root"] = root
+        return {"is_repo": True}
+
+    async def _fake_prepare_temp_workspace(*, project_id, root, ref=None):
+        assert project_id == "p-inline-managed"
+        assert ref is None
+        return {"mode": "copy", "path": temp_root, "setup_result": None}
+
+    monkeypatch.setattr("control_plane.api.projects._repo_status_snapshot", _fake_snapshot)
+    monkeypatch.setattr("control_plane.api.projects._prepare_temp_workspace", _fake_prepare_temp_workspace)
+
+    entry = await _ensure_orchestration_temp_workspace(
+        project_id="p-inline-managed",
+        orchestration_id="orch-1",
+        project_registry=_ProjectRegistry(),
+        workspace_store=_WorkspaceStore(),
+        strict=True,
+        key_vault=None,
+    )
+
+    expected_root = (base_root / "p-inline-managed" / "repo").resolve(strict=False)
+    assert seen["root"] == expected_root
+    assert entry is not None
+    assert entry["source_root"] == str(expected_root)
+    assert entry["temp_root"] == str(temp_root)
+
+
 @pytest.mark.anyio
 async def test_project_repo_workspace_redacts_and_preserves_clone_url_when_omitted(cp_client):
     await cp_client.post(
