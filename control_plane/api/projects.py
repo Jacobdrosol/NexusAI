@@ -321,7 +321,7 @@ async def _maybe_auto_clone_repo_workspace(
         return {"attempted": False, "reason": "clone_url_unconfigured"}
 
     if root.exists():
-        if (root / ".git").exists():
+        if _has_git_marker(root):
             return {"attempted": False, "reason": "already_repo"}
         try:
             has_contents = any(root.iterdir())
@@ -597,6 +597,21 @@ async def _project_github_pat(project: Project, key_vault) -> Optional[str]:
         return None
 
 
+def _has_git_marker(path: Path) -> bool:
+    """Best-effort git marker check for a path or any of its parents."""
+    try:
+        current = path.resolve(strict=False)
+    except Exception:
+        current = path
+    for candidate in [current, *list(current.parents)]:
+        try:
+            if (candidate / ".git").exists():
+                return True
+        except Exception:
+            continue
+    return False
+
+
 async def _run_repo_command(
     args: List[str],
     *,
@@ -665,9 +680,10 @@ async def _repo_status_snapshot(
             timeout_seconds=15,
         )
         is_repo = bool(check_repo.get("ok")) and "true" in str(check_repo.get("stdout") or "").lower()
-        if not is_repo and (root / ".git").exists():
+        if not is_repo and _has_git_marker(root):
             # Some environments fail rev-parse (ownership/safe-directory), but an on-disk
-            # .git marker still indicates this path should be treated as a repository root.
+            # .git marker (at this path or a parent) still indicates this path is inside
+            # a repository workspace.
             is_repo = True
 
     if exists and is_repo:
@@ -1378,16 +1394,14 @@ def _bootstrap_command_specs(workspace: Path, languages: List[str]) -> List[Dict
 
 
 async def _is_git_repository(root: Path) -> bool:
-    git_dir = root / ".git"
-    if git_dir.exists():
-        return True
-    return False
     check_repo = await _run_repo_command(
         ["git", "rev-parse", "--is-inside-work-tree"],
         cwd=root,
         timeout_seconds=20,
     )
-    return bool(check_repo.get("ok")) and "true" in str(check_repo.get("stdout") or "").lower()
+    if bool(check_repo.get("ok")) and "true" in str(check_repo.get("stdout") or "").lower():
+        return True
+    return _has_git_marker(root)
 
 
 def _repo_temp_root(project_id: str) -> Path:

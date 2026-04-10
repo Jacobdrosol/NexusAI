@@ -1250,6 +1250,53 @@ async def test_repo_status_snapshot_treats_dot_git_marker_as_repo_when_rev_parse
 
 
 @pytest.mark.anyio
+async def test_repo_status_snapshot_treats_parent_dot_git_marker_as_repo_when_rev_parse_fails(tmp_path, monkeypatch):
+    from control_plane.api.projects import _repo_status_snapshot
+
+    repo_root = tmp_path / "repo-root"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    (repo_root / ".git").mkdir(parents=True, exist_ok=True)
+    root = repo_root / "nested" / "workspace"
+    root.mkdir(parents=True, exist_ok=True)
+
+    async def _fake_run(args, *, cwd, timeout_seconds=None, env_overrides=None):
+        return {"ok": False, "stdout": "", "stderr": "dubious ownership", "command": args}
+
+    monkeypatch.setattr("control_plane.api.projects._run_repo_command", _fake_run)
+
+    snapshot = await _repo_status_snapshot(
+        root=root,
+        cfg={
+            "enabled": True,
+            "managed_path_mode": True,
+            "allow_push": False,
+            "allow_command_execution": False,
+        },
+    )
+
+    assert snapshot["workspace_exists"] is True
+    assert snapshot["is_repo"] is True
+
+
+@pytest.mark.anyio
+async def test_is_git_repository_treats_parent_git_marker_as_repo(tmp_path, monkeypatch):
+    from control_plane.api.projects import _is_git_repository
+
+    repo_root = tmp_path / "repo-root"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    (repo_root / ".git").mkdir(parents=True, exist_ok=True)
+    nested = repo_root / "src" / "module"
+    nested.mkdir(parents=True, exist_ok=True)
+
+    async def _fake_run(args, *, cwd, timeout_seconds=None, env_overrides=None):
+        return {"ok": False, "stdout": "", "stderr": "dubious ownership", "command": args}
+
+    monkeypatch.setattr("control_plane.api.projects._run_repo_command", _fake_run)
+
+    assert await _is_git_repository(nested) is True
+
+
+@pytest.mark.anyio
 async def test_project_repo_workspace_redacts_and_preserves_clone_url_when_omitted(cp_client):
     await cp_client.post(
         "/v1/projects",
