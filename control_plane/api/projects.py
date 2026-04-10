@@ -665,6 +665,10 @@ async def _repo_status_snapshot(
             timeout_seconds=15,
         )
         is_repo = bool(check_repo.get("ok")) and "true" in str(check_repo.get("stdout") or "").lower()
+        if not is_repo and (root / ".git").exists():
+            # Some environments fail rev-parse (ownership/safe-directory), but an on-disk
+            # .git marker still indicates this path should be treated as a repository root.
+            is_repo = True
 
     if exists and is_repo:
         branch = await _repo_branch_name(root)
@@ -1508,7 +1512,7 @@ async def _ensure_orchestration_temp_workspace(
                 reason = str(clone_outcome.get("reason") or "").strip()
                 if error:
                     detail = f"{detail}: {error}"
-                elif reason:
+                elif reason and reason != "already_repo":
                     detail = f"{detail}: {reason}"
                 raise HTTPException(status_code=400, detail=detail)
         temp_ctx = await _prepare_temp_workspace(project_id=project_id, root=root)
