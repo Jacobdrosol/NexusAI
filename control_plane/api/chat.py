@@ -1378,7 +1378,16 @@ def _inline_code_requested(content: str) -> bool:
     return bool(_INLINE_CODE_TRIGGER_RE.search(text))
 
 
-def _inline_code_mode_requested(body: PostMessageRequest) -> bool:
+def _bot_inline_coding_default_enabled(bot: Any) -> bool:
+    if bot is None:
+        return False
+    exec_policy = getattr(bot, "execution_policy", None)
+    if isinstance(exec_policy, dict):
+        return bool(exec_policy.get("inline_coding_default", False))
+    return bool(getattr(exec_policy, "inline_coding_default", False))
+
+
+def _inline_code_mode_requested(body: PostMessageRequest, *, bot: Any = None) -> bool:
     requested = _inline_code_requested(body.content)
     if not requested:
         return False
@@ -1386,7 +1395,9 @@ def _inline_code_mode_requested(body: PostMessageRequest) -> bool:
     require_flag = require_flag_raw not in {"0", "false", "no", "off"}
     if not require_flag:
         return True
-    return bool(getattr(body, "inline_coding_enabled", False))
+    if bool(getattr(body, "inline_coding_enabled", False)):
+        return True
+    return _bot_inline_coding_default_enabled(bot)
 
 
 def _inline_code_unavailable_message() -> str:
@@ -2836,7 +2847,7 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
 
         require_repo_evidence = _repo_evidence_requested(body)
         repo_intent = _repo_intent_requested(body.content)
-        inline_code_mode = _inline_code_mode_requested(body)
+        inline_code_mode = _inline_code_mode_requested(body, bot=ns_bot)
         force_project_context = repo_intent or inline_code_mode
         force_workspace_context = repo_intent or inline_code_mode
         tool_access = await _effective_tool_access(
@@ -3363,7 +3374,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
 
             require_repo_evidence = _repo_evidence_requested(body)
             repo_intent = _repo_intent_requested(body.content)
-            inline_code_mode = _inline_code_mode_requested(body)
+            inline_code_mode = _inline_code_mode_requested(body, bot=bot)
             force_project_context = repo_intent or inline_code_mode
             force_workspace_context = repo_intent or inline_code_mode
             tool_access = await _effective_tool_access(

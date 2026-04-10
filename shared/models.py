@@ -100,6 +100,7 @@ class BotExecutionPolicy(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     repo_output_mode: Literal["allow", "deny"] = "deny"
     workspace_context_injection: bool = False
+    inline_coding_default: bool = False
     can_apply_db_actions: bool = False
     db_action_policy: Optional[DBActionPolicy] = None
     allow_run_result_ingest: bool = True

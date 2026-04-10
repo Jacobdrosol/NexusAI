@@ -2419,6 +2419,140 @@ async def test_post_message_inline_code_uses_task_manager_temp_workspace(cp_app,
 
 
 @pytest.mark.anyio
+async def test_post_message_inline_code_bot_default_runs_without_inline_flag(cp_app, tmp_path, monkeypatch):
+    from control_plane.api import chat as chat_module
+    from shared.models import Task, TaskMetadata
+
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "scheduler fallback"})
+    workspace_root = tmp_path / "workspace-inline-default"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    temp_root = tmp_path / "workspace-inline-default-temp"
+    temp_root.mkdir(parents=True, exist_ok=True)
+
+    created_task = Task(
+        id="inline-task-default",
+        bot_id="bot-inline-default",
+        payload=[],
+        metadata=TaskMetadata(source="chat_assign"),
+        status="queued",
+        created_at="2026-01-01T00:00:00Z",
+        updated_at="2026-01-01T00:00:00Z",
+    )
+    terminal_task = created_task.model_copy(
+        update={
+            "status": "completed",
+            "result": {"output": "Inline coding default complete."},
+            "updated_at": "2026-01-01T00:00:02Z",
+        }
+    )
+    cp_app.state.task_manager.create_task = AsyncMock(return_value=created_task)
+
+    async def _fake_prepare(**_kwargs):
+        return {"temp_root": str(temp_root), "repo_root": str(workspace_root)}
+
+    async def _fake_wait(_task_manager, *, task_id: str, max_wait_seconds: float = 1800.0):
+        assert task_id == "inline-task-default"
+        return terminal_task
+
+    async def _fake_collect(_temp_root):
+        return (
+            [
+                {
+                    "kind": "file",
+                    "label": "README.md",
+                    "path": "README.md",
+                    "content": "updated",
+                    "status": "updated",
+                    "source": "inline_temp_workspace",
+                    "truncated": False,
+                }
+            ],
+            ["README.md"],
+            [],
+        )
+
+    async def _fake_persist(_task_manager, *, task: Task, result: dict):
+        return task.model_copy(update={"result": result, "updated_at": "2026-01-01T00:00:03Z"})
+
+    monkeypatch.setattr(chat_module, "_inline_code_prepare_temp_workspace", _fake_prepare)
+    monkeypatch.setattr(chat_module, "_inline_code_wait_for_task", _fake_wait)
+    monkeypatch.setattr(chat_module, "_inline_code_collect_workspace_artifacts", _fake_collect)
+    monkeypatch.setattr(chat_module, "_inline_code_persist_result_without_trigger_dispatch", _fake_persist)
+
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-inline-default"
+        create_project = await client.post(
+            "/v1/projects",
+            json={
+                "id": project_id,
+                "name": "Inline Default",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "filesystem": True,
+                        "repo_search": False,
+                        "workspace_root": str(workspace_root),
+                    }
+                },
+            },
+        )
+        assert create_project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Inline Default Chat",
+                "project_id": project_id,
+                "tool_access_enabled": True,
+                "tool_access_filesystem": True,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        bot = await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-inline-default",
+                "name": "Inline Default Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "execution_policy": {
+                    "workspace_context_injection": True,
+                    "repo_output_mode": "allow",
+                    "inline_coding_default": True,
+                },
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "filesystem": True,
+                        "repo_search": False,
+                    }
+                },
+            },
+        )
+        assert bot.status_code == 200
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": "Can you code this?",
+                "bot_id": "bot-inline-default",
+                # inline_coding_enabled intentionally omitted: bot policy default should trigger inline mode
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assistant = body["assistant_message"]
+        assert assistant["metadata"]["mode"] == "pm_run_report"
+        assert assistant["metadata"]["inline_code"] is True
+
+    cp_app.state.task_manager.create_task.assert_awaited_once()
+    assert cp_app.state.scheduler.schedule.await_count == 0
+
+
+@pytest.mark.anyio
 async def test_stream_message_inline_code_uses_task_manager_temp_workspace(cp_app, tmp_path, monkeypatch):
     from control_plane.api import chat as chat_module
     from shared.models import Task, TaskMetadata
