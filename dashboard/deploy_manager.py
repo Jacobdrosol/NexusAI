@@ -197,6 +197,14 @@ class DeployManager:
         return str(self._state.get("runner_container_name") or "").strip()
 
     def _normalize_subcontainer_run_cmd(self, run_cmd: str) -> str:
+        normalize_enabled = str(os.environ.get("NEXUSAI_DEPLOY_NORMALIZE_NESTED_RUN_CMD", "0")).strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        if not normalize_enabled:
+            return str(run_cmd or "").strip()
         cmd = str(run_cmd or "").strip()
         lowered = cmd.lower()
         if "deploy-bluegreen.sh" in lowered and ("docker run" in lowered or "docker container run" in lowered):

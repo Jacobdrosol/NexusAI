@@ -260,10 +260,11 @@ def test_sync_subcontainer_runner_treats_completed_marker_as_success(monkeypatch
         assert manager._state["last_error"] is None
 
 
-def test_subcontainer_run_cmd_normalizes_nested_docker_wrapper():
+def test_subcontainer_run_cmd_normalizes_nested_docker_wrapper(monkeypatch):
     from dashboard.deploy_manager import DeployManager
 
     manager = DeployManager.instance()
+    monkeypatch.setenv("NEXUSAI_DEPLOY_NORMALIZE_NESTED_RUN_CMD", "1")
     raw = (
         "docker run --rm -v /var/run/docker.sock:/var/run/docker.sock "
         "-v /opt/NexusAI:/opt/NexusAI -w /opt/NexusAI docker:27-cli "
@@ -271,6 +272,20 @@ def test_subcontainer_run_cmd_normalizes_nested_docker_wrapper():
     )
     normalized = manager._normalize_subcontainer_run_cmd(raw)
     assert normalized == "sh ./scripts/deploy-bluegreen.sh"
+
+
+def test_subcontainer_run_cmd_normalization_is_opt_in(monkeypatch):
+    from dashboard.deploy_manager import DeployManager
+
+    manager = DeployManager.instance()
+    monkeypatch.delenv("NEXUSAI_DEPLOY_NORMALIZE_NESTED_RUN_CMD", raising=False)
+    raw = (
+        "docker run --rm -v /var/run/docker.sock:/var/run/docker.sock "
+        "-v /opt/NexusAI:/opt/NexusAI -w /opt/NexusAI docker:27-cli "
+        "sh -lc \"sh ./scripts/deploy-bluegreen.sh\""
+    )
+    normalized = manager._normalize_subcontainer_run_cmd(raw)
+    assert normalized == raw
 
 
 def test_run_git_forces_safe_directory(monkeypatch):
