@@ -161,6 +161,7 @@ def test_subcontainer_runner_forces_safe_cleanup_flags(monkeypatch):
     assert len(calls) >= 2
     run_cmd = calls[1]
     assert "-e" in run_cmd
+    assert "NEXUSAI_DEPLOY_RUNNER_MODE=subcontainer" in run_cmd
     assert "NEXUSAI_STOP_PREVIOUS_COLOR=0" in run_cmd
     assert "NEXUSAI_REMOVE_PREVIOUS_COLOR_CONTAINER=0" in run_cmd
 

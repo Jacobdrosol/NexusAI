@@ -18,6 +18,15 @@ RUNTIME_OWNER_GID="${NEXUSAI_DEPLOY_RUNTIME_OWNER_GID:-1000}"
 FIX_REPO_OWNERSHIP="${NEXUSAI_DEPLOY_FIX_REPO_OWNERSHIP:-0}"
 REMOVE_PREVIOUS_COLOR_CONTAINER="${NEXUSAI_REMOVE_PREVIOUS_COLOR_CONTAINER:-1}"
 STOP_PREVIOUS_COLOR_TIMEOUT_SECONDS="${NEXUSAI_STOP_PREVIOUS_COLOR_TIMEOUT_SECONDS:-25}"
+DEPLOY_RUNNER_MODE="${NEXUSAI_DEPLOY_RUNNER_MODE:-}"
+
+if [ "$DEPLOY_RUNNER_MODE" = "subcontainer" ]; then
+  # In dashboard sub-container mode, keep old color untouched from inside
+  # the runner. DeployManager handles post-success cleanup from the host side.
+  STOP_PREVIOUS_COLOR="0"
+  REMOVE_PREVIOUS_COLOR_CONTAINER="0"
+  echo "[deploy] runner mode=subcontainer: forcing old-color stop/remove off"
+fi
 
 echo "[deploy] checking DB drift guard"
 sh ./scripts/check_db_drift.sh

@@ -302,6 +302,7 @@ class DeployManager:
                 cmd.extend(["-e", f"{key}={value}"])
         # In sub-container mode, avoid stopping previous color from inside the runner
         # process. Cleanup is handled by DeployManager after successful completion.
+        cmd.extend(["-e", "NEXUSAI_DEPLOY_RUNNER_MODE=subcontainer"])
         cmd.extend(["-e", "NEXUSAI_STOP_PREVIOUS_COLOR=0"])
         cmd.extend(["-e", "NEXUSAI_REMOVE_PREVIOUS_COLOR_CONTAINER=0"])
         cmd.extend([runner_image, "sh", "-lc", run_cmd])
@@ -357,7 +358,13 @@ class DeployManager:
                 if last_log_line:
                     detail = f"{detail} Last log: {last_log_line}"
                 self._state["last_error"] = detail
-            self._append_log(f"deploy: runner container exited with code {exit_code_int}")
+            if run_succeeded and saw_completed_marker and exit_code_int != 0:
+                self._append_log(
+                    f"deploy: runner container exited with code {exit_code_int} "
+                    "(ignored because deploy completed marker was observed)"
+                )
+            else:
+                self._append_log(f"deploy: runner container exited with code {exit_code_int}")
             subprocess.run(["docker", "rm", "-f", runner_name], capture_output=True, text=True, check=False)
             self._state["runner_container_name"] = None
             self._state["runner_log_line_count"] = 0
