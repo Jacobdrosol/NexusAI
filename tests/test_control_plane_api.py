@@ -1297,6 +1297,58 @@ async def test_is_git_repository_treats_parent_git_marker_as_repo(tmp_path, monk
 
 
 @pytest.mark.anyio
+async def test_run_repo_command_injects_safe_directory_for_git(tmp_path, monkeypatch):
+    from control_plane.api.projects import _run_repo_command
+
+    repo_root = tmp_path / "repo-root"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    (repo_root / ".git").mkdir(parents=True, exist_ok=True)
+    nested = repo_root / "src" / "module"
+    nested.mkdir(parents=True, exist_ok=True)
+
+    captured = {}
+
+    async def _fake_run(args, *, cwd, timeout_seconds=None, env_overrides=None):
+        captured["args"] = list(args)
+        captured["cwd"] = cwd
+        return {"ok": True, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr("control_plane.api.projects.run_repo_command", _fake_run)
+
+    await _run_repo_command(["git", "status", "--porcelain"], cwd=nested, timeout_seconds=10)
+
+    assert captured["args"][0] == "git"
+    assert captured["args"][1] == "-c"
+    assert str(captured["args"][2]) == f"safe.directory={repo_root.resolve(strict=False)}"
+    assert captured["args"][3:] == ["status", "--porcelain"]
+
+
+@pytest.mark.anyio
+async def test_run_repo_command_does_not_duplicate_safe_directory(tmp_path, monkeypatch):
+    from control_plane.api.projects import _run_repo_command
+
+    repo_root = tmp_path / "repo-root"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    (repo_root / ".git").mkdir(parents=True, exist_ok=True)
+
+    captured = {}
+
+    async def _fake_run(args, *, cwd, timeout_seconds=None, env_overrides=None):
+        captured["args"] = list(args)
+        return {"ok": True, "stdout": "", "stderr": ""}
+
+    monkeypatch.setattr("control_plane.api.projects.run_repo_command", _fake_run)
+
+    await _run_repo_command(
+        ["git", "-c", f"safe.directory={repo_root}", "status"],
+        cwd=repo_root,
+        timeout_seconds=10,
+    )
+
+    assert captured["args"] == ["git", "-c", f"safe.directory={repo_root}", "status"]
+
+
+@pytest.mark.anyio
 async def test_project_repo_workspace_redacts_and_preserves_clone_url_when_omitted(cp_client):
     await cp_client.post(
         "/v1/projects",

@@ -619,8 +619,34 @@ async def _run_repo_command(
     timeout_seconds: Optional[int] = None,
     env_overrides: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
+    prepared_args = [str(a) for a in args]
+    if prepared_args:
+        exe_name = os.path.basename(prepared_args[0]).lower()
+        if exe_name == "git":
+            has_safe_dir = any("safe.directory=" in str(part) for part in prepared_args[1:])
+            if not has_safe_dir:
+                safe_dir: Optional[Path] = None
+                try:
+                    probe = cwd.resolve(strict=False)
+                except Exception:
+                    probe = cwd
+                for candidate in [probe, *list(probe.parents)]:
+                    try:
+                        if (candidate / ".git").exists():
+                            safe_dir = candidate
+                            break
+                    except Exception:
+                        continue
+                if safe_dir is None:
+                    safe_dir = probe
+                prepared_args = [
+                    prepared_args[0],
+                    "-c",
+                    f"safe.directory={safe_dir}",
+                    *prepared_args[1:],
+                ]
     return await run_repo_command(
-        args,
+        prepared_args,
         cwd=cwd,
         timeout_seconds=timeout_seconds,
         env_overrides=env_overrides,
