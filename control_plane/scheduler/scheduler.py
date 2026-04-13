@@ -1977,6 +1977,7 @@ class Scheduler:
         from control_plane.chat.workspace_tools import normalize_workspace_root
 
         tools = get_tool_definitions(allow_writes=allow_writes)
+        active_tools: list[dict] = list(tools)
         ws_root = normalize_workspace_root(str(workspace_root))
 
         messages: list[dict] = (
@@ -1997,9 +1998,27 @@ class Scheduler:
             int(os.environ.get("NEXUSAI_AGENT_FORCE_TOOL_FOLLOWUPS", "8") or "8"),
         )
         tree_only_tool_names = {"workspace_tree", "list_tree", "list_directory"}
+        navigation_tools_disabled = False
+        write_tools_only = False
+
+        def _tool_name(tool_def: dict) -> str:
+            try:
+                fn = tool_def.get("function") if isinstance(tool_def, dict) else None
+                return str((fn or {}).get("name") or "")
+            except Exception:
+                return ""
+
+        def _without_navigation_tools(tool_defs: list[dict]) -> list[dict]:
+            filtered = [tool for tool in (tool_defs or []) if _tool_name(tool) not in tree_only_tool_names]
+            return filtered or list(tool_defs or [])
+
+        def _write_only_tools(tool_defs: list[dict]) -> list[dict]:
+            write_names = {"write_file", "edit_file"}
+            filtered = [tool for tool in (tool_defs or []) if _tool_name(tool) in write_names]
+            return filtered or list(tool_defs or [])
 
         for iteration in range(max_iterations):
-            raw = await self._call_backend_raw(backend, messages, tools=tools, task=task)
+            raw = await self._call_backend_raw(backend, messages, tools=active_tools, task=task)
             # Merge usage
             for k, v in (raw.get("usage") or {}).items():
                 accumulated_usage[k] = accumulated_usage.get(k, 0) + (v or 0)
@@ -2037,6 +2056,9 @@ class Scheduler:
                     and forced_tool_followups < max_forced_tool_followups
                 ):
                     forced_tool_followups += 1
+                    if not navigation_tools_disabled:
+                        active_tools = _without_navigation_tools(active_tools)
+                        navigation_tools_disabled = True
                     output_text = str(raw.get("output") or "").strip()
                     if output_text:
                         messages.append({"role": "assistant", "content": output_text})
@@ -2061,6 +2083,9 @@ class Scheduler:
                     continue
                 if allow_writes and observed_tool_call and not observed_write_tool_call and forced_tool_followups < max_forced_tool_followups:
                     forced_tool_followups += 1
+                    if not write_tools_only:
+                        active_tools = _write_only_tools(active_tools)
+                        write_tools_only = True
                     output_text = str(raw.get("output") or "").strip()
                     if output_text:
                         messages.append({"role": "assistant", "content": output_text})
@@ -2177,6 +2202,9 @@ class Scheduler:
                 "forced_followups_used": int(forced_tool_followups),
                 "max_forced_followups": int(max_forced_tool_followups),
                 "tree_only_tools": sorted(tree_only_tool_names),
+                "navigation_tools_disabled": bool(navigation_tools_disabled),
+                "write_tools_only": bool(write_tools_only),
+                "active_tool_names": [name for name in (_tool_name(tool) for tool in active_tools) if name],
             }
         return result
 
