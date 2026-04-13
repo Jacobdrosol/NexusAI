@@ -3266,6 +3266,35 @@ def test_inline_code_compact_payload_limits_chars_even_with_few_messages():
     assert "truncated for prompt budget" in str(compacted[0].get("content") or "")
 
 
+def test_inline_code_compact_payload_dedupes_retry_noise_messages():
+    from control_plane.api import chat as chat_module
+
+    repeated_user = "Please implement month-end scheduler and edit existing files."
+    payload = [
+        {"role": "system", "content": "Context:\nrepo profile"},
+        {"role": "user", "content": repeated_user},
+        {"role": "assistant", "content": "Inline coding mode could not start: fatal: detected dubious ownership"},
+        {"role": "user", "content": repeated_user},
+        {"role": "assistant", "content": "PM pipeline failed\nInline coding run completed but produced no file edits."},
+        {"role": "assistant", "content": "I looked at Program.cs and ProgramSchedulerService.cs"},
+    ]
+
+    compacted = chat_module._inline_code_compact_payload(payload, max_messages=12, max_chars=12000)
+    contents = [str(item.get("content") or "") for item in compacted if isinstance(item, dict)]
+    user_contents = [str(item.get("content") or "") for item in compacted if isinstance(item, dict) and str(item.get("role") or "") == "user"]
+    assistant_contents = [
+        str(item.get("content") or "")
+        for item in compacted
+        if isinstance(item, dict) and str(item.get("role") or "") == "assistant"
+    ]
+
+    assert len(user_contents) == 1
+    assert user_contents[0] == repeated_user
+    assert not any("Inline coding mode could not start" in text for text in contents)
+    assert not any("produced no file edits" in text for text in contents)
+    assert len(assistant_contents) <= 1
+
+
 @pytest.mark.anyio
 async def test_stream_message_emits_context_summary_event_when_repo_context_loaded(cp_app):
     async def _stream(_task):

@@ -99,8 +99,8 @@ _READ_TOOLS: list[dict] = [
         "function": {
             "name": "workspace_tree",
             "description": (
-                "Return the full directory tree of the workspace up to 4 levels deep. "
-                "Use this to understand the overall project layout before deciding where to place new files."
+                "Return a lightweight, truncated directory tree overview of the workspace. "
+                "Use this for quick orientation only; for implementation you should use search_files/read_file/list_directory."
             ),
             "parameters": {
                 "type": "object",
@@ -303,7 +303,7 @@ def _tool_search_files(root: Path, args: dict) -> str:
 
 
 def _tool_workspace_tree(root: Path) -> str:
-    tree = list_workspace_tree(root, max_depth=4, max_entries=400)
+    tree = list_workspace_tree(root, max_depth=2, max_entries=120)
     return tree or "(empty workspace)"
 
 

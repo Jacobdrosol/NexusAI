@@ -1601,6 +1601,19 @@ def _inline_code_compact_payload(
     if not isinstance(payload, list) or not payload:
         return payload
 
+    def _is_inline_retry_noise(content: str) -> bool:
+        text = str(content or "").strip().lower()
+        if not text:
+            return False
+        markers = (
+            "inline coding mode could not start",
+            "inline coding run completed but produced no file edits",
+            "pm pipeline failed",
+            "quality warning: this run created new files but did not modify existing tracked files",
+            "inline coding task completed.",
+        )
+        return any(marker in text for marker in markers)
+
     context_system: dict | None = None
     remaining: List[dict] = []
     for index, item in enumerate(payload):
@@ -1611,7 +1624,35 @@ def _inline_code_compact_payload(
             context_system = dict(item)
             continue
         if role in {"system", "user", "assistant"}:
-            remaining.append(dict(item))
+            candidate = dict(item)
+            if role == "assistant" and _is_inline_retry_noise(str(candidate.get("content") or "")):
+                continue
+            remaining.append(candidate)
+
+    # Keep newest unique user/system messages and at most one recent assistant message.
+    compacted_tail: List[dict] = []
+    seen_user_contents: set[str] = set()
+    seen_system_contents: set[str] = set()
+    kept_assistant = False
+    for item in reversed(remaining):
+        role = str(item.get("role") or "").strip().lower()
+        content = str(item.get("content") or "").strip()
+        if role == "assistant":
+            if kept_assistant:
+                continue
+            kept_assistant = True
+        elif role == "user":
+            if content and content in seen_user_contents:
+                continue
+            if content:
+                seen_user_contents.add(content)
+        elif role == "system":
+            if content and content in seen_system_contents:
+                continue
+            if content:
+                seen_system_contents.add(content)
+        compacted_tail.append(item)
+    remaining = list(reversed(compacted_tail))
 
     max_chars = max(2_000, int(max_chars))
     if context_system is not None:

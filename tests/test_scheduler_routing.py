@@ -316,6 +316,85 @@ async def test_run_agent_loop_forces_tool_followup_for_writable_runs(monkeypatch
 
 
 @pytest.mark.anyio
+async def test_run_agent_loop_forces_discovery_when_only_workspace_tree_was_used(monkeypatch, tmp_path):
+    from control_plane.scheduler.scheduler import Scheduler
+
+    workspace_root = tmp_path / "repo"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    backend = BackendConfig(type="cloud_api", provider="ollama_cloud", model="qwen3-coder-next")
+    scheduler = Scheduler(bot_registry=AsyncMock(), worker_registry=AsyncMock())
+
+    call_messages: list[list[dict[str, Any]]] = []
+    state = {"count": 0}
+
+    async def _fake_call_backend_raw(_backend, messages, *, tools=None, task=None):
+        state["count"] += 1
+        call_messages.append([dict(item) for item in messages])
+        if state["count"] == 1:
+            return {
+                "output": "",
+                "tool_calls": [{"id": "tc-1", "name": "workspace_tree", "arguments": {}}],
+                "usage": {},
+            }
+        if state["count"] == 2:
+            return {"output": "I need to inspect more files first.", "tool_calls": [], "usage": {}}
+        if state["count"] == 3:
+            return {
+                "output": "",
+                "tool_calls": [{"id": "tc-2", "name": "read_file", "arguments": {"path": "demo.txt"}}],
+                "usage": {},
+            }
+        if state["count"] == 4:
+            return {
+                "output": "",
+                "tool_calls": [{"id": "tc-3", "name": "write_file", "arguments": {"path": "demo.txt", "content": "ok"}}],
+                "usage": {},
+            }
+        return {"output": "Implemented changes.", "tool_calls": [], "usage": {}}
+
+    monkeypatch.setattr(scheduler, "_call_backend_raw", _fake_call_backend_raw)
+    monkeypatch.setattr(
+        "control_plane.scheduler.agent_workspace_tools.get_tool_definitions",
+        lambda allow_writes=False: [
+            {"type": "function", "function": {"name": "workspace_tree"}},
+            {"type": "function", "function": {"name": "read_file"}},
+            {"type": "function", "function": {"name": "write_file"}},
+        ],
+    )
+    monkeypatch.setattr(
+        "control_plane.scheduler.agent_workspace_tools.parse_tool_call_arguments",
+        lambda value: value if isinstance(value, dict) else {},
+    )
+    monkeypatch.setattr(
+        "control_plane.scheduler.agent_workspace_tools.execute_tool",
+        lambda name, args, root, allow_writes=False: f"tool={name}",
+    )
+    monkeypatch.setattr(
+        "control_plane.chat.workspace_tools.normalize_workspace_root",
+        lambda value: workspace_root,
+    )
+
+    result = await scheduler._run_agent_loop(
+        backend=backend,
+        prepared_payload=[{"role": "user", "content": "Can you code this?"}],
+        workspace_root=workspace_root,
+        allow_writes=True,
+        max_iterations=8,
+    )
+
+    assert result.get("output") == "Implemented changes."
+    assert state["count"] == 5
+    assert any(str(item.get("name") or "") == "workspace_tree" for item in (result.get("tool_calls_executed") or []))
+    assert any(str(item.get("name") or "") == "read_file" for item in (result.get("tool_calls_executed") or []))
+    assert any(str(item.get("name") or "") == "write_file" for item in (result.get("tool_calls_executed") or []))
+    assert any(
+        str(message.get("role") or "") == "system"
+        and "Discovery requirement (mandatory for this writable coding run)" in str(message.get("content") or "")
+        for message in call_messages[2]
+    )
+
+
+@pytest.mark.anyio
 async def test_scheduler_injects_retry_guidance_into_payload():
     from control_plane.scheduler.scheduler import Scheduler
     from shared.models import TaskError, TaskMetadata

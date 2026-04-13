@@ -1989,12 +1989,14 @@ class Scheduler:
         last_result: dict = {}
         observed_tool_call = False
         observed_write_tool_call = False
+        observed_non_tree_tool_call = False
         executed_tool_calls: list[dict] = []
         forced_tool_followups = 0
         max_forced_tool_followups = max(
             1,
             int(os.environ.get("NEXUSAI_AGENT_FORCE_TOOL_FOLLOWUPS", "4") or "4"),
         )
+        tree_only_tool_names = {"workspace_tree", "list_tree"}
 
         for iteration in range(max_iterations):
             raw = await self._call_backend_raw(backend, messages, tools=tools, task=task)
@@ -2014,7 +2016,7 @@ class Scheduler:
                             "role": "system",
                             "content": (
                             "Tool-use requirement (mandatory for this writable coding run):\n"
-                                "- You must call at least one workspace tool now (for example workspace_tree, list_directory, read_file, search_files, write_file, edit_file).\n"
+                                "- You must call at least one workspace tool now (for example list_directory, read_file, search_files, write_file, edit_file).\n"
                                 "- Your next response must contain at least one tool call; do not return plain-text-only output.\n"
                                 "- Do not ask the user to restate the task.\n"
                                 "- Start implementing a minimal first slice immediately, then continue with additional edits as needed."
@@ -2023,6 +2025,35 @@ class Scheduler:
                     )
                     logger.warning(
                         "[AGENT] task=%s forcing tool-call followup attempt=%d (no tool calls observed yet)",
+                        task.id if task else "?",
+                        forced_tool_followups,
+                    )
+                    continue
+                if (
+                    allow_writes
+                    and observed_tool_call
+                    and not observed_non_tree_tool_call
+                    and not observed_write_tool_call
+                    and forced_tool_followups < max_forced_tool_followups
+                ):
+                    forced_tool_followups += 1
+                    output_text = str(raw.get("output") or "").strip()
+                    if output_text:
+                        messages.append({"role": "assistant", "content": output_text})
+                    messages.append(
+                        {
+                            "role": "system",
+                            "content": (
+                                "Discovery requirement (mandatory for this writable coding run):\n"
+                                "- workspace_tree alone is not sufficient to implement code changes.\n"
+                                "- Your next response must call a concrete discovery tool such as search_files, read_file, or list_directory.\n"
+                                "- After discovery, continue directly to write_file/edit_file changes.\n"
+                                "- Do not ask the user to restate the task."
+                            ),
+                        }
+                    )
+                    logger.warning(
+                        "[AGENT] task=%s forcing discovery followup attempt=%d (only tree-style tool calls observed)",
                         task.id if task else "?",
                         forced_tool_followups,
                     )
@@ -2062,6 +2093,12 @@ class Scheduler:
                         task.id if task else "?",
                         forced_tool_followups,
                     )
+                if allow_writes and observed_tool_call and not observed_non_tree_tool_call:
+                    logger.warning(
+                        "[AGENT] task=%s writable run ended with only tree-style tool calls (forced_followups=%d)",
+                        task.id if task else "?",
+                        forced_tool_followups,
+                    )
                 # No more tool calls — model returned final content
                 last_result = raw
                 break
@@ -2073,6 +2110,8 @@ class Scheduler:
                 tool_name = str(tc.get("name") or "")
                 if allow_writes and tool_name in {"write_file", "edit_file"}:
                     observed_write_tool_call = True
+                elif allow_writes and tool_name not in tree_only_tool_names:
+                    observed_non_tree_tool_call = True
                 executed_tool_calls.append(
                     {
                         "id": str(tc.get("id") or ""),
