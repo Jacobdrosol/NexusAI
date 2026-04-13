@@ -1996,7 +1996,7 @@ class Scheduler:
             1,
             int(os.environ.get("NEXUSAI_AGENT_FORCE_TOOL_FOLLOWUPS", "4") or "4"),
         )
-        tree_only_tool_names = {"workspace_tree", "list_tree"}
+        tree_only_tool_names = {"workspace_tree", "list_tree", "list_directory"}
 
         for iteration in range(max_iterations):
             raw = await self._call_backend_raw(backend, messages, tools=tools, task=task)
@@ -2045,8 +2045,8 @@ class Scheduler:
                             "role": "system",
                             "content": (
                                 "Discovery requirement (mandatory for this writable coding run):\n"
-                                "- workspace_tree alone is not sufficient to implement code changes.\n"
-                                "- Your next response must call a concrete discovery tool such as search_files, read_file, or list_directory.\n"
+                                "- workspace_tree/list_directory alone are not sufficient to implement code changes.\n"
+                                "- Your next response must call a concrete discovery tool such as search_files or read_file.\n"
                                 "- After discovery, continue directly to write_file/edit_file changes.\n"
                                 "- Do not ask the user to restate the task."
                             ),

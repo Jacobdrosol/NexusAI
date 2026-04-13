@@ -269,7 +269,10 @@ def _tool_list_directory(root: Path, args: dict) -> str:
         return f"ERROR listing directory: {exc}"
     if not entries:
         return f"(empty directory: {path_hint})"
-    return "\n".join(entries[:500])  # cap at 500 entries
+    if len(entries) > 180:
+        preview = "\n".join(entries[:180])
+        return f"{preview}\n... [TRUNCATED: {len(entries) - 180} additional entries]"
+    return "\n".join(entries)
 
 
 def _tool_search_files(root: Path, args: dict) -> str:
