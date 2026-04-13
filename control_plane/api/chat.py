@@ -169,6 +169,13 @@ _INLINE_NEW_FILES_ONLY_OK_RE = re.compile(
     r"\b(new\s+file|new\s+module|from\s+scratch|scaffold|skeleton|prototype\s+only)\b",
     re.IGNORECASE,
 )
+_INLINE_SERVER_KEYWORD_RE = re.compile(r"\b(server|backend)\b", re.IGNORECASE)
+_INLINE_WEBAPP_KEYWORD_RE = re.compile(r"\b(web\s*app|webapp|frontend|front[-\s]?end|ui)\b", re.IGNORECASE)
+_INLINE_SERVER_PATH_RE = re.compile(r"(?:^|/)[^/]*server[^/]*/", re.IGNORECASE)
+_INLINE_WEBAPP_PATH_RE = re.compile(
+    r"(?:^|/)(?:[^/]*webapp[^/]*|[^/]*frontend[^/]*|[^/]*client[^/]*|[^/]*ui[^/]*)/",
+    re.IGNORECASE,
+)
 
 
 def _attachment_size_bytes(item: ChatAttachmentInput) -> int:
@@ -1461,6 +1468,106 @@ def _inline_code_new_files_only_warning_message(task: Task, breakdown: Dict[str,
     return f"{base}\n\n{details}\n\nModel output:\n{output}"
 
 
+def _inline_code_has_write_tool_evidence(result: Any) -> bool:
+    payload = result if isinstance(result, dict) else {}
+    diagnostics = payload.get("agent_loop_diagnostics") if isinstance(payload, dict) else None
+    has_diagnostics = isinstance(diagnostics, dict)
+    if has_diagnostics and bool(diagnostics.get("observed_write_tool_call")):
+        return True
+    executed = payload.get("tool_calls_executed") if isinstance(payload, dict) else None
+    has_executed = isinstance(executed, list)
+    if isinstance(executed, list):
+        for item in executed:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip().lower()
+            if name in {"write_file", "edit_file"}:
+                return True
+    # Backward-compatible fallback: older runs/tests may not include tool telemetry.
+    # In that case, treat evidence as indeterminate (pass) instead of hard-failing.
+    if not has_diagnostics and not has_executed:
+        return True
+    return False
+
+
+def _inline_code_required_surfaces(requested_task: str) -> List[str]:
+    text = str(requested_task or "").strip().lower()
+    if not text:
+        return []
+    server_requested = bool(_INLINE_SERVER_KEYWORD_RE.search(text))
+    webapp_requested = bool(_INLINE_WEBAPP_KEYWORD_RE.search(text))
+    if server_requested and webapp_requested:
+        return ["server", "webapp"]
+    return []
+
+
+def _inline_code_surfaces_for_path(path: str) -> List[str]:
+    normalized = str(path or "").strip().replace("\\", "/")
+    lowered = normalized.lower()
+    surfaces: List[str] = []
+    if _INLINE_SERVER_PATH_RE.search(normalized):
+        surfaces.append("server")
+    if _INLINE_WEBAPP_PATH_RE.search(normalized) or lowered.endswith(".razor"):
+        surfaces.append("webapp")
+    return surfaces
+
+
+def _inline_code_surface_coverage(paths: List[str], required_surfaces: List[str]) -> Dict[str, Any]:
+    normalized_paths = [str(path or "").strip().replace("\\", "/") for path in (paths or []) if str(path or "").strip()]
+    by_surface: Dict[str, List[str]] = {key: [] for key in {"server", "webapp"}}
+    touched_surfaces: set[str] = set()
+    for path in normalized_paths:
+        for surface in _inline_code_surfaces_for_path(path):
+            touched_surfaces.add(surface)
+            by_surface.setdefault(surface, []).append(path)
+    required_unique: List[str] = []
+    for surface in required_surfaces or []:
+        token = str(surface or "").strip().lower()
+        if token in {"server", "webapp"} and token not in required_unique:
+            required_unique.append(token)
+    missing = [surface for surface in required_unique if surface not in touched_surfaces]
+    return {
+        "required_surfaces": required_unique,
+        "touched_surfaces": sorted(touched_surfaces),
+        "missing_surfaces": missing,
+        "paths_by_surface": {key: value[:24] for key, value in by_surface.items() if value},
+        "passed": not missing,
+    }
+
+
+def _inline_code_missing_write_evidence_message() -> str:
+    return (
+        "Quality gate failed: no write-tool evidence was observed.\n"
+        "The run must include at least one write operation via write_file or edit_file."
+    )
+
+
+def _inline_code_surface_gate_failure_message(surface_coverage: Dict[str, Any]) -> str:
+    required = ", ".join(surface_coverage.get("required_surfaces") or []) or "(none)"
+    missing = ", ".join(surface_coverage.get("missing_surfaces") or []) or "(none)"
+    return (
+        "Quality gate failed: required code surfaces were not all edited.\n"
+        f"Required surfaces: {required}\n"
+        f"Missing surfaces: {missing}"
+    )
+
+
+def _inline_code_quality_gate_failure_message(task: Task, failures: List[str], files_touched: List[str]) -> str:
+    details = "\n".join(f"- {item}" for item in failures if str(item or "").strip())
+    touched_preview = ", ".join((files_touched or [])[:8]) if files_touched else "(none)"
+    output = _extract_task_output(task.result).strip()
+    if len(output) > 1800:
+        output = f"{output[:1800].rstrip()}..."
+    base = (
+        "Inline coding run failed quality gates.\n\n"
+        f"{details}\n\n"
+        f"Files touched in temp workspace: {touched_preview}"
+    )
+    if not output:
+        return base
+    return f"{base}\n\nModel output:\n{output}"
+
+
 def _inline_code_payload_stats(payload: List[dict]) -> Dict[str, int]:
     total_chars = 0
     user_messages = 0
@@ -1912,11 +2019,15 @@ def _inline_code_normalize_task_result(
     change_breakdown: Dict[str, Any] | None = None,
     integration_required: bool | None = None,
     integration_passed: bool | None = None,
+    write_tool_evidence: bool | None = None,
+    required_surfaces: List[str] | None = None,
+    surface_coverage: Dict[str, Any] | None = None,
     context_sources: List[str] | None = None,
     context_item_count: int | None = None,
     tool_access: Dict[str, Any] | None = None,
     payload_stats: Dict[str, int] | None = None,
     quality_warnings: List[str] | None = None,
+    quality_gate_failures: List[str] | None = None,
 ) -> Dict[str, Any]:
     if isinstance(result, dict):
         normalized: Dict[str, Any] = dict(result)
@@ -1959,6 +2070,19 @@ def _inline_code_normalize_task_result(
         normalized["integration_quality_gate"] = {
             "existing_file_edits_required": bool(integration_required),
             "passed": bool(integration_passed) if integration_passed is not None else None,
+        }
+    if (
+        write_tool_evidence is not None
+        or required_surfaces is not None
+        or isinstance(surface_coverage, dict)
+        or quality_gate_failures
+    ):
+        normalized["inline_quality_gate"] = {
+            "write_tool_evidence_required": True,
+            "write_tool_evidence": bool(write_tool_evidence) if write_tool_evidence is not None else None,
+            "required_surfaces": list(required_surfaces or []),
+            "surface_coverage": dict(surface_coverage or {}),
+            "failures": [str(item).strip() for item in (quality_gate_failures or []) if str(item).strip()],
         }
     if context_sources is not None or context_item_count is not None or isinstance(tool_access, dict):
         normalized["inline_context"] = {
@@ -2999,8 +3123,9 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                     artifacts, files_touched, deleted_paths = await _inline_code_collect_workspace_artifacts(Path(temp_root))
                     change_breakdown = _inline_code_change_breakdown(artifacts, deleted_paths)
                     quality_warnings: List[str] = []
+                    write_tool_evidence = _inline_code_has_write_tool_evidence(terminal_task.result)
                     no_change_repair_attempts = _inline_code_no_change_repair_attempt_limit()
-                    if not files_touched and no_change_repair_attempts > 0:
+                    if (not files_touched or not write_tool_evidence) and no_change_repair_attempts > 0:
                         for _ in range(no_change_repair_attempts):
                             try:
                                 repaired_task = await _inline_code_attempt_no_change_repair(
@@ -3024,8 +3149,9 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                             terminal_task = repaired_task
                             artifacts, files_touched, deleted_paths = await _inline_code_collect_workspace_artifacts(Path(temp_root))
                             change_breakdown = _inline_code_change_breakdown(artifacts, deleted_paths)
-                            if files_touched:
-                                quality_warnings.append("No-change remediation pass executed and produced concrete file edits.")
+                            write_tool_evidence = _inline_code_has_write_tool_evidence(terminal_task.result)
+                            if files_touched and write_tool_evidence:
+                                quality_warnings.append("No-change remediation pass executed and produced concrete file edits with write-tool evidence.")
                                 break
                     integration_passed = bool(
                         not integration_required
@@ -3070,6 +3196,21 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                                 break
                         if integration_required and not integration_passed:
                             quality_warnings.append(_inline_code_new_files_only_warning_message(terminal_task, change_breakdown))
+                    required_surfaces = _inline_code_required_surfaces(body.content)
+                    surface_paths = _inline_code_merge_paths(
+                        files_touched,
+                        list(change_breakdown.get("created_paths") or []),
+                        list(change_breakdown.get("updated_paths") or []),
+                        list(change_breakdown.get("deleted_paths") or []),
+                    )
+                    surface_coverage = _inline_code_surface_coverage(surface_paths, required_surfaces)
+                    quality_gate_failures: List[str] = []
+                    if not write_tool_evidence:
+                        quality_gate_failures.append(_inline_code_missing_write_evidence_message())
+                    if integration_required and not integration_passed:
+                        quality_gate_failures.append(_inline_code_new_files_only_warning_message(terminal_task, change_breakdown))
+                    if required_surfaces and not bool(surface_coverage.get("passed")):
+                        quality_gate_failures.append(_inline_code_surface_gate_failure_message(surface_coverage))
                     normalized_result = _inline_code_normalize_task_result(
                         result=terminal_task.result,
                         artifacts=artifacts,
@@ -3079,11 +3220,15 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                         change_breakdown=change_breakdown,
                         integration_required=integration_required,
                         integration_passed=integration_passed,
+                        write_tool_evidence=write_tool_evidence,
+                        required_surfaces=required_surfaces,
+                        surface_coverage=surface_coverage,
                         context_sources=context_sources,
                         context_item_count=len(resolved_context),
                         tool_access=tool_access,
                         payload_stats=payload_stats,
                         quality_warnings=quality_warnings,
+                        quality_gate_failures=quality_gate_failures,
                     )
                     if normalized_result != terminal_task.result:
                         try:
@@ -3108,18 +3253,26 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                             ),
                         )
                         return {"user_message": user_message, "assistant_message": assistant_message}
+                    if quality_gate_failures:
+                        assistant_message = await chat_manager.add_message(
+                            conversation_id=conversation_id,
+                            role="assistant",
+                            content=_inline_code_quality_gate_failure_message(terminal_task, quality_gate_failures, files_touched),
+                            bot_id=target_bot_id,
+                            metadata=_inline_code_assistant_metadata(
+                                orchestration_id=orchestration_id,
+                                task=terminal_task,
+                                run_status="failed",
+                                files_touched=files_touched,
+                            ),
+                        )
+                        return {"user_message": user_message, "assistant_message": assistant_message}
                     assistant_output = _extract_task_output(terminal_task.result)
                     assistant_output = _apply_repo_evidence_envelope(
                         assistant_output,
                         require_repo_evidence=require_repo_evidence,
                         context_sources=context_sources,
                     )
-                    if integration_required and not integration_passed:
-                        assistant_output = (
-                            f"{assistant_output}\n\n{_inline_code_new_files_only_warning_message(terminal_task, change_breakdown)}".strip()
-                            if assistant_output.strip()
-                            else _inline_code_new_files_only_warning_message(terminal_task, change_breakdown)
-                        )
                     if files_touched and "Files touched in temp workspace:" not in assistant_output:
                         preview = "\n".join(f"- {path}" for path in files_touched[:8])
                         assistant_output = (
@@ -3594,8 +3747,9 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                         artifacts, files_touched, deleted_paths = await _inline_code_collect_workspace_artifacts(Path(temp_root))
                         change_breakdown = _inline_code_change_breakdown(artifacts, deleted_paths)
                         quality_warnings: List[str] = []
+                        write_tool_evidence = _inline_code_has_write_tool_evidence(terminal_task.result)
                         no_change_repair_attempts = _inline_code_no_change_repair_attempt_limit()
-                        if not files_touched and no_change_repair_attempts > 0:
+                        if (not files_touched or not write_tool_evidence) and no_change_repair_attempts > 0:
                             for _ in range(no_change_repair_attempts):
                                 try:
                                     repaired_task = await _inline_code_attempt_no_change_repair(
@@ -3619,8 +3773,9 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                                 terminal_task = repaired_task
                                 artifacts, files_touched, deleted_paths = await _inline_code_collect_workspace_artifacts(Path(temp_root))
                                 change_breakdown = _inline_code_change_breakdown(artifacts, deleted_paths)
-                                if files_touched:
-                                    quality_warnings.append("No-change remediation pass executed and produced concrete file edits.")
+                                write_tool_evidence = _inline_code_has_write_tool_evidence(terminal_task.result)
+                                if files_touched and write_tool_evidence:
+                                    quality_warnings.append("No-change remediation pass executed and produced concrete file edits with write-tool evidence.")
                                     break
                         integration_passed = bool(
                             not integration_required
@@ -3665,6 +3820,21 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                                     break
                             if integration_required and not integration_passed:
                                 quality_warnings.append(_inline_code_new_files_only_warning_message(terminal_task, change_breakdown))
+                        required_surfaces = _inline_code_required_surfaces(body.content)
+                        surface_paths = _inline_code_merge_paths(
+                            files_touched,
+                            list(change_breakdown.get("created_paths") or []),
+                            list(change_breakdown.get("updated_paths") or []),
+                            list(change_breakdown.get("deleted_paths") or []),
+                        )
+                        surface_coverage = _inline_code_surface_coverage(surface_paths, required_surfaces)
+                        quality_gate_failures: List[str] = []
+                        if not write_tool_evidence:
+                            quality_gate_failures.append(_inline_code_missing_write_evidence_message())
+                        if integration_required and not integration_passed:
+                            quality_gate_failures.append(_inline_code_new_files_only_warning_message(terminal_task, change_breakdown))
+                        if required_surfaces and not bool(surface_coverage.get("passed")):
+                            quality_gate_failures.append(_inline_code_surface_gate_failure_message(surface_coverage))
                         normalized_result = _inline_code_normalize_task_result(
                             result=terminal_task.result,
                             artifacts=artifacts,
@@ -3674,11 +3844,15 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                             change_breakdown=change_breakdown,
                             integration_required=integration_required,
                             integration_passed=integration_passed,
+                            write_tool_evidence=write_tool_evidence,
+                            required_surfaces=required_surfaces,
+                            surface_coverage=surface_coverage,
                             context_sources=context_sources,
                             context_item_count=len(resolved_context),
                             tool_access=tool_access,
                             payload_stats=payload_stats,
                             quality_warnings=quality_warnings,
+                            quality_gate_failures=quality_gate_failures,
                         )
                         if normalized_result != terminal_task.result:
                             try:
@@ -3708,6 +3882,22 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                             yield f"event: assistant_message\ndata: {assistant_message.model_dump_json()}\n\n"
                             yield "event: done\ndata: {}\n\n"
                             return
+                        if quality_gate_failures:
+                            assistant_message = await chat_manager.add_message(
+                                conversation_id=conversation_id,
+                                role="assistant",
+                                content=_inline_code_quality_gate_failure_message(terminal_task, quality_gate_failures, files_touched),
+                                bot_id=target_bot_id,
+                                metadata=_inline_code_assistant_metadata(
+                                    orchestration_id=orchestration_id,
+                                    task=terminal_task,
+                                    run_status="failed",
+                                    files_touched=files_touched,
+                                ),
+                            )
+                            yield f"event: assistant_message\ndata: {assistant_message.model_dump_json()}\n\n"
+                            yield "event: done\ndata: {}\n\n"
+                            return
 
                         assistant_output = _extract_task_output(terminal_task.result)
                         assistant_output = _apply_repo_evidence_envelope(
@@ -3715,12 +3905,6 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                             require_repo_evidence=require_repo_evidence,
                             context_sources=context_sources,
                         )
-                        if integration_required and not integration_passed:
-                            assistant_output = (
-                                f"{assistant_output}\n\n{_inline_code_new_files_only_warning_message(terminal_task, change_breakdown)}".strip()
-                                if assistant_output.strip()
-                                else _inline_code_new_files_only_warning_message(terminal_task, change_breakdown)
-                            )
                         if files_touched and "Files touched in temp workspace:" not in assistant_output:
                             preview = "\n".join(f"- {path}" for path in files_touched[:8])
                             assistant_output = (

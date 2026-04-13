@@ -3058,8 +3058,276 @@ async def test_post_message_inline_code_warns_when_only_new_files_for_integratio
         assert resp.status_code == 200
         body = resp.json()
         assistant = body["assistant_message"]
-        assert assistant["metadata"]["run_status"] == "passed"
-        assert "Quality warning: this run created new files but did not modify existing tracked files." in assistant["content"]
+        assert assistant["metadata"]["run_status"] == "failed"
+        assert "Inline coding run failed quality gates." in assistant["content"]
+        assert "created new files but did not modify existing tracked files" in assistant["content"]
+
+
+@pytest.mark.anyio
+async def test_post_message_inline_code_fails_when_write_tool_evidence_missing(cp_app, tmp_path, monkeypatch):
+    from control_plane.api import chat as chat_module
+    from shared.models import Task, TaskMetadata
+
+    workspace_root = tmp_path / "workspace-inline-write-evidence"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    temp_root = tmp_path / "workspace-inline-write-evidence-temp"
+    temp_root.mkdir(parents=True, exist_ok=True)
+
+    created_task = Task(
+        id="inline-task-write-evidence",
+        bot_id="bot-inline-write-evidence",
+        payload=[],
+        metadata=TaskMetadata(source="chat_assign"),
+        status="queued",
+        created_at="2026-01-01T00:00:00Z",
+        updated_at="2026-01-01T00:00:00Z",
+    )
+    terminal_task = created_task.model_copy(
+        update={
+            "status": "completed",
+            "result": {
+                "output": "Updated scheduler code.",
+                "agent_loop_diagnostics": {"observed_write_tool_call": False},
+                "tool_calls_executed": [
+                    {"name": "read_file", "arguments": {"path": "GlobeIQ.Server/Program.cs"}},
+                ],
+            },
+            "updated_at": "2026-01-01T00:00:02Z",
+        }
+    )
+    cp_app.state.task_manager.create_task = AsyncMock(return_value=created_task)
+
+    async def _fake_prepare(**_kwargs):
+        return {"temp_root": str(temp_root), "repo_root": str(workspace_root)}
+
+    async def _fake_wait(_task_manager, *, task_id: str, max_wait_seconds: float = 1800.0):
+        assert task_id == "inline-task-write-evidence"
+        return terminal_task
+
+    async def _fake_collect(_temp_root):
+        return (
+            [
+                {
+                    "kind": "file",
+                    "label": "GlobeIQ.Server/Program.cs",
+                    "path": "GlobeIQ.Server/Program.cs",
+                    "content": "builder.Services.AddScoped<IMonthEndReportService, MonthEndReportService>();",
+                    "status": "updated",
+                    "source": "inline_temp_workspace",
+                    "truncated": False,
+                }
+            ],
+            ["GlobeIQ.Server/Program.cs"],
+            [],
+        )
+
+    monkeypatch.setattr(chat_module, "_inline_code_prepare_temp_workspace", _fake_prepare)
+    monkeypatch.setattr(chat_module, "_inline_code_wait_for_task", _fake_wait)
+    monkeypatch.setattr(chat_module, "_inline_code_collect_workspace_artifacts", _fake_collect)
+    monkeypatch.setattr(chat_module, "_inline_code_no_change_repair_attempt_limit", lambda: 0)
+
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-inline-write-evidence"
+        project = await client.post(
+            "/v1/projects",
+            json={
+                "id": project_id,
+                "name": "Inline Write Evidence",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "filesystem": True,
+                        "repo_search": False,
+                        "workspace_root": str(workspace_root),
+                    }
+                },
+            },
+        )
+        assert project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Inline Write Evidence Chat",
+                "project_id": project_id,
+                "tool_access_enabled": True,
+                "tool_access_filesystem": True,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        bot = await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-inline-write-evidence",
+                "name": "Inline Write Evidence Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "execution_policy": {
+                    "workspace_context_injection": True,
+                    "repo_output_mode": "allow",
+                },
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "filesystem": True,
+                        "repo_search": False,
+                    }
+                },
+            },
+        )
+        assert bot.status_code == 200
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": "Can you add a feature and code this?",
+                "bot_id": "bot-inline-write-evidence",
+                "inline_coding_enabled": True,
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assistant = body["assistant_message"]
+        assert assistant["metadata"]["run_status"] == "failed"
+        assert "no write-tool evidence was observed" in assistant["content"]
+
+
+@pytest.mark.anyio
+async def test_post_message_inline_code_fails_when_required_surfaces_missing(cp_app, tmp_path, monkeypatch):
+    from control_plane.api import chat as chat_module
+    from shared.models import Task, TaskMetadata
+
+    workspace_root = tmp_path / "workspace-inline-surfaces"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    temp_root = tmp_path / "workspace-inline-surfaces-temp"
+    temp_root.mkdir(parents=True, exist_ok=True)
+
+    created_task = Task(
+        id="inline-task-surfaces",
+        bot_id="bot-inline-surfaces",
+        payload=[],
+        metadata=TaskMetadata(source="chat_assign"),
+        status="queued",
+        created_at="2026-01-01T00:00:00Z",
+        updated_at="2026-01-01T00:00:00Z",
+    )
+    terminal_task = created_task.model_copy(
+        update={
+            "status": "completed",
+            "result": {
+                "output": "Updated server scheduler.",
+                "agent_loop_diagnostics": {"observed_write_tool_call": True},
+                "tool_calls_executed": [
+                    {"name": "write_file", "arguments": {"path": "GlobeIQ.Server/Services/ProgramSchedulerService.cs"}},
+                ],
+            },
+            "updated_at": "2026-01-01T00:00:02Z",
+        }
+    )
+    cp_app.state.task_manager.create_task = AsyncMock(return_value=created_task)
+
+    async def _fake_prepare(**_kwargs):
+        return {"temp_root": str(temp_root), "repo_root": str(workspace_root)}
+
+    async def _fake_wait(_task_manager, *, task_id: str, max_wait_seconds: float = 1800.0):
+        assert task_id == "inline-task-surfaces"
+        return terminal_task
+
+    async def _fake_collect(_temp_root):
+        return (
+            [
+                {
+                    "kind": "file",
+                    "label": "GlobeIQ.Server/Services/ProgramSchedulerService.cs",
+                    "path": "GlobeIQ.Server/Services/ProgramSchedulerService.cs",
+                    "content": "public class ProgramSchedulerService {}",
+                    "status": "updated",
+                    "source": "inline_temp_workspace",
+                    "truncated": False,
+                }
+            ],
+            ["GlobeIQ.Server/Services/ProgramSchedulerService.cs"],
+            [],
+        )
+
+    monkeypatch.setattr(chat_module, "_inline_code_prepare_temp_workspace", _fake_prepare)
+    monkeypatch.setattr(chat_module, "_inline_code_wait_for_task", _fake_wait)
+    monkeypatch.setattr(chat_module, "_inline_code_collect_workspace_artifacts", _fake_collect)
+
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-inline-surfaces"
+        project = await client.post(
+            "/v1/projects",
+            json={
+                "id": project_id,
+                "name": "Inline Surface Gate",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "filesystem": True,
+                        "repo_search": False,
+                        "workspace_root": str(workspace_root),
+                    }
+                },
+            },
+        )
+        assert project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Inline Surface Gate Chat",
+                "project_id": project_id,
+                "tool_access_enabled": True,
+                "tool_access_filesystem": True,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        bot = await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-inline-surfaces",
+                "name": "Inline Surface Gate Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "execution_policy": {
+                    "workspace_context_injection": True,
+                    "repo_output_mode": "allow",
+                },
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "filesystem": True,
+                        "repo_search": False,
+                    }
+                },
+            },
+        )
+        assert bot.status_code == 200
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": (
+                    "Can you add a feature and code this? "
+                    "I'm expecting to see edits to the server and webapp at least."
+                ),
+                "bot_id": "bot-inline-surfaces",
+                "inline_coding_enabled": True,
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assistant = body["assistant_message"]
+        assert assistant["metadata"]["run_status"] == "failed"
+        assert "required code surfaces were not all edited" in assistant["content"]
+        assert "Missing surfaces: webapp" in assistant["content"]
 
 
 @pytest.mark.anyio
