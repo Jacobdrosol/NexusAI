@@ -1506,17 +1506,18 @@ def _inline_code_integration_repair_prompt(created_paths: List[str]) -> str:
 
 
 def _inline_code_no_change_repair_attempt_limit() -> int:
-    return _env_int("NEXUSAI_INLINE_CODE_NO_CHANGE_REPAIR_ATTEMPTS", 1, minimum=0, maximum=3)
+    return _env_int("NEXUSAI_INLINE_CODE_NO_CHANGE_REPAIR_ATTEMPTS", 2, minimum=0, maximum=3)
 
 
 def _inline_code_no_change_repair_prompt() -> str:
     return (
         "No file edits were produced in the previous run.\n\n"
         "Now execute the coding task by making concrete repository edits immediately.\n"
-        "- Use workspace tools to inspect and modify files directly.\n"
+        "- Perform discovery using workspace tools now (workspace_search/read_file) and continue directly to edits.\n"
         "- Do not ask the user for files or clarification.\n"
-        "- Make at least one write operation (write_file or edit_file).\n"
-        "- If this is existing-repo feature work, integrate through existing files (not only brand-new files)."
+        "- Make at least one write operation (write_file or edit_file) before finishing.\n"
+        "- If this is existing-repo feature work, integrate through existing files (not only brand-new files).\n"
+        "- A response that only says you need to inspect directories/files is invalid for this turn."
     )
 
 
@@ -1655,16 +1656,16 @@ async def _inline_code_workspace_tree_preview(workspace_root: str | None) -> str
         tree = await asyncio.to_thread(
             list_workspace_tree,
             root,
-            max_depth=4,
-            max_entries=320,
+            max_depth=3,
+            max_entries=140,
         )
     except Exception:
         return ""
     text = str(tree or "").strip()
     if not text:
         return ""
-    if len(text) > 12_000:
-        text = f"{text[:12_000].rstrip()}\n... (workspace tree preview truncated)"
+    if len(text) > 4_500:
+        text = f"{text[:4_500].rstrip()}\n... (workspace tree preview truncated)"
     return text
 
 
@@ -1706,7 +1707,11 @@ def _inject_inline_workspace_marker(
                 "Do not ask the user to send files or point to file paths; discover and read relevant files via workspace tools.\n\n"
                 "For feature requests in an existing repo, include integration edits to existing files (not only newly-created files) "
                 "unless the repo is genuinely empty.\n"
-                "You may read files, infer architecture, make inline edits, add files, and delete files via workspace tools."
+                "You may read files, infer architecture, make inline edits, add files, and delete files via workspace tools.\n\n"
+                "Execution requirement for coding turns:\n"
+                "- Perform concrete discovery via workspace tools (not only workspace_tree), then implement edits now.\n"
+                "- Do not stop at planning text.\n"
+                "- End the turn with concrete file changes unless blocked by a hard tool/runtime error."
             ),
         }
     )
@@ -2919,7 +2924,7 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
         )
         if inline_code_mode:
             integration_required = _inline_code_existing_edits_expected(body.content)
-            payload = _inline_code_compact_payload(payload)
+            payload = _inline_code_compact_payload(payload, max_messages=10, max_chars=24_000)
             payload_stats = _inline_code_payload_stats(payload)
             orchestration_id = str(uuid.uuid4())
             try:
@@ -3472,7 +3477,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
             )
             if inline_code_mode:
                 integration_required = _inline_code_existing_edits_expected(body.content)
-                payload = _inline_code_compact_payload(payload)
+                payload = _inline_code_compact_payload(payload, max_messages=10, max_chars=24_000)
                 payload_stats = _inline_code_payload_stats(payload)
                 orchestration_id = str(uuid.uuid4())
                 try:
