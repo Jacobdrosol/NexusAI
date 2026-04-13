@@ -21,6 +21,66 @@ def test_backend_failure_message_includes_attempts():
     assert "Attempts: ollama_cloud/qwen3.5:397b-cloud: timed out." in message
 
 
+def test_messages_for_ollama_preserve_tool_call_context():
+    from control_plane.scheduler.scheduler import _messages_for_ollama
+
+    normalized = _messages_for_ollama(
+        [
+            {"role": "user", "content": "Implement this feature."},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "tc-1", "name": "search_files", "arguments": {"query": "ProgramSchedulerService"}},
+                ],
+            },
+            {
+                "role": "tool",
+                "name": "search_files",
+                "tool_call_id": "tc-1",
+                "content": "--- GlobeIQ.Server/Services/ProgramSchedulerService.cs ---",
+            },
+        ]
+    )
+
+    assert normalized[1]["role"] == "assistant"
+    assert normalized[1]["tool_calls"][0]["function"]["name"] == "search_files"
+    assert normalized[1]["tool_calls"][0]["function"]["arguments"] == {"query": "ProgramSchedulerService"}
+    assert normalized[2]["role"] == "tool"
+    assert normalized[2]["tool_call_id"] == "tc-1"
+    assert normalized[2]["tool_name"] == "search_files"
+
+
+def test_messages_for_openai_preserve_tool_call_context():
+    from control_plane.scheduler.scheduler import _messages_for_openai
+
+    normalized = _messages_for_openai(
+        [
+            {"role": "user", "content": "Implement this feature."},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"id": "tc-1", "name": "search_files", "arguments": {"query": "ProgramSchedulerService"}},
+                ],
+            },
+            {
+                "role": "tool",
+                "name": "search_files",
+                "tool_call_id": "tc-1",
+                "content": "--- GlobeIQ.Server/Services/ProgramSchedulerService.cs ---",
+            },
+        ]
+    )
+
+    assert normalized[1]["role"] == "assistant"
+    assert normalized[1]["tool_calls"][0]["function"]["name"] == "search_files"
+    assert json.loads(normalized[1]["tool_calls"][0]["function"]["arguments"]) == {"query": "ProgramSchedulerService"}
+    assert normalized[2]["role"] == "tool"
+    assert normalized[2]["tool_call_id"] == "tc-1"
+    assert normalized[2]["name"] == "search_files"
+
+
 def test_cloud_timeout_reads_env(monkeypatch):
     from control_plane.scheduler.scheduler import _cloud_timeout
 

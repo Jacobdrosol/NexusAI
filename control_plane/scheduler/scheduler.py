@@ -1779,9 +1779,52 @@ def _messages_for_openai(messages: list[dict[str, Any]]) -> list[dict[str, Any]]
                 continue
             content_parts.append({"type": "text", "text": str(part.get("text") or "")})
         if len(content_parts) == 1 and content_parts[0]["type"] == "text":
-            normalized.append({"role": role, "content": content_parts[0]["text"]})
+            entry: dict[str, Any] = {"role": role, "content": content_parts[0]["text"]}
         else:
-            normalized.append({"role": role, "content": content_parts})
+            entry = {"role": role, "content": content_parts}
+        if role == "assistant":
+            tool_calls = _tool_calls_for_openai(message.get("tool_calls"))
+            if tool_calls:
+                entry["tool_calls"] = tool_calls
+                if not str(entry.get("content") or "").strip():
+                    entry["content"] = None
+        if role == "tool":
+            tool_call_id = str(message.get("tool_call_id") or "").strip()
+            if tool_call_id:
+                entry["tool_call_id"] = tool_call_id
+            tool_name = str(message.get("name") or message.get("tool_name") or "").strip()
+            if tool_name:
+                entry["name"] = tool_name
+        normalized.append(entry)
+    return normalized
+
+
+def _tool_calls_for_openai(raw_tool_calls: Any) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for index, item in enumerate(raw_tool_calls or []):
+        if not isinstance(item, dict):
+            continue
+        function_obj = item.get("function") if isinstance(item.get("function"), dict) else {}
+        name = str(item.get("name") or function_obj.get("name") or "").strip()
+        if not name:
+            continue
+        tool_call_id = str(item.get("id") or f"call_{index + 1}").strip()
+        raw_arguments = function_obj.get("arguments", item.get("arguments", {}))
+        arguments_payload = "{}"
+        if isinstance(raw_arguments, str):
+            arguments_payload = raw_arguments
+        elif isinstance(raw_arguments, dict):
+            arguments_payload = json.dumps(raw_arguments, ensure_ascii=False)
+        normalized.append(
+            {
+                "id": tool_call_id,
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "arguments": arguments_payload,
+                },
+            }
+        )
     return normalized
 
 
@@ -1807,7 +1850,54 @@ def _messages_for_ollama(messages: list[dict[str, Any]]) -> list[dict[str, Any]]
         entry: dict[str, Any] = {"role": role, "content": "\n\n".join(text_parts)}
         if images:
             entry["images"] = images
+        if role == "assistant":
+            tool_calls = _tool_calls_for_ollama(message.get("tool_calls"))
+            if tool_calls:
+                entry["tool_calls"] = tool_calls
+        if role == "tool":
+            tool_call_id = str(message.get("tool_call_id") or "").strip()
+            if tool_call_id:
+                entry["tool_call_id"] = tool_call_id
+            tool_name = str(message.get("name") or message.get("tool_name") or "").strip()
+            if tool_name:
+                entry["name"] = tool_name
+                entry["tool_name"] = tool_name
         normalized.append(entry)
+    return normalized
+
+
+def _tool_calls_for_ollama(raw_tool_calls: Any) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for index, item in enumerate(raw_tool_calls or []):
+        if not isinstance(item, dict):
+            continue
+        function_obj = item.get("function") if isinstance(item.get("function"), dict) else {}
+        name = str(item.get("name") or function_obj.get("name") or "").strip()
+        if not name:
+            continue
+        raw_arguments = function_obj.get("arguments", item.get("arguments", {}))
+        arguments_payload: dict[str, Any]
+        if isinstance(raw_arguments, str):
+            try:
+                parsed = json.loads(raw_arguments)
+                arguments_payload = parsed if isinstance(parsed, dict) else {}
+            except Exception:
+                arguments_payload = {}
+        elif isinstance(raw_arguments, dict):
+            arguments_payload = raw_arguments
+        else:
+            arguments_payload = {}
+        tool_call: dict[str, Any] = {
+            "type": "function",
+            "function": {
+                "name": name,
+                "arguments": arguments_payload,
+            },
+        }
+        tool_call_id = str(item.get("id") or f"call_{index + 1}").strip()
+        if tool_call_id:
+            tool_call["id"] = tool_call_id
+        normalized.append(tool_call)
     return normalized
 
 
