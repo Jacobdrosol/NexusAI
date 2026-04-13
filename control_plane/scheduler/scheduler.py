@@ -1994,7 +1994,7 @@ class Scheduler:
         forced_tool_followups = 0
         max_forced_tool_followups = max(
             1,
-            int(os.environ.get("NEXUSAI_AGENT_FORCE_TOOL_FOLLOWUPS", "4") or "4"),
+            int(os.environ.get("NEXUSAI_AGENT_FORCE_TOOL_FOLLOWUPS", "8") or "8"),
         )
         tree_only_tool_names = {"workspace_tree", "list_tree", "list_directory"}
 
@@ -2048,7 +2048,8 @@ class Scheduler:
                                 "- workspace_tree/list_directory alone are not sufficient to implement code changes.\n"
                                 "- Your next response must call a concrete discovery tool such as search_files or read_file.\n"
                                 "- After discovery, continue directly to write_file/edit_file changes.\n"
-                                "- Do not ask the user to restate the task."
+                                "- Do not ask the user to restate the task.\n"
+                                "- Plain-text output without tool calls will be ignored."
                             ),
                         }
                     )
@@ -2071,7 +2072,8 @@ class Scheduler:
                                 "- You have used tools, but have not made any file edits yet.\n"
                                 "- Your next response must include at least one write operation via write_file or edit_file.\n"
                                 "- Modify existing files when integrating into an existing codebase.\n"
-                                "- Do not ask the user for files; read and edit files directly via tools."
+                                "- Do not ask the user for files; read and edit files directly via tools.\n"
+                                "- Plain-text output without tool calls will be ignored."
                             ),
                         }
                     )
@@ -2166,6 +2168,16 @@ class Scheduler:
         result["usage"] = accumulated_usage
         if executed_tool_calls:
             result["tool_calls_executed"] = executed_tool_calls
+        if allow_writes:
+            result["agent_loop_diagnostics"] = {
+                "allow_writes": True,
+                "observed_tool_call": bool(observed_tool_call),
+                "observed_non_tree_tool_call": bool(observed_non_tree_tool_call),
+                "observed_write_tool_call": bool(observed_write_tool_call),
+                "forced_followups_used": int(forced_tool_followups),
+                "max_forced_followups": int(max_forced_tool_followups),
+                "tree_only_tools": sorted(tree_only_tool_names),
+            }
         return result
 
     async def _call_backend_raw(

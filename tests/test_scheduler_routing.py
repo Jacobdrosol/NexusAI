@@ -308,6 +308,9 @@ async def test_run_agent_loop_forces_tool_followup_for_writable_runs(monkeypatch
     assert state["count"] == 4
     assert any(str(item.get("name") or "") == "list_tree" for item in (result.get("tool_calls_executed") or []))
     assert any(str(item.get("name") or "") == "write_file" for item in (result.get("tool_calls_executed") or []))
+    diagnostics = result.get("agent_loop_diagnostics") or {}
+    assert diagnostics.get("allow_writes") is True
+    assert diagnostics.get("observed_write_tool_call") is True
     assert any(
         str(message.get("role") or "") == "system"
         and "Tool-use requirement (mandatory for this writable coding run)" in str(message.get("content") or "")
@@ -387,6 +390,9 @@ async def test_run_agent_loop_forces_discovery_when_only_workspace_tree_was_used
     assert any(str(item.get("name") or "") == "workspace_tree" for item in (result.get("tool_calls_executed") or []))
     assert any(str(item.get("name") or "") == "read_file" for item in (result.get("tool_calls_executed") or []))
     assert any(str(item.get("name") or "") == "write_file" for item in (result.get("tool_calls_executed") or []))
+    diagnostics = result.get("agent_loop_diagnostics") or {}
+    assert diagnostics.get("observed_non_tree_tool_call") is True
+    assert diagnostics.get("observed_write_tool_call") is True
     assert any(
         str(message.get("role") or "") == "system"
         and "Discovery requirement (mandatory for this writable coding run)" in str(message.get("content") or "")
@@ -475,6 +481,10 @@ async def test_run_agent_loop_treats_list_directory_as_insufficient_discovery(mo
     assert "list_directory" in names
     assert "read_file" in names
     assert "write_file" in names
+    diagnostics = result.get("agent_loop_diagnostics") or {}
+    assert diagnostics.get("observed_non_tree_tool_call") is True
+    assert diagnostics.get("observed_write_tool_call") is True
+    assert diagnostics.get("forced_followups_used", 0) >= 1
     assert any(
         str(message.get("role") or "") == "system"
         and "Discovery requirement (mandatory for this writable coding run)" in str(message.get("content") or "")

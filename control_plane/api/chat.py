@@ -1513,7 +1513,7 @@ def _inline_code_no_change_repair_prompt() -> str:
     return (
         "No file edits were produced in the previous run.\n\n"
         "Now execute the coding task by making concrete repository edits immediately.\n"
-        "- Perform discovery using workspace tools now (workspace_search/read_file) and continue directly to edits.\n"
+        "- Perform discovery using workspace tools now (search_files/read_file) and continue directly to edits.\n"
         "- Do not ask the user for files or clarification.\n"
         "- Make at least one write operation (write_file or edit_file) before finishing.\n"
         "- If this is existing-repo feature work, integrate through existing files (not only brand-new files).\n"
@@ -1750,7 +1750,8 @@ def _inject_inline_workspace_marker(
                 "unless the repo is genuinely empty.\n"
                 "You may read files, infer architecture, make inline edits, add files, and delete files via workspace tools.\n\n"
                 "Execution requirement for coding turns:\n"
-                "- Perform concrete discovery via workspace tools (not only workspace_tree), then implement edits now.\n"
+                "- Perform concrete discovery via search_files/read_file (not only workspace_tree/list_directory), then implement edits now.\n"
+                "- After discovery, call write_file or edit_file to make concrete repository edits in this turn.\n"
                 "- Do not stop at planning text.\n"
                 "- End the turn with concrete file changes unless blocked by a hard tool/runtime error."
             ),
