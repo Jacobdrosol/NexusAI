@@ -2087,9 +2087,15 @@ class Scheduler:
             1,
             int(os.environ.get("NEXUSAI_AGENT_FORCE_TOOL_FOLLOWUPS", "8") or "8"),
         )
+        max_discovery_iterations_before_write = max(
+            1,
+            int(os.environ.get("NEXUSAI_AGENT_DISCOVERY_ITERATIONS_BEFORE_WRITE", "6") or "6"),
+        )
         tree_only_tool_names = {"workspace_tree", "list_tree", "list_directory"}
         navigation_tools_disabled = False
         write_tools_only = False
+        non_write_discovery_iterations = 0
+        proactive_write_escalations = 0
 
         def _tool_name(tool_def: dict) -> str:
             try:
@@ -2221,14 +2227,18 @@ class Scheduler:
                 break
 
             observed_tool_call = True
+            saw_write_tool_in_iteration = False
+            saw_non_tree_tool_in_iteration = False
             for tc in tool_calls:
                 if not isinstance(tc, dict):
                     continue
                 tool_name = str(tc.get("name") or "")
                 if allow_writes and tool_name in {"write_file", "edit_file"}:
                     observed_write_tool_call = True
+                    saw_write_tool_in_iteration = True
                 elif allow_writes and tool_name not in tree_only_tool_names:
                     observed_non_tree_tool_call = True
+                    saw_non_tree_tool_in_iteration = True
                 executed_tool_calls.append(
                     {
                         "id": str(tc.get("id") or ""),
@@ -2269,6 +2279,39 @@ class Scheduler:
                     tool_msg["tool_call_id"] = tc_id
                 messages.append(tool_msg)
 
+            if allow_writes:
+                if saw_write_tool_in_iteration:
+                    non_write_discovery_iterations = 0
+                elif saw_non_tree_tool_in_iteration:
+                    non_write_discovery_iterations += 1
+                    should_escalate = (
+                        not write_tools_only
+                        and non_write_discovery_iterations >= max_discovery_iterations_before_write
+                    )
+                    if should_escalate:
+                        active_tools = _write_only_tools(active_tools)
+                        write_tools_only = True
+                        proactive_write_escalations += 1
+                        if forced_tool_followups < max_forced_tool_followups:
+                            forced_tool_followups += 1
+                        messages.append(
+                            {
+                                "role": "system",
+                                "content": (
+                                    "Write requirement escalation (mandatory for this writable coding run):\n"
+                                    "- Discovery has already been performed in prior tool calls.\n"
+                                    "- Stop further exploration and produce concrete file edits now.\n"
+                                    "- Your next response must call write_file or edit_file.\n"
+                                    "- Do not return plain-text-only output."
+                                ),
+                            }
+                        )
+                        logger.warning(
+                            "[AGENT] task=%s escalating to write-only tools after %d discovery iterations without writes",
+                            task.id if task else "?",
+                            non_write_discovery_iterations,
+                        )
+
             last_result = raw
         else:
             # Circuit breaker hit — still return whatever the last response was
@@ -2294,6 +2337,9 @@ class Scheduler:
                 "tree_only_tools": sorted(tree_only_tool_names),
                 "navigation_tools_disabled": bool(navigation_tools_disabled),
                 "write_tools_only": bool(write_tools_only),
+                "non_write_discovery_iterations": int(non_write_discovery_iterations),
+                "max_discovery_iterations_before_write": int(max_discovery_iterations_before_write),
+                "proactive_write_escalations": int(proactive_write_escalations),
                 "active_tool_names": [name for name in (_tool_name(tool) for tool in active_tools) if name],
             }
         return result
