@@ -3563,6 +3563,34 @@ def test_inline_code_compact_payload_dedupes_retry_noise_messages():
     assert len(assistant_contents) <= 1
 
 
+def test_inline_code_no_change_repair_prompt_adds_surface_requirement_when_requested():
+    from control_plane.api import chat as chat_module
+
+    prompt = chat_module._inline_code_no_change_repair_prompt(
+        "Please update the server and webapp admin UI for this feature."
+    )
+    assert "server/backend" in prompt
+    assert "webapp/frontend" in prompt
+
+
+def test_inline_code_workspace_marker_adds_surface_execution_hint_when_requested():
+    from control_plane.api import chat as chat_module
+
+    payload = [{"role": "user", "content": "do the thing"}]
+    marked = chat_module._inject_inline_workspace_marker(
+        payload,
+        workspace_root="/tmp/workspace",
+        requested_task="Please make backend server and webapp ui edits.",
+        workspace_tree_preview="",
+    )
+    system_messages = [
+        str(item.get("content") or "")
+        for item in marked
+        if isinstance(item, dict) and str(item.get("role") or "") == "system"
+    ]
+    assert any("explicitly asks for both server/backend and webapp/frontend updates" in text for text in system_messages)
+
+
 @pytest.mark.anyio
 async def test_stream_message_emits_context_summary_event_when_repo_context_loaded(cp_app):
     async def _stream(_task):

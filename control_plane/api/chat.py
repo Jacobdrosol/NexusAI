@@ -1616,8 +1616,20 @@ def _inline_code_no_change_repair_attempt_limit() -> int:
     return _env_int("NEXUSAI_INLINE_CODE_NO_CHANGE_REPAIR_ATTEMPTS", 2, minimum=0, maximum=3)
 
 
-def _inline_code_no_change_repair_prompt() -> str:
-    return (
+def _inline_code_payload_message_limit() -> int:
+    return _env_int("NEXUSAI_INLINE_CODE_PAYLOAD_MAX_MESSAGES", 8, minimum=4, maximum=14)
+
+
+def _inline_code_payload_char_limit() -> int:
+    return _env_int("NEXUSAI_INLINE_CODE_PAYLOAD_MAX_CHARS", 14_000, minimum=6_000, maximum=60_000)
+
+
+def _inline_code_retry_payload_char_limit() -> int:
+    return _env_int("NEXUSAI_INLINE_CODE_RETRY_PAYLOAD_MAX_CHARS", 16_000, minimum=6_000, maximum=60_000)
+
+
+def _inline_code_no_change_repair_prompt(requested_task: str = "") -> str:
+    base = (
         "No file edits were produced in the previous run.\n\n"
         "Now execute the coding task by making concrete repository edits immediately.\n"
         "- Perform discovery using workspace tools now (search_files/read_file) and continue directly to edits.\n"
@@ -1626,6 +1638,13 @@ def _inline_code_no_change_repair_prompt() -> str:
         "- If this is existing-repo feature work, integrate through existing files (not only brand-new files).\n"
         "- A response that only says you need to inspect directories/files is invalid for this turn."
     )
+    required_surfaces = _inline_code_required_surfaces(requested_task)
+    if "server" in required_surfaces and "webapp" in required_surfaces:
+        return (
+            f"{base}\n"
+            "- This task explicitly requests both backend and UI work; edit at least one existing server/backend file and one existing webapp/frontend file."
+        )
+    return base
 
 
 async def _inline_code_attempt_no_change_repair(
@@ -1640,7 +1659,7 @@ async def _inline_code_attempt_no_change_repair(
     workspace_tree_preview: str = "",
 ) -> Task | None:
     remediation_payload: List[dict] = [
-        {"role": "system", "content": _inline_code_no_change_repair_prompt()},
+        {"role": "system", "content": _inline_code_no_change_repair_prompt(requested_task)},
         {"role": "user", "content": str(requested_task or "").strip()},
     ]
     remediation_payload = _inject_inline_workspace_marker(
@@ -1649,7 +1668,11 @@ async def _inline_code_attempt_no_change_repair(
         requested_task=requested_task,
         workspace_tree_preview=workspace_tree_preview,
     )
-    remediation_payload = _inline_code_compact_payload(remediation_payload, max_messages=10, max_chars=20_000)
+    remediation_payload = _inline_code_compact_payload(
+        remediation_payload,
+        max_messages=_inline_code_payload_message_limit(),
+        max_chars=_inline_code_retry_payload_char_limit(),
+    )
     remediation_task = await task_manager.create_task(
         bot_id=target_bot_id,
         payload=remediation_payload,
@@ -1685,7 +1708,11 @@ async def _inline_code_attempt_integration_repair(
         requested_task=requested_task,
         workspace_tree_preview=workspace_tree_preview,
     )
-    remediation_payload = _inline_code_compact_payload(remediation_payload, max_messages=10, max_chars=20_000)
+    remediation_payload = _inline_code_compact_payload(
+        remediation_payload,
+        max_messages=_inline_code_payload_message_limit(),
+        max_chars=_inline_code_retry_payload_char_limit(),
+    )
     remediation_task = await task_manager.create_task(
         bot_id=target_bot_id,
         payload=remediation_payload,
@@ -1843,6 +1870,13 @@ def _inject_inline_workspace_marker(
                 ),
             }
         )
+    required_surfaces = _inline_code_required_surfaces(normalized_task)
+    surface_execution_hint = ""
+    if "server" in required_surfaces and "webapp" in required_surfaces:
+        surface_execution_hint = (
+            "\n- This request explicitly asks for both server/backend and webapp/frontend updates; "
+            "edit at least one existing tracked file in each surface."
+        )
     marked.append(
         {
             "role": "system",
@@ -1859,6 +1893,7 @@ def _inject_inline_workspace_marker(
                 "Execution requirement for coding turns:\n"
                 "- Perform concrete discovery via search_files/read_file (not only workspace_tree/list_directory), then implement edits now.\n"
                 "- After discovery, call write_file or edit_file to make concrete repository edits in this turn.\n"
+                f"{surface_execution_hint}\n"
                 "- Do not stop at planning text.\n"
                 "- End the turn with concrete file changes unless blocked by a hard tool/runtime error."
             ),
@@ -3090,7 +3125,11 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
         )
         if inline_code_mode:
             integration_required = _inline_code_existing_edits_expected(body.content)
-            payload = _inline_code_compact_payload(payload, max_messages=10, max_chars=24_000)
+            payload = _inline_code_compact_payload(
+                payload,
+                max_messages=_inline_code_payload_message_limit(),
+                max_chars=_inline_code_payload_char_limit(),
+            )
             payload_stats = _inline_code_payload_stats(payload)
             orchestration_id = str(uuid.uuid4())
             try:
@@ -3672,7 +3711,11 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
             )
             if inline_code_mode:
                 integration_required = _inline_code_existing_edits_expected(body.content)
-                payload = _inline_code_compact_payload(payload, max_messages=10, max_chars=24_000)
+                payload = _inline_code_compact_payload(
+                    payload,
+                    max_messages=_inline_code_payload_message_limit(),
+                    max_chars=_inline_code_payload_char_limit(),
+                )
                 payload_stats = _inline_code_payload_stats(payload)
                 orchestration_id = str(uuid.uuid4())
                 try:
