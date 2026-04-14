@@ -4352,8 +4352,8 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                                 label = "Executing inline coding task..."
                                 phase = "running"
                             elif status_value == "completed":
-                                label = "Inline coding task completed."
-                                phase = "completed"
+                                label = "Primary coding pass completed. Running quality checks..."
+                                phase = "finalizing"
                             elif status_value in {"failed", "cancelled", "retried"}:
                                 label = f"Inline coding task ended with status: {status_value}."
                                 phase = "failed"
@@ -4374,13 +4374,21 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
 
                     files_touched: List[str] = []
                     if str(terminal_task.status or "").strip().lower() == "completed":
+                        yield (
+                            'event: status\ndata: '
+                            f'{json.dumps({"phase":"finalizing","label":"Collecting workspace artifacts and quality signals...","task_id":terminal_task.id})}\n\n'
+                        )
                         artifacts, files_touched, deleted_paths = await _inline_code_collect_workspace_artifacts(Path(temp_root))
                         change_breakdown = _inline_code_change_breakdown(artifacts, deleted_paths)
                         quality_warnings: List[str] = []
                         write_tool_evidence = _inline_code_has_write_tool_evidence(terminal_task.result)
                         no_change_repair_attempts = _inline_code_no_change_repair_attempt_limit()
                         if (not files_touched or not write_tool_evidence) and no_change_repair_attempts > 0:
-                            for _ in range(no_change_repair_attempts):
+                            for attempt_idx in range(no_change_repair_attempts):
+                                yield (
+                                    'event: status\ndata: '
+                                    f'{json.dumps({"phase":"finalizing","label":f"No-change remediation pass {attempt_idx + 1}/{no_change_repair_attempts}: enforcing concrete edits...","task_id":terminal_task.id})}\n\n'
+                                )
                                 try:
                                     repaired_task = await _inline_code_attempt_no_change_repair(
                                         task_manager=task_manager,
@@ -4414,7 +4422,11 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                         )
                         repair_attempts = _inline_code_integration_repair_attempt_limit()
                         if integration_required and not integration_passed and repair_attempts > 0:
-                            for _ in range(repair_attempts):
+                            for attempt_idx in range(repair_attempts):
+                                yield (
+                                    'event: status\ndata: '
+                                    f'{json.dumps({"phase":"finalizing","label":f"Integration remediation pass {attempt_idx + 1}/{repair_attempts}: adding edits to existing files...","task_id":terminal_task.id})}\n\n'
+                                )
                                 try:
                                     repaired_task = await _inline_code_attempt_integration_repair(
                                         task_manager=task_manager,
@@ -4473,10 +4485,15 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                         )
                         surface_repair_attempts = _inline_code_surface_repair_attempt_limit()
                         if required_surfaces and missing_surface_union and surface_repair_attempts > 0:
-                            for _ in range(surface_repair_attempts):
+                            for attempt_idx in range(surface_repair_attempts):
                                 missing_surfaces = list(missing_surface_union)
                                 if not missing_surfaces:
                                     break
+                                missing_label = ", ".join(missing_surfaces)
+                                yield (
+                                    'event: status\ndata: '
+                                    f'{json.dumps({"phase":"finalizing","label":f"Surface remediation pass {attempt_idx + 1}/{surface_repair_attempts}: covering {missing_label}...","task_id":terminal_task.id})}\n\n'
+                                )
                                 try:
                                     repaired_task = await _inline_code_attempt_surface_repair(
                                         task_manager=task_manager,

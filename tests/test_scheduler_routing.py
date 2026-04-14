@@ -632,8 +632,8 @@ async def test_run_agent_loop_disables_navigation_tools_and_then_forces_write_to
     # After discovery followup, navigation tools are removed.
     assert "workspace_tree" not in call_tools[2]
     assert "list_directory" not in call_tools[2]
-    # After write followup, tool set is write-only.
-    assert set(call_tools[4]) == {"write_file", "edit_file"}
+    # After write followup, tool set is write-priority (read/search + write).
+    assert set(call_tools[4]) == {"read_file", "search_files", "write_file", "edit_file"}
     diagnostics = result.get("agent_loop_diagnostics") or {}
     assert diagnostics.get("navigation_tools_disabled") is True
     assert diagnostics.get("write_tools_only") is True
@@ -712,8 +712,8 @@ async def test_run_agent_loop_escalates_to_write_only_after_discovery_budget(mon
     # Initial calls include discovery tools.
     assert "search_files" in call_tools[0]
     assert "search_files" in call_tools[1]
-    # After discovery budget is hit, tool set is escalated to write-only.
-    assert set(call_tools[2]) == {"write_file", "edit_file"}
+    # After discovery budget is hit, tool set is escalated to write-priority.
+    assert set(call_tools[2]) == {"read_file", "search_files", "write_file", "edit_file"}
     diagnostics = result.get("agent_loop_diagnostics") or {}
     assert diagnostics.get("write_tools_only") is True
     assert diagnostics.get("proactive_write_escalations", 0) >= 1

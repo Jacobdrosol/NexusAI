@@ -2108,9 +2108,15 @@ class Scheduler:
             filtered = [tool for tool in (tool_defs or []) if _tool_name(tool) not in tree_only_tool_names]
             return filtered or list(tool_defs or [])
 
-        def _write_only_tools(tool_defs: list[dict]) -> list[dict]:
+        def _write_priority_tools(tool_defs: list[dict]) -> list[dict]:
+            # Keep write tools plus targeted code discovery tools. A strict write-only
+            # set causes many models to request unavailable read_file/search_files and
+            # stall without edits.
             write_names = {"write_file", "edit_file"}
-            filtered = [tool for tool in (tool_defs or []) if _tool_name(tool) in write_names]
+            discovery_names = {"read_file", "search_files"}
+            allowed = write_names | discovery_names
+            # Preserve read/search when available for surgical edits.
+            filtered = [tool for tool in (tool_defs or []) if _tool_name(tool) in allowed]
             return filtered or list(tool_defs or [])
 
         for iteration in range(max_iterations):
@@ -2180,7 +2186,7 @@ class Scheduler:
                 if allow_writes and observed_tool_call and not observed_write_tool_call and forced_tool_followups < max_forced_tool_followups:
                     forced_tool_followups += 1
                     if not write_tools_only:
-                        active_tools = _write_only_tools(active_tools)
+                        active_tools = _write_priority_tools(active_tools)
                         write_tools_only = True
                     output_text = str(raw.get("output") or "").strip()
                     if output_text:
@@ -2191,6 +2197,7 @@ class Scheduler:
                             "content": (
                                 "Write requirement (mandatory for this writable coding run):\n"
                                 "- You have used tools, but have not made any file edits yet.\n"
+                                "- Use read_file/search_files only as needed, then perform write_file/edit_file in this turn.\n"
                                 "- Your next response must include at least one write operation via write_file or edit_file.\n"
                                 "- Modify existing files when integrating into an existing codebase.\n"
                                 "- Do not ask the user for files; read and edit files directly via tools.\n"
@@ -2289,7 +2296,7 @@ class Scheduler:
                         and non_write_discovery_iterations >= max_discovery_iterations_before_write
                     )
                     if should_escalate:
-                        active_tools = _write_only_tools(active_tools)
+                        active_tools = _write_priority_tools(active_tools)
                         write_tools_only = True
                         proactive_write_escalations += 1
                         if forced_tool_followups < max_forced_tool_followups:
@@ -2300,7 +2307,8 @@ class Scheduler:
                                 "content": (
                                     "Write requirement escalation (mandatory for this writable coding run):\n"
                                     "- Discovery has already been performed in prior tool calls.\n"
-                                    "- Stop further exploration and produce concrete file edits now.\n"
+                                    "- Stop broad exploration and produce concrete file edits now.\n"
+                                    "- You may use read_file/search_files surgically, then write_file/edit_file immediately.\n"
                                     "- Your next response must call write_file or edit_file.\n"
                                     "- Do not return plain-text-only output."
                                 ),
