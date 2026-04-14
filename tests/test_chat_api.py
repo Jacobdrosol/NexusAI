@@ -3125,6 +3125,9 @@ async def test_post_message_inline_code_fails_when_write_tool_evidence_missing(c
     monkeypatch.setattr(chat_module, "_inline_code_wait_for_task", _fake_wait)
     monkeypatch.setattr(chat_module, "_inline_code_collect_workspace_artifacts", _fake_collect)
     monkeypatch.setattr(chat_module, "_inline_code_no_change_repair_attempt_limit", lambda: 0)
+    async def _fake_persist(_task_manager, *, task: Task, result: dict):
+        return task.model_copy(update={"result": result})
+    monkeypatch.setattr(chat_module, "_inline_code_persist_result_without_trigger_dispatch", _fake_persist)
 
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
         project_id = "proj-inline-write-evidence"
@@ -3193,6 +3196,149 @@ async def test_post_message_inline_code_fails_when_write_tool_evidence_missing(c
         assistant = body["assistant_message"]
         assert assistant["metadata"]["run_status"] == "failed"
         assert "no write-tool evidence was observed" in assistant["content"]
+
+
+@pytest.mark.anyio
+async def test_post_message_inline_code_replaces_low_signal_output_with_change_summary(cp_app, tmp_path, monkeypatch):
+    from control_plane.api import chat as chat_module
+    from shared.models import Task, TaskMetadata
+
+    workspace_root = tmp_path / "workspace-inline-low-signal-output"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    temp_root = tmp_path / "workspace-inline-low-signal-output-temp"
+    temp_root.mkdir(parents=True, exist_ok=True)
+
+    created_task = Task(
+        id="inline-task-low-signal-output",
+        bot_id="bot-inline-low-signal-output",
+        payload=[],
+        metadata=TaskMetadata(source="chat_assign"),
+        status="queued",
+        created_at="2026-01-01T00:00:00Z",
+        updated_at="2026-01-01T00:00:00Z",
+    )
+    terminal_task = created_task.model_copy(
+        update={
+            "status": "completed",
+            "result": {
+                "output": "Now let me check the Controllers directory to understand the existing structure.",
+                "agent_loop_diagnostics": {"observed_write_tool_call": True},
+                "tool_calls_executed": [
+                    {
+                        "name": "edit_file",
+                        "arguments": {
+                            "path": "GlobeIQ.Server/Controllers/Admin/ProgramsAdminController.cs",
+                            "old_text": "old",
+                            "new_text": "new",
+                        },
+                    },
+                ],
+            },
+            "updated_at": "2026-01-01T00:00:02Z",
+        }
+    )
+    cp_app.state.task_manager.create_task = AsyncMock(return_value=created_task)
+
+    async def _fake_prepare(**_kwargs):
+        return {"temp_root": str(temp_root), "repo_root": str(workspace_root)}
+
+    async def _fake_wait(_task_manager, *, task_id: str, max_wait_seconds: float = 1800.0):
+        assert task_id == "inline-task-low-signal-output"
+        return terminal_task
+
+    async def _fake_collect(_temp_root):
+        return (
+            [
+                {
+                    "kind": "file",
+                    "label": "GlobeIQ.Server/Controllers/Admin/ProgramsAdminController.cs",
+                    "path": "GlobeIQ.Server/Controllers/Admin/ProgramsAdminController.cs",
+                    "content": "public class ProgramsAdminController {}",
+                    "status": "updated",
+                    "source": "inline_temp_workspace",
+                    "truncated": False,
+                }
+            ],
+            ["GlobeIQ.Server/Controllers/Admin/ProgramsAdminController.cs"],
+            [],
+        )
+
+    monkeypatch.setattr(chat_module, "_inline_code_prepare_temp_workspace", _fake_prepare)
+    monkeypatch.setattr(chat_module, "_inline_code_wait_for_task", _fake_wait)
+    monkeypatch.setattr(chat_module, "_inline_code_collect_workspace_artifacts", _fake_collect)
+    monkeypatch.setattr(chat_module, "_inline_code_no_change_repair_attempt_limit", lambda: 0)
+    async def _fake_persist(_task_manager, *, task: Task, result: dict):
+        return task.model_copy(update={"result": result})
+    monkeypatch.setattr(chat_module, "_inline_code_persist_result_without_trigger_dispatch", _fake_persist)
+
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-inline-low-signal-output"
+        project = await client.post(
+            "/v1/projects",
+            json={
+                "id": project_id,
+                "name": "Inline Low Signal Output",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "filesystem": True,
+                        "repo_search": False,
+                        "workspace_root": str(workspace_root),
+                    }
+                },
+            },
+        )
+        assert project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Inline Low Signal Output Chat",
+                "project_id": project_id,
+                "tool_access_enabled": True,
+                "tool_access_filesystem": True,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        bot = await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-inline-low-signal-output",
+                "name": "Inline Low Signal Output Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "execution_policy": {
+                    "workspace_context_injection": True,
+                    "repo_output_mode": "allow",
+                },
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "filesystem": True,
+                        "repo_search": False,
+                    }
+                },
+            },
+        )
+        assert bot.status_code == 200
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": "Can you add this feature and code this in the existing backend?",
+                "bot_id": "bot-inline-low-signal-output",
+                "inline_coding_enabled": True,
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assistant = body["assistant_message"]
+        assert assistant["metadata"]["run_status"] == "passed"
+        assert "Inline coding task completed with concrete repository edits." in assistant["content"]
+        assert "Now let me check" not in assistant["content"]
 
 
 @pytest.mark.anyio
@@ -3762,6 +3908,43 @@ def test_inline_code_surface_repair_prompt_mentions_missing_surfaces():
     )
     assert "Missing surfaces: webapp" in prompt
     assert "edit existing UI files" in prompt
+
+
+def test_inline_code_has_write_tool_evidence_ignores_noop_edit_call():
+    from control_plane.api import chat as chat_module
+
+    result = {
+        "tool_calls_executed": [
+            {
+                "name": "edit_file",
+                "arguments": {
+                    "path": "GlobeIQ.Server/Program.cs",
+                    "old_text": "same",
+                    "new_text": "same",
+                },
+            }
+        ]
+    }
+    assert chat_module._inline_code_has_write_tool_evidence(result) is False
+
+
+def test_inline_code_existing_code_surface_coverage_requires_code_edits():
+    from control_plane.api import chat as chat_module
+
+    breakdown = {
+        "updated_paths": [
+            "GlobeIQ.Server/GlobeIQ.Server.csproj",
+            "GlobeIQ.WebApp/Pages/Admin/Programs.razor",
+        ],
+        "deleted_paths": [],
+    }
+    coverage = chat_module._inline_code_existing_code_surface_coverage(
+        breakdown,
+        ["server", "webapp"],
+    )
+    assert coverage["passed"] is False
+    assert "server" in coverage["missing_surfaces"]
+    assert "webapp" not in coverage["missing_surfaces"]
 
 
 def test_inline_code_workspace_marker_adds_surface_execution_hint_when_requested():

@@ -176,6 +176,79 @@ _INLINE_WEBAPP_PATH_RE = re.compile(
     r"(?:^|/)(?:[^/]*webapp[^/]*|[^/]*frontend[^/]*|[^/]*client[^/]*|[^/]*ui[^/]*)/",
     re.IGNORECASE,
 )
+_INLINE_LOW_SIGNAL_OUTPUT_LINE_RE = re.compile(
+    r"^\s*(?:now\s+)?(?:let\s+me|i\s+need\s+to)\s+(?:check|look|find|inspect|review|read|scan|explore)\b|"
+    r"^\s*i(?:\s*['’]?m|\s+am)\s+ready\s+to\s+help\b|"
+    r"^\s*could\s+you\s+(?:share|provide|specify)\b|"
+    r"^\s*please\s+(?:let\s+me\s+know|specify|share)\b",
+    re.IGNORECASE,
+)
+_INLINE_OUTPUT_CHANGE_MARKER_RE = re.compile(
+    r"\b(updated?|modified|created|deleted|added|implemented|wired|integrated|refactored|patched|fixed)\b",
+    re.IGNORECASE,
+)
+_INLINE_CODE_FILE_EXTENSIONS: set[str] = {
+    "c",
+    "cc",
+    "cpp",
+    "cs",
+    "css",
+    "go",
+    "h",
+    "hpp",
+    "html",
+    "java",
+    "js",
+    "jsx",
+    "kt",
+    "lua",
+    "php",
+    "py",
+    "razor",
+    "rb",
+    "rs",
+    "scala",
+    "sh",
+    "sql",
+    "swift",
+    "ts",
+    "tsx",
+    "vue",
+}
+_INLINE_NON_CODE_FILE_EXTENSIONS: set[str] = {
+    "cfg",
+    "config",
+    "csproj",
+    "csv",
+    "env",
+    "gif",
+    "ico",
+    "jpeg",
+    "jpg",
+    "json",
+    "lock",
+    "map",
+    "md",
+    "pdf",
+    "png",
+    "props",
+    "resx",
+    "settings",
+    "sln",
+    "svg",
+    "toml",
+    "txt",
+    "xml",
+    "yaml",
+    "yml",
+}
+_INLINE_NON_CODE_FILENAMES: set[str] = {
+    "dockerfile",
+    "makefile",
+    "readme",
+    "license",
+    "changelog",
+}
 
 
 def _attachment_size_bytes(item: ChatAttachmentInput) -> int:
@@ -1100,6 +1173,17 @@ def _env_int(name: str, default: int, *, minimum: int, maximum: int) -> int:
     return max(minimum, min(value, maximum))
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = str(os.environ.get(name, "") or "").strip().lower()
+    if not raw:
+        return bool(default)
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return bool(default)
+
+
 async def _resolve_workspace_context_items(
     *,
     query: str,
@@ -1451,6 +1535,45 @@ def _inline_code_change_breakdown(artifacts: List[Dict[str, Any]], deleted_paths
     }
 
 
+def _inline_code_require_existing_code_surface_edits() -> bool:
+    return _env_bool("NEXUSAI_INLINE_CODE_REQUIRE_EXISTING_CODE_SURFACE_EDITS", True)
+
+
+def _inline_code_is_code_path(path: str) -> bool:
+    normalized = str(path or "").strip().replace("\\", "/")
+    if not normalized:
+        return False
+    filename = normalized.rsplit("/", 1)[-1].strip().lower()
+    if not filename:
+        return False
+    basename = filename.split(".", 1)[0]
+    if basename in _INLINE_NON_CODE_FILENAMES:
+        return False
+    if "." not in filename:
+        return False
+    ext = filename.rsplit(".", 1)[-1].strip().lower()
+    if not ext:
+        return False
+    if ext in _INLINE_CODE_FILE_EXTENSIONS:
+        return True
+    if ext in _INLINE_NON_CODE_FILE_EXTENSIONS:
+        return False
+    return False
+
+
+def _inline_code_existing_code_surface_coverage(
+    breakdown: Dict[str, Any] | None,
+    required_surfaces: List[str],
+) -> Dict[str, Any]:
+    updated_paths = list((breakdown or {}).get("updated_paths") or [])
+    deleted_paths = list((breakdown or {}).get("deleted_paths") or [])
+    existing_paths = _inline_code_merge_paths(updated_paths, deleted_paths)
+    existing_code_paths = [path for path in existing_paths if _inline_code_is_code_path(path)]
+    coverage = _inline_code_surface_coverage(existing_code_paths, required_surfaces)
+    coverage["existing_code_paths"] = existing_code_paths[:24]
+    return coverage
+
+
 def _inline_code_new_files_only_warning_message(task: Task, breakdown: Dict[str, Any]) -> str:
     created_paths = list(breakdown.get("created_paths") or [])
     created_preview = ", ".join(created_paths[:8]) if created_paths else "(none)"
@@ -1468,26 +1591,108 @@ def _inline_code_new_files_only_warning_message(task: Task, breakdown: Dict[str,
     return f"{base}\n\n{details}\n\nModel output:\n{output}"
 
 
+def _inline_code_write_call_has_material_change(item: Dict[str, Any]) -> bool:
+    if not isinstance(item, dict):
+        return False
+    name = str(item.get("name") or "").strip().lower()
+    if name not in {"write_file", "edit_file"}:
+        return False
+    arguments = item.get("arguments")
+    if not isinstance(arguments, dict):
+        return False
+    path = str(arguments.get("path") or "").strip()
+    if not path:
+        return False
+    if name == "write_file":
+        return arguments.get("content") is not None
+    old_text = arguments.get("old_text")
+    new_text = arguments.get("new_text")
+    if old_text is not None and new_text is not None:
+        return str(old_text) != str(new_text)
+    if any(key in arguments for key in ("patch", "diff", "replace_text", "find_text", "content")):
+        return True
+    return True
+
+
 def _inline_code_has_write_tool_evidence(result: Any) -> bool:
     payload = result if isinstance(result, dict) else {}
     diagnostics = payload.get("agent_loop_diagnostics") if isinstance(payload, dict) else None
     has_diagnostics = isinstance(diagnostics, dict)
-    if has_diagnostics and bool(diagnostics.get("observed_write_tool_call")):
-        return True
     executed = payload.get("tool_calls_executed") if isinstance(payload, dict) else None
     has_executed = isinstance(executed, list)
     if isinstance(executed, list):
+        saw_any_write_call = False
         for item in executed:
             if not isinstance(item, dict):
                 continue
             name = str(item.get("name") or "").strip().lower()
             if name in {"write_file", "edit_file"}:
-                return True
+                saw_any_write_call = True
+                if _inline_code_write_call_has_material_change(item):
+                    return True
+        if saw_any_write_call:
+            return False
+    if has_diagnostics and bool(diagnostics.get("observed_write_tool_call")):
+        return True
     # Backward-compatible fallback: older runs/tests may not include tool telemetry.
     # In that case, treat evidence as indeterminate (pass) instead of hard-failing.
     if not has_diagnostics and not has_executed:
         return True
     return False
+
+
+def _inline_code_output_quality_assessment(output: str) -> Dict[str, Any]:
+    lines = [str(line or "").strip() for line in str(output or "").splitlines() if str(line or "").strip()]
+    normalized = "\n".join(lines).strip()
+    first_line = lines[0] if lines else ""
+    has_change_markers = bool(_INLINE_OUTPUT_CHANGE_MARKER_RE.search(normalized))
+    has_path_markers = bool(_PATH_LIKE_TOKEN_RE.search(normalized))
+    discovery_only = bool(first_line and _INLINE_LOW_SIGNAL_OUTPUT_LINE_RE.search(first_line))
+    requests_clarification = bool(_REQUEST_PERMISSION_LINE_RE.search(first_line))
+    access_denial = bool(_ACCESS_DENIAL_LINE_RE.search(first_line))
+    usable = bool(normalized) and not requests_clarification and not access_denial and not (
+        discovery_only and not has_change_markers and not has_path_markers
+    )
+    return {
+        "usable": usable,
+        "first_line": first_line,
+        "discovery_only": discovery_only,
+        "requests_clarification": requests_clarification,
+        "access_denial": access_denial,
+        "has_change_markers": has_change_markers,
+        "has_path_markers": has_path_markers,
+        "normalized_length": len(normalized),
+    }
+
+
+def _inline_code_synthesized_completion_summary(
+    *,
+    files_touched: List[str],
+    change_breakdown: Dict[str, Any] | None,
+    required_surfaces: List[str],
+    surface_coverage: Dict[str, Any] | None,
+    existing_code_surface_required: bool,
+    existing_code_surface_coverage: Dict[str, Any] | None,
+) -> str:
+    created_count = int((change_breakdown or {}).get("created_count") or 0)
+    updated_count = int((change_breakdown or {}).get("updated_count") or 0)
+    deleted_count = int((change_breakdown or {}).get("deleted_count") or 0)
+    lines: List[str] = [
+        "Inline coding task completed with concrete repository edits.",
+        f"Change summary: {updated_count} updated, {created_count} created, {deleted_count} deleted.",
+    ]
+    required = ", ".join(required_surfaces or [])
+    if required:
+        missing = ", ".join((surface_coverage or {}).get("missing_surfaces") or []) or "none"
+        lines.append(f"Requested surfaces: {required}. Missing surfaces after remediation: {missing}.")
+    if existing_code_surface_required:
+        code_missing = ", ".join((existing_code_surface_coverage or {}).get("missing_surfaces") or []) or "none"
+        lines.append(f"Existing code-file edits across requested surfaces: missing {code_missing}.")
+    preview_paths = list(files_touched or [])[:8]
+    if preview_paths:
+        lines.append("Files touched in temp workspace:")
+        lines.extend(f"- {path}" for path in preview_paths)
+    return "\n".join(lines).strip()
 
 
 def _inline_code_required_surfaces(requested_task: str) -> List[str]:
@@ -1549,6 +1754,16 @@ def _inline_code_surface_gate_failure_message(surface_coverage: Dict[str, Any]) 
         "Quality gate failed: required code surfaces were not all edited.\n"
         f"Required surfaces: {required}\n"
         f"Missing surfaces: {missing}"
+    )
+
+
+def _inline_code_surface_existing_code_gate_failure_message(surface_coverage: Dict[str, Any]) -> str:
+    required = ", ".join(surface_coverage.get("required_surfaces") or []) or "(none)"
+    missing = ", ".join(surface_coverage.get("missing_surfaces") or []) or "(none)"
+    return (
+        "Quality gate failed: required surfaces are missing edits to existing code files.\n"
+        f"Required surfaces: {required}\n"
+        f"Missing surfaces for existing code edits: {missing}"
     )
 
 
@@ -2117,12 +2332,16 @@ def _inline_code_normalize_task_result(
     write_tool_evidence: bool | None = None,
     required_surfaces: List[str] | None = None,
     surface_coverage: Dict[str, Any] | None = None,
+    existing_code_surface_required: bool | None = None,
+    existing_code_surface_coverage: Dict[str, Any] | None = None,
     context_sources: List[str] | None = None,
     context_item_count: int | None = None,
     tool_access: Dict[str, Any] | None = None,
     payload_stats: Dict[str, int] | None = None,
     quality_warnings: List[str] | None = None,
     quality_gate_failures: List[str] | None = None,
+    output_override: str | None = None,
+    output_quality: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     if isinstance(result, dict):
         normalized: Dict[str, Any] = dict(result)
@@ -2170,6 +2389,8 @@ def _inline_code_normalize_task_result(
         write_tool_evidence is not None
         or required_surfaces is not None
         or isinstance(surface_coverage, dict)
+        or existing_code_surface_required is not None
+        or isinstance(existing_code_surface_coverage, dict)
         or quality_gate_failures
     ):
         normalized["inline_quality_gate"] = {
@@ -2177,6 +2398,10 @@ def _inline_code_normalize_task_result(
             "write_tool_evidence": bool(write_tool_evidence) if write_tool_evidence is not None else None,
             "required_surfaces": list(required_surfaces or []),
             "surface_coverage": dict(surface_coverage or {}),
+            "existing_code_surface_edits_required": bool(existing_code_surface_required)
+            if existing_code_surface_required is not None
+            else None,
+            "existing_code_surface_coverage": dict(existing_code_surface_coverage or {}),
             "failures": [str(item).strip() for item in (quality_gate_failures or []) if str(item).strip()],
         }
     if context_sources is not None or context_item_count is not None or isinstance(tool_access, dict):
@@ -2201,6 +2426,10 @@ def _inline_code_normalize_task_result(
     warnings = [str(item).strip() for item in (quality_warnings or []) if str(item).strip()]
     if warnings:
         normalized["quality_warnings"] = warnings
+    if output_override is not None:
+        normalized["output"] = str(output_override)
+    if isinstance(output_quality, dict) and output_quality:
+        normalized["inline_output_quality_gate"] = dict(output_quality)
     return normalized
 
 
@@ -3303,10 +3532,23 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                         list(change_breakdown.get("deleted_paths") or []),
                     )
                     surface_coverage = _inline_code_surface_coverage(surface_paths, required_surfaces)
+                    existing_code_surface_required = bool(
+                        integration_required and required_surfaces and _inline_code_require_existing_code_surface_edits()
+                    )
+                    existing_code_surface_coverage = _inline_code_existing_code_surface_coverage(
+                        change_breakdown,
+                        required_surfaces,
+                    )
+                    missing_surface_union = _inline_code_merge_paths(
+                        list(surface_coverage.get("missing_surfaces") or []),
+                        list(existing_code_surface_coverage.get("missing_surfaces") or [])
+                        if existing_code_surface_required
+                        else [],
+                    )
                     surface_repair_attempts = _inline_code_surface_repair_attempt_limit()
-                    if required_surfaces and not bool(surface_coverage.get("passed")) and surface_repair_attempts > 0:
+                    if required_surfaces and missing_surface_union and surface_repair_attempts > 0:
                         for _ in range(surface_repair_attempts):
-                            missing_surfaces = list(surface_coverage.get("missing_surfaces") or [])
+                            missing_surfaces = list(missing_surface_union)
                             if not missing_surfaces:
                                 break
                             try:
@@ -3346,7 +3588,17 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                                 list(change_breakdown.get("deleted_paths") or []),
                             )
                             surface_coverage = _inline_code_surface_coverage(surface_paths, required_surfaces)
-                            if bool(surface_coverage.get("passed")):
+                            existing_code_surface_coverage = _inline_code_existing_code_surface_coverage(
+                                change_breakdown,
+                                required_surfaces,
+                            )
+                            missing_surface_union = _inline_code_merge_paths(
+                                list(surface_coverage.get("missing_surfaces") or []),
+                                list(existing_code_surface_coverage.get("missing_surfaces") or [])
+                                if existing_code_surface_required
+                                else [],
+                            )
+                            if not missing_surface_union:
                                 quality_warnings.append(
                                     "Surface remediation pass executed and satisfied required code surface coverage."
                                 )
@@ -3358,6 +3610,26 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                         quality_gate_failures.append(_inline_code_new_files_only_warning_message(terminal_task, change_breakdown))
                     if required_surfaces and not bool(surface_coverage.get("passed")):
                         quality_gate_failures.append(_inline_code_surface_gate_failure_message(surface_coverage))
+                    if existing_code_surface_required and not bool(existing_code_surface_coverage.get("passed")):
+                        quality_gate_failures.append(
+                            _inline_code_surface_existing_code_gate_failure_message(existing_code_surface_coverage)
+                        )
+                    raw_output = _extract_task_output(terminal_task.result)
+                    sanitized_output = _sanitize_repo_grounded_output(raw_output)
+                    output_quality = _inline_code_output_quality_assessment(sanitized_output or raw_output)
+                    output_override: str | None = sanitized_output if sanitized_output and sanitized_output != raw_output else None
+                    if files_touched and not bool(output_quality.get("usable")):
+                        output_override = _inline_code_synthesized_completion_summary(
+                            files_touched=files_touched,
+                            change_breakdown=change_breakdown,
+                            required_surfaces=required_surfaces,
+                            surface_coverage=surface_coverage,
+                            existing_code_surface_required=existing_code_surface_required,
+                            existing_code_surface_coverage=existing_code_surface_coverage,
+                        )
+                        quality_warnings.append(
+                            "Low-signal model output was replaced with a deterministic change summary."
+                        )
                     normalized_result = _inline_code_normalize_task_result(
                         result=terminal_task.result,
                         artifacts=artifacts,
@@ -3370,12 +3642,16 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                         write_tool_evidence=write_tool_evidence,
                         required_surfaces=required_surfaces,
                         surface_coverage=surface_coverage,
+                        existing_code_surface_required=existing_code_surface_required,
+                        existing_code_surface_coverage=existing_code_surface_coverage,
                         context_sources=context_sources,
                         context_item_count=len(resolved_context),
                         tool_access=tool_access,
                         payload_stats=payload_stats,
                         quality_warnings=quality_warnings,
                         quality_gate_failures=quality_gate_failures,
+                        output_override=output_override,
+                        output_quality=output_quality,
                     )
                     if normalized_result != terminal_task.result:
                         try:
@@ -3979,10 +4255,23 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                             list(change_breakdown.get("deleted_paths") or []),
                         )
                         surface_coverage = _inline_code_surface_coverage(surface_paths, required_surfaces)
+                        existing_code_surface_required = bool(
+                            integration_required and required_surfaces and _inline_code_require_existing_code_surface_edits()
+                        )
+                        existing_code_surface_coverage = _inline_code_existing_code_surface_coverage(
+                            change_breakdown,
+                            required_surfaces,
+                        )
+                        missing_surface_union = _inline_code_merge_paths(
+                            list(surface_coverage.get("missing_surfaces") or []),
+                            list(existing_code_surface_coverage.get("missing_surfaces") or [])
+                            if existing_code_surface_required
+                            else [],
+                        )
                         surface_repair_attempts = _inline_code_surface_repair_attempt_limit()
-                        if required_surfaces and not bool(surface_coverage.get("passed")) and surface_repair_attempts > 0:
+                        if required_surfaces and missing_surface_union and surface_repair_attempts > 0:
                             for _ in range(surface_repair_attempts):
-                                missing_surfaces = list(surface_coverage.get("missing_surfaces") or [])
+                                missing_surfaces = list(missing_surface_union)
                                 if not missing_surfaces:
                                     break
                                 try:
@@ -4022,7 +4311,17 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                                     list(change_breakdown.get("deleted_paths") or []),
                                 )
                                 surface_coverage = _inline_code_surface_coverage(surface_paths, required_surfaces)
-                                if bool(surface_coverage.get("passed")):
+                                existing_code_surface_coverage = _inline_code_existing_code_surface_coverage(
+                                    change_breakdown,
+                                    required_surfaces,
+                                )
+                                missing_surface_union = _inline_code_merge_paths(
+                                    list(surface_coverage.get("missing_surfaces") or []),
+                                    list(existing_code_surface_coverage.get("missing_surfaces") or [])
+                                    if existing_code_surface_required
+                                    else [],
+                                )
+                                if not missing_surface_union:
                                     quality_warnings.append(
                                         "Surface remediation pass executed and satisfied required code surface coverage."
                                     )
@@ -4034,6 +4333,26 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                             quality_gate_failures.append(_inline_code_new_files_only_warning_message(terminal_task, change_breakdown))
                         if required_surfaces and not bool(surface_coverage.get("passed")):
                             quality_gate_failures.append(_inline_code_surface_gate_failure_message(surface_coverage))
+                        if existing_code_surface_required and not bool(existing_code_surface_coverage.get("passed")):
+                            quality_gate_failures.append(
+                                _inline_code_surface_existing_code_gate_failure_message(existing_code_surface_coverage)
+                            )
+                        raw_output = _extract_task_output(terminal_task.result)
+                        sanitized_output = _sanitize_repo_grounded_output(raw_output)
+                        output_quality = _inline_code_output_quality_assessment(sanitized_output or raw_output)
+                        output_override: str | None = sanitized_output if sanitized_output and sanitized_output != raw_output else None
+                        if files_touched and not bool(output_quality.get("usable")):
+                            output_override = _inline_code_synthesized_completion_summary(
+                                files_touched=files_touched,
+                                change_breakdown=change_breakdown,
+                                required_surfaces=required_surfaces,
+                                surface_coverage=surface_coverage,
+                                existing_code_surface_required=existing_code_surface_required,
+                                existing_code_surface_coverage=existing_code_surface_coverage,
+                            )
+                            quality_warnings.append(
+                                "Low-signal model output was replaced with a deterministic change summary."
+                            )
                         normalized_result = _inline_code_normalize_task_result(
                             result=terminal_task.result,
                             artifacts=artifacts,
@@ -4046,12 +4365,16 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                             write_tool_evidence=write_tool_evidence,
                             required_surfaces=required_surfaces,
                             surface_coverage=surface_coverage,
+                            existing_code_surface_required=existing_code_surface_required,
+                            existing_code_surface_coverage=existing_code_surface_coverage,
                             context_sources=context_sources,
                             context_item_count=len(resolved_context),
                             tool_access=tool_access,
                             payload_stats=payload_stats,
                             quality_warnings=quality_warnings,
                             quality_gate_failures=quality_gate_failures,
+                            output_override=output_override,
+                            output_quality=output_quality,
                         )
                         if normalized_result != terminal_task.result:
                             try:
