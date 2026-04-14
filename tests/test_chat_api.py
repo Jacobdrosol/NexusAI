@@ -2326,6 +2326,8 @@ async def test_post_message_inline_code_uses_task_manager_temp_workspace(cp_app,
     monkeypatch.setattr(chat_module, "_inline_code_wait_for_task", _fake_wait)
     monkeypatch.setattr(chat_module, "_inline_code_collect_workspace_artifacts", _fake_collect)
     monkeypatch.setattr(chat_module, "_inline_code_persist_result_without_trigger_dispatch", _fake_persist)
+    monkeypatch.setattr(chat_module, "_inline_code_require_deliverable_contract", lambda: False)
+    monkeypatch.setattr(chat_module, "_inline_code_require_feature_test_edits", lambda: False)
 
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
         project_id = "proj-inline-post"
@@ -2607,6 +2609,10 @@ async def test_stream_message_inline_code_uses_task_manager_temp_workspace(cp_ap
 
     monkeypatch.setattr(chat_module, "_inline_code_prepare_temp_workspace", _fake_prepare)
     monkeypatch.setattr(chat_module, "_inline_code_collect_workspace_artifacts", _fake_collect)
+    monkeypatch.setattr(chat_module, "_inline_code_require_deliverable_contract", lambda: False)
+    monkeypatch.setattr(chat_module, "_inline_code_require_feature_test_edits", lambda: False)
+    monkeypatch.setattr(chat_module, "_inline_code_require_deliverable_contract", lambda: False)
+    monkeypatch.setattr(chat_module, "_inline_code_require_feature_test_edits", lambda: False)
     monkeypatch.setattr(chat_module, "_inline_code_persist_result_without_trigger_dispatch", _fake_persist)
 
     async def _unexpected_stream(_task):
@@ -2854,6 +2860,8 @@ async def test_post_message_inline_code_forwards_user_prompt_to_scheduler(cp_app
 
     monkeypatch.setattr(chat_module, "_inline_code_prepare_temp_workspace", _fake_prepare)
     monkeypatch.setattr(chat_module, "_inline_code_collect_workspace_artifacts", _fake_collect)
+    monkeypatch.setattr(chat_module, "_inline_code_require_deliverable_contract", lambda: False)
+    monkeypatch.setattr(chat_module, "_inline_code_require_feature_test_edits", lambda: False)
 
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
         project_id = "proj-inline-forward"
@@ -3125,6 +3133,8 @@ async def test_post_message_inline_code_fails_when_write_tool_evidence_missing(c
     monkeypatch.setattr(chat_module, "_inline_code_wait_for_task", _fake_wait)
     monkeypatch.setattr(chat_module, "_inline_code_collect_workspace_artifacts", _fake_collect)
     monkeypatch.setattr(chat_module, "_inline_code_no_change_repair_attempt_limit", lambda: 0)
+    monkeypatch.setattr(chat_module, "_inline_code_require_deliverable_contract", lambda: False)
+    monkeypatch.setattr(chat_module, "_inline_code_require_feature_test_edits", lambda: False)
     async def _fake_persist(_task_manager, *, task: Task, result: dict):
         return task.model_copy(update={"result": result})
     monkeypatch.setattr(chat_module, "_inline_code_persist_result_without_trigger_dispatch", _fake_persist)
@@ -3267,6 +3277,8 @@ async def test_post_message_inline_code_replaces_low_signal_output_with_change_s
     monkeypatch.setattr(chat_module, "_inline_code_wait_for_task", _fake_wait)
     monkeypatch.setattr(chat_module, "_inline_code_collect_workspace_artifacts", _fake_collect)
     monkeypatch.setattr(chat_module, "_inline_code_no_change_repair_attempt_limit", lambda: 0)
+    monkeypatch.setattr(chat_module, "_inline_code_require_deliverable_contract", lambda: False)
+    monkeypatch.setattr(chat_module, "_inline_code_require_feature_test_edits", lambda: False)
     async def _fake_persist(_task_manager, *, task: Task, result: dict):
         return task.model_copy(update={"result": result})
     monkeypatch.setattr(chat_module, "_inline_code_persist_result_without_trigger_dispatch", _fake_persist)
@@ -3575,6 +3587,8 @@ async def test_post_message_inline_code_runs_integration_remediation_pass(cp_app
     monkeypatch.setattr(chat_module, "_inline_code_collect_workspace_artifacts", _fake_collect)
     monkeypatch.setattr(chat_module, "_inline_code_attempt_integration_repair", _fake_repair)
     monkeypatch.setattr(chat_module, "_inline_code_persist_result_without_trigger_dispatch", _fake_persist)
+    monkeypatch.setattr(chat_module, "_inline_code_require_deliverable_contract", lambda: False)
+    monkeypatch.setattr(chat_module, "_inline_code_require_feature_test_edits", lambda: False)
 
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
         project_id = "proj-inline-remediate"
@@ -3753,6 +3767,8 @@ async def test_post_message_inline_code_runs_surface_remediation_pass(cp_app, tm
     monkeypatch.setattr(chat_module, "_inline_code_collect_workspace_artifacts", _fake_collect)
     monkeypatch.setattr(chat_module, "_inline_code_attempt_surface_repair", _fake_surface_repair)
     monkeypatch.setattr(chat_module, "_inline_code_persist_result_without_trigger_dispatch", _fake_persist)
+    monkeypatch.setattr(chat_module, "_inline_code_require_deliverable_contract", lambda: False)
+    monkeypatch.setattr(chat_module, "_inline_code_require_feature_test_edits", lambda: False)
 
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
         project_id = "proj-inline-surface-remediate"
@@ -3945,6 +3961,70 @@ def test_inline_code_existing_code_surface_coverage_requires_code_edits():
     assert coverage["passed"] is False
     assert "server" in coverage["missing_surfaces"]
     assert "webapp" not in coverage["missing_surfaces"]
+
+
+def test_inline_code_output_quality_marks_action_plan_lines_low_signal():
+    from control_plane.api import chat as chat_module
+
+    assessment = chat_module._inline_code_output_quality_assessment(
+        "Now let me create a new reporting program. First, let me check if there is a program seeder."
+    )
+    assert assessment["low_signal"] is True
+    assert assessment["usable"] is False
+
+
+def test_inline_code_deliverable_contract_detects_missing_reporting_and_pdf():
+    from control_plane.api import chat as chat_module
+
+    coverage = chat_module._inline_code_deliverable_contract_coverage(
+        requested_task=(
+            "Add end of month scheduling and accounting reporting with PDF exports in the admin programs page."
+        ),
+        files_touched=[
+            "GlobeIQ.Server/Services/ProgramSchedulerService.cs",
+            "GlobeIQ.WebApp/Pages/Admin/Programs.razor",
+        ],
+        artifacts=[
+            {
+                "path": "GlobeIQ.Server/Services/ProgramSchedulerService.cs",
+                "content": "if (schedule.Frequency.StartsWith(\"End of \")) { return ShouldRunEndOfPeriodSchedule(schedule, now); }",
+            }
+        ],
+    )
+    assert "scheduling" in coverage["required_deliverables"]
+    assert "reporting" in coverage["required_deliverables"]
+    assert "pdf_export" in coverage["required_deliverables"]
+    assert "scheduling" in coverage["touched_deliverables"]
+    assert "reporting" in coverage["missing_deliverables"]
+    assert "pdf_export" in coverage["missing_deliverables"]
+    assert coverage["passed"] is False
+
+
+def test_inline_code_test_coverage_requires_test_edits_for_feature_work(monkeypatch):
+    from control_plane.api import chat as chat_module
+
+    monkeypatch.setattr(chat_module, "_inline_code_require_feature_test_edits", lambda: True)
+    coverage = chat_module._inline_code_test_coverage(
+        requested_task="Can you add this feature and code this in the existing admin app?",
+        integration_required=True,
+        files_touched=["GlobeIQ.Server/Services/ProgramSchedulerService.cs"],
+        deleted_paths=[],
+    )
+    assert coverage["tests_required"] is True
+    assert coverage["passed"] is False
+
+    passing = chat_module._inline_code_test_coverage(
+        requested_task="Can you add this feature and code this in the existing admin app?",
+        integration_required=True,
+        files_touched=[
+            "GlobeIQ.Server/Services/ProgramSchedulerService.cs",
+            "GlobeIQ.Server.Tests/ProgramSchedulerServiceTests.cs",
+        ],
+        deleted_paths=[],
+    )
+    assert passing["tests_required"] is True
+    assert passing["passed"] is True
+    assert "GlobeIQ.Server.Tests/ProgramSchedulerServiceTests.cs" in passing["test_paths"]
 
 
 def test_inline_code_workspace_marker_adds_surface_execution_hint_when_requested():

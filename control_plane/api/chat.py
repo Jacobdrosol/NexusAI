@@ -183,8 +183,31 @@ _INLINE_LOW_SIGNAL_OUTPUT_LINE_RE = re.compile(
     r"^\s*please\s+(?:let\s+me\s+know|specify|share)\b",
     re.IGNORECASE,
 )
+_INLINE_LOW_SIGNAL_FIRST_LINE_RE = re.compile(
+    r"^\s*(?:now\s+)?(?:let\s+me|first,\s*let\s+me|next,\s*let\s+me|i\s+need\s+to)\b",
+    re.IGNORECASE,
+)
 _INLINE_OUTPUT_CHANGE_MARKER_RE = re.compile(
     r"\b(updated?|modified|created|deleted|added|implemented|wired|integrated|refactored|patched|fixed)\b",
+    re.IGNORECASE,
+)
+_INLINE_DELIVERABLE_SCHEDULE_RE = re.compile(
+    r"\b(schedule|scheduler|frequency|end\s+of\s+day|end\s+of\s+week|end\s+of\s+month|end\s+of\s+quarter|end\s+of\s+year)\b",
+    re.IGNORECASE,
+)
+_INLINE_DELIVERABLE_REPORT_RE = re.compile(
+    r"\b(report|reporting|accounting|financial|month[-\s]?end|month\s+end)\b",
+    re.IGNORECASE,
+)
+_INLINE_DELIVERABLE_PDF_RE = re.compile(r"\b(pdf|export)\b", re.IGNORECASE)
+_INLINE_FEATURE_REQUEST_RE = re.compile(
+    r"\b(add|build|implement|create|introduce|feature|enhancement|code\s+this|make\s+it\s+happen)\b",
+    re.IGNORECASE,
+)
+_INLINE_TEST_PATH_RE = re.compile(
+    r"(?:^|/)(?:test|tests|spec|specs|__tests__)(?:/|$)|"
+    r"(?:^|/)[^/]*\.(?:test|spec)\.[^/]+$|"
+    r"(?:^|/)[^/]*tests?\.[^/]+$",
     re.IGNORECASE,
 )
 _INLINE_CODE_FILE_EXTENSIONS: set[str] = {
@@ -1539,6 +1562,18 @@ def _inline_code_require_existing_code_surface_edits() -> bool:
     return _env_bool("NEXUSAI_INLINE_CODE_REQUIRE_EXISTING_CODE_SURFACE_EDITS", True)
 
 
+def _inline_code_require_deliverable_contract() -> bool:
+    return _env_bool("NEXUSAI_INLINE_CODE_REQUIRE_DELIVERABLE_CONTRACT", True)
+
+
+def _inline_code_require_feature_test_edits() -> bool:
+    return _env_bool("NEXUSAI_INLINE_CODE_REQUIRE_FEATURE_TEST_EDITS", True)
+
+
+def _inline_code_force_deterministic_completion_summary() -> bool:
+    return _env_bool("NEXUSAI_INLINE_CODE_FORCE_DETERMINISTIC_SUMMARY", True)
+
+
 def _inline_code_is_code_path(path: str) -> bool:
     normalized = str(path or "").strip().replace("\\", "/")
     if not normalized:
@@ -1572,6 +1607,118 @@ def _inline_code_existing_code_surface_coverage(
     coverage = _inline_code_surface_coverage(existing_code_paths, required_surfaces)
     coverage["existing_code_paths"] = existing_code_paths[:24]
     return coverage
+
+
+def _inline_code_required_deliverables(requested_task: str) -> List[str]:
+    text = str(requested_task or "").strip().lower()
+    required: List[str] = []
+    if not text:
+        return required
+    if _INLINE_DELIVERABLE_SCHEDULE_RE.search(text):
+        required.append("scheduling")
+    if _INLINE_DELIVERABLE_REPORT_RE.search(text):
+        required.append("reporting")
+    if _INLINE_DELIVERABLE_PDF_RE.search(text):
+        required.append("pdf_export")
+    return required
+
+
+def _inline_code_deliverable_contract_coverage(
+    *,
+    requested_task: str,
+    files_touched: List[str],
+    artifacts: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    required = _inline_code_required_deliverables(requested_task)
+    evidence_chunks: List[str] = []
+    for path in list(files_touched or [])[:40]:
+        normalized = str(path or "").strip().replace("\\", "/")
+        if normalized:
+            evidence_chunks.append(normalized)
+    for item in artifacts[:24]:
+        if not isinstance(item, dict):
+            continue
+        path = str(item.get("path") or "").strip().replace("\\", "/")
+        if path:
+            evidence_chunks.append(path)
+        content = str(item.get("content") or "")
+        if content:
+            evidence_chunks.append(content[:4_000])
+    evidence_text = "\n".join(evidence_chunks)
+    checks = {
+        "scheduling": bool(_INLINE_DELIVERABLE_SCHEDULE_RE.search(evidence_text)),
+        "reporting": bool(_INLINE_DELIVERABLE_REPORT_RE.search(evidence_text)),
+        "pdf_export": bool(_INLINE_DELIVERABLE_PDF_RE.search(evidence_text)),
+    }
+    missing = [name for name in required if not checks.get(name, False)]
+    touched: List[str] = [name for name in required if checks.get(name, False)]
+    return {
+        "required_deliverables": required,
+        "touched_deliverables": touched,
+        "missing_deliverables": missing,
+        "passed": not bool(missing),
+    }
+
+
+def _inline_code_deliverable_contract_gate_failure_message(contract: Dict[str, Any]) -> str:
+    required = ", ".join(contract.get("required_deliverables") or []) or "(none)"
+    missing = ", ".join(contract.get("missing_deliverables") or []) or "(none)"
+    return (
+        "Quality gate failed: explicit request deliverables were not fully implemented.\n"
+        f"Required deliverables: {required}\n"
+        f"Missing deliverables: {missing}"
+    )
+
+
+def _inline_code_feature_request_expected(requested_task: str, *, integration_required: bool) -> bool:
+    if not integration_required:
+        return False
+    text = str(requested_task or "").strip()
+    if not text:
+        return False
+    return bool(_INLINE_FEATURE_REQUEST_RE.search(text))
+
+
+def _inline_code_test_paths(paths: List[str]) -> List[str]:
+    test_paths: List[str] = []
+    seen: set[str] = set()
+    for raw in list(paths or []):
+        normalized = str(raw or "").strip().replace("\\", "/")
+        if not normalized or normalized in seen:
+            continue
+        if _INLINE_TEST_PATH_RE.search(normalized):
+            seen.add(normalized)
+            test_paths.append(normalized)
+    return test_paths
+
+
+def _inline_code_test_coverage(
+    *,
+    requested_task: str,
+    integration_required: bool,
+    files_touched: List[str],
+    deleted_paths: List[str],
+) -> Dict[str, Any]:
+    tests_required = bool(
+        _inline_code_require_feature_test_edits()
+        and _inline_code_feature_request_expected(requested_task, integration_required=integration_required)
+    )
+    all_paths = _inline_code_merge_paths(list(files_touched or []), list(deleted_paths or []))
+    test_paths = _inline_code_test_paths(all_paths)
+    return {
+        "tests_required": tests_required,
+        "test_paths": test_paths,
+        "passed": (not tests_required) or bool(test_paths),
+    }
+
+
+def _inline_code_test_coverage_gate_failure_message(test_coverage: Dict[str, Any]) -> str:
+    touched = ", ".join(test_coverage.get("test_paths") or []) or "(none)"
+    return (
+        "Quality gate failed: feature work did not include test file edits.\n"
+        "Expected at least one test update to validate behavior.\n"
+        f"Test files touched: {touched}"
+    )
 
 
 def _inline_code_new_files_only_warning_message(task: Task, breakdown: Dict[str, Any]) -> str:
@@ -1648,15 +1795,25 @@ def _inline_code_output_quality_assessment(output: str) -> Dict[str, Any]:
     has_change_markers = bool(_INLINE_OUTPUT_CHANGE_MARKER_RE.search(normalized))
     has_path_markers = bool(_PATH_LIKE_TOKEN_RE.search(normalized))
     discovery_only = bool(first_line and _INLINE_LOW_SIGNAL_OUTPUT_LINE_RE.search(first_line))
+    starts_with_action_plan = bool(first_line and _INLINE_LOW_SIGNAL_FIRST_LINE_RE.search(first_line))
+    has_discovery_fragments = bool(_UNVERIFIABLE_ACTION_FRAGMENT_RE.search(normalized))
     requests_clarification = bool(_REQUEST_PERMISSION_LINE_RE.search(first_line))
     access_denial = bool(_ACCESS_DENIAL_LINE_RE.search(first_line))
+    low_signal = bool(
+        discovery_only
+        or (starts_with_action_plan and not has_change_markers and not has_path_markers)
+        or (has_discovery_fragments and len(lines) <= 3 and not has_change_markers and not has_path_markers)
+    )
     usable = bool(normalized) and not requests_clarification and not access_denial and not (
-        discovery_only and not has_change_markers and not has_path_markers
+        low_signal
     )
     return {
         "usable": usable,
         "first_line": first_line,
         "discovery_only": discovery_only,
+        "starts_with_action_plan": starts_with_action_plan,
+        "has_discovery_fragments": has_discovery_fragments,
+        "low_signal": low_signal,
         "requests_clarification": requests_clarification,
         "access_denial": access_denial,
         "has_change_markers": has_change_markers,
@@ -1673,6 +1830,8 @@ def _inline_code_synthesized_completion_summary(
     surface_coverage: Dict[str, Any] | None,
     existing_code_surface_required: bool,
     existing_code_surface_coverage: Dict[str, Any] | None,
+    deliverable_contract: Dict[str, Any] | None = None,
+    test_coverage: Dict[str, Any] | None = None,
 ) -> str:
     created_count = int((change_breakdown or {}).get("created_count") or 0)
     updated_count = int((change_breakdown or {}).get("updated_count") or 0)
@@ -1688,6 +1847,16 @@ def _inline_code_synthesized_completion_summary(
     if existing_code_surface_required:
         code_missing = ", ".join((existing_code_surface_coverage or {}).get("missing_surfaces") or []) or "none"
         lines.append(f"Existing code-file edits across requested surfaces: missing {code_missing}.")
+    required_deliverables = ", ".join((deliverable_contract or {}).get("required_deliverables") or [])
+    if required_deliverables:
+        deliverable_missing = ", ".join((deliverable_contract or {}).get("missing_deliverables") or []) or "none"
+        lines.append(
+            f"Requested deliverables: {required_deliverables}. Missing deliverables after remediation: {deliverable_missing}."
+        )
+    if bool((test_coverage or {}).get("tests_required")):
+        test_paths = list((test_coverage or {}).get("test_paths") or [])
+        test_preview = ", ".join(test_paths[:6]) if test_paths else "none"
+        lines.append(f"Test coverage edits included: {test_preview}.")
     preview_paths = list(files_touched or [])[:8]
     if preview_paths:
         lines.append("Files touched in temp workspace:")
@@ -2334,6 +2503,8 @@ def _inline_code_normalize_task_result(
     surface_coverage: Dict[str, Any] | None = None,
     existing_code_surface_required: bool | None = None,
     existing_code_surface_coverage: Dict[str, Any] | None = None,
+    deliverable_contract: Dict[str, Any] | None = None,
+    test_coverage: Dict[str, Any] | None = None,
     context_sources: List[str] | None = None,
     context_item_count: int | None = None,
     tool_access: Dict[str, Any] | None = None,
@@ -2391,6 +2562,8 @@ def _inline_code_normalize_task_result(
         or isinstance(surface_coverage, dict)
         or existing_code_surface_required is not None
         or isinstance(existing_code_surface_coverage, dict)
+        or isinstance(deliverable_contract, dict)
+        or isinstance(test_coverage, dict)
         or quality_gate_failures
     ):
         normalized["inline_quality_gate"] = {
@@ -2402,6 +2575,8 @@ def _inline_code_normalize_task_result(
             if existing_code_surface_required is not None
             else None,
             "existing_code_surface_coverage": dict(existing_code_surface_coverage or {}),
+            "deliverable_contract": dict(deliverable_contract or {}),
+            "test_coverage": dict(test_coverage or {}),
             "failures": [str(item).strip() for item in (quality_gate_failures or []) if str(item).strip()],
         }
     if context_sources is not None or context_item_count is not None or isinstance(tool_access, dict):
@@ -3614,11 +3789,30 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                         quality_gate_failures.append(
                             _inline_code_surface_existing_code_gate_failure_message(existing_code_surface_coverage)
                         )
+                    deliverable_contract = _inline_code_deliverable_contract_coverage(
+                        requested_task=body.content,
+                        files_touched=files_touched,
+                        artifacts=artifacts,
+                    )
+                    if _inline_code_require_deliverable_contract() and not bool(deliverable_contract.get("passed")):
+                        quality_gate_failures.append(
+                            _inline_code_deliverable_contract_gate_failure_message(deliverable_contract)
+                        )
+                    test_coverage = _inline_code_test_coverage(
+                        requested_task=body.content,
+                        integration_required=integration_required,
+                        files_touched=files_touched,
+                        deleted_paths=deleted_paths,
+                    )
+                    if not bool(test_coverage.get("passed")):
+                        quality_gate_failures.append(_inline_code_test_coverage_gate_failure_message(test_coverage))
                     raw_output = _extract_task_output(terminal_task.result)
                     sanitized_output = _sanitize_repo_grounded_output(raw_output)
                     output_quality = _inline_code_output_quality_assessment(sanitized_output or raw_output)
                     output_override: str | None = sanitized_output if sanitized_output and sanitized_output != raw_output else None
-                    if files_touched and not bool(output_quality.get("usable")):
+                    if files_touched and (
+                        not bool(output_quality.get("usable")) or _inline_code_force_deterministic_completion_summary()
+                    ):
                         output_override = _inline_code_synthesized_completion_summary(
                             files_touched=files_touched,
                             change_breakdown=change_breakdown,
@@ -3626,10 +3820,17 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                             surface_coverage=surface_coverage,
                             existing_code_surface_required=existing_code_surface_required,
                             existing_code_surface_coverage=existing_code_surface_coverage,
+                            deliverable_contract=deliverable_contract,
+                            test_coverage=test_coverage,
                         )
-                        quality_warnings.append(
-                            "Low-signal model output was replaced with a deterministic change summary."
-                        )
+                        if not bool(output_quality.get("usable")):
+                            quality_warnings.append(
+                                "Low-signal model output was replaced with a deterministic change summary."
+                            )
+                        else:
+                            quality_warnings.append(
+                                "Deterministic completion summary generated from actual repository diff."
+                            )
                     normalized_result = _inline_code_normalize_task_result(
                         result=terminal_task.result,
                         artifacts=artifacts,
@@ -3644,6 +3845,8 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                         surface_coverage=surface_coverage,
                         existing_code_surface_required=existing_code_surface_required,
                         existing_code_surface_coverage=existing_code_surface_coverage,
+                        deliverable_contract=deliverable_contract,
+                        test_coverage=test_coverage,
                         context_sources=context_sources,
                         context_item_count=len(resolved_context),
                         tool_access=tool_access,
@@ -4337,11 +4540,30 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                             quality_gate_failures.append(
                                 _inline_code_surface_existing_code_gate_failure_message(existing_code_surface_coverage)
                             )
+                        deliverable_contract = _inline_code_deliverable_contract_coverage(
+                            requested_task=body.content,
+                            files_touched=files_touched,
+                            artifacts=artifacts,
+                        )
+                        if _inline_code_require_deliverable_contract() and not bool(deliverable_contract.get("passed")):
+                            quality_gate_failures.append(
+                                _inline_code_deliverable_contract_gate_failure_message(deliverable_contract)
+                            )
+                        test_coverage = _inline_code_test_coverage(
+                            requested_task=body.content,
+                            integration_required=integration_required,
+                            files_touched=files_touched,
+                            deleted_paths=deleted_paths,
+                        )
+                        if not bool(test_coverage.get("passed")):
+                            quality_gate_failures.append(_inline_code_test_coverage_gate_failure_message(test_coverage))
                         raw_output = _extract_task_output(terminal_task.result)
                         sanitized_output = _sanitize_repo_grounded_output(raw_output)
                         output_quality = _inline_code_output_quality_assessment(sanitized_output or raw_output)
                         output_override: str | None = sanitized_output if sanitized_output and sanitized_output != raw_output else None
-                        if files_touched and not bool(output_quality.get("usable")):
+                        if files_touched and (
+                            not bool(output_quality.get("usable")) or _inline_code_force_deterministic_completion_summary()
+                        ):
                             output_override = _inline_code_synthesized_completion_summary(
                                 files_touched=files_touched,
                                 change_breakdown=change_breakdown,
@@ -4349,10 +4571,17 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                                 surface_coverage=surface_coverage,
                                 existing_code_surface_required=existing_code_surface_required,
                                 existing_code_surface_coverage=existing_code_surface_coverage,
+                                deliverable_contract=deliverable_contract,
+                                test_coverage=test_coverage,
                             )
-                            quality_warnings.append(
-                                "Low-signal model output was replaced with a deterministic change summary."
-                            )
+                            if not bool(output_quality.get("usable")):
+                                quality_warnings.append(
+                                    "Low-signal model output was replaced with a deterministic change summary."
+                                )
+                            else:
+                                quality_warnings.append(
+                                    "Deterministic completion summary generated from actual repository diff."
+                                )
                         normalized_result = _inline_code_normalize_task_result(
                             result=terminal_task.result,
                             artifacts=artifacts,
@@ -4367,6 +4596,8 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                             surface_coverage=surface_coverage,
                             existing_code_surface_required=existing_code_surface_required,
                             existing_code_surface_coverage=existing_code_surface_coverage,
+                            deliverable_contract=deliverable_contract,
+                            test_coverage=test_coverage,
                             context_sources=context_sources,
                             context_item_count=len(resolved_context),
                             tool_access=tool_access,
