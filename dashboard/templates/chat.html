@@ -778,6 +778,18 @@ async function refreshMessagesUntilSettled(maxAttempts = 20, delayMs = 1000) {
   return false;
 }
 
+async function continuePendingAssistantRecovery(maxAttempts = 180, delayMs = 5000) {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const pending = document.querySelector('.message[data-pending-assistant="true"]');
+    if (!pending) return true;
+    await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+    await refreshMessages();
+    const unresolved = document.querySelector('.message[data-pending-assistant="true"]');
+    if (!unresolved) return true;
+  }
+  return false;
+}
+
 function hasAssignmentTerminalMessage(orchestrationId) {
   if (!orchestrationId) return false;
   return Array.from(messageMap.values()).some((message) => {
@@ -2076,7 +2088,18 @@ async function sendMessage(streamMode) {
     setPendingAssistantStatus('Stream closed unexpectedly. Rechecking saved response...', pending);
     const recovered = await refreshMessagesUntilSettled();
     if (!recovered) {
-      setPendingAssistantStatus('Generation stopped before completion. Partial output was kept if anything was saved.', pending);
+      setPendingAssistantStatus(
+        'Connection to live stream closed, but the backend may still be running. Continuing to check for saved completion...',
+        pending,
+      );
+      continuePendingAssistantRecovery().then((longRecovered) => {
+        if (!longRecovered) {
+          setPendingAssistantStatus(
+            'Still waiting on backend completion. Keep this chat open; full recap will appear automatically once saved.',
+            null,
+          );
+        }
+      }).catch(() => {});
     }
   }
 }

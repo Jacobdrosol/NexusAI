@@ -4340,8 +4340,12 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
 
                     last_status: Optional[str] = None
                     deadline = asyncio.get_event_loop().time() + 1800.0
+                    last_heartbeat_at = asyncio.get_event_loop().time()
+                    heartbeat_interval_seconds = 10.0
+                    run_started_at = asyncio.get_event_loop().time()
                     terminal_task: Optional[Task] = None
                     while True:
+                        now = asyncio.get_event_loop().time()
                         current = await task_manager.get_task(inline_task.id)
                         status_value = str(current.status or "").strip().lower()
                         if status_value != last_status:
@@ -4362,10 +4366,27 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                                 phase = "running"
                             yield f'event: status\ndata: {json.dumps({"phase": phase, "label": label, "task_id": current.id})}\n\n'
                             last_status = status_value
+                            last_heartbeat_at = now
+                        elif status_value in {"queued", "running", "blocked"} and (now - last_heartbeat_at) >= heartbeat_interval_seconds:
+                            elapsed = int(max(0.0, now - run_started_at))
+                            if status_value == "queued":
+                                heartbeat_label = f"Still queued... ({elapsed}s elapsed)"
+                                heartbeat_phase = "queued"
+                            elif status_value == "blocked":
+                                heartbeat_label = f"Still running remediation/coordination... ({elapsed}s elapsed)"
+                                heartbeat_phase = "running"
+                            else:
+                                heartbeat_label = f"Inline coding still running... ({elapsed}s elapsed)"
+                                heartbeat_phase = "running"
+                            yield (
+                                'event: status\ndata: '
+                                f'{json.dumps({"phase": heartbeat_phase, "label": heartbeat_label, "task_id": current.id})}\n\n'
+                            )
+                            last_heartbeat_at = now
                         if status_value in {"completed", "failed", "cancelled", "retried"}:
                             terminal_task = current
                             break
-                        if asyncio.get_event_loop().time() >= deadline:
+                        if now >= deadline:
                             raise HTTPException(status_code=504, detail="inline coding task timed out")
                         await asyncio.sleep(0.35)
 
