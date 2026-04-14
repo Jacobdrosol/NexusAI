@@ -3500,6 +3500,186 @@ async def test_post_message_inline_code_runs_integration_remediation_pass(cp_app
         assert "Quality warning: this run created new files but did not modify existing tracked files." not in assistant["content"]
 
 
+@pytest.mark.anyio
+async def test_post_message_inline_code_runs_surface_remediation_pass(cp_app, tmp_path, monkeypatch):
+    from control_plane.api import chat as chat_module
+    from shared.models import Task, TaskMetadata
+
+    workspace_root = tmp_path / "workspace-inline-surface-remediate"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    temp_root = tmp_path / "workspace-inline-surface-remediate-temp"
+    temp_root.mkdir(parents=True, exist_ok=True)
+
+    created_task = Task(
+        id="inline-task-surface-remediate-first",
+        bot_id="bot-inline-surface-remediate",
+        payload=[],
+        metadata=TaskMetadata(source="chat_assign"),
+        status="queued",
+        created_at="2026-01-01T00:00:00Z",
+        updated_at="2026-01-01T00:00:00Z",
+    )
+    first_completed = created_task.model_copy(
+        update={
+            "status": "completed",
+            "result": {
+                "output": "Updated scheduler service.",
+                "agent_loop_diagnostics": {"observed_write_tool_call": True},
+                "tool_calls_executed": [{"name": "edit_file", "arguments": {"path": "GlobeIQ.Server/Services/ProgramSchedulerService.cs"}}],
+            },
+            "updated_at": "2026-01-01T00:00:01Z",
+        }
+    )
+    surface_remediation_completed = created_task.model_copy(
+        update={
+            "id": "inline-task-surface-remediate-second",
+            "status": "completed",
+            "result": {
+                "output": "Added webapp admin wiring updates.",
+                "agent_loop_diagnostics": {"observed_write_tool_call": True},
+                "tool_calls_executed": [{"name": "edit_file", "arguments": {"path": "GlobeIQ.WebApp/Pages/Admin/Programs.razor"}}],
+            },
+            "updated_at": "2026-01-01T00:00:02Z",
+        }
+    )
+    cp_app.state.task_manager.create_task = AsyncMock(return_value=created_task)
+
+    async def _fake_prepare(**_kwargs):
+        return {"temp_root": str(temp_root), "repo_root": str(workspace_root)}
+
+    async def _fake_wait(_task_manager, *, task_id: str, max_wait_seconds: float = 1800.0):
+        assert task_id == "inline-task-surface-remediate-first"
+        return first_completed
+
+    collect_state = {"count": 0}
+
+    async def _fake_collect(_temp_root):
+        collect_state["count"] += 1
+        if collect_state["count"] == 1:
+            return (
+                [
+                    {
+                        "kind": "file",
+                        "label": "GlobeIQ.Server/Services/ProgramSchedulerService.cs",
+                        "path": "GlobeIQ.Server/Services/ProgramSchedulerService.cs",
+                        "content": "public class ProgramSchedulerService {}",
+                        "status": "updated",
+                        "source": "inline_temp_workspace",
+                        "truncated": False,
+                    }
+                ],
+                ["GlobeIQ.Server/Services/ProgramSchedulerService.cs"],
+                [],
+            )
+        return (
+            [
+                {
+                    "kind": "file",
+                    "label": "GlobeIQ.Server/Services/ProgramSchedulerService.cs",
+                    "path": "GlobeIQ.Server/Services/ProgramSchedulerService.cs",
+                    "content": "public class ProgramSchedulerService {}",
+                    "status": "updated",
+                    "source": "inline_temp_workspace",
+                    "truncated": False,
+                },
+                {
+                    "kind": "file",
+                    "label": "GlobeIQ.WebApp/Pages/Admin/Programs.razor",
+                    "path": "GlobeIQ.WebApp/Pages/Admin/Programs.razor",
+                    "content": "@code { }",
+                    "status": "updated",
+                    "source": "inline_temp_workspace",
+                    "truncated": False,
+                },
+            ],
+            ["GlobeIQ.Server/Services/ProgramSchedulerService.cs", "GlobeIQ.WebApp/Pages/Admin/Programs.razor"],
+            [],
+        )
+
+    async def _fake_surface_repair(**_kwargs):
+        return surface_remediation_completed
+
+    async def _fake_persist(_task_manager, *, task: Task, result: dict):
+        return task.model_copy(update={"result": result})
+
+    monkeypatch.setattr(chat_module, "_inline_code_prepare_temp_workspace", _fake_prepare)
+    monkeypatch.setattr(chat_module, "_inline_code_wait_for_task", _fake_wait)
+    monkeypatch.setattr(chat_module, "_inline_code_collect_workspace_artifacts", _fake_collect)
+    monkeypatch.setattr(chat_module, "_inline_code_attempt_surface_repair", _fake_surface_repair)
+    monkeypatch.setattr(chat_module, "_inline_code_persist_result_without_trigger_dispatch", _fake_persist)
+
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        project_id = "proj-inline-surface-remediate"
+        project = await client.post(
+            "/v1/projects",
+            json={
+                "id": project_id,
+                "name": "Inline Surface Remediation",
+                "settings_overrides": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "filesystem": True,
+                        "repo_search": False,
+                        "workspace_root": str(workspace_root),
+                    }
+                },
+            },
+        )
+        assert project.status_code == 200
+
+        convo = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Inline Surface Remediation Chat",
+                "project_id": project_id,
+                "tool_access_enabled": True,
+                "tool_access_filesystem": True,
+            },
+        )
+        assert convo.status_code == 200
+        conversation_id = convo.json()["id"]
+
+        bot = await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-inline-surface-remediate",
+                "name": "Inline Surface Remediation Bot",
+                "role": "assistant",
+                "backends": [],
+                "enabled": True,
+                "execution_policy": {
+                    "workspace_context_injection": True,
+                    "repo_output_mode": "allow",
+                },
+                "routing_rules": {
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "filesystem": True,
+                        "repo_search": False,
+                    }
+                },
+            },
+        )
+        assert bot.status_code == 200
+
+        resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": (
+                    "Can you add this feature and code this? "
+                    "I expect edits to existing files in server and webapp."
+                ),
+                "bot_id": "bot-inline-surface-remediate",
+                "inline_coding_enabled": True,
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assistant = body["assistant_message"]
+        assert assistant["metadata"]["run_status"] == "passed"
+        assert "GlobeIQ.WebApp/Pages/Admin/Programs.razor" in assistant["content"]
+
+
 def test_inline_code_compact_payload_preserves_context_and_limits_size():
     from control_plane.api import chat as chat_module
 
@@ -3571,6 +3751,17 @@ def test_inline_code_no_change_repair_prompt_adds_surface_requirement_when_reque
     )
     assert "server/backend" in prompt
     assert "webapp/frontend" in prompt
+
+
+def test_inline_code_surface_repair_prompt_mentions_missing_surfaces():
+    from control_plane.api import chat as chat_module
+
+    prompt = chat_module._inline_code_surface_repair_prompt(
+        ["webapp"],
+        ["GlobeIQ.Server/Services/ProgramSchedulerService.cs"],
+    )
+    assert "Missing surfaces: webapp" in prompt
+    assert "edit existing UI files" in prompt
 
 
 def test_inline_code_workspace_marker_adds_surface_execution_hint_when_requested():
