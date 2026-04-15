@@ -3631,6 +3631,7 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                     change_breakdown = _inline_code_change_breakdown(artifacts, deleted_paths)
                     quality_warnings: List[str] = []
                     write_tool_evidence = _inline_code_has_write_tool_evidence(terminal_task.result)
+                    cumulative_write_tool_evidence = bool(write_tool_evidence)
                     no_change_repair_attempts = _inline_code_no_change_repair_attempt_limit()
                     if (not files_touched or not write_tool_evidence) and no_change_repair_attempts > 0:
                         for _ in range(no_change_repair_attempts):
@@ -3657,7 +3658,8 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                             artifacts, files_touched, deleted_paths = await _inline_code_collect_workspace_artifacts(Path(temp_root))
                             change_breakdown = _inline_code_change_breakdown(artifacts, deleted_paths)
                             write_tool_evidence = _inline_code_has_write_tool_evidence(terminal_task.result)
-                            if files_touched and write_tool_evidence:
+                            cumulative_write_tool_evidence = bool(cumulative_write_tool_evidence or write_tool_evidence)
+                            if files_touched and cumulative_write_tool_evidence:
                                 quality_warnings.append("No-change remediation pass executed and produced concrete file edits with write-tool evidence.")
                                 break
                     integration_passed = bool(
@@ -3667,7 +3669,7 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                     )
                     skip_downstream_repairs = bool(
                         _inline_code_skip_downstream_repairs_without_writes()
-                        and not write_tool_evidence
+                        and not cumulative_write_tool_evidence
                     )
                     if skip_downstream_repairs:
                         quality_warnings.append(
@@ -3763,6 +3765,7 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                             artifacts, files_touched, deleted_paths = await _inline_code_collect_workspace_artifacts(Path(temp_root))
                             change_breakdown = _inline_code_change_breakdown(artifacts, deleted_paths)
                             write_tool_evidence = _inline_code_has_write_tool_evidence(terminal_task.result)
+                            cumulative_write_tool_evidence = bool(cumulative_write_tool_evidence or write_tool_evidence)
                             integration_passed = bool(
                                 not integration_required
                                 or int(change_breakdown.get("updated_count") or 0) > 0
@@ -3791,7 +3794,7 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                                 )
                                 break
                     quality_gate_failures: List[str] = []
-                    if not write_tool_evidence:
+                    if not cumulative_write_tool_evidence:
                         quality_gate_failures.append(_inline_code_missing_write_evidence_message())
                     if integration_required and not integration_passed:
                         quality_gate_failures.append(_inline_code_new_files_only_warning_message(terminal_task, change_breakdown))
@@ -3852,7 +3855,7 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                         change_breakdown=change_breakdown,
                         integration_required=integration_required,
                         integration_passed=integration_passed,
-                        write_tool_evidence=write_tool_evidence,
+                        write_tool_evidence=cumulative_write_tool_evidence,
                         required_surfaces=required_surfaces,
                         surface_coverage=surface_coverage,
                         existing_code_surface_required=existing_code_surface_required,
@@ -4415,6 +4418,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                         change_breakdown = _inline_code_change_breakdown(artifacts, deleted_paths)
                         quality_warnings: List[str] = []
                         write_tool_evidence = _inline_code_has_write_tool_evidence(terminal_task.result)
+                        cumulative_write_tool_evidence = bool(write_tool_evidence)
                         no_change_repair_attempts = _inline_code_no_change_repair_attempt_limit()
                         if (not files_touched or not write_tool_evidence) and no_change_repair_attempts > 0:
                             for attempt_idx in range(no_change_repair_attempts):
@@ -4445,7 +4449,8 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                                 artifacts, files_touched, deleted_paths = await _inline_code_collect_workspace_artifacts(Path(temp_root))
                                 change_breakdown = _inline_code_change_breakdown(artifacts, deleted_paths)
                                 write_tool_evidence = _inline_code_has_write_tool_evidence(terminal_task.result)
-                                if files_touched and write_tool_evidence:
+                                cumulative_write_tool_evidence = bool(cumulative_write_tool_evidence or write_tool_evidence)
+                                if files_touched and cumulative_write_tool_evidence:
                                     quality_warnings.append("No-change remediation pass executed and produced concrete file edits with write-tool evidence.")
                                     break
                         integration_passed = bool(
@@ -4455,7 +4460,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                         )
                         skip_downstream_repairs = bool(
                             _inline_code_skip_downstream_repairs_without_writes()
-                            and not write_tool_evidence
+                            and not cumulative_write_tool_evidence
                         )
                         if skip_downstream_repairs:
                             quality_warnings.append(
@@ -4560,6 +4565,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                                 artifacts, files_touched, deleted_paths = await _inline_code_collect_workspace_artifacts(Path(temp_root))
                                 change_breakdown = _inline_code_change_breakdown(artifacts, deleted_paths)
                                 write_tool_evidence = _inline_code_has_write_tool_evidence(terminal_task.result)
+                                cumulative_write_tool_evidence = bool(cumulative_write_tool_evidence or write_tool_evidence)
                                 integration_passed = bool(
                                     not integration_required
                                     or int(change_breakdown.get("updated_count") or 0) > 0
@@ -4588,7 +4594,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                                     )
                                     break
                         quality_gate_failures: List[str] = []
-                        if not write_tool_evidence:
+                        if not cumulative_write_tool_evidence:
                             quality_gate_failures.append(_inline_code_missing_write_evidence_message())
                         if integration_required and not integration_passed:
                             quality_gate_failures.append(_inline_code_new_files_only_warning_message(terminal_task, change_breakdown))
@@ -4649,7 +4655,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                             change_breakdown=change_breakdown,
                             integration_required=integration_required,
                             integration_passed=integration_passed,
-                            write_tool_evidence=write_tool_evidence,
+                            write_tool_evidence=cumulative_write_tool_evidence,
                             required_surfaces=required_surfaces,
                             surface_coverage=surface_coverage,
                             existing_code_surface_required=existing_code_surface_required,
