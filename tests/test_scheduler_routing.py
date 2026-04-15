@@ -721,6 +721,171 @@ async def test_run_agent_loop_escalates_to_write_only_after_discovery_budget(mon
 
 
 @pytest.mark.anyio
+async def test_run_agent_loop_escalates_to_strict_write_only_after_extended_discovery(monkeypatch, tmp_path):
+    from control_plane.scheduler.scheduler import Scheduler
+
+    workspace_root = tmp_path / "repo"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    backend = BackendConfig(type="cloud_api", provider="ollama_cloud", model="qwen3-coder-next")
+    scheduler = Scheduler(bot_registry=AsyncMock(), worker_registry=AsyncMock())
+
+    call_tools: list[list[str]] = []
+    state = {"count": 0}
+
+    async def _fake_call_backend_raw(_backend, messages, *, tools=None, task=None):
+        tool_names = []
+        for tool in (tools or []):
+            if not isinstance(tool, dict):
+                continue
+            fn = tool.get("function") or {}
+            tool_names.append(str(fn.get("name") or ""))
+        call_tools.append(tool_names)
+        state["count"] += 1
+        if state["count"] <= 3:
+            return {
+                "output": "",
+                "tool_calls": [{"id": f"tc-{state['count']}", "name": "search_files", "arguments": {"query": "Program"}}],
+                "usage": {},
+            }
+        if state["count"] == 4:
+            return {
+                "output": "",
+                "tool_calls": [{"id": "tc-4", "name": "write_file", "arguments": {"path": "demo.txt", "content": "ok"}}],
+                "usage": {},
+            }
+        return {"output": "done", "tool_calls": [], "usage": {}}
+
+    monkeypatch.setenv("NEXUSAI_AGENT_DISCOVERY_ITERATIONS_BEFORE_WRITE", "2")
+    monkeypatch.setenv("NEXUSAI_AGENT_DISCOVERY_ITERATIONS_BEFORE_STRICT_WRITE", "3")
+    monkeypatch.setattr(scheduler, "_call_backend_raw", _fake_call_backend_raw)
+    monkeypatch.setattr(
+        "control_plane.scheduler.agent_workspace_tools.get_tool_definitions",
+        lambda allow_writes=False: [
+            {"type": "function", "function": {"name": "workspace_tree"}},
+            {"type": "function", "function": {"name": "list_directory"}},
+            {"type": "function", "function": {"name": "read_file"}},
+            {"type": "function", "function": {"name": "search_files"}},
+            {"type": "function", "function": {"name": "write_file"}},
+            {"type": "function", "function": {"name": "edit_file"}},
+        ],
+    )
+    monkeypatch.setattr(
+        "control_plane.scheduler.agent_workspace_tools.parse_tool_call_arguments",
+        lambda value: value if isinstance(value, dict) else {},
+    )
+    monkeypatch.setattr(
+        "control_plane.scheduler.agent_workspace_tools.execute_tool",
+        lambda name, args, root, allow_writes=False: f"tool={name}",
+    )
+    monkeypatch.setattr(
+        "control_plane.chat.workspace_tools.normalize_workspace_root",
+        lambda value: workspace_root,
+    )
+
+    result = await scheduler._run_agent_loop(
+        backend=backend,
+        prepared_payload=[{"role": "user", "content": "Can you code this?"}],
+        workspace_root=workspace_root,
+        allow_writes=True,
+        max_iterations=8,
+    )
+
+    assert set(call_tools[2]) == {"read_file", "search_files", "write_file", "edit_file"}
+    assert set(call_tools[3]) == {"write_file", "edit_file"}
+    diagnostics = result.get("agent_loop_diagnostics") or {}
+    assert diagnostics.get("write_tools_only") is True
+    assert diagnostics.get("strict_write_only") is True
+    assert diagnostics.get("strict_write_escalations", 0) >= 1
+    assert diagnostics.get("observed_write_tool_call") is True
+
+
+@pytest.mark.anyio
+async def test_run_agent_loop_rejects_non_write_calls_in_strict_mode(monkeypatch, tmp_path):
+    from control_plane.scheduler.scheduler import Scheduler
+
+    workspace_root = tmp_path / "repo"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    backend = BackendConfig(type="cloud_api", provider="ollama_cloud", model="qwen3-coder-next")
+    scheduler = Scheduler(bot_registry=AsyncMock(), worker_registry=AsyncMock())
+
+    call_tools: list[list[str]] = []
+    state = {"count": 0}
+
+    async def _fake_call_backend_raw(_backend, messages, *, tools=None, task=None):
+        tool_names = []
+        for tool in (tools or []):
+            if not isinstance(tool, dict):
+                continue
+            fn = tool.get("function") or {}
+            tool_names.append(str(fn.get("name") or ""))
+        call_tools.append(tool_names)
+        state["count"] += 1
+        if state["count"] <= 2:
+            return {
+                "output": "",
+                "tool_calls": [{"id": f"tc-{state['count']}", "name": "search_files", "arguments": {"query": "Program"}}],
+                "usage": {},
+            }
+        if state["count"] == 3:
+            # Simulates a model continuing to request a non-write tool even after strict escalation.
+            return {
+                "output": "",
+                "tool_calls": [{"id": "tc-3", "name": "read_file", "arguments": {"path": "demo.txt"}}],
+                "usage": {},
+            }
+        if state["count"] == 4:
+            return {
+                "output": "",
+                "tool_calls": [{"id": "tc-4", "name": "edit_file", "arguments": {"path": "demo.txt", "old_text": "a", "new_text": "b"}}],
+                "usage": {},
+            }
+        return {"output": "done", "tool_calls": [], "usage": {}}
+
+    monkeypatch.setenv("NEXUSAI_AGENT_DISCOVERY_ITERATIONS_BEFORE_WRITE", "1")
+    monkeypatch.setenv("NEXUSAI_AGENT_DISCOVERY_ITERATIONS_BEFORE_STRICT_WRITE", "2")
+    monkeypatch.setattr(scheduler, "_call_backend_raw", _fake_call_backend_raw)
+    monkeypatch.setattr(
+        "control_plane.scheduler.agent_workspace_tools.get_tool_definitions",
+        lambda allow_writes=False: [
+            {"type": "function", "function": {"name": "workspace_tree"}},
+            {"type": "function", "function": {"name": "list_directory"}},
+            {"type": "function", "function": {"name": "read_file"}},
+            {"type": "function", "function": {"name": "search_files"}},
+            {"type": "function", "function": {"name": "write_file"}},
+            {"type": "function", "function": {"name": "edit_file"}},
+        ],
+    )
+    monkeypatch.setattr(
+        "control_plane.scheduler.agent_workspace_tools.parse_tool_call_arguments",
+        lambda value: value if isinstance(value, dict) else {},
+    )
+    monkeypatch.setattr(
+        "control_plane.scheduler.agent_workspace_tools.execute_tool",
+        lambda name, args, root, allow_writes=False: f"tool={name}",
+    )
+    monkeypatch.setattr(
+        "control_plane.chat.workspace_tools.normalize_workspace_root",
+        lambda value: workspace_root,
+    )
+
+    result = await scheduler._run_agent_loop(
+        backend=backend,
+        prepared_payload=[{"role": "user", "content": "Can you code this?"}],
+        workspace_root=workspace_root,
+        allow_writes=True,
+        max_iterations=9,
+    )
+
+    assert set(call_tools[2]) == {"write_file", "edit_file"}
+    executed = result.get("tool_calls_executed") or []
+    assert any(bool(item.get("rejected_in_strict_write_mode")) for item in executed if isinstance(item, dict))
+    diagnostics = result.get("agent_loop_diagnostics") or {}
+    assert diagnostics.get("strict_write_only") is True
+    assert diagnostics.get("strict_mode_rejected_tool_calls", 0) >= 1
+    assert diagnostics.get("observed_write_tool_call") is True
+
+
+@pytest.mark.anyio
 async def test_scheduler_injects_retry_guidance_into_payload():
     from control_plane.scheduler.scheduler import Scheduler
     from shared.models import TaskError, TaskMetadata

@@ -2019,6 +2019,10 @@ def _inline_code_no_change_repair_attempt_limit() -> int:
     return _env_int("NEXUSAI_INLINE_CODE_NO_CHANGE_REPAIR_ATTEMPTS", 2, minimum=0, maximum=3)
 
 
+def _inline_code_skip_downstream_repairs_without_writes() -> bool:
+    return _env_bool("NEXUSAI_INLINE_CODE_SKIP_DOWNSTREAM_REPAIRS_WITHOUT_WRITES", True)
+
+
 def _inline_code_payload_message_limit() -> int:
     return _env_int("NEXUSAI_INLINE_CODE_PAYLOAD_MAX_MESSAGES", 8, minimum=4, maximum=14)
 
@@ -3661,8 +3665,16 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                         or int(change_breakdown.get("updated_count") or 0) > 0
                         or int(change_breakdown.get("deleted_count") or 0) > 0
                     )
+                    skip_downstream_repairs = bool(
+                        _inline_code_skip_downstream_repairs_without_writes()
+                        and not write_tool_evidence
+                    )
+                    if skip_downstream_repairs:
+                        quality_warnings.append(
+                            "Skipping integration/surface remediation passes because no write-tool evidence was observed after no-change remediation."
+                        )
                     repair_attempts = _inline_code_integration_repair_attempt_limit()
-                    if integration_required and not integration_passed and repair_attempts > 0:
+                    if integration_required and not integration_passed and repair_attempts > 0 and not skip_downstream_repairs:
                         for _ in range(repair_attempts):
                             try:
                                 repaired_task = await _inline_code_attempt_integration_repair(
@@ -3721,7 +3733,7 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                         else [],
                     )
                     surface_repair_attempts = _inline_code_surface_repair_attempt_limit()
-                    if required_surfaces and missing_surface_union and surface_repair_attempts > 0:
+                    if required_surfaces and missing_surface_union and surface_repair_attempts > 0 and not skip_downstream_repairs:
                         for _ in range(surface_repair_attempts):
                             missing_surfaces = list(missing_surface_union)
                             if not missing_surfaces:
@@ -4441,8 +4453,16 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                             or int(change_breakdown.get("updated_count") or 0) > 0
                             or int(change_breakdown.get("deleted_count") or 0) > 0
                         )
+                        skip_downstream_repairs = bool(
+                            _inline_code_skip_downstream_repairs_without_writes()
+                            and not write_tool_evidence
+                        )
+                        if skip_downstream_repairs:
+                            quality_warnings.append(
+                                "Skipping integration/surface remediation passes because no write-tool evidence was observed after no-change remediation."
+                            )
                         repair_attempts = _inline_code_integration_repair_attempt_limit()
-                        if integration_required and not integration_passed and repair_attempts > 0:
+                        if integration_required and not integration_passed and repair_attempts > 0 and not skip_downstream_repairs:
                             for attempt_idx in range(repair_attempts):
                                 yield (
                                     'event: status\ndata: '
@@ -4505,7 +4525,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                             else [],
                         )
                         surface_repair_attempts = _inline_code_surface_repair_attempt_limit()
-                        if required_surfaces and missing_surface_union and surface_repair_attempts > 0:
+                        if required_surfaces and missing_surface_union and surface_repair_attempts > 0 and not skip_downstream_repairs:
                             for attempt_idx in range(surface_repair_attempts):
                                 missing_surfaces = list(missing_surface_union)
                                 if not missing_surfaces:

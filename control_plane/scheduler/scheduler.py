@@ -2091,11 +2091,19 @@ class Scheduler:
             1,
             int(os.environ.get("NEXUSAI_AGENT_DISCOVERY_ITERATIONS_BEFORE_WRITE", "6") or "6"),
         )
+        max_discovery_iterations_before_strict_write = max(
+            max_discovery_iterations_before_write + 1,
+            int(os.environ.get("NEXUSAI_AGENT_DISCOVERY_ITERATIONS_BEFORE_STRICT_WRITE", "10") or "10"),
+        )
         tree_only_tool_names = {"workspace_tree", "list_tree", "list_directory"}
         navigation_tools_disabled = False
         write_tools_only = False
+        strict_write_only = False
         non_write_discovery_iterations = 0
         proactive_write_escalations = 0
+        strict_write_escalations = 0
+        strict_mode_rejected_tool_calls = 0
+        hit_max_iterations = False
 
         def _tool_name(tool_def: dict) -> str:
             try:
@@ -2119,6 +2127,13 @@ class Scheduler:
             filtered = [tool for tool in (tool_defs or []) if _tool_name(tool) in allowed]
             return filtered or list(tool_defs or [])
 
+        def _strict_write_only_tools(tool_defs: list[dict]) -> list[dict]:
+            write_names = {"write_file", "edit_file"}
+            filtered = [tool for tool in (tool_defs or []) if _tool_name(tool) in write_names]
+            if filtered:
+                return filtered
+            return _write_priority_tools(tool_defs)
+
         for iteration in range(max_iterations):
             raw = await self._call_backend_raw(backend, messages, tools=active_tools, task=task)
             # Merge usage
@@ -2126,6 +2141,7 @@ class Scheduler:
                 accumulated_usage[k] = accumulated_usage.get(k, 0) + (v or 0)
 
             tool_calls = raw.get("tool_calls") or []
+            active_tool_name_set = {name for name in (_tool_name(tool) for tool in active_tools) if name}
             if not tool_calls:
                 if allow_writes and not observed_tool_call and forced_tool_followups < max_forced_tool_followups:
                     forced_tool_followups += 1
@@ -2240,19 +2256,30 @@ class Scheduler:
                 if not isinstance(tc, dict):
                     continue
                 tool_name = str(tc.get("name") or "")
-                if allow_writes and tool_name in {"write_file", "edit_file"}:
+                strict_rejected = bool(
+                    allow_writes
+                    and strict_write_only
+                    and tool_name
+                    and tool_name not in {"write_file", "edit_file"}
+                )
+                if strict_rejected:
+                    strict_mode_rejected_tool_calls += 1
+                    observed_non_tree_tool_call = True
+                    saw_non_tree_tool_in_iteration = True
+                elif allow_writes and tool_name in {"write_file", "edit_file"}:
                     observed_write_tool_call = True
                     saw_write_tool_in_iteration = True
                 elif allow_writes and tool_name not in tree_only_tool_names:
                     observed_non_tree_tool_call = True
                     saw_non_tree_tool_in_iteration = True
-                executed_tool_calls.append(
-                    {
-                        "id": str(tc.get("id") or ""),
-                        "name": tool_name,
-                        "arguments": tc.get("arguments") if isinstance(tc.get("arguments"), dict) else {},
-                    }
-                )
+                record = {
+                    "id": str(tc.get("id") or ""),
+                    "name": tool_name,
+                    "arguments": tc.get("arguments") if isinstance(tc.get("arguments"), dict) else {},
+                }
+                if strict_rejected:
+                    record["rejected_in_strict_write_mode"] = True
+                executed_tool_calls.append(record)
             # Append the assistant message that contains tool_calls
             assistant_msg: dict = {
                 "role": "assistant",
@@ -2274,9 +2301,21 @@ class Scheduler:
                     tc_name,
                     list(tc_args.keys()),
                 )
-                tool_output = await asyncio.to_thread(
-                    execute_tool, tc_name, tc_args, ws_root, allow_writes=allow_writes
-                )
+                if tc_name and active_tool_name_set and tc_name not in active_tool_name_set:
+                    allowed_label = ", ".join(sorted(active_tool_name_set))
+                    tool_output = (
+                        f"ERROR: Tool '{tc_name}' is not enabled in this step. "
+                        f"Use one of: {allowed_label}."
+                    )
+                elif allow_writes and strict_write_only and tc_name not in {"write_file", "edit_file"}:
+                    tool_output = (
+                        "ERROR: strict write mode is active. "
+                        "Call write_file or edit_file now to implement code changes."
+                    )
+                else:
+                    tool_output = await asyncio.to_thread(
+                        execute_tool, tc_name, tc_args, ws_root, allow_writes=allow_writes
+                    )
                 tool_msg: dict = {
                     "role": "tool",
                     "name": tc_name,
@@ -2315,7 +2354,35 @@ class Scheduler:
                             }
                         )
                         logger.warning(
-                            "[AGENT] task=%s escalating to write-only tools after %d discovery iterations without writes",
+                            "[AGENT] task=%s escalating to write-priority tools after %d discovery iterations without writes",
+                            task.id if task else "?",
+                            non_write_discovery_iterations,
+                        )
+                    strict_should_escalate = (
+                        write_tools_only
+                        and not strict_write_only
+                        and non_write_discovery_iterations >= max_discovery_iterations_before_strict_write
+                    )
+                    if strict_should_escalate:
+                        active_tools = _strict_write_only_tools(active_tools)
+                        strict_write_only = True
+                        strict_write_escalations += 1
+                        if forced_tool_followups < max_forced_tool_followups:
+                            forced_tool_followups += 1
+                        messages.append(
+                            {
+                                "role": "system",
+                                "content": (
+                                    "Strict write requirement (mandatory for this writable coding run):\n"
+                                    "- Discovery budget is exhausted for this run.\n"
+                                    "- Call write_file or edit_file now as your next tool call.\n"
+                                    "- Do not call read_file, search_files, workspace_tree, or list_directory.\n"
+                                    "- Do not return plain-text-only output."
+                                ),
+                            }
+                        )
+                        logger.warning(
+                            "[AGENT] task=%s escalating to strict write-only tools after %d discovery iterations without writes",
                             task.id if task else "?",
                             non_write_discovery_iterations,
                         )
@@ -2323,6 +2390,7 @@ class Scheduler:
             last_result = raw
         else:
             # Circuit breaker hit — still return whatever the last response was
+            hit_max_iterations = True
             logger.warning(
                 "[AGENT] task=%s hit max_iterations=%d — returning last result",
                 task.id if task else "?",
@@ -2345,9 +2413,14 @@ class Scheduler:
                 "tree_only_tools": sorted(tree_only_tool_names),
                 "navigation_tools_disabled": bool(navigation_tools_disabled),
                 "write_tools_only": bool(write_tools_only),
+                "strict_write_only": bool(strict_write_only),
                 "non_write_discovery_iterations": int(non_write_discovery_iterations),
                 "max_discovery_iterations_before_write": int(max_discovery_iterations_before_write),
+                "max_discovery_iterations_before_strict_write": int(max_discovery_iterations_before_strict_write),
                 "proactive_write_escalations": int(proactive_write_escalations),
+                "strict_write_escalations": int(strict_write_escalations),
+                "strict_mode_rejected_tool_calls": int(strict_mode_rejected_tool_calls),
+                "hit_max_iterations": bool(hit_max_iterations),
                 "active_tool_names": [name for name in (_tool_name(tool) for tool in active_tools) if name],
             }
         return result
