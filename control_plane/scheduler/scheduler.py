@@ -2103,6 +2103,7 @@ class Scheduler:
         proactive_write_escalations = 0
         strict_write_escalations = 0
         strict_mode_rejected_tool_calls = 0
+        no_op_write_tool_requests = 0
         hit_max_iterations = False
 
         def _tool_name(tool_def: dict) -> str:
@@ -2256,6 +2257,14 @@ class Scheduler:
                 if not isinstance(tc, dict):
                     continue
                 tool_name = str(tc.get("name") or "")
+                tc_args = parse_tool_call_arguments(tc.get("arguments", {}))
+                no_op_edit_request = bool(
+                    allow_writes
+                    and tool_name == "edit_file"
+                    and "old_text" in tc_args
+                    and "new_text" in tc_args
+                    and str(tc_args.get("old_text")) == str(tc_args.get("new_text"))
+                )
                 strict_rejected = bool(
                     allow_writes
                     and strict_write_only
@@ -2264,6 +2273,10 @@ class Scheduler:
                 )
                 if strict_rejected:
                     strict_mode_rejected_tool_calls += 1
+                    observed_non_tree_tool_call = True
+                    saw_non_tree_tool_in_iteration = True
+                elif no_op_edit_request:
+                    no_op_write_tool_requests += 1
                     observed_non_tree_tool_call = True
                     saw_non_tree_tool_in_iteration = True
                 elif allow_writes and tool_name in {"write_file", "edit_file"}:
@@ -2275,10 +2288,12 @@ class Scheduler:
                 record = {
                     "id": str(tc.get("id") or ""),
                     "name": tool_name,
-                    "arguments": tc.get("arguments") if isinstance(tc.get("arguments"), dict) else {},
+                    "arguments": tc.get("arguments") if isinstance(tc.get("arguments"), dict) else tc_args,
                 }
                 if strict_rejected:
                     record["rejected_in_strict_write_mode"] = True
+                if no_op_edit_request:
+                    record["rejected_no_op_edit"] = True
                 executed_tool_calls.append(record)
             # Append the assistant message that contains tool_calls
             assistant_msg: dict = {
@@ -2311,6 +2326,17 @@ class Scheduler:
                     tool_output = (
                         "ERROR: strict write mode is active. "
                         "Call write_file or edit_file now to implement code changes."
+                    )
+                elif (
+                    allow_writes
+                    and tc_name == "edit_file"
+                    and "old_text" in tc_args
+                    and "new_text" in tc_args
+                    and str(tc_args.get("old_text")) == str(tc_args.get("new_text"))
+                ):
+                    tool_output = (
+                        "ERROR: no-op edit detected (old_text equals new_text). "
+                        "Provide a real replacement that changes file content."
                     )
                 else:
                     tool_output = await asyncio.to_thread(
@@ -2420,6 +2446,7 @@ class Scheduler:
                 "proactive_write_escalations": int(proactive_write_escalations),
                 "strict_write_escalations": int(strict_write_escalations),
                 "strict_mode_rejected_tool_calls": int(strict_mode_rejected_tool_calls),
+                "no_op_write_tool_requests": int(no_op_write_tool_requests),
                 "hit_max_iterations": bool(hit_max_iterations),
                 "active_tool_names": [name for name in (_tool_name(tool) for tool in active_tools) if name],
             }

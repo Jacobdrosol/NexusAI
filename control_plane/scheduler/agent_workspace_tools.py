@@ -348,6 +348,8 @@ def _tool_edit_file(root: Path, args: dict) -> str:
     new_text_str = str(new_text)
     if not old_text_str:
         return "ERROR: 'old_text' cannot be empty."
+    if old_text_str == new_text_str:
+        return "ERROR: no-op edit detected (old_text equals new_text)."
     resolved = _safe_resolve_under_root(root, path_hint)
     if resolved is None:
         return f"ERROR: Path '{path_hint}' is outside the workspace root or invalid."

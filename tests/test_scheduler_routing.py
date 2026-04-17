@@ -886,6 +886,77 @@ async def test_run_agent_loop_rejects_non_write_calls_in_strict_mode(monkeypatch
 
 
 @pytest.mark.anyio
+async def test_run_agent_loop_rejects_noop_edit_as_non_material_write(monkeypatch, tmp_path):
+    from control_plane.scheduler.scheduler import Scheduler
+
+    workspace_root = tmp_path / "repo"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    backend = BackendConfig(type="cloud_api", provider="ollama_cloud", model="qwen3-coder-next")
+    scheduler = Scheduler(bot_registry=AsyncMock(), worker_registry=AsyncMock())
+
+    state = {"count": 0}
+
+    async def _fake_call_backend_raw(_backend, messages, *, tools=None, task=None):
+        state["count"] += 1
+        if state["count"] == 1:
+            return {
+                "output": "",
+                "tool_calls": [
+                    {
+                        "id": "tc-1",
+                        "name": "edit_file",
+                        "arguments": {"path": "demo.txt", "old_text": "same", "new_text": "same"},
+                    }
+                ],
+                "usage": {},
+            }
+        if state["count"] == 2:
+            return {
+                "output": "",
+                "tool_calls": [{"id": "tc-2", "name": "write_file", "arguments": {"path": "demo.txt", "content": "ok"}}],
+                "usage": {},
+            }
+        return {"output": "done", "tool_calls": [], "usage": {}}
+
+    monkeypatch.setattr(scheduler, "_call_backend_raw", _fake_call_backend_raw)
+    monkeypatch.setattr(
+        "control_plane.scheduler.agent_workspace_tools.get_tool_definitions",
+        lambda allow_writes=False: [
+            {"type": "function", "function": {"name": "read_file"}},
+            {"type": "function", "function": {"name": "search_files"}},
+            {"type": "function", "function": {"name": "write_file"}},
+            {"type": "function", "function": {"name": "edit_file"}},
+        ],
+    )
+    monkeypatch.setattr(
+        "control_plane.scheduler.agent_workspace_tools.parse_tool_call_arguments",
+        lambda value: value if isinstance(value, dict) else {},
+    )
+    monkeypatch.setattr(
+        "control_plane.scheduler.agent_workspace_tools.execute_tool",
+        lambda name, args, root, allow_writes=False: f"tool={name}",
+    )
+    monkeypatch.setattr(
+        "control_plane.chat.workspace_tools.normalize_workspace_root",
+        lambda value: workspace_root,
+    )
+
+    result = await scheduler._run_agent_loop(
+        backend=backend,
+        prepared_payload=[{"role": "user", "content": "Can you code this?"}],
+        workspace_root=workspace_root,
+        allow_writes=True,
+        max_iterations=5,
+    )
+
+    diagnostics = result.get("agent_loop_diagnostics") or {}
+    assert diagnostics.get("no_op_write_tool_requests", 0) >= 1
+    assert diagnostics.get("observed_write_tool_call") is True
+    executed = result.get("tool_calls_executed") or []
+    assert any(bool(item.get("rejected_no_op_edit")) for item in executed if isinstance(item, dict))
+
+
+@pytest.mark.anyio
 async def test_scheduler_injects_retry_guidance_into_payload():
     from control_plane.scheduler.scheduler import Scheduler
     from shared.models import TaskError, TaskMetadata
