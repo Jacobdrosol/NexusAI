@@ -1721,6 +1721,15 @@ def _inline_code_test_coverage_gate_failure_message(test_coverage: Dict[str, Any
     )
 
 
+def _inline_code_test_coverage_warning_message(test_coverage: Dict[str, Any]) -> str:
+    touched = ", ".join(test_coverage.get("test_paths") or []) or "(none)"
+    return (
+        "Quality warning: feature work did not include test file edits.\n"
+        "A test-remediation pass was attempted when enabled, but no test files were updated.\n"
+        f"Test files touched: {touched}"
+    )
+
+
 def _inline_code_new_files_only_warning_message(task: Task, breakdown: Dict[str, Any]) -> str:
     created_paths = list(breakdown.get("created_paths") or [])
     created_preview = ", ".join(created_paths[:8]) if created_paths else "(none)"
@@ -2023,6 +2032,14 @@ def _inline_code_skip_downstream_repairs_without_writes() -> bool:
     return _env_bool("NEXUSAI_INLINE_CODE_SKIP_DOWNSTREAM_REPAIRS_WITHOUT_WRITES", True)
 
 
+def _inline_code_test_repair_attempt_limit() -> int:
+    return _env_int("NEXUSAI_INLINE_CODE_TEST_REPAIR_ATTEMPTS", 1, minimum=0, maximum=3)
+
+
+def _inline_code_fail_on_missing_tests() -> bool:
+    return _env_bool("NEXUSAI_INLINE_CODE_FAIL_ON_MISSING_TESTS", False)
+
+
 def _inline_code_payload_message_limit() -> int:
     return _env_int("NEXUSAI_INLINE_CODE_PAYLOAD_MAX_MESSAGES", 8, minimum=4, maximum=14)
 
@@ -2052,6 +2069,20 @@ def _inline_code_no_change_repair_prompt(requested_task: str = "") -> str:
             "- This task explicitly requests both backend and UI work; edit at least one existing server/backend file and one existing webapp/frontend file."
         )
     return base
+
+
+def _inline_code_test_repair_prompt(requested_task: str, touched_paths: List[str]) -> str:
+    touched = ", ".join((touched_paths or [])[:12]) if touched_paths else "(none)"
+    return (
+        "Quality remediation pass: add or update tests for the implemented feature.\n"
+        f"Files currently touched: {touched}\n\n"
+        "Now create or modify at least one relevant test file that validates the new behavior.\n"
+        "- Prefer existing test projects/folders and match current test conventions.\n"
+        "- Keep prior feature edits intact.\n"
+        "- Use write_file/edit_file and make concrete test changes now.\n"
+        "- Do not ask the user for clarification.\n\n"
+        f"Original request:\n{str(requested_task or '').strip()}"
+    )
 
 
 async def _inline_code_attempt_no_change_repair(
@@ -2148,6 +2179,46 @@ async def _inline_code_attempt_surface_repair(
 ) -> Task | None:
     remediation_payload: List[dict] = [
         {"role": "system", "content": _inline_code_surface_repair_prompt(missing_surfaces, touched_paths)},
+        {"role": "user", "content": str(requested_task or "").strip()},
+    ]
+    remediation_payload = _inject_inline_workspace_marker(
+        remediation_payload,
+        workspace_root=temp_root,
+        requested_task=requested_task,
+        workspace_tree_preview=workspace_tree_preview,
+    )
+    remediation_payload = _inline_code_compact_payload(
+        remediation_payload,
+        max_messages=_inline_code_payload_message_limit(),
+        max_chars=_inline_code_retry_payload_char_limit(),
+    )
+    remediation_task = await task_manager.create_task(
+        bot_id=target_bot_id,
+        payload=remediation_payload,
+        metadata=TaskMetadata(
+            source="chat_assign",
+            project_id=project_id or None,
+            conversation_id=conversation_id or None,
+            orchestration_id=orchestration_id,
+        ),
+    )
+    return await _inline_code_wait_for_task(task_manager, task_id=remediation_task.id)
+
+
+async def _inline_code_attempt_test_repair(
+    *,
+    task_manager: Any,
+    target_bot_id: str,
+    conversation_id: str,
+    project_id: str,
+    orchestration_id: str,
+    temp_root: str,
+    requested_task: str,
+    touched_paths: List[str],
+    workspace_tree_preview: str = "",
+) -> Task | None:
+    remediation_payload: List[dict] = [
+        {"role": "system", "content": _inline_code_test_repair_prompt(requested_task, touched_paths)},
         {"role": "user", "content": str(requested_task or "").strip()},
     ]
     remediation_payload = _inject_inline_workspace_marker(
@@ -3819,8 +3890,69 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                         files_touched=files_touched,
                         deleted_paths=deleted_paths,
                     )
+                    test_repair_attempts = _inline_code_test_repair_attempt_limit()
+                    if bool(test_coverage.get("tests_required")) and not bool(test_coverage.get("passed")) and test_repair_attempts > 0:
+                        for _ in range(test_repair_attempts):
+                            try:
+                                repaired_task = await _inline_code_attempt_test_repair(
+                                    task_manager=task_manager,
+                                    target_bot_id=target_bot_id,
+                                    conversation_id=conversation_id,
+                                    project_id=str(conversation.project_id or "").strip(),
+                                    orchestration_id=orchestration_id,
+                                    temp_root=temp_root,
+                                    requested_task=body.content,
+                                    touched_paths=files_touched,
+                                    workspace_tree_preview=workspace_tree_preview,
+                                )
+                            except Exception:
+                                logger.exception("Inline test remediation attempt failed before task completion")
+                                break
+                            if repaired_task is None:
+                                break
+                            if str(repaired_task.status or "").strip().lower() != "completed":
+                                quality_warnings.append(_inline_code_terminal_error_message(repaired_task))
+                                break
+                            terminal_task = repaired_task
+                            artifacts, files_touched, deleted_paths = await _inline_code_collect_workspace_artifacts(Path(temp_root))
+                            change_breakdown = _inline_code_change_breakdown(artifacts, deleted_paths)
+                            write_tool_evidence = _inline_code_has_write_tool_evidence(terminal_task.result)
+                            cumulative_write_tool_evidence = bool(cumulative_write_tool_evidence or write_tool_evidence)
+                            integration_passed = bool(
+                                not integration_required
+                                or int(change_breakdown.get("updated_count") or 0) > 0
+                                or int(change_breakdown.get("deleted_count") or 0) > 0
+                            )
+                            surface_paths = _inline_code_merge_paths(
+                                files_touched,
+                                list(change_breakdown.get("created_paths") or []),
+                                list(change_breakdown.get("updated_paths") or []),
+                                list(change_breakdown.get("deleted_paths") or []),
+                            )
+                            surface_coverage = _inline_code_surface_coverage(surface_paths, required_surfaces)
+                            existing_code_surface_coverage = _inline_code_existing_code_surface_coverage(
+                                change_breakdown,
+                                required_surfaces,
+                            )
+                            deliverable_contract = _inline_code_deliverable_contract_coverage(
+                                requested_task=body.content,
+                                files_touched=files_touched,
+                                artifacts=artifacts,
+                            )
+                            test_coverage = _inline_code_test_coverage(
+                                requested_task=body.content,
+                                integration_required=integration_required,
+                                files_touched=files_touched,
+                                deleted_paths=deleted_paths,
+                            )
+                            if bool(test_coverage.get("passed")):
+                                quality_warnings.append("Test remediation pass executed and added test file edits.")
+                                break
                     if not bool(test_coverage.get("passed")):
-                        quality_gate_failures.append(_inline_code_test_coverage_gate_failure_message(test_coverage))
+                        if _inline_code_fail_on_missing_tests():
+                            quality_gate_failures.append(_inline_code_test_coverage_gate_failure_message(test_coverage))
+                        else:
+                            quality_warnings.append(_inline_code_test_coverage_warning_message(test_coverage))
                     raw_output = _extract_task_output(terminal_task.result)
                     sanitized_output = _sanitize_repo_grounded_output(raw_output)
                     output_quality = _inline_code_output_quality_assessment(sanitized_output or raw_output)
@@ -4619,8 +4751,73 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                             files_touched=files_touched,
                             deleted_paths=deleted_paths,
                         )
+                        test_repair_attempts = _inline_code_test_repair_attempt_limit()
+                        if bool(test_coverage.get("tests_required")) and not bool(test_coverage.get("passed")) and test_repair_attempts > 0:
+                            for attempt_idx in range(test_repair_attempts):
+                                yield (
+                                    'event: status\ndata: '
+                                    f'{json.dumps({"phase":"finalizing","label":f"Test remediation pass {attempt_idx + 1}/{test_repair_attempts}: adding validation coverage...","task_id":terminal_task.id})}\n\n'
+                                )
+                                try:
+                                    repaired_task = await _inline_code_attempt_test_repair(
+                                        task_manager=task_manager,
+                                        target_bot_id=target_bot_id,
+                                        conversation_id=conversation_id,
+                                        project_id=str(conversation.project_id or "").strip(),
+                                        orchestration_id=orchestration_id,
+                                        temp_root=temp_root,
+                                        requested_task=body.content,
+                                        touched_paths=files_touched,
+                                        workspace_tree_preview=workspace_tree_preview,
+                                    )
+                                except Exception:
+                                    logger.exception("Inline test remediation attempt failed before task completion")
+                                    break
+                                if repaired_task is None:
+                                    break
+                                if str(repaired_task.status or "").strip().lower() != "completed":
+                                    quality_warnings.append(_inline_code_terminal_error_message(repaired_task))
+                                    break
+                                terminal_task = repaired_task
+                                artifacts, files_touched, deleted_paths = await _inline_code_collect_workspace_artifacts(Path(temp_root))
+                                change_breakdown = _inline_code_change_breakdown(artifacts, deleted_paths)
+                                write_tool_evidence = _inline_code_has_write_tool_evidence(terminal_task.result)
+                                cumulative_write_tool_evidence = bool(cumulative_write_tool_evidence or write_tool_evidence)
+                                integration_passed = bool(
+                                    not integration_required
+                                    or int(change_breakdown.get("updated_count") or 0) > 0
+                                    or int(change_breakdown.get("deleted_count") or 0) > 0
+                                )
+                                surface_paths = _inline_code_merge_paths(
+                                    files_touched,
+                                    list(change_breakdown.get("created_paths") or []),
+                                    list(change_breakdown.get("updated_paths") or []),
+                                    list(change_breakdown.get("deleted_paths") or []),
+                                )
+                                surface_coverage = _inline_code_surface_coverage(surface_paths, required_surfaces)
+                                existing_code_surface_coverage = _inline_code_existing_code_surface_coverage(
+                                    change_breakdown,
+                                    required_surfaces,
+                                )
+                                deliverable_contract = _inline_code_deliverable_contract_coverage(
+                                    requested_task=body.content,
+                                    files_touched=files_touched,
+                                    artifacts=artifacts,
+                                )
+                                test_coverage = _inline_code_test_coverage(
+                                    requested_task=body.content,
+                                    integration_required=integration_required,
+                                    files_touched=files_touched,
+                                    deleted_paths=deleted_paths,
+                                )
+                                if bool(test_coverage.get("passed")):
+                                    quality_warnings.append("Test remediation pass executed and added test file edits.")
+                                    break
                         if not bool(test_coverage.get("passed")):
-                            quality_gate_failures.append(_inline_code_test_coverage_gate_failure_message(test_coverage))
+                            if _inline_code_fail_on_missing_tests():
+                                quality_gate_failures.append(_inline_code_test_coverage_gate_failure_message(test_coverage))
+                            else:
+                                quality_warnings.append(_inline_code_test_coverage_warning_message(test_coverage))
                         raw_output = _extract_task_output(terminal_task.result)
                         sanitized_output = _sanitize_repo_grounded_output(raw_output)
                         output_quality = _inline_code_output_quality_assessment(sanitized_output or raw_output)

@@ -4190,6 +4190,20 @@ def test_inline_code_test_coverage_requires_test_edits_for_feature_work(monkeypa
     assert "GlobeIQ.Server.Tests/ProgramSchedulerServiceTests.cs" in passing["test_paths"]
 
 
+def test_inline_code_missing_tests_gate_is_advisory_by_default(monkeypatch):
+    from control_plane.api import chat as chat_module
+
+    monkeypatch.delenv("NEXUSAI_INLINE_CODE_FAIL_ON_MISSING_TESTS", raising=False)
+    assert chat_module._inline_code_fail_on_missing_tests() is False
+
+
+def test_inline_code_missing_tests_gate_can_be_enabled_via_env(monkeypatch):
+    from control_plane.api import chat as chat_module
+
+    monkeypatch.setenv("NEXUSAI_INLINE_CODE_FAIL_ON_MISSING_TESTS", "1")
+    assert chat_module._inline_code_fail_on_missing_tests() is True
+
+
 def test_inline_code_workspace_marker_adds_surface_execution_hint_when_requested():
     from control_plane.api import chat as chat_module
 
