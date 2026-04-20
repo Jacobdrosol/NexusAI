@@ -4089,6 +4089,43 @@ def test_inline_code_surface_repair_prompt_mentions_missing_surfaces():
     assert "edit existing UI files" in prompt
 
 
+def test_inline_code_surface_repair_candidate_map_finds_existing_surface_files(tmp_path):
+    from control_plane.api import chat as chat_module
+
+    repo_root = tmp_path / "repo"
+    (repo_root / "GlobeIQ.WebApp/Pages/Admin").mkdir(parents=True, exist_ok=True)
+    (repo_root / "GlobeIQ.Server/Services").mkdir(parents=True, exist_ok=True)
+    (repo_root / "GlobeIQ.WebApp/Pages/Admin/Programs.razor").write_text("@code { }", encoding="utf-8")
+    (repo_root / "GlobeIQ.Server/Services/ProgramSchedulerService.cs").write_text(
+        "public class ProgramSchedulerService {}",
+        encoding="utf-8",
+    )
+    (repo_root / "README.md").write_text("ignore", encoding="utf-8")
+
+    candidates = chat_module._inline_code_surface_repair_candidate_map(
+        workspace_root=str(repo_root),
+        missing_surfaces=["server", "webapp"],
+        touched_paths=["GlobeIQ.Server/Services/ProgramSchedulerService.cs"],
+    )
+
+    assert "webapp" in candidates
+    assert "GlobeIQ.WebApp/Pages/Admin/Programs.razor" in candidates["webapp"]
+    assert "GlobeIQ.Server/Services/ProgramSchedulerService.cs" not in candidates.get("server", [])
+
+
+def test_inline_code_surface_repair_prompt_lists_candidate_files():
+    from control_plane.api import chat as chat_module
+
+    prompt = chat_module._inline_code_surface_repair_prompt(
+        ["webapp"],
+        ["GlobeIQ.Server/Services/ProgramSchedulerService.cs"],
+        candidate_map={"webapp": ["GlobeIQ.WebApp/Pages/Admin/Programs.razor"]},
+    )
+
+    assert "Candidate existing webapp files to edit now" in prompt
+    assert "GlobeIQ.WebApp/Pages/Admin/Programs.razor" in prompt
+
+
 def test_inline_code_has_write_tool_evidence_ignores_noop_edit_call():
     from control_plane.api import chat as chat_module
 

@@ -2009,9 +2009,123 @@ def _inline_code_integration_repair_prompt(created_paths: List[str]) -> str:
     )
 
 
-def _inline_code_surface_repair_prompt(missing_surfaces: List[str], touched_paths: List[str]) -> str:
+def _inline_code_surface_repair_candidate_map(
+    *,
+    workspace_root: str,
+    missing_surfaces: List[str],
+    touched_paths: List[str],
+) -> Dict[str, List[str]]:
+    root = normalize_workspace_root(workspace_root)
+    if root is None:
+        return {}
+    requested_surfaces = {
+        str(surface or "").strip().lower()
+        for surface in (missing_surfaces or [])
+        if str(surface or "").strip().lower() in {"server", "webapp"}
+    }
+    if not requested_surfaces:
+        return {}
+    touched = {
+        str(path or "").strip().replace("\\", "/").lower()
+        for path in (touched_paths or [])
+        if str(path or "").strip()
+    }
+    per_surface_limit = _env_int(
+        "NEXUSAI_INLINE_CODE_SURFACE_CANDIDATE_LIMIT_PER_SURFACE",
+        8,
+        minimum=2,
+        maximum=20,
+    )
+    scan_file_limit = _env_int(
+        "NEXUSAI_INLINE_CODE_SURFACE_CANDIDATE_SCAN_FILE_LIMIT",
+        5_000,
+        minimum=500,
+        maximum=20_000,
+    )
+    skip_dirs = {
+        ".git",
+        ".hg",
+        ".svn",
+        "__pycache__",
+        ".venv",
+        "venv",
+        "node_modules",
+        "bin",
+        "obj",
+        "dist",
+        "build",
+    }
+    scored_paths: Dict[str, List[Tuple[int, str]]] = {surface: [] for surface in requested_surfaces}
+    scanned_files = 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [name for name in dirnames if name not in skip_dirs]
+        for filename in filenames:
+            scanned_files += 1
+            if scanned_files > scan_file_limit:
+                break
+            full_path = Path(dirpath) / filename
+            try:
+                rel_path = full_path.relative_to(root).as_posix()
+            except Exception:
+                continue
+            lowered = rel_path.lower()
+            if lowered in touched:
+                continue
+            if not _inline_code_is_code_path(rel_path):
+                continue
+            surfaces = _inline_code_surfaces_for_path(rel_path)
+            if not surfaces:
+                continue
+            for surface in surfaces:
+                if surface not in requested_surfaces:
+                    continue
+                score = 0
+                if "/admin/" in lowered:
+                    score += 4
+                if any(token in lowered for token in ("program", "schedule", "report", "account", "financial")):
+                    score += 3
+                if lowered.endswith(".razor") or lowered.endswith(".tsx") or lowered.endswith(".jsx"):
+                    score += 2
+                if surface == "server" and lowered.endswith(".cs"):
+                    score += 1
+                scored_paths.setdefault(surface, []).append((score, rel_path))
+        if scanned_files > scan_file_limit:
+            break
+    output: Dict[str, List[str]] = {}
+    for surface in requested_surfaces:
+        unique: List[str] = []
+        seen: set[str] = set()
+        ranked = sorted(scored_paths.get(surface) or [], key=lambda item: (-item[0], item[1]))
+        for _score, path in ranked:
+            normalized = str(path or "").strip().replace("\\", "/")
+            key = normalized.lower()
+            if not normalized or key in seen:
+                continue
+            seen.add(key)
+            unique.append(normalized)
+            if len(unique) >= per_surface_limit:
+                break
+        if unique:
+            output[surface] = unique
+    return output
+
+
+def _inline_code_surface_repair_prompt(
+    missing_surfaces: List[str],
+    touched_paths: List[str],
+    candidate_map: Dict[str, List[str]] | None = None,
+) -> str:
     missing = ", ".join(str(item).strip().lower() for item in (missing_surfaces or []) if str(item).strip()) or "(none)"
     touched = ", ".join((touched_paths or [])[:10]) if touched_paths else "(none)"
+    candidate_lines: List[str] = []
+    for surface in ("webapp", "server"):
+        paths = list((candidate_map or {}).get(surface) or [])
+        if not paths:
+            continue
+        preview = ", ".join(paths[:6])
+        candidate_lines.append(f"- Candidate existing {surface} files to edit now: {preview}")
+    candidates_block = "\n".join(candidate_lines).strip()
+    candidates_section = f"{candidates_block}\n" if candidates_block else ""
     return (
         "Quality remediation pass: required code surfaces are missing.\n"
         f"Missing surfaces: {missing}\n"
@@ -2019,7 +2133,10 @@ def _inline_code_surface_repair_prompt(missing_surfaces: List[str], touched_path
         "Now update existing files in each missing surface and keep prior good edits intact.\n"
         "- For missing 'webapp': edit existing UI files (for example .razor pages/components).\n"
         "- For missing 'server': edit existing backend files (for example controllers/services).\n"
+        f"{candidates_section}"
         "- Use write_file or edit_file now; do not stop at discovery.\n"
+        "- Do not spend this pass on directory browsing; make at least one concrete file edit first.\n"
+        "- If needed, apply a minimal integration/wiring update in an existing file, then continue.\n"
         "- Do not ask the user for clarification."
     )
 
@@ -2177,8 +2294,18 @@ async def _inline_code_attempt_surface_repair(
     touched_paths: List[str],
     workspace_tree_preview: str = "",
 ) -> Task | None:
+    candidate_map = _inline_code_surface_repair_candidate_map(
+        workspace_root=temp_root,
+        missing_surfaces=missing_surfaces,
+        touched_paths=touched_paths,
+    )
+    prompt = _inline_code_surface_repair_prompt(
+        missing_surfaces,
+        touched_paths,
+        candidate_map=candidate_map,
+    )
     remediation_payload: List[dict] = [
-        {"role": "system", "content": _inline_code_surface_repair_prompt(missing_surfaces, touched_paths)},
+        {"role": "system", "content": prompt},
         {"role": "user", "content": str(requested_task or "").strip()},
     ]
     remediation_payload = _inject_inline_workspace_marker(
