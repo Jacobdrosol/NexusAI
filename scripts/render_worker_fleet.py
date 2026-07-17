@@ -117,6 +117,7 @@ def _worker_config(worker: dict[str, Any], fleet: dict[str, Any]) -> dict[str, A
         "id": worker_id,
         "name": str(worker.get("name") or worker_id).strip(),
         "host": service,
+        "listen_host": "0.0.0.0",
         "port": port,
         "status": "offline",
         "enabled": bool(worker.get("enabled", True)),

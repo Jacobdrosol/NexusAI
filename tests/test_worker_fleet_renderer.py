@@ -75,6 +75,7 @@ def test_render_worker_fleet_outputs_compose_worker_config_and_bot(tmp_path):
 
     worker_cfg = yaml.safe_load((out / "workers" / "content-repair-01.yaml").read_text())
     assert worker_cfg["host"] == "worker-content"
+    assert worker_cfg["listen_host"] == "0.0.0.0"
     assert worker_cfg["capabilities"][0]["provider"] == "ollama_cloud"
     assert worker_cfg["capabilities"][0]["models"] == ["glm-5.2:cloud"]
 
