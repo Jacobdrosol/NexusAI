@@ -1,0 +1,34 @@
+fleet:
+  control_plane_url: http://control_plane:8000
+  control_plane_token_env: CONTROL_PLANE_API_TOKEN
+  docker_network: nexusai_nexus-net
+  worker_node_source: ../../../nexus-worker-node
+  image: nexus-worker-node:latest
+  provider: ollama_cloud
+  default_model: glm-5.2:cloud
+  ollama_api_key_env: OLLAMA_API_KEY
+  ollama_cloud_base_url: https://ollama.com/api
+  cloud_context_policy: redact
+  heartbeat_interval_seconds: 15
+  internal_worker_port: 8010
+  bot_priority: 10
+  backend_params:
+    temperature: 0.2
+    max_tokens: 1200
+
+workers:
+  - id: example-qc-reader-01
+    name: Example QC Reader
+    role: qc-reader
+    service: example-qc-reader-01
+    can_edit: false
+    task_scope: read-only-quality-review
+    allowed_pages:
+      - /admin/dashboard
+      - /admin/documentation
+    course_scope: []
+    lesson_scope: []
+    models:
+      - glm-5.2:cloud
+    bot:
+      id: example-qc-reader-bot

@@ -6,7 +6,18 @@ from pydantic import BaseModel, ConfigDict, Field
 class Capability(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     type: Literal["llm", "embedding", "tool", "custom"]
-    provider: Literal["ollama", "vllm", "lmstudio", "openai", "claude", "gemini", "vertex", "cli", "custom"]
+    provider: Literal[
+        "ollama",
+        "ollama_cloud",
+        "vllm",
+        "lmstudio",
+        "openai",
+        "claude",
+        "gemini",
+        "vertex",
+        "cli",
+        "custom",
+    ]
     models: List[str]
     gpus: Optional[List[str]] = None
 

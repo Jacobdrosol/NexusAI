@@ -225,6 +225,30 @@ async def test_register_worker(cp_client):
 
 
 @pytest.mark.anyio
+async def test_register_worker_with_ollama_cloud_capability(cp_client):
+    worker = {
+        "id": "cloud-worker-1",
+        "name": "Cloud Worker",
+        "host": "cloud-worker-1",
+        "port": 8010,
+        "status": "offline",
+        "capabilities": [
+            {
+                "type": "llm",
+                "provider": "ollama_cloud",
+                "models": ["glm-5.2:cloud"],
+            }
+        ],
+        "metrics": {},
+        "enabled": True,
+    }
+    resp = await cp_client.post("/v1/workers", json=worker)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["capabilities"][0]["provider"] == "ollama_cloud"
+
+
+@pytest.mark.anyio
 async def test_get_worker_not_found(cp_client):
     resp = await cp_client.get("/v1/workers/nonexistent")
     assert resp.status_code == 404

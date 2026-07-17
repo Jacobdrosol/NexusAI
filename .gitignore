@@ -19,6 +19,7 @@ data/nginx/
 data/platform_ai/
 data/repo_workspaces/
 data.backup.*/
+runtime/
 .venv/
 venv/
 env/
