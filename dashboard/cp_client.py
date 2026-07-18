@@ -170,6 +170,9 @@ class CPClient:
     def register_worker(self, worker: Dict) -> Optional[Dict]:
         return self._post("/v1/workers", worker)
 
+    def provision_worker(self, worker: Dict) -> Optional[Dict]:
+        return self._post("/v1/workers/provision", worker)
+
     def update_worker(self, worker_id: str, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return self._put(f"/v1/workers/{worker_id}", body)
 

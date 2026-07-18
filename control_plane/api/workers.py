@@ -3,6 +3,7 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from control_plane.audit.utils import record_audit_event
 from shared.exceptions import WorkerNotFoundError
 from shared.models import Worker, WorkerMetrics
 
@@ -18,6 +19,17 @@ async def register_worker(request: Request, worker: Worker) -> Worker:
     worker_registry = request.app.state.worker_registry
     await worker_registry.register(worker)
     await worker_registry.update_status(worker.id, "online")
+    return await worker_registry.get(worker.id)
+
+
+@router.post("/provision", response_model=Worker, status_code=201)
+async def provision_worker(request: Request, worker: Worker) -> Worker:
+    worker_registry = request.app.state.worker_registry
+    try:
+        await worker_registry.provision(worker)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    await record_audit_event(request, action="workers.provision", resource=f"worker:{worker.id}")
     return await worker_registry.get(worker.id)
 
 

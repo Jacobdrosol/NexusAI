@@ -67,7 +67,7 @@ async def cp_app(tmp_path):
     app.include_router(vault.router)
     app.include_router(audit.router)
 
-    worker_registry = WorkerRegistry()
+    worker_registry = WorkerRegistry(db_path=str(tmp_path / "workers.db"))
     bot_registry = BotRegistry(db_path=str(tmp_path / "bots.db"))
     project_registry = ProjectRegistry(db_path=str(tmp_path / "projects.db"))
     model_registry = ModelRegistry(db_path=str(tmp_path / "models.db"))

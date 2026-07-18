@@ -93,7 +93,10 @@ async def lifespan(app: FastAPI):
     bot_configs = ConfigLoader.load_all_from_dir(bots_dir)
 
     if cp_cfg.get("seed_workers_from_config", False):
-        worker_registry.load_from_configs(worker_configs)
+        await worker_registry.seed_from_configs(
+            worker_configs,
+            force=cp_cfg.get("force_seed_workers_from_config", False),
+        )
     worker_ids = set(await worker_registry.get_worker_ids())
     if cp_cfg.get("seed_bots_from_config", False):
         force_seed = cp_cfg.get("force_seed_bots_from_config", False)

@@ -2254,6 +2254,34 @@ def test_worker_live_endpoint_returns_payload(dashboard_client):
     assert "running_tasks" in data
 
 
+def test_worker_creation_provisions_through_control_plane(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def __init__(self):
+            self.provisioned = None
+
+        def list_workers(self):
+            return []
+
+        def provision_worker(self, body):
+            self.provisioned = body
+            return {**body, "status": "offline", "last_heartbeat_at": None}
+
+    fake_cp = FakeCP()
+    with patch("dashboard.cp_client.get_cp_client", return_value=fake_cp):
+        response = dashboard_client.post(
+            "/api/workers",
+            json={"name": "New Worker", "host": "worker.internal", "port": 8011},
+        )
+
+    assert response.status_code == 201
+    assert response.get_json()["id"] == "new-worker"
+    assert response.get_json()["status"] == "offline"
+    assert fake_cp.provisioned["id"] == "new-worker"
+    assert fake_cp.provisioned["capabilities"] == []
+
+
 def test_worker_model_pull_proxy_returns_payload(dashboard_client):
     _login_admin(dashboard_client)
 

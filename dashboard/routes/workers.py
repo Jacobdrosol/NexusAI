@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+import uuid
 from typing import Any
 
 import requests
@@ -45,6 +47,11 @@ def _worker_base_url(worker: dict[str, Any]) -> str:
     if not host or not port:
         raise ValueError("worker host/port unavailable")
     return f"http://{host}:{port}"
+
+
+def _worker_id_from_name(name: Any) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", str(name or "").strip().lower()).strip("-")
+    return slug or "worker"
 
 
 @bp.get("/workers")
@@ -107,6 +114,11 @@ def worker_detail_page(worker_id: str):
 @login_required
 def api_list_workers():
     """List all workers as JSON."""
+    from dashboard.cp_client import get_cp_client
+
+    cp_workers = get_cp_client().list_workers()
+    if cp_workers is not None:
+        return jsonify(cp_workers)
     db = get_db()
     try:
         workers = db.query(Worker).all()
@@ -122,6 +134,30 @@ def api_create_worker():
     data: dict[str, Any] = request.get_json(force=True) or {}
     if not data.get("name") or not data.get("host"):
         return jsonify({"error": "name and host are required"}), 400
+    from dashboard.cp_client import get_cp_client
+
+    cp = get_cp_client()
+    cp_workers = cp.list_workers()
+    if cp_workers is not None:
+        requested_id = str(data.get("id") or "").strip()
+        worker_id = requested_id or _worker_id_from_name(data.get("name"))
+        existing_ids = {str(worker.get("id") or "") for worker in cp_workers if isinstance(worker, dict)}
+        if worker_id in existing_ids:
+            worker_id = f"{worker_id}-{uuid.uuid4().hex[:8]}"
+        payload = {
+            "id": worker_id,
+            "name": str(data["name"]).strip(),
+            "host": str(data["host"]).strip(),
+            "port": int(data.get("port", 8001)),
+            "status": "offline",
+            "capabilities": data.get("capabilities") if isinstance(data.get("capabilities"), list) else [],
+            "metrics": data.get("metrics") if isinstance(data.get("metrics"), dict) else {},
+            "enabled": bool(data.get("enabled", True)),
+        }
+        created = cp.provision_worker(payload)
+        if created is None:
+            return jsonify({"error": "control plane unavailable"}), 502
+        return jsonify(created), 201
     db = get_db()
     try:
         worker = Worker(

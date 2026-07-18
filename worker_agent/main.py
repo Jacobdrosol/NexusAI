@@ -26,6 +26,22 @@ def _cp_headers() -> dict:
     return {"X-Nexus-API-Key": CONTROL_PLANE_API_TOKEN}
 
 
+async def _register_with_control_plane(worker_config: dict, client: httpx.AsyncClient) -> bool:
+    worker_id = str(worker_config.get("id") or "unknown")
+    try:
+        response = await client.post(
+            f"{CONTROL_PLANE_URL}/v1/workers",
+            json=worker_config,
+            headers=_cp_headers(),
+        )
+        response.raise_for_status()
+        logger.info("Registered with control plane as %s", worker_id)
+        return True
+    except Exception as exc:
+        logger.warning("Could not register with control plane as %s: %s", worker_id, exc)
+        return False
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logging.basicConfig(
@@ -42,19 +58,9 @@ async def lifespan(app: FastAPI):
 
     app.state.worker_config = worker_config
 
-    # Register with control plane
     worker_id = worker_config.get("id", "unknown")
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post(
-                f"{CONTROL_PLANE_URL}/v1/workers",
-                json=worker_config,
-                headers=_cp_headers(),
-            )
-            response.raise_for_status()
-            logger.info("Registered with control plane as %s", worker_id)
-    except Exception as e:
-        logger.warning("Could not register with control plane: %s", e)
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        await _register_with_control_plane(worker_config, client)
 
     # Background heartbeat
     heartbeat_task = asyncio.create_task(_send_heartbeats(worker_id, app))
@@ -84,11 +90,17 @@ async def _send_heartbeats(worker_id: str, app: FastAPI) -> None:
             if gpu_util:
                 metrics["gpu_utilization"] = gpu_util
             async with httpx.AsyncClient(timeout=5.0) as client:
-                await client.post(
+                response = await client.post(
                     f"{CONTROL_PLANE_URL}/v1/workers/{worker_id}/heartbeat",
                     json={"metrics": metrics},
                     headers=_cp_headers(),
                 )
+                if response.status_code == 404:
+                    worker_config = getattr(app.state, "worker_config", {})
+                    if isinstance(worker_config, dict):
+                        await _register_with_control_plane(worker_config, client)
+                    continue
+                response.raise_for_status()
         except Exception as e:
             logger.warning("Heartbeat failed: %s", e)
 

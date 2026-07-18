@@ -145,6 +145,7 @@ def test_create_app_does_not_seed_workers_from_config_by_default(tmp_path, monke
         encoding="utf-8",
     )
     monkeypatch.setenv("NEXUS_CONFIG_PATH", str(config_dir / "nexus_config.yaml"))
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{(tmp_path / 'control-plane.db').as_posix()}")
 
     import control_plane.main as main_module
     importlib.reload(main_module)
@@ -223,6 +224,23 @@ async def test_register_worker(cp_client):
     assert data["id"] == "w1"
     assert data["status"] == "online"
     assert data["last_heartbeat_at"]
+
+
+@pytest.mark.anyio
+async def test_provision_worker_starts_offline(cp_client):
+    worker = {
+        "id": "provisioned-worker",
+        "name": "Provisioned Worker",
+        "host": "localhost",
+        "port": 8001,
+        "capabilities": [],
+    }
+
+    response = await cp_client.post("/v1/workers/provision", json=worker)
+
+    assert response.status_code == 201
+    assert response.json()["status"] == "offline"
+    assert response.json()["last_heartbeat_at"] is None
 
 
 @pytest.mark.anyio
