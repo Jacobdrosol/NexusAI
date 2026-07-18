@@ -1,6 +1,7 @@
 """Flask application factory for the NexusAI dashboard."""
 from __future__ import annotations
 
+import json
 import os
 import time
 from datetime import timedelta
@@ -16,6 +17,47 @@ from dashboard.models import User
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 _STATIC_DIR = Path(__file__).parent / "static"
 _DATA_DIR = Path(__file__).parent.parent / "data"
+_FLEET_FAILURE_CATEGORIES = frozenset(
+    {"policy", "output_contract", "timeout", "authentication", "transport", "model", "other"}
+)
+
+
+def _fleet_health_failure_categories(task: object) -> dict[str, int]:
+    """Extract only the fixed, aggregate failure signal from a health task."""
+    if not isinstance(task, dict):
+        return {}
+    payload = task.get("payload")
+    if not isinstance(payload, dict):
+        return {}
+    raw_events = payload.get("monitoring_events")
+    if isinstance(raw_events, str):
+        try:
+            events = json.loads(raw_events)
+        except (TypeError, ValueError):
+            return {}
+    elif isinstance(raw_events, dict):
+        events = raw_events
+    else:
+        return {}
+    if not isinstance(events, dict):
+        return {}
+    task_summary = events.get("tasks")
+    categories = task_summary.get("failed_by_category") if isinstance(task_summary, dict) else None
+    if not isinstance(categories, dict):
+        return {}
+
+    safe_categories: dict[str, int] = {}
+    for name, count in categories.items():
+        label = str(name or "").strip().lower()
+        if label not in _FLEET_FAILURE_CATEGORIES:
+            continue
+        try:
+            value = int(count)
+        except (TypeError, ValueError):
+            continue
+        if 0 < value <= 1_000_000:
+            safe_categories[label] = value
+    return dict(sorted(safe_categories.items()))
 
 
 def create_app() -> Flask:
@@ -221,6 +263,9 @@ def create_app() -> Flask:
                                             ),
                                         }
                                     )
+                                failure_categories = _fleet_health_failure_categories(task)
+                                if failure_categories:
+                                    fleet_health_report["failed_by_category"] = failure_categories
 
             total_workers = len(workers)
             online_workers = sum(1 for w in workers if w.get("status") == "online")

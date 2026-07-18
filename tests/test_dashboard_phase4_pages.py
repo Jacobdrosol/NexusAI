@@ -2,6 +2,7 @@
 
 import bcrypt
 import io
+import json
 from datetime import datetime, timezone
 from unittest.mock import patch
 
@@ -2679,6 +2680,18 @@ def test_overview_shows_latest_bounded_fleet_health_report(dashboard_client):
             assert task_id == "fleet-task"
             return {
                 "id": task_id,
+                "payload": {
+                    "monitoring_events": json.dumps(
+                        {
+                            "tasks": {
+                                "failed_by_category": {
+                                    "authentication": 2,
+                                    "secret": 99,
+                                }
+                            }
+                        }
+                    )
+                },
                 "result": {
                     "status": "warning",
                     "severity": "warning",
@@ -2697,6 +2710,9 @@ def test_overview_shows_latest_bounded_fleet_health_report(dashboard_client):
     assert b"Latest Fleet Health Analysis" in resp.data
     assert b"One worker requires runtime attention." in resp.data
     assert b"Review the worker capability evidence." in resp.data
+    assert b"Failure signals:" in resp.data
+    assert b"authentication: 2" in resp.data
+    assert b"secret: 99" not in resp.data
 
 
 def test_overview_page_shows_saved_launch_profiles(dashboard_client):

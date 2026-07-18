@@ -204,6 +204,14 @@
     {% if fleet_health_report.recommended_next_step %}
     <div class="mini-note"><strong>Next safe action:</strong> {{ fleet_health_report.recommended_next_step }}</div>
     {% endif %}
+    {% if fleet_health_report.failed_by_category %}
+    <div class="mini-note" style="margin-top:0.5rem;">
+      <strong>Failure signals:</strong>
+      {% for category, count in fleet_health_report.failed_by_category.items() %}
+      <span class="badge badge-warning">{{ category }}: {{ count }}</span>
+      {% endfor %}
+    </div>
+    {% endif %}
     <div style="margin-top:0.75rem;"><a class="quick-link" href="{{ url_for('schedules.schedules_page') }}">Review schedules</a></div>
     {% else %}
     <div class="empty">No completed fleet health analysis is available yet.</div>
