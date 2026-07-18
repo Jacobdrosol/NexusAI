@@ -217,9 +217,11 @@ def bots_page() -> str:
     cp = get_cp_client()
     cp_data = cp.list_bots()
     if cp_data is not None:
+        readiness_getter = getattr(cp, "list_bot_readiness", None)
+        readiness_payload = readiness_getter() if callable(readiness_getter) else None
         return render_template(
             "bots.html",
-            bots=_with_bot_readiness(cp_data, cp.list_bot_readiness()),
+            bots=_with_bot_readiness(cp_data, readiness_payload),
             workers=_cp_catalog_items(cp, "list_workers"),
             models=_cp_catalog_items(cp, "list_models"),
             api_keys=_cp_catalog_items(cp, "list_keys"),
