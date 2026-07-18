@@ -779,6 +779,7 @@ async def test_agent_scheduler_create_and_manual_trigger(cp_client):
             "prompt": "Process queued issues",
             "target_bot_id": bot_id,
             "status": "active",
+            "metadata": {"mutation_safe": True},
         },
     )
     assert create_schedule_resp.status_code == 200

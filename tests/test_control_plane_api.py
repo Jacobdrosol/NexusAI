@@ -193,6 +193,7 @@ def test_create_app_can_seed_workers_from_config_when_enabled(tmp_path, monkeypa
         encoding="utf-8",
     )
     monkeypatch.setenv("NEXUS_CONFIG_PATH", str(config_dir / "nexus_config.yaml"))
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{(tmp_path / 'control-plane.db').as_posix()}")
 
     import control_plane.main as main_module
     importlib.reload(main_module)
