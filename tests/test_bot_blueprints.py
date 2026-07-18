@@ -68,6 +68,7 @@ def test_content_writer_blueprint_is_disabled_and_draft_only_by_default():
     assert bot.routing_rules["specialist"]["risk_level"] == "draft_only"
     assert bot.routing_rules["input_contract"]["required_fields"] == ["instruction"]
     assert bot.routing_rules["output_contract"]["non_empty_fields"] == ["status", "draft"]
+    assert bot.routing_rules["output_contract"]["allow_blocked_status"] is True
     assert "draft" in bot.workflow.required_output_fields
     assert "never publish" in bot.system_prompt.lower()
 

@@ -494,17 +494,41 @@ def _extract_pm_pipeline_stage_summaries(payload: Any) -> List[Dict[str, Any]]:
     return stages
 
 
-def _payload_satisfies_output_contract(payload: Any, required_fields: list[str], non_empty_fields: list[str]) -> bool:
+def _effective_non_empty_output_fields(
+    payload: Any,
+    non_empty_fields: list[str],
+    *,
+    allow_blocked_status: bool,
+) -> list[str]:
+    if not allow_blocked_status or not isinstance(payload, dict):
+        return [str(field) for field in non_empty_fields]
+    if str(payload.get("status") or "").strip().lower() != "blocked":
+        return [str(field) for field in non_empty_fields]
+    return [str(field) for field in non_empty_fields if str(field) == "status"]
+
+
+def _payload_satisfies_output_contract(
+    payload: Any,
+    required_fields: list[str],
+    non_empty_fields: list[str],
+    *,
+    allow_blocked_status: bool = False,
+) -> bool:
     if not isinstance(payload, dict):
         return False
     if required_fields:
         missing = [field for field in required_fields if str(field) not in payload]
         if missing:
             return False
-    if non_empty_fields:
+    effective_non_empty_fields = _effective_non_empty_output_fields(
+        payload,
+        non_empty_fields,
+        allow_blocked_status=allow_blocked_status,
+    )
+    if effective_non_empty_fields:
         empty_fields = [
             str(field)
-            for field in non_empty_fields
+            for field in effective_non_empty_fields
             if _is_empty_contract_value(_lookup_payload_path(payload, str(field)))
         ]
         if empty_fields:
@@ -4334,6 +4358,7 @@ class TaskManager:
         output_format = str(contract.get("format") or "any").strip().lower()
         required_fields = contract.get("required_fields") if isinstance(contract.get("required_fields"), list) else []
         non_empty_fields = contract.get("non_empty_fields") if isinstance(contract.get("non_empty_fields"), list) else []
+        allow_blocked_status = bool(contract.get("allow_blocked_status", False))
         defaults_template = contract.get("defaults_template") if isinstance(contract.get("defaults_template"), dict) else None
         fallback_mode = str(contract.get("fallback_mode") or "").strip().lower()
         if fallback_mode not in {"disabled", "missing_only", "parse_failure", "parse_failure_or_missing"}:
@@ -4353,7 +4378,12 @@ class TaskManager:
             return result
 
         if mode == "payload_transform":
-            if _payload_satisfies_output_contract(task.payload, [str(field) for field in required_fields], [str(field) for field in non_empty_fields]):
+            if _payload_satisfies_output_contract(
+                task.payload,
+                [str(field) for field in required_fields],
+                [str(field) for field in non_empty_fields],
+                allow_blocked_status=allow_blocked_status,
+            ):
                 normalized = task.payload
             else:
                 template = contract.get("template")
@@ -4444,12 +4474,17 @@ class TaskManager:
                     missing = [field for field in required_fields if str(field) not in normalized]
             if missing:
                 raise ValueError(f"output contract missing required fields: {', '.join(str(field) for field in missing)}")
-        if non_empty_fields:
+        effective_non_empty_fields = _effective_non_empty_output_fields(
+            normalized,
+            [str(field) for field in non_empty_fields],
+            allow_blocked_status=allow_blocked_status,
+        )
+        if effective_non_empty_fields:
             if not isinstance(normalized, dict):
                 raise ValueError("non-empty fields can only be validated on JSON objects")
             empty_fields = [
                 str(field)
-                for field in non_empty_fields
+                for field in effective_non_empty_fields
                 if _is_empty_contract_value(_lookup_payload_path(normalized, str(field)))
             ]
             if empty_fields:

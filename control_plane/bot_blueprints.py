@@ -307,6 +307,7 @@ def build_specialist_bot(request: SpecialistBlueprintRequest) -> Bot:
             "format": "json_object",
             "required_fields": output_fields,
             "non_empty_fields": ["status", output_fields[1]],
+            "allow_blocked_status": True,
             "max_retries": 1,
         },
     }

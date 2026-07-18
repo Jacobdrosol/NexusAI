@@ -4480,6 +4480,60 @@ async def test_output_contract_non_empty_fields_fail_incomplete_output(tmp_path)
 
 
 @pytest.mark.anyio
+async def test_output_contract_allows_blocked_result_without_primary_artifact(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {
+                "output": json.dumps(
+                    {
+                        "status": "blocked",
+                        "outline": None,
+                        "source_gaps": ["Audience and source material are required."],
+                    }
+                )
+            }
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "blocked-output-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="planner-bot",
+            name="Planner",
+            role="assistant",
+            backends=[],
+            routing_rules={
+                "output_contract": {
+                    "enabled": True,
+                    "mode": "model_output",
+                    "format": "json_object",
+                    "required_fields": ["status", "outline", "source_gaps"],
+                    "non_empty_fields": ["status", "outline"],
+                    "allow_blocked_status": True,
+                }
+            },
+        )
+    )
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "blocked-output.db"), bot_registry=bot_registry)
+    task = await tm.create_task(bot_id="planner-bot", payload={"instruction": "plan"})
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.1)
+
+    assert updated.status == "completed"
+    assert updated.result["status"] == "blocked"
+    assert updated.result["outline"] is None
+
+
+@pytest.mark.anyio
 async def test_output_contract_error_includes_truncation_hint_when_finish_reason_is_length(tmp_path):
     import asyncio
 
