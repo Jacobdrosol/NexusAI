@@ -138,6 +138,7 @@ def create_app() -> Flask:
         worker_runtime_ready = None
         active_schedules = 0
         failed_schedule_runs = 0
+        fleet_health_report = None
 
         if cp_available:
             workers = cp_workers or []
@@ -175,6 +176,51 @@ def create_app() -> Flask:
                     schedules_unavailable = True
             else:
                 schedules_unavailable = True
+
+            if not schedules_unavailable:
+                fleet_health_schedules = [
+                    schedule
+                    for schedule in schedules
+                    if isinstance(schedule.get("metadata"), dict)
+                    and isinstance(schedule["metadata"].get("system_payload_source"), dict)
+                    and str(schedule["metadata"]["system_payload_source"].get("type") or "")
+                    == "control_plane_fleet_summary_v1"
+                ]
+                latest_fleet_health_schedule = max(
+                    fleet_health_schedules,
+                    key=lambda schedule: str(schedule.get("updated_at") or schedule.get("created_at") or ""),
+                    default=None,
+                )
+                if latest_fleet_health_schedule is not None:
+                    run_getter = getattr(cp, "list_schedule_runs", None)
+                    if callable(run_getter):
+                        run_payload = run_getter(str(latest_fleet_health_schedule.get("id") or ""), limit=1)
+                        runs = run_payload.get("runs") if isinstance(run_payload, dict) else None
+                        latest_run = runs[0] if isinstance(runs, list) and runs else None
+                        if isinstance(latest_run, dict):
+                            fleet_health_report = {
+                                "run_status": str(latest_run.get("status") or "unknown"),
+                                "finished_at": str(latest_run.get("finished_at") or ""),
+                                "schedule_id": str(latest_fleet_health_schedule.get("id") or ""),
+                            }
+                            task_id = str(latest_run.get("task_id") or "").strip()
+                            task_getter = getattr(cp, "get_task", None)
+                            if task_id and callable(task_getter):
+                                task_payload = task_getter(task_id)
+                                task = task_payload.get("task") if isinstance(task_payload, dict) else None
+                                task = task if isinstance(task, dict) else task_payload
+                                result = task.get("result") if isinstance(task, dict) else None
+                                if isinstance(result, dict):
+                                    fleet_health_report.update(
+                                        {
+                                            "status": str(result.get("status") or "unknown"),
+                                            "severity": str(result.get("severity") or "unknown"),
+                                            "health_summary": str(result.get("health_summary") or ""),
+                                            "recommended_next_step": str(
+                                                result.get("recommended_next_step") or ""
+                                            ),
+                                        }
+                                    )
 
             total_workers = len(workers)
             online_workers = sum(1 for w in workers if w.get("status") == "online")
@@ -589,6 +635,7 @@ def create_app() -> Flask:
             active_schedules=active_schedules,
             failed_schedule_runs=failed_schedule_runs,
             schedules_unavailable=schedules_unavailable,
+            fleet_health_report=fleet_health_report,
             recent_activity=recent_activity,
             launchable_bots=overview_launch_bots,
             system_alerts=system_alerts,

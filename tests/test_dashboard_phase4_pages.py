@@ -2549,6 +2549,7 @@ def test_overview_page_shows_enhanced_sections(dashboard_client):
     assert b"Required complete" in resp.data
     assert b"System Alerts" in resp.data
     assert b"Fleet Readiness" in resp.data
+    assert b"Latest Fleet Health Analysis" in resp.data
     assert b"Worker runtime attention" in resp.data
     assert b"Active schedules" in resp.data
     assert b"Recent Activity" in resp.data
@@ -2623,6 +2624,79 @@ def test_overview_reports_worker_capability_and_schedule_attention(dashboard_cli
     assert b"runtime degraded" in resp.data
     assert b"browser_session_check_failed" in resp.data
     assert b"1 most-recent run(s) failed" in resp.data
+
+
+def test_overview_shows_latest_bounded_fleet_health_report(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def health(self):
+            return True
+
+        def list_workers(self):
+            return []
+
+        def list_worker_probes(self):
+            return {"probes": []}
+
+        def list_bots(self):
+            return []
+
+        def list_projects(self):
+            return []
+
+        def list_tasks(self, **kwargs):
+            return []
+
+        def list_schedules(self, **kwargs):
+            return {
+                "schedules": [
+                    {
+                        "id": "fleet-health",
+                        "status": "active",
+                        "last_run_status": "completed",
+                        "metadata": {
+                            "system_payload_source": {"type": "control_plane_fleet_summary_v1"}
+                        },
+                    }
+                ]
+            }
+
+        def list_schedule_runs(self, schedule_id, limit=50):
+            assert schedule_id == "fleet-health"
+            assert limit == 1
+            return {
+                "runs": [
+                    {
+                        "status": "completed",
+                        "finished_at": "2026-07-18T22:30:00+00:00",
+                        "task_id": "fleet-task",
+                    }
+                ]
+            }
+
+        def get_task(self, task_id):
+            assert task_id == "fleet-task"
+            return {
+                "id": task_id,
+                "result": {
+                    "status": "warning",
+                    "severity": "warning",
+                    "health_summary": "One worker requires runtime attention.",
+                    "recommended_next_step": "Review the worker capability evidence.",
+                },
+            }
+
+        def probe_paths(self, paths):
+            return [{"path": path, "ok": True, "status_code": 200, "detail": "ok"} for path in paths]
+
+    with patch("dashboard.cp_client.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/")
+
+    assert resp.status_code == 200
+    assert b"Latest Fleet Health Analysis" in resp.data
+    assert b"One worker requires runtime attention." in resp.data
+    assert b"Review the worker capability evidence." in resp.data
 
 
 def test_overview_page_shows_saved_launch_profiles(dashboard_client):

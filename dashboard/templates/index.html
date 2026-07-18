@@ -188,6 +188,29 @@
   </section>
 
   <section class="panel">
+    <h2 class="panel-title">Latest Fleet Health Analysis</h2>
+    {% if fleet_health_report %}
+    <div class="mini-note" style="margin-bottom:0.75rem;">
+      Schedule run:
+      <span class="badge badge-{% if fleet_health_report.run_status == 'completed' %}ready{% elif fleet_health_report.run_status == 'failed' %}failed{% else %}warning{% endif %}">{{ fleet_health_report.run_status }}</span>
+      {% if fleet_health_report.finished_at %}{{ fleet_health_report.finished_at }}{% endif %}
+    </div>
+    {% if fleet_health_report.health_summary %}
+    <p style="margin:0 0 0.75rem;">{{ fleet_health_report.health_summary }}</p>
+    {% endif %}
+    {% if fleet_health_report.severity %}
+    <div class="mini-note" style="margin-bottom:0.5rem;"><strong>Severity:</strong> {{ fleet_health_report.severity }}</div>
+    {% endif %}
+    {% if fleet_health_report.recommended_next_step %}
+    <div class="mini-note"><strong>Next safe action:</strong> {{ fleet_health_report.recommended_next_step }}</div>
+    {% endif %}
+    <div style="margin-top:0.75rem;"><a class="quick-link" href="{{ url_for('schedules.schedules_page') }}">Review schedules</a></div>
+    {% else %}
+    <div class="empty">No completed fleet health analysis is available yet.</div>
+    {% endif %}
+  </section>
+
+  <section class="panel">
     <h2 class="panel-title">Fleet Readiness</h2>
     <table>
       <thead><tr><th>Area</th><th>Status</th><th>Detail</th></tr></thead>
