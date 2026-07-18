@@ -63,6 +63,17 @@ def api_list_schedules():
     return jsonify(data)
 
 
+@bp.get("/api/schedules/bots/<bot_id>/readiness")
+@login_required
+def api_get_schedule_bot_readiness(bot_id: str):
+    """Expose the control plane's non-secret dispatch readiness for schedule setup."""
+    cp = get_cp_client()
+    data = cp.get_bot_readiness(bot_id)
+    if data is None:
+        return _cp_error_response(cp, "failed to load bot readiness")
+    return jsonify(data)
+
+
 @bp.post("/api/schedules")
 @login_required
 def api_create_schedule():

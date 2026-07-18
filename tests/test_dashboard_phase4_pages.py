@@ -35,6 +35,26 @@ def test_projects_page_loads_when_logged_in(dashboard_client):
     assert b"Projects" in resp.data
 
 
+def test_schedule_bot_readiness_api_proxies_non_secret_readiness(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def get_bot_readiness(self, bot_id):
+            return {
+                "bot_id": bot_id,
+                "ready": False,
+                "summary": {"checks": 1, "failed": 1, "warnings": 0},
+                "checks": [{"component": "worker", "status": "failed", "message": "no healthy worker"}],
+            }
+
+    with patch("dashboard.routes.schedules.get_cp_client", return_value=FakeCP()):
+        response = dashboard_client.get("/api/schedules/bots/example-bot/readiness")
+
+    assert response.status_code == 200
+    assert response.get_json()["bot_id"] == "example-bot"
+    assert response.get_json()["ready"] is False
+
+
 def test_project_detail_page_handles_unavailable_cp(dashboard_client):
     _login_admin(dashboard_client)
     resp = dashboard_client.get("/projects/proj-x")

@@ -125,9 +125,52 @@ function setScheduleCreateStatus(message, isError=false) {
   el.style.color = isError ? '#dc2626' : '#64748b';
 }
 
+let selectedScheduleBotReadiness = null;
+let selectedScheduleBotId = '';
+
+function scheduleReadinessBlockers(readiness) {
+  const checks = readiness && Array.isArray(readiness.checks) ? readiness.checks : [];
+  const failed = checks.filter((item) => item && item.status === 'failed');
+  const warnings = checks.filter((item) => item && item.status === 'warning');
+  const details = failed.length ? failed : warnings;
+  return details.map((item) => String(item && (item.message || item.name) || '')).filter(Boolean);
+}
+
+async function refreshSelectedScheduleBotReadiness() {
+  const select = document.getElementById('schedule-bot');
+  const botId = String(select.value || '').trim();
+  selectedScheduleBotId = botId;
+  selectedScheduleBotReadiness = null;
+  if (!botId) {
+    setScheduleCreateStatus('Select a bot to check whether it can receive recurring dispatch.');
+    return null;
+  }
+
+  setScheduleCreateStatus('Checking bot readiness...');
+  const response = await fetch('/api/schedules/bots/' + encodeURIComponent(botId) + '/readiness');
+  const data = await response.json().catch(() => ({}));
+  if (botId !== String(select.value || '').trim()) {
+    return null;
+  }
+  if (!response.ok) {
+    setScheduleCreateStatus(data.error || 'Unable to verify bot readiness. Active scheduling is blocked until it can be confirmed.', true);
+    return null;
+  }
+
+  selectedScheduleBotReadiness = data;
+  if (data.ready === true) {
+    setScheduleCreateStatus('This bot is ready for active recurring dispatch.');
+    return data;
+  }
+  const blockers = scheduleReadinessBlockers(data);
+  const detail = blockers.length ? ' ' + blockers.join(' ') : '';
+  setScheduleCreateStatus('This bot cannot be activated yet. You can create the schedule paused and resolve its readiness blockers first.' + detail, true);
+  return data;
+}
+
 function openCreateSchedule() {
   document.getElementById('modal-create-schedule').style.display = 'flex';
-  setScheduleCreateStatus('');
+  refreshSelectedScheduleBotReadiness();
 }
 
 function closeCreateSchedule() {
@@ -151,6 +194,14 @@ document.getElementById('form-create-schedule').addEventListener('submit', async
     setScheduleCreateStatus('Name, target bot, cron expression, and task instruction are required.', true);
     return;
   }
+  if (payload.status === 'active') {
+    const hasCurrentReadiness = selectedScheduleBotId === payload.target_bot_id && selectedScheduleBotReadiness;
+    const readiness = hasCurrentReadiness ? selectedScheduleBotReadiness : await refreshSelectedScheduleBotReadiness();
+    if (!readiness || readiness.ready !== true) {
+      setScheduleCreateStatus('Active scheduling is blocked until this bot is ready. Create the schedule paused after resolving its blockers.', true);
+      return;
+    }
+  }
   setScheduleCreateStatus('Creating schedule...');
   const response = await fetch('/api/schedules', {
     method: 'POST',
@@ -164,6 +215,8 @@ document.getElementById('form-create-schedule').addEventListener('submit', async
   }
   window.location.reload();
 });
+
+document.getElementById('schedule-bot').addEventListener('change', refreshSelectedScheduleBotReadiness);
 
 async function toggleSchedule(scheduleId, status) {
   const response = await fetch('/api/schedules/' + encodeURIComponent(scheduleId), {
