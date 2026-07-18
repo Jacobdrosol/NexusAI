@@ -23,6 +23,8 @@ services:
 
   dashboard_blue:
     container_name: nexus-dashboard-blue
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     build:
       context: .
       dockerfile: dashboard/Dockerfile
@@ -45,6 +47,8 @@ services:
 
   dashboard_green:
     container_name: nexus-dashboard-green
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     build:
       context: .
       dockerfile: dashboard/Dockerfile

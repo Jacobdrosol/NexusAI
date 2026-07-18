@@ -8,6 +8,8 @@ volumes:
 services:
   control_plane:
     shm_size: "24gb"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     build:
       context: .
       dockerfile: control_plane/Dockerfile
@@ -29,6 +31,8 @@ services:
 
   worker_agent:
     shm_size: "24gb"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     build:
       context: .
       dockerfile: worker_agent/Dockerfile
@@ -49,6 +53,8 @@ services:
       retries: 3
 
   dashboard:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     build:
       context: .
       dockerfile: dashboard/Dockerfile
