@@ -88,6 +88,16 @@ def _json_load(raw: Any, default: Any) -> Any:
         return default
 
 
+def _schedule_task_payload(schedule: Dict[str, Any]) -> Dict[str, Any]:
+    direct_payload = schedule.get("task_payload")
+    if isinstance(direct_payload, dict):
+        return dict(direct_payload)
+    metadata = schedule.get("metadata")
+    if isinstance(metadata, dict) and isinstance(metadata.get("task_payload"), dict):
+        return dict(metadata["task_payload"])
+    return {}
+
+
 def _db_path() -> str:
     db_url = str(os.environ.get("DATABASE_URL", "") or "").strip()
     if db_url.startswith("sqlite:///"):
@@ -246,6 +256,11 @@ class AgentScheduleEngine:
             conversation_id=conversation_id,
         )
         next_run = _next_run_time(cron_expression, timezone_name, after=now)
+        metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+        metadata = dict(metadata)
+        task_payload = payload.get("task_payload") if isinstance(payload.get("task_payload"), dict) else {}
+        if "task_payload" in payload:
+            metadata["task_payload"] = task_payload
         schedule = {
             "id": str(uuid.uuid4()),
             "name": str(payload.get("name") or "").strip() or "Scheduled Agent",
@@ -258,9 +273,10 @@ class AgentScheduleEngine:
             "conversation_id": conversation_id,
             "project_id": str(payload.get("project_id") or "").strip() or None,
             "node_overrides": payload.get("node_overrides") if isinstance(payload.get("node_overrides"), dict) else {},
+            "task_payload": task_payload,
             "retry_max": max(0, int(payload.get("retry_max", 2))),
             "retry_backoff_seconds": max(1, int(payload.get("retry_backoff_seconds", 30))),
-            "metadata": payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {},
+            "metadata": metadata,
             "last_scheduled_at": None,
             "next_run_at": _iso(next_run),
             "last_run_at": None,
@@ -363,6 +379,7 @@ class AgentScheduleEngine:
             "assignment_pm_bot_id",
             "conversation_id",
             "project_id",
+            "task_payload",
             "retry_max",
             "retry_backoff_seconds",
         ):
@@ -374,6 +391,11 @@ class AgentScheduleEngine:
             next_meta = dict(merged.get("metadata") or {})
             next_meta.update(patch["metadata"])
             merged["metadata"] = next_meta
+        if "task_payload" in patch and isinstance(patch.get("task_payload"), dict):
+            next_meta = dict(merged.get("metadata") or {})
+            next_meta["task_payload"] = dict(patch["task_payload"])
+            merged["metadata"] = next_meta
+        merged["task_payload"] = _schedule_task_payload(merged)
 
         merged["status"] = _normalize_schedule_status(merged.get("status"))
         merged["cron_expression"] = str(merged.get("cron_expression") or "").strip()
@@ -653,9 +675,11 @@ class AgentScheduleEngine:
             }
         target_bot_id = str(schedule.get("target_bot_id") or "").strip()
         if target_bot_id and prompt:
+            task_payload = _schedule_task_payload(schedule)
             task = await self._task_manager.create_task(
                 bot_id=target_bot_id,
                 payload={
+                    **task_payload,
                     "instruction": prompt,
                     "source": "agent_schedule",
                     "schedule_id": str(schedule.get("id") or ""),
@@ -717,6 +741,7 @@ class AgentScheduleEngine:
     def _row_to_schedule(self, row: Any) -> Optional[Dict[str, Any]]:
         if row is None:
             return None
+        metadata = _json_load(row["metadata_json"], {})
         return {
             "id": str(row["id"]),
             "name": str(row["name"] or ""),
@@ -729,9 +754,10 @@ class AgentScheduleEngine:
             "conversation_id": str(row["conversation_id"] or "") or None,
             "project_id": str(row["project_id"] or "") or None,
             "node_overrides": _json_load(row["node_overrides_json"], {}),
+            "task_payload": _schedule_task_payload({"metadata": metadata}),
             "retry_max": int(row["retry_max"] or 0),
             "retry_backoff_seconds": int(row["retry_backoff_seconds"] or 30),
-            "metadata": _json_load(row["metadata_json"], {}),
+            "metadata": metadata,
             "last_scheduled_at": str(row["last_scheduled_at"] or "") or None,
             "next_run_at": str(row["next_run_at"] or "") or None,
             "last_run_at": str(row["last_run_at"] or "") or None,

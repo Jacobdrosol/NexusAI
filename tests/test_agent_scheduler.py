@@ -117,6 +117,29 @@ async def test_schedule_dispatch_guard_blocks_unsafe_run(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_schedule_dispatch_merges_structured_task_payload(tmp_path):
+    task_manager = _FakeTaskManager()
+    engine = AgentScheduleEngine(
+        assignment_service=object(),
+        task_manager=task_manager,
+        db_path=str(tmp_path / "schedules.db"),
+    )
+    schedule = await engine.create_schedule(
+        {
+            **_schedule_payload(),
+            "task_payload": {"artifact": "draft lesson", "acceptance_criteria": "No factual errors", "instruction": "ignored"},
+        }
+    )
+
+    await engine.trigger_schedule(schedule["id"])
+
+    payload = task_manager.create_calls[0]["payload"]
+    assert payload["artifact"] == "draft lesson"
+    assert payload["acceptance_criteria"] == "No factual errors"
+    assert payload["instruction"] == "Reply with exactly OK."
+
+
+@pytest.mark.anyio
 async def test_schedule_listing_filters_status_and_rejects_invalid_status(tmp_path):
     engine = AgentScheduleEngine(
         assignment_service=object(),

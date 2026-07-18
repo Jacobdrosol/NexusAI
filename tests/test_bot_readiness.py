@@ -230,6 +230,57 @@ async def test_active_schedule_rejects_mutation_capable_target(cp_client):
 
 
 @pytest.mark.anyio
+async def test_active_schedule_requires_complete_task_payload(cp_client):
+    bot_id = "scheduled-structured-review-bot"
+    await cp_client.post(
+        "/v1/bots",
+        json={
+            "id": bot_id,
+            "name": "Scheduled Structured Review Bot",
+            "role": "reviewer",
+            "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "review-model"}],
+            "routing_rules": {
+                "input_contract": {
+                    "enabled": True,
+                    "format": "json_object",
+                    "required_fields": ["artifact", "acceptance_criteria"],
+                    "non_empty_fields": ["artifact", "acceptance_criteria"],
+                }
+            },
+        },
+    )
+
+    incomplete = await cp_client.post(
+        "/v1/schedules",
+        json={
+            "name": "Incomplete review",
+            "cron_expression": "0 * * * *",
+            "prompt": "Review the artifact.",
+            "target_bot_id": bot_id,
+            "status": "active",
+            "metadata": {"mutation_safe": True},
+        },
+    )
+    complete = await cp_client.post(
+        "/v1/schedules",
+        json={
+            "name": "Complete review",
+            "cron_expression": "0 * * * *",
+            "prompt": "Review the artifact.",
+            "target_bot_id": bot_id,
+            "status": "active",
+            "metadata": {"mutation_safe": True},
+            "task_payload": {"artifact": "A bounded draft", "acceptance_criteria": "No errors"},
+        },
+    )
+
+    assert incomplete.status_code == 409
+    assert incomplete.json()["detail"]["reason_code"] == "schedule_payload_contract_incomplete"
+    assert complete.status_code == 200
+    assert complete.json()["schedule"]["task_payload"]["artifact"] == "A bounded draft"
+
+
+@pytest.mark.anyio
 async def test_bot_enable_requires_a_ready_backend(cp_client):
     bot_id = "staged-unready-bot"
     created = await cp_client.post(

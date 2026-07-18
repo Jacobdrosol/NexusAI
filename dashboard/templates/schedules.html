@@ -93,6 +93,10 @@
         <textarea class="form-control" id="schedule-prompt" name="prompt" rows="5" required></textarea>
       </div>
       <div class="form-group">
+        <label for="schedule-task-payload">Task Payload JSON</label>
+        <textarea class="form-control" id="schedule-task-payload" name="task_payload" rows="6" placeholder='{"artifact":"...","acceptance_criteria":"..."}'>{}</textarea>
+      </div>
+      <div class="form-group">
         <label><input type="checkbox" id="schedule-active" name="active"> Enable recurring dispatch</label>
       </div>
       <div class="form-group">
@@ -190,6 +194,20 @@ function closeCreateSchedule() {
 document.getElementById('form-create-schedule').addEventListener('submit', async function(event) {
   event.preventDefault();
   const form = new FormData(this);
+  let taskPayload = {};
+  const rawTaskPayload = String(form.get('task_payload') || '').trim();
+  if (rawTaskPayload) {
+    try {
+      taskPayload = JSON.parse(rawTaskPayload);
+    } catch (error) {
+      setScheduleCreateStatus('Task payload must be valid JSON.', true);
+      return;
+    }
+    if (!taskPayload || Array.isArray(taskPayload) || typeof taskPayload !== 'object') {
+      setScheduleCreateStatus('Task payload must be a JSON object.', true);
+      return;
+    }
+  }
   const payload = {
     name: String(form.get('name') || '').trim(),
     target_bot_id: String(form.get('target_bot_id') || '').trim(),
@@ -197,6 +215,7 @@ document.getElementById('form-create-schedule').addEventListener('submit', async
     timezone: String(form.get('timezone') || '').trim() || 'UTC',
     project_id: String(form.get('project_id') || '').trim() || null,
     prompt: String(form.get('prompt') || '').trim(),
+    task_payload: taskPayload,
     status: document.getElementById('schedule-active').checked ? 'active' : 'paused',
     metadata: {
       source: 'dashboard_schedule_manager',

@@ -72,6 +72,7 @@ class CreateScheduleRequest(BaseModel):
     conversation_id: Optional[str] = None
     project_id: Optional[str] = None
     node_overrides: Dict[str, Any] = Field(default_factory=dict)
+    task_payload: Dict[str, Any] = Field(default_factory=dict)
     retry_max: int = 2
     retry_backoff_seconds: int = 30
     metadata: Dict[str, Any] = Field(default_factory=dict)
@@ -88,6 +89,7 @@ class UpdateScheduleRequest(BaseModel):
     conversation_id: Optional[str] = None
     project_id: Optional[str] = None
     node_overrides: Optional[Dict[str, Any]] = None
+    task_payload: Optional[Dict[str, Any]] = None
     retry_max: Optional[int] = None
     retry_backoff_seconds: Optional[int] = None
     metadata: Optional[Dict[str, Any]] = None
