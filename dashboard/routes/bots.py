@@ -175,6 +175,36 @@ def _cp_catalog_items(cp, method_name: str) -> list[dict[str, Any]]:
     return result if isinstance(result, list) else []
 
 
+def _bot_readiness_view(readiness: Any) -> dict[str, Any] | None:
+    if not isinstance(readiness, dict):
+        return None
+    failures = [
+        str(check.get("message") or "").strip()
+        for check in readiness.get("checks") or []
+        if isinstance(check, dict) and str(check.get("status") or "").strip().lower() == "failed"
+    ]
+    return {
+        "ready": bool(readiness.get("ready")),
+        "detail": failures[0] if failures else "All declared dispatch checks passed.",
+        "failed": len(failures),
+    }
+
+
+def _with_bot_readiness(bots: list[dict[str, Any]], payload: Any) -> list[dict[str, Any]]:
+    raw_readiness = payload.get("readiness") if isinstance(payload, dict) else []
+    readiness_by_id = {
+        str(item.get("bot_id") or "").strip(): item
+        for item in raw_readiness
+        if isinstance(item, dict) and str(item.get("bot_id") or "").strip()
+    }
+    enriched: list[dict[str, Any]] = []
+    for bot in bots:
+        row = dict(bot)
+        row["readiness"] = _bot_readiness_view(readiness_by_id.get(str(row.get("id") or "").strip()))
+        enriched.append(row)
+    return enriched
+
+
 @bp.get("/bots")
 @login_required
 def bots_page() -> str:
@@ -186,7 +216,7 @@ def bots_page() -> str:
     if cp_data is not None:
         return render_template(
             "bots.html",
-            bots=cp_data,
+            bots=_with_bot_readiness(cp_data, cp.list_bot_readiness()),
             workers=_cp_catalog_items(cp, "list_workers"),
             models=_cp_catalog_items(cp, "list_models"),
             api_keys=_cp_catalog_items(cp, "list_keys"),

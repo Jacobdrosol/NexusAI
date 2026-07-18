@@ -18,7 +18,7 @@
 <table id="bots-table">
   <thead>
     <tr>
-      <th>Name</th><th>Role</th><th>Priority</th><th>Enabled</th><th>Backends</th><th>Actions</th>
+      <th>Name</th><th>Role</th><th>Priority</th><th>Enabled</th><th>Readiness</th><th>Backends</th><th>Actions</th>
     </tr>
   </thead>
   <tbody>
@@ -28,6 +28,14 @@
       <td>{{ b.role }}</td>
       <td>{{ b.priority }}</td>
       <td><span class="badge badge-{{ 'enabled' if b.enabled else 'disabled' }}">{{ 'enabled' if b.enabled else 'disabled' }}</span></td>
+      <td>
+        {% if b.readiness %}
+        <span class="badge badge-{{ 'ready' if b.readiness.ready else 'blocked' }}" title="{{ b.readiness.detail }}">{{ 'ready' if b.readiness.ready else 'blocked' }}</span>
+        {% if b.readiness.failed %}<div class="metrics">{{ b.readiness.failed }} check(s)</div>{% endif %}
+        {% else %}
+        <span class="badge badge-unknown">unknown</span>
+        {% endif %}
+      </td>
       <td>{{ b.backends | length }} backend(s)</td>
       <td class="actions">
         <button class="btn btn-sm" onclick="toggleBot('{{ b.id }}', {{ 'false' if b.enabled else 'true' }})">
@@ -37,7 +45,7 @@
       </td>
     </tr>
     {% else %}
-    <tr><td colspan="6" style="text-align:center;color:#718096;">No bots registered</td></tr>
+    <tr><td colspan="7" style="text-align:center;color:#718096;">No bots registered</td></tr>
     {% endfor %}
   </tbody>
 </table>

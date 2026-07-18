@@ -33,6 +33,26 @@ async def test_bot_readiness_reports_ready_worker_backend(cp_client):
 
 
 @pytest.mark.anyio
+async def test_bot_readiness_list_returns_each_registered_bot(cp_client):
+    await cp_client.post(
+        "/v1/bots",
+        json={
+            "id": "listed-bot",
+            "name": "Listed Bot",
+            "role": "worker",
+            "backends": [],
+        },
+    )
+
+    response = await cp_client.get("/v1/bots/readiness")
+
+    assert response.status_code == 200
+    assert response.json()["count"] == 1
+    assert response.json()["readiness"][0]["bot_id"] == "listed-bot"
+    assert response.json()["readiness"][0]["ready"] is False
+
+
+@pytest.mark.anyio
 async def test_schedule_activation_requires_a_ready_bot(cp_client):
     bot_id = "unready-bot"
     await cp_client.post(

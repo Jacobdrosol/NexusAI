@@ -261,6 +261,23 @@ async def list_bots(request: Request) -> List[Bot]:
     return await bot_registry.list()
 
 
+@router.get("/readiness")
+async def list_bot_readiness(request: Request) -> Dict[str, Any]:
+    """Return non-mutating dispatch readiness for every registered bot."""
+    bot_registry = request.app.state.bot_registry
+    bots = await bot_registry.list()
+    readiness = [
+        await assess_bot_instance_readiness(
+            bot,
+            worker_registry=request.app.state.worker_registry,
+            connection_resolver=request.app.state.connection_resolver,
+            worker_probe_store=request.app.state.worker_probe_store,
+        )
+        for bot in bots
+    ]
+    return {"readiness": readiness, "count": len(readiness)}
+
+
 @router.get("/{bot_id}/readiness")
 async def get_bot_readiness(bot_id: str, request: Request) -> Dict[str, Any]:
     try:

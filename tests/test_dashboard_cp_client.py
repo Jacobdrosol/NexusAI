@@ -109,6 +109,21 @@ def test_list_worker_probes_hits_fleet_probe_endpoint():
     assert called_url.endswith("/v1/workers/probes")
 
 
+def test_list_bot_readiness_hits_fleet_readiness_endpoint():
+    cp = CPClient(base_url="http://example.invalid", timeout=0.1)
+
+    ok_resp = Mock()
+    ok_resp.raise_for_status.return_value = None
+    ok_resp.text = '{"readiness":[]}'
+    ok_resp.json.return_value = {"readiness": []}
+
+    with patch("dashboard.cp_client.requests.get", return_value=ok_resp) as get_mock:
+        cp.list_bot_readiness()
+
+    called_url = str(get_mock.call_args.args[0])
+    assert called_url.endswith("/v1/bots/readiness")
+
+
 def test_get_assignment_graph_by_orchestration_hits_expected_endpoint():
     cp = CPClient(base_url="http://example.invalid", timeout=0.1)
 
