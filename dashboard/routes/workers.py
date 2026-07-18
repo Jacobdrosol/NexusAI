@@ -35,6 +35,7 @@ def _worker_to_dict(w: Worker) -> dict[str, Any]:
         "enabled": w.enabled,
         "capabilities": w.capabilities_as_dict(),
         "metrics": w.metrics_as_dict(),
+        "last_heartbeat_at": None,
     }
 
 

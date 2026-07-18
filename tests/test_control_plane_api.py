@@ -222,6 +222,7 @@ async def test_register_worker(cp_client):
     data = resp.json()
     assert data["id"] == "w1"
     assert data["status"] == "online"
+    assert data["last_heartbeat_at"]
 
 
 @pytest.mark.anyio

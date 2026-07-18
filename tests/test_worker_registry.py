@@ -1,4 +1,6 @@
 """Unit tests for WorkerRegistry."""
+from datetime import datetime, timezone
+
 import pytest
 from shared.models import Worker
 from shared.exceptions import WorkerNotFoundError
@@ -12,6 +14,7 @@ async def test_register_and_get():
     await reg.register(w)
     result = await reg.get("w1")
     assert result.id == "w1"
+    assert result.last_heartbeat_at is not None
 
 
 @pytest.mark.anyio
@@ -60,3 +63,28 @@ async def test_heartbeat_updates_status():
     await reg.update_heartbeat("w1")
     w = await reg.get("w1")
     assert w.status == "online"
+    assert w.last_heartbeat_at is not None
+
+
+@pytest.mark.anyio
+async def test_update_preserves_registry_owned_heartbeat_timestamp():
+    from control_plane.registry.worker_registry import WorkerRegistry
+
+    reg = WorkerRegistry()
+    await reg.register(Worker(id="w1", name="W1", host="h1", port=8001, capabilities=[]))
+    before = (await reg.get("w1")).last_heartbeat_at
+    assert before is not None
+
+    await reg.update(
+        "w1",
+        Worker(
+            id="w1",
+            name="Renamed",
+            host="h1",
+            port=8001,
+            capabilities=[],
+            last_heartbeat_at=datetime(2000, 1, 1, tzinfo=timezone.utc),
+        ),
+    )
+
+    assert (await reg.get("w1")).last_heartbeat_at == before

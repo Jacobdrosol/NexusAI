@@ -17,9 +17,8 @@ class HeartbeatRequest(BaseModel):
 async def register_worker(request: Request, worker: Worker) -> Worker:
     worker_registry = request.app.state.worker_registry
     await worker_registry.register(worker)
-    updated = worker.model_copy(update={"status": "online"})
     await worker_registry.update_status(worker.id, "online")
-    return updated
+    return await worker_registry.get(worker.id)
 
 
 @router.get("", response_model=List[Worker])
@@ -42,7 +41,7 @@ async def update_worker(worker_id: str, request: Request, worker: Worker) -> Wor
     worker_registry = request.app.state.worker_registry
     try:
         await worker_registry.update(worker_id, worker)
-        return worker
+        return await worker_registry.get(worker_id)
     except WorkerNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
 

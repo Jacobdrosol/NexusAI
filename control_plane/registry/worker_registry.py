@@ -17,19 +17,22 @@ class WorkerRegistry:
 
     async def register(self, worker: Worker) -> None:
         async with self._lock:
-            self._workers[worker.id] = worker
-            self._last_heartbeat[worker.id] = datetime.now(timezone.utc)
+            last_heartbeat_at = datetime.now(timezone.utc)
+            self._workers[worker.id] = worker.model_copy(
+                update={"last_heartbeat_at": last_heartbeat_at}
+            )
+            self._last_heartbeat[worker.id] = last_heartbeat_at
             logger.info("Registered worker %s", worker.id)
 
     async def get(self, worker_id: str) -> Worker:
         async with self._lock:
             if worker_id not in self._workers:
                 raise WorkerNotFoundError(f"Worker not found: {worker_id}")
-            return self._workers[worker_id]
+            return self._with_last_heartbeat(self._workers[worker_id])
 
     async def list(self) -> List[Worker]:
         async with self._lock:
-            return list(self._workers.values())
+            return [self._with_last_heartbeat(worker) for worker in self._workers.values()]
 
     async def update_status(
         self, worker_id: str, status: Literal["online", "offline", "degraded"]
@@ -45,9 +48,10 @@ class WorkerRegistry:
         async with self._lock:
             if worker_id not in self._workers:
                 raise WorkerNotFoundError(f"Worker not found: {worker_id}")
-            self._last_heartbeat[worker_id] = datetime.now(timezone.utc)
+            last_heartbeat_at = datetime.now(timezone.utc)
+            self._last_heartbeat[worker_id] = last_heartbeat_at
             self._workers[worker_id] = self._workers[worker_id].model_copy(
-                update={"status": "online"}
+                update={"status": "online", "last_heartbeat_at": last_heartbeat_at}
             )
 
     async def update_metrics(self, worker_id: str, metrics: WorkerMetrics) -> None:
@@ -69,7 +73,7 @@ class WorkerRegistry:
         async with self._lock:
             if worker_id not in self._workers:
                 raise WorkerNotFoundError(f"Worker not found: {worker_id}")
-            self._workers[worker_id] = worker
+            self._workers[worker_id] = self._with_last_heartbeat(worker)
 
     async def get_worker_ids(self) -> List[str]:
         async with self._lock:
@@ -83,8 +87,16 @@ class WorkerRegistry:
         for cfg in configs:
             try:
                 worker = Worker.model_validate(cfg)
-                self._workers[worker.id] = worker
-                self._last_heartbeat[worker.id] = datetime.now(timezone.utc)
+                last_heartbeat_at = datetime.now(timezone.utc)
+                self._workers[worker.id] = worker.model_copy(
+                    update={"last_heartbeat_at": last_heartbeat_at}
+                )
+                self._last_heartbeat[worker.id] = last_heartbeat_at
                 logger.info("Loaded worker from config: %s", worker.id)
             except Exception as e:
                 logger.warning("Failed to load worker config: %s", e)
+
+    def _with_last_heartbeat(self, worker: Worker) -> Worker:
+        return worker.model_copy(
+            update={"last_heartbeat_at": self._last_heartbeat.get(worker.id)}
+        )

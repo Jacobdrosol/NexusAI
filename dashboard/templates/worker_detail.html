@@ -45,6 +45,10 @@
           <span class="worker-meta-label">Capability Groups</span>
           <span class="worker-meta-value">{{ worker.capabilities|length }}</span>
         </div>
+        <div class="worker-meta-item">
+          <span class="worker-meta-label">Last Heartbeat</span>
+          <span class="worker-meta-value" id="worker-heartbeat-value">{{ (worker.last_heartbeat_at[:19] if worker.last_heartbeat_at else 'Unknown') | replace('T', ' ') }}</span>
+        </div>
       </div>
       <div class="worker-action-row">
         <button class="btn" onclick="pingWorker('{{ worker.id }}')">Ping</button>
@@ -277,6 +281,17 @@ function updateMetricCard(valueId, fillId, value, max = 100, digits = 1) {
   if (fillEl) fillEl.style.width = `${Math.max(0, Math.min(100, (value / max) * 100))}%`;
 }
 
+function formatHeartbeat(value) {
+  if (!value) return 'Unknown';
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return String(value).replace('T', ' ').slice(0, 19);
+  const ageSeconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+  if (ageSeconds < 5) return 'Just now';
+  if (ageSeconds < 60) return `${ageSeconds}s ago`;
+  if (ageSeconds < 3600) return `${Math.floor(ageSeconds / 60)}m ago`;
+  return `${Math.floor(ageSeconds / 3600)}h ago`;
+}
+
 function renderGpuBreakdown(samples) {
   const wrap = document.getElementById('gpu-breakdown');
   const note = document.getElementById('gpu-summary-note');
@@ -304,6 +319,8 @@ async function pollLiveWorker() {
   const data = await res.json();
   const worker = data.worker || {};
   const metrics = worker.metrics || {};
+  const heartbeatEl = document.getElementById('worker-heartbeat-value');
+  if (heartbeatEl) heartbeatEl.textContent = formatHeartbeat(worker.last_heartbeat_at);
   const gpu = Array.isArray(metrics.gpu_utilization) && metrics.gpu_utilization.length
     ? metrics.gpu_utilization.reduce((a, b) => a + b, 0) / metrics.gpu_utilization.length
     : 0;

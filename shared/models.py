@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -39,6 +40,7 @@ class Worker(BaseModel):
     status: Literal["online", "offline", "degraded"] = "offline"
     metrics: Optional[WorkerMetrics] = None
     enabled: bool = True
+    last_heartbeat_at: Optional[datetime] = None
 
 
 class BackendParams(BaseModel):
