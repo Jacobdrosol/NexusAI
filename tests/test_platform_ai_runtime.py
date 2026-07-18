@@ -1432,3 +1432,39 @@ async def test_configuration_proposal_rejects_cli_backend(tmp_path, monkeypatch)
     detail = str((actions[0].get("result") or {}).get("detail") or "")
     assert detail == "proposal_backend_type_not_approvable:cli"
     assert await store.list_patch_proposals(session["id"]) == []
+
+
+@pytest.mark.anyio
+async def test_configuration_proposal_rejects_direct_credential_value(tmp_path, monkeypatch):
+    monkeypatch.delenv("NEXUS_PLATFORM_AI_CONFIGURATION_MUTATIONS_ENABLED", raising=False)
+    store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+    bot_registry = BotRegistry(db_path=str(tmp_path / "bots.db"))
+    runtime = PlatformAISessionRuntime(store, bot_registry=bot_registry)
+    session = await store.create_session(mode="bot_creator", status="running")
+    directive = {
+        "platform_ai_action": "upsert_bot",
+        "bot": {
+            "id": "credential-proposal-bot",
+            "name": "Credential Proposal Bot",
+            "role": "assistant",
+            "backends": [
+                {
+                    "type": "cloud_api",
+                    "provider": "openai",
+                    "model": "gpt-4o-mini",
+                    "api_key_ref": "sk-live-secret",
+                }
+            ],
+        },
+    }
+
+    result = await runtime._apply_operator_directives(
+        session["id"],
+        session=session,
+        content=json.dumps(directive),
+    )
+
+    actions = result.get("actions") if isinstance(result.get("actions"), list) else []
+    assert len(actions) == 1
+    assert (actions[0].get("result") or {}).get("detail") == "proposal_direct_credential_not_allowed"
+    assert await store.list_patch_proposals(session["id"]) == []

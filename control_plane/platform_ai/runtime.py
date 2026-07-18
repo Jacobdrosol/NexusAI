@@ -27,6 +27,7 @@ _SESSION_STATUSES = {"ready", "running", "stopped"}
 _CONFIGURATION_MUTATION_ACTIONS = {"upsert_bot", "upsert_bots", "delete_bot", "remove_bot", "configure_pipeline_entry"}
 _AUTONOMOUS_PIPELINE_ACTIONS = {"set_pipeline_target", "launch_pipeline"}
 _APPROVABLE_PROPOSAL_BACKEND_TYPES = {"local_llm", "remote_llm", "cloud_api"}
+_DIRECT_CREDENTIAL_PREFIXES = ("sk-", "ghp_", "github_pat_", "xoxb-", "xoxp-", "akia", "aiza")
 
 
 def _env_enabled(name: str) -> bool:
@@ -1629,6 +1630,12 @@ class PlatformAISessionRuntime:
                 return f"proposal_backend_type_not_approvable:{backend_type or 'missing'}"
             if str(getattr(backend, "command", "") or "").strip():
                 return "proposal_backend_command_not_allowed"
+            credential_ref = str(getattr(backend, "api_key_ref", "") or "").strip()
+            normalized_ref = credential_ref.lower()
+            if normalized_ref.startswith(_DIRECT_CREDENTIAL_PREFIXES) or "=" in credential_ref or any(
+                char.isspace() for char in credential_ref
+            ):
+                return "proposal_direct_credential_not_allowed"
         return None
 
     async def _create_bot_configuration_proposal(

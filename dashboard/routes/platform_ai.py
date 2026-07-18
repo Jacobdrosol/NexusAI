@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional
 
 import requests
 from flask import Blueprint, Response, abort, jsonify, render_template, request, send_file, stream_with_context
-from flask_login import login_required
+from flask_login import current_user, login_required
 from werkzeug.utils import secure_filename
 
 from dashboard.cp_client import get_cp_client
@@ -82,6 +82,20 @@ def _upload_soft_warnings(*, file_count: int, total_bytes: int, label: str) -> L
 
 def _as_list(value: Any) -> List[Dict[str, Any]]:
     return value if isinstance(value, list) else []
+
+
+def _approval_body_with_operator(body: Any) -> Dict[str, Any]:
+    """Attach the authenticated dashboard identity when an approval body omits it."""
+    result = dict(body) if isinstance(body, dict) else {}
+    if str(result.get("operator_id") or "").strip():
+        return result
+    try:
+        identity = str(current_user.get_id() or "").strip()
+    except Exception:
+        identity = ""
+    if identity:
+        result["operator_id"] = identity[:255]
+    return result
 
 
 def _session_pipeline_bot_id(session: Dict[str, Any]) -> Optional[str]:
@@ -381,7 +395,7 @@ def api_list_platform_ai_session_proposals(session_id: str):
 @login_required
 def api_approve_platform_ai_session_proposal(session_id: str, proposal_id: str):
     cp = get_cp_client()
-    body = request.get_json(silent=True) or {}
+    body = _approval_body_with_operator(request.get_json(silent=True) or {})
     data = cp.approve_platform_ai_proposal(session_id, proposal_id, body)
     if data is None:
         return _cp_error_response(cp, "failed to approve platform ai proposal")
@@ -392,7 +406,7 @@ def api_approve_platform_ai_session_proposal(session_id: str, proposal_id: str):
 @login_required
 def api_reject_platform_ai_session_proposal(session_id: str, proposal_id: str):
     cp = get_cp_client()
-    body = request.get_json(silent=True) or {}
+    body = _approval_body_with_operator(request.get_json(silent=True) or {})
     data = cp.reject_platform_ai_proposal(session_id, proposal_id, body)
     if data is None:
         return _cp_error_response(cp, "failed to reject platform ai proposal")
