@@ -10,6 +10,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import requests
 import yaml
@@ -127,13 +128,103 @@ def _worker_runtime(worker: dict[str, Any]) -> dict[str, Any]:
     return value
 
 
-def _worker_cli_tools(worker: dict[str, Any]) -> list[str]:
+def _worker_tooling(worker: dict[str, Any]) -> dict[str, Any]:
     tooling = worker.get("tooling")
     if tooling is None:
-        return []
+        return {}
     if not isinstance(tooling, dict):
         raise ValueError(f"Worker {worker.get('id') or worker.get('name')} tooling must be a mapping.")
-    return _as_list(tooling.get("cli_tools"))
+    return tooling
+
+
+def _worker_cli_tools(worker: dict[str, Any]) -> list[str]:
+    return _as_list(_worker_tooling(worker).get("cli_tools"))
+
+
+def _worker_browser_tooling(worker: dict[str, Any]) -> dict[str, Any] | None:
+    """Return a validated private browser runtime declaration when configured."""
+
+    raw_browser = _worker_tooling(worker).get("browser")
+    if raw_browser is None:
+        return None
+    if not isinstance(raw_browser, dict):
+        raise ValueError(f"Worker {worker.get('id') or worker.get('name')} tooling.browser must be a mapping.")
+
+    allowed_fields = {
+        "enabled",
+        "base_url",
+        "allowed_paths",
+        "user_data_dir",
+        "request_token_env",
+        "headless",
+        "timeout_seconds",
+    }
+    unknown_fields = sorted(set(raw_browser) - allowed_fields)
+    if unknown_fields:
+        raise ValueError(
+            f"Worker {worker.get('id') or worker.get('name')} tooling.browser has unsupported fields: "
+            + ", ".join(unknown_fields)
+        )
+
+    browser = dict(raw_browser)
+    browser["enabled"] = bool(browser.get("enabled", True))
+    if not browser["enabled"]:
+        return browser
+
+    base_url = str(browser.get("base_url") or "").strip()
+    parsed_base_url = urlsplit(base_url)
+    if (
+        parsed_base_url.scheme not in {"http", "https"}
+        or not parsed_base_url.netloc
+        or parsed_base_url.username
+        or parsed_base_url.password
+        or parsed_base_url.query
+        or parsed_base_url.fragment
+    ):
+        raise ValueError(
+            f"Worker {worker.get('id') or worker.get('name')} tooling.browser.base_url must be an origin or base path without credentials, query, or fragment."
+        )
+    browser["base_url"] = base_url.rstrip("/")
+
+    allowed_paths = _as_list(browser.get("allowed_paths"))
+    if not allowed_paths:
+        raise ValueError(f"Worker {worker.get('id') or worker.get('name')} tooling.browser.allowed_paths is required.")
+    for path in allowed_paths:
+        parsed_path = urlsplit(path[:-1] if path.endswith("/*") else path)
+        if (
+            parsed_path.scheme
+            or parsed_path.netloc
+            or parsed_path.query
+            or parsed_path.fragment
+            or not parsed_path.path.startswith("/")
+            or parsed_path.path.startswith("//")
+            or "\\" in parsed_path.path
+        ):
+            raise ValueError(
+                f"Worker {worker.get('id') or worker.get('name')} tooling.browser.allowed_paths must contain relative absolute paths only."
+            )
+    browser["allowed_paths"] = allowed_paths
+
+    user_data_dir = str(browser.get("user_data_dir") or "").strip()
+    if not user_data_dir:
+        raise ValueError(f"Worker {worker.get('id') or worker.get('name')} tooling.browser.user_data_dir is required.")
+    browser["user_data_dir"] = user_data_dir
+
+    token_env = str(browser.get("request_token_env") or "").strip()
+    if not _ENV_NAME.fullmatch(token_env):
+        raise ValueError(
+            f"Worker {worker.get('id') or worker.get('name')} tooling.browser.request_token_env must be an environment variable name."
+        )
+    browser["request_token_env"] = token_env
+
+    timeout_seconds = int(browser.get("timeout_seconds") or 30)
+    if not 1 <= timeout_seconds <= 120:
+        raise ValueError(
+            f"Worker {worker.get('id') or worker.get('name')} tooling.browser.timeout_seconds must be between 1 and 120."
+        )
+    browser["timeout_seconds"] = timeout_seconds
+    browser["headless"] = bool(browser.get("headless", True))
+    return browser
 
 
 def _first_model(worker: dict[str, Any], fleet: dict[str, Any]) -> str:
@@ -191,8 +282,14 @@ def _worker_config(worker: dict[str, Any], fleet: dict[str, Any]) -> dict[str, A
         "capabilities": capabilities,
         "metrics": {},
     }
+    tooling: dict[str, Any] = {}
     if cli_tools:
-        config["tooling"] = {"cli_tools": cli_tools}
+        tooling["cli_tools"] = cli_tools
+    browser = _worker_browser_tooling(worker)
+    if browser is not None:
+        tooling["browser"] = browser
+    if tooling:
+        config["tooling"] = tooling
     return config
 
 
@@ -240,9 +337,10 @@ def _bot_backends(worker: dict[str, Any], fleet: dict[str, Any]) -> list[dict[st
         "gpu_id",
         "command",
     }
-    allowed_types = {"local_llm", "remote_llm", "cloud_api", "cli", "custom"}
+    allowed_types = {"local_llm", "remote_llm", "cloud_api", "cli", "browser", "custom"}
     worker_id = str(worker["id"]).strip()
     cli_tools = set(_worker_cli_tools(worker))
+    browser = _worker_browser_tooling(worker)
     resolved: list[dict[str, Any]] = []
     for index, raw_backend in enumerate(configured):
         if not isinstance(raw_backend, dict):
@@ -264,7 +362,7 @@ def _bot_backends(worker: dict[str, Any], fleet: dict[str, Any]) -> list[dict[st
             "provider": provider,
             "model": model,
         }
-        if backend_type in {"local_llm", "remote_llm", "cli"}:
+        if backend_type in {"local_llm", "remote_llm", "cli", "browser"}:
             backend["worker_id"] = str(raw_backend.get("worker_id") or worker_id).strip()
         elif raw_backend.get("worker_id"):
             backend["worker_id"] = str(raw_backend["worker_id"]).strip()
@@ -292,6 +390,21 @@ def _bot_backends(worker: dict[str, Any], fleet: dict[str, Any]) -> list[dict[st
                     "is not declared in tooling.cli_tools."
                 )
             backend["command"] = command
+        elif backend_type == "browser":
+            if not isinstance(browser, dict) or not bool(browser.get("enabled")):
+                raise ValueError(
+                    f"Worker {worker_id} bot.backends[{index}] uses a browser backend without enabled tooling.browser."
+                )
+            if provider.casefold() != "browser" or model.casefold() != "browser-ui":
+                raise ValueError(
+                    f"Worker {worker_id} bot.backends[{index}] must use provider=browser and model=browser-ui."
+                )
+            if not str(backend.get("api_key_ref") or "").strip():
+                raise ValueError(
+                    f"Worker {worker_id} bot.backends[{index}] requires api_key_ref for the browser request token."
+                )
+            if command:
+                raise ValueError(f"Worker {worker_id} bot.backends[{index}] command is only valid for cli backends.")
         elif command:
             raise ValueError(f"Worker {worker_id} bot.backends[{index}] command is only valid for cli backends.")
         resolved.append(backend)
@@ -304,6 +417,10 @@ def _bot_payload(worker: dict[str, Any], fleet: dict[str, Any]) -> dict[str, Any
     bot_id = str(bot.get("id") or f"{worker_id}-bot").strip()
     backends = _bot_backends(worker, fleet)
     primary_backend = backends[0]
+    configured_policy = bot.get("execution_policy") if isinstance(bot.get("execution_policy"), dict) else {}
+    required_worker_tools = _as_list(configured_policy.get("required_worker_tools"))
+    if any(str(backend.get("type") or "").strip().lower() == "browser" for backend in backends):
+        required_worker_tools = list(dict.fromkeys([*required_worker_tools, "browser-ui"]))
     return {
         "id": bot_id,
         "name": str(bot.get("name") or worker.get("name") or bot_id).strip(),
@@ -317,11 +434,12 @@ def _bot_payload(worker: dict[str, Any], fleet: dict[str, Any]) -> dict[str, Any
             "can_self_serve": [],
         },
         "execution_policy": {
-            "repo_output_mode": "deny",
-            "workspace_context_injection": False,
-            "inline_coding_default": False,
-            "can_apply_db_actions": False,
-            "allow_run_result_ingest": True,
+            "repo_output_mode": str(configured_policy.get("repo_output_mode") or "deny"),
+            "workspace_context_injection": bool(configured_policy.get("workspace_context_injection", False)),
+            "inline_coding_default": bool(configured_policy.get("inline_coding_default", False)),
+            "required_worker_tools": required_worker_tools,
+            "can_apply_db_actions": bool(configured_policy.get("can_apply_db_actions", False)),
+            "allow_run_result_ingest": bool(configured_policy.get("allow_run_result_ingest", True)),
         },
         "routing_rules": {
             "worker_profile": {
@@ -540,6 +658,15 @@ def render(profile_path: Path, output_dir: Path, env: dict[str, str], *, allow_m
                 "retries": 3,
             },
         }
+        runtime = _worker_runtime(worker)
+        volumes = runtime.get("volumes")
+        if volumes is not None:
+            if not isinstance(volumes, list) or not all(isinstance(value, str) and value.strip() for value in volumes):
+                raise ValueError(f"Worker {worker_id} runtime.volumes must be a list of non-empty compose volume strings.")
+            service_config["volumes"].extend(volumes)
+        shm_size = str(runtime.get("shm_size") or "").strip()
+        if shm_size:
+            service_config["shm_size"] = shm_size
         if build is not None:
             service_config["build"] = build
         compose["services"][service] = service_config

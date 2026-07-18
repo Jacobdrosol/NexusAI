@@ -197,6 +197,105 @@ def test_render_worker_fleet_supports_node_local_tooling_and_prebuilt_images(tmp
     assert "ANTHROPIC_AUTH_TOKEN=gateway-token" in env_text
 
 
+def test_render_worker_fleet_supports_bounded_browser_inspection_workers(tmp_path):
+    renderer = _load_renderer()
+    profile = _profile(tmp_path / "workers.yaml")
+    profile_data = yaml.safe_load(profile.read_text(encoding="utf-8"))
+    worker = profile_data["workers"][0]
+    worker["can_edit"] = False
+    worker["tooling"] = {
+        "browser": {
+            "enabled": True,
+            "base_url": "https://admin.example.test",
+            "allowed_paths": ["/admin/courses", "/admin/health"],
+            "user_data_dir": "/var/lib/nexus-worker/browser-profile",
+            "request_token_env": "NEXUS_BROWSER_WORKER_TOKEN",
+            "headless": True,
+            "timeout_seconds": 30,
+        }
+    }
+    worker["runtime"] = {
+        "image": "nexus-worker-node-browser:latest",
+        "volumes": ["/srv/nexus/browser-profile:/var/lib/nexus-worker/browser-profile"],
+        "shm_size": "1gb",
+    }
+    worker["bot"]["backends"] = [
+        {
+            "type": "browser",
+            "provider": "browser",
+            "model": "browser-ui",
+            "api_key_ref": "NEXUS_BROWSER_WORKER_TOKEN",
+        }
+    ]
+    profile.write_text(yaml.safe_dump(profile_data, sort_keys=False), encoding="utf-8")
+
+    out = tmp_path / "runtime"
+    renderer.render(
+        profile,
+        out,
+        {"CONTROL_PLANE_API_TOKEN": "control-token", "OLLAMA_API_KEY": "ollama-token"},
+    )
+
+    worker_cfg = yaml.safe_load((out / "workers" / "content-repair-01.yaml").read_text())
+    assert worker_cfg["tooling"]["browser"] == worker["tooling"]["browser"]
+
+    compose = yaml.safe_load((out / "docker-compose.worker-node.generated.yml").read_text())
+    service = compose["services"]["worker-content"]
+    assert service["shm_size"] == "1gb"
+    assert "/srv/nexus/browser-profile:/var/lib/nexus-worker/browser-profile" in service["volumes"]
+
+    bot_payload = json.loads((out / "bots" / "content-repair-01.bot.json").read_text())
+    assert bot_payload["backends"] == [
+        {
+            "type": "browser",
+            "provider": "browser",
+            "model": "browser-ui",
+            "worker_id": "content-repair-01",
+            "api_key_ref": "NEXUS_BROWSER_WORKER_TOKEN",
+        }
+    ]
+    assert bot_payload["execution_policy"]["required_worker_tools"] == ["browser-ui"]
+
+
+@pytest.mark.parametrize(
+    ("browser", "backend", "message"),
+    [
+        (
+            None,
+            {"type": "browser", "provider": "browser", "model": "browser-ui", "api_key_ref": "TOKEN"},
+            "without enabled tooling.browser",
+        ),
+        (
+            {
+                "enabled": True,
+                "base_url": "https://admin.example.test",
+                "allowed_paths": ["/admin/courses"],
+                "user_data_dir": "/var/lib/nexus-worker/browser-profile",
+                "request_token_env": "NEXUS_BROWSER_WORKER_TOKEN",
+            },
+            {"type": "browser", "provider": "browser", "model": "browser-ui"},
+            "requires api_key_ref",
+        ),
+    ],
+)
+def test_render_worker_fleet_rejects_unbounded_browser_backends(tmp_path, browser, backend, message):
+    renderer = _load_renderer()
+    profile = _profile(tmp_path / "workers.yaml")
+    profile_data = yaml.safe_load(profile.read_text(encoding="utf-8"))
+    worker = profile_data["workers"][0]
+    if browser is not None:
+        worker["tooling"] = {"browser": browser}
+    worker["bot"]["backends"] = [backend]
+    profile.write_text(yaml.safe_dump(profile_data, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=message):
+        renderer.render(
+            profile,
+            tmp_path / "runtime",
+            {"CONTROL_PLANE_API_TOKEN": "control-token", "OLLAMA_API_KEY": "ollama-token"},
+        )
+
+
 def test_render_worker_fleet_warns_when_node_local_runtime_env_is_missing(tmp_path):
     renderer = _load_renderer()
     profile = _profile(tmp_path / "workers.yaml")
