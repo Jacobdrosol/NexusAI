@@ -2550,6 +2550,7 @@ def test_overview_page_shows_enhanced_sections(dashboard_client):
     assert b"Fleet Readiness" in resp.data
     assert b"Worker runtime attention" in resp.data
     assert b"Active schedules" in resp.data
+    assert b"Control-plane fleet health summary" in resp.data
     assert b"Recent Activity" in resp.data
     assert b"Worker Health" in resp.data
     assert b"Quick Links" in resp.data

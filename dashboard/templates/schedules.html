@@ -97,6 +97,13 @@
         <textarea class="form-control" id="schedule-task-payload" name="task_payload" rows="6" placeholder='{"artifact":"...","acceptance_criteria":"..."}'>{}</textarea>
       </div>
       <div class="form-group">
+        <label for="schedule-system-payload-source">System Data Source</label>
+        <select class="form-control" id="schedule-system-payload-source" name="system_payload_source">
+          <option value="">None</option>
+          <option value="control_plane_fleet_summary_v1">Control-plane fleet health summary (read-only monitoring only)</option>
+        </select>
+      </div>
+      <div class="form-group">
         <label><input type="checkbox" id="schedule-active" name="active"> Enable recurring dispatch</label>
       </div>
       <div class="form-group">
@@ -222,6 +229,16 @@ document.getElementById('form-create-schedule').addEventListener('submit', async
       mutation_safe: document.getElementById('schedule-mutation-safe').checked,
     },
   };
+  const systemPayloadSource = String(form.get('system_payload_source') || '').trim();
+  if (systemPayloadSource) {
+    payload.metadata.system_payload_source = {
+      type: systemPayloadSource,
+      target_field: 'monitoring_events',
+    };
+    if (!Object.prototype.hasOwnProperty.call(taskPayload, 'monitoring_events')) {
+      taskPayload.monitoring_events = 'A current internal control-plane summary will be materialized at dispatch.';
+    }
+  }
   if (!payload.name || !payload.target_bot_id || !payload.cron_expression || !payload.prompt) {
     setScheduleCreateStatus('Name, target bot, cron expression, and task instruction are required.', true);
     return;

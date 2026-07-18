@@ -218,11 +218,13 @@ class AgentScheduleEngine:
         task_manager: Any,
         db_path: Optional[str] = None,
         autonomy_guard: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
+        payload_materializer: Optional[Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]]]] = None,
     ) -> None:
         self._assignment_service = assignment_service
         self._task_manager = task_manager
         self._db_path = db_path or _db_path()
         self._autonomy_guard = autonomy_guard
+        self._payload_materializer = payload_materializer
         self._ready = False
         self._tick_lock = asyncio.Lock()
 
@@ -676,6 +678,11 @@ class AgentScheduleEngine:
         target_bot_id = str(schedule.get("target_bot_id") or "").strip()
         if target_bot_id and prompt:
             task_payload = _schedule_task_payload(schedule)
+            if self._payload_materializer is not None:
+                generated_payload = await self._payload_materializer(schedule)
+                if not isinstance(generated_payload, dict):
+                    raise ValueError("schedule payload materializer must return an object")
+                task_payload.update(generated_payload)
             task = await self._task_manager.create_task(
                 bot_id=target_bot_id,
                 payload={

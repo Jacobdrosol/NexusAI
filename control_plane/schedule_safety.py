@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable
 
+from control_plane.schedule_payload_sources import SystemPayloadSourceError, validate_system_payload_source
 from shared.bot_policy import bot_allows_repo_output, bot_can_apply_db_actions, bot_is_pipeline_entry
 
 
@@ -150,4 +151,11 @@ async def require_schedule_autonomy_safety(
             f"Schedule target '{bot_id}' cannot run autonomously because " + "; ".join(blockers) + ".",
             blockers=blockers,
         )
+    try:
+        validate_system_payload_source(schedule, bot)
+    except SystemPayloadSourceError as exc:
+        raise ScheduleAutonomySafetyError(
+            "schedule_system_payload_source_not_allowed",
+            f"Schedule target '{bot_id}' cannot use the requested system payload source: {exc}.",
+        ) from exc
     _require_schedule_input_contract(schedule, bot)
