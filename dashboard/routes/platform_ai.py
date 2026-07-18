@@ -242,6 +242,7 @@ def platform_ai_session_page(session_id: str) -> str:
             suite_runs=[],
             projects=[],
             bots=[],
+            workers=[],
             error="Platform AI session not found or control plane unavailable.",
             active_page="platform_ai",
         )
@@ -266,6 +267,7 @@ def platform_ai_session_page(session_id: str) -> str:
             suite_runs = _as_list(runs_resp.get("runs"))
     projects = cp.list_projects() or []
     bots = cp.list_bots() or []
+    workers = cp.list_workers() or []
     return render_template(
         "platform_ai_session.html",
         session=session,
@@ -279,6 +281,7 @@ def platform_ai_session_page(session_id: str) -> str:
         suite_runs=suite_runs,
         projects=projects,
         bots=bots,
+        workers=workers,
         error=None,
         active_page="platform_ai",
     )

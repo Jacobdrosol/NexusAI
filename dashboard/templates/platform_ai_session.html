@@ -284,7 +284,13 @@
     </div>
     <div>
       <label for="session-backend-type">Backend Type</label>
-      <input id="session-backend-type" class="form-control" value="{{ ((session.metadata or {}).get('backend') or {}).get('backend_type') or '' }}">
+      {% set active_backend_type = ((session.metadata or {}).get('backend') or {}).get('backend_type') or '' %}
+      <select id="session-backend-type" class="form-control">
+        <option value="">Select backend type</option>
+        {% for backend_type in ['cloud_api', 'remote_llm', 'local_llm', 'cli', 'browser', 'custom'] %}
+        <option value="{{ backend_type }}" {% if active_backend_type == backend_type %}selected{% endif %}>{{ backend_type }}</option>
+        {% endfor %}
+      </select>
     </div>
     <div>
       <label for="session-credential-ref">Credential Ref</label>
@@ -297,6 +303,25 @@
     <div id="session-vertex-location-wrap">
       <label for="session-vertex-location">Vertex Location</label>
       <input id="session-vertex-location" class="form-control" value="{{ ((session.metadata or {}).get('backend') or {}).get('vertex_location') or '' }}">
+    </div>
+    <div id="session-worker-wrap">
+      <label for="session-worker-id">Worker</label>
+      <select id="session-worker-id" class="form-control">
+        <option value="">Select worker</option>
+        {% for worker in workers %}
+        <option value="{{ worker.id }}" {% if ((session.metadata or {}).get('backend') or {}).get('worker_id') == worker.id %}selected{% endif %}>{{ worker.id }}{% if worker.status %} ({{ worker.status }}){% endif %}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div id="session-cli-profile-wrap">
+      <label for="session-cli-command-profile">CLI Profile</label>
+      <select id="session-cli-command-profile" class="form-control">
+        <option value="claude_ollama_json" {% if ((session.metadata or {}).get('backend') or {}).get('cli_command_profile') == 'claude_ollama_json' %}selected{% endif %}>Claude via Ollama (JSON)</option>
+      </select>
+    </div>
+    <div id="session-cli-runtime-model-wrap">
+      <label for="session-cli-runtime-model">Ollama Runtime Model</label>
+      <input id="session-cli-runtime-model" class="form-control" value="{{ ((session.metadata or {}).get('backend') or {}).get('cli_runtime_model') or '' }}" placeholder="glm-5.2:cloud">
     </div>
   </div>
   <div style="margin-top:0.75rem;">
@@ -943,6 +968,19 @@ async function refreshSessionHeader() {
     const pipelineName = String(metadata.pipeline_name || runtimeState.pipeline_name || '');
     if (pipelineName) pipelineNameInput.value = pipelineName;
   }
+  const backend = metadata && typeof metadata.backend === 'object' ? metadata.backend : {};
+  const syncValue = (id, value) => {
+    const input = document.getElementById(id);
+    if (input && value !== undefined && value !== null) input.value = String(value);
+  };
+  syncValue('session-provider', backend.provider || '');
+  syncValue('session-model', backend.model || '');
+  syncValue('session-backend-type', backend.backend_type || '');
+  syncValue('session-credential-ref', backend.credential_ref || '');
+  syncValue('session-worker-id', backend.worker_id || '');
+  syncValue('session-cli-command-profile', backend.cli_command_profile || 'claude_ollama_json');
+  syncValue('session-cli-runtime-model', backend.cli_runtime_model || '');
+  toggleSessionBackendConfigFields();
   ensureMessageStream(status, Boolean(data.archived));
   renderContextFiles();
   renderMessageFileLibrary();
@@ -1196,12 +1234,35 @@ function isSessionVertexProviderSelected() {
   return provider === 'vertex';
 }
 
-function toggleSessionVertexConfigFields() {
-  const show = isSessionVertexProviderSelected();
+function isSessionCliBackendSelected() {
+  const backendType = String(document.getElementById('session-backend-type')?.value || '').trim().toLowerCase();
+  return backendType === 'cli';
+}
+
+function toggleSessionBackendConfigFields() {
+  const showVertex = isSessionVertexProviderSelected();
+  const showCli = isSessionCliBackendSelected();
   const projectWrap = document.getElementById('session-vertex-project-wrap');
   const locationWrap = document.getElementById('session-vertex-location-wrap');
-  if (projectWrap) projectWrap.style.display = show ? '' : 'none';
-  if (locationWrap) locationWrap.style.display = show ? '' : 'none';
+  const workerWrap = document.getElementById('session-worker-wrap');
+  const profileWrap = document.getElementById('session-cli-profile-wrap');
+  const runtimeModelWrap = document.getElementById('session-cli-runtime-model-wrap');
+  if (projectWrap) projectWrap.style.display = showVertex ? '' : 'none';
+  if (locationWrap) locationWrap.style.display = showVertex ? '' : 'none';
+  if (workerWrap) workerWrap.style.display = showCli ? '' : 'none';
+  if (profileWrap) profileWrap.style.display = showCli ? '' : 'none';
+  if (runtimeModelWrap) runtimeModelWrap.style.display = showCli ? '' : 'none';
+  const provider = document.getElementById('session-provider');
+  const model = document.getElementById('session-model');
+  if (showCli) {
+    if (provider) provider.value = 'cli';
+    if (model) model.value = 'claude';
+    if (provider) provider.readOnly = true;
+    if (model) model.readOnly = true;
+  } else {
+    if (provider) provider.readOnly = false;
+    if (model) model.readOnly = false;
+  }
 }
 
 async function updateBackendConfig() {
@@ -1213,13 +1274,18 @@ async function updateBackendConfig() {
     setStatus('backend-update-status', error.message || 'Invalid JSON', true);
     return;
   }
+  const backendType = String(document.getElementById('session-backend-type')?.value || '').trim() || null;
+  const cliBackend = String(backendType || '').toLowerCase() === 'cli';
   const body = {
     provider: String(document.getElementById('session-provider')?.value || '').trim() || null,
     model: String(document.getElementById('session-model')?.value || '').trim() || null,
-    backend_type: String(document.getElementById('session-backend-type')?.value || '').trim() || null,
+    backend_type: backendType,
     credential_ref: String(document.getElementById('session-credential-ref')?.value || '').trim() || null,
     vertex_project_id: null,
     vertex_location: null,
+    worker_id: cliBackend ? (String(document.getElementById('session-worker-id')?.value || '').trim() || null) : null,
+    cli_command_profile: cliBackend ? (String(document.getElementById('session-cli-command-profile')?.value || '').trim() || null) : null,
+    cli_runtime_model: cliBackend ? (String(document.getElementById('session-cli-runtime-model')?.value || '').trim() || null) : null,
     params: params,
   };
   if (isSessionVertexProviderSelected()) {
@@ -1552,11 +1618,16 @@ async function pollWorkspace() {
 document.addEventListener('DOMContentLoaded', async () => {
   if (!SESSION_ID) return;
   const providerInput = document.getElementById('session-provider');
+  const backendTypeInput = document.getElementById('session-backend-type');
   if (providerInput) {
-    providerInput.addEventListener('change', toggleSessionVertexConfigFields);
-    providerInput.addEventListener('input', toggleSessionVertexConfigFields);
+    providerInput.addEventListener('change', toggleSessionBackendConfigFields);
+    providerInput.addEventListener('input', toggleSessionBackendConfigFields);
   }
-  toggleSessionVertexConfigFields();
+  if (backendTypeInput) {
+    backendTypeInput.addEventListener('change', toggleSessionBackendConfigFields);
+    backendTypeInput.addEventListener('input', toggleSessionBackendConfigFields);
+  }
+  toggleSessionBackendConfigFields();
   renderSessionComposerAttachments();
   renderContextFiles();
   renderMessageFileLibrary();
