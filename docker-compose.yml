@@ -79,6 +79,7 @@ services:
 
   prometheus:
     image: prom/prometheus:v2.54.1
+    restart: unless-stopped
     ports:
       - "9090:9090"
     command:
