@@ -2233,7 +2233,8 @@ def test_settings_tool_status_uses_user_profile_runtime_paths(dashboard_client):
 
         return Result()
 
-    with patch("dashboard.settings.subprocess.run", side_effect=_fake_run):
+    with patch("dashboard.settings.platform.system", return_value="Windows"), \
+         patch("dashboard.settings.subprocess.run", side_effect=_fake_run):
         resp = dashboard_client.post("/api/settings/tools/test", json={"tool_id": "code_exec_dotnet"})
 
     assert resp.status_code == 200
