@@ -1779,7 +1779,7 @@ def _repo_output_policy_prompt_suffix(bot: Any, payload: Any = None) -> str:
 
 
 def _prepare_payload_for_backend(bot: Any, backend: BackendConfig, payload: Any, *, task: Task | None = None) -> Any:
-    if backend.type == "custom":
+    if backend.type in {"browser", "custom"}:
         return payload
     payload = _reduce_payload_for_context_limits(payload)
     return _inject_system_prompt(

@@ -2427,6 +2427,31 @@ def test_prepare_payload_for_backend_preserves_small_non_join_payload():
     assert parsed_payload == payload
 
 
+def test_prepare_payload_for_browser_backend_preserves_inspection_request():
+    from control_plane.scheduler.scheduler import _prepare_payload_for_backend
+
+    bot = Bot(
+        id="browser-inspector",
+        name="Browser Inspector",
+        role="browser-inspector",
+        system_prompt="Inspect only the configured page.",
+        backends=[
+            BackendConfig(
+                type="browser",
+                provider="browser",
+                model="browser-ui",
+                worker_id="browser-worker",
+                api_key_ref="BROWSER_TOKEN",
+            )
+        ],
+    )
+    payload = {"path": "/admin/dashboard", "text_limit": 200, "element_limit": 5}
+
+    prepared = _prepare_payload_for_backend(bot, bot.backends[0], payload)
+
+    assert prepared == payload
+
+
 @pytest.mark.anyio
 async def test_scheduler_appends_docs_only_upstream_artifact_guidance_to_system_prompt():
     from control_plane.scheduler.scheduler import Scheduler
