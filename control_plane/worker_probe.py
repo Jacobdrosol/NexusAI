@@ -132,6 +132,8 @@ def _safe_attestation(value: Any) -> dict[str, Any]:
         "installed_cli_tools": _safe_string_list(value.get("installed_cli_tools")),
         "enabled_cli_tools": _safe_string_list(value.get("enabled_cli_tools")),
         "unavailable_cli_tools": _safe_string_list(value.get("unavailable_cli_tools")),
+        "auth_required_cli_tools": _safe_string_list(value.get("auth_required_cli_tools")),
+        "unauthenticated_cli_tools": _safe_string_list(value.get("unauthenticated_cli_tools")),
         "discarded_declared_tool_capabilities": _safe_nonnegative_int(
             value.get("discarded_declared_tool_capabilities")
         ),

@@ -49,11 +49,13 @@ async def test_probe_worker_reports_ready_for_matching_attested_runtime():
                         {"type": "llm", "provider": "ollama_cloud", "models": ["glm-5.2:cloud"]}
                     ],
                     "capability_attestation": {
-                        "configured_cli_tools": [],
-                        "installed_cli_tools": ["python"],
-                        "enabled_cli_tools": [],
-                        "unavailable_cli_tools": [],
-                        "discarded_declared_tool_capabilities": 0,
+                    "configured_cli_tools": [],
+                    "installed_cli_tools": ["python"],
+                    "enabled_cli_tools": [],
+                    "unavailable_cli_tools": [],
+                    "auth_required_cli_tools": ["codex"],
+                    "unauthenticated_cli_tools": ["codex"],
+                    "discarded_declared_tool_capabilities": 0,
                     },
                 },
             )
@@ -64,6 +66,7 @@ async def test_probe_worker_reports_ready_for_matching_attested_runtime():
     assert result["probe_status"] == "ready"
     assert result["dispatch_eligible"] is True
     assert result["capability_attestation"]["installed_cli_tools"] == ["python"]
+    assert result["capability_attestation"]["unauthenticated_cli_tools"] == ["codex"]
     assert all(check["status"] != "fail" for check in result["checks"])
 
 
