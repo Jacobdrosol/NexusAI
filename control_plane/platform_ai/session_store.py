@@ -1283,6 +1283,24 @@ class PlatformAISessionStore:
             await db.commit()
         return await self.get_patch_proposal(safe_id)
 
+    async def update_patch_proposal_after_state(
+        self,
+        proposal_id: str,
+        after_state: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        """Persist reviewed proposal metadata without changing its approval status."""
+        await self._ensure_db()
+        safe_id = str(proposal_id or "").strip()
+        if not safe_id:
+            return None
+        async with open_sqlite(self._db_path) as db:
+            await db.execute(
+                "UPDATE platform_ai_patch_proposals SET after_state_json = ?, updated_at = ? WHERE id = ?",
+                (_dumps(after_state or {}), _now(), safe_id),
+            )
+            await db.commit()
+        return await self.get_patch_proposal(safe_id)
+
     async def get_patch_proposal(self, proposal_id: str) -> Optional[Dict[str, Any]]:
         await self._ensure_db()
         safe_id = str(proposal_id or "").strip()

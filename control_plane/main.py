@@ -149,6 +149,9 @@ async def lifespan(app: FastAPI):
         task_manager=task_manager,
         bot_registry=bot_registry,
         scheduler=scheduler,
+        worker_registry=worker_registry,
+        connection_resolver=connection_resolver,
+        worker_probe_store=worker_probe_store,
     )
     async def _schedule_dispatch_guard(schedule: dict) -> None:
         await require_schedule_autonomy_safety(

@@ -740,6 +740,9 @@ class CPClient:
     def approve_platform_ai_proposal(self, session_id: str, proposal_id: str, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return self._post(f"/v1/platform-ai/sessions/{session_id}/proposals/{proposal_id}/approve", body, timeout=_CHAT_TIMEOUT)
 
+    def preflight_platform_ai_proposal(self, session_id: str, proposal_id: str, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        return self._post(f"/v1/platform-ai/sessions/{session_id}/proposals/{proposal_id}/preflight", body, timeout=_CHAT_TIMEOUT)
+
     def reject_platform_ai_proposal(self, session_id: str, proposal_id: str, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return self._post(f"/v1/platform-ai/sessions/{session_id}/proposals/{proposal_id}/reject", body, timeout=_CHAT_TIMEOUT)
 

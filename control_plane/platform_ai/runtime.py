@@ -12,7 +12,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from control_plane.bot_readiness import assess_bot_instance_readiness
 from control_plane.platform_ai.session_store import PlatformAISessionStore
+from shared.bot_policy import validate_bot_configuration
 from shared.exceptions import BotNotFoundError
 from shared.models import BackendConfig, BackendParams, Bot, CatalogModel, TaskMetadata
 
@@ -28,6 +30,7 @@ _CONFIGURATION_MUTATION_ACTIONS = {"upsert_bot", "upsert_bots", "delete_bot", "r
 _AUTONOMOUS_PIPELINE_ACTIONS = {"set_pipeline_target", "launch_pipeline"}
 _APPROVABLE_PROPOSAL_BACKEND_TYPES = {"local_llm", "remote_llm", "cloud_api"}
 _DIRECT_CREDENTIAL_PREFIXES = ("sk-", "ghp_", "github_pat_", "xoxb-", "xoxp-", "akia", "aiza")
+_PROPOSAL_PREFLIGHT_TTL_SECONDS = 300
 
 
 def _env_enabled(name: str) -> bool:
@@ -73,6 +76,20 @@ def _project_edit_project_allowlist() -> set[str]:
 def _session_allows_auto_bot_activation(metadata: Dict[str, Any]) -> bool:
     """Require a deliberate session grant as well as a deployment-level opt-in."""
     return _env_enabled("NEXUS_PLATFORM_AI_AUTO_ACTIVATE_BOTS") and metadata.get("allow_bot_activation") is True
+
+
+def _proposal_preflight_is_fresh(preflight: Dict[str, Any]) -> bool:
+    checked_at = str(preflight.get("checked_at") or "").strip()
+    if not checked_at:
+        return False
+    try:
+        timestamp = datetime.fromisoformat(checked_at.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+    age_seconds = (datetime.now(timezone.utc) - timestamp.astimezone(timezone.utc)).total_seconds()
+    return 0 <= age_seconds <= _PROPOSAL_PREFLIGHT_TTL_SECONDS
 
 
 def _safe_timeout_seconds(env_name: str, default: float, *, min_value: float, max_value: float) -> float:
@@ -540,6 +557,9 @@ class PlatformAISessionRuntime:
         task_manager: Any = None,
         bot_registry: Any = None,
         scheduler: Any = None,
+        worker_registry: Any = None,
+        connection_resolver: Any = None,
+        worker_probe_store: Any = None,
     ) -> None:
         self._store = store
         self._assignment_service = assignment_service
@@ -547,6 +567,9 @@ class PlatformAISessionRuntime:
         self._task_manager = task_manager
         self._bot_registry = bot_registry
         self._scheduler = scheduler
+        self._worker_registry = worker_registry
+        self._connection_resolver = connection_resolver
+        self._worker_probe_store = worker_probe_store
         self._session_tasks: Dict[str, asyncio.Task[None]] = {}
         self._deploy_tasks: Dict[str, asyncio.Task[None]] = {}
         self._repo_edit_tasks: Dict[str, asyncio.Task[None]] = {}
@@ -4569,6 +4592,130 @@ class PlatformAISessionRuntime:
     async def list_patch_proposals(self, session_id: str, *, limit: int = 50) -> List[Dict[str, Any]]:
         return await self._store.list_patch_proposals(session_id, limit=limit)
 
+    async def preflight_patch_proposal(
+        self,
+        session_id: str,
+        proposal_id: str,
+        *,
+        operator_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Read-only policy and runtime validation for one pending bot proposal.
+
+        This intentionally validates an enabled in-memory copy. Proposals are kept
+        disabled until a separate operator-controlled approval flow applies them.
+        """
+        proposal = await self._store.get_patch_proposal(proposal_id)
+        if proposal is None:
+            return {"status": "error", "detail": "proposal_not_found"}
+        if str(proposal.get("session_id") or "").strip() != str(session_id or "").strip():
+            return {"status": "error", "detail": "proposal_session_mismatch"}
+        if str(proposal.get("status") or "").strip().lower() != "proposed":
+            return {"status": "error", "detail": "proposal_not_pending", "proposal": proposal}
+
+        after_state = proposal.get("after_state") if isinstance(proposal.get("after_state"), dict) else {}
+        if str(after_state.get("proposal_kind") or "").strip() != "bot_configuration":
+            return {"status": "blocked", "detail": "proposal_preflight_not_supported", "proposal": proposal}
+
+        preflight: Dict[str, Any] = {
+            "version": 1,
+            "checked_at": _now(),
+            "proposal_kind": "bot_configuration",
+            "schema_valid": False,
+            "policy_errors": [],
+            "safety_error": None,
+            "readiness": None,
+            "ready_for_operator_review": False,
+            "manual_activation_required": True,
+            "valid_for_seconds": _PROPOSAL_PREFLIGHT_TTL_SECONDS,
+        }
+        bot_payload = after_state.get("bot") if isinstance(after_state.get("bot"), dict) else {}
+        try:
+            bot = Bot.model_validate(bot_payload)
+        except Exception:
+            preflight["policy_errors"] = ["invalid_proposed_bot"]
+            return await self._record_proposal_preflight(
+                session_id,
+                proposal,
+                after_state,
+                preflight,
+                operator_id=operator_id,
+            )
+
+        preflight["schema_valid"] = True
+        preflight["bot_id"] = str(bot.id or "")
+        policy_errors = validate_bot_configuration(bot)
+        preflight["policy_errors"] = policy_errors
+        safety_error = self._proposal_bot_safety_error(bot)
+        preflight["safety_error"] = safety_error or None
+        if self._worker_registry is None or self._connection_resolver is None:
+            preflight["policy_errors"] = [*policy_errors, "runtime_readiness_unavailable"]
+            return await self._record_proposal_preflight(
+                session_id,
+                proposal,
+                after_state,
+                preflight,
+                operator_id=operator_id,
+            )
+
+        staged_bot = bot.model_copy(update={"enabled": True})
+        try:
+            readiness = await assess_bot_instance_readiness(
+                staged_bot,
+                worker_registry=self._worker_registry,
+                connection_resolver=self._connection_resolver,
+                worker_probe_store=self._worker_probe_store,
+            )
+        except Exception:
+            readiness = {
+                "bot_id": str(bot.id or ""),
+                "ready": False,
+                "summary": {"checks": 0, "failed": 1, "blocking": 1, "warnings": 0, "viable_backends": 0},
+                "checks": [{"component": "runtime", "status": "failed", "message": "Runtime readiness check unavailable."}],
+            }
+        preflight["readiness"] = readiness
+        preflight["ready_for_operator_review"] = bool(
+            not policy_errors and not safety_error and readiness.get("ready")
+        )
+        return await self._record_proposal_preflight(
+            session_id,
+            proposal,
+            after_state,
+            preflight,
+            operator_id=operator_id,
+        )
+
+    async def _record_proposal_preflight(
+        self,
+        session_id: str,
+        proposal: Dict[str, Any],
+        after_state: Dict[str, Any],
+        preflight: Dict[str, Any],
+        *,
+        operator_id: Optional[str],
+    ) -> Dict[str, Any]:
+        updated_after_state = dict(after_state)
+        updated_after_state["preflight"] = preflight
+        updated = await self._store.update_patch_proposal_after_state(
+            str(proposal.get("id") or ""),
+            updated_after_state,
+        )
+        await self._store.append_event(
+            session_id,
+            "action_trace",
+            {
+                "action": "bot_configuration_proposal_preflight",
+                "proposal_id": str(proposal.get("id") or ""),
+                "bot_id": str(preflight.get("bot_id") or ""),
+                "ready_for_operator_review": bool(preflight.get("ready_for_operator_review")),
+                "operator_id": str(operator_id or "").strip() or None,
+            },
+        )
+        return {
+            "status": "ready" if bool(preflight.get("ready_for_operator_review")) else "blocked",
+            "proposal": updated or proposal,
+            "preflight": preflight,
+        }
+
     async def approve_patch_proposal(
         self,
         session_id: str,
@@ -4590,6 +4737,11 @@ class PlatformAISessionRuntime:
             session = await self._store.get_session(session_id)
             if session is None:
                 return {"status": "error", "detail": "session_not_found"}
+            preflight = after_state.get("preflight") if isinstance(after_state.get("preflight"), dict) else {}
+            if not bool(preflight.get("ready_for_operator_review")):
+                return {"status": "blocked", "detail": "proposal_preflight_required", "proposal": proposal}
+            if not _proposal_preflight_is_fresh(preflight):
+                return {"status": "blocked", "detail": "proposal_preflight_stale", "proposal": proposal}
             bot_payload = after_state.get("bot") if isinstance(after_state.get("bot"), dict) else {}
             try:
                 bot = Bot.model_validate(bot_payload)

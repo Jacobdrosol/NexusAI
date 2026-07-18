@@ -1059,12 +1059,18 @@ function renderProposals(proposals) {
   }
   root.innerHTML = rows.map((proposal) => {
     const summary = proposalSummary(proposal);
+    const after = proposal && typeof proposal.after_state === 'object' ? proposal.after_state : {};
     const status = String(proposal?.status || 'proposed').trim().toLowerCase() || 'proposed';
     const proposalId = String(proposal?.id || '').trim();
     const rationale = String(proposal?.rationale || '').trim();
     const created = displayTs(proposal?.created_at || '');
+    const preflight = after && typeof after.preflight === 'object' ? after.preflight : null;
+    const preflightReady = Boolean(preflight?.ready_for_operator_review);
+    const preflightText = preflight
+      ? `Preflight: ${preflightReady ? 'ready for review' : 'attention required'}${preflight?.checked_at ? ` · ${displayTs(preflight.checked_at)}` : ''}`
+      : '';
     const controls = status === 'proposed' && proposalId
-      ? `<div style="display:flex;gap:0.45rem;flex-wrap:wrap;margin-top:0.45rem;"><button class="btn btn-primary btn-sm" type="button" onclick="reviewProposal('${htmlEscape(proposalId)}', 'approve')">Approve</button><button class="btn btn-danger btn-sm" type="button" onclick="reviewProposal('${htmlEscape(proposalId)}', 'reject')">Reject</button></div>`
+      ? `<div style="display:flex;gap:0.45rem;flex-wrap:wrap;margin-top:0.45rem;"><button class="btn btn-sm" type="button" onclick="preflightProposal('${htmlEscape(proposalId)}')">Preflight</button><button class="btn btn-primary btn-sm" type="button" onclick="reviewProposal('${htmlEscape(proposalId)}', 'approve')">Approve</button><button class="btn btn-danger btn-sm" type="button" onclick="reviewProposal('${htmlEscape(proposalId)}', 'reject')">Reject</button></div>`
       : '';
     return `<div style="padding:0.65rem 0;border-bottom:1px solid rgba(148,163,184,0.15);">
       <div style="display:flex;justify-content:space-between;gap:0.75rem;align-items:flex-start;">
@@ -1073,6 +1079,7 @@ function renderProposals(proposals) {
       </div>
       ${summary.detail ? `<div class="mini-note" style="margin-top:0.2rem;">${htmlEscape(summary.detail)}</div>` : ''}
       ${rationale ? `<div class="mini-note" style="margin-top:0.35rem;white-space:pre-wrap;">${htmlEscape(rationale)}</div>` : ''}
+      ${preflightText ? `<div class="mini-note" style="margin-top:0.25rem;">${htmlEscape(preflightText)}</div>` : ''}
       <div class="mini-note" style="margin-top:0.25rem;">${htmlEscape(created)}</div>
       ${controls}
     </div>`;
@@ -1085,6 +1092,28 @@ async function refreshProposals() {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) return;
   renderProposals(Array.isArray(data.proposals) ? data.proposals : []);
+}
+
+async function preflightProposal(proposalId) {
+  const safeId = String(proposalId || '').trim();
+  if (!SESSION_ID || !safeId) return;
+  setStatus('proposal-review-status', 'Validating proposal policy and runtime readiness...', false);
+  try {
+    const res = await fetch('/api/platform-ai/sessions/' + encodeURIComponent(SESSION_ID) + '/proposals/' + encodeURIComponent(safeId) + '/preflight', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
+      body: JSON.stringify({}),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Failed to preflight proposal');
+    const result = data && typeof data.result === 'object' ? data.result : {};
+    const preflight = result && typeof result.preflight === 'object' ? result.preflight : {};
+    setStatus('proposal-review-status', preflight.ready_for_operator_review ? 'Preflight passed. The proposal remains disabled until separately approved.' : 'Preflight found policy or runtime readiness blockers.', !preflight.ready_for_operator_review);
+    await refreshProposals();
+    await refreshEvents(true);
+  } catch (error) {
+    setStatus('proposal-review-status', error.message || 'Failed to preflight proposal', true);
+  }
 }
 
 async function reviewProposal(proposalId, decision) {

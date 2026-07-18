@@ -2095,6 +2095,31 @@ async def approve_session_proposal(
     return {"session_id": safe_session, "proposal_id": safe_proposal, "result": result}
 
 
+@router.post("/sessions/{session_id}/proposals/{proposal_id}/preflight")
+async def preflight_session_proposal(
+    session_id: str,
+    proposal_id: str,
+    request: Request,
+    body: ApprovePatchRequest,
+) -> Dict[str, Any]:
+    """Validate one pending proposal without registering, enabling, or dispatching it."""
+    runtime = request.app.state.platform_ai_runtime
+    safe_session = str(session_id or "").strip()
+    safe_proposal = str(proposal_id or "").strip()
+    if not safe_session or not safe_proposal:
+        raise HTTPException(status_code=400, detail="session_id and proposal_id required")
+    result = await runtime.preflight_patch_proposal(
+        safe_session,
+        safe_proposal,
+        operator_id=str(body.operator_id or "").strip() or None,
+    )
+    status = str(result.get("status") or "").strip().lower() if isinstance(result, dict) else "error"
+    if status == "error":
+        detail = str((result or {}).get("detail") or "proposal preflight failed")
+        raise HTTPException(status_code=404 if detail == "proposal_not_found" else 409, detail=detail)
+    return {"session_id": safe_session, "proposal_id": safe_proposal, "result": result}
+
+
 @router.post("/sessions/{session_id}/proposals/{proposal_id}/reject")
 async def reject_session_proposal(
     session_id: str,

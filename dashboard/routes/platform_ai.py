@@ -405,6 +405,17 @@ def api_approve_platform_ai_session_proposal(session_id: str, proposal_id: str):
     return jsonify(data)
 
 
+@bp.post("/api/platform-ai/sessions/<session_id>/proposals/<proposal_id>/preflight")
+@login_required
+def api_preflight_platform_ai_session_proposal(session_id: str, proposal_id: str):
+    cp = get_cp_client()
+    body = _approval_body_with_operator(request.get_json(silent=True) or {})
+    data = cp.preflight_platform_ai_proposal(session_id, proposal_id, body)
+    if data is None:
+        return _cp_error_response(cp, "failed to preflight platform ai proposal")
+    return jsonify(data)
+
+
 @bp.post("/api/platform-ai/sessions/<session_id>/proposals/<proposal_id>/reject")
 @login_required
 def api_reject_platform_ai_session_proposal(session_id: str, proposal_id: str):
