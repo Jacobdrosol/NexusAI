@@ -257,6 +257,52 @@ def test_render_worker_fleet_supports_bounded_browser_inspection_workers(tmp_pat
     assert bot_payload["execution_policy"]["required_worker_tools"] == ["browser-ui"]
 
 
+def test_render_worker_fleet_preserves_private_bot_input_contract(tmp_path):
+    renderer = _load_renderer()
+    profile = _profile(tmp_path / "workers.yaml")
+    profile_data = yaml.safe_load(profile.read_text(encoding="utf-8"))
+    profile_data["workers"][0]["bot"]["routing_rules"] = {
+        "input_contract": {
+            "enabled": True,
+            "format": "json_object",
+            "required_fields": ["question_bank"],
+            "form_fields": [{"key": "question_bank", "type": "textarea", "required": True}],
+        }
+    }
+    profile.write_text(yaml.safe_dump(profile_data, sort_keys=False), encoding="utf-8")
+
+    out = tmp_path / "runtime"
+    renderer.render(
+        profile,
+        out,
+        {"CONTROL_PLANE_API_TOKEN": "control-token", "OLLAMA_API_KEY": "ollama-token"},
+    )
+
+    bot_payload = json.loads((out / "bots" / "content-repair-01.bot.json").read_text())
+    assert bot_payload["routing_rules"]["input_contract"] == {
+        "enabled": True,
+        "format": "json_object",
+        "required_fields": ["question_bank"],
+        "form_fields": [{"key": "question_bank", "type": "textarea", "required": True}],
+    }
+    assert bot_payload["routing_rules"]["worker_profile"]["worker_id"] == "content-repair-01"
+
+
+def test_render_worker_fleet_rejects_private_override_of_managed_routing_fields(tmp_path):
+    renderer = _load_renderer()
+    profile = _profile(tmp_path / "workers.yaml")
+    profile_data = yaml.safe_load(profile.read_text(encoding="utf-8"))
+    profile_data["workers"][0]["bot"]["routing_rules"] = {"worker_profile": {"can_edit": True}}
+    profile.write_text(yaml.safe_dump(profile_data, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="cannot override renderer-managed fields"):
+        renderer.render(
+            profile,
+            tmp_path / "runtime",
+            {"CONTROL_PLANE_API_TOKEN": "control-token", "OLLAMA_API_KEY": "ollama-token"},
+        )
+
+
 @pytest.mark.parametrize(
     ("browser", "backend", "message"),
     [

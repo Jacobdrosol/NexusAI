@@ -411,6 +411,23 @@ def _bot_backends(worker: dict[str, Any], fleet: dict[str, Any]) -> list[dict[st
     return resolved
 
 
+def _bot_routing_rules(worker: dict[str, Any]) -> dict[str, Any]:
+    bot = worker.get("bot") if isinstance(worker.get("bot"), dict) else {}
+    raw_rules = bot.get("routing_rules")
+    if raw_rules is None:
+        return {}
+    if not isinstance(raw_rules, dict):
+        raise ValueError(f"Worker {worker.get('id')} bot.routing_rules must be a mapping.")
+    reserved = {"worker_profile", "launch_profile"}
+    conflicts = sorted(reserved & set(raw_rules))
+    if conflicts:
+        raise ValueError(
+            f"Worker {worker.get('id')} bot.routing_rules cannot override renderer-managed fields: "
+            + ", ".join(conflicts)
+        )
+    return dict(raw_rules)
+
+
 def _bot_payload(worker: dict[str, Any], fleet: dict[str, Any]) -> dict[str, Any]:
     bot = worker.get("bot") if isinstance(worker.get("bot"), dict) else {}
     worker_id = str(worker["id"]).strip()
@@ -421,6 +438,24 @@ def _bot_payload(worker: dict[str, Any], fleet: dict[str, Any]) -> dict[str, Any
     required_worker_tools = _as_list(configured_policy.get("required_worker_tools"))
     if any(str(backend.get("type") or "").strip().lower() == "browser" for backend in backends):
         required_worker_tools = list(dict.fromkeys([*required_worker_tools, "browser-ui"]))
+    routing_rules = _bot_routing_rules(worker)
+    routing_rules["worker_profile"] = {
+        "worker_id": worker_id,
+        "service": _worker_service(worker),
+        "role": str(worker.get("role") or "").strip(),
+        "can_edit": bool(worker.get("can_edit", False)),
+        "task_scope": str(worker.get("task_scope") or "").strip(),
+        "allowed_pages": _as_list(worker.get("allowed_pages")),
+        "course_scope": _as_list(worker.get("course_scope")),
+        "lesson_scope": _as_list(worker.get("lesson_scope")),
+        "cli_tools": _worker_cli_tools(worker),
+    }
+    routing_rules["launch_profile"] = {
+        "worker_node_service": _worker_service(worker),
+        "backend_type": primary_backend["type"],
+        "provider": primary_backend["provider"],
+        "model": primary_backend["model"],
+    }
     return {
         "id": bot_id,
         "name": str(bot.get("name") or worker.get("name") or bot_id).strip(),
@@ -441,25 +476,7 @@ def _bot_payload(worker: dict[str, Any], fleet: dict[str, Any]) -> dict[str, Any
             "can_apply_db_actions": bool(configured_policy.get("can_apply_db_actions", False)),
             "allow_run_result_ingest": bool(configured_policy.get("allow_run_result_ingest", True)),
         },
-        "routing_rules": {
-            "worker_profile": {
-                "worker_id": worker_id,
-                "service": _worker_service(worker),
-                "role": str(worker.get("role") or "").strip(),
-                "can_edit": bool(worker.get("can_edit", False)),
-                "task_scope": str(worker.get("task_scope") or "").strip(),
-                "allowed_pages": _as_list(worker.get("allowed_pages")),
-                "course_scope": _as_list(worker.get("course_scope")),
-                "lesson_scope": _as_list(worker.get("lesson_scope")),
-                "cli_tools": _worker_cli_tools(worker),
-            },
-            "launch_profile": {
-                "worker_node_service": _worker_service(worker),
-                "backend_type": primary_backend["type"],
-                "provider": primary_backend["provider"],
-                "model": primary_backend["model"],
-            },
-        },
+        "routing_rules": routing_rules,
     }
 
 
