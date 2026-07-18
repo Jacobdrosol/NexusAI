@@ -734,6 +734,15 @@ class CPClient:
     def list_platform_ai_messages(self, session_id: str, limit: int = 200) -> Optional[Dict[str, Any]]:
         return self._get(f"/v1/platform-ai/sessions/{session_id}/messages?limit={max(1, int(limit))}")
 
+    def list_platform_ai_proposals(self, session_id: str, limit: int = 100) -> Optional[Dict[str, Any]]:
+        return self._get(f"/v1/platform-ai/sessions/{session_id}/proposals?limit={max(1, int(limit))}")
+
+    def approve_platform_ai_proposal(self, session_id: str, proposal_id: str, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        return self._post(f"/v1/platform-ai/sessions/{session_id}/proposals/{proposal_id}/approve", body, timeout=_CHAT_TIMEOUT)
+
+    def reject_platform_ai_proposal(self, session_id: str, proposal_id: str, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        return self._post(f"/v1/platform-ai/sessions/{session_id}/proposals/{proposal_id}/reject", body, timeout=_CHAT_TIMEOUT)
+
     def post_platform_ai_message(self, session_id: str, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return self._post(f"/v1/platform-ai/sessions/{session_id}/messages", body, timeout=_CHAT_TIMEOUT)
 

@@ -1,4 +1,6 @@
 import asyncio
+import json
+
 import pytest
 import sys
 from contextlib import suppress
@@ -1286,3 +1288,147 @@ async def test_backfill_seed_binding_merges_missing_fields_only(tmp_path):
     assert str(binding.get("seed_orchestration_id") or "") == "orch-new"
     assert str(binding.get("seed_project_id") or "") == "globeiq"
     assert str(binding.get("seed_conversation_id") or "") == "conv-root"
+
+
+@pytest.mark.anyio
+async def test_disabled_configuration_mutation_creates_disabled_bot_proposal(tmp_path, monkeypatch):
+    monkeypatch.delenv("NEXUS_PLATFORM_AI_CONFIGURATION_MUTATIONS_ENABLED", raising=False)
+    store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+    bot_registry = BotRegistry(db_path=str(tmp_path / "bots.db"))
+    runtime = PlatformAISessionRuntime(store, bot_registry=bot_registry)
+    session = await store.create_session(mode="bot_creator", status="running")
+    directive = {
+        "platform_ai_action": "upsert_bot",
+        "bot": {
+            "id": "proposal-only-bot",
+            "name": "Proposal Only Bot",
+            "role": "assistant",
+            "enabled": True,
+            "backends": [{"type": "cloud_api", "provider": "openai", "model": "gpt-4o-mini"}],
+        },
+    }
+
+    result = await runtime._apply_operator_directives(
+        session["id"],
+        session=session,
+        content=json.dumps(directive),
+    )
+
+    actions = result.get("actions") if isinstance(result.get("actions"), list) else []
+    assert len(actions) == 1
+    proposal_id = str((actions[0].get("result") or {}).get("proposal_id") or "")
+    assert proposal_id
+    proposal = await store.get_patch_proposal(proposal_id)
+    assert proposal is not None
+    after_state = proposal.get("after_state") if isinstance(proposal.get("after_state"), dict) else {}
+    assert after_state.get("proposal_kind") == "bot_configuration"
+    assert bool((after_state.get("bot") or {}).get("enabled")) is False
+    with pytest.raises(BotNotFoundError):
+        await bot_registry.get("proposal-only-bot")
+
+
+@pytest.mark.anyio
+async def test_operator_approval_applies_proposed_bot_without_auto_activation(tmp_path, monkeypatch):
+    monkeypatch.delenv("NEXUS_PLATFORM_AI_CONFIGURATION_MUTATIONS_ENABLED", raising=False)
+    monkeypatch.delenv("NEXUS_PLATFORM_AI_AUTO_ACTIVATE_BOTS", raising=False)
+    store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+    bot_registry = BotRegistry(db_path=str(tmp_path / "bots.db"))
+    runtime = PlatformAISessionRuntime(store, bot_registry=bot_registry)
+    session = await store.create_session(mode="bot_creator", status="running")
+    directive = {
+        "platform_ai_action": "upsert_bot",
+        "bot": {
+            "id": "approved-disabled-bot",
+            "name": "Approved Disabled Bot",
+            "role": "assistant",
+            "enabled": True,
+            "backends": [{"type": "remote_llm", "provider": "ollama", "model": "glm-5.2:cloud"}],
+        },
+    }
+    result = await runtime._apply_operator_directives(
+        session["id"],
+        session=session,
+        content=json.dumps(directive),
+    )
+    proposal_id = str((((result.get("actions") or [])[0].get("result") or {}).get("proposal_id") or ""))
+
+    approval = await runtime.approve_patch_proposal(session["id"], proposal_id, operator_id="operator")
+
+    assert approval.get("status") == "applied"
+    created = await bot_registry.get("approved-disabled-bot")
+    assert created.enabled is False
+    proposal = await store.get_patch_proposal(proposal_id)
+    assert proposal is not None
+    assert proposal.get("status") == "applied"
+
+
+@pytest.mark.anyio
+async def test_operator_approval_refuses_to_change_active_bot(tmp_path, monkeypatch):
+    monkeypatch.delenv("NEXUS_PLATFORM_AI_CONFIGURATION_MUTATIONS_ENABLED", raising=False)
+    store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+    bot_registry = BotRegistry(db_path=str(tmp_path / "bots.db"))
+    await bot_registry.register(
+        Bot.model_validate(
+            {
+                "id": "active-bot",
+                "name": "Active Bot",
+                "role": "assistant",
+                "enabled": True,
+                "backends": [{"type": "cloud_api", "provider": "openai", "model": "gpt-4o-mini"}],
+            }
+        )
+    )
+    runtime = PlatformAISessionRuntime(store, bot_registry=bot_registry)
+    session = await store.create_session(mode="bot_creator", status="running")
+    directive = {
+        "platform_ai_action": "upsert_bot",
+        "bot": {
+            "id": "active-bot",
+            "name": "Changed Active Bot",
+            "role": "assistant",
+            "backends": [{"type": "cloud_api", "provider": "openai", "model": "gpt-4.1"}],
+        },
+    }
+    result = await runtime._apply_operator_directives(
+        session["id"],
+        session=session,
+        content=json.dumps(directive),
+    )
+    proposal_id = str((((result.get("actions") or [])[0].get("result") or {}).get("proposal_id") or ""))
+
+    approval = await runtime.approve_patch_proposal(session["id"], proposal_id, operator_id="operator")
+
+    assert approval.get("status") == "blocked"
+    assert approval.get("detail") == "active_bot_update_requires_direct_operator_edit"
+    unchanged = await bot_registry.get("active-bot")
+    assert unchanged.name == "Active Bot"
+
+
+@pytest.mark.anyio
+async def test_configuration_proposal_rejects_cli_backend(tmp_path, monkeypatch):
+    monkeypatch.delenv("NEXUS_PLATFORM_AI_CONFIGURATION_MUTATIONS_ENABLED", raising=False)
+    store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+    bot_registry = BotRegistry(db_path=str(tmp_path / "bots.db"))
+    runtime = PlatformAISessionRuntime(store, bot_registry=bot_registry)
+    session = await store.create_session(mode="bot_creator", status="running")
+    directive = {
+        "platform_ai_action": "upsert_bot",
+        "bot": {
+            "id": "cli-proposal-bot",
+            "name": "CLI Proposal Bot",
+            "role": "assistant",
+            "backends": [{"type": "cli", "provider": "cli", "model": "claude", "command": "claude -p"}],
+        },
+    }
+
+    result = await runtime._apply_operator_directives(
+        session["id"],
+        session=session,
+        content=json.dumps(directive),
+    )
+
+    actions = result.get("actions") if isinstance(result.get("actions"), list) else []
+    assert len(actions) == 1
+    detail = str((actions[0].get("result") or {}).get("detail") or "")
+    assert detail == "proposal_backend_type_not_approvable:cli"
+    assert await store.list_patch_proposals(session["id"]) == []

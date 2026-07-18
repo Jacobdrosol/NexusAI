@@ -375,6 +375,17 @@
 
 <section class="panel" style="margin-bottom:1rem;">
   <div class="page-header" style="margin-bottom:0.75rem;">
+    <h2 class="panel-title">Configuration Proposals</h2>
+    <div class="mini-note"><span id="proposal-count">{{ proposals|length }}</span> recorded</div>
+  </div>
+  <div id="proposal-list">
+    <div class="empty">No configuration proposals</div>
+  </div>
+  <div id="proposal-review-status" class="mini-note" style="margin-top:0.55rem;"></div>
+</section>
+
+<section class="panel" style="margin-bottom:1rem;">
+  <div class="page-header" style="margin-bottom:0.75rem;">
     <h2 class="panel-title">Session Chat</h2>
     <div class="mini-note"><span id="session-chat-message-count">{{ messages|length }}</span> messages</div>
   </div>
@@ -483,6 +494,7 @@
 const SESSION_ID = {{ (session.id if session else '') | tojson }};
 const INITIAL_MESSAGES = {{ messages|default([], true)|tojson }};
 const INITIAL_EVENTS = {{ events|default([], true)|tojson }};
+const INITIAL_PROPOSALS = {{ proposals|default([], true)|tojson }};
 let EVENTS_CURSOR = 0;
 let MESSAGES_CURSOR = 0;
 let AUTO_POLL_HANDLE = null;
@@ -490,6 +502,7 @@ let MESSAGE_STREAM = null;
 let LAST_ASSISTANT_MESSAGE_AT = '';
 let LAST_MESSAGES = Array.isArray(INITIAL_MESSAGES) ? INITIAL_MESSAGES : [];
 let LAST_EVENTS = Array.isArray(INITIAL_EVENTS) ? INITIAL_EVENTS : [];
+let LAST_PROPOSALS = Array.isArray(INITIAL_PROPOSALS) ? INITIAL_PROPOSALS : [];
 let LAST_CONTEXT_FILES = {{ context_files|default([], true)|tojson }};
 let LAST_MESSAGE_FILES = {{ message_files|default([], true)|tojson }};
 let pendingSessionAttachments = [];
@@ -975,6 +988,90 @@ function renderEvents(events) {
   renderTimeline();
 }
 
+function proposalSummary(proposal) {
+  const after = proposal && typeof proposal.after_state === 'object' ? proposal.after_state : {};
+  const bot = after && typeof after.bot === 'object' ? after.bot : {};
+  const botId = String(bot.id || '').trim();
+  const name = String(bot.name || '').trim();
+  const role = String(bot.role || '').trim();
+  const backends = Array.isArray(bot.backends) ? bot.backends : [];
+  const backendSummary = backends.map((backend) => {
+    const type = String(backend?.type || '').trim();
+    const provider = String(backend?.provider || '').trim();
+    const model = String(backend?.model || '').trim();
+    return [type, provider, model].filter(Boolean).join(' / ');
+  }).filter(Boolean).join(', ');
+  return {
+    botId: botId,
+    label: name || botId || String(proposal.target_config || 'configuration'),
+    detail: [role, backendSummary].filter(Boolean).join(' · '),
+  };
+}
+
+function renderProposals(proposals) {
+  const root = document.getElementById('proposal-list');
+  const count = document.getElementById('proposal-count');
+  const rows = Array.isArray(proposals) ? proposals : [];
+  LAST_PROPOSALS = rows;
+  if (count) count.textContent = String(rows.length);
+  if (!root) return;
+  if (!rows.length) {
+    root.innerHTML = '<div class="empty">No configuration proposals</div>';
+    return;
+  }
+  root.innerHTML = rows.map((proposal) => {
+    const summary = proposalSummary(proposal);
+    const status = String(proposal?.status || 'proposed').trim().toLowerCase() || 'proposed';
+    const proposalId = String(proposal?.id || '').trim();
+    const rationale = String(proposal?.rationale || '').trim();
+    const created = displayTs(proposal?.created_at || '');
+    const controls = status === 'proposed' && proposalId
+      ? `<div style="display:flex;gap:0.45rem;flex-wrap:wrap;margin-top:0.45rem;"><button class="btn btn-primary btn-sm" type="button" onclick="reviewProposal('${htmlEscape(proposalId)}', 'approve')">Approve</button><button class="btn btn-danger btn-sm" type="button" onclick="reviewProposal('${htmlEscape(proposalId)}', 'reject')">Reject</button></div>`
+      : '';
+    return `<div style="padding:0.65rem 0;border-bottom:1px solid rgba(148,163,184,0.15);">
+      <div style="display:flex;justify-content:space-between;gap:0.75rem;align-items:flex-start;">
+        <div style="min-width:0;"><strong>${htmlEscape(summary.label)}</strong>${summary.botId ? `<div class="mini-note"><code>${htmlEscape(summary.botId)}</code></div>` : ''}</div>
+        <span class="badge badge-${htmlEscape(status)}">${htmlEscape(status)}</span>
+      </div>
+      ${summary.detail ? `<div class="mini-note" style="margin-top:0.2rem;">${htmlEscape(summary.detail)}</div>` : ''}
+      ${rationale ? `<div class="mini-note" style="margin-top:0.35rem;white-space:pre-wrap;">${htmlEscape(rationale)}</div>` : ''}
+      <div class="mini-note" style="margin-top:0.25rem;">${htmlEscape(created)}</div>
+      ${controls}
+    </div>`;
+  }).join('');
+}
+
+async function refreshProposals() {
+  if (!SESSION_ID) return;
+  const res = await fetch('/api/platform-ai/sessions/' + encodeURIComponent(SESSION_ID) + '/proposals?limit=100');
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) return;
+  renderProposals(Array.isArray(data.proposals) ? data.proposals : []);
+}
+
+async function reviewProposal(proposalId, decision) {
+  const safeId = String(proposalId || '').trim();
+  const safeDecision = String(decision || '').trim().toLowerCase();
+  if (!SESSION_ID || !safeId || !['approve', 'reject'].includes(safeDecision)) return;
+  setStatus('proposal-review-status', safeDecision === 'approve' ? 'Applying proposal...' : 'Rejecting proposal...', false);
+  try {
+    const res = await fetch('/api/platform-ai/sessions/' + encodeURIComponent(SESSION_ID) + '/proposals/' + encodeURIComponent(safeId) + '/' + safeDecision, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
+      body: JSON.stringify({}),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `Failed to ${safeDecision} proposal`);
+    const result = data && typeof data.result === 'object' ? data.result : {};
+    setStatus('proposal-review-status', `Proposal ${String(result.status || safeDecision)}.`, false);
+    await refreshProposals();
+    await refreshEvents(true);
+    await refreshSessionHeader();
+  } catch (error) {
+    setStatus('proposal-review-status', error.message || `Failed to ${safeDecision} proposal`, true);
+  }
+}
+
 function renderTimeline() {
   const root = document.getElementById('session-timeline-log');
   if (!root) return;
@@ -1448,6 +1545,7 @@ function ensureMessageStream(status, archived) {
 async function pollWorkspace() {
   await refreshMessages(false);
   await refreshEvents(false);
+  await refreshProposals();
   await refreshSessionHeader();
 }
 
@@ -1464,9 +1562,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   renderMessageFileLibrary();
   renderMessages(LAST_MESSAGES);
   renderEvents(LAST_EVENTS);
+  renderProposals(LAST_PROPOSALS);
   setupSessionComposerDragDrop();
   await refreshMessages(true);
   await refreshEvents(true);
+  await refreshProposals();
   await refreshSessionHeader();
   AUTO_POLL_HANDLE = setInterval(pollWorkspace, 4000);
   const suiteSelect = document.getElementById('suite-id');

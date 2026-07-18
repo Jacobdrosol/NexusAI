@@ -26,6 +26,7 @@ _QUALITY_FIELDS = {"summary", "quality_gates", "acceptance_criteria", "tests", "
 _SESSION_STATUSES = {"ready", "running", "stopped"}
 _CONFIGURATION_MUTATION_ACTIONS = {"upsert_bot", "upsert_bots", "delete_bot", "remove_bot", "configure_pipeline_entry"}
 _AUTONOMOUS_PIPELINE_ACTIONS = {"set_pipeline_target", "launch_pipeline"}
+_APPROVABLE_PROPOSAL_BACKEND_TYPES = {"local_llm", "remote_llm", "cloud_api"}
 
 
 def _env_enabled(name: str) -> bool:
@@ -1615,6 +1616,113 @@ class PlatformAISessionRuntime:
         backends = payload.get("backends")
         return bool(bot_id and role and isinstance(backends, list))
 
+    @staticmethod
+    def _proposal_bot_safety_error(bot: Bot) -> Optional[str]:
+        """Keep approval-time bot changes bounded to declarative model backends.
+
+        CLI, browser, and custom backends can carry host tooling or arbitrary commands.
+        Those require a direct operator configuration path, not an AI-generated proposal.
+        """
+        for backend in list(getattr(bot, "backends", None) or []):
+            backend_type = str(getattr(backend, "type", "") or "").strip().lower()
+            if backend_type not in _APPROVABLE_PROPOSAL_BACKEND_TYPES:
+                return f"proposal_backend_type_not_approvable:{backend_type or 'missing'}"
+            if str(getattr(backend, "command", "") or "").strip():
+                return "proposal_backend_command_not_allowed"
+        return None
+
+    async def _create_bot_configuration_proposal(
+        self,
+        *,
+        session_id: str,
+        session: Dict[str, Any],
+        payload: Dict[str, Any],
+        rationale: str = "",
+    ) -> Dict[str, Any]:
+        """Persist a bounded bot configuration for individual operator approval."""
+        if self._bot_registry is None:
+            return {"ok": False, "detail": "bot_registry_unavailable"}
+        try:
+            proposed_bot = Bot.model_validate(payload)
+        except Exception as exc:
+            return {"ok": False, "detail": f"invalid_bot_payload:{exc}"}
+        safety_error = self._proposal_bot_safety_error(proposed_bot)
+        if safety_error:
+            return {"ok": False, "detail": safety_error}
+
+        safe_id = str(proposed_bot.id or "").strip()
+        if not safe_id:
+            return {"ok": False, "detail": "bot_id_missing"}
+
+        # Proposals never carry activation authority. New bots remain disabled and an
+        # existing enabled bot must be changed through the direct operator path.
+        proposed_bot = proposed_bot.model_copy(update={"enabled": False})
+        existing_bot: Optional[Bot] = None
+        try:
+            existing_bot = await self._bot_registry.get(safe_id)
+        except BotNotFoundError:
+            existing_bot = None
+        except Exception:
+            existing_bot = None
+
+        before_state: Dict[str, Any] = {
+            "exists": existing_bot is not None,
+            "enabled": bool(getattr(existing_bot, "enabled", False)) if existing_bot is not None else False,
+        }
+        if existing_bot is not None:
+            before_state["bot"] = existing_bot.model_dump(mode="json", exclude_none=True)
+
+        action_record = await self._create_action_record(
+            session_id,
+            action_type="bot_configuration_proposal",
+            target_type="bot",
+            target_id=safe_id,
+            rationale=str(rationale or "").strip() or "Platform AI proposed a bot configuration.",
+            snapshot={"bot_id": safe_id, "proposed_bot": proposed_bot.model_dump(mode="json", exclude_none=True)},
+        )
+        proposal = await self._store.create_patch_proposal(
+            session_id,
+            action_id=action_record["id"],
+            target_config=f"bot:{safe_id}:configuration",
+            before_state=before_state,
+            after_state={
+                "proposal_kind": "bot_configuration",
+                "action": "upsert_bot",
+                "bot": proposed_bot.model_dump(mode="json", exclude_none=True),
+            },
+            rationale=str(rationale or "").strip() or "Platform AI proposed a bounded bot configuration.",
+            expected_effect="Create or update a disabled bot after individual operator approval.",
+            validation_steps=[
+                "validate_bot_schema",
+                "validate_backend_type",
+                "validate_session_scope",
+                "preserve_manual_activation",
+            ],
+            rollback_note="Disable or remove the bot through the direct operator controls after review.",
+        )
+        await self._store.update_action(
+            action_record["id"],
+            status="proposed",
+            state_delta_summary=f"Awaiting operator review for bot {safe_id}.",
+        )
+        await self._store.append_event(
+            session_id,
+            "action_trace",
+            {
+                "action": "bot_configuration_proposed",
+                "proposal_id": proposal["id"],
+                "bot_id": safe_id,
+                "existing_bot_enabled": bool(getattr(existing_bot, "enabled", False)) if existing_bot is not None else False,
+            },
+        )
+        return {
+            "ok": False,
+            "detail": "configuration_mutations_disabled",
+            "proposal_only": True,
+            "proposal_id": proposal["id"],
+            "bot_id": safe_id,
+        }
+
     def _mode_mutation_policy(self, *, mode: str, metadata: Dict[str, Any]) -> Dict[str, bool]:
         defaults = {
             "bot_tuner": {"create": False, "update": True, "delete": False},
@@ -1947,6 +2055,29 @@ class PlatformAISessionRuntime:
             if not action and self._looks_like_bot_payload(directive):
                 action = "upsert_bot"
             if action in _CONFIGURATION_MUTATION_ACTIONS and not _configuration_mutations_enabled():
+                if action == "upsert_bot":
+                    bot_payload = directive.get("bot") if isinstance(directive.get("bot"), dict) else directive
+                    result = await self._create_bot_configuration_proposal(
+                        session_id=session_id,
+                        session=session,
+                        payload=bot_payload if isinstance(bot_payload, dict) else {},
+                        rationale=str(directive.get("rationale") or directive.get("reason") or "").strip(),
+                    )
+                    actions_taken.append({"action": "upsert_bot", "result": result})
+                    continue
+                if action == "upsert_bots":
+                    bots = directive.get("bots") if isinstance(directive.get("bots"), list) else []
+                    for item in bots:
+                        if not isinstance(item, dict):
+                            continue
+                        result = await self._create_bot_configuration_proposal(
+                            session_id=session_id,
+                            session=session,
+                            payload=item,
+                            rationale=str(directive.get("rationale") or directive.get("reason") or "").strip(),
+                        )
+                        actions_taken.append({"action": "upsert_bot", "result": result})
+                    continue
                 actions_taken.append(
                     {
                         "action": action,
@@ -4416,8 +4547,14 @@ class PlatformAISessionRuntime:
     async def get_session_brief(self, session_id: str) -> Optional[Dict[str, Any]]:
         return await self._store.get_session_brief(session_id)
 
-    async def list_session_actions(self, session_id: str, *, limit: int = 100) -> List[Dict[str, Any]]:
-        return await self._store.list_actions(session_id, limit=limit)
+    async def list_session_actions(
+        self,
+        session_id: str,
+        *,
+        limit: int = 100,
+        status: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        return await self._store.list_actions(session_id, limit=limit, status=status)
 
     async def get_patch_proposal(self, proposal_id: str) -> Optional[Dict[str, Any]]:
         return await self._store.get_patch_proposal(proposal_id)
@@ -4433,9 +4570,81 @@ class PlatformAISessionRuntime:
         operator_id: Optional[str] = None,
         notes: Optional[str] = None,
     ) -> Dict[str, Any]:
-        updated = await self._store.update_patch_proposal_status(proposal_id, "approved")
-        if updated is None:
+        proposal = await self._store.get_patch_proposal(proposal_id)
+        if proposal is None:
             return {"status": "error", "detail": "proposal_not_found"}
+        if str(proposal.get("session_id") or "").strip() != str(session_id or "").strip():
+            return {"status": "error", "detail": "proposal_session_mismatch"}
+        if str(proposal.get("status") or "").strip().lower() != "proposed":
+            return {"status": "error", "detail": "proposal_not_pending", "proposal": proposal}
+
+        after_state = proposal.get("after_state") if isinstance(proposal.get("after_state"), dict) else {}
+        if str(after_state.get("proposal_kind") or "").strip() == "bot_configuration":
+            session = await self._store.get_session(session_id)
+            if session is None:
+                return {"status": "error", "detail": "session_not_found"}
+            bot_payload = after_state.get("bot") if isinstance(after_state.get("bot"), dict) else {}
+            try:
+                bot = Bot.model_validate(bot_payload)
+            except Exception as exc:
+                return {"status": "blocked", "detail": f"invalid_proposed_bot:{exc}", "proposal": proposal}
+            safety_error = self._proposal_bot_safety_error(bot)
+            if safety_error:
+                return {"status": "blocked", "detail": safety_error, "proposal": proposal}
+            if self._bot_registry is None:
+                return {"status": "blocked", "detail": "bot_registry_unavailable", "proposal": proposal}
+            try:
+                existing_bot = await self._bot_registry.get(str(bot.id or "").strip())
+            except BotNotFoundError:
+                existing_bot = None
+            except Exception:
+                existing_bot = None
+            if existing_bot is not None and bool(getattr(existing_bot, "enabled", False)):
+                return {
+                    "status": "blocked",
+                    "detail": "active_bot_update_requires_direct_operator_edit",
+                    "proposal": proposal,
+                }
+
+            mode = str(session.get("mode") or "").strip().lower()
+            result = await self._upsert_bot_payload(
+                bot.model_dump(mode="json", exclude_none=True),
+                session_id=session_id,
+                session=session,
+                allow_scope_expansion=mode in {"bot_creator", "pipeline_creator", "pipeline_tuner"},
+            )
+            if not bool(result.get("ok")):
+                await self._store.append_event(
+                    session_id,
+                    "action_trace",
+                    {
+                        "action": "bot_configuration_proposal_approval_blocked",
+                        "proposal_id": proposal_id,
+                        "detail": result.get("detail"),
+                        "operator_id": str(operator_id or "").strip() or None,
+                    },
+                )
+                return {"status": "blocked", "detail": result.get("detail"), "proposal": proposal, "result": result}
+
+            updated = await self._store.update_patch_proposal_status(proposal_id, "applied")
+            action_id = str(proposal.get("action_id") or "").strip()
+            if action_id:
+                await self._store.update_action(
+                    action_id,
+                    status="completed",
+                    output_snapshot_hash=self._compute_state_hash(result),
+                    state_delta_summary=f"Approved bot configuration applied to {result.get('bot_id') or bot.id}.",
+                )
+            await self._store.append_event(session_id, "action_trace", {
+                "action": "bot_configuration_proposal_applied",
+                "proposal_id": proposal_id,
+                "bot_id": result.get("bot_id") or bot.id,
+                "operator_id": str(operator_id or "").strip() or None,
+                "notes": str(notes or "").strip() or None,
+            })
+            return {"status": "applied", "proposal": updated, "result": result}
+
+        updated = await self._store.update_patch_proposal_status(proposal_id, "approved")
         await self._store.append_event(session_id, "action_trace", {
             "action": "patch_proposal_approved",
             "proposal_id": proposal_id,
@@ -4444,6 +4653,38 @@ class PlatformAISessionRuntime:
             "notes": str(notes or "").strip() or None,
         })
         return {"status": "approved", "proposal": updated}
+
+    async def reject_patch_proposal(
+        self,
+        session_id: str,
+        proposal_id: str,
+        *,
+        operator_id: Optional[str] = None,
+        notes: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        proposal = await self._store.get_patch_proposal(proposal_id)
+        if proposal is None:
+            return {"status": "error", "detail": "proposal_not_found"}
+        if str(proposal.get("session_id") or "").strip() != str(session_id or "").strip():
+            return {"status": "error", "detail": "proposal_session_mismatch"}
+        if str(proposal.get("status") or "").strip().lower() != "proposed":
+            return {"status": "error", "detail": "proposal_not_pending", "proposal": proposal}
+        updated = await self._store.update_patch_proposal_status(proposal_id, "rejected")
+        action_id = str(proposal.get("action_id") or "").strip()
+        if action_id:
+            await self._store.update_action(
+                action_id,
+                status="rejected",
+                state_delta_summary="Operator rejected the proposal.",
+            )
+        await self._store.append_event(session_id, "action_trace", {
+            "action": "patch_proposal_rejected",
+            "proposal_id": proposal_id,
+            "target_config": proposal.get("target_config"),
+            "operator_id": str(operator_id or "").strip() or None,
+            "notes": str(notes or "").strip() or None,
+        })
+        return {"status": "rejected", "proposal": updated}
 
     async def halt_session(
         self,

@@ -222,6 +222,7 @@ def platform_ai_session_page(session_id: str) -> str:
             session=None,
             messages=[],
             events=[],
+            proposals=[],
             pipeline=None,
             suites=[],
             suite_runs=[],
@@ -233,8 +234,10 @@ def platform_ai_session_page(session_id: str) -> str:
 
     messages_resp = cp.list_platform_ai_messages(session_id, limit=400) or {}
     events_resp = cp.list_platform_ai_events(session_id, limit=600) or {}
+    proposals_resp = cp.list_platform_ai_proposals(session_id, limit=100) or {}
     messages = _as_list(messages_resp.get("messages"))
     events = _as_list(events_resp.get("events"))
+    proposals = _as_list(proposals_resp.get("proposals"))
 
     pipeline: Optional[Dict[str, Any]] = None
     suites: List[Dict[str, Any]] = []
@@ -254,6 +257,7 @@ def platform_ai_session_page(session_id: str) -> str:
         session=session,
         messages=messages,
         events=events,
+        proposals=proposals,
         context_files=_session_context_files(session),
         message_files=_session_message_files(session),
         pipeline=pipeline,
@@ -359,6 +363,39 @@ def api_list_platform_ai_session_messages(session_id: str):
     data = cp.list_platform_ai_messages(session_id, limit=limit)
     if data is None:
         return _cp_error_response(cp, "failed to list platform ai messages")
+    return jsonify(data)
+
+
+@bp.get("/api/platform-ai/sessions/<session_id>/proposals")
+@login_required
+def api_list_platform_ai_session_proposals(session_id: str):
+    cp = get_cp_client()
+    limit = _safe_int(request.args.get("limit"), 100, min_value=1, max_value=2000)
+    data = cp.list_platform_ai_proposals(session_id, limit=limit)
+    if data is None:
+        return _cp_error_response(cp, "failed to list platform ai proposals")
+    return jsonify(data)
+
+
+@bp.post("/api/platform-ai/sessions/<session_id>/proposals/<proposal_id>/approve")
+@login_required
+def api_approve_platform_ai_session_proposal(session_id: str, proposal_id: str):
+    cp = get_cp_client()
+    body = request.get_json(silent=True) or {}
+    data = cp.approve_platform_ai_proposal(session_id, proposal_id, body)
+    if data is None:
+        return _cp_error_response(cp, "failed to approve platform ai proposal")
+    return jsonify(data)
+
+
+@bp.post("/api/platform-ai/sessions/<session_id>/proposals/<proposal_id>/reject")
+@login_required
+def api_reject_platform_ai_session_proposal(session_id: str, proposal_id: str):
+    cp = get_cp_client()
+    body = request.get_json(silent=True) or {}
+    data = cp.reject_platform_ai_proposal(session_id, proposal_id, body)
+    if data is None:
+        return _cp_error_response(cp, "failed to reject platform ai proposal")
     return jsonify(data)
 
 
