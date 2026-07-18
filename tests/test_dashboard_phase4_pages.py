@@ -2685,7 +2685,7 @@ def test_overview_shows_latest_bounded_fleet_health_report(dashboard_client):
                     "monitoring_events": json.dumps(
                         {
                             "tasks": {
-                                "failed_by_category": {
+                                "recent_failed_by_category": {
                                     "authentication": 2,
                                     "secret": 99,
                                 }

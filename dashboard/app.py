@@ -42,7 +42,7 @@ def _fleet_health_failure_categories(task: object) -> dict[str, int]:
     if not isinstance(events, dict):
         return {}
     task_summary = events.get("tasks")
-    categories = task_summary.get("failed_by_category") if isinstance(task_summary, dict) else None
+    categories = task_summary.get("recent_failed_by_category") if isinstance(task_summary, dict) else None
     if not isinstance(categories, dict):
         return {}
 

@@ -5,13 +5,14 @@ import inspect
 import json
 import re
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
 
 
 FLEET_HEALTH_SUMMARY_SOURCE = "control_plane_fleet_summary_v1"
 _SYSTEM_PAYLOAD_SOURCE_KEY = "system_payload_source"
 _SAFE_FIELD_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
+_FLEET_HEALTH_RECENT_WINDOW_HOURS = 24
 
 
 def _failure_category(task: Any) -> str:
@@ -34,6 +35,19 @@ def _failure_category(task: Any) -> str:
     if any(token in haystack for token in ("model", "inference", "provider")):
         return "model"
     return "other"
+
+
+def _task_updated_at(task: Any) -> datetime | None:
+    raw = str(getattr(task, "updated_at", "") or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 class SystemPayloadSourceError(ValueError):
@@ -93,6 +107,8 @@ async def _fleet_health_summary(
     task_manager: Any,
     schedule_engine: Any,
 ) -> Dict[str, Any]:
+    generated_at = datetime.now(timezone.utc)
+    recent_cutoff = generated_at - timedelta(hours=_FLEET_HEALTH_RECENT_WINDOW_HOURS)
     workers = list(await _await_if_needed(worker_registry.list()) or [])
     worker_ids = [str(getattr(worker, "id", "") or "").strip() for worker in workers]
     stored_probes = await _await_if_needed(worker_probe_store.list_for_workers(worker_ids))
@@ -116,9 +132,17 @@ async def _fleet_health_summary(
     tasks = await _await_if_needed(task_manager.list_tasks(limit=200))
     schedules = await _await_if_needed(schedule_engine.list_schedules(limit=100))
     task_statuses = Counter(str(getattr(task, "status", "unknown") or "unknown") for task in (tasks or []))
-    failure_categories = Counter(
+    recent_tasks = []
+    for task in tasks or []:
+        updated_at = _task_updated_at(task)
+        if updated_at is not None and updated_at >= recent_cutoff:
+            recent_tasks.append(task)
+    recent_task_statuses = Counter(
+        str(getattr(task, "status", "unknown") or "unknown") for task in recent_tasks
+    )
+    recent_failure_categories = Counter(
         _failure_category(task)
-        for task in (tasks or [])
+        for task in recent_tasks
         if str(getattr(task, "status", "") or "").strip().lower() == "failed"
     )
     runtime_attention_worker_ids = {
@@ -143,7 +167,7 @@ async def _fleet_health_summary(
 
     return {
         "source": FLEET_HEALTH_SUMMARY_SOURCE,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": generated_at.isoformat(),
         "workers": {
             "registered": len(workers),
             "online": sum(1 for worker in workers if str(getattr(worker, "status", "")).lower() == "online"),
@@ -158,7 +182,9 @@ async def _fleet_health_summary(
         "tasks": {
             "sample_limit": 200,
             "by_status": dict(sorted(task_statuses.items())),
-            "failed_by_category": dict(sorted(failure_categories.items())),
+            "recent_window_hours": _FLEET_HEALTH_RECENT_WINDOW_HOURS,
+            "recent_by_status": dict(sorted(recent_task_statuses.items())),
+            "recent_failed_by_category": dict(sorted(recent_failure_categories.items())),
         },
         "schedules": {
             "registered": len(schedules or []),

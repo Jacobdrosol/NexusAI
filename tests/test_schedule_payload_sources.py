@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -42,13 +43,19 @@ class _FakeTaskManager:
     async def list_tasks(self, limit):
         assert limit == 200
         return [
-            SimpleNamespace(status="completed"),
+            SimpleNamespace(status="completed", updated_at=datetime.now(timezone.utc).isoformat()),
             SimpleNamespace(
                 status="failed",
+                updated_at=datetime.now(timezone.utc).isoformat(),
                 error=SimpleNamespace(
                     message="API key missing: private-token-must-not-leak",
                     code=None,
                 ),
+            ),
+            SimpleNamespace(
+                status="failed",
+                updated_at="2020-01-01T00:00:00+00:00",
+                error=SimpleNamespace(message="policy block", code="policy_violation"),
             ),
         ]
 
@@ -84,8 +91,10 @@ async def test_materialized_fleet_summary_is_sanitized_and_bounded():
     assert '"browser"' in payload["monitoring_events"]
     assert '"failed_recent_schedule_ids":["failing"]' in payload["monitoring_events"]
     assert '"enabled_with_runtime_attention":1' in payload["monitoring_events"]
-    assert '"failed_by_category":{"authentication":1}' in payload["monitoring_events"]
+    assert '"recent_failed_by_category":{"authentication":1}' in payload["monitoring_events"]
+    assert '"recent_by_status":{"completed":1,"failed":1}' in payload["monitoring_events"]
     assert "prompt" not in payload["monitoring_events"]
+    assert "policy" not in payload["monitoring_events"]
     assert "private-token-must-not-leak" not in payload["monitoring_events"]
 
 
