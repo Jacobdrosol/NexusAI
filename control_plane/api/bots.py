@@ -6,7 +6,7 @@ from fastapi import APIRouter, Body, HTTPException, Query, Request
 from pydantic import ValidationError
 
 from control_plane.audit.utils import record_audit_event
-from control_plane.bot_readiness import assess_bot_readiness
+from control_plane.bot_readiness import assess_bot_instance_readiness, assess_bot_readiness
 from control_plane.security.guards import enforce_body_size, enforce_rate_limit
 from shared.exceptions import BotNotFoundError
 from shared.bot_policy import validate_bot_configuration
@@ -125,6 +125,25 @@ def _validate_bot_or_400(bot: Bot) -> None:
             reason_code="bot_validation_failed",
             message="Bot payload failed workflow validation.",
             validation_errors=_policy_validation_errors(errors),
+        )
+
+
+async def _require_bot_ready_to_enable(bot: Bot, request: Request) -> None:
+    """Block activation when the staged bot cannot dispatch its declared backends."""
+    candidate = bot.model_copy(update={"enabled": True})
+    readiness = await assess_bot_instance_readiness(
+        candidate,
+        worker_registry=request.app.state.worker_registry,
+        connection_resolver=request.app.state.connection_resolver,
+    )
+    if not readiness["ready"]:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "reason_code": "bot_not_ready",
+                "message": f"Bot '{bot.id}' cannot be enabled until its dispatch checks pass.",
+                "readiness": readiness,
+            },
         )
 
 
@@ -303,6 +322,8 @@ async def delete_bot(bot_id: str, request: Request) -> dict:
 async def enable_bot(bot_id: str, request: Request) -> Bot:
     bot_registry = request.app.state.bot_registry
     try:
+        bot = await bot_registry.get(bot_id)
+        await _require_bot_ready_to_enable(bot, request)
         await bot_registry.enable(bot_id)
         await record_audit_event(request, action="bots.enable", resource=f"bot:{bot_id}")
         return await bot_registry.get(bot_id)

@@ -67,6 +67,61 @@ async def test_schedule_activation_requires_a_ready_bot(cp_client):
 
 
 @pytest.mark.anyio
+async def test_bot_enable_requires_a_ready_backend(cp_client):
+    bot_id = "staged-unready-bot"
+    created = await cp_client.post(
+        "/v1/bots",
+        json={
+            "id": bot_id,
+            "name": "Staged Unready Bot",
+            "role": "worker",
+            "enabled": False,
+            "backends": [],
+        },
+    )
+    assert created.status_code == 200
+
+    enabled = await cp_client.post(f"/v1/bots/{bot_id}/enable")
+    current = await cp_client.get(f"/v1/bots/{bot_id}")
+
+    assert enabled.status_code == 409
+    assert enabled.json()["detail"]["reason_code"] == "bot_not_ready"
+    assert current.json()["enabled"] is False
+
+
+@pytest.mark.anyio
+async def test_bot_enable_allows_a_ready_worker_backend(cp_client):
+    worker_id = "enable-ready-worker"
+    bot_id = "enable-ready-bot"
+    await cp_client.post(
+        "/v1/workers",
+        json={
+            "id": worker_id,
+            "name": "Enable Ready Worker",
+            "host": "enable-ready-worker",
+            "port": 8001,
+            "status": "online",
+            "capabilities": [{"type": "llm", "provider": "ollama_cloud", "models": ["ready-model"]}],
+        },
+    )
+    await cp_client.post(
+        "/v1/bots",
+        json={
+            "id": bot_id,
+            "name": "Enable Ready Bot",
+            "role": "worker",
+            "enabled": False,
+            "backends": [{"type": "remote_llm", "worker_id": worker_id, "provider": "ollama_cloud", "model": "ready-model"}],
+        },
+    )
+
+    enabled = await cp_client.post(f"/v1/bots/{bot_id}/enable")
+
+    assert enabled.status_code == 200
+    assert enabled.json()["enabled"] is True
+
+
+@pytest.mark.anyio
 async def test_bot_readiness_requires_declared_worker_tools(cp_client):
     worker_id = "browser-worker"
     await cp_client.post(

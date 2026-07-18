@@ -48,6 +48,20 @@ async def assess_bot_readiness(
 ) -> dict[str, Any]:
     """Return non-secret operational checks for the bot's declared backend chain."""
     bot: Bot = await bot_registry.get(str(bot_id or "").strip())
+    return await assess_bot_instance_readiness(
+        bot,
+        worker_registry=worker_registry,
+        connection_resolver=connection_resolver,
+    )
+
+
+async def assess_bot_instance_readiness(
+    bot: Bot,
+    *,
+    worker_registry: Any,
+    connection_resolver: Any,
+) -> dict[str, Any]:
+    """Assess a persisted or staged bot without exposing connection secrets."""
     checks: list[dict[str, Any]] = []
     required_tools = required_worker_tools(bot)
     worker_backends = 0
