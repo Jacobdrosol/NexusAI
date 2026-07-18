@@ -4942,9 +4942,18 @@ class TaskManager:
                 # created by the caller. Coercing these to {} drops user intent.
                 task_for_execution = task
             bot_allows_repo_output_for_task = bool(bot is not None and self._bot_allows_repo_output_for_task(task, bot))
+            structured_payload_backend = bool(
+                bot is not None
+                and getattr(bot, "backends", None)
+                and all(
+                    str(getattr(backend, "type", "") or "").strip().lower() in {"browser", "custom"}
+                    for backend in bot.backends
+                )
+            )
             if bot is not None and not bot_allows_repo_output_for_task and isinstance(task_for_execution.payload, dict):
-                # Inject bot role as role_hint if not already present in payload
-                if "role_hint" not in runtime_payload and bot.role:
+                # Browser and custom backends own strict payload contracts. Do not add
+                # LLM-specific routing metadata that their workers must reject.
+                if not structured_payload_backend and "role_hint" not in runtime_payload and bot.role:
                     runtime_payload = dict(runtime_payload)
                     runtime_payload["role_hint"] = str(bot.role).strip().lower()
                     task_for_execution = task_for_execution.model_copy(update={"payload": runtime_payload})

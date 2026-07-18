@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Set
 import pytest
 from unittest.mock import AsyncMock
 
-from shared.models import Bot, Task, TaskMetadata
+from shared.models import BackendConfig, Bot, Task, TaskMetadata
 
 
 @pytest.fixture(autouse=True)
@@ -120,6 +120,57 @@ async def test_task_manager_preserves_non_dict_payload_for_scheduler(tmp_path):
     assert mock_scheduler.schedule.await_count == 1
     scheduled_task = mock_scheduler.schedule.await_args[0][0]
     assert isinstance(scheduled_task.payload, list)
+    assert scheduled_task.payload == original_payload
+
+
+@pytest.mark.anyio
+async def test_task_manager_preserves_strict_browser_payload_for_scheduler(tmp_path):
+    import asyncio
+
+    from control_plane.task_manager.task_manager import TaskManager
+
+    class StubRegistry:
+        def __init__(self):
+            self._bots = {
+                "browser-inspector": Bot(
+                    id="browser-inspector",
+                    name="Browser Inspector",
+                    role="browser-inspector",
+                    backends=[
+                        BackendConfig(
+                            type="browser",
+                            provider="browser",
+                            model="browser-ui",
+                            worker_id="browser-worker",
+                            api_key_ref="BROWSER_TOKEN",
+                        )
+                    ],
+                    execution_policy={"repo_output_mode": "deny", "required_worker_tools": ["browser-ui"]},
+                )
+            }
+
+        async def get(self, bot_id):
+            return self._bots[bot_id]
+
+    mock_scheduler = AsyncMock()
+    mock_scheduler.schedule.return_value = {
+        "url": "https://admin.example.test/admin/dashboard",
+        "title": "Admin Dashboard",
+        "text": "",
+        "elements": [],
+    }
+    tm = TaskManager(mock_scheduler, db_path=str(tmp_path / "browser-payload.db"), bot_registry=StubRegistry())
+    original_payload = {"path": "/admin/dashboard", "text_limit": 200, "element_limit": 5}
+    task = await tm.create_task(bot_id="browser-inspector", payload=original_payload)
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.05)
+
+    assert updated.status == "completed"
+    scheduled_task = mock_scheduler.schedule.await_args[0][0]
     assert scheduled_task.payload == original_payload
 
 
