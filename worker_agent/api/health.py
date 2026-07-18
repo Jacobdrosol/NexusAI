@@ -9,4 +9,5 @@ async def health(request: Request) -> dict:
     return {
         "status": "ok",
         "worker_id": worker_config.get("id", "unknown"),
+        "enabled_cli_tools": [],
     }

@@ -6,7 +6,6 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from worker_agent.backends import (
-    cli_backend,
     ollama_backend,
     openai_backend,
     claude_backend,
@@ -26,24 +25,64 @@ class InferRequest(BaseModel):
     command: Optional[str] = None
 
 
+_SUPPORTED_PROVIDERS = {"ollama", "openai", "claude", "gemini", "cli"}
+
+
+def _is_declared_model(worker_config: Dict[str, Any], provider: str, model: str) -> bool:
+    """Allow inference only for a model explicitly declared by this worker."""
+    requested_provider = str(provider or "").strip().lower()
+    requested_model = str(model or "").strip().lower()
+    capabilities = worker_config.get("capabilities", [])
+    if not isinstance(capabilities, list) or not requested_provider or not requested_model:
+        return False
+
+    for capability in capabilities:
+        if not isinstance(capability, dict):
+            continue
+        if str(capability.get("type") or "").strip().lower() != "llm":
+            continue
+        if str(capability.get("provider") or "").strip().lower() != requested_provider:
+            continue
+        models = capability.get("models", [])
+        if isinstance(models, list) and any(
+            str(declared_model or "").strip().lower() == requested_model
+            for declared_model in models
+        ):
+            return True
+    return False
+
+
 @router.post("/infer")
 async def infer(request: Request, body: InferRequest) -> dict:
     params = body.params or {}
     worker_config = getattr(request.app.state, "worker_config", {})
+    provider = str(body.provider or "").strip().lower()
+    if provider not in _SUPPORTED_PROVIDERS:
+        raise HTTPException(status_code=400, detail=f"Unsupported provider: {body.provider}")
+    if provider == "cli":
+        raise HTTPException(
+            status_code=403,
+            detail="Legacy worker CLI execution is disabled; use an isolated worker node.",
+        )
+    if not _is_declared_model(worker_config, provider, body.model):
+        raise HTTPException(
+            status_code=403,
+            detail="Requested provider/model is not declared for this worker.",
+        )
     ollama_host = worker_config.get("ollama_host", "http://localhost:11434")
     request.app.state.inference_inflight = int(
         getattr(request.app.state, "inference_inflight", 0) or 0
     ) + 1
 
     try:
-        if body.provider == "ollama":
+        if provider == "ollama":
             return await ollama_backend.infer(
                 model=body.model,
                 messages=body.messages,
                 params=params,
                 host=ollama_host,
             )
-        elif body.provider == "openai":
+        elif provider == "openai":
             api_key = os.environ.get("OPENAI_API_KEY", "")
             return await openai_backend.infer(
                 model=body.model,
@@ -51,7 +90,7 @@ async def infer(request: Request, body: InferRequest) -> dict:
                 params=params,
                 api_key=api_key,
             )
-        elif body.provider == "claude":
+        elif provider == "claude":
             api_key = os.environ.get("ANTHROPIC_API_KEY", "")
             return await claude_backend.infer(
                 model=body.model,
@@ -59,7 +98,7 @@ async def infer(request: Request, body: InferRequest) -> dict:
                 params=params,
                 api_key=api_key,
             )
-        elif body.provider == "gemini":
+        elif provider == "gemini":
             api_key = os.environ.get("GEMINI_API_KEY", "")
             return await gemini_backend.infer(
                 model=body.model,
@@ -67,12 +106,9 @@ async def infer(request: Request, body: InferRequest) -> dict:
                 params=params,
                 api_key=api_key,
             )
-        elif body.provider == "cli":
-            command = body.command or body.model
-            return await cli_backend.infer(command=command, params=params)
         else:
             raise HTTPException(
-                status_code=400, detail=f"Unsupported provider: {body.provider}"
+                status_code=400, detail=f"Unsupported provider: {provider}"
             )
     except HTTPException:
         raise

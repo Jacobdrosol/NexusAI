@@ -37,7 +37,7 @@ services:
       context: .
       dockerfile: worker_agent/Dockerfile
     ports:
-      - "8001:8001"
+      - "127.0.0.1:8001:8001"
     env_file: .env
     volumes:
       - ./data:/app/data

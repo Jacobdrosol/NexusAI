@@ -184,7 +184,12 @@ def worker_app():
     app = FastAPI()
     install_observability(app)
     app.include_router(infer_module.router)
-    app.state.worker_config = {"ollama_host": "http://localhost:11434"}
+    app.state.worker_config = {
+        "ollama_host": "http://localhost:11434",
+        "capabilities": [
+            {"type": "llm", "provider": "ollama", "models": ["llama3"]}
+        ],
+    }
     return app
 
 
@@ -230,23 +235,34 @@ async def test_infer_endpoint_cli(worker_app):
     async with AsyncClient(
         transport=ASGITransport(app=worker_app), base_url="http://test"
     ) as client:
-        with patch(
-            "worker_agent.backends.cli_backend.infer",
-            new=AsyncMock(
-                return_value={"output": "result", "stderr": "", "returncode": 0, "usage": {}}
-            ),
-        ):
-            resp = await client.post(
-                "/infer",
-                json={
-                    "model": "echo hi",
-                    "provider": "cli",
-                    "messages": [],
-                    "command": "echo hi",
-                },
-            )
-    assert resp.status_code == 200
-    assert resp.json()["output"] == "result"
+        resp = await client.post(
+            "/infer",
+            json={
+                "model": "echo hi",
+                "provider": "cli",
+                "messages": [],
+                "command": "echo hi",
+            },
+        )
+    assert resp.status_code == 403
+    assert "disabled" in resp.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_infer_endpoint_rejects_undeclared_model(worker_app):
+    async with AsyncClient(
+        transport=ASGITransport(app=worker_app), base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            "/infer",
+            json={
+                "model": "not-declared",
+                "provider": "ollama",
+                "messages": [],
+            },
+        )
+    assert resp.status_code == 403
+    assert "not declared" in resp.json()["detail"]
 
 
 @pytest.mark.anyio

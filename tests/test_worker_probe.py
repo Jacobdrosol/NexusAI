@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from control_plane.worker_probe import probe_worker
+from control_plane.worker_probe import probe_worker, worker_base_url
 from shared.models import Capability, Worker
 
 
@@ -26,6 +26,10 @@ def _client_factory(handler):
         return httpx.AsyncClient(transport=httpx.MockTransport(handler), **kwargs)
 
     return factory
+
+
+def test_worker_base_url_allows_docker_service_names_with_underscores():
+    assert worker_base_url(_worker(host="worker_agent")) == "http://worker_agent:8010"
 
 
 @pytest.mark.anyio

@@ -11,7 +11,7 @@ import httpx
 
 from shared.models import Worker
 
-_HOST_RE = re.compile(r"^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$")
+_HOST_RE = re.compile(r"^(?=.{1,253}$)[A-Za-z0-9_](?:[A-Za-z0-9_.-]*[A-Za-z0-9_])?$")
 _MAX_CAPABILITIES = 64
 _MAX_LIST_ITEMS = 64
 _MAX_VALUE_LENGTH = 160

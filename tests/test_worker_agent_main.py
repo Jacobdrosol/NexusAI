@@ -1,7 +1,10 @@
 import httpx
 import pytest
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
 
 from worker_agent import main
+from worker_agent.api import capabilities, health
 
 
 class _FakeClient:
@@ -41,3 +44,23 @@ async def test_register_with_control_plane_returns_false_for_an_error_response(m
     registered = await main._register_with_control_plane({"id": "worker-1"}, client)
 
     assert registered is False
+
+
+@pytest.mark.anyio
+async def test_worker_status_endpoints_use_the_capability_attestation_contract():
+    app = FastAPI()
+    app.include_router(health.router)
+    app.include_router(capabilities.router)
+    app.state.worker_config = {
+        "id": "worker-1",
+        "capabilities": [{"type": "llm", "provider": "ollama", "models": ["llama3"]}],
+    }
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        health_response = await client.get("/health")
+        capabilities_response = await client.get("/capabilities")
+
+    assert health_response.json()["enabled_cli_tools"] == []
+    capabilities_payload = capabilities_response.json()
+    assert capabilities_payload["configured_capabilities"] == app.state.worker_config["capabilities"]
+    assert capabilities_payload["capability_attestation"]["enabled_cli_tools"] == []

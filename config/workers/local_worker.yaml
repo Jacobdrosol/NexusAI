@@ -4,3 +4,5 @@ host: "worker_agent"
 port: 8001
 status: "offline"
 capabilities: []
+tooling:
+  cli_tools: []
