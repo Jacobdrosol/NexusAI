@@ -4,6 +4,7 @@ from __future__ import annotations
 import ipaddress
 import os
 import re
+import time
 from datetime import datetime, timezone
 from typing import Any, Callable
 
@@ -70,6 +71,59 @@ def _safe_nonnegative_int(value: Any) -> int:
         return max(0, int(value))
     except (TypeError, ValueError):
         return 0
+
+
+def _verification_timeout_seconds() -> float:
+    try:
+        configured = float(os.environ.get("NEXUSAI_WORKER_INFERENCE_VERIFY_TIMEOUT_SECONDS", "60"))
+    except (TypeError, ValueError):
+        configured = 60.0
+    return min(max(configured, 5.0), 90.0)
+
+
+def _worker_llm_models(worker: Worker) -> list[tuple[str, str]]:
+    models: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for capability in worker.capabilities or []:
+        if str(capability.type or "").strip().lower() != "llm":
+            continue
+        provider = str(capability.provider or "").strip()
+        if not provider:
+            continue
+        for model in capability.models or []:
+            model_name = str(model or "").strip()
+            key = (provider.lower(), model_name.lower())
+            if model_name and key not in seen:
+                seen.add(key)
+                models.append((provider, model_name))
+    return models
+
+
+def select_worker_inference_model(
+    worker: Worker,
+    *,
+    provider: str | None = None,
+    model: str | None = None,
+) -> tuple[str, str]:
+    """Resolve one declared LLM model without accepting an arbitrary provider/model pair."""
+    requested_provider = str(provider or "").strip()
+    requested_model = str(model or "").strip()
+    if bool(requested_provider) != bool(requested_model):
+        raise WorkerProbeError("provider and model must be supplied together")
+
+    candidates = _worker_llm_models(worker)
+    if requested_provider and requested_model:
+        requested = (requested_provider.lower(), requested_model.lower())
+        for candidate in candidates:
+            if (candidate[0].lower(), candidate[1].lower()) == requested:
+                return candidate
+        raise WorkerProbeError("requested provider/model is not declared for this worker")
+
+    if not candidates:
+        raise WorkerProbeError("worker does not advertise an LLM capability")
+    if len(candidates) != 1:
+        raise WorkerProbeError("worker advertises multiple LLM models; provider and model are required")
+    return candidates[0]
 
 
 def _normalize_capabilities(value: Any) -> tuple[list[dict[str, Any]], int]:
@@ -161,6 +215,90 @@ async def _get_json(client: httpx.AsyncClient, url: str, label: str) -> dict[str
     if not isinstance(payload, dict):
         raise WorkerProbeError(f"{label} endpoint returned an invalid response")
     return payload
+
+
+async def verify_worker_inference(
+    worker: Worker,
+    *,
+    provider: str | None = None,
+    model: str | None = None,
+    client_factory: Callable[..., httpx.AsyncClient] = httpx.AsyncClient,
+) -> dict[str, Any]:
+    """Run one fixed, bounded LLM check without sending task or user context."""
+    selected_provider, selected_model = select_worker_inference_model(
+        worker, provider=provider, model=model
+    )
+    result: dict[str, Any] = {
+        "worker_id": worker.id,
+        "provider": selected_provider,
+        "model": selected_model,
+        "verification_status": "failed",
+        "latency_ms": None,
+        "output_length": 0,
+        "finish_reason": "",
+        "detail": "",
+    }
+    if not worker.enabled or worker.status != "online":
+        result["detail"] = "worker is not enabled and online"
+        return result
+
+    try:
+        base_url = worker_base_url(worker)
+    except WorkerProbeError as exc:
+        result["detail"] = str(exc)
+        return result
+
+    request_body = {
+        "provider": selected_provider,
+        "model": selected_model,
+        "messages": [{"role": "user", "content": "Return exactly READY."}],
+        "params": {"max_tokens": 16, "temperature": 0},
+    }
+    started = time.perf_counter()
+    try:
+        async with client_factory(
+            timeout=httpx.Timeout(connect=10.0, read=_verification_timeout_seconds(), write=20.0, pool=10.0),
+            follow_redirects=False,
+        ) as client:
+            response = await client.post(
+                f"{base_url}/infer",
+                headers={"Accept": "application/json", "Content-Type": "application/json"},
+                json=request_body,
+            )
+        result["latency_ms"] = round((time.perf_counter() - started) * 1000, 1)
+    except httpx.TimeoutException:
+        result["detail"] = "inference verification timed out"
+        return result
+    except httpx.HTTPError:
+        result["detail"] = "inference endpoint did not respond"
+        return result
+
+    if not response.is_success:
+        result["detail"] = f"inference endpoint returned HTTP {response.status_code}"
+        return result
+    try:
+        payload = response.json()
+    except ValueError:
+        result["detail"] = "inference endpoint returned invalid JSON"
+        return result
+    if not isinstance(payload, dict):
+        result["detail"] = "inference endpoint returned an invalid response"
+        return result
+
+    output = payload.get("output")
+    if not isinstance(output, str) or not output.strip():
+        result["detail"] = "inference response did not contain final output"
+        return result
+
+    result.update(
+        {
+            "verification_status": "ready",
+            "output_length": len(output),
+            "finish_reason": _safe_text(payload.get("finish_reason")),
+            "detail": "bounded inference returned final output",
+        }
+    )
+    return result
 
 
 async def probe_worker(

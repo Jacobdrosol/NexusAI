@@ -1,7 +1,15 @@
+import json
+
 import httpx
 import pytest
 
-from control_plane.worker_probe import probe_worker, worker_base_url
+from control_plane.worker_probe import (
+    WorkerProbeError,
+    probe_worker,
+    select_worker_inference_model,
+    verify_worker_inference,
+    worker_base_url,
+)
 from shared.models import Capability, Worker
 
 
@@ -163,6 +171,52 @@ async def test_probe_worker_marks_unreachable_when_health_fails():
             "detail": "health endpoint returned HTTP 503",
         }
     ]
+
+
+def test_select_worker_inference_model_requires_an_unambiguous_declared_model():
+    worker = _worker(
+        capabilities=[
+            Capability(type="llm", provider="ollama_cloud", models=["one", "two"]),
+        ]
+    )
+
+    with pytest.raises(WorkerProbeError, match="multiple LLM models"):
+        select_worker_inference_model(worker)
+    assert select_worker_inference_model(worker, provider="ollama_cloud", model="two") == (
+        "ollama_cloud",
+        "two",
+    )
+
+
+@pytest.mark.anyio
+async def test_verify_worker_inference_records_only_safe_completion_metadata():
+    async def handler(request):
+        assert request.url.path == "/infer"
+        assert json.loads(request.content) == {
+            "provider": "ollama_cloud",
+            "model": "glm-5.2:cloud",
+            "messages": [{"role": "user", "content": "Return exactly READY."}],
+            "params": {"max_tokens": 16, "temperature": 0},
+        }
+        return httpx.Response(200, json={"output": "READY", "finish_reason": "stop"})
+
+    result = await verify_worker_inference(_worker(), client_factory=_client_factory(handler))
+
+    assert result["verification_status"] == "ready"
+    assert result["output_length"] == 5
+    assert result["finish_reason"] == "stop"
+    assert "READY" not in str(result)
+
+
+@pytest.mark.anyio
+async def test_verify_worker_inference_rejects_empty_final_output():
+    async def handler(request):
+        return httpx.Response(200, json={"output": ""})
+
+    result = await verify_worker_inference(_worker(), client_factory=_client_factory(handler))
+
+    assert result["verification_status"] == "failed"
+    assert result["detail"] == "inference response did not contain final output"
 
 
 @pytest.mark.anyio

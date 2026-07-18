@@ -332,6 +332,23 @@ def api_probe_worker(worker_id: str):
     return jsonify(result)
 
 
+@bp.post("/api/workers/<worker_id>/verify-inference")
+@login_required
+def api_verify_worker_inference(worker_id: str):
+    """Proxy a bounded, no-context LLM completion verification."""
+    from dashboard.cp_client import get_cp_client
+
+    cp = get_cp_client()
+    result = cp.verify_worker_inference(worker_id, request.get_json(silent=True) or {})
+    if result is None:
+        err = cp.last_error()
+        status = int(err.get("status_code") or 502)
+        if status < 400 or status > 599:
+            status = 502
+        return jsonify({"error": str(err.get("detail") or "inference verification failed")}), status
+    return jsonify(result)
+
+
 @bp.get("/api/workers/<worker_id>/live")
 @login_required
 def api_worker_live(worker_id: str):

@@ -52,6 +52,7 @@
       </div>
       <div class="worker-action-row">
         <button class="btn" onclick="probeWorker('{{ worker.id }}')">Probe</button>
+        <button class="btn" onclick="verifyWorkerInference('{{ worker.id }}')">Verify Model</button>
         <button class="btn" onclick="pingWorker('{{ worker.id }}')">Ping</button>
         <button class="btn" onclick="toggleWorker('{{ worker.id }}', {{ 'false' if worker.enabled else 'true' }})">
           {{ 'Disable' if worker.enabled else 'Enable' }}
@@ -228,6 +229,35 @@ async function probeWorker(id) {
     ? `${status}: ${failedChecks.map(check => check.detail).join(' | ')}`
     : `${status}: runtime and capability contract verified`;
   resultEl.textContent = authDetail ? `${baseDetail} | ${authDetail}` : baseDetail;
+}
+
+async function verifyWorkerInference(id) {
+  const resultEl = document.getElementById('worker-probe-result');
+  if (resultEl) {
+    resultEl.hidden = false;
+    resultEl.className = 'worker-probe-result';
+    resultEl.textContent = 'Verifying a bounded model response...';
+  }
+  const res = await fetch('/api/workers/' + encodeURIComponent(id) + '/verify-inference', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify({})
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!resultEl) return;
+  if (!res.ok) {
+    resultEl.className = 'worker-probe-result worker-probe-error';
+    resultEl.textContent = payload.error || 'Inference verification failed';
+    return;
+  }
+  const ready = payload.verification_status === 'ready';
+  resultEl.className = 'worker-probe-result worker-probe-' + (ready ? 'ready' : 'error');
+  if (!ready) {
+    resultEl.textContent = payload.detail || 'Inference verification failed';
+    return;
+  }
+  const latency = Number.isFinite(payload.latency_ms) ? ` in ${payload.latency_ms}ms` : '';
+  resultEl.textContent = `${payload.provider}/${payload.model} returned final output (${payload.output_length} chars)${latency}.`;
 }
 
 async function toggleWorker(id, enable) {

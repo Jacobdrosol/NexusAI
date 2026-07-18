@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from control_plane.audit.utils import record_audit_event
-from control_plane.worker_probe import probe_worker
+from control_plane.worker_probe import WorkerProbeError, probe_worker, verify_worker_inference
 from shared.exceptions import WorkerNotFoundError
 from shared.models import Worker, WorkerMetrics
 
@@ -13,6 +13,11 @@ router = APIRouter(prefix="/v1/workers", tags=["workers"])
 
 class HeartbeatRequest(BaseModel):
     metrics: Optional[WorkerMetrics] = None
+
+
+class VerifyInferenceRequest(BaseModel):
+    provider: Optional[str] = None
+    model: Optional[str] = None
 
 
 @router.post("", response_model=Worker)
@@ -88,6 +93,43 @@ async def get_registered_worker_probe(worker_id: str, request: Request) -> dict:
             "dispatch_eligible": False,
             "checks": [],
         }
+    return result
+
+
+@router.post("/{worker_id}/verify-inference")
+async def verify_registered_worker_inference(
+    worker_id: str,
+    request: Request,
+    body: VerifyInferenceRequest | None = None,
+) -> dict:
+    """Run a fixed, no-context completion check against one declared worker LLM."""
+    worker_registry = request.app.state.worker_registry
+    try:
+        worker = await worker_registry.get(worker_id)
+    except WorkerNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    try:
+        result = await verify_worker_inference(
+            worker,
+            provider=body.provider if body else None,
+            model=body.model if body else None,
+        )
+    except WorkerProbeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    await record_audit_event(
+        request,
+        action="workers.verify_inference",
+        resource=f"worker:{worker.id}",
+        status=str(result["verification_status"]),
+        details={
+            "provider": result["provider"],
+            "model": result["model"],
+            "latency_ms": result["latency_ms"],
+            "output_length": result["output_length"],
+        },
+    )
     return result
 
 
