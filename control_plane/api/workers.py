@@ -45,6 +45,29 @@ async def list_workers(request: Request) -> List[Worker]:
     return await worker_registry.list()
 
 
+@router.get("/probes")
+async def list_registered_worker_probes(request: Request) -> dict:
+    """Return persisted read-only runtime evidence for every currently registered worker."""
+    worker_registry = request.app.state.worker_registry
+    workers = await worker_registry.list()
+    stored = await request.app.state.worker_probe_store.list_for_workers(
+        [worker.id for worker in workers]
+    )
+    probes: list[dict] = []
+    for worker in workers:
+        probe = stored.get(worker.id)
+        if probe is None:
+            probe = {
+                "worker_id": worker.id,
+                "probe_status": "unknown",
+                "checked_at": None,
+                "dispatch_eligible": False,
+                "checks": [],
+            }
+        probes.append(probe)
+    return {"probes": probes, "count": len(probes)}
+
+
 @router.get("/{worker_id}", response_model=Worker)
 async def get_worker(worker_id: str, request: Request) -> Worker:
     worker_registry = request.app.state.worker_registry

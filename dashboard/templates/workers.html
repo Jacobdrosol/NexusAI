@@ -12,7 +12,7 @@
 <table id="workers-table">
   <thead>
     <tr>
-      <th>Name</th><th>Host</th><th>Status</th><th>Last Heartbeat</th><th>Enabled</th><th>Capabilities</th><th>Actions</th>
+      <th>Name</th><th>Host</th><th>Status</th><th>Runtime</th><th>Last Heartbeat</th><th>Enabled</th><th>Capabilities</th><th>Actions</th>
     </tr>
   </thead>
   <tbody>
@@ -21,6 +21,15 @@
       <td><a href="{{ url_for('workers.worker_detail_page', worker_id=w.id) }}">{{ w.name }}</a></td>
       <td>{{ w.host }}:{{ w.port }}</td>
       <td><span class="badge badge-{{ w.status }}">{{ w.status }}</span></td>
+      <td>
+        {% if w.probe %}
+        <span class="badge badge-{{ w.probe.status }}" title="{{ w.probe.detail }}">{{ w.probe.status }}</span>
+        <div class="metrics">{{ w.probe.checked_at or 'not yet checked' }}</div>
+        {% else %}
+        <span class="badge badge-unknown">unknown</span>
+        <div class="metrics">not yet checked</div>
+        {% endif %}
+      </td>
       <td class="metrics">{{ (w.last_heartbeat_at[:19] if w.last_heartbeat_at else '—') | replace('T', ' ') }}</td>
       <td><span class="badge badge-{{ 'enabled' if w.enabled else 'disabled' }}">{{ 'enabled' if w.enabled else 'disabled' }}</span></td>
       <td class="metrics">{{ w.capabilities | length }} cap(s)</td>
@@ -32,7 +41,7 @@
       </td>
     </tr>
     {% else %}
-    <tr><td colspan="7" style="text-align:center;color:#718096;">No workers registered</td></tr>
+    <tr><td colspan="8" style="text-align:center;color:#718096;">No workers registered</td></tr>
     {% endfor %}
   </tbody>
 </table>

@@ -105,3 +105,45 @@ class WorkerProbeStore:
             return None
         result["worker_id"] = normalized_id
         return result
+
+    async def list_for_workers(self, worker_ids: list[str]) -> dict[str, dict[str, Any]]:
+        """Return the latest stored probe for each requested registered worker.
+
+        The control plane supplies the authoritative worker IDs, so orphaned rows from
+        removed workers are never exposed through the fleet view.
+        """
+        await self._ensure_db()
+        normalized_ids: list[str] = []
+        seen: set[str] = set()
+        for worker_id in worker_ids:
+            normalized_id = str(worker_id or "").strip()
+            if normalized_id and normalized_id not in seen:
+                seen.add(normalized_id)
+                normalized_ids.append(normalized_id)
+        if not normalized_ids:
+            return {}
+
+        placeholders = ", ".join("?" for _ in normalized_ids)
+        records: dict[str, dict[str, Any]] = {}
+        async with open_sqlite(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                f"SELECT worker_id, data FROM cp_worker_probes WHERE worker_id IN ({placeholders})",
+                normalized_ids,
+            ) as cursor:
+                rows = await cursor.fetchall()
+
+        for row in rows:
+            worker_id = str(row["worker_id"] or "").strip()
+            if worker_id not in seen:
+                continue
+            try:
+                result = json.loads(row["data"])
+            except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                logger.warning("Failed to restore worker probe for %s: %s", worker_id, exc)
+                continue
+            if not isinstance(result, dict):
+                continue
+            result["worker_id"] = worker_id
+            records[worker_id] = result
+        return records

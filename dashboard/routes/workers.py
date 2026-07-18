@@ -82,15 +82,36 @@ def _worker_probe_view(probe: Any) -> dict[str, Any] | None:
     return {"status": status, "detail": detail, "checked_at": checked_at}
 
 
+def _with_worker_probe_views(workers: list[dict[str, Any]], payload: Any) -> list[dict[str, Any]]:
+    """Attach the latest persisted runtime evidence without performing fresh probes."""
+    raw_probes = payload.get("probes") if isinstance(payload, dict) else []
+    probe_by_id = {
+        str(probe.get("worker_id") or "").strip(): probe
+        for probe in raw_probes
+        if isinstance(probe, dict) and str(probe.get("worker_id") or "").strip()
+    }
+    enriched: list[dict[str, Any]] = []
+    for worker in workers:
+        row = dict(worker)
+        row["probe"] = _worker_probe_view(probe_by_id.get(str(row.get("id") or "").strip()))
+        enriched.append(row)
+    return enriched
+
+
 @bp.get("/workers")
 @login_required
 def workers_page() -> str:
     """Render the workers table page."""
     from dashboard.cp_client import get_cp_client
 
-    cp_data = get_cp_client().list_workers()
+    cp = get_cp_client()
+    cp_data = cp.list_workers()
     if cp_data is not None:
-        return render_template("workers.html", workers=cp_data, error=None)
+        return render_template(
+            "workers.html",
+            workers=_with_worker_probe_views(cp_data, cp.list_worker_probes()),
+            error=None,
+        )
 
     flash(get_cp_client().unavailable_reason(), "warning")
     db = get_db()
