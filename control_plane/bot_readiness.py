@@ -71,7 +71,8 @@ async def assess_bot_instance_readiness(
     """Assess a persisted or staged bot without exposing connection secrets."""
     checks: list[dict[str, Any]] = []
     required_tools = required_worker_tools(bot)
-    worker_backends = 0
+    viable_backends = 0
+    ready_worker_backends = 0
 
     if bot.enabled:
         checks.append(_check("bot", "ready", "Bot is enabled."))
@@ -87,7 +88,6 @@ async def assess_bot_instance_readiness(
         label = f"backend[{index}]"
 
         if backend_type in {"local_llm", "remote_llm", "cli", "browser"}:
-            worker_backends += 1
             worker_id = str(backend.worker_id or "").strip()
             if not worker_id:
                 checks.append(_check(label, "failed", "Worker-backed backend is missing worker_id.", backend_index=index))
@@ -133,6 +133,8 @@ async def assess_bot_instance_readiness(
                     )
                 )
                 continue
+            viable_backends += 1
+            ready_worker_backends += 1
             checks.append(_check(label, "ready", f"Worker '{worker_id}' is online and supports this backend.", backend_index=index))
             continue
 
@@ -147,8 +149,10 @@ async def assess_bot_instance_readiness(
             if not http_connections:
                 checks.append(_check(label, "failed", "No enabled HTTP connection is attached to this bot.", backend_index=index))
             elif len(http_connections) == 1:
+                viable_backends += 1
                 checks.append(_check(label, "ready", "One enabled HTTP connection is attached.", backend_index=index))
             else:
+                viable_backends += 1
                 checks.append(
                     _check(
                         label,
@@ -160,32 +164,45 @@ async def assess_bot_instance_readiness(
             continue
 
         if backend_type == "cloud_api":
+            viable_backends += 1
             if backend.api_key_ref:
                 checks.append(_check(label, "ready", "Cloud API backend has a key reference.", backend_index=index))
             else:
                 checks.append(_check(label, "warning", "Cloud API backend has no key reference.", backend_index=index))
             continue
 
+        viable_backends += 1
         checks.append(_check(label, "warning", f"No readiness probe is available for {backend_type}/{provider}.", backend_index=index))
 
-    if required_tools and worker_backends == 0:
+    if required_tools and ready_worker_backends == 0:
         checks.append(
             _check(
                 "worker-tools",
                 "failed",
-                f"Required worker tools need a worker-backed backend: {', '.join(required_tools)}.",
+                f"Required worker tools need a ready worker-backed backend: {', '.join(required_tools)}.",
             )
         )
 
     failed = [item for item in checks if item["status"] == "failed"]
     warnings = [item for item in checks if item["status"] == "warning"]
+    blocking = [
+        item
+        for item in failed
+        if item["component"] in {"bot", "backends", "worker-tools"}
+    ]
+    if viable_backends == 0:
+        blocking.extend(
+            item for item in failed if str(item["component"]).startswith("backend[")
+        )
     return {
         "bot_id": bot.id,
-        "ready": not failed,
+        "ready": not blocking and viable_backends > 0,
         "summary": {
             "checks": len(checks),
             "failed": len(failed),
+            "blocking": len(blocking),
             "warnings": len(warnings),
+            "viable_backends": viable_backends,
         },
         "checks": checks,
     }

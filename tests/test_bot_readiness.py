@@ -33,6 +33,77 @@ async def test_bot_readiness_reports_ready_worker_backend(cp_client):
 
 
 @pytest.mark.anyio
+async def test_bot_readiness_allows_a_ready_fallback_backend(cp_client):
+    response = await cp_client.post(
+        "/v1/bots",
+        json={
+            "id": "fallback-ready-bot",
+            "name": "Fallback Ready Bot",
+            "role": "worker",
+            "backends": [
+                {
+                    "type": "remote_llm",
+                    "worker_id": "retired-worker",
+                    "provider": "ollama_cloud",
+                    "model": "retired-model",
+                },
+                {
+                    "type": "cloud_api",
+                    "provider": "openai",
+                    "model": "fallback-model",
+                    "api_key_ref": "FALLBACK_API_KEY",
+                },
+            ],
+        },
+    )
+    assert response.status_code == 200
+
+    readiness = await cp_client.get("/v1/bots/fallback-ready-bot/readiness")
+
+    assert readiness.status_code == 200
+    assert readiness.json()["ready"] is True
+    assert readiness.json()["summary"]["failed"] == 1
+    assert readiness.json()["summary"]["blocking"] == 0
+
+
+@pytest.mark.anyio
+async def test_bot_readiness_does_not_use_cloud_fallback_for_required_worker_tools(cp_client):
+    response = await cp_client.post(
+        "/v1/bots",
+        json={
+            "id": "fallback-tools-bot",
+            "name": "Fallback Tools Bot",
+            "role": "worker",
+            "backends": [
+                {
+                    "type": "remote_llm",
+                    "worker_id": "retired-worker",
+                    "provider": "ollama_cloud",
+                    "model": "retired-model",
+                },
+                {
+                    "type": "cloud_api",
+                    "provider": "openai",
+                    "model": "fallback-model",
+                    "api_key_ref": "FALLBACK_API_KEY",
+                },
+            ],
+            "execution_policy": {"required_worker_tools": ["browser-ui"]},
+        },
+    )
+    assert response.status_code == 200
+
+    readiness = await cp_client.get("/v1/bots/fallback-tools-bot/readiness")
+
+    assert readiness.status_code == 200
+    assert readiness.json()["ready"] is False
+    assert any(
+        check["component"] == "worker-tools" and check["status"] == "failed"
+        for check in readiness.json()["checks"]
+    )
+
+
+@pytest.mark.anyio
 async def test_bot_readiness_list_returns_each_registered_bot(cp_client):
     await cp_client.post(
         "/v1/bots",

@@ -92,7 +92,7 @@
     {% endif %}
   </div>
   {% if readiness %}
-  <div class="mini-note" style="margin-bottom:0.75rem;">{{ readiness.summary.checks }} checks, {{ readiness.summary.failed }} blocking, {{ readiness.summary.warnings }} warnings.</div>
+  <div class="mini-note" style="margin-bottom:0.75rem;">{{ readiness.summary.checks }} checks, {{ readiness.summary.blocking | default(readiness.summary.failed) }} blocking, {{ readiness.summary.warnings }} warnings.</div>
   <table>
     <thead><tr><th>Component</th><th>Status</th><th>Detail</th></tr></thead>
     <tbody>

@@ -183,11 +183,14 @@ def _bot_readiness_view(readiness: Any) -> dict[str, Any] | None:
         for check in readiness.get("checks") or []
         if isinstance(check, dict) and str(check.get("status") or "").strip().lower() == "failed"
     ]
-    return {
-        "ready": bool(readiness.get("ready")),
-        "detail": failures[0] if failures else "All declared dispatch checks passed.",
-        "failed": len(failures),
-    }
+    ready = bool(readiness.get("ready"))
+    if ready and failures:
+        detail = f"Fallback dispatch is available; {len(failures)} backend check(s) are unavailable."
+    elif ready:
+        detail = "At least one declared backend is ready for dispatch."
+    else:
+        detail = failures[0] if failures else "No declared backend is ready for dispatch."
+    return {"ready": ready, "detail": detail, "failed": len(failures)}
 
 
 def _with_bot_readiness(bots: list[dict[str, Any]], payload: Any) -> list[dict[str, Any]]:
