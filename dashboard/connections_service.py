@@ -162,12 +162,18 @@ def test_http_connection(
     base_url = str(config.get("base_url") or "").strip()
     timeout_seconds = int(config.get("timeout_seconds") or 15)
     verify_ssl = bool(config.get("verify_ssl", True))
+    declared_actions = parse_openapi_actions(schema_text)
     op = _find_action(
         schema_text,
         operation_id=str(payload.get("operation_id") or "").strip() or None,
         method=str(payload.get("method") or "").strip() or None,
         path=str(payload.get("path") or "").strip() or None,
     )
+    if declared_actions and op is None:
+        return {
+            "ok": False,
+            "error": "Requested HTTP action is not declared in the connection schema.",
+        }
     method = str((op or {}).get("method") or payload.get("method") or "GET").upper()
     path = str((op or {}).get("path") or payload.get("path") or "/")
     url = _build_url(base_url, path, payload.get("path_params") if isinstance(payload.get("path_params"), dict) else {})

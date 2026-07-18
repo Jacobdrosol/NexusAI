@@ -476,3 +476,31 @@ def test_http_connection_merges_action_headers(monkeypatch):
     assert result["ok"] is True
     assert captured["headers"]["X-api-key"] == "secret-token"
     assert captured["headers"]["X-globeiq-agent-approval"] == "approval-token"
+
+
+def test_http_connection_rejects_actions_not_declared_in_schema(monkeypatch):
+    called = False
+
+    def fake_urlopen(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("Undeclared actions must not make an HTTP request")
+
+    monkeypatch.setattr("dashboard.connections_service.urllib.request.urlopen", fake_urlopen)
+
+    result = run_http_connection_test(
+        config={"base_url": "https://api.example.com"},
+        auth={"type": "none"},
+        schema_text='''
+openapi: 3.0.0
+paths:
+  /health:
+    get:
+      operationId: getHealth
+''',
+        payload={"method": "POST", "path": "/jobs", "body_json": {"unexpected": True}},
+    )
+
+    assert result["ok"] is False
+    assert result["error"] == "Requested HTTP action is not declared in the connection schema."
+    assert called is False
