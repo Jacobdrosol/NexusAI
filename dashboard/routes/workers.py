@@ -277,6 +277,18 @@ def api_ping_worker(worker_id: str):
     return jsonify(resp)
 
 
+@bp.post("/api/workers/<worker_id>/probe")
+@login_required
+def api_probe_worker(worker_id: str):
+    """Proxy an operator-requested, non-mutating worker runtime probe."""
+    from dashboard.cp_client import get_cp_client
+
+    result = get_cp_client().probe_worker(worker_id)
+    if result is None:
+        return jsonify({"error": "control plane unavailable"}), 502
+    return jsonify(result)
+
+
 @bp.get("/api/workers/<worker_id>/live")
 @login_required
 def api_worker_live(worker_id: str):

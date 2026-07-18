@@ -2255,6 +2255,20 @@ def test_worker_live_endpoint_returns_payload(dashboard_client):
     assert "running_tasks" in data
 
 
+def test_worker_probe_endpoint_proxies_control_plane_result(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def probe_worker(self, worker_id):
+            return {"worker_id": worker_id, "probe_status": "ready", "checks": []}
+
+    with patch("dashboard.cp_client.get_cp_client", return_value=FakeCP()):
+        response = dashboard_client.post("/api/workers/worker-1/probe")
+
+    assert response.status_code == 200
+    assert response.get_json()["probe_status"] == "ready"
+
+
 def test_worker_creation_provisions_through_control_plane(dashboard_client):
     _login_admin(dashboard_client)
 

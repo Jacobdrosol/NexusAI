@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from control_plane.audit.utils import record_audit_event
+from control_plane.worker_probe import probe_worker
 from shared.exceptions import WorkerNotFoundError
 from shared.models import Worker, WorkerMetrics
 
@@ -46,6 +47,26 @@ async def get_worker(worker_id: str, request: Request) -> Worker:
         return await worker_registry.get(worker_id)
     except WorkerNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/{worker_id}/probe")
+async def probe_registered_worker(worker_id: str, request: Request) -> dict:
+    """Perform a non-mutating runtime and capability probe for one worker."""
+    worker_registry = request.app.state.worker_registry
+    try:
+        worker = await worker_registry.get(worker_id)
+    except WorkerNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    result = await probe_worker(worker)
+    await record_audit_event(
+        request,
+        action="workers.probe",
+        resource=f"worker:{worker.id}",
+        status=str(result["probe_status"]),
+        details={"checks": result["checks"]},
+    )
+    return result
 
 
 @router.put("/{worker_id}", response_model=Worker)

@@ -1275,6 +1275,17 @@ select.form-control {
   margin-top: 1rem;
 }
 
+.worker-probe-result {
+  margin-top: 0.75rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.worker-probe-ready { color: #6ee7b7; }
+.worker-probe-degraded,
+.worker-probe-error { color: #fcd34d; }
+
 .subsection-title {
   font-size: 0.95rem;
   color: var(--ink);

@@ -51,12 +51,14 @@
         </div>
       </div>
       <div class="worker-action-row">
+        <button class="btn" onclick="probeWorker('{{ worker.id }}')">Probe</button>
         <button class="btn" onclick="pingWorker('{{ worker.id }}')">Ping</button>
         <button class="btn" onclick="toggleWorker('{{ worker.id }}', {{ 'false' if worker.enabled else 'true' }})">
           {{ 'Disable' if worker.enabled else 'Enable' }}
         </button>
         <button class="btn btn-danger" onclick="deleteWorker('{{ worker.id }}')">Delete</button>
       </div>
+      <div class="worker-probe-result" id="worker-probe-result" hidden aria-live="polite"></div>
     </div>
 
     <div>
@@ -194,6 +196,32 @@ async function pingWorker(id) {
   });
   if (res.ok) location.reload();
   else alert('Ping failed');
+}
+
+async function probeWorker(id) {
+  const resultEl = document.getElementById('worker-probe-result');
+  if (resultEl) {
+    resultEl.hidden = false;
+    resultEl.className = 'worker-probe-result';
+    resultEl.textContent = 'Probing worker runtime...';
+  }
+  const res = await fetch('/api/workers/' + encodeURIComponent(id) + '/probe', {
+    method: 'POST',
+    headers: {'X-CSRFToken': getCsrf()}
+  });
+  const payload = await res.json().catch(() => ({}));
+  if (!resultEl) return;
+  if (!res.ok) {
+    resultEl.className = 'worker-probe-result worker-probe-error';
+    resultEl.textContent = payload.error || 'Probe failed';
+    return;
+  }
+  const status = payload.probe_status || 'unknown';
+  const failedChecks = (payload.checks || []).filter(check => check.status === 'fail');
+  resultEl.className = 'worker-probe-result worker-probe-' + status;
+  resultEl.textContent = failedChecks.length
+    ? `${status}: ${failedChecks.map(check => check.detail).join(' | ')}`
+    : `${status}: runtime and capability contract verified`;
 }
 
 async function toggleWorker(id, enable) {

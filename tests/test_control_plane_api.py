@@ -282,6 +282,48 @@ async def test_worker_heartbeat(cp_client):
 
 
 @pytest.mark.anyio
+async def test_worker_probe_returns_non_mutating_runtime_result(cp_client, monkeypatch):
+    worker = {
+        "id": "w1",
+        "name": "W1",
+        "host": "h1",
+        "port": 8001,
+        "status": "offline",
+        "capabilities": [],
+        "metrics": {},
+        "enabled": True,
+    }
+    await cp_client.post("/v1/workers", json=worker)
+
+    async def fake_probe(registered_worker):
+        assert registered_worker.id == "w1"
+        return {
+            "worker_id": "w1",
+            "worker_status": "online",
+            "worker_enabled": True,
+            "dispatch_eligible": True,
+            "checked_at": "2026-07-18T00:00:00+00:00",
+            "probe_status": "ready",
+            "health": {
+                "status": "ok",
+                "worker_id": "w1",
+                "enabled_cli_tools": [],
+            },
+            "reported_capabilities": [],
+            "capability_attestation": {},
+            "checks": [
+                {"name": "health", "status": "pass", "detail": "health endpoint returned ok"}
+            ],
+        }
+
+    monkeypatch.setattr("control_plane.api.workers.probe_worker", fake_probe)
+    response = await cp_client.post("/v1/workers/w1/probe")
+
+    assert response.status_code == 200
+    assert response.json()["probe_status"] == "ready"
+
+
+@pytest.mark.anyio
 async def test_update_worker(cp_client):
     worker = {"id": "w1", "name": "W1", "host": "h1", "port": 8001, "status": "offline", "capabilities": [], "metrics": {}, "enabled": True}
     await cp_client.post("/v1/workers", json=worker)
