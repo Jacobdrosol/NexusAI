@@ -15,7 +15,7 @@
   <table>
     <thead>
       <tr>
-        <th>Name</th><th>Bot</th><th>Status</th><th>Cadence</th><th>Next Run</th><th>Last Run</th><th>Actions</th>
+        <th>Name</th><th>Bot</th><th>Status</th><th>Safety</th><th>Cadence</th><th>Next Run</th><th>Last Run</th><th>Actions</th>
       </tr>
     </thead>
     <tbody>
@@ -24,6 +24,13 @@
         <td><strong>{{ schedule.name }}</strong><br><span class="mini-note"><code>{{ schedule.id }}</code></span></td>
         <td><code>{{ schedule.target_bot_id or schedule.assignment_pm_bot_id or '—' }}</code></td>
         <td><span class="badge badge-{{ schedule.status }}">{{ schedule.status }}</span></td>
+        <td>
+          {% if schedule.metadata and schedule.metadata.mutation_safe %}
+          <span class="badge badge-active">attested</span>
+          {% else %}
+          <span class="mini-note">unattested</span>
+          {% endif %}
+        </td>
         <td><code>{{ schedule.cron_expression }}</code><br><span class="mini-note">{{ schedule.timezone }}</span></td>
         <td>{{ (schedule.next_run_at[:19] if schedule.next_run_at else '—') | replace('T', ' ') }}</td>
         <td>
@@ -31,13 +38,13 @@
           {% if schedule.last_run_status %}<br><span class="mini-note">{{ schedule.last_run_status }}</span>{% endif %}
         </td>
         <td class="actions">
-          <button class="btn btn-sm" type="button" onclick='triggerSchedule({{ schedule.id|tojson }})'>Run</button>
-          <button class="btn btn-sm" type="button" onclick='toggleSchedule({{ schedule.id|tojson }}, {{ ('paused' if schedule.status == 'active' else 'active')|tojson }}, {{ (schedule.target_bot_id or schedule.assignment_pm_bot_id or '')|tojson }})'>{{ 'Pause' if schedule.status == 'active' else 'Enable' }}</button>
+          <button class="btn btn-sm" type="button" onclick='triggerSchedule({{ schedule.id|tojson }}, {{ ((schedule.metadata or {}).mutation_safe or false)|tojson }})'>Run</button>
+          <button class="btn btn-sm" type="button" onclick='toggleSchedule({{ schedule.id|tojson }}, {{ ('paused' if schedule.status == 'active' else 'active')|tojson }}, {{ (schedule.target_bot_id or schedule.assignment_pm_bot_id or '')|tojson }}, {{ ((schedule.metadata or {}).mutation_safe or false)|tojson }})'>{{ 'Pause' if schedule.status == 'active' else 'Enable' }}</button>
           <button class="btn btn-sm" type="button" onclick='showScheduleRuns({{ schedule.id|tojson }}, {{ schedule.name|tojson }})'>Runs</button>
         </td>
       </tr>
       {% else %}
-      <tr><td colspan="7" class="empty">No schedules configured</td></tr>
+      <tr><td colspan="8" class="empty">No schedules configured</td></tr>
       {% endfor %}
     </tbody>
   </table>
@@ -87,6 +94,9 @@
       </div>
       <div class="form-group">
         <label><input type="checkbox" id="schedule-active" name="active"> Enable recurring dispatch</label>
+      </div>
+      <div class="form-group">
+        <label><input type="checkbox" id="schedule-mutation-safe" name="mutation_safe"> Read-only or draft-only run</label>
       </div>
       <div id="schedule-create-status" class="mini-note" style="margin-bottom:0.75rem;"></div>
       <div class="modal-actions">
@@ -188,13 +198,20 @@ document.getElementById('form-create-schedule').addEventListener('submit', async
     project_id: String(form.get('project_id') || '').trim() || null,
     prompt: String(form.get('prompt') || '').trim(),
     status: document.getElementById('schedule-active').checked ? 'active' : 'paused',
-    metadata: {source: 'dashboard_schedule_manager'},
+    metadata: {
+      source: 'dashboard_schedule_manager',
+      mutation_safe: document.getElementById('schedule-mutation-safe').checked,
+    },
   };
   if (!payload.name || !payload.target_bot_id || !payload.cron_expression || !payload.prompt) {
     setScheduleCreateStatus('Name, target bot, cron expression, and task instruction are required.', true);
     return;
   }
   if (payload.status === 'active') {
+    if (payload.metadata.mutation_safe !== true) {
+      setScheduleCreateStatus('Active schedules require a read-only or draft-only run attestation.', true);
+      return;
+    }
     const hasCurrentReadiness = selectedScheduleBotId === payload.target_bot_id && selectedScheduleBotReadiness;
     const readiness = hasCurrentReadiness ? selectedScheduleBotReadiness : await refreshSelectedScheduleBotReadiness();
     if (!readiness || readiness.ready !== true) {
@@ -218,8 +235,36 @@ document.getElementById('form-create-schedule').addEventListener('submit', async
 
 document.getElementById('schedule-bot').addEventListener('change', refreshSelectedScheduleBotReadiness);
 
-async function toggleSchedule(scheduleId, status, botId) {
+async function markScheduleMutationSafe(scheduleId) {
+  const response = await fetch('/api/schedules/' + encodeURIComponent(scheduleId), {
+    method: 'PATCH',
+    headers: {'Content-Type': 'application/json', 'X-CSRFToken': getScheduleCsrf()},
+    body: JSON.stringify({metadata: {mutation_safe: true, safety_attested_via: 'dashboard_schedule_manager'}}),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    window.alert(data.error || 'Unable to record the schedule safety attestation.');
+    return false;
+  }
+  return true;
+}
+
+async function confirmScheduleMutationSafe(scheduleId, mutationSafe) {
+  if (mutationSafe) {
+    return true;
+  }
+  const confirmed = window.confirm('Confirm this run is read-only or draft-only and will not change external, database, repository, or browser state.');
+  if (!confirmed) {
+    return false;
+  }
+  return markScheduleMutationSafe(scheduleId);
+}
+
+async function toggleSchedule(scheduleId, status, botId, mutationSafe) {
   if (status === 'active' && botId) {
+    if (!(await confirmScheduleMutationSafe(scheduleId, mutationSafe))) {
+      return;
+    }
     const response = await fetch('/api/schedules/bots/' + encodeURIComponent(botId) + '/readiness');
     const readiness = await response.json().catch(() => ({}));
     if (!response.ok || readiness.ready !== true) {
@@ -242,7 +287,10 @@ async function toggleSchedule(scheduleId, status, botId) {
   window.location.reload();
 }
 
-async function triggerSchedule(scheduleId) {
+async function triggerSchedule(scheduleId, mutationSafe) {
+  if (!(await confirmScheduleMutationSafe(scheduleId, mutationSafe))) {
+    return;
+  }
   const response = await fetch('/api/schedules/' + encodeURIComponent(scheduleId) + '/trigger', {
     method: 'POST',
     headers: {'X-CSRFToken': getScheduleCsrf()},

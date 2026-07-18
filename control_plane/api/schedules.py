@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 from control_plane.audit.utils import record_audit_event
 from control_plane.bot_readiness import assess_bot_readiness
+from control_plane.schedule_safety import ScheduleAutonomySafetyError, require_schedule_autonomy_safety
 
 
 router = APIRouter(prefix="/v1/schedules", tags=["schedules"])
@@ -42,6 +43,22 @@ async def _require_schedule_target_ready(
             "message": f"Schedule target '{bot_id}' is not ready.",
             "readiness": readiness,
         })
+
+
+async def _require_schedule_autonomy_safety(
+    request: Request,
+    schedule: Dict[str, Any],
+    *,
+    only_when_active: bool,
+) -> None:
+    try:
+        await require_schedule_autonomy_safety(
+            schedule,
+            bot_registry=request.app.state.bot_registry,
+            only_when_active=only_when_active,
+        )
+    except ScheduleAutonomySafetyError as exc:
+        raise HTTPException(status_code=409, detail=exc.as_detail()) from exc
 
 
 class CreateScheduleRequest(BaseModel):
@@ -101,6 +118,7 @@ async def create_schedule(request: Request, body: CreateScheduleRequest) -> Dict
     try:
         payload = body.model_dump()
         await _require_schedule_target_ready(request, payload, only_when_active=True)
+        await _require_schedule_autonomy_safety(request, payload, only_when_active=True)
         schedule = await engine.create_schedule(payload)
         await record_audit_event(request, action="schedules.create", resource=f"schedule:{schedule['id']}")
         return {"schedule": schedule}
@@ -120,6 +138,7 @@ async def update_schedule(schedule_id: str, request: Request, body: UpdateSchedu
             raise HTTPException(status_code=404, detail="schedule not found")
         candidate = {**current, **patch}
         await _require_schedule_target_ready(request, candidate, only_when_active=True)
+        await _require_schedule_autonomy_safety(request, candidate, only_when_active=True)
         schedule = await engine.update_schedule(schedule_id, patch)
         if schedule is None:
             raise HTTPException(status_code=404, detail="schedule not found")
@@ -148,6 +167,7 @@ async def trigger_schedule(schedule_id: str, request: Request) -> Dict[str, Any]
         if schedule is None:
             raise HTTPException(status_code=404, detail="schedule not found")
         await _require_schedule_target_ready(request, schedule, only_when_active=False)
+        await _require_schedule_autonomy_safety(request, schedule, only_when_active=False)
         run = await engine.trigger_schedule(schedule_id)
         await record_audit_event(request, action="schedules.trigger", resource=f"schedule:{schedule_id}")
         return {"run": run}

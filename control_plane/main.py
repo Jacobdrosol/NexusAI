@@ -49,6 +49,7 @@ from control_plane.registry.project_registry import ProjectRegistry
 from control_plane.repo_workspace_usage_store import RepoWorkspaceUsageStore
 from control_plane.registry.worker_registry import WorkerRegistry
 from control_plane.scheduler.scheduler import Scheduler
+from control_plane.schedule_safety import require_schedule_autonomy_safety
 from control_plane.task_manager.task_manager import TaskManager
 from control_plane.vault.mcp_broker import MCPBroker
 from control_plane.vault.vault_manager import VaultManager
@@ -148,9 +149,17 @@ async def lifespan(app: FastAPI):
         bot_registry=bot_registry,
         scheduler=scheduler,
     )
+    async def _schedule_dispatch_guard(schedule: dict) -> None:
+        await require_schedule_autonomy_safety(
+            schedule,
+            bot_registry=bot_registry,
+            only_when_active=False,
+        )
+
     agent_schedule_engine = AgentScheduleEngine(
         assignment_service=assignment_service,
         task_manager=task_manager,
+        autonomy_guard=_schedule_dispatch_guard,
     )
 
     # Store on app state

@@ -94,6 +94,29 @@ async def test_schedule_run_records_linked_task_failure(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_schedule_dispatch_guard_blocks_unsafe_run(tmp_path):
+    task_manager = _FakeTaskManager()
+
+    async def reject_unattested_schedule(schedule):
+        raise ValueError(f"schedule {schedule['id']} is not attested")
+
+    engine = AgentScheduleEngine(
+        assignment_service=object(),
+        task_manager=task_manager,
+        db_path=str(tmp_path / "schedules.db"),
+        autonomy_guard=reject_unattested_schedule,
+    )
+    schedule = await engine.create_schedule(_schedule_payload())
+
+    await engine.trigger_schedule(schedule["id"])
+
+    failed_run = (await engine.list_runs(schedule["id"]))[0]
+    assert failed_run["status"] == "failed"
+    assert "not attested" in failed_run["error"]["message"]
+    assert task_manager.create_calls == []
+
+
+@pytest.mark.anyio
 async def test_schedule_listing_filters_status_and_rejects_invalid_status(tmp_path):
     engine = AgentScheduleEngine(
         assignment_service=object(),

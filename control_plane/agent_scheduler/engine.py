@@ -7,7 +7,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional, Set, Tuple
 from zoneinfo import ZoneInfo
 
 import aiosqlite
@@ -207,10 +207,12 @@ class AgentScheduleEngine:
         assignment_service: Any,
         task_manager: Any,
         db_path: Optional[str] = None,
+        autonomy_guard: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
     ) -> None:
         self._assignment_service = assignment_service
         self._task_manager = task_manager
         self._db_path = db_path or _db_path()
+        self._autonomy_guard = autonomy_guard
         self._ready = False
         self._tick_lock = asyncio.Lock()
 
@@ -629,6 +631,8 @@ class AgentScheduleEngine:
             await self._update_schedule_last_run(run["schedule_id"], status="failed")
 
     async def _dispatch_schedule(self, schedule: Dict[str, Any]) -> Dict[str, Any]:
+        if self._autonomy_guard is not None:
+            await self._autonomy_guard(schedule)
         prompt = str(schedule.get("prompt") or "").strip()
         pm_bot_id = str(schedule.get("assignment_pm_bot_id") or "").strip()
         conversation_id = str(schedule.get("conversation_id") or "").strip()

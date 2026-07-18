@@ -158,6 +158,78 @@ async def test_schedule_activation_requires_a_ready_bot(cp_client):
 
 
 @pytest.mark.anyio
+async def test_active_schedule_requires_explicit_non_mutating_attestation(cp_client):
+    bot_id = "scheduled-review-bot"
+    await cp_client.post(
+        "/v1/bots",
+        json={
+            "id": bot_id,
+            "name": "Scheduled Review Bot",
+            "role": "reviewer",
+            "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "review-model"}],
+        },
+    )
+
+    unattested = await cp_client.post(
+        "/v1/schedules",
+        json={
+            "name": "Unattested review",
+            "cron_expression": "0 * * * *",
+            "prompt": "Review the current queue and report findings.",
+            "target_bot_id": bot_id,
+            "status": "active",
+        },
+    )
+    attested = await cp_client.post(
+        "/v1/schedules",
+        json={
+            "name": "Attested review",
+            "cron_expression": "0 * * * *",
+            "prompt": "Review the current queue and report findings.",
+            "target_bot_id": bot_id,
+            "status": "active",
+            "metadata": {"mutation_safe": True},
+        },
+    )
+
+    assert unattested.status_code == 409
+    assert unattested.json()["detail"]["reason_code"] == "schedule_autonomy_not_attested"
+    assert attested.status_code == 200
+    assert attested.json()["schedule"]["status"] == "active"
+
+
+@pytest.mark.anyio
+async def test_active_schedule_rejects_mutation_capable_target(cp_client):
+    bot_id = "scheduled-writer-bot"
+    await cp_client.post(
+        "/v1/bots",
+        json={
+            "id": bot_id,
+            "name": "Scheduled Writer Bot",
+            "role": "writer",
+            "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "writer-model"}],
+            "execution_policy": {"repo_output_mode": "allow"},
+        },
+    )
+
+    response = await cp_client.post(
+        "/v1/schedules",
+        json={
+            "name": "Unsafe writer",
+            "cron_expression": "0 * * * *",
+            "prompt": "Write the requested change.",
+            "target_bot_id": bot_id,
+            "status": "active",
+            "metadata": {"mutation_safe": True},
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason_code"] == "schedule_target_not_autonomy_safe"
+    assert "repository writes" in response.json()["detail"]["message"]
+
+
+@pytest.mark.anyio
 async def test_bot_enable_requires_a_ready_backend(cp_client):
     bot_id = "staged-unready-bot"
     created = await cp_client.post(
