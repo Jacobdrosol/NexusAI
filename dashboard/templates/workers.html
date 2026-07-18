@@ -12,7 +12,7 @@
 <table id="workers-table">
   <thead>
     <tr>
-      <th>Name</th><th>Host</th><th>Status</th><th>Runtime</th><th>Last Heartbeat</th><th>Enabled</th><th>Capabilities</th><th>Actions</th>
+      <th>Name</th><th>Host</th><th>Status</th><th>Runtime</th><th>Budget</th><th>Last Heartbeat</th><th>Enabled</th><th>Capabilities</th><th>Actions</th>
     </tr>
   </thead>
   <tbody>
@@ -30,6 +30,15 @@
         <div class="metrics">not yet checked</div>
         {% endif %}
       </td>
+      <td class="metrics">
+        {% set limits = w.runtime_limits or {} %}
+        {% if limits %}
+        <div>{{ limits.get('cpus', '—') }} CPU</div>
+        <div>{{ limits.get('memory_limit', '—') }} memory · {{ limits.get('pids_limit', '—') }} processes</div>
+        {% else %}
+        —
+        {% endif %}
+      </td>
       <td class="metrics">{{ (w.last_heartbeat_at[:19] if w.last_heartbeat_at else '—') | replace('T', ' ') }}</td>
       <td><span class="badge badge-{{ 'enabled' if w.enabled else 'disabled' }}">{{ 'enabled' if w.enabled else 'disabled' }}</span></td>
       <td class="metrics">{{ w.capabilities | length }} cap(s)</td>
@@ -41,7 +50,7 @@
       </td>
     </tr>
     {% else %}
-    <tr><td colspan="8" style="text-align:center;color:#718096;">No workers registered</td></tr>
+    <tr><td colspan="9" style="text-align:center;color:#718096;">No workers registered</td></tr>
     {% endfor %}
   </tbody>
 </table>
