@@ -195,6 +195,18 @@ def _validated_resource_limits(worker: dict[str, Any], fleet: dict[str, Any]) ->
     return compose_limits
 
 
+def _worker_runtime_limits(worker: dict[str, Any], fleet: dict[str, Any]) -> dict[str, Any]:
+    limits = _validated_resource_limits(worker, fleet)
+    result: dict[str, Any] = {
+        "cpus": float(limits["cpus"]),
+        "memory_limit": limits["mem_limit"],
+        "pids_limit": limits["pids_limit"],
+    }
+    if "mem_reservation" in limits:
+        result["memory_reservation"] = limits["mem_reservation"]
+    return result
+
+
 def _worker_tooling(worker: dict[str, Any]) -> dict[str, Any]:
     tooling = worker.get("tooling")
     if tooling is None:
@@ -348,6 +360,7 @@ def _worker_config(worker: dict[str, Any], fleet: dict[str, Any]) -> dict[str, A
         "enabled": bool(worker.get("enabled", True)),
         "capabilities": capabilities,
         "metrics": {},
+        "runtime_limits": _worker_runtime_limits(worker, fleet),
     }
     tooling: dict[str, Any] = {}
     if cli_tools:

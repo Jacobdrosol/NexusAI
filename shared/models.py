@@ -31,6 +31,16 @@ class WorkerMetrics(BaseModel):
     queue_depth: Optional[int] = None
 
 
+class WorkerRuntimeLimits(BaseModel):
+    """Declared container limits for operator capacity planning and safety visibility."""
+
+    model_config = ConfigDict(from_attributes=True)
+    cpus: Optional[float] = Field(default=None, gt=0)
+    memory_limit: Optional[str] = None
+    memory_reservation: Optional[str] = None
+    pids_limit: Optional[int] = Field(default=None, ge=1)
+
+
 class Worker(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str
@@ -40,6 +50,7 @@ class Worker(BaseModel):
     capabilities: List[Capability]
     status: Literal["online", "offline", "degraded"] = "offline"
     metrics: Optional[WorkerMetrics] = None
+    runtime_limits: Optional[WorkerRuntimeLimits] = None
     enabled: bool = True
     last_heartbeat_at: Optional[datetime] = None
 

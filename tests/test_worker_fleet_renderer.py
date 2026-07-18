@@ -90,6 +90,11 @@ def test_render_worker_fleet_outputs_compose_worker_config_and_bot(tmp_path):
     assert worker_cfg["listen_host"] == "0.0.0.0"
     assert worker_cfg["capabilities"][0]["provider"] == "ollama_cloud"
     assert worker_cfg["capabilities"][0]["models"] == ["glm-5.2:cloud"]
+    assert worker_cfg["runtime_limits"] == {
+        "cpus": 1.0,
+        "memory_limit": "1g",
+        "pids_limit": 256,
+    }
 
     env_text = (out / "env" / "content-repair-01.env").read_text()
     assert "CONTROL_PLANE_API_TOKEN=control-token" in env_text
@@ -159,6 +164,14 @@ def test_render_worker_fleet_merges_validated_resource_limits(tmp_path):
     assert service["mem_limit"] == "2g"
     assert service["mem_reservation"] == "1g"
     assert service["pids_limit"] == 384
+
+    worker_cfg = yaml.safe_load((out / "workers" / "content-repair-01.yaml").read_text())
+    assert worker_cfg["runtime_limits"] == {
+        "cpus": 1.5,
+        "memory_limit": "2g",
+        "memory_reservation": "1g",
+        "pids_limit": 384,
+    }
 
 
 def test_render_worker_fleet_rejects_invalid_resource_limits(tmp_path):

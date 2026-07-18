@@ -22,6 +22,23 @@ def test_worker_model_supports_attested_browser_capability():
     assert capability.provider == "browser"
 
 
+def test_worker_model_supports_declared_runtime_limits():
+    from shared.models import Worker
+
+    worker = Worker(
+        id="w1",
+        name="Test Worker",
+        host="localhost",
+        port=8001,
+        capabilities=[],
+        runtime_limits={"cpus": 1.5, "memory_limit": "2g", "pids_limit": 384},
+    )
+
+    assert worker.runtime_limits is not None
+    assert worker.runtime_limits.memory_limit == "2g"
+    assert worker.runtime_limits.pids_limit == 384
+
+
 def test_bot_model_valid():
     from shared.models import Bot
     b = Bot(id="bot1", name="Assistant", role="helper", backends=[])

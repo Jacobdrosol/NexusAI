@@ -49,6 +49,17 @@
           <span class="worker-meta-label">Last Heartbeat</span>
           <span class="worker-meta-value" id="worker-heartbeat-value">{{ (worker.last_heartbeat_at[:19] if worker.last_heartbeat_at else 'Unknown') | replace('T', ' ') }}</span>
         </div>
+        <div class="worker-meta-item">
+          <span class="worker-meta-label">Runtime Budget</span>
+          {% set limits = worker.runtime_limits or {} %}
+          <span class="worker-meta-value">
+            {% if limits %}
+            {{ limits.get('cpus', '—') }} CPU{% if limits.get('memory_limit') %} · {{ limits.get('memory_limit') }} memory{% endif %}{% if limits.get('pids_limit') %} · {{ limits.get('pids_limit') }} processes{% endif %}
+            {% else %}
+            Not declared
+            {% endif %}
+          </span>
+        </div>
       </div>
       <div class="worker-action-row">
         <button class="btn" onclick="probeWorker('{{ worker.id }}')">Probe</button>
