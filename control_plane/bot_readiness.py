@@ -28,7 +28,11 @@ def _check(
 def _worker_supports_backend(worker: Worker, backend: BackendConfig) -> bool:
     expected_provider = str(backend.provider or "").strip().lower()
     expected_model = str(backend.model or "").strip()
-    expected_capability_type = "tool" if str(backend.type or "").strip().lower() == "browser" else "llm"
+    expected_capability_type = (
+        "tool"
+        if str(backend.type or "").strip().lower() in {"browser", "cli"}
+        else "llm"
+    )
     for capability in worker.capabilities or []:
         if str(capability.type or "").strip().lower() != expected_capability_type:
             continue
@@ -45,6 +49,7 @@ async def assess_bot_readiness(
     bot_registry: Any,
     worker_registry: Any,
     connection_resolver: Any,
+    worker_probe_store: Any = None,
 ) -> dict[str, Any]:
     """Return non-secret operational checks for the bot's declared backend chain."""
     bot: Bot = await bot_registry.get(str(bot_id or "").strip())
@@ -52,6 +57,7 @@ async def assess_bot_readiness(
         bot,
         worker_registry=worker_registry,
         connection_resolver=connection_resolver,
+        worker_probe_store=worker_probe_store,
     )
 
 
@@ -60,6 +66,7 @@ async def assess_bot_instance_readiness(
     *,
     worker_registry: Any,
     connection_resolver: Any,
+    worker_probe_store: Any = None,
 ) -> dict[str, Any]:
     """Assess a persisted or staged bot without exposing connection secrets."""
     checks: list[dict[str, Any]] = []
@@ -97,7 +104,7 @@ async def assess_bot_instance_readiness(
             if worker.status != "online":
                 checks.append(_check(label, "failed", f"Worker '{worker_id}' is {worker.status}.", backend_index=index))
                 continue
-            if backend_type != "cli" and not _worker_supports_backend(worker, backend):
+            if not _worker_supports_backend(worker, backend):
                 checks.append(
                     _check(
                         label,
@@ -117,6 +124,14 @@ async def assess_bot_instance_readiness(
                         backend_index=index,
                     )
                 )
+                continue
+            attestation_blocker = await _worker_attestation_blocker(
+                worker_id=worker_id,
+                backend=backend,
+                worker_probe_store=worker_probe_store,
+            )
+            if attestation_blocker:
+                checks.append(_check(label, "failed", attestation_blocker, backend_index=index))
                 continue
             checks.append(_check(label, "ready", f"Worker '{worker_id}' is online and supports this backend.", backend_index=index))
             continue
@@ -174,3 +189,53 @@ async def assess_bot_instance_readiness(
         },
         "checks": checks,
     }
+
+
+async def _worker_attestation_blocker(
+    *,
+    worker_id: str,
+    backend: BackendConfig,
+    worker_probe_store: Any,
+) -> str:
+    """Return a concrete nonsecret blocker from the latest worker evidence, if any."""
+    if worker_probe_store is None:
+        return ""
+    try:
+        probe = await worker_probe_store.get(worker_id)
+    except Exception:
+        return ""
+    if not isinstance(probe, dict):
+        return ""
+
+    status = str(probe.get("probe_status") or "").strip().lower()
+    if status and status != "ready":
+        return f"Worker '{worker_id}' latest runtime probe is {status}."
+
+    attestation = probe.get("capability_attestation")
+    if not isinstance(attestation, dict):
+        return ""
+    backend_type = str(backend.type or "").strip().lower()
+    if backend_type == "cli":
+        unauthenticated = {
+            str(tool or "").strip().lower()
+            for tool in attestation.get("unauthenticated_cli_tools") or []
+            if str(tool or "").strip()
+        }
+        tool_names = {str(backend.model or "").strip().lower()}
+        command = str(backend.command or "").strip()
+        if command:
+            tool_names.add(command.split(maxsplit=1)[0].rsplit("/", 1)[-1].lower())
+        tool_names.discard("")
+        blocked_tools = sorted(tool_names & unauthenticated)
+        if blocked_tools:
+            return (
+                f"Worker '{worker_id}' requires CLI authentication for "
+                f"{', '.join(blocked_tools)}."
+            )
+    elif backend_type == "browser":
+        browser = attestation.get("browser")
+        if isinstance(browser, dict) and not bool(browser.get("ready")):
+            reason = str(browser.get("reason") or "").strip()
+            suffix = f": {reason}" if reason else "."
+            return f"Worker '{worker_id}' browser runtime is not ready{suffix}"
+    return ""

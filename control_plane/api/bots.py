@@ -135,6 +135,7 @@ async def _require_bot_ready_to_enable(bot: Bot, request: Request) -> None:
         candidate,
         worker_registry=request.app.state.worker_registry,
         connection_resolver=request.app.state.connection_resolver,
+        worker_probe_store=request.app.state.worker_probe_store,
     )
     if not readiness["ready"]:
         raise HTTPException(
@@ -268,6 +269,7 @@ async def get_bot_readiness(bot_id: str, request: Request) -> Dict[str, Any]:
             bot_registry=request.app.state.bot_registry,
             worker_registry=request.app.state.worker_registry,
             connection_resolver=request.app.state.connection_resolver,
+            worker_probe_store=request.app.state.worker_probe_store,
         )
     except BotNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

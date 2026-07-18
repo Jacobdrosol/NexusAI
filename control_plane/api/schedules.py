@@ -29,6 +29,7 @@ async def _require_schedule_target_ready(
             bot_registry=request.app.state.bot_registry,
             worker_registry=request.app.state.worker_registry,
             connection_resolver=request.app.state.connection_resolver,
+            worker_probe_store=request.app.state.worker_probe_store,
         )
     except Exception as exc:
         raise HTTPException(status_code=409, detail={
