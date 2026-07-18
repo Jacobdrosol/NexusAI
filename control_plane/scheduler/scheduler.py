@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import time
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, AsyncGenerator, Dict, Optional
 
@@ -97,6 +98,21 @@ def _is_non_mutating_test_task(task: "Task | None") -> bool:
     mode = str(getattr(task.metadata, "execution_mode", "") or "").strip().lower()
     source = str(getattr(task.metadata, "source", "") or "").strip().lower()
     return mode == "test" or source == "bot_test"
+
+
+def _is_autonomous_schedule_task(task: "Task | None") -> bool:
+    """Return whether a task originated from an agent schedule."""
+    if task is None or task.metadata is None:
+        return False
+    return str(getattr(task.metadata, "source", "") or "").strip().lower() == "agent_schedule"
+
+
+def _autonomous_probe_max_age_seconds() -> float:
+    try:
+        value = float(os.environ.get("NEXUSAI_AUTONOMOUS_WORKER_PROBE_MAX_AGE_SECONDS", "300"))
+    except (TypeError, ValueError):
+        value = 300.0
+    return min(max(value, 30.0), 3600.0)
 
 
 def _mark_test_payload(payload: Any) -> Any:
@@ -1996,6 +2012,7 @@ class Scheduler:
         model_registry: Any = None,
         project_registry: Any = None,
         connection_resolver: Any = None,
+        worker_probe_store: Any = None,
     ) -> None:
         self.bot_registry = bot_registry
         self.worker_registry = worker_registry
@@ -2003,6 +2020,7 @@ class Scheduler:
         self.model_registry = model_registry
         self.project_registry = project_registry
         self._connection_resolver = connection_resolver or ConnectionResolver()
+        self._worker_probe_store = worker_probe_store
         self._inflight_by_worker: dict[str, int] = {}
         self._latency_ema_ms: dict[str, float] = {}
         self._latency_alpha = float(os.environ.get("NEXUSAI_WORKER_LATENCY_EMA_ALPHA", "0.30"))
@@ -2788,6 +2806,7 @@ class Scheduler:
         safe_payload = await self._apply_cloud_context_policy(backend, payload, task=task)
         if backend.type in ("local_llm", "remote_llm"):
             worker = await self._resolve_worker_for_llm_backend(backend, task=task)
+            await self._require_fresh_autonomous_worker_probe(worker, task)
             if worker.status != "online":
                 raise BackendError(
                     f"Worker {worker.id} is not online (status={worker.status})"
@@ -2813,6 +2832,7 @@ class Scheduler:
                 worker = await self.worker_registry.get(backend.worker_id)
             except Exception as e:
                 raise BackendError(f"Worker not found: {backend.worker_id}") from e
+            await self._require_fresh_autonomous_worker_probe(worker, task)
             await self._require_task_worker_tools(worker, task)
             return await self._dispatch_to_worker(worker, backend, safe_payload)
         elif backend.type == "custom":
@@ -2937,6 +2957,7 @@ class Scheduler:
         safe_payload = await self._apply_cloud_context_policy(backend, payload, task=task)
         if backend.type in ("local_llm", "remote_llm", "cli"):
             worker = await self._resolve_worker_for_llm_backend(backend, task=task) if backend.type != "cli" else await self.worker_registry.get(backend.worker_id)  # type: ignore[arg-type]
+            await self._require_fresh_autonomous_worker_probe(worker, task)
             if backend.type == "cli":
                 await self._require_task_worker_tools(worker, task)
             if worker.status != "online":
@@ -3712,6 +3733,42 @@ class Scheduler:
         if missing_tools:
             raise BackendError(
                 f"Worker {worker.id} is missing required tool capabilities: {', '.join(missing_tools)}"
+            )
+
+    async def _require_fresh_autonomous_worker_probe(
+        self,
+        worker: Worker,
+        task: Task | None,
+    ) -> None:
+        """Require recent attested evidence before a scheduled task reaches a worker."""
+        if not _is_autonomous_schedule_task(task):
+            return
+        if self._worker_probe_store is None:
+            raise BackendError(
+                "Autonomous schedule dispatch requires a configured worker probe store."
+            )
+        probe = await self._worker_probe_store.get(worker.id)
+        if not isinstance(probe, dict):
+            raise BackendError(
+                f"Autonomous schedule dispatch requires a recent ready probe for worker {worker.id}."
+            )
+        if str(probe.get("probe_status") or "").strip().lower() != "ready":
+            raise BackendError(
+                f"Autonomous schedule dispatch blocked: worker {worker.id} probe is not ready."
+            )
+        checked_at = str(probe.get("checked_at") or "").strip()
+        try:
+            checked = datetime.fromisoformat(checked_at.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise BackendError(
+                f"Autonomous schedule dispatch blocked: worker {worker.id} probe has no valid timestamp."
+            ) from exc
+        if checked.tzinfo is None:
+            checked = checked.replace(tzinfo=timezone.utc)
+        age_seconds = (datetime.now(timezone.utc) - checked.astimezone(timezone.utc)).total_seconds()
+        if age_seconds < -30 or age_seconds > _autonomous_probe_max_age_seconds():
+            raise BackendError(
+                f"Autonomous schedule dispatch blocked: worker {worker.id} probe is stale."
             )
 
     async def _resolve_worker_for_llm_backend(self, backend: BackendConfig, *, task: Task | None = None) -> Worker:

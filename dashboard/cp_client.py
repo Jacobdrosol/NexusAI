@@ -185,6 +185,9 @@ class CPClient:
     def probe_worker(self, worker_id: str) -> Optional[Dict[str, Any]]:
         return self._post(f"/v1/workers/{worker_id}/probe", {})
 
+    def get_worker_probe(self, worker_id: str) -> Optional[Dict[str, Any]]:
+        return self._get(f"/v1/workers/{worker_id}/probe")
+
     def delete_worker(self, worker_id: str) -> bool:
         return self._delete(f"/v1/workers/{worker_id}")
 

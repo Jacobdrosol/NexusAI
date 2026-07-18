@@ -337,6 +337,109 @@ async def test_scheduler_rejects_worker_missing_declared_bot_tools():
 
 
 @pytest.mark.anyio
+async def test_scheduled_worker_dispatch_requires_recent_ready_probe():
+    from control_plane.scheduler.scheduler import BackendError, Scheduler
+
+    worker = Worker(
+        id="scheduled-worker",
+        name="Scheduled Worker",
+        host="scheduled.local",
+        port=8001,
+        capabilities=[Capability(type="llm", provider="ollama", models=["llama3"])],
+        status="online",
+        enabled=True,
+    )
+    task = Task(
+        id="scheduled-task",
+        bot_id="scheduled-bot",
+        payload={"instruction": "Run the scheduled report"},
+        metadata=TaskMetadata(source="agent_schedule"),
+        created_at="2026-07-18T00:00:00Z",
+        updated_at="2026-07-18T00:00:00Z",
+    )
+    probe_store = type("ProbeStore", (), {"get": AsyncMock(return_value=None)})()
+    scheduler = Scheduler(
+        bot_registry=AsyncMock(),
+        worker_registry=AsyncMock(),
+        worker_probe_store=probe_store,
+    )
+
+    with pytest.raises(BackendError, match="recent ready probe"):
+        await scheduler._require_fresh_autonomous_worker_probe(worker, task)
+
+
+@pytest.mark.anyio
+async def test_scheduled_worker_dispatch_accepts_recent_ready_probe():
+    from datetime import datetime, timezone
+
+    from control_plane.scheduler.scheduler import Scheduler
+
+    worker = Worker(
+        id="scheduled-worker",
+        name="Scheduled Worker",
+        host="scheduled.local",
+        port=8001,
+        capabilities=[Capability(type="llm", provider="ollama", models=["llama3"])],
+        status="online",
+        enabled=True,
+    )
+    task = Task(
+        id="scheduled-task",
+        bot_id="scheduled-bot",
+        payload={"instruction": "Run the scheduled report"},
+        metadata=TaskMetadata(source="agent_schedule"),
+        created_at="2026-07-18T00:00:00Z",
+        updated_at="2026-07-18T00:00:00Z",
+    )
+    probe_store = type(
+        "ProbeStore",
+        (),
+        {
+            "get": AsyncMock(
+                return_value={
+                    "worker_id": worker.id,
+                    "probe_status": "ready",
+                    "checked_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+        },
+    )()
+    scheduler = Scheduler(
+        bot_registry=AsyncMock(),
+        worker_registry=AsyncMock(),
+        worker_probe_store=probe_store,
+    )
+
+    await scheduler._require_fresh_autonomous_worker_probe(worker, task)
+
+
+@pytest.mark.anyio
+async def test_interactive_worker_dispatch_does_not_require_probe_store():
+    from control_plane.scheduler.scheduler import Scheduler
+
+    worker = Worker(
+        id="interactive-worker",
+        name="Interactive Worker",
+        host="interactive.local",
+        port=8001,
+        capabilities=[Capability(type="llm", provider="ollama", models=["llama3"])],
+        status="online",
+        enabled=True,
+    )
+    task = Task(
+        id="interactive-task",
+        bot_id="interactive-bot",
+        payload={"instruction": "Answer this chat request"},
+        metadata=TaskMetadata(source="chat"),
+        created_at="2026-07-18T00:00:00Z",
+        updated_at="2026-07-18T00:00:00Z",
+    )
+    scheduler = Scheduler(bot_registry=AsyncMock(), worker_registry=AsyncMock())
+
+    await scheduler._require_fresh_autonomous_worker_probe(worker, task)
+
+
+@pytest.mark.anyio
 async def test_scheduler_dispatch_tracks_latency_and_inflight():
     from control_plane.scheduler.scheduler import Scheduler
 

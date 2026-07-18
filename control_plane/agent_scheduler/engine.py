@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 import aiosqlite
 
 from control_plane.sqlite_helpers import open_sqlite
+from shared.models import TaskMetadata
 
 _DEFAULT_DB_PATH = str(Path(__file__).parent.parent.parent / "data" / "nexusai.db")
 
@@ -639,6 +640,7 @@ class AgentScheduleEngine:
                 run_id=None,
                 node_overrides=schedule.get("node_overrides") if isinstance(schedule.get("node_overrides"), dict) else {},
                 context_items=[],
+                task_source="agent_schedule",
             )
             return {
                 "orchestration_id": assignment.get("orchestration_id"),
@@ -656,6 +658,10 @@ class AgentScheduleEngine:
                     "project_id": str(schedule.get("project_id") or "").strip() or None,
                     "node_overrides": schedule.get("node_overrides") if isinstance(schedule.get("node_overrides"), dict) else {},
                 },
+                metadata=TaskMetadata(
+                    source="agent_schedule",
+                    project_id=str(schedule.get("project_id") or "").strip() or None,
+                ),
             )
             return {"task_id": task.id}
         raise ValueError("schedule requires either (assignment_pm_bot_id + conversation_id) or target_bot_id with prompt")

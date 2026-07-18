@@ -7,6 +7,7 @@ control_plane:
   seed_bots_from_config: true
   force_seed_bots_from_config: true
   heartbeat_timeout_seconds: 30
+  worker_probe_interval_seconds: 120
 
 dashboard:
   host: 0.0.0.0

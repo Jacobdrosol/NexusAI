@@ -49,18 +49,17 @@ async def test_schedule_run_stays_running_until_linked_task_completes(tmp_path):
     assert running_run["status"] == "running"
     assert running_run["task_id"] == task_manager.task.id
     assert (await engine.get_schedule(schedule["id"]))["last_run_status"] == "running"
-    assert task_manager.create_calls == [
-        {
-            "bot_id": "qc-bot",
-            "payload": {
-                "instruction": "Reply with exactly OK.",
-                "source": "agent_schedule",
-                "schedule_id": schedule["id"],
-                "project_id": None,
-                "node_overrides": {},
-            },
-        }
-    ]
+    assert len(task_manager.create_calls) == 1
+    create_call = task_manager.create_calls[0]
+    assert create_call["bot_id"] == "qc-bot"
+    assert create_call["payload"] == {
+        "instruction": "Reply with exactly OK.",
+        "source": "agent_schedule",
+        "schedule_id": schedule["id"],
+        "project_id": None,
+        "node_overrides": {},
+    }
+    assert create_call["metadata"].source == "agent_schedule"
 
     task_manager.task.status = "completed"
     await engine.tick_once()

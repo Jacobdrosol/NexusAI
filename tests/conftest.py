@@ -25,12 +25,14 @@ async def cp_app(tmp_path):
     from control_plane.registry.project_registry import ProjectRegistry
     from control_plane.scheduler.scheduler import Scheduler
     from control_plane.task_manager.task_manager import TaskManager
+    from control_plane.worker_probe_store import WorkerProbeStore
     from control_plane.vault.mcp_broker import MCPBroker
     from control_plane.vault.vault_manager import VaultManager
     from control_plane.connections.resolver import ConnectionResolver
     from control_plane.orchestration.assignment_service import AssignmentService
     from control_plane.orchestration.run_store import OrchestrationRunStore
     from control_plane.platform_ai.session_store import PlatformAISessionStore
+    from control_plane.repo_workspace_usage_store import RepoWorkspaceUsageStore
     from control_plane.agent_scheduler.engine import AgentScheduleEngine
     from control_plane.observability import install_observability
     from control_plane.orchestration_workspace_store import OrchestrationWorkspaceStore
@@ -79,6 +81,8 @@ async def cp_app(tmp_path):
     audit_log = AuditLog(db_path=str(tmp_path / "audit.db"))
     orchestration_workspace_store = OrchestrationWorkspaceStore()
     connection_resolver = ConnectionResolver(db_path=str(tmp_path / "dashboard.db"))
+    worker_probe_store = WorkerProbeStore(db_path=str(tmp_path / "worker_probes.db"))
+    repo_workspace_usage_store = RepoWorkspaceUsageStore(db_path=str(tmp_path / "repo_usage.db"))
     scheduler = Scheduler(
         bot_registry,
         worker_registry,
@@ -86,6 +90,7 @@ async def cp_app(tmp_path):
         model_registry=model_registry,
         project_registry=project_registry,
         connection_resolver=connection_resolver,
+        worker_probe_store=worker_probe_store,
     )
     task_manager = TaskManager(
         scheduler,
@@ -127,6 +132,8 @@ async def cp_app(tmp_path):
     app.state.github_webhook_store = github_webhook_store
     app.state.audit_log = audit_log
     app.state.orchestration_workspace_store = orchestration_workspace_store
+    app.state.repo_workspace_usage_store = repo_workspace_usage_store
+    app.state.worker_probe_store = worker_probe_store
     app.state.scheduler = scheduler
     app.state.task_manager = task_manager
     app.state.pm_orchestrator = pm_orchestrator

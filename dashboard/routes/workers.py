@@ -54,6 +54,24 @@ def _worker_id_from_name(name: Any) -> str:
     return slug or "worker"
 
 
+def _worker_probe_view(probe: Any) -> dict[str, Any] | None:
+    if not isinstance(probe, dict):
+        return None
+    status = str(probe.get("probe_status") or "unknown").strip().lower() or "unknown"
+    if status == "unknown":
+        return None
+    failed_checks = [
+        str(check.get("detail") or "").strip()
+        for check in probe.get("checks") or []
+        if isinstance(check, dict) and str(check.get("status") or "").strip().lower() == "fail"
+    ]
+    detail = " | ".join(item for item in failed_checks if item)
+    if not detail:
+        detail = "runtime and capability contract verified" if status == "ready" else "runtime probe requires attention"
+    checked_at = str(probe.get("checked_at") or "").strip().replace("T", " ")[:19]
+    return {"status": status, "detail": detail, "checked_at": checked_at}
+
+
 @bp.get("/workers")
 @login_required
 def workers_page() -> str:
@@ -85,22 +103,37 @@ def worker_detail_page(worker_id: str):
 
     cp = get_cp_client()
     worker = cp.get_worker(worker_id)
+    probe_getter = getattr(cp, "get_worker_probe", None)
+    worker_probe = _worker_probe_view(probe_getter(worker_id) if callable(probe_getter) else None)
     running_tasks = _cp_list_tasks_safe(cp, statuses=["running"], limit=200, include_content=False) or []
     running_tasks = [t for t in running_tasks if t.get("status") == "running"]
     if worker is not None:
-        return render_template("worker_detail.html", worker=worker, running_tasks=running_tasks, error=None)
+        return render_template(
+            "worker_detail.html",
+            worker=worker,
+            worker_probe=worker_probe,
+            running_tasks=running_tasks,
+            error=None,
+        )
 
     flash(get_cp_client().unavailable_reason(), "warning")
     db = get_db()
     try:
         if not str(worker_id).isdigit():
-            return render_template("worker_detail.html", worker=None, running_tasks=[], error="Worker not found")
+            return render_template(
+                "worker_detail.html",
+                worker=None,
+                worker_probe=None,
+                running_tasks=[],
+                error="Worker not found",
+            )
         local = db.get(Worker, int(worker_id))
         if not local:
             return render_template("worker_detail.html", worker=None, running_tasks=[], error="Worker not found")
         return render_template(
             "worker_detail.html",
             worker=_worker_to_dict(local),
+            worker_probe=None,
             running_tasks=[],
             error=None,
         )

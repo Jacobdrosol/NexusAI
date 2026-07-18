@@ -58,7 +58,7 @@
         </button>
         <button class="btn btn-danger" onclick="deleteWorker('{{ worker.id }}')">Delete</button>
       </div>
-      <div class="worker-probe-result" id="worker-probe-result" hidden aria-live="polite"></div>
+      <div class="worker-probe-result{% if worker_probe %} worker-probe-{{ worker_probe.status }}{% endif %}" id="worker-probe-result"{% if not worker_probe %} hidden{% endif %} aria-live="polite">{% if worker_probe %}{{ worker_probe.status }}: {{ worker_probe.detail }}{% if worker_probe.checked_at %} (checked {{ worker_probe.checked_at }}){% endif %}{% endif %}</div>
     </div>
 
     <div>

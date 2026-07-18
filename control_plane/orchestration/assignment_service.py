@@ -212,6 +212,7 @@ class AssignmentService:
         conversation_transcript_strategy: str = "",
         assignment_memory_hits: Optional[List[Dict[str, Any]]] = None,
         assignment_memory_hit_count: int = 0,
+        task_source: str = "chat_assign",
     ) -> Dict[str, Any]:
         conversation = await self._chat_manager.get_conversation(conversation_id)
         if conversation is None:
@@ -240,6 +241,7 @@ class AssignmentService:
             conversation_transcript_strategy=conversation_transcript_strategy,
             assignment_memory_hits=assignment_memory_hits,
             assignment_memory_hit_count=assignment_memory_hit_count,
+            task_source=task_source,
             project_id=conversation.project_id,
             node_overrides=normalized_overrides,
             orchestration_run_id=str(run_payload.get("id") or ""),

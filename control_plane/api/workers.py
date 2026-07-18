@@ -59,6 +59,7 @@ async def probe_registered_worker(worker_id: str, request: Request) -> dict:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     result = await probe_worker(worker)
+    await request.app.state.worker_probe_store.record(result)
     await record_audit_event(
         request,
         action="workers.probe",
@@ -66,6 +67,27 @@ async def probe_registered_worker(worker_id: str, request: Request) -> dict:
         status=str(result["probe_status"]),
         details={"checks": result["checks"]},
     )
+    return result
+
+
+@router.get("/{worker_id}/probe")
+async def get_registered_worker_probe(worker_id: str, request: Request) -> dict:
+    """Return the latest stored, read-only runtime probe result for one worker."""
+    worker_registry = request.app.state.worker_registry
+    try:
+        await worker_registry.get(worker_id)
+    except WorkerNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    result = await request.app.state.worker_probe_store.get(worker_id)
+    if result is None:
+        return {
+            "worker_id": worker_id,
+            "probe_status": "unknown",
+            "checked_at": None,
+            "dispatch_eligible": False,
+            "checks": [],
+        }
     return result
 
 

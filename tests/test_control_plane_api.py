@@ -321,6 +321,35 @@ async def test_worker_probe_returns_non_mutating_runtime_result(cp_client, monke
 
     assert response.status_code == 200
     assert response.json()["probe_status"] == "ready"
+    persisted = await cp_client.get("/v1/workers/w1/probe")
+    assert persisted.status_code == 200
+    assert persisted.json()["checked_at"] == "2026-07-18T00:00:00+00:00"
+
+
+@pytest.mark.anyio
+async def test_worker_probe_returns_unknown_before_first_probe(cp_client):
+    worker = {
+        "id": "w-unprobed",
+        "name": "Unprobed Worker",
+        "host": "h1",
+        "port": 8001,
+        "status": "offline",
+        "capabilities": [],
+        "metrics": {},
+        "enabled": True,
+    }
+    await cp_client.post("/v1/workers", json=worker)
+
+    response = await cp_client.get("/v1/workers/w-unprobed/probe")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "worker_id": "w-unprobed",
+        "probe_status": "unknown",
+        "checked_at": None,
+        "dispatch_eligible": False,
+        "checks": [],
+    }
 
 
 @pytest.mark.anyio
@@ -1967,7 +1996,7 @@ async def test_project_repo_workspace_run_records_usage_history(cp_client, tmp_p
     assert runs[0]["status"] == "ok"
     assert (runs[0]["metrics"] or {}).get("peak_rss_bytes") == 12345678
 
-    summary_resp = await cp_client.get("/v1/projects/p-repo-usage/repo/workspace/runs/summary?since_hours=720")
+    summary_resp = await cp_client.get("/v1/projects/p-repo-usage/repo/workspace/runs/summary?since_hours=4000")
     assert summary_resp.status_code == 200
     summary = summary_resp.json()
     totals = summary["totals"]

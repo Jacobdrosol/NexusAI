@@ -543,6 +543,7 @@ class PMOrchestrator:
         conversation_transcript_strategy: str = "",
         assignment_memory_hits: Optional[List[Dict[str, Any]]] = None,
         assignment_memory_hit_count: int = 0,
+        task_source: str = "chat_assign",
         project_id: Optional[str] = None,
         node_overrides: Optional[Dict[str, Any]] = None,
         orchestration_run_id: Optional[str] = None,
@@ -571,6 +572,7 @@ class PMOrchestrator:
             conversation_transcript_strategy=conversation_transcript_strategy,
             assignment_memory_hits=assignment_memory_hits,
             assignment_memory_hit_count=assignment_memory_hit_count,
+            task_source=task_source,
             project_id=project_id,
             bots=bots,
             node_overrides=node_overrides,
@@ -598,6 +600,7 @@ class PMOrchestrator:
         conversation_transcript_strategy: str = "",
         assignment_memory_hits: Optional[List[Dict[str, Any]]] = None,
         assignment_memory_hit_count: int = 0,
+        task_source: str = "chat_assign",
         project_id: Optional[str],
         bots: List[Bot],
         node_overrides: Optional[Dict[str, Any]] = None,
@@ -605,6 +608,7 @@ class PMOrchestrator:
         assignment_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         orchestration_id = str(uuid.uuid4())
+        normalized_task_source = str(task_source or "").strip() or "chat_assign"
         if project_id and self._orchestration_workspace_store is not None:
             try:
                 from control_plane.api.projects import _ensure_orchestration_temp_workspace
@@ -654,7 +658,7 @@ class PMOrchestrator:
                 "global_acceptance_criteria": [],
                 "global_quality_gates": [],
                 "global_risks": [],
-                "source": "chat_assign",
+                "source": normalized_task_source,
                 "project_id": project_id,
                 "conversation_id": conversation_id,
                 "orchestration_id": orchestration_id,
@@ -675,7 +679,7 @@ class PMOrchestrator:
                 "template_id": inferred_template_id or "",
             },
             metadata=TaskMetadata(
-                source="chat_assign",
+                source=normalized_task_source,
                 project_id=project_id,
                 conversation_id=conversation_id,
                 orchestration_id=orchestration_id,

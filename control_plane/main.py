@@ -52,6 +52,8 @@ from control_plane.scheduler.scheduler import Scheduler
 from control_plane.task_manager.task_manager import TaskManager
 from control_plane.vault.mcp_broker import MCPBroker
 from control_plane.vault.vault_manager import VaultManager
+from control_plane.worker_probe import probe_worker
+from control_plane.worker_probe_store import WorkerProbeStore
 from shared.config_loader import ConfigLoader
 
 logger = logging.getLogger(__name__)
@@ -85,6 +87,7 @@ async def lifespan(app: FastAPI):
     audit_log = AuditLog()
     repo_workspace_usage_store = RepoWorkspaceUsageStore()
     orchestration_workspace_store = OrchestrationWorkspaceStore()
+    worker_probe_store = WorkerProbeStore()
 
     # Load from YAML configs
     workers_dir = cp_cfg.get("workers_config_dir", "config/workers")
@@ -111,6 +114,7 @@ async def lifespan(app: FastAPI):
         model_registry=model_registry,
         project_registry=project_registry,
         connection_resolver=connection_resolver,
+        worker_probe_store=worker_probe_store,
     )
     task_manager = TaskManager(
         scheduler,
@@ -162,6 +166,7 @@ async def lifespan(app: FastAPI):
     app.state.audit_log = audit_log
     app.state.repo_workspace_usage_store = repo_workspace_usage_store
     app.state.orchestration_workspace_store = orchestration_workspace_store
+    app.state.worker_probe_store = worker_probe_store
     app.state.scheduler = scheduler
     app.state.task_manager = task_manager
     app.state.pm_orchestrator = pm_orchestrator
@@ -184,18 +189,35 @@ async def lifespan(app: FastAPI):
     schedule_task = asyncio.create_task(
         _agent_schedule_loop(agent_schedule_engine, tick_seconds=schedule_tick_seconds)
     )
+    try:
+        configured_probe_interval = int(cp_cfg.get("worker_probe_interval_seconds", 120))
+    except (TypeError, ValueError):
+        configured_probe_interval = 120
+    probe_interval_seconds = min(3600, max(15, configured_probe_interval))
+    worker_probe_task = asyncio.create_task(
+        _worker_probe_loop(
+            worker_registry,
+            worker_probe_store,
+            interval_seconds=probe_interval_seconds,
+        )
+    )
 
     logger.info("NexusAI Control Plane started")
     yield
 
     heartbeat_task.cancel()
     schedule_task.cancel()
+    worker_probe_task.cancel()
     try:
         await heartbeat_task
     except asyncio.CancelledError:
         pass
     try:
         await schedule_task
+    except asyncio.CancelledError:
+        pass
+    try:
+        await worker_probe_task
     except asyncio.CancelledError:
         pass
     logger.info("NexusAI Control Plane stopped")
@@ -230,6 +252,27 @@ async def _agent_schedule_loop(agent_schedule_engine: AgentScheduleEngine, *, ti
             await agent_schedule_engine.tick_once()
         except Exception as e:
             logger.error("Agent schedule tick error: %s", e)
+
+
+async def _worker_probe_loop(
+    worker_registry: WorkerRegistry,
+    worker_probe_store: WorkerProbeStore,
+    *,
+    interval_seconds: int,
+) -> None:
+    """Continuously record runtime evidence without changing worker state."""
+    while True:
+        try:
+            workers = await worker_registry.list()
+            for worker in workers:
+                try:
+                    result = await probe_worker(worker)
+                    await worker_probe_store.record(result)
+                except Exception as exc:
+                    logger.warning("Worker probe failed for %s: %s", worker.id, exc)
+        except Exception as exc:
+            logger.error("Worker probe loop error: %s", exc)
+        await asyncio.sleep(max(15, int(interval_seconds)))
 
 
 def create_app() -> FastAPI:
