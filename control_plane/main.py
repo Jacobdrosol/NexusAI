@@ -12,6 +12,7 @@ from control_plane.agent_scheduler.engine import AgentScheduleEngine
 from control_plane.api import (
     assignments,
     audit,
+    bot_blueprints,
     bots,
     chat,
     database,
@@ -238,6 +239,7 @@ def create_app() -> FastAPI:
     install_observability(app)
 
     app.include_router(tasks.router)
+    app.include_router(bot_blueprints.router)
     app.include_router(bots.router)
     app.include_router(workers.router)
     app.include_router(projects.router)

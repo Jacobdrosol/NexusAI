@@ -643,7 +643,7 @@ def test_bot_detail_page_loads_when_logged_in(dashboard_client):
     assert b"Saved Launch Profile" in resp.data
     assert b"Backlog" in resp.data
     assert b"ollama_cloud" in resp.data
-    assert b"qwen3.5:cloud" in resp.data
+    assert b"qwen3.5:397b" in resp.data
     assert b"Auto: 1024 for local Ollama chat" in resp.data
     assert b"Context Window" in resp.data
     assert b"GPU Layers" in resp.data
@@ -2304,6 +2304,55 @@ def test_create_bot_uses_control_plane_when_available(dashboard_client):
     assert data["id"] == "my-test-bot"
     assert data["name"] == "My Test Bot"
     assert fake_cp.created["backends"] == []
+
+
+def test_bots_page_and_proxy_support_specialist_creation(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_bots(self):
+            return []
+
+        def list_workers(self):
+            return [{"id": "worker-1", "name": "Worker One"}]
+
+        def list_models(self):
+            return [{"name": "qwen3.5:cloud", "provider": "ollama_cloud"}]
+
+        def list_keys(self):
+            return [{"name": "ollama-cloud", "provider": "ollama_cloud"}]
+
+        def list_projects(self):
+            return [{"id": "project-1", "name": "Project One"}]
+
+        def list_bot_blueprints(self):
+            return {"blueprints": [{"kind": "researcher", "label": "Researcher"}]}
+
+        def preview_bot_blueprint(self, body):
+            return {"bot": {"id": "researcher", "name": body["name"]}}
+
+        def create_bot_blueprint(self, body):
+            return {"bot": {"id": "researcher", "name": body["name"]}}
+
+    fake_cp = FakeCP()
+    with patch("dashboard.cp_client.get_cp_client", return_value=fake_cp):
+        page = dashboard_client.get("/bots")
+        catalog = dashboard_client.get("/api/bot-blueprints")
+        preview = dashboard_client.post(
+            "/api/bot-blueprints/preview",
+            json={"name": "Researcher"},
+        )
+        created = dashboard_client.post(
+            "/api/bot-blueprints/create",
+            json={"name": "Researcher"},
+        )
+
+    assert page.status_code == 200
+    assert b"Create Specialist" in page.data
+    assert b"specialist-model-options" in page.data
+    assert catalog.get_json()["blueprints"][0]["kind"] == "researcher"
+    assert preview.get_json()["bot"]["id"] == "researcher"
+    assert created.status_code == 201
 
 
 def test_vault_upload_api_validates_required_fields(dashboard_client):

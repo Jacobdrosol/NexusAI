@@ -163,15 +163,36 @@ def _export_bundle(bot_payload: dict[str, Any], connections: list[dict[str, Any]
     }
 
 
+def _cp_catalog_items(cp, method_name: str) -> list[dict[str, Any]]:
+    method = getattr(cp, method_name, None)
+    if not callable(method):
+        return []
+    try:
+        result = method()
+    except Exception:
+        logger.exception("Unable to load bot creation catalog %s", method_name)
+        return []
+    return result if isinstance(result, list) else []
+
+
 @bp.get("/bots")
 @login_required
 def bots_page() -> str:
     """Render the bots table page."""
     from dashboard.cp_client import get_cp_client
 
-    cp_data = get_cp_client().list_bots()
+    cp = get_cp_client()
+    cp_data = cp.list_bots()
     if cp_data is not None:
-        return render_template("bots.html", bots=cp_data, error=None)
+        return render_template(
+            "bots.html",
+            bots=cp_data,
+            workers=_cp_catalog_items(cp, "list_workers"),
+            models=_cp_catalog_items(cp, "list_models"),
+            api_keys=_cp_catalog_items(cp, "list_keys"),
+            projects=_cp_catalog_items(cp, "list_projects"),
+            error=None,
+        )
 
     flash(get_cp_client().unavailable_reason(), "warning")
     db = get_db()
@@ -180,6 +201,10 @@ def bots_page() -> str:
         return render_template(
             "bots.html",
             bots=[_bot_to_dict(b) for b in bots],
+            workers=[],
+            models=[],
+            api_keys=[],
+            projects=[],
             error=None,
         )
     finally:
@@ -327,6 +352,51 @@ def api_create_bot():
         return jsonify(_bot_to_dict(bot)), 201
     finally:
         db.close()
+
+
+@bp.get("/api/bot-blueprints")
+@login_required
+def api_list_bot_blueprints():
+    from dashboard.cp_client import get_cp_client
+
+    cp = get_cp_client()
+    data = cp.list_bot_blueprints()
+    if data is None:
+        err = cp.last_error()
+        detail = str((err or {}).get("detail") or "failed to load specialist catalog")
+        status = int((err or {}).get("status_code") or 502)
+        return jsonify({"error": detail}), status if 400 <= status <= 599 else 502
+    return jsonify(data)
+
+
+@bp.post("/api/bot-blueprints/preview")
+@login_required
+def api_preview_bot_blueprint():
+    from dashboard.cp_client import get_cp_client
+
+    cp = get_cp_client()
+    data = cp.preview_bot_blueprint(request.get_json(silent=True) or {})
+    if data is None:
+        err = cp.last_error()
+        detail = str((err or {}).get("detail") or "failed to preview specialist bot")
+        status = int((err or {}).get("status_code") or 502)
+        return jsonify({"error": detail}), status if 400 <= status <= 599 else 502
+    return jsonify(data)
+
+
+@bp.post("/api/bot-blueprints/create")
+@login_required
+def api_create_bot_blueprint():
+    from dashboard.cp_client import get_cp_client
+
+    cp = get_cp_client()
+    data = cp.create_bot_blueprint(request.get_json(silent=True) or {})
+    if data is None:
+        err = cp.last_error()
+        detail = str((err or {}).get("detail") or "failed to create specialist bot")
+        status = int((err or {}).get("status_code") or 502)
+        return jsonify({"error": detail}), status if 400 <= status <= 599 else 502
+    return jsonify(data), 201
 
 
 @bp.get("/api/bots/<bot_id>")

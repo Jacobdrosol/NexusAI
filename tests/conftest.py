@@ -38,6 +38,7 @@ async def cp_app(tmp_path):
     from control_plane.api import (
         assignments,
         audit,
+        bot_blueprints,
         bots,
         chat,
         keys,
@@ -53,6 +54,7 @@ async def cp_app(tmp_path):
     app = FastAPI(title="NexusAI Control Plane Test")
     install_observability(app)
     app.include_router(tasks.router)
+    app.include_router(bot_blueprints.router)
     app.include_router(bots.router)
     app.include_router(workers_api.router)
     app.include_router(projects.router)

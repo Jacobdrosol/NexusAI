@@ -148,6 +148,18 @@ All services share **`data/nexusai.db`** (SQLite). Tables are created lazily on 
 - Workers are registered at startup (YAML seed) or self-register at runtime (worker agent `POST /v1/workers`).
 - Changes made in the dashboard are persisted to SQLite and override the YAML seed (unless `force_seed_bots_from_config: true`).
 
+### Specialist Blueprints
+
+`/v1/bot-blueprints` provides typed starting configurations for bounded worker roles such as researchers, content planners and writers, reviewers, support triage, marketing analysis, website incident review, and code review or implementation.
+
+- `GET /v1/bot-blueprints` lists the public specialist catalog.
+- `POST /v1/bot-blueprints/preview` composes a complete bot configuration without storing it.
+- `POST /v1/bot-blueprints/create` registers the composed bot after the operator selects its backend references.
+
+Blueprint requests refer to credentials only by existing key reference. They never accept or persist a raw API secret. New specialists are disabled by default. The code-implementer blueprint keeps repository output disabled until an operator explicitly grants scoped workspace write access; it cannot grant database, deployment, infrastructure, or credential access.
+
+The dashboard exposes this through **Bots → Create Specialist**, including a configuration preview before registration. Blueprint metadata is stored in the bot's `routing_rules.specialist` field so the operator can inspect the declared role, risk level, mission, project scope, and write grant on the bot detail page or through the API.
+
 ---
 
 ## Blue/Green Deployment
@@ -244,7 +256,7 @@ Operator → Platform AI Session (dashboard /platform-ai/)
 
 5. **Rate limit store is per-process**: `guards.py` stores rate limit buckets in `request.app.state`. Under multi-worker Gunicorn/uvicorn this is per-worker, not shared. Rate limits are not effective in multi-process deploys.
 
-6. **No task queue**: Tasks are dispatched synchronously inside `create_task()`. Under load, the HTTP call to the worker blocks the asyncio event loop for the duration of inference. A proper queue (Celery, ARQ, etc.) is absent.
+6. **In-process task runners**: Tasks are persisted before dispatch and run in bounded background `asyncio` slots, but there is no separate durable worker-queue service. A control-plane restart interrupts in-flight runners and high-volume deployments may still need a dedicated queue such as Celery, ARQ, or a broker-backed runner.
 
 7. **`_extract_scope_lock` heuristics are fragile**: The scope lock extraction in `pm_orchestrator.py` uses keyword matching on a small hardcoded phrase catalog. It does not generalise well to arbitrary instructions.
 

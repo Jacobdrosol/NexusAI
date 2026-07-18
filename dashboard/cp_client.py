@@ -192,6 +192,15 @@ class CPClient:
     def create_bot(self, bot: Dict) -> Optional[Dict]:
         return self._post("/v1/bots", bot)
 
+    def list_bot_blueprints(self) -> Optional[Dict[str, Any]]:
+        return self._get("/v1/bot-blueprints")
+
+    def preview_bot_blueprint(self, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        return self._post("/v1/bot-blueprints/preview", body)
+
+    def create_bot_blueprint(self, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        return self._post("/v1/bot-blueprints/create", body)
+
     def update_bot(self, bot_id: str, bot: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return self._put(f"/v1/bots/{bot_id}", bot)
 

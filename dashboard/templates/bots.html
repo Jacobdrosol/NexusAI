@@ -6,6 +6,7 @@
   <h1>Bots</h1>
   <div style="display:flex;gap:0.5rem;">
     <button class="btn" type="button" onclick="triggerBotImport()">Import Bot(s)</button>
+    <button class="btn" type="button" onclick="openSpecialistModal()">Create Specialist</button>
     <button class="btn btn-primary" onclick="showAddBot()">+ Add Bot</button>
   </div>
 </div>
@@ -57,11 +58,250 @@
     </form>
   </div>
 </div>
+
+<div id="modal-create-specialist" class="modal" style="display:none;">
+  <div class="modal-content" style="max-width:780px;">
+    <h2>Create Specialist</h2>
+    <form id="form-create-specialist">
+      <div class="split-grid" style="grid-template-columns:1fr 1fr;gap:0.75rem;">
+        <div class="form-group">
+          <label for="specialist-kind">Specialty</label>
+          <select class="form-control" id="specialist-kind" name="kind" required></select>
+        </div>
+        <div class="form-group">
+          <label for="specialist-name">Name</label>
+          <input class="form-control" id="specialist-name" name="name" maxlength="120" required>
+        </div>
+      </div>
+      <div id="specialist-description" class="mini-note" style="margin:-0.2rem 0 0.75rem;"></div>
+      <div class="split-grid" style="grid-template-columns:1fr 1fr;gap:0.75rem;">
+        <div class="form-group">
+          <label for="specialist-backend-type">Backend Type</label>
+          <select class="form-control" id="specialist-backend-type" name="backend_type">
+            <option value="cloud_api">Cloud API</option>
+            <option value="remote_llm">Remote Worker</option>
+            <option value="local_llm">Local Worker</option>
+            <option value="cli">CLI Worker</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="specialist-provider">Provider</label>
+          <input class="form-control" id="specialist-provider" name="provider" list="specialist-provider-options" placeholder="ollama_cloud" required>
+          <datalist id="specialist-provider-options">
+            <option value="ollama_cloud"></option>
+            <option value="ollama"></option>
+            <option value="openai"></option>
+            <option value="claude"></option>
+            <option value="gemini"></option>
+          </datalist>
+        </div>
+      </div>
+      <div class="split-grid" style="grid-template-columns:1fr 1fr;gap:0.75rem;">
+        <div class="form-group">
+          <label for="specialist-model">Model</label>
+          <input class="form-control" id="specialist-model" name="model" list="specialist-model-options" required>
+          <datalist id="specialist-model-options"></datalist>
+        </div>
+        <div class="form-group">
+          <label for="specialist-worker">Worker (when applicable)</label>
+          <select class="form-control" id="specialist-worker" name="worker_id">
+            <option value="">No worker binding</option>
+            {% for worker in workers %}
+            <option value="{{ worker.id }}">{{ worker.name }} ({{ worker.id }})</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+      <div class="split-grid" style="grid-template-columns:1fr 1fr;gap:0.75rem;">
+        <div class="form-group">
+          <label for="specialist-key">Credential Reference</label>
+          <select class="form-control" id="specialist-key" name="api_key_ref">
+            <option value="">No credential reference</option>
+            {% for key in api_keys %}
+            <option value="{{ key.name }}">{{ key.name }} ({{ key.provider }})</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="specialist-project">Project Scope</label>
+          <select class="form-control" id="specialist-project" name="project_id">
+            <option value="">No project binding</option>
+            {% for project in projects %}
+            <option value="{{ project.id }}">{{ project.name }} ({{ project.id }})</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="specialist-mission">Mission (optional)</label>
+        <textarea class="form-control" id="specialist-mission" name="mission" rows="3" maxlength="4000"></textarea>
+      </div>
+      <div class="split-grid" style="grid-template-columns:1fr 1fr;gap:0.75rem;">
+        <div class="form-group">
+          <label><input type="checkbox" id="specialist-activate" name="activate"> Create enabled</label>
+        </div>
+        <div class="form-group" id="specialist-write-option" style="display:none;">
+          <label><input type="checkbox" id="specialist-allow-writes" name="allow_repo_writes"> Allow scoped repository writes</label>
+        </div>
+      </div>
+      <div id="specialist-status" class="mini-note" style="margin-bottom:0.75rem;"></div>
+      <details id="specialist-preview-wrap" style="display:none;margin-bottom:0.75rem;">
+        <summary style="cursor:pointer;">Configuration Preview</summary>
+        <pre id="specialist-preview" style="margin-top:0.65rem;max-height:270px;overflow:auto;white-space:pre-wrap;"></pre>
+      </details>
+      <div class="modal-actions">
+        <button type="button" class="btn" onclick="previewSpecialist()">Preview</button>
+        <button type="submit" class="btn btn-primary">Create Specialist</button>
+        <button type="button" class="btn" onclick="closeSpecialistModal()">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
 {% endblock %}
 {% block scripts %}
 <script>
+const SPECIALIST_MODELS = {{ models|tojson }};
+let SPECIALIST_CATALOG = [];
+
 function showAddBot() { document.getElementById('modal-add-bot').style.display='flex'; }
 function hideModal(id) { document.getElementById(id).style.display='none'; }
+
+function specialistCsrf() {
+  const el = document.querySelector('input[name=csrf_token]');
+  return el ? el.value : '';
+}
+
+function setSpecialistStatus(message, isError=false) {
+  const el = document.getElementById('specialist-status');
+  if (!el) return;
+  el.textContent = String(message || '');
+  el.style.color = isError ? '#dc2626' : '#64748b';
+}
+
+function selectedSpecialist() {
+  const kind = String(document.getElementById('specialist-kind')?.value || '');
+  return SPECIALIST_CATALOG.find((item) => String(item.kind) === kind) || null;
+}
+
+function refreshSpecialistDetails() {
+  const selected = selectedSpecialist();
+  const description = document.getElementById('specialist-description');
+  const writeOption = document.getElementById('specialist-write-option');
+  if (description) description.textContent = selected ? selected.description : '';
+  if (writeOption) writeOption.style.display = selected?.supports_repo_writes ? 'block' : 'none';
+  if (!selected?.supports_repo_writes) {
+    const writes = document.getElementById('specialist-allow-writes');
+    if (writes) writes.checked = false;
+  }
+}
+
+function refreshSpecialistModels() {
+  const provider = String(document.getElementById('specialist-provider')?.value || '').trim().toLowerCase();
+  const options = document.getElementById('specialist-model-options');
+  if (!options) return;
+  const names = [];
+  (SPECIALIST_MODELS || []).forEach((model) => {
+    if (provider && String(model.provider || '').toLowerCase() !== provider) return;
+    const name = String(model.name || '').trim();
+    if (name && !names.includes(name)) names.push(name);
+  });
+  options.innerHTML = names.map((name) => `<option value="${name}"></option>`).join('');
+}
+
+async function loadSpecialistCatalog() {
+  if (SPECIALIST_CATALOG.length) return true;
+  const response = await fetch('/api/bot-blueprints');
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    setSpecialistStatus(data.error || 'Unable to load specialist catalog.', true);
+    return false;
+  }
+  SPECIALIST_CATALOG = Array.isArray(data.blueprints) ? data.blueprints : [];
+  const select = document.getElementById('specialist-kind');
+  select.innerHTML = SPECIALIST_CATALOG.map((item) => `<option value="${item.kind}">${item.label}</option>`).join('');
+  refreshSpecialistDetails();
+  return true;
+}
+
+async function openSpecialistModal() {
+  document.getElementById('modal-create-specialist').style.display = 'flex';
+  setSpecialistStatus('');
+  await loadSpecialistCatalog();
+}
+
+function closeSpecialistModal() {
+  document.getElementById('modal-create-specialist').style.display = 'none';
+}
+
+function specialistPayload() {
+  const form = document.getElementById('form-create-specialist');
+  const fd = new FormData(form);
+  const backendType = String(fd.get('backend_type') || '').trim();
+  const workerId = String(fd.get('worker_id') || '').trim();
+  const provider = String(fd.get('provider') || '').trim();
+  const model = String(fd.get('model') || '').trim();
+  if (!provider || !model) throw new Error('Provider and model are required.');
+  if ((backendType === 'remote_llm' || backendType === 'local_llm' || backendType === 'cli') && !workerId) {
+    throw new Error('The selected backend type requires a worker binding.');
+  }
+  return {
+    kind: String(fd.get('kind') || '').trim(),
+    name: String(fd.get('name') || '').trim(),
+    mission: String(fd.get('mission') || '').trim() || null,
+    project_id: String(fd.get('project_id') || '').trim() || null,
+    activate: !!document.getElementById('specialist-activate')?.checked,
+    allow_repo_writes: !!document.getElementById('specialist-allow-writes')?.checked,
+    backends: [{
+      type: backendType,
+      provider,
+      model,
+      worker_id: workerId || null,
+      api_key_ref: String(fd.get('api_key_ref') || '').trim() || null,
+    }],
+  };
+}
+
+async function previewSpecialist() {
+  try {
+    const payload = specialistPayload();
+    if (!payload.kind || !payload.name) throw new Error('Specialty and name are required.');
+    setSpecialistStatus('Generating configuration preview...');
+    const response = await fetch('/api/bot-blueprints/preview', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-CSRFToken': specialistCsrf()},
+      body: JSON.stringify(payload),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Unable to preview specialist.');
+    document.getElementById('specialist-preview').textContent = JSON.stringify(data.bot || {}, null, 2);
+    document.getElementById('specialist-preview-wrap').style.display = 'block';
+    setSpecialistStatus('Preview generated.');
+  } catch (error) {
+    setSpecialistStatus(error.message || 'Unable to preview specialist.', true);
+  }
+}
+
+document.getElementById('specialist-kind').addEventListener('change', refreshSpecialistDetails);
+document.getElementById('specialist-provider').addEventListener('input', refreshSpecialistModels);
+
+document.getElementById('form-create-specialist').addEventListener('submit', async function(event) {
+  event.preventDefault();
+  try {
+    const payload = specialistPayload();
+    if (!payload.kind || !payload.name) throw new Error('Specialty and name are required.');
+    setSpecialistStatus('Creating specialist...');
+    const response = await fetch('/api/bot-blueprints/create', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-CSRFToken': specialistCsrf()},
+      body: JSON.stringify(payload),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Unable to create specialist.');
+    window.location.assign('/bots/' + encodeURIComponent(data.bot.id));
+  } catch (error) {
+    setSpecialistStatus(error.message || 'Unable to create specialist.', true);
+  }
+});
 
 document.getElementById('form-add-bot').addEventListener('submit', async function(e) {
   e.preventDefault();

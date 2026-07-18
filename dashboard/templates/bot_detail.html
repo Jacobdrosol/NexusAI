@@ -124,6 +124,25 @@
   {% endif %}
 </section>
 
+{% set specialist = bot.routing_rules.specialist if bot.routing_rules and bot.routing_rules.specialist else None %}
+{% if specialist %}
+<section class="panel" style="margin-bottom:1rem;">
+  <h2 class="panel-title">Specialist Scope</h2>
+  <div class="split-grid" style="grid-template-columns:1fr 1fr;">
+    <div>
+      <div><strong>Type:</strong> <code>{{ specialist.kind }}</code></div>
+      <div><strong>Risk Level:</strong> <code>{{ specialist.risk_level }}</code></div>
+      <div><strong>Project:</strong> <code>{{ specialist.project_id or '—' }}</code></div>
+    </div>
+    <div>
+      <div><strong>Review Required:</strong> {{ 'yes' if specialist.operator_review_required else 'no' }}</div>
+      <div><strong>Repository Write Granted:</strong> {{ 'yes' if specialist.repo_write_granted else 'no' }}</div>
+      {% if specialist.mission %}<div style="margin-top:0.5rem;"><strong>Mission:</strong> {{ specialist.mission }}</div>{% endif %}
+    </div>
+  </div>
+</section>
+{% endif %}
+
 <section class="panel" style="margin-bottom:1rem;">
   <div class="page-header" style="margin-bottom:0.75rem;">
     <h2 class="panel-title">Workflow Orchestration</h2>
