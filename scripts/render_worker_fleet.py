@@ -17,7 +17,15 @@ import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_PROFILE = ROOT / "deploy" / "worker-fleet" / "workers.example.yaml"
-DEFAULT_OUTPUT_DIR = ROOT / "runtime" / "worker-fleet"
+
+
+def _default_output_dir() -> Path:
+    configured_root = str(os.environ.get("NEXUSAI_PRIVATE_CONFIG_DIR") or "").strip()
+    private_root = Path(configured_root).expanduser() if configured_root else Path.home() / ".nexusai"
+    return private_root / "worker-fleet"
+
+
+DEFAULT_OUTPUT_DIR = _default_output_dir()
 _ENV_NAME = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 _RESERVED_WORKER_ENV = {
     "NEXUS_WORKER_CONFIG_PATH",
@@ -633,7 +641,7 @@ def wait_workers(worker_ids: list[str], *, api_url: str, api_token: str, timeout
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Render and optionally apply a NexusAI worker-node fleet.")
     parser.add_argument("--profile", default=str(DEFAULT_PROFILE), help="Worker fleet YAML profile.")
-    parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR), help="Ignored runtime output directory.")
+    parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR), help="Private generated runtime output directory.")
     parser.add_argument("--env-file", action="append", default=[str(ROOT / ".env")], help="Env file to read. May be repeated.")
     parser.add_argument("--allow-missing-ollama-key", action="store_true", help="Render ollama_cloud workers even when OLLAMA_API_KEY is not set.")
     parser.add_argument("--apply-bots", action="store_true", help="Create or update rendered bot records in the control plane.")

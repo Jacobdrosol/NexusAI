@@ -18,6 +18,15 @@ def _load_renderer():
     return module
 
 
+def test_worker_fleet_default_output_uses_configured_private_root(monkeypatch, tmp_path):
+    monkeypatch.setenv("NEXUSAI_PRIVATE_CONFIG_DIR", str(tmp_path / "private-nexusai"))
+
+    renderer = _load_renderer()
+
+    assert renderer.DEFAULT_OUTPUT_DIR == tmp_path / "private-nexusai" / "worker-fleet"
+    assert not renderer.DEFAULT_OUTPUT_DIR.is_relative_to(renderer.ROOT)
+
+
 def _profile(path: Path) -> Path:
     path.write_text(
         yaml.safe_dump(
