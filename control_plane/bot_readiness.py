@@ -104,6 +104,14 @@ async def assess_bot_instance_readiness(
             if worker.status != "online":
                 checks.append(_check(label, "failed", f"Worker '{worker_id}' is {worker.status}.", backend_index=index))
                 continue
+            attestation_blocker = await _worker_attestation_blocker(
+                worker_id=worker_id,
+                backend=backend,
+                worker_probe_store=worker_probe_store,
+            )
+            if attestation_blocker:
+                checks.append(_check(label, "failed", attestation_blocker, backend_index=index))
+                continue
             if not _worker_supports_backend(worker, backend):
                 checks.append(
                     _check(
@@ -124,14 +132,6 @@ async def assess_bot_instance_readiness(
                         backend_index=index,
                     )
                 )
-                continue
-            attestation_blocker = await _worker_attestation_blocker(
-                worker_id=worker_id,
-                backend=backend,
-                worker_probe_store=worker_probe_store,
-            )
-            if attestation_blocker:
-                checks.append(_check(label, "failed", attestation_blocker, backend_index=index))
                 continue
             checks.append(_check(label, "ready", f"Worker '{worker_id}' is online and supports this backend.", backend_index=index))
             continue
