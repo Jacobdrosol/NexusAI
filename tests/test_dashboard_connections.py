@@ -264,6 +264,9 @@ def test_bot_import_can_overwrite_existing_bot_config_and_connections(dashboard_
             self.bots[bot_id] = dict(body)
             return self.bots[bot_id]
 
+        def preflight_bot(self, body):
+            return {"bot_id": body["id"], "candidate_enabled": bool(body.get("enabled")), "ready_to_enable": True, "readiness": {"ready": True}}
+
         def create_bot(self, body):
             self.bots[body["id"]] = dict(body)
             return self.bots[body["id"]]
@@ -298,6 +301,7 @@ def test_bot_import_can_overwrite_existing_bot_config_and_connections(dashboard_
                 "enabled": True,
                 "system_prompt": "Imported prompt",
                 "backends": [{"type": "cloud_api", "provider": "openai", "model": "gpt-4.1-mini"}],
+                "context_access": {"receives": ["instruction"], "can_self_serve": ["repo"]},
                 "routing_rules": {
                     "launch_profile": {"enabled": True, "label": "Imported Launch", "payload": {"instruction": "go"}}
                 },
@@ -325,14 +329,73 @@ def test_bot_import_can_overwrite_existing_bot_config_and_connections(dashboard_
         body = import_resp.get_json()
         assert body["overwritten"] is True
         assert body["bot"]["name"] == "Imported Bot"
-        assert fake_cp.deleted_bot_ids == ["course-bot"]
-        assert fake_cp.updated_bot_ids == []
+        assert body["bot"]["context_access"] == {"receives": ["instruction"], "can_self_serve": ["repo"]}
+        assert fake_cp.deleted_bot_ids == []
+        assert fake_cp.updated_bot_ids == ["course-bot"]
 
         list_resp = dashboard_client.get("/api/bots/course-bot/connections")
         assert list_resp.status_code == 200
         rows = list_resp.get_json()
         assert len(rows) == 1
         assert rows[0]["name"] == "Imported API"
+
+
+def test_bot_import_keeps_existing_bot_when_enabled_candidate_is_unready(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def __init__(self):
+            self._last_error = {}
+            self.updated_bot_ids = []
+            self.bots = {
+                "guarded-bot": {
+                    "id": "guarded-bot",
+                    "name": "Existing Bot",
+                    "role": "assistant",
+                    "enabled": True,
+                    "backends": [],
+                }
+            }
+
+        def get_bot(self, bot_id):
+            bot = self.bots.get(bot_id)
+            self._last_error = {} if bot else {"status_code": 404, "detail": "not found"}
+            return bot
+
+        def preflight_bot(self, body):
+            return {"bot_id": body["id"], "candidate_enabled": True, "ready_to_enable": False, "readiness": {"ready": False}}
+
+        def update_bot(self, bot_id, body):
+            self.updated_bot_ids.append(bot_id)
+            self.bots[bot_id] = dict(body)
+            return self.bots[bot_id]
+
+        def create_bot(self, body):
+            raise AssertionError("unready import must not create a bot")
+
+        def last_error(self):
+            return self._last_error
+
+    fake_cp = FakeCP()
+    bundle = {
+        "schema_version": "nexusai.bot-export.v1",
+        "bot": {
+            "id": "guarded-bot",
+            "name": "Unready Replacement",
+            "role": "worker",
+            "enabled": True,
+            "backends": [{"type": "remote_llm", "worker_id": "missing-worker", "provider": "ollama_cloud", "model": "ready-model"}],
+        },
+        "connections": [],
+    }
+
+    with patch("dashboard.cp_client.get_cp_client", return_value=fake_cp):
+        response = dashboard_client.post("/api/bots/import", json={"bundle": bundle, "overwrite": True})
+
+    assert response.status_code == 409
+    assert response.get_json()["reason_code"] == "bot_not_ready"
+    assert fake_cp.updated_bot_ids == []
+    assert fake_cp.bots["guarded-bot"]["name"] == "Existing Bot"
 
 
 def test_project_database_connection_create_test_and_schema_ingest(dashboard_client):

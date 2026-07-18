@@ -148,6 +148,55 @@ async def _require_bot_ready_to_enable(bot: Bot, request: Request) -> None:
         )
 
 
+async def _preflight_bot_payload(payload: Any, request: Request) -> Dict[str, Any]:
+    """Validate a staged bot without registering, enabling, or dispatching it."""
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Bot payload must be a JSON object.")
+    try:
+        bot = Bot.model_validate(payload)
+    except ValidationError as exc:
+        validation_errors = [
+            {
+                "field_path": ".".join(str(part) for part in item.get("loc") or []),
+                "message": str(item.get("msg") or "Invalid value"),
+                "error_type": str(item.get("type") or "").strip() or None,
+            }
+            for item in exc.errors()
+        ]
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "reason_code": "bot_validation_failed",
+                "message": "Bot payload failed schema validation.",
+                "validation_errors": validation_errors,
+            },
+        ) from exc
+
+    policy_errors = validate_bot_configuration(bot)
+    if policy_errors:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "reason_code": "bot_validation_failed",
+                "message": "Bot payload failed workflow validation.",
+                "validation_errors": _policy_validation_errors(policy_errors),
+            },
+        )
+
+    readiness = await assess_bot_instance_readiness(
+        bot.model_copy(update={"enabled": True}),
+        worker_registry=request.app.state.worker_registry,
+        connection_resolver=request.app.state.connection_resolver,
+        worker_probe_store=request.app.state.worker_probe_store,
+    )
+    return {
+        "bot_id": bot.id,
+        "candidate_enabled": bool(bot.enabled),
+        "ready_to_enable": bool(readiness.get("ready")),
+        "readiness": readiness,
+    }
+
+
 def _settings_int(name: str, default: int) -> int:
     try:
         return int(SettingsManager.instance().get(name, default))
@@ -249,6 +298,8 @@ def _resolve_external_payload(config: Dict[str, Any], body: Any) -> Any:
 async def create_bot(request: Request, payload: Any = Body(...)) -> Bot:
     bot = _parse_bot_payload_or_400(payload)
     _validate_bot_or_400(bot)
+    if bot.enabled and bot.backends:
+        await _require_bot_ready_to_enable(bot, request)
     bot_registry = request.app.state.bot_registry
     await bot_registry.register(bot)
     await record_audit_event(request, action="bots.create", resource=f"bot:{bot.id}")
@@ -259,6 +310,12 @@ async def create_bot(request: Request, payload: Any = Body(...)) -> Bot:
 async def list_bots(request: Request) -> List[Bot]:
     bot_registry = request.app.state.bot_registry
     return await bot_registry.list()
+
+
+@router.post("/preflight")
+async def preflight_bot(request: Request, payload: Any = Body(...)) -> Dict[str, Any]:
+    """Return non-secret schema, policy, and dispatch readiness for a staged bot."""
+    return await _preflight_bot_payload(payload, request)
 
 
 @router.get("/readiness")
@@ -320,7 +377,12 @@ async def update_bot(bot_id: str, request: Request, payload: Any = Body(...)) ->
     bot_registry = request.app.state.bot_registry
     try:
         current = await bot_registry.get(bot_id)
-        if not current.enabled and bot.enabled:
+        requires_readiness_check = bot.enabled and (
+            not current.enabled
+            or current.backends != bot.backends
+            or current.execution_policy != bot.execution_policy
+        )
+        if requires_readiness_check:
             await _require_bot_ready_to_enable(bot, request)
         await bot_registry.update(bot_id, bot)
         await record_audit_event(request, action="bots.update", resource=f"bot:{bot_id}")

@@ -74,6 +74,7 @@ async def test_bot_readiness_does_not_use_cloud_fallback_for_required_worker_too
             "id": "fallback-tools-bot",
             "name": "Fallback Tools Bot",
             "role": "worker",
+            "enabled": False,
             "backends": [
                 {
                     "type": "remote_llm",
@@ -304,6 +305,49 @@ async def test_bot_enable_requires_a_ready_backend(cp_client):
 
 
 @pytest.mark.anyio
+async def test_bot_preflight_reports_unready_backend_without_registering_it(cp_client):
+    response = await cp_client.post(
+        "/v1/bots/preflight",
+        json={
+            "id": "preflight-unready-bot",
+            "name": "Preflight Unready Bot",
+            "role": "worker",
+            "enabled": True,
+            "backends": [
+                {"type": "remote_llm", "worker_id": "missing-worker", "provider": "ollama_cloud", "model": "ready-model"}
+            ],
+        },
+    )
+    stored = await cp_client.get("/v1/bots/preflight-unready-bot")
+
+    assert response.status_code == 200
+    assert response.json()["ready_to_enable"] is False
+    assert response.json()["readiness"]["ready"] is False
+    assert stored.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_bot_create_rejects_enabled_unready_backend(cp_client):
+    response = await cp_client.post(
+        "/v1/bots",
+        json={
+            "id": "create-unready-bot",
+            "name": "Create Unready Bot",
+            "role": "worker",
+            "enabled": True,
+            "backends": [
+                {"type": "remote_llm", "worker_id": "missing-worker", "provider": "ollama_cloud", "model": "ready-model"}
+            ],
+        },
+    )
+    stored = await cp_client.get("/v1/bots/create-unready-bot")
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason_code"] == "bot_not_ready"
+    assert stored.status_code == 404
+
+
+@pytest.mark.anyio
 async def test_bot_enable_allows_a_ready_worker_backend(cp_client):
     worker_id = "enable-ready-worker"
     bot_id = "enable-ready-bot"
@@ -365,6 +409,41 @@ async def test_bot_update_cannot_bypass_readiness_on_activation(cp_client):
 
 
 @pytest.mark.anyio
+async def test_enabled_bot_backend_update_requires_fresh_readiness(cp_client):
+    bot_id = "backend-update-bot"
+    created = await cp_client.post(
+        "/v1/bots",
+        json={
+            "id": bot_id,
+            "name": "Backend Update Bot",
+            "role": "worker",
+            "enabled": True,
+            "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "ready-model"}],
+        },
+    )
+    updated = await cp_client.put(
+        f"/v1/bots/{bot_id}",
+        json={
+            "id": bot_id,
+            "name": "Backend Update Bot",
+            "role": "worker",
+            "enabled": True,
+            "backends": [
+                {"type": "remote_llm", "worker_id": "missing-worker", "provider": "ollama_cloud", "model": "ready-model"}
+            ],
+        },
+    )
+    current = await cp_client.get(f"/v1/bots/{bot_id}")
+
+    assert created.status_code == 200
+    assert updated.status_code == 409
+    assert updated.json()["detail"]["reason_code"] == "bot_not_ready"
+    assert current.json()["backends"][0]["type"] == "cloud_api"
+    assert current.json()["backends"][0]["provider"] == "ollama_cloud"
+    assert current.json()["backends"][0]["model"] == "ready-model"
+
+
+@pytest.mark.anyio
 async def test_bot_readiness_requires_declared_worker_tools(cp_client):
     worker_id = "browser-worker"
     await cp_client.post(
@@ -374,6 +453,7 @@ async def test_bot_readiness_requires_declared_worker_tools(cp_client):
             "name": "Browser Worker",
             "host": "browser-worker",
             "port": 8001,
+            "status": "online",
             "capabilities": [{"type": "llm", "provider": "ollama_cloud", "models": ["ready-model"]}],
         },
     )
@@ -383,6 +463,7 @@ async def test_bot_readiness_requires_declared_worker_tools(cp_client):
             "id": "browser-bot",
             "name": "Browser Bot",
             "role": "worker",
+            "enabled": False,
             "backends": [{"type": "remote_llm", "worker_id": worker_id, "provider": "ollama_cloud", "model": "ready-model"}],
             "execution_policy": {"required_worker_tools": ["browser-ui"]},
         },
@@ -407,6 +488,19 @@ async def test_bot_readiness_requires_declared_worker_tools(cp_client):
             ],
         },
     )
+
+    activated = await cp_client.put(
+        "/v1/bots/browser-bot",
+        json={
+            "id": "browser-bot",
+            "name": "Browser Bot",
+            "role": "worker",
+            "enabled": True,
+            "backends": [{"type": "remote_llm", "worker_id": worker_id, "provider": "ollama_cloud", "model": "ready-model"}],
+            "execution_policy": {"required_worker_tools": ["browser-ui"]},
+        },
+    )
+    assert activated.status_code == 200
 
     ready = await cp_client.get("/v1/bots/browser-bot/readiness")
     assert ready.status_code == 200

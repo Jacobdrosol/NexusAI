@@ -515,7 +515,7 @@ def api_import_bot():
             return jsonify({"error": str((err or {}).get("detail") or "bot import requires control plane access")}), status
 
     if existing is not None and not overwrite:
-        return jsonify({"error": "bot id already exists", "bot_id": bot_id}), 409
+        return jsonify({"error": "bot id already exists", "reason_code": "bot_id_conflict", "bot_id": bot_id}), 409
 
     import_payload = {
         "id": bot_id,
@@ -525,21 +525,31 @@ def api_import_bot():
         "enabled": bool(bot_payload.get("enabled", True)),
         "system_prompt": bot_payload.get("system_prompt"),
         "backends": bot_payload.get("backends", []),
+        "context_access": bot_payload.get("context_access"),
         "assignment_capabilities": bot_payload.get("assignment_capabilities"),
         "execution_policy": bot_payload.get("execution_policy"),
         "routing_rules": _merge_routing_rules(bot_payload, existing=bot_payload.get("routing_rules")),
         "workflow": bot_payload.get("workflow"),
     }
 
+    preflight = cp.preflight_bot(import_payload)
+    if preflight is None:
+        err = cp.last_error()
+        status = int((err or {}).get("status_code") or 502)
+        if status < 400 or status > 599:
+            status = 502
+        return jsonify({"error": str((err or {}).get("detail") or "bot import preflight failed")}), status
+    if bool(import_payload["enabled"]) and not bool(preflight.get("ready_to_enable")):
+        return jsonify(
+            {
+                "error": f"Bot '{bot_id}' is not ready to enable. Import it disabled or correct the reported worker/backend blockers.",
+                "reason_code": "bot_not_ready",
+                "readiness": preflight.get("readiness"),
+            }
+        ), 409
+
     if existing is not None:
-        deleted = cp.delete_bot(bot_id)
-        if not deleted:
-            err = cp.last_error()
-            status = int((err or {}).get("status_code") or 502)
-            if status < 400 or status > 599:
-                status = 502
-            return jsonify({"error": str((err or {}).get("detail") or "failed to replace existing bot")}), status
-        saved = cp.create_bot(import_payload)
+        saved = cp.update_bot(bot_id, import_payload)
     else:
         saved = cp.create_bot(import_payload)
     if saved is None:

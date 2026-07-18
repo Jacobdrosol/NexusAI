@@ -213,6 +213,9 @@ class CPClient:
     def create_bot(self, bot: Dict) -> Optional[Dict]:
         return self._post("/v1/bots", bot)
 
+    def preflight_bot(self, bot: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        return self._post("/v1/bots/preflight", bot)
+
     def list_bot_blueprints(self) -> Optional[Dict[str, Any]]:
         return self._get("/v1/bot-blueprints")
 

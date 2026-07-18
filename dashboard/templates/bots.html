@@ -430,7 +430,7 @@ function submitBotImport(bundle, overwrite, fileName) {
   })
   .then(async (r) => {
     const data = await r.json().catch(() => ({}));
-    if (r.status === 409) {
+    if (r.status === 409 && data.reason_code === 'bot_id_conflict') {
       const targetBotId = String(data.bot_id || (((bundle || {}).bot || {}).id) || fileName || 'this bot');
       const confirmOverwrite = window.confirm('A bot with id "' + targetBotId + '" already exists. Overwrite it?');
       if (!confirmOverwrite) return null;
