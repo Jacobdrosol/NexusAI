@@ -189,6 +189,9 @@ class CPClient:
     def get_bot(self, bot_id: str) -> Optional[Dict]:
         return self._get(f"/v1/bots/{bot_id}")
 
+    def get_bot_readiness(self, bot_id: str) -> Optional[Dict[str, Any]]:
+        return self._get(f"/v1/bots/{bot_id}/readiness")
+
     def create_bot(self, bot: Dict) -> Optional[Dict]:
         return self._post("/v1/bots", bot)
 

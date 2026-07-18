@@ -6,6 +6,7 @@ from fastapi import APIRouter, Body, HTTPException, Query, Request
 from pydantic import ValidationError
 
 from control_plane.audit.utils import record_audit_event
+from control_plane.bot_readiness import assess_bot_readiness
 from control_plane.security.guards import enforce_body_size, enforce_rate_limit
 from shared.exceptions import BotNotFoundError
 from shared.bot_policy import validate_bot_configuration
@@ -238,6 +239,19 @@ async def create_bot(request: Request, payload: Any = Body(...)) -> Bot:
 async def list_bots(request: Request) -> List[Bot]:
     bot_registry = request.app.state.bot_registry
     return await bot_registry.list()
+
+
+@router.get("/{bot_id}/readiness")
+async def get_bot_readiness(bot_id: str, request: Request) -> Dict[str, Any]:
+    try:
+        return await assess_bot_readiness(
+            bot_id,
+            bot_registry=request.app.state.bot_registry,
+            worker_registry=request.app.state.worker_registry,
+            connection_resolver=request.app.state.connection_resolver,
+        )
+    except BotNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/{bot_id}", response_model=Bot)

@@ -219,6 +219,8 @@ def bot_detail_page(bot_id: str):
 
     cp = get_cp_client()
     cp_bot = cp.get_bot(bot_id)
+    readiness_getter = getattr(cp, "get_bot_readiness", None)
+    cp_readiness = readiness_getter(bot_id) if callable(readiness_getter) else None
     cp_tasks = _cp_list_tasks_safe(cp, bot_id=bot_id, limit=300, include_content=False)
     cp_runs = cp.list_bot_runs(bot_id) or []
     cp_artifacts = cp.list_bot_artifacts(bot_id, limit=300, include_content=False) or []
@@ -237,6 +239,7 @@ def bot_detail_page(bot_id: str):
             workers=cp_workers,
             models=cp_models,
             api_keys=cp_keys,
+            readiness=cp_readiness,
             error=None,
         )
 
@@ -272,6 +275,7 @@ def bot_detail_page(bot_id: str):
             workers=[],
             models=[],
             api_keys=[],
+            readiness=None,
             error=None,
         )
     finally:

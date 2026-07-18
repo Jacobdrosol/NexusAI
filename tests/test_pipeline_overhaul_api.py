@@ -746,6 +746,18 @@ async def test_platform_ai_session_patch_project_and_target_context(cp_client):
 @pytest.mark.anyio
 async def test_agent_scheduler_create_and_manual_trigger(cp_client):
     bot_id = "scheduled-bot"
+    worker_id = "scheduled-worker"
+    worker_resp = await cp_client.post(
+        "/v1/workers",
+        json={
+            "id": worker_id,
+            "name": "Scheduled Worker",
+            "host": "scheduled-worker",
+            "port": 8001,
+            "capabilities": [{"type": "llm", "provider": "ollama_cloud", "models": ["scheduled-model"]}],
+        },
+    )
+    assert worker_resp.status_code == 200
     bot_resp = await cp_client.post(
         "/v1/bots",
         json={
@@ -753,7 +765,7 @@ async def test_agent_scheduler_create_and_manual_trigger(cp_client):
             "name": "Scheduled Bot",
             "role": "worker",
             "enabled": True,
-            "backends": [],
+            "backends": [{"type": "remote_llm", "worker_id": worker_id, "provider": "ollama_cloud", "model": "scheduled-model"}],
         },
     )
     assert bot_resp.status_code == 200

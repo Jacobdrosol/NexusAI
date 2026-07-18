@@ -6,9 +6,41 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from control_plane.audit.utils import record_audit_event
+from control_plane.bot_readiness import assess_bot_readiness
 
 
 router = APIRouter(prefix="/v1/schedules", tags=["schedules"])
+
+
+async def _require_schedule_target_ready(
+    request: Request,
+    schedule: Dict[str, Any],
+    *,
+    only_when_active: bool,
+) -> None:
+    if only_when_active and str(schedule.get("status") or "").strip().lower() != "active":
+        return
+    bot_id = str(schedule.get("assignment_pm_bot_id") or schedule.get("target_bot_id") or "").strip()
+    if not bot_id:
+        return
+    try:
+        readiness = await assess_bot_readiness(
+            bot_id,
+            bot_registry=request.app.state.bot_registry,
+            worker_registry=request.app.state.worker_registry,
+            connection_resolver=request.app.state.connection_resolver,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=409, detail={
+            "reason_code": "schedule_target_not_ready",
+            "message": f"Schedule target '{bot_id}' cannot be dispatched: {exc}",
+        }) from exc
+    if not readiness["ready"]:
+        raise HTTPException(status_code=409, detail={
+            "reason_code": "schedule_target_not_ready",
+            "message": f"Schedule target '{bot_id}' is not ready.",
+            "readiness": readiness,
+        })
 
 
 class CreateScheduleRequest(BaseModel):
@@ -66,9 +98,13 @@ async def list_schedules(
 async def create_schedule(request: Request, body: CreateScheduleRequest) -> Dict[str, Any]:
     engine = request.app.state.agent_schedule_engine
     try:
-        schedule = await engine.create_schedule(body.model_dump())
+        payload = body.model_dump()
+        await _require_schedule_target_ready(request, payload, only_when_active=True)
+        schedule = await engine.create_schedule(payload)
         await record_audit_event(request, action="schedules.create", resource=f"schedule:{schedule['id']}")
         return {"schedule": schedule}
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -78,6 +114,11 @@ async def update_schedule(schedule_id: str, request: Request, body: UpdateSchedu
     engine = request.app.state.agent_schedule_engine
     patch = {key: value for key, value in body.model_dump().items() if value is not None}
     try:
+        current = await engine.get_schedule(schedule_id)
+        if current is None:
+            raise HTTPException(status_code=404, detail="schedule not found")
+        candidate = {**current, **patch}
+        await _require_schedule_target_ready(request, candidate, only_when_active=True)
         schedule = await engine.update_schedule(schedule_id, patch)
         if schedule is None:
             raise HTTPException(status_code=404, detail="schedule not found")
@@ -102,6 +143,10 @@ async def get_schedule(schedule_id: str, request: Request) -> Dict[str, Any]:
 async def trigger_schedule(schedule_id: str, request: Request) -> Dict[str, Any]:
     engine = request.app.state.agent_schedule_engine
     try:
+        schedule = await engine.get_schedule(schedule_id)
+        if schedule is None:
+            raise HTTPException(status_code=404, detail="schedule not found")
+        await _require_schedule_target_ready(request, schedule, only_when_active=False)
         run = await engine.trigger_schedule(schedule_id)
         await record_audit_event(request, action="schedules.trigger", resource=f"schedule:{schedule_id}")
         return {"run": run}

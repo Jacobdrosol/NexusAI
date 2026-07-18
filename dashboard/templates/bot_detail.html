@@ -85,6 +85,32 @@
 </section>
 
 <section class="panel" style="margin-bottom:1rem;">
+  <div class="page-header" style="margin-bottom:0.75rem;">
+    <h2 class="panel-title">Dispatch Readiness</h2>
+    {% if readiness %}
+    <span class="badge badge-{{ 'online' if readiness.ready else 'failed' }}">{{ 'ready' if readiness.ready else 'blocked' }}</span>
+    {% endif %}
+  </div>
+  {% if readiness %}
+  <div class="mini-note" style="margin-bottom:0.75rem;">{{ readiness.summary.checks }} checks, {{ readiness.summary.failed }} blocking, {{ readiness.summary.warnings }} warnings.</div>
+  <table>
+    <thead><tr><th>Component</th><th>Status</th><th>Detail</th></tr></thead>
+    <tbody>
+      {% for check in readiness.checks %}
+      <tr>
+        <td><code>{{ check.component }}</code></td>
+        <td><span class="badge badge-{{ 'online' if check.status == 'ready' else ('failed' if check.status == 'failed' else 'degraded') }}">{{ check.status }}</span></td>
+        <td>{{ check.message }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty">Readiness is available when the control plane is connected.</div>
+  {% endif %}
+</section>
+
+<section class="panel" style="margin-bottom:1rem;">
   <h2 class="panel-title">Execution Policy</h2>
   {% set policy = bot.execution_policy if bot.execution_policy else {} %}
   {% set db_policy = policy.db_action_policy if policy and policy.db_action_policy else {} %}
