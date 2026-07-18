@@ -130,6 +130,8 @@ def create_app() -> Flask:
         )
         cp_available = cp_auth_ok or cp_tasks is not None
         overview_launch_bots = launchable_bots(cp_bots or [], surface="overview")
+        enabled_bot_readiness = []
+        bot_readiness_unavailable = False
 
         if cp_available:
             workers = cp_workers or []
@@ -146,6 +148,23 @@ def create_app() -> Flask:
             failed = sum(1 for t in tasks if t.get("status") == "failed")
             retried = sum(1 for t in tasks if t.get("status") == "retried")
             cancelled = sum(1 for t in tasks if t.get("status") == "cancelled")
+
+            if active_bots:
+                readiness_getter = getattr(cp, "list_bot_readiness", None)
+                readiness_payload = readiness_getter() if callable(readiness_getter) else None
+                if isinstance(readiness_payload, dict):
+                    readiness_by_bot_id = {
+                        str(item.get("bot_id") or "").strip(): item
+                        for item in readiness_payload.get("readiness") or []
+                        if isinstance(item, dict) and str(item.get("bot_id") or "").strip()
+                    }
+                    enabled_bot_readiness = [
+                        readiness_by_bot_id.get(str(bot.get("id") or "").strip())
+                        for bot in bots
+                        if bot.get("enabled")
+                    ]
+                else:
+                    bot_readiness_unavailable = True
 
             worker_health = []
             for w in workers[:12]:
@@ -235,6 +254,12 @@ def create_app() -> Flask:
                     )
             finally:
                 db.close()
+
+        blocked_enabled_bots = sum(
+            1
+            for readiness in enabled_bot_readiness
+            if not isinstance(readiness, dict) or not readiness.get("ready")
+        )
 
         db = get_db()
         try:
@@ -356,6 +381,29 @@ def create_app() -> Flask:
                 "cta": "Open Bots",
             },
             {
+                "key": "enabled-bot-readiness",
+                "label": "Enabled bot dispatch readiness",
+                "ok": active_bots == 0 or (
+                    not bot_readiness_unavailable and blocked_enabled_bots == 0
+                ),
+                "required": False,
+                "detail": (
+                    "No enabled bots are configured."
+                    if active_bots == 0
+                    else (
+                        f"{active_bots} enabled bot(s) passed dispatch readiness."
+                        if not bot_readiness_unavailable and blocked_enabled_bots == 0
+                        else (
+                            f"{blocked_enabled_bots} enabled bot(s) are blocked by runtime or tool checks."
+                            if not bot_readiness_unavailable
+                            else "Bot readiness could not be loaded from the control plane."
+                        )
+                    )
+                ),
+                "href": url_for("bots.bots_page"),
+                "cta": "Review Bots",
+            },
+            {
                 "key": "project-bootstrap",
                 "label": "Project bootstrap",
                 "ok": len(cp_projects or []) > 0,
@@ -403,6 +451,20 @@ def create_app() -> Flask:
             system_alerts.append(
                 {"level": "error", "message": f"{failed} task(s) are currently in failed state."}
             )
+        if bot_readiness_unavailable:
+            system_alerts.append(
+                {
+                    "level": "warning",
+                    "message": "Enabled bot readiness could not be verified from the control plane.",
+                }
+            )
+        elif blocked_enabled_bots > 0:
+            system_alerts.append(
+                {
+                    "level": "warning",
+                    "message": f"{blocked_enabled_bots} enabled bot(s) are blocked by dispatch readiness checks.",
+                }
+            )
         if not system_alerts:
             system_alerts.append({"level": "info", "message": "No critical alerts. System is stable."})
 
@@ -422,6 +484,7 @@ def create_app() -> Flask:
                 "workers_online": online_workers,
                 "workers_offline": offline_workers,
                 "bots_active": active_bots,
+                "bots_blocked": blocked_enabled_bots,
                 "tasks_queued": queued,
                 "tasks_blocked": blocked,
                 "tasks_running": running,

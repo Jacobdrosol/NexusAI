@@ -18,6 +18,10 @@
     <div class="card-value card-blue" id="stat-bots-active">{{ stats.bots_active }}</div>
   </div>
   <div class="card">
+    <div class="card-label">Bots blocked</div>
+    <div class="card-value {% if stats.bots_blocked %}card-red{% else %}card-green{% endif %}" id="stat-bots-blocked">{{ stats.bots_blocked }}</div>
+  </div>
+  <div class="card">
     <div class="card-label">Tasks waiting</div>
     <div class="card-value card-yellow" id="stat-tasks-queued">{{ stats.tasks_queued + stats.tasks_blocked }}</div>
   </div>
