@@ -41,7 +41,16 @@ class _FakeBotRegistry:
 class _FakeTaskManager:
     async def list_tasks(self, limit):
         assert limit == 200
-        return [SimpleNamespace(status="completed"), SimpleNamespace(status="failed")]
+        return [
+            SimpleNamespace(status="completed"),
+            SimpleNamespace(
+                status="failed",
+                error=SimpleNamespace(
+                    message="API key missing: private-token-must-not-leak",
+                    code=None,
+                ),
+            ),
+        ]
 
 
 class _FakeScheduleEngine:
@@ -75,7 +84,9 @@ async def test_materialized_fleet_summary_is_sanitized_and_bounded():
     assert '"browser"' in payload["monitoring_events"]
     assert '"failed_recent_schedule_ids":["failing"]' in payload["monitoring_events"]
     assert '"enabled_with_runtime_attention":1' in payload["monitoring_events"]
+    assert '"failed_by_category":{"authentication":1}' in payload["monitoring_events"]
     assert "prompt" not in payload["monitoring_events"]
+    assert "private-token-must-not-leak" not in payload["monitoring_events"]
 
 
 def test_system_payload_source_requires_read_only_monitoring_worker():

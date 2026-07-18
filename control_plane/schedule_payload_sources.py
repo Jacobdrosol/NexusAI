@@ -14,6 +14,28 @@ _SYSTEM_PAYLOAD_SOURCE_KEY = "system_payload_source"
 _SAFE_FIELD_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
 
 
+def _failure_category(task: Any) -> str:
+    """Classify a failed task without exposing its error text to a cloud worker."""
+    error = getattr(task, "error", None)
+    code = str(getattr(error, "code", "") or "").strip().lower()
+    message = str(getattr(error, "message", "") or "").strip().lower()
+    haystack = f"{code} {message}"
+
+    if any(token in haystack for token in ("policy", "scope", "approval", "forbidden")):
+        return "policy"
+    if "output contract" in haystack or "schema" in haystack:
+        return "output_contract"
+    if any(token in haystack for token in ("timeout", "timed out", "deadline")):
+        return "timeout"
+    if any(token in haystack for token in ("auth", "credential", "api key", "unauthorized", "forbidden")):
+        return "authentication"
+    if any(token in haystack for token in ("connection", "transport", "unavailable", "refused")):
+        return "transport"
+    if any(token in haystack for token in ("model", "inference", "provider")):
+        return "model"
+    return "other"
+
+
 class SystemPayloadSourceError(ValueError):
     """A schedule requested an unsupported or unsafe internal data source."""
 
@@ -94,6 +116,11 @@ async def _fleet_health_summary(
     tasks = await _await_if_needed(task_manager.list_tasks(limit=200))
     schedules = await _await_if_needed(schedule_engine.list_schedules(limit=100))
     task_statuses = Counter(str(getattr(task, "status", "unknown") or "unknown") for task in (tasks or []))
+    failure_categories = Counter(
+        _failure_category(task)
+        for task in (tasks or [])
+        if str(getattr(task, "status", "") or "").strip().lower() == "failed"
+    )
     runtime_attention_worker_ids = {
         str(item.get("worker_id") or "").strip()
         for item in runtime_attention
@@ -128,7 +155,11 @@ async def _fleet_health_summary(
             "enabled": sum(1 for bot in bots if bool(getattr(bot, "enabled", False))),
             "enabled_with_runtime_attention": enabled_bots_with_runtime_attention,
         },
-        "tasks": {"sample_limit": 200, "by_status": dict(sorted(task_statuses.items()))},
+        "tasks": {
+            "sample_limit": 200,
+            "by_status": dict(sorted(task_statuses.items())),
+            "failed_by_category": dict(sorted(failure_categories.items())),
+        },
         "schedules": {
             "registered": len(schedules or []),
             "active": sum(
