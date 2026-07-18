@@ -68,6 +68,44 @@ async def test_probe_worker_reports_ready_for_matching_attested_runtime():
 
 
 @pytest.mark.anyio
+async def test_probe_worker_keeps_only_safe_browser_attestation_evidence():
+    async def handler(request):
+        if request.url.path == "/health":
+            return httpx.Response(
+                200,
+                json={"status": "ok", "worker_id": "worker-1", "browser_ready": True},
+            )
+        return httpx.Response(
+            200,
+            json={
+                "worker_id": "worker-1",
+                "configured_capabilities": [
+                    {"type": "llm", "provider": "ollama_cloud", "models": ["glm-5.2:cloud"]}
+                ],
+                "capability_attestation": {
+                    "browser": {
+                        "configured": True,
+                        "ready": True,
+                        "browser": "chromium",
+                        "base_url": "https://private.example",
+                        "user_data_dir": "/private/profile",
+                    }
+                },
+            },
+        )
+
+    result = await probe_worker(_worker(), client_factory=_client_factory(handler))
+
+    assert result["health"]["browser_ready"] is True
+    assert result["capability_attestation"]["browser"] == {
+        "configured": True,
+        "ready": True,
+        "reason": "",
+        "browser": "chromium",
+    }
+
+
+@pytest.mark.anyio
 async def test_probe_worker_marks_capability_contract_mismatch_degraded():
     async def handler(request):
         if request.url.path == "/health":

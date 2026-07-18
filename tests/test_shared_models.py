@@ -15,6 +15,13 @@ def test_worker_model_invalid_port():
     assert w.port == 99999
 
 
+def test_worker_model_supports_attested_browser_capability():
+    from shared.models import Capability
+
+    capability = Capability(type="tool", provider="browser", models=["browser-ui"])
+    assert capability.provider == "browser"
+
+
 def test_bot_model_valid():
     from shared.models import Bot
     b = Bot(id="bot1", name="Assistant", role="helper", backends=[])

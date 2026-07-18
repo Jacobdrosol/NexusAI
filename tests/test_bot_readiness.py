@@ -113,3 +113,42 @@ async def test_bot_readiness_requires_declared_worker_tools(cp_client):
     ready = await cp_client.get("/v1/bots/browser-bot/readiness")
     assert ready.status_code == 200
     assert ready.json()["ready"] is True
+
+
+@pytest.mark.anyio
+async def test_bot_readiness_accepts_attested_read_only_browser_backend(cp_client):
+    worker_id = "attested-browser-worker"
+    await cp_client.post(
+        "/v1/workers",
+        json={
+            "id": worker_id,
+            "name": "Attested Browser Worker",
+            "host": "browser-worker",
+            "port": 8010,
+            "status": "online",
+            "capabilities": [{"type": "tool", "provider": "browser", "models": ["browser-ui"]}],
+        },
+    )
+    await cp_client.post(
+        "/v1/bots",
+        json={
+            "id": "browser-inspector-bot",
+            "name": "Browser Inspector",
+            "role": "worker",
+            "backends": [
+                {
+                    "type": "browser",
+                    "worker_id": worker_id,
+                    "provider": "browser",
+                    "model": "browser-ui",
+                    "api_key_ref": "BROWSER_WORKER_TOKEN",
+                }
+            ],
+            "execution_policy": {"required_worker_tools": ["browser-ui"]},
+        },
+    )
+
+    response = await cp_client.get("/v1/bots/browser-inspector-bot/readiness")
+
+    assert response.status_code == 200
+    assert response.json()["ready"] is True

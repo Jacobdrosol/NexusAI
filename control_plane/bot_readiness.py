@@ -28,8 +28,9 @@ def _check(
 def _worker_supports_backend(worker: Worker, backend: BackendConfig) -> bool:
     expected_provider = str(backend.provider or "").strip().lower()
     expected_model = str(backend.model or "").strip()
+    expected_capability_type = "tool" if str(backend.type or "").strip().lower() == "browser" else "llm"
     for capability in worker.capabilities or []:
-        if str(capability.type or "").strip().lower() != "llm":
+        if str(capability.type or "").strip().lower() != expected_capability_type:
             continue
         if str(capability.provider or "").strip().lower() != expected_provider:
             continue
@@ -64,7 +65,7 @@ async def assess_bot_readiness(
         provider = str(backend.provider or "").strip().lower()
         label = f"backend[{index}]"
 
-        if backend_type in {"local_llm", "remote_llm", "cli"}:
+        if backend_type in {"local_llm", "remote_llm", "cli", "browser"}:
             worker_backends += 1
             worker_id = str(backend.worker_id or "").strip()
             if not worker_id:

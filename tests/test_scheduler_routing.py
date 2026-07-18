@@ -520,6 +520,62 @@ async def test_scheduler_dispatches_fixed_cli_command_to_worker():
 
 
 @pytest.mark.anyio
+async def test_scheduler_dispatches_scoped_browser_inspection_with_worker_token(monkeypatch):
+    from control_plane.scheduler.scheduler import Scheduler
+
+    worker = Worker(
+        id="browser-worker",
+        name="Browser Worker",
+        host="browser.local",
+        port=8010,
+        capabilities=[Capability(type="tool", provider="browser", models=["browser-ui"])],
+        status="online",
+        enabled=True,
+    )
+    backend = BackendConfig(
+        type="browser",
+        provider="browser",
+        model="browser-ui",
+        worker_id=worker.id,
+        api_key_ref="BROWSER_WORKER_TOKEN",
+    )
+    monkeypatch.setenv("BROWSER_WORKER_TOKEN", "worker-token")
+
+    fake_response = MagicMock()
+    fake_response.raise_for_status.return_value = None
+    fake_response.json.return_value = {"url": "https://app.example/admin/courses", "text": "Courses"}
+    mock_client = AsyncMock()
+    mock_client.__aenter__.return_value = mock_client
+    mock_client.__aexit__.return_value = False
+    mock_client.post.return_value = fake_response
+    worker_registry = AsyncMock()
+    worker_registry.get.return_value = worker
+    scheduler = Scheduler(bot_registry=AsyncMock(), worker_registry=worker_registry)
+
+    with patch("control_plane.scheduler.scheduler.httpx.AsyncClient", return_value=mock_client):
+        result = await scheduler._dispatch_backend(
+            backend,
+            {"path": "/admin/courses", "text_limit": 500},
+        )
+
+    assert result["text"] == "Courses"
+    assert mock_client.post.await_args.args[0] == "http://browser.local:8010/browser/inspect"
+    assert mock_client.post.await_args.kwargs["json"] == {"path": "/admin/courses", "text_limit": 500}
+    assert mock_client.post.await_args.kwargs["headers"] == {"X-Nexus-Worker-Token": "worker-token"}
+
+
+@pytest.mark.anyio
+async def test_scheduler_rejects_browser_backend_without_a_pinned_attested_worker():
+    from control_plane.scheduler.scheduler import BackendError, Scheduler
+
+    scheduler = Scheduler(bot_registry=AsyncMock(), worker_registry=AsyncMock())
+    backend = BackendConfig(type="browser", provider="browser", model="browser-ui")
+
+    with pytest.raises(BackendError, match="worker_id is required"):
+        await scheduler._dispatch_backend(backend, {"path": "/admin/courses"})
+
+
+@pytest.mark.anyio
 async def test_scheduler_injects_bot_system_prompt_into_payload():
     from control_plane.scheduler.scheduler import Scheduler
 

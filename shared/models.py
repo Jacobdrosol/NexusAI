@@ -17,6 +17,7 @@ class Capability(BaseModel):
         "gemini",
         "vertex",
         "cli",
+        "browser",
         "custom",
     ]
     models: List[str]
@@ -58,7 +59,7 @@ class BackendParams(BaseModel):
 
 class BackendConfig(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-    type: Literal["local_llm", "remote_llm", "cloud_api", "cli", "custom"]
+    type: Literal["local_llm", "remote_llm", "cloud_api", "cli", "browser", "custom"]
     worker_id: Optional[str] = None
     model: str
     provider: str

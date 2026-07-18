@@ -126,6 +126,7 @@ def _capability_contract_gaps(
 def _safe_attestation(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         return {}
+    browser = value.get("browser") if isinstance(value.get("browser"), dict) else {}
     return {
         "configured_cli_tools": _safe_string_list(value.get("configured_cli_tools")),
         "installed_cli_tools": _safe_string_list(value.get("installed_cli_tools")),
@@ -134,6 +135,12 @@ def _safe_attestation(value: Any) -> dict[str, Any]:
         "discarded_declared_tool_capabilities": _safe_nonnegative_int(
             value.get("discarded_declared_tool_capabilities")
         ),
+        "browser": {
+            "configured": bool(browser.get("configured")),
+            "ready": bool(browser.get("ready")),
+            "reason": _safe_text(browser.get("reason")),
+            "browser": _safe_text(browser.get("browser")),
+        },
     }
 
 
@@ -210,6 +217,7 @@ async def probe_worker(
         "status": health_status,
         "worker_id": health_worker_id,
         "enabled_cli_tools": _safe_string_list(health_payload.get("enabled_cli_tools")),
+        "browser_ready": bool(health_payload.get("browser_ready")),
     }
     if health_status == "ok":
         checks.append(_check("health", "pass", "health endpoint returned ok"))
