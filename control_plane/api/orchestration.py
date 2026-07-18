@@ -17,9 +17,14 @@ class CreateBindingRequest(BaseModel):
     template_id: str = Field(..., description="ID of the OrchestrationTemplate to bind")
     owner_id: str = Field(..., description="Owner / user / team that owns this binding")
     name: Optional[str] = Field(default=None)
+    description: Optional[str] = Field(default=None)
+    role_map: Optional[Dict[str, str]] = Field(default=None)
+    default_stage_configs: Optional[Dict[str, Any]] = Field(default=None)
+    default_connection_requirements: Optional[List[Dict[str, Any]]] = Field(default=None)
+    default_context_requirements: Optional[List[Dict[str, Any]]] = Field(default=None)
     overrides: Optional[Dict[str, Any]] = Field(
         default=None,
-        description="Per-binding node overrides that extend/narrow the template without mutating it",
+        description="Deprecated alias for default_stage_configs retained for existing callers",
     )
     metadata: Optional[Dict[str, Any]] = Field(default=None)
 
@@ -30,6 +35,8 @@ class CompileRunContractRequest(BaseModel):
         default=None,
         description="Per-run overrides applied on top of the binding",
     )
+    assignment_text: str = Field(default="", max_length=20000)
+    operator_brief: str = Field(default="", max_length=20000)
 
 
 class CancelOrchestrationRequest(BaseModel):
@@ -47,7 +54,7 @@ def _template_store(request: Request) -> Any:
     if store is None:
         raise HTTPException(
             status_code=501,
-            detail="OrchestrationTemplateStore not initialised (main.py needs updating — Pass 2 pending)",
+            detail="orchestration template store is unavailable",
         )
     return store
 
@@ -99,18 +106,24 @@ async def create_binding(request: Request, body: CreateBindingRequest) -> Dict[s
         raise HTTPException(status_code=400, detail="template_id required")
     if not owner_id:
         raise HTTPException(status_code=400, detail="owner_id required")
-    try:
-        binding = await store.create_binding(
-            template_id=template_id,
-            owner_id=owner_id,
-            name=str(body.name or "").strip() or None,
-            overrides=body.overrides or {},
-            metadata=body.metadata or {},
-        )
-    except AttributeError:
-        raise HTTPException(status_code=501, detail="binding creation not available")
-    if binding is None:
-        raise HTTPException(status_code=400, detail="binding creation failed — check template_id")
+    template = await store.get_template(template_id)
+    if template is None:
+        raise HTTPException(status_code=404, detail="template not found")
+    stage_configs = body.default_stage_configs
+    if stage_configs is None:
+        stage_configs = body.overrides or {}
+    default_name = f"{str(template.get('name') or template_id).strip()} binding"
+    binding = await store.create_binding(
+        template_id=template_id,
+        owner_id=owner_id,
+        name=str(body.name or "").strip() or default_name,
+        description=str(body.description or "").strip(),
+        role_map=body.role_map or {},
+        default_stage_configs=stage_configs,
+        default_connection_requirements=body.default_connection_requirements or [],
+        default_context_requirements=body.default_context_requirements or [],
+        metadata=body.metadata or {},
+    )
     return {"binding": binding}
 
 
@@ -145,15 +158,20 @@ async def compile_run_contract(request: Request, body: CompileRunContractRequest
     binding_id = str(body.binding_id or "").strip()
     if not binding_id:
         raise HTTPException(status_code=400, detail="binding_id required")
-    try:
-        contract = await store.compile_run_contract(
-            binding_id=binding_id,
-            overrides=body.overrides or {},
-        )
-    except AttributeError:
-        raise HTTPException(status_code=501, detail="run contract compile not available")
-    if contract is None:
-        raise HTTPException(status_code=404, detail="binding not found or template missing")
+    binding = await store.get_binding(binding_id)
+    if binding is None:
+        raise HTTPException(status_code=404, detail="binding not found")
+    template_id = str(binding.get("template_id") or "").strip()
+    template = await store.get_template(template_id)
+    if template is None:
+        raise HTTPException(status_code=409, detail="binding references a missing template")
+    contract = store.compile_run_contract(
+        template=template,
+        binding=binding,
+        overrides=body.overrides or {},
+        assignment_text=str(body.assignment_text or "").strip(),
+        operator_brief=str(body.operator_brief or "").strip(),
+    )
     return {"contract": contract}
 
 
@@ -179,7 +197,7 @@ async def cancel_orchestration_run(
         result = await run_store.cancel_orchestration(
             safe_id,
             reason=str(body.reason or "operator_cancelled").strip() or "operator_cancelled",
-            operator_id=str(body.operator_id or "").strip() or None,
+            actor=str(body.operator_id or "").strip() or "operator",
         )
     except AttributeError:
         raise HTTPException(
