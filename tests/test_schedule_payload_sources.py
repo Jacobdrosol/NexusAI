@@ -32,7 +32,10 @@ class _FakeProbeStore:
 
 class _FakeBotRegistry:
     async def list(self):
-        return [SimpleNamespace(enabled=True), SimpleNamespace(enabled=False)]
+        return [
+            SimpleNamespace(enabled=True, backends=[SimpleNamespace(worker_id="browser")]),
+            SimpleNamespace(enabled=False, backends=[]),
+        ]
 
 
 class _FakeTaskManager:
@@ -71,6 +74,7 @@ async def test_materialized_fleet_summary_is_sanitized_and_bounded():
     assert set(payload) == {"monitoring_events"}
     assert '"browser"' in payload["monitoring_events"]
     assert '"failed_recent_schedule_ids":["failing"]' in payload["monitoring_events"]
+    assert '"enabled_with_runtime_attention":1' in payload["monitoring_events"]
     assert "prompt" not in payload["monitoring_events"]
 
 

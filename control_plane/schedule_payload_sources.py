@@ -90,9 +90,24 @@ async def _fleet_health_summary(
         )
 
     bots = await _await_if_needed(bot_registry.list())
+    bots = list(bots or [])
     tasks = await _await_if_needed(task_manager.list_tasks(limit=200))
     schedules = await _await_if_needed(schedule_engine.list_schedules(limit=100))
     task_statuses = Counter(str(getattr(task, "status", "unknown") or "unknown") for task in (tasks or []))
+    runtime_attention_worker_ids = {
+        str(item.get("worker_id") or "").strip()
+        for item in runtime_attention
+        if str(item.get("worker_id") or "").strip()
+    }
+    enabled_bots_with_runtime_attention = sum(
+        1
+        for bot in bots
+        if bool(getattr(bot, "enabled", False))
+        and any(
+            str(getattr(backend, "worker_id", "") or "").strip() in runtime_attention_worker_ids
+            for backend in (getattr(bot, "backends", None) or [])
+        )
+    )
     failed_schedules = [
         str(schedule.get("id") or "")
         for schedule in (schedules or [])
@@ -109,8 +124,9 @@ async def _fleet_health_summary(
             "runtime_attention": runtime_attention[:50],
         },
         "bots": {
-            "registered": len(bots or []),
-            "enabled": sum(1 for bot in (bots or []) if bool(getattr(bot, "enabled", False))),
+            "registered": len(bots),
+            "enabled": sum(1 for bot in bots if bool(getattr(bot, "enabled", False))),
+            "enabled_with_runtime_attention": enabled_bots_with_runtime_attention,
         },
         "tasks": {"sample_limit": 200, "by_status": dict(sorted(task_statuses.items()))},
         "schedules": {
