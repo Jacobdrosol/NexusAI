@@ -173,6 +173,32 @@ def _next_run_time(expr: str, timezone_name: str, *, after: Optional[datetime] =
     raise ValueError("could not compute next run for cron expression within 2 years")
 
 
+def _normalize_schedule_status(value: Any) -> str:
+    status = str(value or "paused").strip().lower()
+    if status not in {"active", "paused"}:
+        raise ValueError("schedule status must be 'active' or 'paused'")
+    return status
+
+
+def _validate_schedule_dispatch(
+    *,
+    prompt: str,
+    target_bot_id: Optional[str],
+    assignment_pm_bot_id: Optional[str],
+    conversation_id: Optional[str],
+) -> None:
+    if not prompt:
+        raise ValueError("prompt is required")
+
+    has_target_bot = bool(target_bot_id)
+    has_assignment_pm = bool(assignment_pm_bot_id)
+    has_conversation = bool(conversation_id)
+    if has_assignment_pm != has_conversation:
+        raise ValueError("assignment schedules require both assignment_pm_bot_id and conversation_id")
+    if has_target_bot == has_assignment_pm:
+        raise ValueError("schedule requires exactly one dispatch target")
+
+
 class AgentScheduleEngine:
     def __init__(
         self,
@@ -204,17 +230,29 @@ class AgentScheduleEngine:
         now = _now()
         cron_expression = str(payload.get("cron_expression") or "").strip()
         timezone_name = str(payload.get("timezone") or "UTC").strip() or "UTC"
+        prompt = str(payload.get("prompt") or "").strip()
+        target_bot_id = str(payload.get("target_bot_id") or "").strip() or None
+        assignment_pm_bot_id = str(payload.get("assignment_pm_bot_id") or "").strip() or None
+        conversation_id = str(payload.get("conversation_id") or "").strip() or None
+        if not cron_expression:
+            raise ValueError("cron_expression is required")
+        _validate_schedule_dispatch(
+            prompt=prompt,
+            target_bot_id=target_bot_id,
+            assignment_pm_bot_id=assignment_pm_bot_id,
+            conversation_id=conversation_id,
+        )
         next_run = _next_run_time(cron_expression, timezone_name, after=now)
         schedule = {
             "id": str(uuid.uuid4()),
             "name": str(payload.get("name") or "").strip() or "Scheduled Agent",
-            "status": str(payload.get("status") or "active").strip().lower(),
+            "status": _normalize_schedule_status(payload.get("status")),
             "cron_expression": cron_expression,
             "timezone": timezone_name,
-            "prompt": str(payload.get("prompt") or "").strip(),
-            "target_bot_id": str(payload.get("target_bot_id") or "").strip() or None,
-            "assignment_pm_bot_id": str(payload.get("assignment_pm_bot_id") or "").strip() or None,
-            "conversation_id": str(payload.get("conversation_id") or "").strip() or None,
+            "prompt": prompt,
+            "target_bot_id": target_bot_id,
+            "assignment_pm_bot_id": assignment_pm_bot_id,
+            "conversation_id": conversation_id,
             "project_id": str(payload.get("project_id") or "").strip() or None,
             "node_overrides": payload.get("node_overrides") if isinstance(payload.get("node_overrides"), dict) else {},
             "retry_max": max(0, int(payload.get("retry_max", 2))),
@@ -273,6 +311,40 @@ class AgentScheduleEngine:
                 row = await cursor.fetchone()
         return self._row_to_schedule(row)
 
+    async def list_schedules(
+        self,
+        *,
+        limit: int = 100,
+        status: Optional[str] = None,
+        target_bot_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        await self._ensure_db()
+        safe_limit = max(1, min(int(limit), 500))
+        filters: List[str] = []
+        values: List[Any] = []
+        normalized_status = str(status or "").strip().lower()
+        if normalized_status:
+            normalized_status = _normalize_schedule_status(normalized_status)
+            filters.append("status = ?")
+            values.append(normalized_status)
+        normalized_bot_id = str(target_bot_id or "").strip()
+        if normalized_bot_id:
+            filters.append("target_bot_id = ?")
+            values.append(normalized_bot_id)
+        where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
+        query = f"""
+            SELECT * FROM agent_schedules
+            {where_clause}
+            ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END, next_run_at ASC, created_at DESC
+            LIMIT ?
+        """
+        values.append(safe_limit)
+        async with open_sqlite(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(query, tuple(values)) as cursor:
+                rows = await cursor.fetchall()
+        return [self._row_to_schedule(row) for row in rows if row is not None]
+
     async def update_schedule(self, schedule_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         schedule = await self.get_schedule(schedule_id)
         if schedule is None:
@@ -300,8 +372,19 @@ class AgentScheduleEngine:
             next_meta.update(patch["metadata"])
             merged["metadata"] = next_meta
 
+        merged["status"] = _normalize_schedule_status(merged.get("status"))
         merged["cron_expression"] = str(merged.get("cron_expression") or "").strip()
         merged["timezone"] = str(merged.get("timezone") or "UTC").strip() or "UTC"
+        merged["prompt"] = str(merged.get("prompt") or "").strip()
+        merged["target_bot_id"] = str(merged.get("target_bot_id") or "").strip() or None
+        merged["assignment_pm_bot_id"] = str(merged.get("assignment_pm_bot_id") or "").strip() or None
+        merged["conversation_id"] = str(merged.get("conversation_id") or "").strip() or None
+        _validate_schedule_dispatch(
+            prompt=merged["prompt"],
+            target_bot_id=merged["target_bot_id"],
+            assignment_pm_bot_id=merged["assignment_pm_bot_id"],
+            conversation_id=merged["conversation_id"],
+        )
         merged["next_run_at"] = _iso(
             _next_run_time(merged["cron_expression"], merged["timezone"], after=_now())
         )

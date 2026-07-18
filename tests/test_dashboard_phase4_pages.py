@@ -2355,6 +2355,68 @@ def test_bots_page_and_proxy_support_specialist_creation(dashboard_client):
     assert created.status_code == 201
 
 
+def test_schedules_page_and_proxy_support_operational_schedule_management(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_schedules(self, **kwargs):
+            return {
+                "schedules": [
+                    {
+                        "id": "schedule-1",
+                        "name": "Daily Review",
+                        "status": "paused",
+                        "cron_expression": "0 8 * * *",
+                        "timezone": "UTC",
+                        "target_bot_id": "reviewer",
+                        "assignment_pm_bot_id": None,
+                        "next_run_at": "2026-07-19T08:00:00+00:00",
+                        "last_run_at": None,
+                        "last_run_status": None,
+                    }
+                ]
+            }
+
+        def list_bots(self):
+            return [{"id": "reviewer", "name": "Reviewer"}]
+
+        def list_projects(self):
+            return []
+
+        def create_schedule(self, body):
+            return {"schedule": {"id": "schedule-2", **body}}
+
+        def update_schedule(self, schedule_id, body):
+            return {"schedule": {"id": schedule_id, **body}}
+
+        def trigger_schedule(self, schedule_id):
+            return {"run": {"id": "run-1", "schedule_id": schedule_id}}
+
+        def list_schedule_runs(self, schedule_id, limit=50):
+            return {"schedule_id": schedule_id, "runs": []}
+
+    fake_cp = FakeCP()
+    with patch("dashboard.routes.schedules.get_cp_client", return_value=fake_cp):
+        page = dashboard_client.get("/schedules")
+        listed = dashboard_client.get("/api/schedules")
+        created = dashboard_client.post(
+            "/api/schedules",
+            json={"name": "Daily Review", "target_bot_id": "reviewer", "cron_expression": "0 8 * * *", "prompt": "Review"},
+        )
+        toggled = dashboard_client.patch("/api/schedules/schedule-1", json={"status": "active"})
+        triggered = dashboard_client.post("/api/schedules/schedule-1/trigger")
+        runs = dashboard_client.get("/api/schedules/schedule-1/runs")
+
+    assert page.status_code == 200
+    assert b"Create Schedule" in page.data
+    assert b"Daily Review" in page.data
+    assert listed.get_json()["schedules"][0]["id"] == "schedule-1"
+    assert created.status_code == 201
+    assert toggled.get_json()["schedule"]["status"] == "active"
+    assert triggered.get_json()["run"]["schedule_id"] == "schedule-1"
+    assert runs.get_json()["runs"] == []
+
+
 def test_vault_upload_api_validates_required_fields(dashboard_client):
     _login_admin(dashboard_client)
     resp = dashboard_client.post("/api/vault/upload", data={"source_mode": "paste"})

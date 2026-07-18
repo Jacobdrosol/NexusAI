@@ -769,6 +769,19 @@ class CPClient:
         return self._post(f"/v1/platform-ai/pipelines/{safe_id}/test-suites/run", body, timeout=_CHAT_TIMEOUT)
 
     # Agent schedules
+    def list_schedules(
+        self,
+        limit: int = 100,
+        status: Optional[str] = None,
+        target_bot_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        params = [f"limit={max(1, int(limit))}"]
+        if status:
+            params.append(f"status={requests.utils.quote(str(status), safe='')}")
+        if target_bot_id:
+            params.append(f"target_bot_id={requests.utils.quote(str(target_bot_id), safe='')}")
+        return self._get(f"/v1/schedules?{'&'.join(params)}")
+
     def create_schedule(self, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return self._post("/v1/schedules", body)
 

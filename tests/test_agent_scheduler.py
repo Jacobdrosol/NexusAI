@@ -26,7 +26,6 @@ class _FakeTaskManager:
 def _schedule_payload() -> dict:
     return {
         "name": "Task completion tracking test",
-        "status": "paused",
         "cron_expression": "0 * * * *",
         "timezone": "UTC",
         "prompt": "Reply with exactly OK.",
@@ -93,3 +92,34 @@ async def test_schedule_run_records_linked_task_failure(tmp_path):
         "task_status": "failed",
     }
     assert (await engine.get_schedule(schedule["id"]))["last_run_status"] == "failed"
+
+
+@pytest.mark.anyio
+async def test_schedule_listing_filters_status_and_rejects_invalid_status(tmp_path):
+    engine = AgentScheduleEngine(
+        assignment_service=object(),
+        task_manager=_FakeTaskManager(),
+        db_path=str(tmp_path / "schedules.db"),
+    )
+    paused = await engine.create_schedule(_schedule_payload())
+    active = await engine.create_schedule(
+        {
+            **_schedule_payload(),
+            "name": "Active schedule",
+            "status": "active",
+            "target_bot_id": "writer-bot",
+        }
+    )
+
+    active_rows = await engine.list_schedules(status="active")
+    all_rows = await engine.list_schedules(target_bot_id="qc-bot")
+
+    assert [row["id"] for row in active_rows] == [active["id"]]
+    assert [row["id"] for row in all_rows] == [paused["id"]]
+    assert paused["status"] == "paused"
+    with pytest.raises(ValueError, match="schedule status"):
+        await engine.list_schedules(status="disabled")
+    with pytest.raises(ValueError, match="exactly one dispatch target"):
+        await engine.update_schedule(paused["id"], {"assignment_pm_bot_id": "pm-bot", "conversation_id": "thread-1"})
+    with pytest.raises(ValueError, match="exactly one dispatch target"):
+        await engine.update_schedule(paused["id"], {"target_bot_id": ""})

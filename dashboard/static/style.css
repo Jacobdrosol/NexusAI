@@ -70,6 +70,7 @@ nav {
   border-bottom: 1px solid var(--line);
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 1.25rem;
   position: sticky;
   top: 0;
@@ -174,6 +175,8 @@ tr:hover td {
 .badge-retried { background: #3f2a0d; color: #fcd34d; }
 .badge-enabled { background: #064e3b; color: #6ee7b7; }
 .badge-disabled { background: #1f2937; color: #9ca3af; }
+.badge-active { background: #064e3b; color: #6ee7b7; }
+.badge-paused { background: #3f2a0d; color: #fcd34d; }
 
 .task-row { cursor: pointer; }
 

@@ -1,0 +1,230 @@
+{% extends "base.html" %}
+{% set active_page = "schedules" %}
+{% block title %}Schedules{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Schedules</h1>
+  <button class="btn btn-primary" type="button" onclick="openCreateSchedule()">Create Schedule</button>
+</div>
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+{% if error %}
+<div class="alert alert-error">{{ error }}</div>
+{% endif %}
+
+<section class="panel">
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th><th>Bot</th><th>Status</th><th>Cadence</th><th>Next Run</th><th>Last Run</th><th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for schedule in schedules %}
+      <tr>
+        <td><strong>{{ schedule.name }}</strong><br><span class="mini-note"><code>{{ schedule.id }}</code></span></td>
+        <td><code>{{ schedule.target_bot_id or schedule.assignment_pm_bot_id or '—' }}</code></td>
+        <td><span class="badge badge-{{ schedule.status }}">{{ schedule.status }}</span></td>
+        <td><code>{{ schedule.cron_expression }}</code><br><span class="mini-note">{{ schedule.timezone }}</span></td>
+        <td>{{ (schedule.next_run_at[:19] if schedule.next_run_at else '—') | replace('T', ' ') }}</td>
+        <td>
+          {{ (schedule.last_run_at[:19] if schedule.last_run_at else '—') | replace('T', ' ') }}
+          {% if schedule.last_run_status %}<br><span class="mini-note">{{ schedule.last_run_status }}</span>{% endif %}
+        </td>
+        <td class="actions">
+          <button class="btn btn-sm" type="button" onclick='triggerSchedule({{ schedule.id|tojson }})'>Run</button>
+          <button class="btn btn-sm" type="button" onclick='toggleSchedule({{ schedule.id|tojson }}, {{ ('paused' if schedule.status == 'active' else 'active')|tojson }})'>{{ 'Pause' if schedule.status == 'active' else 'Enable' }}</button>
+          <button class="btn btn-sm" type="button" onclick='showScheduleRuns({{ schedule.id|tojson }}, {{ schedule.name|tojson }})'>Runs</button>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="empty">No schedules configured</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<div id="modal-create-schedule" class="modal" style="display:none;">
+  <div class="modal-content" style="max-width:720px;">
+    <h2>Create Schedule</h2>
+    <form id="form-create-schedule">
+      <div class="split-grid" style="grid-template-columns:1fr 1fr;gap:0.75rem;">
+        <div class="form-group">
+          <label for="schedule-name">Name</label>
+          <input class="form-control" id="schedule-name" name="name" maxlength="160" required>
+        </div>
+        <div class="form-group">
+          <label for="schedule-bot">Target Bot</label>
+          <select class="form-control" id="schedule-bot" name="target_bot_id" required>
+            <option value="">Select bot</option>
+            {% for bot in bots %}
+            <option value="{{ bot.id }}">{{ bot.name }} ({{ bot.id }})</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+      <div class="split-grid" style="grid-template-columns:1fr 1fr;gap:0.75rem;">
+        <div class="form-group">
+          <label for="schedule-cron">Cron Expression</label>
+          <input class="form-control" id="schedule-cron" name="cron_expression" placeholder="0 8 * * 1-5" required>
+        </div>
+        <div class="form-group">
+          <label for="schedule-timezone">Timezone</label>
+          <input class="form-control" id="schedule-timezone" name="timezone" value="UTC" required>
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="schedule-project">Project Scope</label>
+        <select class="form-control" id="schedule-project" name="project_id">
+          <option value="">No project binding</option>
+          {% for project in projects %}
+          <option value="{{ project.id }}">{{ project.name }} ({{ project.id }})</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="schedule-prompt">Task Instruction</label>
+        <textarea class="form-control" id="schedule-prompt" name="prompt" rows="5" required></textarea>
+      </div>
+      <div class="form-group">
+        <label><input type="checkbox" id="schedule-active" name="active"> Enable recurring dispatch</label>
+      </div>
+      <div id="schedule-create-status" class="mini-note" style="margin-bottom:0.75rem;"></div>
+      <div class="modal-actions">
+        <button type="submit" class="btn btn-primary">Create Schedule</button>
+        <button type="button" class="btn" onclick="closeCreateSchedule()">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="modal-schedule-runs" class="modal" style="display:none;">
+  <div class="modal-content" style="max-width:860px;">
+    <h2 id="schedule-runs-title">Schedule Runs</h2>
+    <div id="schedule-runs-status" class="mini-note" style="margin-bottom:0.75rem;"></div>
+    <div style="overflow:auto;max-height:420px;">
+      <table>
+        <thead><tr><th>Scheduled</th><th>Status</th><th>Task</th><th>Finished</th><th>Error</th></tr></thead>
+        <tbody id="schedule-runs-body"></tbody>
+      </table>
+    </div>
+    <div class="modal-actions"><button type="button" class="btn" onclick="closeScheduleRuns()">Close</button></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function getScheduleCsrf() {
+  const el = document.querySelector('input[name=csrf_token]');
+  return el ? el.value : '';
+}
+
+function setScheduleCreateStatus(message, isError=false) {
+  const el = document.getElementById('schedule-create-status');
+  el.textContent = String(message || '');
+  el.style.color = isError ? '#dc2626' : '#64748b';
+}
+
+function openCreateSchedule() {
+  document.getElementById('modal-create-schedule').style.display = 'flex';
+  setScheduleCreateStatus('');
+}
+
+function closeCreateSchedule() {
+  document.getElementById('modal-create-schedule').style.display = 'none';
+}
+
+document.getElementById('form-create-schedule').addEventListener('submit', async function(event) {
+  event.preventDefault();
+  const form = new FormData(this);
+  const payload = {
+    name: String(form.get('name') || '').trim(),
+    target_bot_id: String(form.get('target_bot_id') || '').trim(),
+    cron_expression: String(form.get('cron_expression') || '').trim(),
+    timezone: String(form.get('timezone') || '').trim() || 'UTC',
+    project_id: String(form.get('project_id') || '').trim() || null,
+    prompt: String(form.get('prompt') || '').trim(),
+    status: document.getElementById('schedule-active').checked ? 'active' : 'paused',
+    metadata: {source: 'dashboard_schedule_manager'},
+  };
+  if (!payload.name || !payload.target_bot_id || !payload.cron_expression || !payload.prompt) {
+    setScheduleCreateStatus('Name, target bot, cron expression, and task instruction are required.', true);
+    return;
+  }
+  setScheduleCreateStatus('Creating schedule...');
+  const response = await fetch('/api/schedules', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-CSRFToken': getScheduleCsrf()},
+    body: JSON.stringify(payload),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    setScheduleCreateStatus(data.error || 'Unable to create schedule.', true);
+    return;
+  }
+  window.location.reload();
+});
+
+async function toggleSchedule(scheduleId, status) {
+  const response = await fetch('/api/schedules/' + encodeURIComponent(scheduleId), {
+    method: 'PATCH',
+    headers: {'Content-Type': 'application/json', 'X-CSRFToken': getScheduleCsrf()},
+    body: JSON.stringify({status}),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    window.alert(data.error || 'Unable to update schedule.');
+    return;
+  }
+  window.location.reload();
+}
+
+async function triggerSchedule(scheduleId) {
+  const response = await fetch('/api/schedules/' + encodeURIComponent(scheduleId) + '/trigger', {
+    method: 'POST',
+    headers: {'X-CSRFToken': getScheduleCsrf()},
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    window.alert(data.error || 'Unable to trigger schedule.');
+    return;
+  }
+  window.location.reload();
+}
+
+function closeScheduleRuns() {
+  document.getElementById('modal-schedule-runs').style.display = 'none';
+}
+
+function renderScheduleRunRows(runs) {
+  const body = document.getElementById('schedule-runs-body');
+  if (!Array.isArray(runs) || !runs.length) {
+    body.innerHTML = '<tr><td colspan="5" class="empty">No runs recorded</td></tr>';
+    return;
+  }
+  body.innerHTML = runs.map((run) => {
+    const error = run.error && run.error.message ? run.error.message : '—';
+    return `<tr><td>${escapeScheduleHtml(run.scheduled_for || '—')}</td><td>${escapeScheduleHtml(run.status || '—')}</td><td><code>${escapeScheduleHtml(run.task_id || '—')}</code></td><td>${escapeScheduleHtml(run.finished_at || '—')}</td><td>${escapeScheduleHtml(error)}</td></tr>`;
+  }).join('');
+}
+
+function escapeScheduleHtml(value) {
+  return String(value || '').replace(/[&<>'"]/g, (char) => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
+}
+
+async function showScheduleRuns(scheduleId, scheduleName) {
+  document.getElementById('modal-schedule-runs').style.display = 'flex';
+  document.getElementById('schedule-runs-title').textContent = scheduleName + ' Runs';
+  document.getElementById('schedule-runs-status').textContent = 'Loading...';
+  document.getElementById('schedule-runs-body').innerHTML = '';
+  const response = await fetch('/api/schedules/' + encodeURIComponent(scheduleId) + '/runs?limit=50');
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    document.getElementById('schedule-runs-status').textContent = data.error || 'Unable to load runs.';
+    return;
+  }
+  document.getElementById('schedule-runs-status').textContent = '';
+  renderScheduleRunRows(data.runs);
+}
+</script>
+{% endblock %}

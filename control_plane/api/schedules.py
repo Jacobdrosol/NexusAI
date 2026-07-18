@@ -5,6 +5,8 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from control_plane.audit.utils import record_audit_event
+
 
 router = APIRouter(prefix="/v1/schedules", tags=["schedules"])
 
@@ -14,7 +16,7 @@ class CreateScheduleRequest(BaseModel):
     cron_expression: str
     timezone: str = "UTC"
     prompt: str
-    status: str = "active"
+    status: str = "paused"
     target_bot_id: Optional[str] = None
     assignment_pm_bot_id: Optional[str] = None
     conversation_id: Optional[str] = None
@@ -41,11 +43,31 @@ class UpdateScheduleRequest(BaseModel):
     metadata: Optional[Dict[str, Any]] = None
 
 
+@router.get("")
+async def list_schedules(
+    request: Request,
+    limit: int = 100,
+    status: Optional[str] = None,
+    target_bot_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    engine = request.app.state.agent_schedule_engine
+    try:
+        schedules = await engine.list_schedules(
+            limit=limit,
+            status=status,
+            target_bot_id=target_bot_id,
+        )
+        return {"schedules": schedules}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("")
 async def create_schedule(request: Request, body: CreateScheduleRequest) -> Dict[str, Any]:
     engine = request.app.state.agent_schedule_engine
     try:
         schedule = await engine.create_schedule(body.model_dump())
+        await record_audit_event(request, action="schedules.create", resource=f"schedule:{schedule['id']}")
         return {"schedule": schedule}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -59,6 +81,7 @@ async def update_schedule(schedule_id: str, request: Request, body: UpdateSchedu
         schedule = await engine.update_schedule(schedule_id, patch)
         if schedule is None:
             raise HTTPException(status_code=404, detail="schedule not found")
+        await record_audit_event(request, action="schedules.update", resource=f"schedule:{schedule_id}")
         return {"schedule": schedule}
     except HTTPException:
         raise
@@ -80,6 +103,7 @@ async def trigger_schedule(schedule_id: str, request: Request) -> Dict[str, Any]
     engine = request.app.state.agent_schedule_engine
     try:
         run = await engine.trigger_schedule(schedule_id)
+        await record_audit_event(request, action="schedules.trigger", resource=f"schedule:{schedule_id}")
         return {"run": run}
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
