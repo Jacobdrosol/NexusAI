@@ -28,6 +28,7 @@ _TERMINAL_AUTONOMOUS_STATES = {
     "refinement_launch_failed",
     "launch_failed",
 }
+_CLI_RUNTIME_MODEL_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}")
 
 
 def _now() -> str:
@@ -237,6 +238,7 @@ def _default_backend_config(
     params: Optional[Dict[str, Any]],
     vertex_project_id: Optional[str],
     vertex_location: Optional[str],
+    worker_id: Optional[str],
 ) -> Dict[str, Any]:
     return {
         "provider": str(provider or "").strip() or None,
@@ -246,7 +248,35 @@ def _default_backend_config(
         "params": dict(params or {}),
         "vertex_project_id": str(vertex_project_id or "").strip() or None,
         "vertex_location": str(vertex_location or "").strip() or None,
+        "worker_id": str(worker_id or "").strip() or None,
     }
+
+
+def _apply_cli_backend_profile(
+    config: Dict[str, Any],
+    *,
+    cli_command_profile: Optional[str],
+    cli_runtime_model: Optional[str],
+) -> None:
+    backend_type = str(config.get("backend_type") or "").strip().lower()
+    profile = str(cli_command_profile or "").strip()
+    runtime_model = str(cli_runtime_model or "").strip()
+    if backend_type != "cli":
+        config.pop("command", None)
+        config.pop("cli_command_profile", None)
+        config.pop("cli_runtime_model", None)
+        return
+    if str(config.get("provider") or "").strip().lower() != "cli" or str(config.get("model") or "").strip() != "claude":
+        raise HTTPException(status_code=400, detail="CLI Platform AI sessions require provider 'cli' and model 'claude'.")
+    if not str(config.get("worker_id") or "").strip():
+        raise HTTPException(status_code=400, detail="CLI Platform AI sessions require worker_id.")
+    if profile != "claude_ollama_json":
+        raise HTTPException(status_code=400, detail="CLI Platform AI sessions require the approved Claude via Ollama JSON profile.")
+    if not _CLI_RUNTIME_MODEL_PATTERN.fullmatch(runtime_model):
+        raise HTTPException(status_code=400, detail="CLI runtime model must be a valid Ollama model name.")
+    config["cli_command_profile"] = profile
+    config["cli_runtime_model"] = runtime_model
+    config["command"] = f"claude -p --model {runtime_model} --output-format json"
 
 
 def _validate_backend_config(config: Dict[str, Any]) -> None:
@@ -786,6 +816,9 @@ class CreatePlatformAISessionRequest(BaseModel):
     params: Dict[str, Any] = Field(default_factory=dict)
     vertex_project_id: Optional[str] = None
     vertex_location: Optional[str] = None
+    worker_id: Optional[str] = None
+    cli_command_profile: Optional[str] = None
+    cli_runtime_model: Optional[str] = None
 
 
 class UpdatePlatformAISessionRequest(BaseModel):
@@ -809,6 +842,9 @@ class UpdatePlatformAISessionRequest(BaseModel):
     params: Dict[str, Any] = Field(default_factory=dict)
     vertex_project_id: Optional[str] = None
     vertex_location: Optional[str] = None
+    worker_id: Optional[str] = None
+    cli_command_profile: Optional[str] = None
+    cli_runtime_model: Optional[str] = None
 
 
 class SessionMessageRequest(BaseModel):
@@ -1026,6 +1062,12 @@ async def create_session(request: Request, body: CreatePlatformAISessionRequest)
         body.params,
         body.vertex_project_id,
         body.vertex_location,
+        body.worker_id,
+    )
+    _apply_cli_backend_profile(
+        backend_cfg,
+        cli_command_profile=body.cli_command_profile,
+        cli_runtime_model=body.cli_runtime_model,
     )
     _validate_backend_config(backend_cfg)
     await _ensure_backend_model_catalog_entry(request, backend_cfg)
@@ -1220,6 +1262,9 @@ async def patch_session(session_id: str, request: Request, body: UpdatePlatformA
             bool(body.params),
             body.vertex_project_id is not None,
             body.vertex_location is not None,
+            body.worker_id is not None,
+            body.cli_command_profile is not None,
+            body.cli_runtime_model is not None,
         ]
     )
     if wants_backend_update and current_status not in {"ready", "stopped"}:
@@ -1245,6 +1290,15 @@ async def patch_session(session_id: str, request: Request, body: UpdatePlatformA
             backend_cfg["vertex_project_id"] = str(body.vertex_project_id or "").strip() or None
         if body.vertex_location is not None:
             backend_cfg["vertex_location"] = str(body.vertex_location or "").strip() or None
+        if body.worker_id is not None:
+            backend_cfg["worker_id"] = str(body.worker_id or "").strip() or None
+        current_profile = str(backend_cfg.get("cli_command_profile") or "").strip() or None
+        current_runtime_model = str(backend_cfg.get("cli_runtime_model") or "").strip() or None
+        _apply_cli_backend_profile(
+            backend_cfg,
+            cli_command_profile=body.cli_command_profile if body.cli_command_profile is not None else current_profile,
+            cli_runtime_model=body.cli_runtime_model if body.cli_runtime_model is not None else current_runtime_model,
+        )
         _validate_backend_config(backend_cfg)
         await _ensure_backend_model_catalog_entry(request, backend_cfg)
         metadata["backend"] = backend_cfg

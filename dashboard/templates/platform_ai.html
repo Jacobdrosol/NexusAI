@@ -313,6 +313,18 @@
           <input class="form-control" name="vertex_location" placeholder="us-central1">
         </div>
       </div>
+      <div id="session-backend-cli-fields" class="split-grid" style="grid-template-columns:1fr 1fr;gap:0.75rem;display:none;">
+        <div class="form-group">
+          <label>CLI Profile</label>
+          <select class="form-control" name="cli_command_profile">
+            <option value="claude_ollama_json">Claude via Ollama (JSON)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Ollama Runtime Model</label>
+          <input class="form-control" name="cli_runtime_model" placeholder="glm-5.2:cloud">
+        </div>
+      </div>
       <details style="margin-top:0.5rem;">
         <summary style="cursor:pointer;">Advanced Local Runtime</summary>
         <div class="split-grid" style="grid-template-columns:1fr 1fr;margin-top:0.75rem;">
@@ -380,7 +392,7 @@ function openSessionBackendModal() {
     form.type.value = 'cloud_api';
     refreshSessionApiKeyOptions('');
     refreshSessionModelOptions('');
-    toggleSessionVertexFields();
+    toggleSessionBackendTypeFields();
   } else {
     form.worker_id.value = NEW_SESSION_BACKEND.worker_id || '';
     form.type.value = NEW_SESSION_BACKEND.type || 'cloud_api';
@@ -397,9 +409,11 @@ function openSessionBackendModal() {
     form.repeat_penalty.value = NEW_SESSION_BACKEND.params?.repeat_penalty ?? '';
     form.vertex_project_id.value = NEW_SESSION_BACKEND.vertex_project_id || '';
     form.vertex_location.value = NEW_SESSION_BACKEND.vertex_location || '';
+    form.cli_command_profile.value = NEW_SESSION_BACKEND.cli_command_profile || 'claude_ollama_json';
+    form.cli_runtime_model.value = NEW_SESSION_BACKEND.cli_runtime_model || '';
     refreshSessionApiKeyOptions(NEW_SESSION_BACKEND.api_key_ref || '');
     refreshSessionModelOptions(NEW_SESSION_BACKEND.model || '');
-    toggleSessionVertexFields();
+    toggleSessionBackendTypeFields();
   }
   document.getElementById('modal-session-backend').style.display = 'flex';
 }
@@ -507,32 +521,51 @@ function refreshSessionModelOptions(preferredValue='') {
   }
 }
 
-function toggleSessionVertexFields() {
+function toggleSessionBackendTypeFields() {
   const form = document.getElementById('form-session-backend');
   if (!form) return;
   const provider = String(form.provider?.value || '').trim().toLowerCase();
   const type = String(form.type?.value || '').trim().toLowerCase();
-  const show = provider === 'vertex' && type === 'cloud_api';
-  const wrap = document.getElementById('session-backend-vertex-fields');
-  if (wrap) wrap.style.display = show ? 'grid' : 'none';
+  const isCli = type === 'cli';
+  const vertexWrap = document.getElementById('session-backend-vertex-fields');
+  if (vertexWrap) vertexWrap.style.display = provider === 'vertex' && type === 'cloud_api' ? 'grid' : 'none';
+  const cliWrap = document.getElementById('session-backend-cli-fields');
+  if (cliWrap) cliWrap.style.display = isCli ? 'grid' : 'none';
+  if (isCli) {
+    form.provider.value = 'cli';
+    form.model.value = 'claude';
+    form.model_select.value = '';
+  }
+  form.provider.disabled = isCli;
+  form.model.readOnly = isCli;
+  form.model_select.disabled = isCli;
+  form.api_key_ref.disabled = isCli;
 }
 
 function applySessionBackendForm() {
   const form = document.getElementById('form-session-backend');
   const fd = new FormData(form);
-  const provider = String(fd.get('provider') || '').trim();
+  const type = String(fd.get('type') || '').trim();
+  const isCli = type.toLowerCase() === 'cli';
+  const provider = isCli ? 'cli' : String(fd.get('provider') || '').trim();
   const isVertexProvider = provider.toLowerCase() === 'vertex';
   const backend = {
-    type: String(fd.get('type') || '').trim(),
+    type: type,
     provider: provider,
-    model: String(fd.get('model') || '').trim(),
+    model: isCli ? 'claude' : String(fd.get('model') || '').trim(),
     worker_id: String(fd.get('worker_id') || '').trim() || null,
-    api_key_ref: String(fd.get('api_key_ref') || '').trim() || null,
+    api_key_ref: isCli ? null : (String(fd.get('api_key_ref') || '').trim() || null),
     vertex_project_id: isVertexProvider ? (String(fd.get('vertex_project_id') || '').trim() || null) : null,
     vertex_location: isVertexProvider ? (String(fd.get('vertex_location') || '').trim() || null) : null,
+    cli_command_profile: isCli ? (String(fd.get('cli_command_profile') || '').trim() || null) : null,
+    cli_runtime_model: isCli ? (String(fd.get('cli_runtime_model') || '').trim() || null) : null,
   };
   if (!backend.type || !backend.provider || !backend.model) {
     setCreateSessionStatus('Model config needs type, provider, and model.', true);
+    return;
+  }
+  if (isCli && (!backend.worker_id || !backend.cli_runtime_model)) {
+    setCreateSessionStatus('Claude via Ollama needs a worker and runtime model.', true);
     return;
   }
   const temp = String(fd.get('temperature') || '').trim();
@@ -632,6 +665,9 @@ async function createPlatformAISession() {
     credential_ref: NEW_SESSION_BACKEND.api_key_ref || undefined,
     vertex_project_id: NEW_SESSION_BACKEND.vertex_project_id || undefined,
     vertex_location: NEW_SESSION_BACKEND.vertex_location || undefined,
+    worker_id: NEW_SESSION_BACKEND.worker_id || undefined,
+    cli_command_profile: NEW_SESSION_BACKEND.cli_command_profile || undefined,
+    cli_runtime_model: NEW_SESSION_BACKEND.cli_runtime_model || undefined,
     params: NEW_SESSION_BACKEND.params || {},
     metadata: {
       source: 'platform_ai_index',
@@ -704,13 +740,13 @@ document.addEventListener('DOMContentLoaded', () => {
   form.provider?.addEventListener('change', () => {
     refreshSessionApiKeyOptions();
     refreshSessionModelOptions();
-    toggleSessionVertexFields();
+    toggleSessionBackendTypeFields();
   });
   form.type?.addEventListener('change', () => {
+    toggleSessionBackendTypeFields();
     refreshSessionModelOptions();
-    toggleSessionVertexFields();
   });
-  toggleSessionVertexFields();
+  toggleSessionBackendTypeFields();
   renderBackendSummary();
 });
 </script>

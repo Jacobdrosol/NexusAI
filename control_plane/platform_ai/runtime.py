@@ -678,7 +678,11 @@ class PlatformAISessionRuntime:
             "provider": provider,
             "model": model,
             "api_key_ref": str(backend.get("credential_ref") or "").strip() or None,
+            "worker_id": str(backend.get("worker_id") or "").strip() or None,
         }
+        command = str(backend.get("command") or "").strip()
+        if command:
+            payload["command"] = command
         if params_filtered:
             payload["params"] = params_filtered
         try:

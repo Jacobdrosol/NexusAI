@@ -3,11 +3,46 @@ import pytest
 import sys
 from contextlib import suppress
 
+from control_plane.api.platform_ai import _apply_cli_backend_profile
 from control_plane.platform_ai.runtime import PlatformAISessionRuntime
 from control_plane.platform_ai.session_store import PlatformAISessionStore
 from control_plane.registry.bot_registry import BotRegistry
 from shared.exceptions import BotNotFoundError
 from shared.models import Bot
+
+
+def test_platform_ai_cli_backend_uses_approved_ollama_profile():
+    config = {
+        "backend_type": "cli",
+        "provider": "cli",
+        "model": "claude",
+        "worker_id": "globeiq-coding-sandbox-01",
+    }
+
+    _apply_cli_backend_profile(
+        config,
+        cli_command_profile="claude_ollama_json",
+        cli_runtime_model="glm-5.2:cloud",
+    )
+
+    assert config["command"] == "claude -p --model glm-5.2:cloud --output-format json"
+    assert config["cli_command_profile"] == "claude_ollama_json"
+
+
+def test_platform_ai_cli_backend_rejects_unsafe_runtime_model():
+    config = {
+        "backend_type": "cli",
+        "provider": "cli",
+        "model": "claude",
+        "worker_id": "globeiq-coding-sandbox-01",
+    }
+
+    with pytest.raises(Exception, match="valid Ollama model name"):
+        _apply_cli_backend_profile(
+            config,
+            cli_command_profile="claude_ollama_json",
+            cli_runtime_model="glm-5.2:cloud; rm -rf /",
+        )
 
 
 @pytest.mark.anyio
