@@ -17,6 +17,7 @@ data/deploy_status.json
 data/tool_installs/
 data/nginx/
 data/platform_ai/
+data/project_data/
 data/repo_workspaces/
 data.backup.*/
 runtime/
