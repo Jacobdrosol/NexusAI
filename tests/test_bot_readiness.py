@@ -122,6 +122,35 @@ async def test_bot_enable_allows_a_ready_worker_backend(cp_client):
 
 
 @pytest.mark.anyio
+async def test_bot_update_cannot_bypass_readiness_on_activation(cp_client):
+    bot_id = "update-unready-bot"
+    await cp_client.post(
+        "/v1/bots",
+        json={
+            "id": bot_id,
+            "name": "Update Unready Bot",
+            "role": "worker",
+            "enabled": False,
+            "backends": [],
+        },
+    )
+
+    updated = await cp_client.put(
+        f"/v1/bots/{bot_id}",
+        json={
+            "id": bot_id,
+            "name": "Update Unready Bot",
+            "role": "worker",
+            "enabled": True,
+            "backends": [],
+        },
+    )
+
+    assert updated.status_code == 409
+    assert updated.json()["detail"]["reason_code"] == "bot_not_ready"
+
+
+@pytest.mark.anyio
 async def test_bot_readiness_requires_declared_worker_tools(cp_client):
     worker_id = "browser-worker"
     await cp_client.post(

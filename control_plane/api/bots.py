@@ -300,6 +300,9 @@ async def update_bot(bot_id: str, request: Request, payload: Any = Body(...)) ->
     _validate_bot_or_400(bot)
     bot_registry = request.app.state.bot_registry
     try:
+        current = await bot_registry.get(bot_id)
+        if not current.enabled and bot.enabled:
+            await _require_bot_ready_to_enable(bot, request)
         await bot_registry.update(bot_id, bot)
         await record_audit_event(request, action="bots.update", resource=f"bot:{bot_id}")
         return bot

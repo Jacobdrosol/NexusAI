@@ -545,7 +545,19 @@ def api_update_bot(bot_id: str):
         merged.update(data)
         updated = cp.update_bot(bot_id, merged)
         if updated is None:
-            return jsonify({"error": "control plane unavailable"}), 502
+            err = cp.last_error()
+            status = int(err.get("status_code") or 502)
+            if status < 400 or status > 599:
+                status = 502
+            raw_detail = err.get("detail") or "control plane update failed"
+            try:
+                detail = json.loads(raw_detail) if isinstance(raw_detail, str) else raw_detail
+            except (TypeError, json.JSONDecodeError):
+                detail = raw_detail
+            message = detail.get("detail", {}).get("message") if isinstance(detail, dict) else None
+            if not message and isinstance(detail, dict):
+                message = detail.get("message")
+            return jsonify({"error": message or str(raw_detail), "detail": detail}), status
         return jsonify(updated)
 
     db = get_db()
