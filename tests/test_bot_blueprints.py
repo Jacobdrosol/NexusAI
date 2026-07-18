@@ -95,6 +95,48 @@ def test_code_implementer_requires_explicit_write_escalation():
     assert writer_bot.routing_rules["specialist"]["operator_review_required"] is True
 
 
+def test_cli_specialist_uses_an_approved_claude_ollama_profile():
+    bot = build_specialist_bot(
+        SpecialistBlueprintRequest(
+            kind="code_reviewer",
+            name="Claude Review Worker",
+            backends=[
+                BackendConfig(
+                    type="cli",
+                    worker_id="coding-worker",
+                    provider="cli",
+                    model="claude",
+                )
+            ],
+            cli_command_profile="claude_ollama_json",
+            cli_runtime_model="glm-5.2:cloud",
+        )
+    )
+
+    assert bot.backends[0].command == "claude -p --model glm-5.2:cloud --output-format json"
+
+
+def test_cli_specialist_rejects_unapproved_commands_and_models():
+    request = SpecialistBlueprintRequest(
+        kind="code_reviewer",
+        name="Unsafe Claude Worker",
+        backends=[
+            BackendConfig(
+                type="cli",
+                worker_id="coding-worker",
+                provider="cli",
+                model="claude",
+                command="claude -p --unsafe",
+            )
+        ],
+        cli_command_profile="claude_ollama_json",
+        cli_runtime_model="glm-5.2:cloud",
+    )
+
+    with pytest.raises(ValueError, match="generated from an approved profile"):
+        build_specialist_bot(request)
+
+
 @pytest.mark.anyio
 async def test_specialist_blueprint_api_previews_and_registers_disabled_bot(cp_app):
     payload = {

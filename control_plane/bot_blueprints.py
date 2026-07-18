@@ -49,6 +49,8 @@ class SpecialistBlueprintRequest(BaseModel):
     project_id: str | None = Field(default=None, max_length=120)
     activate: bool = False
     allow_repo_writes: bool = False
+    cli_command_profile: Literal["claude_ollama_json"] | None = None
+    cli_runtime_model: str | None = Field(default=None, max_length=128)
 
 
 _BLUEPRINTS: dict[str, dict[str, Any]] = {
@@ -277,6 +279,7 @@ def build_specialist_bot(request: SpecialistBlueprintRequest) -> Bot:
     workspace_context = bool(spec.get("workspace_context", False))
     output_fields = list(spec["outputs"])
     input_fields = ["instruction"]
+    backends = _prepare_specialist_backends(request)
 
     system_prompt = _system_prompt(
         label=str(spec["label"]),
@@ -324,7 +327,7 @@ def build_specialist_bot(request: SpecialistBlueprintRequest) -> Bot:
         system_prompt=system_prompt,
         priority=0,
         enabled=bool(request.activate),
-        backends=request.backends,
+        backends=backends,
         routing_rules=routing_rules,
         workflow=BotWorkflow(required_output_fields=output_fields),
         context_access=BotContextAccess(
@@ -339,6 +342,41 @@ def build_specialist_bot(request: SpecialistBlueprintRequest) -> Bot:
             allow_run_result_ingest=True,
         ),
     )
+
+
+def _prepare_specialist_backends(request: SpecialistBlueprintRequest) -> list[BackendConfig]:
+    """Apply approved CLI profiles without accepting arbitrary shell commands."""
+    cli_backends = [backend for backend in request.backends if backend.type == "cli"]
+    profile = request.cli_command_profile
+    runtime_model = str(request.cli_runtime_model or "").strip()
+
+    if not cli_backends:
+        if profile or runtime_model:
+            raise ValueError("CLI profile settings require at least one CLI backend.")
+        return list(request.backends)
+
+    if profile != "claude_ollama_json":
+        raise ValueError("CLI backends require the approved Claude via Ollama JSON profile.")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}", runtime_model):
+        raise ValueError("CLI runtime model must be a valid Ollama model name.")
+
+    configured: list[BackendConfig] = []
+    for backend in request.backends:
+        if backend.type != "cli":
+            configured.append(backend)
+            continue
+        if backend.command:
+            raise ValueError("Specialist CLI commands are generated from an approved profile.")
+        if backend.provider != "cli" or backend.model != "claude":
+            raise ValueError("The Claude via Ollama profile requires provider 'cli' and model 'claude'.")
+        configured.append(
+            backend.model_copy(
+                update={
+                    "command": f"claude -p --model {runtime_model} --output-format json",
+                }
+            )
+        )
+    return configured
 
 
 def _normalize_bot_id(value: str) -> str:

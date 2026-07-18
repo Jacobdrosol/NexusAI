@@ -140,6 +140,19 @@
           </select>
         </div>
       </div>
+      <div class="split-grid" id="specialist-cli-options" style="display:none;grid-template-columns:1fr 1fr;gap:0.75rem;">
+        <div class="form-group">
+          <label for="specialist-cli-profile">CLI Profile</label>
+          <select class="form-control" id="specialist-cli-profile" name="cli_command_profile">
+            <option value="">Select a CLI profile</option>
+            <option value="claude_ollama_json">Claude Code via Ollama (JSON)</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="specialist-cli-runtime-model">Ollama Runtime Model</label>
+          <input class="form-control" id="specialist-cli-runtime-model" name="cli_runtime_model" placeholder="glm-5.2:cloud" maxlength="128">
+        </div>
+      </div>
       <div class="form-group">
         <label for="specialist-mission">Mission (optional)</label>
         <textarea class="form-control" id="specialist-mission" name="mission" rows="3" maxlength="4000"></textarea>
@@ -203,6 +216,25 @@ function refreshSpecialistDetails() {
   }
 }
 
+function refreshSpecialistBackendControls() {
+  const backendType = String(document.getElementById('specialist-backend-type')?.value || '');
+  const cliOptions = document.getElementById('specialist-cli-options');
+  const provider = document.getElementById('specialist-provider');
+  const model = document.getElementById('specialist-model');
+  const profile = document.getElementById('specialist-cli-profile');
+  if (cliOptions) cliOptions.style.display = backendType === 'cli' ? 'grid' : 'none';
+  if (backendType === 'cli') {
+    if (provider) provider.value = 'cli';
+    if (model) model.value = 'claude';
+    if (profile && !profile.value) profile.value = 'claude_ollama_json';
+  } else {
+    if (profile) profile.value = '';
+    const runtimeModel = document.getElementById('specialist-cli-runtime-model');
+    if (runtimeModel) runtimeModel.value = '';
+  }
+  refreshSpecialistModels();
+}
+
 function refreshSpecialistModels() {
   const provider = String(document.getElementById('specialist-provider')?.value || '').trim().toLowerCase();
   const options = document.getElementById('specialist-model-options');
@@ -235,6 +267,7 @@ async function openSpecialistModal() {
   document.getElementById('modal-create-specialist').style.display = 'flex';
   setSpecialistStatus('');
   await loadSpecialistCatalog();
+  refreshSpecialistBackendControls();
 }
 
 function closeSpecialistModal() {
@@ -248,9 +281,14 @@ function specialistPayload() {
   const workerId = String(fd.get('worker_id') || '').trim();
   const provider = String(fd.get('provider') || '').trim();
   const model = String(fd.get('model') || '').trim();
+  const cliProfile = String(fd.get('cli_command_profile') || '').trim();
+  const cliRuntimeModel = String(fd.get('cli_runtime_model') || '').trim();
   if (!provider || !model) throw new Error('Provider and model are required.');
   if ((backendType === 'remote_llm' || backendType === 'local_llm' || backendType === 'cli') && !workerId) {
     throw new Error('The selected backend type requires a worker binding.');
+  }
+  if (backendType === 'cli' && (!cliProfile || !cliRuntimeModel)) {
+    throw new Error('The CLI profile and Ollama runtime model are required for a CLI worker.');
   }
   return {
     kind: String(fd.get('kind') || '').trim(),
@@ -259,6 +297,8 @@ function specialistPayload() {
     project_id: String(fd.get('project_id') || '').trim() || null,
     activate: !!document.getElementById('specialist-activate')?.checked,
     allow_repo_writes: !!document.getElementById('specialist-allow-writes')?.checked,
+    cli_command_profile: cliProfile || null,
+    cli_runtime_model: cliRuntimeModel || null,
     backends: [{
       type: backendType,
       provider,
@@ -291,6 +331,7 @@ async function previewSpecialist() {
 
 document.getElementById('specialist-kind').addEventListener('change', refreshSpecialistDetails);
 document.getElementById('specialist-provider').addEventListener('input', refreshSpecialistModels);
+document.getElementById('specialist-backend-type').addEventListener('change', refreshSpecialistBackendControls);
 
 document.getElementById('form-create-specialist').addEventListener('submit', async function(event) {
   event.preventDefault();
