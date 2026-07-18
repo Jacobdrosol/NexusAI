@@ -38,6 +38,12 @@ _RESERVED_WORKER_ENV = {
     "OLLAMA_CLOUD_BASE_URL",
     "OLLAMA_API_KEY",
 }
+_DEFAULT_RESOURCE_LIMITS = {
+    "cpus": "1.0",
+    "memory": "1g",
+    "pids_limit": 256,
+}
+_MEMORY_LIMIT = re.compile(r"^[1-9][0-9]*(?:b|k|kb|kib|m|mb|mib|g|gb|gib)?$", re.IGNORECASE)
 
 
 def _read_env_file(path: Path) -> dict[str, str]:
@@ -126,6 +132,67 @@ def _worker_runtime(worker: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"Worker {worker.get('id') or worker.get('name')} runtime must be a mapping.")
     return value
+
+
+def _resource_limit_values(value: Any, *, label: str) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} must be a mapping.")
+    allowed = {"cpus", "memory", "memory_reservation", "pids_limit"}
+    unknown = sorted(set(value) - allowed)
+    if unknown:
+        raise ValueError(f"{label} has unsupported fields: {', '.join(unknown)}")
+    return dict(value)
+
+
+def _validated_resource_limits(worker: dict[str, Any], fleet: dict[str, Any]) -> dict[str, Any]:
+    worker_id = str(worker.get("id") or worker.get("name") or "worker").strip()
+    limits = dict(_DEFAULT_RESOURCE_LIMITS)
+    limits.update(_resource_limit_values(fleet.get("resource_limits"), label="fleet.resource_limits"))
+    limits.update(
+        _resource_limit_values(
+            _worker_runtime(worker).get("resource_limits"),
+            label=f"worker {worker_id} runtime.resource_limits",
+        )
+    )
+
+    cpus = str(limits.get("cpus") or "").strip()
+    try:
+        parsed_cpus = float(cpus)
+    except ValueError as exc:
+        raise ValueError(f"Worker {worker_id} resource limit cpus must be a positive number") from exc
+    if not 0 < parsed_cpus <= 128:
+        raise ValueError(f"Worker {worker_id} resource limit cpus must be greater than zero and at most 128")
+
+    memory = str(limits.get("memory") or "").strip()
+    if not _MEMORY_LIMIT.fullmatch(memory):
+        raise ValueError(f"Worker {worker_id} resource limit memory must be a positive Docker memory value")
+
+    compose_limits: dict[str, Any] = {
+        "cpus": cpus,
+        "mem_limit": memory,
+    }
+    memory_reservation = limits.get("memory_reservation")
+    if memory_reservation is not None:
+        normalized_reservation = str(memory_reservation).strip()
+        if not _MEMORY_LIMIT.fullmatch(normalized_reservation):
+            raise ValueError(
+                f"Worker {worker_id} resource limit memory_reservation must be a positive Docker memory value"
+            )
+        compose_limits["mem_reservation"] = normalized_reservation
+
+    pids_limit = limits.get("pids_limit")
+    if isinstance(pids_limit, bool):
+        raise ValueError(f"Worker {worker_id} resource limit pids_limit must be a positive integer")
+    try:
+        normalized_pids = int(pids_limit)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Worker {worker_id} resource limit pids_limit must be a positive integer") from exc
+    if normalized_pids < 32:
+        raise ValueError(f"Worker {worker_id} resource limit pids_limit must be at least 32")
+    compose_limits["pids_limit"] = normalized_pids
+    return compose_limits
 
 
 def _worker_tooling(worker: dict[str, Any]) -> dict[str, Any]:
@@ -660,6 +727,7 @@ def render(profile_path: Path, output_dir: Path, env: dict[str, str], *, allow_m
         service_config: dict[str, Any] = {
             "image": image,
             "restart": "unless-stopped",
+            **_validated_resource_limits(worker, fleet),
             "env_file": [env_path.resolve().as_posix()],
             "volumes": [f"{config_path.resolve().as_posix()}:/app/worker.yaml:ro"],
             "networks": ["nexus-net"],

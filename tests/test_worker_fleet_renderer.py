@@ -80,6 +80,9 @@ def test_render_worker_fleet_outputs_compose_worker_config_and_bot(tmp_path):
     service = compose["services"]["worker-content"]
     assert service["networks"] == ["nexus-net"]
     assert service["env_file"][0].endswith("content-repair-01.env")
+    assert service["cpus"] == "1.0"
+    assert service["mem_limit"] == "1g"
+    assert service["pids_limit"] == 256
     assert compose["networks"]["nexus-net"]["name"] == "nexusai_nexus-net"
 
     worker_cfg = yaml.safe_load((out / "workers" / "content-repair-01.yaml").read_text())
@@ -124,6 +127,53 @@ def test_render_worker_fleet_can_allow_missing_ollama_key(tmp_path):
     )
 
     assert summary["warnings"] == ["Missing Ollama Cloud API key env value: OLLAMA_API_KEY"]
+
+
+def test_render_worker_fleet_merges_validated_resource_limits(tmp_path):
+    renderer = _load_renderer()
+    profile = _profile(tmp_path / "workers.yaml")
+    profile_data = yaml.safe_load(profile.read_text(encoding="utf-8"))
+    profile_data["fleet"]["resource_limits"] = {
+        "cpus": 1.5,
+        "memory": "1536m",
+        "pids_limit": 384,
+    }
+    profile_data["workers"][0]["runtime"] = {
+        "resource_limits": {
+            "memory": "2g",
+            "memory_reservation": "1g",
+        }
+    }
+    profile.write_text(yaml.safe_dump(profile_data, sort_keys=False), encoding="utf-8")
+
+    out = tmp_path / "runtime"
+    renderer.render(
+        profile,
+        out,
+        {"CONTROL_PLANE_API_TOKEN": "control-token", "OLLAMA_API_KEY": "ollama-token"},
+    )
+
+    compose = yaml.safe_load((out / "docker-compose.worker-node.generated.yml").read_text())
+    service = compose["services"]["worker-content"]
+    assert service["cpus"] == "1.5"
+    assert service["mem_limit"] == "2g"
+    assert service["mem_reservation"] == "1g"
+    assert service["pids_limit"] == 384
+
+
+def test_render_worker_fleet_rejects_invalid_resource_limits(tmp_path):
+    renderer = _load_renderer()
+    profile = _profile(tmp_path / "workers.yaml")
+    profile_data = yaml.safe_load(profile.read_text(encoding="utf-8"))
+    profile_data["fleet"]["resource_limits"] = {"memory": "unbounded"}
+    profile.write_text(yaml.safe_dump(profile_data, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="resource limit memory"):
+        renderer.render(
+            profile,
+            tmp_path / "runtime",
+            {"CONTROL_PLANE_API_TOKEN": "control-token", "OLLAMA_API_KEY": "ollama-token"},
+        )
 
 
 def test_render_worker_fleet_supports_node_local_tooling_and_prebuilt_images(tmp_path):
