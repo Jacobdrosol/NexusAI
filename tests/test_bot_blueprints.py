@@ -29,6 +29,28 @@ def test_specialist_catalog_exposes_specialized_roles_without_secrets():
     assert all("api_key" not in item for item in catalog)
 
 
+def test_assessment_and_lesson_specialists_are_bounded_by_default():
+    catalog = list_specialist_blueprints()
+    catalog_by_kind = {item["kind"]: item for item in catalog}
+
+    assert catalog_by_kind["question_bank_reviewer"]["risk_level"] == "read_only"
+    assert catalog_by_kind["question_bank_writer"]["risk_level"] == "draft_only"
+    assert catalog_by_kind["lesson_block_reviewer"]["risk_level"] == "read_only"
+    assert catalog_by_kind["lesson_block_builder"]["risk_level"] == "draft_only"
+
+    bot = build_specialist_bot(
+        SpecialistBlueprintRequest(
+            kind="question_bank_writer",
+            name="Question Draft Writer",
+            backends=[_backend()],
+        )
+    )
+    assert bot.enabled is False
+    assert bot.execution_policy.repo_output_mode == "deny"
+    assert "semantic novelty" in bot.system_prompt.lower()
+    assert "admin ui" in bot.system_prompt.lower()
+
+
 def test_content_writer_blueprint_is_disabled_and_draft_only_by_default():
     bot = build_specialist_bot(
         SpecialistBlueprintRequest(
