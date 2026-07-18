@@ -183,6 +183,7 @@ def platform_ai_page() -> str:
     sessions_active_resp = cp.list_platform_ai_sessions(limit=300, archived="active") or {}
     sessions_archived_resp = cp.list_platform_ai_sessions(limit=300, archived="archived") or {}
     pipelines_resp = cp.list_platform_ai_pipelines() or {}
+    capabilities = cp.get_platform_ai_capabilities() or {}
     workers = cp.list_workers() or []
     models = cp.list_models() or []
     api_keys = cp.list_keys() or []
@@ -199,6 +200,7 @@ def platform_ai_page() -> str:
         sessions_active=sessions_active,
         sessions_archived=sessions_archived,
         pipelines=pipelines,
+        capabilities=capabilities,
         workers=workers,
         models=models,
         api_keys=api_keys,

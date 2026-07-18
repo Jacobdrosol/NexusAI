@@ -58,6 +58,25 @@ def _require_feature_flag(flag: str, *, action: str) -> None:
     raise HTTPException(status_code=403, detail=f"{action} is disabled ({flag} not enabled)")
 
 
+@router.get("/capabilities")
+async def get_platform_ai_capabilities() -> Dict[str, Any]:
+    """Return non-secret Platform AI modes and operator-controlled safety flags."""
+    cloud_context_policy = str(
+        os.environ.get("NEXUSAI_CLOUD_CONTEXT_POLICY", "") or ""
+    ).strip().lower()
+    return {
+        "session_modes": sorted(_CANONICAL_MODES),
+        "cloud_context_policy": cloud_context_policy or "unset",
+        "actions": {
+            "privileged_mode": _env_enabled("NEXUS_PLATFORM_AI_PRIVILEGED_ENABLED"),
+            "project_repo_edits": _env_enabled("NEXUS_PLATFORM_AI_PROJECT_EDIT_ENABLED"),
+            "external_repo_edits": _env_enabled("NEXUS_PLATFORM_AI_EXTERNAL_REPO_EDIT_ENABLED"),
+            "repository_edits": _env_enabled("NEXUS_PLATFORM_AI_REPO_EDIT_ENABLED"),
+            "deployments": _env_enabled("NEXUS_PLATFORM_AI_DEPLOY_ENABLED"),
+        },
+    }
+
+
 def _instruction_from_payload(payload: Any) -> str:
     if isinstance(payload, str):
         return str(payload).strip()

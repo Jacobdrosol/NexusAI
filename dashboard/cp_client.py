@@ -690,6 +690,9 @@ class CPClient:
         return self._get(f"/v1/assignments/{assignment_id}/lineage")
 
     # Platform AI
+    def get_platform_ai_capabilities(self) -> Optional[Dict[str, Any]]:
+        return self._get("/v1/platform-ai/capabilities")
+
     def create_platform_ai_session(self, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return self._post("/v1/platform-ai/sessions", body, timeout=_CHAT_TIMEOUT)
 

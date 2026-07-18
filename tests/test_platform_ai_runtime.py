@@ -10,6 +10,29 @@ from shared.models import Bot
 
 
 @pytest.mark.anyio
+async def test_platform_ai_capabilities_expose_nonsecret_feature_flags(cp_client, monkeypatch):
+    monkeypatch.setenv("NEXUSAI_CLOUD_CONTEXT_POLICY", "redact")
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_PRIVILEGED_ENABLED", "0")
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_REPO_EDIT_ENABLED", "0")
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_PROJECT_EDIT_ENABLED", "0")
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_EXTERNAL_REPO_EDIT_ENABLED", "0")
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_DEPLOY_ENABLED", "0")
+
+    response = await cp_client.get("/v1/platform-ai/capabilities")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["cloud_context_policy"] == "redact"
+    assert payload["actions"] == {
+        "privileged_mode": False,
+        "project_repo_edits": False,
+        "external_repo_edits": False,
+        "repository_edits": False,
+        "deployments": False,
+    }
+
+
+@pytest.mark.anyio
 async def test_pipeline_tuner_terminal_failure_stops_session(tmp_path):
     store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
     runtime = PlatformAISessionRuntime(store)

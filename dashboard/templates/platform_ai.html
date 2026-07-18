@@ -14,6 +14,28 @@
 {% endif %}
 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
+{% set actions = capabilities.actions or {} %}
+<section class="panel" style="margin-bottom:1rem;">
+  <div class="page-header" style="margin-bottom:0.75rem;">
+    <h2 class="panel-title">Runtime Policy</h2>
+    <div class="mini-note">Cloud context: <code>{{ capabilities.cloud_context_policy or "unknown" }}</code></div>
+  </div>
+  <div class="cards">
+    <div class="card">
+      <div class="card-label">Privileged Mode</div>
+      <div class="card-value {% if actions.privileged_mode %}card-yellow{% else %}card-green{% endif %}">{{ "enabled" if actions.privileged_mode else "disabled" }}</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Repository Edits</div>
+      <div class="card-value {% if actions.repository_edits or actions.project_repo_edits or actions.external_repo_edits %}card-yellow{% else %}card-green{% endif %}">{{ "enabled" if actions.repository_edits or actions.project_repo_edits or actions.external_repo_edits else "disabled" }}</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Deployments</div>
+      <div class="card-value {% if actions.deployments %}card-yellow{% else %}card-green{% endif %}">{{ "enabled" if actions.deployments else "disabled" }}</div>
+    </div>
+  </div>
+</section>
+
 <section class="panel" style="margin-bottom:1rem;">
   <div class="page-header" style="margin-bottom:0.75rem;">
     <h2 class="panel-title">Active Sessions</h2>

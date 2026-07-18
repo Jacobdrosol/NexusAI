@@ -94,6 +94,21 @@ def test_platform_ai_pipeline_endpoints():
     assert called_url.endswith("/v1/platform-ai/pipelines")
 
 
+def test_platform_ai_capabilities_hits_expected_endpoint():
+    cp = CPClient(base_url="http://example.invalid", timeout=0.1)
+
+    ok_resp = Mock()
+    ok_resp.raise_for_status.return_value = None
+    ok_resp.text = '{"actions":{}}'
+    ok_resp.json.return_value = {"actions": {}}
+
+    with patch("dashboard.cp_client.requests.get", return_value=ok_resp) as get_mock:
+        cp.get_platform_ai_capabilities()
+
+    called_url = str(get_mock.call_args.args[0])
+    assert called_url.endswith("/v1/platform-ai/capabilities")
+
+
 def test_list_worker_probes_hits_fleet_probe_endpoint():
     cp = CPClient(base_url="http://example.invalid", timeout=0.1)
 
