@@ -132,14 +132,70 @@ def create_app() -> Flask:
         overview_launch_bots = launchable_bots(cp_bots or [], surface="overview")
         enabled_bot_readiness = []
         bot_readiness_unavailable = False
+        worker_probes_unavailable = False
+        schedules_unavailable = False
+        worker_runtime_attention = None
+        worker_runtime_ready = None
+        active_schedules = 0
+        failed_schedule_runs = 0
 
         if cp_available:
             workers = cp_workers or []
             bots = cp_bots or []
             tasks = cp_tasks or []
+            worker_rows = workers
+            probe_getter = getattr(cp, "list_worker_probes", None)
+            if callable(probe_getter):
+                probe_payload = probe_getter()
+                if isinstance(probe_payload, dict):
+                    from dashboard.routes.workers import _with_worker_probe_views
+
+                    worker_rows = _with_worker_probe_views(workers, probe_payload)
+                else:
+                    worker_probes_unavailable = True
+            else:
+                worker_probes_unavailable = True
+
+            schedule_getter = getattr(cp, "list_schedules", None)
+            if callable(schedule_getter):
+                schedule_payload = schedule_getter(limit=100)
+                if isinstance(schedule_payload, dict):
+                    schedules = [
+                        item for item in (schedule_payload.get("schedules") or []) if isinstance(item, dict)
+                    ]
+                    active_schedules = sum(
+                        1 for schedule in schedules if str(schedule.get("status") or "").lower() == "active"
+                    )
+                    failed_schedule_runs = sum(
+                        1
+                        for schedule in schedules
+                        if str(schedule.get("last_run_status") or "").lower() == "failed"
+                    )
+                else:
+                    schedules_unavailable = True
+            else:
+                schedules_unavailable = True
+
             total_workers = len(workers)
             online_workers = sum(1 for w in workers if w.get("status") == "online")
             offline_workers = sum(1 for w in workers if w.get("status") == "offline")
+            online_enabled_workers = sum(
+                1
+                for worker in worker_rows
+                if worker.get("status") == "online" and bool(worker.get("enabled", True))
+            )
+            if not worker_probes_unavailable:
+                worker_runtime_attention = sum(
+                    1
+                    for worker in worker_rows
+                    if worker.get("status") == "online"
+                    and bool(worker.get("enabled", True))
+                    and (
+                        not isinstance(worker.get("probe"), dict)
+                        or str((worker.get("probe") or {}).get("status") or "").lower() != "ready"
+                    )
+                )
+                worker_runtime_ready = online_enabled_workers - worker_runtime_attention
             active_bots = sum(1 for b in bots if b.get("enabled"))
             queued = sum(1 for t in tasks if t.get("status") == "queued")
             blocked = sum(1 for t in tasks if t.get("status") == "blocked")
@@ -167,7 +223,7 @@ def create_app() -> Flask:
                     bot_readiness_unavailable = True
 
             worker_health = []
-            for w in workers[:12]:
+            for w in worker_rows[:12]:
                 m = w.get("metrics") or {}
                 gpu_util = m.get("gpu_utilization") or []
                 gpu_avg = (
@@ -184,6 +240,8 @@ def create_app() -> Flask:
                         "load": float(m.get("load") or 0.0),
                         "queue_depth": int(m.get("queue_depth") or 0),
                         "gpu_avg": float(gpu_avg),
+                        "runtime_status": (w.get("probe") or {}).get("status"),
+                        "runtime_detail": (w.get("probe") or {}).get("detail"),
                     }
                 )
 
@@ -447,6 +505,20 @@ def create_app() -> Flask:
             system_alerts.append(
                 {"level": "warning", "message": f"{offline_workers} worker(s) are offline."}
             )
+        if worker_probes_unavailable:
+            system_alerts.append(
+                {
+                    "level": "warning",
+                    "message": "Worker runtime capability evidence could not be loaded from the control plane.",
+                }
+            )
+        elif worker_runtime_attention:
+            system_alerts.append(
+                {
+                    "level": "warning",
+                    "message": f"{worker_runtime_attention} online worker(s) require runtime capability attention.",
+                }
+            )
         if failed > 0:
             system_alerts.append(
                 {"level": "error", "message": f"{failed} task(s) are currently in failed state."}
@@ -463,6 +535,20 @@ def create_app() -> Flask:
                 {
                     "level": "warning",
                     "message": f"{blocked_enabled_bots} enabled bot(s) are blocked by dispatch readiness checks.",
+                }
+            )
+        if schedules_unavailable:
+            system_alerts.append(
+                {
+                    "level": "warning",
+                    "message": "Schedule status could not be loaded from the control plane.",
+                }
+            )
+        elif failed_schedule_runs > 0:
+            system_alerts.append(
+                {
+                    "level": "warning",
+                    "message": f"{failed_schedule_runs} schedule(s) have a failed most recent run.",
                 }
             )
         if not system_alerts:
@@ -483,8 +569,11 @@ def create_app() -> Flask:
                 "workers_total": total_workers,
                 "workers_online": online_workers,
                 "workers_offline": offline_workers,
+                "worker_runtime_attention": worker_runtime_attention,
                 "bots_active": active_bots,
                 "bots_blocked": blocked_enabled_bots,
+                "schedules_active": active_schedules,
+                "schedules_failed": failed_schedule_runs,
                 "tasks_queued": queued,
                 "tasks_blocked": blocked,
                 "tasks_running": running,
@@ -494,6 +583,12 @@ def create_app() -> Flask:
                 "tasks_cancelled": cancelled,
             },
             worker_health=worker_health,
+            worker_runtime_ready=worker_runtime_ready,
+            worker_runtime_attention=worker_runtime_attention,
+            worker_probes_unavailable=worker_probes_unavailable,
+            active_schedules=active_schedules,
+            failed_schedule_runs=failed_schedule_runs,
+            schedules_unavailable=schedules_unavailable,
             recent_activity=recent_activity,
             launchable_bots=overview_launch_bots,
             system_alerts=system_alerts,

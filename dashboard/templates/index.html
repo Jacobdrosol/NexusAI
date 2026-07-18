@@ -14,12 +14,24 @@
     <div class="card-value card-gray" id="stat-workers-offline">{{ stats.workers_offline }}</div>
   </div>
   <div class="card">
+    <div class="card-label">Worker runtime attention</div>
+    <div class="card-value {% if stats.worker_runtime_attention is none %}card-gray{% elif stats.worker_runtime_attention %}card-yellow{% else %}card-green{% endif %}">{{ stats.worker_runtime_attention if stats.worker_runtime_attention is not none else '—' }}</div>
+  </div>
+  <div class="card">
     <div class="card-label">Bots active</div>
     <div class="card-value card-blue" id="stat-bots-active">{{ stats.bots_active }}</div>
   </div>
   <div class="card">
     <div class="card-label">Bots blocked</div>
     <div class="card-value {% if stats.bots_blocked %}card-red{% else %}card-green{% endif %}" id="stat-bots-blocked">{{ stats.bots_blocked }}</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Active schedules</div>
+    <div class="card-value card-blue">{{ stats.schedules_active }}</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Schedule run failures</div>
+    <div class="card-value {% if stats.schedules_failed %}card-red{% else %}card-green{% endif %}">{{ stats.schedules_failed }}</div>
   </div>
   <div class="card">
     <div class="card-label">Tasks waiting</div>
@@ -176,6 +188,68 @@
   </section>
 
   <section class="panel">
+    <h2 class="panel-title">Fleet Readiness</h2>
+    <table>
+      <thead><tr><th>Area</th><th>Status</th><th>Detail</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>Worker runtime capabilities</td>
+          <td>
+            {% if worker_probes_unavailable %}
+            <span class="badge badge-warning">unknown</span>
+            {% elif worker_runtime_attention %}
+            <span class="badge badge-degraded">attention</span>
+            {% else %}
+            <span class="badge badge-ready">ready</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if worker_probes_unavailable %}
+            Runtime capability evidence is unavailable.
+            {% elif worker_runtime_attention %}
+            {{ worker_runtime_attention }} online worker(s) need capability attention. <a class="quick-link" href="{{ url_for('workers.workers_page') }}">Review workers</a>
+            {% else %}
+            {{ worker_runtime_ready }} enabled online worker(s) have ready runtime capability evidence.
+            {% endif %}
+          </td>
+        </tr>
+        <tr>
+          <td>Enabled bot dispatch</td>
+          <td>
+            {% if stats.bots_blocked %}
+            <span class="badge badge-blocked">blocked</span>
+            {% else %}
+            <span class="badge badge-ready">ready</span>
+            {% endif %}
+          </td>
+          <td>{{ stats.bots_active - stats.bots_blocked }} of {{ stats.bots_active }} enabled bot(s) are dispatch-ready. <a class="quick-link" href="{{ url_for('bots.bots_page') }}">Review bots</a></td>
+        </tr>
+        <tr>
+          <td>Recurring schedules</td>
+          <td>
+            {% if schedules_unavailable %}
+            <span class="badge badge-warning">unknown</span>
+            {% elif failed_schedule_runs %}
+            <span class="badge badge-failed">attention</span>
+            {% else %}
+            <span class="badge badge-ready">ready</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if schedules_unavailable %}
+            Schedule status is unavailable.
+            {% elif failed_schedule_runs %}
+            {{ active_schedules }} active schedule(s); {{ failed_schedule_runs }} most-recent run(s) failed. <a class="quick-link" href="{{ url_for('schedules.schedules_page') }}">Review schedules</a>
+            {% else %}
+            {{ active_schedules }} active schedule(s); no most-recent run failures. <a class="quick-link" href="{{ url_for('schedules.schedules_page') }}">Review schedules</a>
+            {% endif %}
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="panel">
     <h2 class="panel-title">Control Plane Checks</h2>
     <table>
       <thead><tr><th>Endpoint</th><th>Status</th><th>Detail</th></tr></thead>
@@ -222,6 +296,7 @@
         <div class="health-header">
           <strong><a href="{{ url_for('workers.worker_detail_page', worker_id=w.id) }}">{{ w.name }}</a></strong>
           <span class="badge badge-{{ w.status }}">{{ w.status }}</span>
+          {% if w.runtime_status %}<span class="badge badge-{{ w.runtime_status }}">runtime {{ w.runtime_status }}</span>{% endif %}
         </div>
         <div class="mini-bar-row">
           <span>Load</span>
@@ -231,7 +306,7 @@
           <span>GPU</span>
           <div class="mini-bar"><div class="mini-fill mini-fill-amber" style="width: {{ [w.gpu_avg, 100]|min }}%;"></div></div>
         </div>
-        <div class="mini-note">Queue depth: {{ w.queue_depth }}</div>
+        <div class="mini-note">Queue depth: {{ w.queue_depth }}{% if w.runtime_detail %} | {{ w.runtime_detail }}{% endif %}</div>
       </div>
       {% else %}
       <div class="empty">No workers available</div>

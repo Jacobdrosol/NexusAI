@@ -2547,10 +2547,81 @@ def test_overview_page_shows_enhanced_sections(dashboard_client):
     assert b"/v1/projects" in resp.data
     assert b"Required complete" in resp.data
     assert b"System Alerts" in resp.data
+    assert b"Fleet Readiness" in resp.data
+    assert b"Worker runtime attention" in resp.data
+    assert b"Active schedules" in resp.data
     assert b"Recent Activity" in resp.data
     assert b"Worker Health" in resp.data
     assert b"Quick Links" in resp.data
     assert b"Workflow Launch" in resp.data
+
+
+def test_overview_reports_worker_capability_and_schedule_attention(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def health(self):
+            return True
+
+        def list_workers(self):
+            return [
+                {
+                    "id": "browser-worker",
+                    "name": "Browser Worker",
+                    "status": "online",
+                    "enabled": True,
+                    "metrics": {"load": 0, "queue_depth": 0, "gpu_utilization": []},
+                }
+            ]
+
+        def list_worker_probes(self):
+            return {
+                "probes": [
+                    {
+                        "worker_id": "browser-worker",
+                        "probe_status": "ready",
+                        "capability_attestation": {
+                            "browser": {
+                                "configured": True,
+                                "ready": False,
+                                "reason": "browser_session_check_failed",
+                            }
+                        },
+                    }
+                ]
+            }
+
+        def list_bots(self):
+            return []
+
+        def list_projects(self):
+            return []
+
+        def list_tasks(self, **kwargs):
+            return []
+
+        def list_schedules(self, **kwargs):
+            return {
+                "schedules": [
+                    {
+                        "id": "schedule-1",
+                        "status": "active",
+                        "last_run_status": "failed",
+                    }
+                ]
+            }
+
+        def probe_paths(self, paths):
+            return [{"path": path, "ok": True, "status_code": 200, "detail": "ok"} for path in paths]
+
+    with patch("dashboard.cp_client.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/")
+
+    assert resp.status_code == 200
+    assert b"1 online worker(s) need capability attention" in resp.data
+    assert b"runtime degraded" in resp.data
+    assert b"browser_session_check_failed" in resp.data
+    assert b"1 most-recent run(s) failed" in resp.data
 
 
 def test_overview_page_shows_saved_launch_profiles(dashboard_client):
