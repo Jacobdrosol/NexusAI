@@ -654,6 +654,7 @@ async def test_autonomous_tuner_pauses_when_platform_brain_unavailable(tmp_path,
     runtime._pipeline_name_for_bot_id = fake_pipeline_name  # type: ignore[method-assign]
     runtime._invoke_platform_brain = fake_invoke  # type: ignore[method-assign]
     runtime._launch_autonomous_orchestration = fake_launch  # type: ignore[method-assign]
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_AUTONOMOUS_PIPELINES_ENABLED", "1")
     monkeypatch.setenv("NEXUS_PLATFORM_AI_REQUIRE_BRAIN_FOR_AUTONOMY", "1")
 
     await runtime._run_autonomous_pipeline_tuner(
