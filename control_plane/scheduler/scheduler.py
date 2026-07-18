@@ -90,6 +90,32 @@ def _agent_workspace_context(bot: Any, task: "Task") -> tuple["Path | None", boo
         return None, False
 
 
+def _is_non_mutating_test_task(task: "Task | None") -> bool:
+    """Return whether a task is an interactive test that must not change state."""
+    if task is None or task.metadata is None:
+        return False
+    mode = str(getattr(task.metadata, "execution_mode", "") or "").strip().lower()
+    source = str(getattr(task.metadata, "source", "") or "").strip().lower()
+    return mode == "test" or source == "bot_test"
+
+
+def _mark_test_payload(payload: Any) -> Any:
+    guardrail = (
+        "Execution mode is TEST. Analyze and report only. Do not claim to have changed external "
+        "systems, sent requests, published content, or written files."
+    )
+    if isinstance(payload, list):
+        return [*payload, {"role": "system", "content": guardrail}]
+    if isinstance(payload, dict):
+        marked = dict(payload)
+        marked["execution_mode"] = "test"
+        marked["test_constraints"] = guardrail
+        return marked
+    if isinstance(payload, str):
+        return f"{guardrail}\n\n{payload}"
+    return payload
+
+
 def _backend_supports_tools(backend: "BackendConfig") -> bool:
     """Return True if the backend provider supports function/tool calling."""
     provider = str(getattr(backend, "provider", "") or "").lower()
@@ -2004,14 +2030,23 @@ class Scheduler:
 
         last_error: Exception = NoViableBackendError("No backends configured")
         attempts: list[str] = []
+        is_test_task = _is_non_mutating_test_task(task)
         transformed_payload = self._apply_input_transform(bot, task.payload)
+        if is_test_task:
+            transformed_payload = _mark_test_payload(transformed_payload)
 
         # Determine if this bot should run in agentic tool-calling mode.
         workspace_root, allow_writes = _agent_workspace_context(bot, task)
+        if is_test_task:
+            allow_writes = False
 
         for backend in bot.backends:
             try:
                 effective_backend = _backend_with_retry_params(backend, task)
+                if is_test_task and effective_backend.type in {"cli", "custom"}:
+                    raise BackendError(
+                        "Test-mode tasks do not execute CLI or custom backends; configure an LLM backend for analysis."
+                    )
                 prepared_payload = _prepare_payload_for_backend(bot, effective_backend, transformed_payload, task=task)
 
                 if workspace_root is not None and _backend_supports_tools(effective_backend):
@@ -2745,6 +2780,10 @@ class Scheduler:
         raise NoViableBackendError(_backend_failure_message(task.id, last_error, attempts)) from last_error
 
     async def _dispatch_backend(self, backend: BackendConfig, payload: Any, task: Task | None = None) -> Any:
+        if _is_non_mutating_test_task(task) and backend.type in {"cli", "custom"}:
+            raise BackendError(
+                "Test-mode tasks do not execute CLI or custom backends; configure an LLM backend for analysis."
+            )
         await self._validate_model_if_catalog_present(backend)
         safe_payload = await self._apply_cloud_context_policy(backend, payload, task=task)
         if backend.type in ("local_llm", "remote_llm"):
@@ -2890,6 +2929,10 @@ class Scheduler:
     async def _dispatch_backend_stream(
         self, backend: BackendConfig, payload: Any, task: Task | None = None
     ) -> AsyncGenerator[dict[str, Any], None]:
+        if _is_non_mutating_test_task(task) and backend.type in {"cli", "custom"}:
+            raise BackendError(
+                "Test-mode tasks do not execute CLI or custom backends; configure an LLM backend for analysis."
+            )
         await self._validate_model_if_catalog_present(backend)
         safe_payload = await self._apply_cloud_context_policy(backend, payload, task=task)
         if backend.type in ("local_llm", "remote_llm", "cli"):

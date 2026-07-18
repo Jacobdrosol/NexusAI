@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Set
 import pytest
 from unittest.mock import AsyncMock
 
-from shared.models import Bot, TaskMetadata
+from shared.models import Bot, Task, TaskMetadata
 
 
 @pytest.fixture(autouse=True)
@@ -2452,6 +2452,28 @@ async def test_auto_retry_downstream_branch_keeps_forward_triggers(tmp_path):
     assert len(tester_tasks) == 1
     assert tester_tasks[0].metadata is not None
     assert tester_tasks[0].metadata.parent_task_id == coder_task.id
+
+
+@pytest.mark.anyio
+async def test_test_task_does_not_dispatch_workflow_triggers(tmp_path):
+    from control_plane.task_manager.task_manager import TaskManager
+
+    bot_registry = AsyncMock()
+    manager = TaskManager(AsyncMock(), db_path=str(tmp_path / "test-trigger-guard.db"), bot_registry=bot_registry)
+    task = Task(
+        id="test-trigger-guard",
+        bot_id="source-bot",
+        payload={"instruction": "Analyze only"},
+        metadata=TaskMetadata(source="bot_test", execution_mode="test"),
+        status="completed",
+        created_at="2026-07-18T00:00:00Z",
+        updated_at="2026-07-18T00:00:00Z",
+    )
+
+    await manager._dispatch_triggers(task)
+
+    bot_registry.get.assert_not_awaited()
+    await manager.close()
 
 
 @pytest.mark.anyio

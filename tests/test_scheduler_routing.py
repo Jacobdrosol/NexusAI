@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from shared.models import BackendConfig, Bot, Capability, Task, Worker, WorkerMetrics
+from shared.models import BackendConfig, Bot, Capability, Task, TaskMetadata, Worker, WorkerMetrics
 
 
 def test_backend_failure_message_includes_attempts():
@@ -137,6 +137,70 @@ def test_agent_workspace_context_reads_hidden_chat_marker(tmp_path):
     resolved_root, allow_writes = _agent_workspace_context(bot, task)
     assert resolved_root == workspace_root
     assert allow_writes is True
+
+
+@pytest.mark.anyio
+async def test_test_task_skips_cli_backend_and_disables_workspace_writes(tmp_path):
+    from control_plane.scheduler.scheduler import Scheduler
+
+    workspace_root = tmp_path / "repo"
+    workspace_root.mkdir()
+    bot = Bot(
+        id="test-run-bot",
+        name="Test Run Bot",
+        role="coder",
+        backends=[
+            BackendConfig(type="cli", provider="cli", model="codex", worker_id="coder-worker"),
+            BackendConfig(type="cloud_api", provider="ollama_cloud", model="glm-5.2:cloud"),
+        ],
+        execution_policy={
+            "repo_output_mode": "allow",
+            "workspace_context_injection": True,
+        },
+    )
+    task = Task(
+        id="safe-test-1",
+        bot_id=bot.id,
+        payload={"instruction": "Review the workspace", "_injected_workspace_root": str(workspace_root)},
+        metadata=TaskMetadata(source="bot_test", execution_mode="test"),
+        created_at="2026-07-18T00:00:00Z",
+        updated_at="2026-07-18T00:00:00Z",
+    )
+    bot_registry = AsyncMock()
+    bot_registry.get.return_value = bot
+    scheduler = Scheduler(bot_registry=bot_registry, worker_registry=AsyncMock())
+    agent_loop = AsyncMock(return_value={"output": "analysis only"})
+    scheduler._run_agent_loop = agent_loop  # type: ignore[method-assign]
+
+    result = await scheduler.schedule(task)
+
+    assert result == {"output": "analysis only"}
+    dispatched_backend = agent_loop.await_args.args[0]
+    assert dispatched_backend.type == "cloud_api"
+    assert agent_loop.await_args.kwargs["allow_writes"] is False
+    assert "Execution mode is TEST" in str(agent_loop.await_args.args[1])
+
+
+@pytest.mark.anyio
+async def test_test_task_rejects_direct_cli_and_custom_dispatch():
+    from control_plane.scheduler.scheduler import BackendError, Scheduler
+
+    task = Task(
+        id="safe-test-2",
+        bot_id="bot",
+        payload={"instruction": "test"},
+        metadata=TaskMetadata(execution_mode="test"),
+        created_at="2026-07-18T00:00:00Z",
+        updated_at="2026-07-18T00:00:00Z",
+    )
+    scheduler = Scheduler(bot_registry=AsyncMock(), worker_registry=AsyncMock())
+
+    for backend in (
+        BackendConfig(type="cli", provider="cli", model="codex", worker_id="worker"),
+        BackendConfig(type="custom", provider="http_connection", model="connection"),
+    ):
+        with pytest.raises(BackendError, match="Test-mode tasks do not execute"):
+            await scheduler._dispatch_backend(backend, {"instruction": "test"}, task=task)
 
 
 @pytest.mark.anyio

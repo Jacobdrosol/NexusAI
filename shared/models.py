@@ -212,6 +212,9 @@ class TaskMetadata(BaseModel):
     allowed_bot_ids: List[str] = Field(default_factory=list)
     workflow_graph_id: Optional[str] = None
     run_class: Optional[str] = None
+    # Test tasks may invoke an LLM for analysis, but the scheduler blocks external
+    # actions and workspace writes before dispatch.
+    execution_mode: Literal["live", "test"] = "live"
     # Fan-out / join convergence identity — explicit fields so evaluators and
     # join gates can operate without parsing the opaque step_id string.
     branch_id: Optional[str] = None       # stable per-lane key (e.g. "branch:0")

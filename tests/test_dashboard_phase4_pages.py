@@ -664,6 +664,7 @@ def test_bot_test_run_api_proxies_to_control_plane(dashboard_client):
 
     assert resp.status_code == 201
     assert resp.get_json()["id"] == "task-123"
+    assert resp.get_json()["metadata"]["execution_mode"] == "test"
 
 
 def test_bot_launch_api_uses_saved_launch_profile(dashboard_client):

@@ -616,6 +616,7 @@ def api_test_run_bot(bot_id: str):
         payload=payload,
         metadata={
             "source": "bot_test",
+            "execution_mode": "test",
             "project_id": data.get("project_id"),
             "conversation_id": data.get("conversation_id"),
             "priority": data.get("priority"),

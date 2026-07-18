@@ -6167,6 +6167,12 @@ class TaskManager:
         )
 
     async def _dispatch_triggers(self, task: Task) -> None:
+        metadata = task.metadata or TaskMetadata()
+        test_mode = str(getattr(metadata, "execution_mode", "") or "").strip().lower() == "test"
+        legacy_test_source = str(getattr(metadata, "source", "") or "").strip().lower() == "bot_test"
+        if test_mode or legacy_test_source:
+            logger.info("Skipping workflow triggers for non-mutating test task %s", task.id)
+            return
         if self._bot_registry is None:
             return
         try:
@@ -6175,8 +6181,6 @@ class TaskManager:
             return
         workflow = self._bot_workflow(bot)
         triggers = getattr(workflow, "triggers", None) or []
-
-        metadata = task.metadata or TaskMetadata()
 
         # For plan-managed orchestrated tasks, skip forward triggers because the PM plan already
         # defines the main forward path. Backward-triggered remediation tasks are created with
@@ -6884,6 +6888,7 @@ class TaskManager:
             allowed_bot_ids=allowed_bot_ids,
             workflow_graph_id=metadata.workflow_graph_id,
             run_class=metadata.run_class,
+            execution_mode=metadata.execution_mode,
             step_id=step_id or None,
         )
 
