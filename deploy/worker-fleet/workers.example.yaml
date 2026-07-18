@@ -30,5 +30,11 @@ workers:
     lesson_scope: []
     models:
       - glm-5.2:cloud
+    runtime:
+      # Values are sourced only from the private deployment environment.
+      env_from: {}
+    tooling:
+      # Declare tools installed in this node's image; this never installs or authenticates them.
+      cli_tools: []
     bot:
       id: example-qc-reader-bot

@@ -3028,6 +3028,8 @@ class Scheduler:
         }
         if backend.gpu_id:
             body["gpu_id"] = backend.gpu_id
+        if backend.command:
+            body["command"] = backend.command
         self._inflight_by_worker[worker.id] = int(self._inflight_by_worker.get(worker.id, 0)) + 1
         started = time.perf_counter()
         async with httpx.AsyncClient(timeout=_worker_timeout()) as client:
@@ -3060,6 +3062,8 @@ class Scheduler:
         }
         if backend.gpu_id:
             body["gpu_id"] = backend.gpu_id
+        if backend.command:
+            body["command"] = backend.command
         self._inflight_by_worker[worker.id] = int(self._inflight_by_worker.get(worker.id, 0)) + 1
         started = time.perf_counter()
         saw_token = False

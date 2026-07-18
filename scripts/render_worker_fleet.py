@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import sys
 import time
 from pathlib import Path
@@ -17,6 +18,17 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_PROFILE = ROOT / "deploy" / "worker-fleet" / "workers.example.yaml"
 DEFAULT_OUTPUT_DIR = ROOT / "runtime" / "worker-fleet"
+_ENV_NAME = re.compile(r"^[A-Z_][A-Z0-9_]*$")
+_RESERVED_WORKER_ENV = {
+    "NEXUS_WORKER_CONFIG_PATH",
+    "CONTROL_PLANE_URL",
+    "CONTROL_PLANE_API_TOKEN",
+    "NEXUS_WORKER_AUTO_REGISTER",
+    "HEARTBEAT_INTERVAL",
+    "NEXUS_WORKER_CLOUD_CONTEXT_POLICY",
+    "OLLAMA_CLOUD_BASE_URL",
+    "OLLAMA_API_KEY",
+}
 
 
 def _read_env_file(path: Path) -> dict[str, str]:
@@ -79,6 +91,43 @@ def _as_list(value: Any) -> list[str]:
     return [text] if text else []
 
 
+def _mapping(value: Any, *, label: str) -> dict[str, str]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} must be a mapping.")
+    result: dict[str, str] = {}
+    for key, source in value.items():
+        target_name = str(key or "").strip()
+        source_name = str(source or "").strip()
+        if not _ENV_NAME.fullmatch(target_name):
+            raise ValueError(f"{label} contains an invalid environment variable name: {target_name!r}")
+        if not _ENV_NAME.fullmatch(source_name):
+            raise ValueError(f"{label} source for {target_name!r} must be an environment variable name")
+        if target_name in _RESERVED_WORKER_ENV:
+            raise ValueError(f"{label} cannot override the reserved worker setting {target_name}")
+        result[target_name] = source_name
+    return result
+
+
+def _worker_runtime(worker: dict[str, Any]) -> dict[str, Any]:
+    value = worker.get("runtime")
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"Worker {worker.get('id') or worker.get('name')} runtime must be a mapping.")
+    return value
+
+
+def _worker_cli_tools(worker: dict[str, Any]) -> list[str]:
+    tooling = worker.get("tooling")
+    if tooling is None:
+        return []
+    if not isinstance(tooling, dict):
+        raise ValueError(f"Worker {worker.get('id') or worker.get('name')} tooling must be a mapping.")
+    return _as_list(tooling.get("cli_tools"))
+
+
 def _first_model(worker: dict[str, Any], fleet: dict[str, Any]) -> str:
     models = _as_list(worker.get("models"))
     if models:
@@ -113,7 +162,17 @@ def _worker_config(worker: dict[str, Any], fleet: dict[str, Any]) -> dict[str, A
         raise ValueError("Every worker entry needs an id.")
     service = _worker_service(worker)
     port = int(worker.get("port") or fleet.get("internal_worker_port") or 8010)
-    return {
+    capabilities: list[dict[str, Any]] = [
+        {
+            "type": "llm",
+            "provider": _worker_provider(worker, fleet),
+            "models": _worker_models(worker, fleet),
+        }
+    ]
+    cli_tools = _worker_cli_tools(worker)
+    if cli_tools:
+        capabilities.append({"type": "tool", "provider": "cli", "models": cli_tools})
+    config = {
         "id": worker_id,
         "name": str(worker.get("name") or worker_id).strip(),
         "host": service,
@@ -121,15 +180,12 @@ def _worker_config(worker: dict[str, Any], fleet: dict[str, Any]) -> dict[str, A
         "port": port,
         "status": "offline",
         "enabled": bool(worker.get("enabled", True)),
-        "capabilities": [
-            {
-                "type": "llm",
-                "provider": _worker_provider(worker, fleet),
-                "models": _worker_models(worker, fleet),
-            }
-        ],
+        "capabilities": capabilities,
         "metrics": {},
     }
+    if cli_tools:
+        config["tooling"] = {"cli_tools": cli_tools}
+    return config
 
 
 def _system_prompt(worker: dict[str, Any]) -> str:
@@ -147,14 +203,99 @@ def _system_prompt(worker: dict[str, Any]) -> str:
     )
 
 
+def _bot_backends(worker: dict[str, Any], fleet: dict[str, Any]) -> list[dict[str, Any]]:
+    bot = worker.get("bot") if isinstance(worker.get("bot"), dict) else {}
+    configured = bot.get("backends")
+    if configured is None:
+        return [
+            {
+                "type": "remote_llm",
+                "worker_id": str(worker["id"]).strip(),
+                "provider": _worker_provider(worker, fleet),
+                "model": _first_model(worker, fleet),
+                "params": {
+                    **dict(fleet.get("backend_params") or {}),
+                    **dict(bot.get("backend_params") or {}),
+                },
+            }
+        ]
+    if not isinstance(configured, list) or not configured:
+        raise ValueError(f"Worker {worker.get('id')} bot.backends must be a non-empty list.")
+
+    allowed_fields = {
+        "type",
+        "worker_id",
+        "provider",
+        "model",
+        "params",
+        "api_key_ref",
+        "gpu_id",
+        "command",
+    }
+    allowed_types = {"local_llm", "remote_llm", "cloud_api", "cli", "custom"}
+    worker_id = str(worker["id"]).strip()
+    cli_tools = set(_worker_cli_tools(worker))
+    resolved: list[dict[str, Any]] = []
+    for index, raw_backend in enumerate(configured):
+        if not isinstance(raw_backend, dict):
+            raise ValueError(f"Worker {worker_id} bot.backends[{index}] must be a mapping.")
+        unknown_fields = set(raw_backend) - allowed_fields
+        if unknown_fields:
+            fields = ", ".join(sorted(unknown_fields))
+            raise ValueError(f"Worker {worker_id} bot.backends[{index}] has unsupported fields: {fields}")
+        backend_type = str(raw_backend.get("type") or "").strip()
+        provider = str(raw_backend.get("provider") or "").strip()
+        model = str(raw_backend.get("model") or "").strip()
+        if backend_type not in allowed_types:
+            raise ValueError(f"Worker {worker_id} bot.backends[{index}] has unsupported type {backend_type!r}")
+        if not provider or not model:
+            raise ValueError(f"Worker {worker_id} bot.backends[{index}] needs provider and model values.")
+
+        backend: dict[str, Any] = {
+            "type": backend_type,
+            "provider": provider,
+            "model": model,
+        }
+        if backend_type in {"local_llm", "remote_llm", "cli"}:
+            backend["worker_id"] = str(raw_backend.get("worker_id") or worker_id).strip()
+        elif raw_backend.get("worker_id"):
+            backend["worker_id"] = str(raw_backend["worker_id"]).strip()
+
+        for field in ("api_key_ref", "gpu_id"):
+            value = str(raw_backend.get(field) or "").strip()
+            if value:
+                backend[field] = value
+        if raw_backend.get("params") is not None:
+            if not isinstance(raw_backend["params"], dict):
+                raise ValueError(f"Worker {worker_id} bot.backends[{index}].params must be a mapping.")
+            backend["params"] = raw_backend["params"]
+
+        command = str(raw_backend.get("command") or "").strip()
+        if backend_type == "cli":
+            if not command:
+                raise ValueError(f"Worker {worker_id} bot.backends[{index}] needs a fixed CLI command.")
+            try:
+                executable = shlex.split(command, posix=True)[0].replace("\\", "/").rsplit("/", 1)[-1]
+            except (IndexError, ValueError) as exc:
+                raise ValueError(f"Worker {worker_id} bot.backends[{index}] has an invalid CLI command.") from exc
+            if executable not in cli_tools:
+                raise ValueError(
+                    f"Worker {worker_id} bot.backends[{index}] command executable {executable!r} "
+                    "is not declared in tooling.cli_tools."
+                )
+            backend["command"] = command
+        elif command:
+            raise ValueError(f"Worker {worker_id} bot.backends[{index}] command is only valid for cli backends.")
+        resolved.append(backend)
+    return resolved
+
+
 def _bot_payload(worker: dict[str, Any], fleet: dict[str, Any]) -> dict[str, Any]:
     bot = worker.get("bot") if isinstance(worker.get("bot"), dict) else {}
     worker_id = str(worker["id"]).strip()
     bot_id = str(bot.get("id") or f"{worker_id}-bot").strip()
-    provider = _worker_provider(worker, fleet)
-    model = _first_model(worker, fleet)
-    params = dict(fleet.get("backend_params") or {})
-    params.update(bot.get("backend_params") or {})
+    backends = _bot_backends(worker, fleet)
+    primary_backend = backends[0]
     return {
         "id": bot_id,
         "name": str(bot.get("name") or worker.get("name") or bot_id).strip(),
@@ -162,15 +303,7 @@ def _bot_payload(worker: dict[str, Any], fleet: dict[str, Any]) -> dict[str, Any
         "system_prompt": _system_prompt(worker),
         "priority": int(bot.get("priority") or fleet.get("bot_priority") or 0),
         "enabled": bool(bot.get("enabled", True)),
-        "backends": [
-            {
-                "type": "remote_llm",
-                "worker_id": worker_id,
-                "provider": provider,
-                "model": model,
-                "params": params,
-            }
-        ],
+        "backends": backends,
         "context_access": {
             "receives": ["instruction", "job", "worker_profile"],
             "can_self_serve": [],
@@ -192,11 +325,13 @@ def _bot_payload(worker: dict[str, Any], fleet: dict[str, Any]) -> dict[str, Any
                 "allowed_pages": _as_list(worker.get("allowed_pages")),
                 "course_scope": _as_list(worker.get("course_scope")),
                 "lesson_scope": _as_list(worker.get("lesson_scope")),
+                "cli_tools": _worker_cli_tools(worker),
             },
             "launch_profile": {
                 "worker_node_service": _worker_service(worker),
-                "provider": provider,
-                "model": model,
+                "backend_type": primary_backend["type"],
+                "provider": primary_backend["provider"],
+                "model": primary_backend["model"],
             },
         },
     }
@@ -211,6 +346,7 @@ def _write_env_file(
     ollama_cloud_base_url: str,
     cloud_context_policy: str,
     heartbeat_interval_seconds: int,
+    extra_env: dict[str, str],
 ) -> None:
     lines = [
         "NEXUS_WORKER_CONFIG_PATH=/app/worker.yaml",
@@ -221,14 +357,76 @@ def _write_env_file(
         f"NEXUS_WORKER_CLOUD_CONTEXT_POLICY={cloud_context_policy}",
         f"OLLAMA_CLOUD_BASE_URL={ollama_cloud_base_url}",
         f"OLLAMA_API_KEY={ollama_api_key}",
-        "",
     ]
+    for key, value in sorted(extra_env.items()):
+        if "\n" in value or "\r" in value:
+            raise ValueError(f"Worker environment value for {key} cannot contain a newline")
+        lines.append(f"{key}={value}")
+    lines.append("")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(lines), encoding="utf-8")
     try:
         path.chmod(0o600)
     except OSError:
         pass
+
+
+def _worker_node_env(
+    worker: dict[str, Any],
+    fleet: dict[str, Any],
+    env: dict[str, str],
+    warnings: list[str],
+) -> dict[str, str]:
+    runtime = _worker_runtime(worker)
+    sources = _mapping(fleet.get("node_env_from"), label="fleet.node_env_from")
+    sources.update(
+        _mapping(
+            runtime.get("env_from"),
+            label=f"worker {worker.get('id') or worker.get('name')} runtime.env_from",
+        )
+    )
+    values: dict[str, str] = {}
+    for target_name, source_name in sorted(sources.items()):
+        value = str(env.get(source_name, "")).strip()
+        if not value:
+            warnings.append(
+                f"Missing node runtime env value: {source_name} for worker {worker.get('id') or worker.get('name')}"
+            )
+            continue
+        values[target_name] = value
+    return values
+
+
+def _service_image_and_build(
+    worker: dict[str, Any],
+    fleet: dict[str, Any],
+    *,
+    profile_base: Path,
+    worker_node_source: Path,
+) -> tuple[str, dict[str, str] | None]:
+    runtime = _worker_runtime(worker)
+    image = str(runtime.get("image") or fleet.get("image") or "nexus-worker-node:latest").strip()
+    if not image:
+        raise ValueError(f"Worker {worker.get('id') or worker.get('name')} has an empty runtime image")
+
+    if "build" not in runtime:
+        if "image" in runtime:
+            return image, None
+        return image, {"context": worker_node_source.as_posix(), "dockerfile": "Dockerfile"}
+
+    raw_build = runtime.get("build")
+    if raw_build in (None, False):
+        return image, None
+    if isinstance(raw_build, str):
+        return image, {"context": _resolve_path(raw_build, base=profile_base).as_posix(), "dockerfile": "Dockerfile"}
+    if not isinstance(raw_build, dict):
+        raise ValueError(f"Worker {worker.get('id') or worker.get('name')} runtime.build must be false, a path, or a mapping.")
+    raw_context = str(raw_build.get("context") or "").strip()
+    build_context = _resolve_path(raw_context, base=profile_base) if raw_context else worker_node_source
+    dockerfile = str(raw_build.get("dockerfile") or "Dockerfile").strip()
+    if not dockerfile:
+        raise ValueError(f"Worker {worker.get('id') or worker.get('name')} runtime.build.dockerfile is empty")
+    return image, {"context": build_context.as_posix(), "dockerfile": dockerfile}
 
 
 def render(profile_path: Path, output_dir: Path, env: dict[str, str], *, allow_missing_ollama_key: bool = False) -> dict[str, Any]:
@@ -293,6 +491,7 @@ def render(profile_path: Path, output_dir: Path, env: dict[str, str], *, allow_m
         config_path = configs_dir / f"{worker_id}.yaml"
         env_path = env_dir / f"{worker_id}.env"
         bot_path = bots_dir / f"{worker_id}.bot.json"
+        node_env = _worker_node_env(worker, fleet, env, warnings)
         with config_path.open("w", encoding="utf-8") as fh:
             yaml.safe_dump(worker_config, fh, sort_keys=False)
         _write_env_file(
@@ -303,17 +502,20 @@ def render(profile_path: Path, output_dir: Path, env: dict[str, str], *, allow_m
             ollama_cloud_base_url=ollama_base_url,
             cloud_context_policy=cloud_context_policy,
             heartbeat_interval_seconds=heartbeat,
+            extra_env=node_env,
         )
         bot_payload = _bot_payload(worker, fleet)
         bot_path.write_text(json.dumps(bot_payload, indent=2) + "\n", encoding="utf-8")
         rendered_bots.append(bot_payload["id"])
 
-        compose["services"][service] = {
+        image, build = _service_image_and_build(
+            worker,
+            fleet,
+            profile_base=profile_path.parent,
+            worker_node_source=worker_node_source,
+        )
+        service_config: dict[str, Any] = {
             "image": image,
-            "build": {
-                "context": worker_node_source.as_posix(),
-                "dockerfile": "Dockerfile",
-            },
             "restart": "unless-stopped",
             "env_file": [env_path.resolve().as_posix()],
             "volumes": [f"{config_path.resolve().as_posix()}:/app/worker.yaml:ro"],
@@ -330,6 +532,9 @@ def render(profile_path: Path, output_dir: Path, env: dict[str, str], *, allow_m
                 "retries": 3,
             },
         }
+        if build is not None:
+            service_config["build"] = build
+        compose["services"][service] = service_config
         rendered_workers.append(
             {
                 "id": worker_id,

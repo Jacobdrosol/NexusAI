@@ -62,6 +62,7 @@ class BackendConfig(BaseModel):
     provider: str
     api_key_ref: Optional[str] = None
     gpu_id: Optional[str] = None
+    command: Optional[str] = None
     params: Optional[BackendParams] = None
 
 

@@ -115,3 +115,134 @@ def test_render_worker_fleet_can_allow_missing_ollama_key(tmp_path):
     )
 
     assert summary["warnings"] == ["Missing Ollama Cloud API key env value: OLLAMA_API_KEY"]
+
+
+def test_render_worker_fleet_supports_node_local_tooling_and_prebuilt_images(tmp_path):
+    renderer = _load_renderer()
+    profile = _profile(tmp_path / "workers.yaml")
+    profile_data = yaml.safe_load(profile.read_text(encoding="utf-8"))
+    worker = profile_data["workers"][0]
+    worker["runtime"] = {
+        "image": "private-claude-tool-worker:latest",
+        "env_from": {
+            "ANTHROPIC_BASE_URL": "CLAUDE_GATEWAY_URL",
+            "ANTHROPIC_AUTH_TOKEN": "CLAUDE_GATEWAY_TOKEN",
+        },
+    }
+    worker["tooling"] = {"cli_tools": ["claude", "git"]}
+    worker["bot"]["backends"] = [
+        {
+            "type": "cli",
+            "provider": "cli",
+            "model": "claude",
+            "command": "claude -p",
+        }
+    ]
+    profile.write_text(yaml.safe_dump(profile_data, sort_keys=False), encoding="utf-8")
+
+    out = tmp_path / "runtime"
+    summary = renderer.render(
+        profile,
+        out,
+        {
+            "CONTROL_PLANE_API_TOKEN": "control-token",
+            "OLLAMA_API_KEY": "ollama-token",
+            "CLAUDE_GATEWAY_URL": "http://gateway:4000",
+            "CLAUDE_GATEWAY_TOKEN": "gateway-token",
+        },
+    )
+
+    assert summary["warnings"] == []
+    compose = yaml.safe_load((out / "docker-compose.worker-node.generated.yml").read_text())
+    service = compose["services"]["worker-content"]
+    assert service["image"] == "private-claude-tool-worker:latest"
+    assert "build" not in service
+
+    worker_cfg = yaml.safe_load((out / "workers" / "content-repair-01.yaml").read_text())
+    assert worker_cfg["tooling"] == {"cli_tools": ["claude", "git"]}
+    assert worker_cfg["capabilities"][1] == {
+        "type": "tool",
+        "provider": "cli",
+        "models": ["claude", "git"],
+    }
+
+    bot_payload = json.loads((out / "bots" / "content-repair-01.bot.json").read_text())
+    assert bot_payload["backends"] == [
+        {
+            "type": "cli",
+            "provider": "cli",
+            "model": "claude",
+            "worker_id": "content-repair-01",
+            "command": "claude -p",
+        }
+    ]
+    assert bot_payload["routing_rules"]["launch_profile"] == {
+        "worker_node_service": "worker-content",
+        "backend_type": "cli",
+        "provider": "cli",
+        "model": "claude",
+    }
+
+    env_text = (out / "env" / "content-repair-01.env").read_text()
+    assert "ANTHROPIC_BASE_URL=http://gateway:4000" in env_text
+    assert "ANTHROPIC_AUTH_TOKEN=gateway-token" in env_text
+
+
+def test_render_worker_fleet_warns_when_node_local_runtime_env_is_missing(tmp_path):
+    renderer = _load_renderer()
+    profile = _profile(tmp_path / "workers.yaml")
+    profile_data = yaml.safe_load(profile.read_text(encoding="utf-8"))
+    profile_data["workers"][0]["runtime"] = {
+        "env_from": {"ANTHROPIC_AUTH_TOKEN": "CLAUDE_GATEWAY_TOKEN"}
+    }
+    profile.write_text(yaml.safe_dump(profile_data, sort_keys=False), encoding="utf-8")
+
+    summary = renderer.render(
+        profile,
+        tmp_path / "runtime",
+        {"CONTROL_PLANE_API_TOKEN": "control-token", "OLLAMA_API_KEY": "ollama-token"},
+    )
+
+    assert summary["warnings"] == [
+        "Missing node runtime env value: CLAUDE_GATEWAY_TOKEN for worker content-repair-01"
+    ]
+
+
+def test_render_worker_fleet_rejects_node_runtime_override_of_control_plane_settings(tmp_path):
+    renderer = _load_renderer()
+    profile = _profile(tmp_path / "workers.yaml")
+    profile_data = yaml.safe_load(profile.read_text(encoding="utf-8"))
+    profile_data["workers"][0]["runtime"] = {
+        "env_from": {"CONTROL_PLANE_API_TOKEN": "UNTRUSTED_TOKEN"}
+    }
+    profile.write_text(yaml.safe_dump(profile_data, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="cannot override the reserved worker setting CONTROL_PLANE_API_TOKEN"):
+        renderer.render(
+            profile,
+            tmp_path / "runtime",
+            {"CONTROL_PLANE_API_TOKEN": "control-token", "OLLAMA_API_KEY": "ollama-token"},
+        )
+
+
+def test_render_worker_fleet_rejects_cli_command_for_an_undeclared_tool(tmp_path):
+    renderer = _load_renderer()
+    profile = _profile(tmp_path / "workers.yaml")
+    profile_data = yaml.safe_load(profile.read_text(encoding="utf-8"))
+    profile_data["workers"][0]["tooling"] = {"cli_tools": ["claude"]}
+    profile_data["workers"][0]["bot"]["backends"] = [
+        {
+            "type": "cli",
+            "provider": "cli",
+            "model": "claude",
+            "command": "git status",
+        }
+    ]
+    profile.write_text(yaml.safe_dump(profile_data, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="is not declared in tooling.cli_tools"):
+        renderer.render(
+            profile,
+            tmp_path / "runtime",
+            {"CONTROL_PLANE_API_TOKEN": "control-token", "OLLAMA_API_KEY": "ollama-token"},
+        )

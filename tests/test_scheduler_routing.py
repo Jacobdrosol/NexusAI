@@ -268,6 +268,49 @@ async def test_scheduler_dispatch_tracks_latency_and_inflight():
 
 
 @pytest.mark.anyio
+async def test_scheduler_dispatches_fixed_cli_command_to_worker():
+    from control_plane.scheduler.scheduler import Scheduler
+
+    worker = Worker(
+        id="w-cli",
+        name="CLI Worker",
+        host="cli.local",
+        port=8001,
+        capabilities=[Capability(type="tool", provider="cli", models=["claude"])],
+        status="online",
+        enabled=True,
+    )
+    backend = BackendConfig(
+        type="cli",
+        provider="cli",
+        model="claude",
+        command="claude -p",
+        worker_id="w-cli",
+    )
+
+    fake_response = MagicMock()
+    fake_response.raise_for_status.return_value = None
+    fake_response.json.return_value = {"output": "ok"}
+    mock_client = AsyncMock()
+    mock_client.__aenter__.return_value = mock_client
+    mock_client.__aexit__.return_value = False
+    mock_client.post.return_value = fake_response
+
+    scheduler = Scheduler(bot_registry=AsyncMock(), worker_registry=AsyncMock())
+    with patch("control_plane.scheduler.scheduler.httpx.AsyncClient", return_value=mock_client):
+        result = await scheduler._dispatch_to_worker(
+            worker,
+            backend,
+            [{"role": "user", "content": "Review this change."}],
+        )
+
+    assert result == {"output": "ok"}
+    request_body = mock_client.post.await_args.kwargs["json"]
+    assert request_body["provider"] == "cli"
+    assert request_body["command"] == "claude -p"
+
+
+@pytest.mark.anyio
 async def test_scheduler_injects_bot_system_prompt_into_payload():
     from control_plane.scheduler.scheduler import Scheduler
 
