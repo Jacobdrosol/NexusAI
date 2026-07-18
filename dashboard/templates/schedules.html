@@ -32,7 +32,7 @@
         </td>
         <td class="actions">
           <button class="btn btn-sm" type="button" onclick='triggerSchedule({{ schedule.id|tojson }})'>Run</button>
-          <button class="btn btn-sm" type="button" onclick='toggleSchedule({{ schedule.id|tojson }}, {{ ('paused' if schedule.status == 'active' else 'active')|tojson }})'>{{ 'Pause' if schedule.status == 'active' else 'Enable' }}</button>
+          <button class="btn btn-sm" type="button" onclick='toggleSchedule({{ schedule.id|tojson }}, {{ ('paused' if schedule.status == 'active' else 'active')|tojson }}, {{ (schedule.target_bot_id or schedule.assignment_pm_bot_id or '')|tojson }})'>{{ 'Pause' if schedule.status == 'active' else 'Enable' }}</button>
           <button class="btn btn-sm" type="button" onclick='showScheduleRuns({{ schedule.id|tojson }}, {{ schedule.name|tojson }})'>Runs</button>
         </td>
       </tr>
@@ -218,7 +218,17 @@ document.getElementById('form-create-schedule').addEventListener('submit', async
 
 document.getElementById('schedule-bot').addEventListener('change', refreshSelectedScheduleBotReadiness);
 
-async function toggleSchedule(scheduleId, status) {
+async function toggleSchedule(scheduleId, status, botId) {
+  if (status === 'active' && botId) {
+    const response = await fetch('/api/schedules/bots/' + encodeURIComponent(botId) + '/readiness');
+    const readiness = await response.json().catch(() => ({}));
+    if (!response.ok || readiness.ready !== true) {
+      const blockers = scheduleReadinessBlockers(readiness);
+      const detail = blockers.length ? '\n\n' + blockers.join('\n') : '';
+      window.alert((readiness.error || 'This schedule target is not ready for recurring dispatch.') + detail);
+      return;
+    }
+  }
   const response = await fetch('/api/schedules/' + encodeURIComponent(scheduleId), {
     method: 'PATCH',
     headers: {'Content-Type': 'application/json', 'X-CSRFToken': getScheduleCsrf()},
