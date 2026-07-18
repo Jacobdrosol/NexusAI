@@ -365,6 +365,7 @@ class AgentScheduleEngine:
 
     async def tick_once(self) -> List[Dict[str, Any]]:
         await self._ensure_db()
+        await self._reconcile_task_runs()
         due: List[Dict[str, Any]] = []
         async with self._tick_lock:
             now_iso = _iso(_now())
@@ -466,12 +467,20 @@ class AgentScheduleEngine:
         await self._set_run_status(run["id"], "running", started_at=_iso(_now()))
         try:
             result = await self._dispatch_schedule(schedule)
+            task_id = str(result.get("task_id") or "").strip() or None
+            if task_id:
+                await self._set_run_status(
+                    run["id"],
+                    "running",
+                    task_id=task_id,
+                )
+                await self._update_schedule_last_run(schedule["id"], status="running")
+                return
             await self._set_run_status(
                 run["id"],
                 "completed",
                 finished_at=_iso(_now()),
                 orchestration_id=str(result.get("orchestration_id") or "") or None,
-                task_id=str(result.get("task_id") or "") or None,
             )
             await self._update_schedule_last_run(schedule["id"], status="completed")
         except Exception as exc:
@@ -482,6 +491,58 @@ class AgentScheduleEngine:
                 error={"message": str(exc)},
             )
             await self._update_schedule_last_run(schedule["id"], status="failed")
+
+    async def _reconcile_task_runs(self) -> None:
+        async with open_sqlite(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                """
+                SELECT * FROM agent_schedule_runs
+                WHERE status = 'running' AND task_id IS NOT NULL AND task_id != ''
+                ORDER BY created_at ASC
+                LIMIT 100
+                """
+            ) as cursor:
+                rows = await cursor.fetchall()
+
+        terminal_statuses = {"completed", "failed", "cancelled", "retried"}
+        for row in rows:
+            run = self._row_to_run(row)
+            if run is None:
+                continue
+            try:
+                task = await self._task_manager.get_task(str(run["task_id"]))
+            except Exception as exc:
+                await self._set_run_status(
+                    run["id"],
+                    "failed",
+                    finished_at=_iso(_now()),
+                    error={"message": f"Scheduled task lookup failed: {exc}"},
+                )
+                await self._update_schedule_last_run(run["schedule_id"], status="failed")
+                continue
+
+            task_status = str(getattr(task, "status", "") or "").strip().lower()
+            if task_status not in terminal_statuses:
+                continue
+            if task_status == "completed":
+                await self._set_run_status(
+                    run["id"],
+                    "completed",
+                    finished_at=_iso(_now()),
+                )
+                await self._update_schedule_last_run(run["schedule_id"], status="completed")
+                continue
+
+            task_error = getattr(task, "error", None)
+            detail = getattr(task_error, "message", None) or f"Scheduled task finished with status {task_status}"
+            await self._set_run_status(
+                run["id"],
+                "failed",
+                finished_at=_iso(_now()),
+                error={"message": str(detail), "task_status": task_status},
+            )
+            await self._update_schedule_last_run(run["schedule_id"], status="failed")
 
     async def _dispatch_schedule(self, schedule: Dict[str, Any]) -> Dict[str, Any]:
         prompt = str(schedule.get("prompt") or "").strip()
