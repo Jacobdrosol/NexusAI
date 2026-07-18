@@ -13,11 +13,15 @@ async def infer(
     if not api_key:
         raise ValueError("OLLAMA_API_KEY is not configured")
 
+    request_params = dict(params or {})
     body = {
         "model": model,
         "messages": messages,
         "stream": False,
-        "options": params,
+        # Prevent short bounded calls from spending their output budget on hidden
+        # reasoning before a final answer can be returned.
+        "think": request_params.pop("think", False),
+        "options": request_params,
     }
     async with httpx.AsyncClient(timeout=120.0) as client:
         response = await client.post(

@@ -163,6 +163,7 @@ async def test_scheduler_ollama_cloud_uses_bearer_key_and_chat_endpoint(monkeypa
     args, kwargs = mock_client.post.call_args
     assert args[0] == "https://ollama.com/api/chat"
     assert kwargs["headers"]["Authorization"] == "Bearer ollama-secret"
+    assert kwargs["json"]["think"] is False
     assert result["output"] == "ok"
     assert result["finish_reason"] == "length"
 
@@ -230,6 +231,7 @@ async def test_scheduler_ollama_cloud_maps_max_tokens_to_num_predict():
         await scheduler._call_ollama_cloud(backend, payload)
 
     _, kwargs = mock_client.post.call_args
+    assert kwargs["json"]["think"] is False
     assert kwargs["json"]["options"]["num_predict"] == 768
     assert "max_tokens" not in kwargs["json"]["options"]
     assert kwargs["json"]["options"]["temperature"] == 0.3

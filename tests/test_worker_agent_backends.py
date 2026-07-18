@@ -86,6 +86,7 @@ async def test_ollama_cloud_backend_infer():
     assert result["output"] == "Hello from Ollama Cloud"
     assert result["usage"]["prompt_tokens"] == 9
     assert mock_client.post.call_args.kwargs["headers"]["Authorization"] == "Bearer test-key"
+    assert mock_client.post.call_args.kwargs["json"]["think"] is False
 
 
 # ---------------------------------------------------------------------------

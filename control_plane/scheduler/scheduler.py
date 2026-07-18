@@ -2554,6 +2554,8 @@ class Scheduler:
         base_body: dict = {
             "messages": messages,
             "stream": False,
+            # Worker and direct-cloud paths share the same bounded-response policy.
+            "think": False,
             "options": _ollama_options(params_dict),
         }
         if tools:
@@ -3350,6 +3352,8 @@ class Scheduler:
         base_body: dict = {
             "messages": messages,
             "stream": False,
+            # Keep ordinary direct-cloud dispatch aligned with worker runtimes.
+            "think": False,
             "options": _ollama_options(params_dict),
         }
         base_url = os.environ.get("OLLAMA_CLOUD_BASE_URL", "https://ollama.com/api").rstrip("/")
