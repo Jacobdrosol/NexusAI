@@ -58,6 +58,11 @@ def _project_edit_project_allowlist() -> set[str]:
     return _csv_env_values("NEXUS_PLATFORM_AI_PROJECT_EDIT_PROJECT_ALLOWLIST")
 
 
+def _session_allows_auto_bot_activation(metadata: Dict[str, Any]) -> bool:
+    """Require a deliberate session grant as well as a deployment-level opt-in."""
+    return _env_enabled("NEXUS_PLATFORM_AI_AUTO_ACTIVATE_BOTS") and metadata.get("allow_bot_activation") is True
+
+
 def _safe_timeout_seconds(env_name: str, default: float, *, min_value: float, max_value: float) -> float:
     raw = str(os.environ.get(env_name, "") or "").strip()
     if not raw:
@@ -1718,8 +1723,9 @@ class PlatformAISessionRuntime:
         scope = await self._editable_bot_scope(session=session)
         reference_scope = await self._reference_bot_scope(session=session)
         existed = True
+        existing_bot: Optional[Bot] = None
         try:
-            await self._bot_registry.get(safe_id)
+            existing_bot = await self._bot_registry.get(safe_id)
         except BotNotFoundError:
             existed = False
         except Exception:
@@ -1745,6 +1751,19 @@ class PlatformAISessionRuntime:
                 allowed_scope=sorted(scope),
             )
             return {"ok": False, "detail": "out_of_scope", "bot_id": safe_id, "allowed_scope": sorted(scope)}
+
+        activation_change = "unchanged"
+        if not _session_allows_auto_bot_activation(metadata):
+            if existed and existing_bot is not None:
+                current_enabled = bool(getattr(existing_bot, "enabled", False))
+                if bool(bot.enabled) != current_enabled:
+                    bot = bot.model_copy(update={"enabled": current_enabled})
+                    activation_change = "preserved_existing_state"
+            elif bool(bot.enabled):
+                bot = bot.model_copy(update={"enabled": False})
+                activation_change = "created_disabled"
+        elif bool(bot.enabled):
+            activation_change = "auto_activation_allowed"
         try:
             if existed:
                 await self._bot_registry.update(safe_id, bot)
@@ -1757,7 +1776,12 @@ class PlatformAISessionRuntime:
             if safe_id not in mutable:
                 mutable = list(mutable) + [safe_id]
                 await self._store.update_session(session_id, metadata={"mutable_bot_ids": mutable})
-        return {"ok": True, "bot_id": safe_id, "operation": "updated" if existed else "created"}
+        return {
+            "ok": True,
+            "bot_id": safe_id,
+            "operation": "updated" if existed else "created",
+            "activation_change": activation_change,
+        }
 
     async def _configure_linear_pipeline_entry(
         self,
@@ -4040,16 +4064,6 @@ class PlatformAISessionRuntime:
                     },
                 },
             )
-            await self._store.append_event(
-                session_id,
-                "action_trace",
-                {
-                    "action": "project_edit_finished",
-                    "state": "succeeded" if succeeded else "failed",
-                    "exit_code": rc,
-                    "timed_out": timed_out,
-                },
-            )
             await self._store.append_message(
                 session_id,
                 role="assistant",
@@ -4066,6 +4080,16 @@ class PlatformAISessionRuntime:
                     )
                 ),
                 metadata={"source": "project_edit_runner", "state": "succeeded" if succeeded else "failed"},
+            )
+            await self._store.append_event(
+                session_id,
+                "action_trace",
+                {
+                    "action": "project_edit_finished",
+                    "state": "succeeded" if succeeded else "failed",
+                    "exit_code": rc,
+                    "timed_out": timed_out,
+                },
             )
         except Exception as exc:
             await self._store.update_session(

@@ -114,6 +114,7 @@ Please create this bot config.
     created = await bot_registry.get("designer-created-bot")
     assert created.id == "designer-created-bot"
     assert str(created.name) == "Designer Created Bot"
+    assert created.enabled is False
 
 
 @pytest.mark.anyio
@@ -248,6 +249,49 @@ async def test_platform_brain_actions_can_upsert_bot_within_mode_policy(tmp_path
     created = await bot_registry.get("platform-brain-bot")
     assert created.id == "platform-brain-bot"
     assert str(created.name) == "Platform Brain Bot"
+    assert created.enabled is False
+
+
+@pytest.mark.anyio
+async def test_platform_ai_keeps_bot_activation_manual_unless_both_grants_are_present(tmp_path, monkeypatch):
+    store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+    bot_registry = BotRegistry(db_path=str(tmp_path / "bots.db"))
+    runtime = PlatformAISessionRuntime(store, bot_registry=bot_registry)
+    session = await store.create_session(
+        mode="bot_creator",
+        status="running",
+        metadata={"bot_name_seed": "Approved Bot", "allow_bot_activation": True},
+    )
+    payload = {
+        "id": "approved-bot",
+        "name": "Approved Bot",
+        "role": "assistant",
+        "enabled": True,
+        "backends": [{"type": "cloud_api", "provider": "openai", "model": "gpt-4o-mini"}],
+    }
+
+    denied = await runtime._upsert_bot_payload(
+        payload,
+        session_id=session["id"],
+        session=session,
+        allow_scope_expansion=True,
+    )
+
+    assert denied["activation_change"] == "created_disabled"
+    assert (await bot_registry.get("approved-bot")).enabled is False
+
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_AUTO_ACTIVATE_BOTS", "true")
+    granted_session = await store.update_session(session["id"], metadata={"allow_bot_activation": True})
+    assert granted_session is not None
+    granted = await runtime._upsert_bot_payload(
+        payload,
+        session_id=session["id"],
+        session=granted_session,
+        allow_scope_expansion=True,
+    )
+
+    assert granted["activation_change"] == "auto_activation_allowed"
+    assert (await bot_registry.get("approved-bot")).enabled is True
 
 
 @pytest.mark.anyio
