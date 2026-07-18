@@ -26,6 +26,14 @@
       <div class="card-value {% if actions.privileged_mode %}card-yellow{% else %}card-green{% endif %}">{{ "enabled" if actions.privileged_mode else "disabled" }}</div>
     </div>
     <div class="card">
+      <div class="card-label">Configuration Changes</div>
+      <div class="card-value {% if actions.configuration_mutations %}card-yellow{% else %}card-green{% endif %}">{{ "enabled" if actions.configuration_mutations else "proposal only" }}</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Autonomous Pipelines</div>
+      <div class="card-value {% if actions.autonomous_pipeline_runs %}card-yellow{% else %}card-green{% endif %}">{{ "enabled" if actions.autonomous_pipeline_runs else "disabled" }}</div>
+    </div>
+    <div class="card">
       <div class="card-label">Repository Edits</div>
       <div class="card-value {% if actions.repository_edits or actions.project_repo_edits or actions.external_repo_edits %}card-yellow{% else %}card-green{% endif %}">{{ "enabled" if actions.repository_edits or actions.project_repo_edits or actions.external_repo_edits else "disabled" }}</div>
     </div>

@@ -69,6 +69,8 @@ async def get_platform_ai_capabilities() -> Dict[str, Any]:
         "cloud_context_policy": cloud_context_policy or "unset",
         "actions": {
             "privileged_mode": _env_enabled("NEXUS_PLATFORM_AI_PRIVILEGED_ENABLED"),
+            "configuration_mutations": _env_enabled("NEXUS_PLATFORM_AI_CONFIGURATION_MUTATIONS_ENABLED"),
+            "autonomous_pipeline_runs": _env_enabled("NEXUS_PLATFORM_AI_AUTONOMOUS_PIPELINES_ENABLED"),
             "project_repo_edits": _env_enabled("NEXUS_PLATFORM_AI_PROJECT_EDIT_ENABLED"),
             "external_repo_edits": _env_enabled("NEXUS_PLATFORM_AI_EXTERNAL_REPO_EDIT_ENABLED"),
             "repository_edits": _env_enabled("NEXUS_PLATFORM_AI_REPO_EDIT_ENABLED"),

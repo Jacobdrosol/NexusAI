@@ -24,10 +24,20 @@ def _now() -> str:
 _TERMINAL_STATUSES = {"completed", "failed", "cancelled", "retried"}
 _QUALITY_FIELDS = {"summary", "quality_gates", "acceptance_criteria", "tests", "artifacts", "warnings", "errors"}
 _SESSION_STATUSES = {"ready", "running", "stopped"}
+_CONFIGURATION_MUTATION_ACTIONS = {"upsert_bot", "upsert_bots", "delete_bot", "remove_bot", "configure_pipeline_entry"}
+_AUTONOMOUS_PIPELINE_ACTIONS = {"set_pipeline_target", "launch_pipeline"}
 
 
 def _env_enabled(name: str) -> bool:
     return str(os.environ.get(name, "") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _configuration_mutations_enabled() -> bool:
+    return _env_enabled("NEXUS_PLATFORM_AI_CONFIGURATION_MUTATIONS_ENABLED")
+
+
+def _autonomous_pipeline_runs_enabled() -> bool:
+    return _env_enabled("NEXUS_PLATFORM_AI_AUTONOMOUS_PIPELINES_ENABLED")
 
 
 def _owner_allowlist() -> set[str]:
@@ -706,6 +716,12 @@ class PlatformAISessionRuntime:
             "orchestration_id": str(session.get("orchestration_id") or "").strip() or None,
             "runtime_status_counts": status_counts,
         }
+        runtime_policy = (
+            "Configuration changes and autonomous pipeline launches are disabled. "
+            "Return those actions as proposals only; they will not execute until an operator enables the matching runtime policy."
+            if not _configuration_mutations_enabled() or not _autonomous_pipeline_runs_enabled()
+            else "Configuration changes and autonomous pipeline launches are enabled for this deployment."
+        )
         system_prompt = (
             "You are Platform AI, an autonomous operator for NexusAI sessions. "
             "Session mode decides scope: bot_tuner edits only target_bot_id, pipeline_tuner edits only pipeline graph bots. "
@@ -713,7 +729,8 @@ class PlatformAISessionRuntime:
             "If a concrete tool action is needed, return JSON with actions using `platform_ai_action` values. "
             "Allowed actions include upsert_bot, upsert_bots, delete_bot, set_pipeline_target, launch_pipeline, "
             "project_code_edit, repo_edit, external_repo_edit, deploy. "
-            "Never produce actions outside scope."
+            "Never produce actions outside scope. "
+            f"{runtime_policy}"
         )
         user_prompt = (
             f"Session scope:\n{json.dumps(session_scope, ensure_ascii=False)}\n\n"
@@ -1925,6 +1942,22 @@ class PlatformAISessionRuntime:
             action = str(directive.get("platform_ai_action") or directive.get("action") or "").strip().lower()
             if not action and self._looks_like_bot_payload(directive):
                 action = "upsert_bot"
+            if action in _CONFIGURATION_MUTATION_ACTIONS and not _configuration_mutations_enabled():
+                actions_taken.append(
+                    {
+                        "action": action,
+                        "result": {"ok": False, "detail": "configuration_mutations_disabled", "proposal_only": True},
+                    }
+                )
+                continue
+            if action in _AUTONOMOUS_PIPELINE_ACTIONS and not _autonomous_pipeline_runs_enabled():
+                actions_taken.append(
+                    {
+                        "action": action,
+                        "result": {"ok": False, "detail": "autonomous_pipeline_runs_disabled", "proposal_only": True},
+                    }
+                )
+                continue
             if action == "upsert_bot":
                 bot_payload = directive.get("bot") if isinstance(directive.get("bot"), dict) else directive
                 result = await self._upsert_bot_payload(
@@ -2045,9 +2078,17 @@ class PlatformAISessionRuntime:
         if not actions_taken:
             overrides = self._extract_tuning_overrides(content)
             if mode == "pipeline_tuner" and overrides:
-                overrides["autonomous_enabled"] = True
-                await self._store.update_session(session_id, metadata=overrides)
-                actions_taken.append({"action": "tuning_override", "result": {"ok": True, **overrides}})
+                if _autonomous_pipeline_runs_enabled():
+                    overrides["autonomous_enabled"] = True
+                    await self._store.update_session(session_id, metadata=overrides)
+                    actions_taken.append({"action": "tuning_override", "result": {"ok": True, **overrides}})
+                else:
+                    actions_taken.append(
+                        {
+                            "action": "tuning_override",
+                            "result": {"ok": False, "detail": "autonomous_pipeline_runs_disabled", "proposal_only": True},
+                        }
+                    )
             lowered = str(content or "").lower()
             if any(token in lowered for token in ("deploy now", "run deployment", "build deployment", "deploy latest")):
                 deploy_result = await self.start_deploy_run(session_id, requested_by=str(session.get("operator_id") or "platform-ai"))
@@ -2288,7 +2329,7 @@ class PlatformAISessionRuntime:
             )
             session = await self._store.get_session(session_id)
             mode = str((session or {}).get("mode") or "").strip().lower()
-            if mode == "pipeline_tuner":
+            if mode == "pipeline_tuner" and _autonomous_pipeline_runs_enabled():
                 await self._store.update_session(
                     session_id,
                     metadata={
@@ -2305,6 +2346,17 @@ class PlatformAISessionRuntime:
                         "action": "autonomous_goal_updated",
                         "goal_preview": content[:240],
                         "message_id": mid,
+                    },
+                )
+            elif mode == "pipeline_tuner":
+                await self._store.append_event(
+                    session_id,
+                    "action_trace",
+                    {
+                        "action": "autonomous_goal_proposed",
+                        "goal_preview": content[:240],
+                        "message_id": mid,
+                        "detail": "Autonomous pipeline runs are disabled by runtime policy.",
                     },
                 )
             await self._store.append_event(
@@ -2396,23 +2448,53 @@ class PlatformAISessionRuntime:
                 )
 
             if applied_actions:
-                action_names = ", ".join(str(item.get("action") or "action") for item in applied_actions[:6] if isinstance(item, dict))
+                executed_actions = [
+                    item
+                    for item in applied_actions
+                    if isinstance(item, dict)
+                    and isinstance(item.get("result"), dict)
+                    and bool(item["result"].get("ok"))
+                ]
+                proposal_actions = [
+                    item
+                    for item in applied_actions
+                    if isinstance(item, dict)
+                    and isinstance(item.get("result"), dict)
+                    and bool(item["result"].get("proposal_only"))
+                ]
                 await self._store.append_event(
                     session_id,
                     "action_trace",
                     {
                         "action": "operator_directives_applied",
                         "message_id": mid,
-                        "applied_count": len(applied_actions),
+                        "executed_count": len(executed_actions),
+                        "proposal_count": len(proposal_actions),
                         "applied_actions": [item.get("action") for item in applied_actions if isinstance(item, dict)],
                     },
                 )
-                await self._store.append_message(
-                    session_id,
-                    role="assistant",
-                    content=f"Executed operator directives: {action_names}.",
-                    metadata={"source": "operator_directive_executor", "operator_message_id": mid},
-                )
+                if executed_actions:
+                    action_names = ", ".join(
+                        str(item.get("action") or "action")
+                        for item in executed_actions[:6]
+                    )
+                    await self._store.append_message(
+                        session_id,
+                        role="assistant",
+                        content=f"Executed operator directives: {action_names}.",
+                        metadata={"source": "operator_directive_executor", "operator_message_id": mid},
+                    )
+                if proposal_actions:
+                    proposal_details = ", ".join(
+                        f"{str(item.get('action') or 'action')} ({str((item.get('result') or {}).get('detail') or 'approval_required')})"
+                        for item in proposal_actions[:6]
+                    )
+                    await self._store.append_message(
+                        session_id,
+                        role="assistant",
+                        content=f"Recorded proposal-only directives: {proposal_details}.",
+                        metadata={"source": "operator_directive_proposal", "operator_message_id": mid},
+                    )
             await self._store.update_session(session_id, metadata={"no_progress_count": 0})
 
     async def _bot_label(self, bot_id: str) -> str:
@@ -3110,6 +3192,17 @@ class PlatformAISessionRuntime:
         reason: str,
         iteration: int,
     ) -> Optional[str]:
+        if not _autonomous_pipeline_runs_enabled():
+            await self._store.append_event(
+                session_id,
+                "action_trace",
+                {
+                    "action": "autonomous_orchestration_blocked",
+                    "reason": reason,
+                    "detail": "Autonomous pipeline runs are disabled by runtime policy.",
+                },
+            )
+            return None
         if self._task_manager is None:
             return None
         launch_orchestration_id = str(uuid.uuid4())
@@ -3204,6 +3297,8 @@ class PlatformAISessionRuntime:
     ) -> None:
         mode = str(session.get("mode") or "").strip().lower()
         if mode != "pipeline_tuner":
+            return
+        if not _autonomous_pipeline_runs_enabled():
             return
         metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
         if not bool(metadata.get("autonomous_enabled")):

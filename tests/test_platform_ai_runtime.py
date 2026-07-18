@@ -6,6 +6,7 @@ from contextlib import suppress
 from control_plane.platform_ai.runtime import PlatformAISessionRuntime
 from control_plane.platform_ai.session_store import PlatformAISessionStore
 from control_plane.registry.bot_registry import BotRegistry
+from shared.exceptions import BotNotFoundError
 from shared.models import Bot
 
 
@@ -13,6 +14,8 @@ from shared.models import Bot
 async def test_platform_ai_capabilities_expose_nonsecret_feature_flags(cp_client, monkeypatch):
     monkeypatch.setenv("NEXUSAI_CLOUD_CONTEXT_POLICY", "redact")
     monkeypatch.setenv("NEXUS_PLATFORM_AI_PRIVILEGED_ENABLED", "0")
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_CONFIGURATION_MUTATIONS_ENABLED", "0")
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_AUTONOMOUS_PIPELINES_ENABLED", "0")
     monkeypatch.setenv("NEXUS_PLATFORM_AI_REPO_EDIT_ENABLED", "0")
     monkeypatch.setenv("NEXUS_PLATFORM_AI_PROJECT_EDIT_ENABLED", "0")
     monkeypatch.setenv("NEXUS_PLATFORM_AI_EXTERNAL_REPO_EDIT_ENABLED", "0")
@@ -25,6 +28,8 @@ async def test_platform_ai_capabilities_expose_nonsecret_feature_flags(cp_client
     assert payload["cloud_context_policy"] == "redact"
     assert payload["actions"] == {
         "privileged_mode": False,
+        "configuration_mutations": False,
+        "autonomous_pipeline_runs": False,
         "project_repo_edits": False,
         "external_repo_edits": False,
         "repository_edits": False,
@@ -110,7 +115,8 @@ async def test_pipeline_tuner_converged_session_completes(tmp_path):
 
 
 @pytest.mark.anyio
-async def test_process_operator_message_upserts_bot_from_json_block(tmp_path):
+async def test_process_operator_message_upserts_bot_from_json_block(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_CONFIGURATION_MUTATIONS_ENABLED", "true")
     store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
     bot_registry = BotRegistry(db_path=str(tmp_path / "bots.db"))
     runtime = PlatformAISessionRuntime(store, bot_registry=bot_registry)
@@ -141,7 +147,8 @@ Please create this bot config.
 
 
 @pytest.mark.anyio
-async def test_process_operator_message_applies_tuning_overrides(tmp_path):
+async def test_process_operator_message_applies_tuning_overrides(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_AUTONOMOUS_PIPELINES_ENABLED", "true")
     store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
     runtime = PlatformAISessionRuntime(store)
     session = await store.create_session(
@@ -224,7 +231,8 @@ async def test_process_operator_message_invokes_platform_brain_backend(tmp_path)
 
 
 @pytest.mark.anyio
-async def test_platform_brain_actions_can_upsert_bot_within_mode_policy(tmp_path):
+async def test_platform_brain_actions_can_upsert_bot_within_mode_policy(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_CONFIGURATION_MUTATIONS_ENABLED", "true")
     store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
     bot_registry = BotRegistry(db_path=str(tmp_path / "bots.db"))
 
@@ -273,6 +281,47 @@ async def test_platform_brain_actions_can_upsert_bot_within_mode_policy(tmp_path
     assert created.id == "platform-brain-bot"
     assert str(created.name) == "Platform Brain Bot"
     assert created.enabled is False
+
+
+@pytest.mark.anyio
+async def test_platform_ai_keeps_model_actions_proposal_only_without_configuration_grant(tmp_path):
+    store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+    bot_registry = BotRegistry(db_path=str(tmp_path / "bots.db"))
+    runtime = PlatformAISessionRuntime(store, bot_registry=bot_registry)
+    session = await store.create_session(mode="bot_creator", status="running", metadata={"bot_name_seed": "Draft Only Bot"})
+    message = """
+```json
+{"platform_ai_action":"upsert_bot","bot":{"id":"draft-only-bot","name":"Draft Only Bot","role":"assistant","backends":[{"type":"cloud_api","provider":"openai","model":"gpt-4o-mini"}]}}
+```
+"""
+
+    await store.append_message(session["id"], role="operator", content=message, metadata={})
+    await runtime._process_operator_messages(session["id"])
+
+    with pytest.raises(BotNotFoundError):
+        await bot_registry.get("draft-only-bot")
+    messages = await store.list_messages(session["id"], limit=20)
+    assert any(
+        str((row.get("metadata") or {}).get("source") or "") == "operator_directive_proposal"
+        and "configuration_mutations_disabled" in str(row.get("content") or "")
+        for row in messages
+    )
+
+
+@pytest.mark.anyio
+async def test_pipeline_tuner_message_does_not_enable_autonomy_without_runtime_grant(tmp_path):
+    store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+    runtime = PlatformAISessionRuntime(store)
+    session = await store.create_session(mode="pipeline_tuner", status="running", metadata={"pipeline_bot_id": "safe-pipeline"})
+
+    await store.append_message(session["id"], role="operator", content="Improve the pipeline quality.", metadata={})
+    await runtime._process_operator_messages(session["id"])
+
+    updated = await store.get_session(session["id"])
+    metadata = updated.get("metadata") if isinstance(updated.get("metadata"), dict) else {}
+    assert metadata.get("autonomous_enabled") is not True
+    events = await store.list_events(session["id"], limit=30)
+    assert any(str((event.get("payload") or {}).get("action") or "") == "autonomous_goal_proposed" for event in events)
 
 
 @pytest.mark.anyio
@@ -1074,7 +1123,8 @@ async def test_resolve_context_prefers_explicit_orchestration_over_stale_run_id(
 
 
 @pytest.mark.anyio
-async def test_launch_autonomous_orchestration_propagates_project_and_conversation_scope(tmp_path):
+async def test_launch_autonomous_orchestration_propagates_project_and_conversation_scope(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_AUTONOMOUS_PIPELINES_ENABLED", "true")
     store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
     runtime = PlatformAISessionRuntime(store)
     session = await store.create_session(
