@@ -1,6 +1,6 @@
 import hmac
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
 from pydantic import ValidationError
