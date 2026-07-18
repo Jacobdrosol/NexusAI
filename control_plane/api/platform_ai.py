@@ -1435,7 +1435,6 @@ async def control_session(session_id: str, request: Request, body: ControlPlatfo
     result: Dict[str, Any] = {}
     control_metadata: Dict[str, Any] = dict(body.metadata or {})
     is_archived = bool(session.get("archived"))
-    current_status = str(session.get("status") or "").strip().lower()
     if is_archived and action not in {"restore", "unarchive"}:
         raise HTTPException(status_code=409, detail="session is archived; restore it before executing actions")
 
