@@ -1981,6 +1981,25 @@ def test_worker_probe_view_exposes_nonsecret_cli_authentication_blockers():
     assert view["detail"] == "CLI authentication required: codex, claude"
 
 
+def test_worker_probe_view_marks_unavailable_browser_session_degraded():
+    from dashboard.routes.workers import _worker_probe_view
+
+    view = _worker_probe_view(
+        {
+            "probe_status": "ready",
+            "checked_at": "2026-07-18T18:37:38+00:00",
+            "checks": [],
+            "capability_attestation": {
+                "browser": {"configured": True, "ready": False, "reason": "browser_session_check_failed"}
+            },
+        }
+    )
+
+    assert view is not None
+    assert view["status"] == "degraded"
+    assert view["detail"] == "Browser session unavailable: browser_session_check_failed"
+
+
 def test_settings_page_loads_for_admin(dashboard_client):
     _login_admin(dashboard_client)
     resp = dashboard_client.get("/settings")

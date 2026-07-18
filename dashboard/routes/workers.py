@@ -75,6 +75,12 @@ def _worker_probe_view(probe: Any) -> dict[str, Any] | None:
     ]
     if unauthenticated_tools:
         detail_parts.append("CLI authentication required: " + ", ".join(unauthenticated_tools))
+    browser = attestation.get("browser") if isinstance(attestation.get("browser"), dict) else {}
+    if bool(browser.get("configured")) and not bool(browser.get("ready")):
+        reason = str(browser.get("reason") or "").strip()
+        detail_parts.append("Browser session unavailable" + (f": {reason}" if reason else ""))
+        if status == "ready":
+            status = "degraded"
     detail = " | ".join(detail_parts)
     if not detail:
         detail = "runtime and capability contract verified" if status == "ready" else "runtime probe requires attention"

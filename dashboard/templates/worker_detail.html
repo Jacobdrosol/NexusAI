@@ -235,11 +235,19 @@ async function probeWorker(id) {
   const authDetail = unauthenticatedTools.length
     ? `CLI authentication required: ${unauthenticatedTools.join(', ')}`
     : '';
-  resultEl.className = 'worker-probe-result worker-probe-' + status;
+  const browser = attestation.browser || {};
+  const browserDetail = browser.configured && !browser.ready
+    ? `Browser session unavailable${browser.reason ? ': ' + browser.reason : ''}`
+    : '';
+  const displayStatus = status === 'ready' && browserDetail ? 'degraded' : status;
+  resultEl.className = 'worker-probe-result worker-probe-' + displayStatus;
   const baseDetail = failedChecks.length
-    ? `${status}: ${failedChecks.map(check => check.detail).join(' | ')}`
-    : `${status}: runtime and capability contract verified`;
-  resultEl.textContent = authDetail ? `${baseDetail} | ${authDetail}` : baseDetail;
+    ? `${displayStatus}: ${failedChecks.map(check => check.detail).join(' | ')}`
+    : (authDetail || browserDetail)
+      ? `${displayStatus}: runtime reachable; capability attention required`
+      : `${displayStatus}: runtime and capability contract verified`;
+  const details = [authDetail, browserDetail].filter(Boolean);
+  resultEl.textContent = details.length ? `${baseDetail} | ${details.join(' | ')}` : baseDetail;
 }
 
 async function verifyWorkerInference(id) {
