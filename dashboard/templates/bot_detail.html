@@ -117,6 +117,7 @@
   <div class="split-grid" style="grid-template-columns:1fr 1fr;">
     <div>
       <div><strong>Repo Output Mode:</strong> {{ policy.repo_output_mode if policy else 'deny' }}</div>
+      <div><strong>Required Worker Tools:</strong> {{ policy.required_worker_tools | join(', ') if policy and policy.required_worker_tools else 'none' }}</div>
       <div><strong>Can Apply DB Actions:</strong> {{ 'yes' if policy and policy.can_apply_db_actions else 'no' }}</div>
       <div><strong>Allow Run Result Ingest:</strong> {{ 'yes' if not policy or policy.allow_run_result_ingest else 'no' }}</div>
     </div>
@@ -637,6 +638,7 @@
       <div class="form-group"><label>Role</label><input class="form-control" name="role" value="{{ bot.role }}"></div>
       <div class="form-group"><label>Priority</label><input class="form-control" type="number" name="priority" value="{{ bot.priority }}"></div>
       <div class="form-group"><label>System Prompt</label><textarea class="form-control" rows="5" name="system_prompt">{{ bot.system_prompt or '' }}</textarea></div>
+      <div class="form-group"><label>Required Worker Tools</label><input class="form-control" name="required_worker_tools" placeholder="browser-ui, playwright"></div>
       <div class="form-group">
         <label><input type="checkbox" name="enabled" {% if bot.enabled %}checked{% endif %}> Enabled</label>
       </div>
@@ -1024,6 +1026,9 @@ function closeModal(id) {
 }
 
 function openBotEdit() {
+  const policy = BOT.execution_policy && typeof BOT.execution_policy === 'object' ? BOT.execution_policy : {};
+  const input = document.querySelector('#form-edit-bot input[name=required_worker_tools]');
+  if (input) input.value = Array.isArray(policy.required_worker_tools) ? policy.required_worker_tools.join(', ') : '';
   document.getElementById('modal-edit-bot').style.display = 'flex';
 }
 
@@ -1628,6 +1633,11 @@ function saveBotInfo() {
   BOT.priority = parseInt(fd.get('priority') || '0', 10);
   BOT.system_prompt = fd.get('system_prompt') || null;
   BOT.enabled = form.querySelector('input[name=enabled]').checked;
+  const tools = String(fd.get('required_worker_tools') || '').split(',')
+    .map((tool) => tool.trim()).filter(Boolean);
+  BOT.execution_policy = Object.assign({}, BOT.execution_policy || {}, {
+    required_worker_tools: [...new Set(tools)],
+  });
   persistBot('Bot details saved.');
 }
 

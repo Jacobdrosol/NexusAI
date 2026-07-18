@@ -5,6 +5,7 @@ from typing import Any
 
 from shared.exceptions import BotNotFoundError, WorkerNotFoundError
 from shared.models import BackendConfig, Bot, Worker
+from shared.worker_capabilities import required_worker_tools, worker_missing_tools
 
 
 def _check(
@@ -47,6 +48,8 @@ async def assess_bot_readiness(
     """Return non-secret operational checks for the bot's declared backend chain."""
     bot: Bot = await bot_registry.get(str(bot_id or "").strip())
     checks: list[dict[str, Any]] = []
+    required_tools = required_worker_tools(bot)
+    worker_backends = 0
 
     if bot.enabled:
         checks.append(_check("bot", "ready", "Bot is enabled."))
@@ -62,6 +65,7 @@ async def assess_bot_readiness(
         label = f"backend[{index}]"
 
         if backend_type in {"local_llm", "remote_llm", "cli"}:
+            worker_backends += 1
             worker_id = str(backend.worker_id or "").strip()
             if not worker_id:
                 checks.append(_check(label, "failed", "Worker-backed backend is missing worker_id.", backend_index=index))
@@ -84,6 +88,17 @@ async def assess_bot_readiness(
                         label,
                         "failed",
                         f"Worker '{worker_id}' does not advertise {backend.provider}/{backend.model}.",
+                        backend_index=index,
+                    )
+                )
+                continue
+            missing_tools = worker_missing_tools(worker, required_tools)
+            if missing_tools:
+                checks.append(
+                    _check(
+                        label,
+                        "failed",
+                        f"Worker '{worker_id}' is missing required tool capabilities: {', '.join(missing_tools)}.",
                         backend_index=index,
                     )
                 )
@@ -122,6 +137,15 @@ async def assess_bot_readiness(
             continue
 
         checks.append(_check(label, "warning", f"No readiness probe is available for {backend_type}/{provider}.", backend_index=index))
+
+    if required_tools and worker_backends == 0:
+        checks.append(
+            _check(
+                "worker-tools",
+                "failed",
+                f"Required worker tools need a worker-backed backend: {', '.join(required_tools)}.",
+            )
+        )
 
     failed = [item for item in checks if item["status"] == "failed"]
     warnings = [item for item in checks if item["status"] == "warning"]

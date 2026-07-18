@@ -64,3 +64,52 @@ async def test_schedule_activation_requires_a_ready_bot(cp_client):
     assert paused.json()["schedule"]["status"] == "paused"
     assert active.status_code == 409
     assert active.json()["detail"]["reason_code"] == "schedule_target_not_ready"
+
+
+@pytest.mark.anyio
+async def test_bot_readiness_requires_declared_worker_tools(cp_client):
+    worker_id = "browser-worker"
+    await cp_client.post(
+        "/v1/workers",
+        json={
+            "id": worker_id,
+            "name": "Browser Worker",
+            "host": "browser-worker",
+            "port": 8001,
+            "capabilities": [{"type": "llm", "provider": "ollama_cloud", "models": ["ready-model"]}],
+        },
+    )
+    await cp_client.post(
+        "/v1/bots",
+        json={
+            "id": "browser-bot",
+            "name": "Browser Bot",
+            "role": "worker",
+            "backends": [{"type": "remote_llm", "worker_id": worker_id, "provider": "ollama_cloud", "model": "ready-model"}],
+            "execution_policy": {"required_worker_tools": ["browser-ui"]},
+        },
+    )
+
+    blocked = await cp_client.get("/v1/bots/browser-bot/readiness")
+    assert blocked.status_code == 200
+    assert blocked.json()["ready"] is False
+    assert "browser-ui" in blocked.json()["checks"][-1]["message"]
+
+    await cp_client.put(
+        f"/v1/workers/{worker_id}",
+        json={
+            "id": worker_id,
+            "name": "Browser Worker",
+            "host": "browser-worker",
+            "port": 8001,
+            "status": "online",
+            "capabilities": [
+                {"type": "llm", "provider": "ollama_cloud", "models": ["ready-model"]},
+                {"type": "tool", "provider": "cli", "models": ["browser-ui", "playwright"]},
+            ],
+        },
+    )
+
+    ready = await cp_client.get("/v1/bots/browser-bot/readiness")
+    assert ready.status_code == 200
+    assert ready.json()["ready"] is True

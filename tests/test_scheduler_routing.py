@@ -231,6 +231,48 @@ async def test_scheduler_pinned_local_backend_rejects_second_inflight_task():
 
 
 @pytest.mark.anyio
+async def test_scheduler_rejects_worker_missing_declared_bot_tools():
+    from control_plane.scheduler.scheduler import BackendError, Scheduler
+
+    worker = Worker(
+        id="browser-worker",
+        name="Browser Worker",
+        host="browser.example",
+        port=8001,
+        capabilities=[Capability(type="llm", provider="ollama", models=["llama3"])],
+        status="online",
+        enabled=True,
+    )
+    bot = Bot(
+        id="browser-bot",
+        name="Browser Bot",
+        role="worker",
+        backends=[BackendConfig(type="local_llm", provider="ollama", model="llama3", worker_id=worker.id)],
+        execution_policy={"required_worker_tools": ["browser-ui"]},
+    )
+    task = Task(
+        id="task-browser",
+        bot_id=bot.id,
+        payload={"instruction": "Open the browser"},
+        created_at="2026-07-18T00:00:00Z",
+        updated_at="2026-07-18T00:00:00Z",
+    )
+    worker_registry = AsyncMock()
+    worker_registry.get.return_value = worker
+    bot_registry = AsyncMock()
+    bot_registry.get.return_value = bot
+    scheduler = Scheduler(bot_registry=bot_registry, worker_registry=worker_registry)
+
+    with pytest.raises(BackendError, match="missing required tool capabilities: browser-ui"):
+        await scheduler._resolve_worker_for_llm_backend(bot.backends[0], task=task)
+
+    worker.capabilities.append(Capability(type="tool", provider="cli", models=["browser-ui"]))
+    selected = await scheduler._resolve_worker_for_llm_backend(bot.backends[0], task=task)
+
+    assert selected.id == worker.id
+
+
+@pytest.mark.anyio
 async def test_scheduler_dispatch_tracks_latency_and_inflight():
     from control_plane.scheduler.scheduler import Scheduler
 

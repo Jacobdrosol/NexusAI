@@ -16,6 +16,7 @@ from cryptography.hazmat.primitives.asymmetric import padding
 from control_plane.connections.resolver import ConnectionResolver
 from shared.bot_policy import bot_allows_repo_output
 from shared.exceptions import BackendError, BotNotFoundError, NoViableBackendError
+from shared.worker_capabilities import required_worker_tools, worker_missing_tools
 
 try:
     from control_plane.chat.workspace_tools import list_workspace_tree  # noqa: F401
@@ -2747,7 +2748,7 @@ class Scheduler:
         await self._validate_model_if_catalog_present(backend)
         safe_payload = await self._apply_cloud_context_policy(backend, payload, task=task)
         if backend.type in ("local_llm", "remote_llm"):
-            worker = await self._resolve_worker_for_llm_backend(backend)
+            worker = await self._resolve_worker_for_llm_backend(backend, task=task)
             if worker.status != "online":
                 raise BackendError(
                     f"Worker {worker.id} is not online (status={worker.status})"
@@ -2773,6 +2774,7 @@ class Scheduler:
                 worker = await self.worker_registry.get(backend.worker_id)
             except Exception as e:
                 raise BackendError(f"Worker not found: {backend.worker_id}") from e
+            await self._require_task_worker_tools(worker, task)
             return await self._dispatch_to_worker(worker, backend, safe_payload)
         elif backend.type == "custom":
             return await self._dispatch_custom_backend(backend, safe_payload, task=task)
@@ -2891,7 +2893,9 @@ class Scheduler:
         await self._validate_model_if_catalog_present(backend)
         safe_payload = await self._apply_cloud_context_policy(backend, payload, task=task)
         if backend.type in ("local_llm", "remote_llm", "cli"):
-            worker = await self._resolve_worker_for_llm_backend(backend) if backend.type != "cli" else await self.worker_registry.get(backend.worker_id)  # type: ignore[arg-type]
+            worker = await self._resolve_worker_for_llm_backend(backend, task=task) if backend.type != "cli" else await self.worker_registry.get(backend.worker_id)  # type: ignore[arg-type]
+            if backend.type == "cli":
+                await self._require_task_worker_tools(worker, task)
             if worker.status != "online":
                 raise BackendError(
                     f"Worker {worker.id} is not online (status={worker.status})"
@@ -3651,7 +3655,24 @@ class Scheduler:
             # If model registry lookup fails unexpectedly, avoid blocking execution.
             return
 
-    async def _resolve_worker_for_llm_backend(self, backend: BackendConfig) -> Worker:
+    async def _required_tools_for_task(self, task: Task | None) -> list[str]:
+        if task is None or not str(task.bot_id or "").strip():
+            return []
+        try:
+            bot = await self.bot_registry.get(task.bot_id)
+        except Exception:
+            return []
+        return required_worker_tools(bot)
+
+    async def _require_task_worker_tools(self, worker: Worker, task: Task | None) -> None:
+        missing_tools = worker_missing_tools(worker, await self._required_tools_for_task(task))
+        if missing_tools:
+            raise BackendError(
+                f"Worker {worker.id} is missing required tool capabilities: {', '.join(missing_tools)}"
+            )
+
+    async def _resolve_worker_for_llm_backend(self, backend: BackendConfig, *, task: Task | None = None) -> Worker:
+        required_tools = await self._required_tools_for_task(task)
         if backend.worker_id:
             try:
                 worker = await self.worker_registry.get(backend.worker_id)
@@ -3660,6 +3681,11 @@ class Scheduler:
             if not self._worker_has_capacity(worker, backend):
                 raise BackendError(
                     f"Worker {worker.id} has no remaining task capacity for backend type {backend.type}"
+                )
+            missing_tools = worker_missing_tools(worker, required_tools)
+            if missing_tools:
+                raise BackendError(
+                    f"Worker {worker.id} is missing required tool capabilities: {', '.join(missing_tools)}"
                 )
             return worker
 
@@ -3671,8 +3697,14 @@ class Scheduler:
             and w.status == "online"
             and self._worker_supports_backend(w, backend)
             and self._worker_has_capacity(w, backend)
+            and not worker_missing_tools(w, required_tools)
         ]
         if not candidates:
+            if required_tools:
+                raise BackendError(
+                    f"No online worker supports provider={backend.provider} model={backend.model} "
+                    f"with required tools: {', '.join(required_tools)}"
+                )
             raise BackendError(
                 f"No online worker supports provider={backend.provider} model={backend.model}"
             )
