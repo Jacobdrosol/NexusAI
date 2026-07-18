@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from worker_agent.backends import (
     ollama_backend,
+    ollama_cloud_backend,
     openai_backend,
     claude_backend,
     gemini_backend,
@@ -25,7 +26,7 @@ class InferRequest(BaseModel):
     command: Optional[str] = None
 
 
-_SUPPORTED_PROVIDERS = {"ollama", "openai", "claude", "gemini", "cli"}
+_SUPPORTED_PROVIDERS = {"ollama", "ollama_cloud", "openai", "claude", "gemini", "cli"}
 
 
 def _is_declared_model(worker_config: Dict[str, Any], provider: str, model: str) -> bool:
@@ -81,6 +82,14 @@ async def infer(request: Request, body: InferRequest) -> dict:
                 messages=body.messages,
                 params=params,
                 host=ollama_host,
+            )
+        elif provider == "ollama_cloud":
+            return await ollama_cloud_backend.infer(
+                model=body.model,
+                messages=body.messages,
+                params=params,
+                api_key=os.environ.get("OLLAMA_API_KEY", ""),
+                base_url=os.environ.get("OLLAMA_CLOUD_BASE_URL", "https://ollama.com/api"),
             )
         elif provider == "openai":
             api_key = os.environ.get("OPENAI_API_KEY", "")

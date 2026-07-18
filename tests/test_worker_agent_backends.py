@@ -53,6 +53,42 @@ async def test_ollama_backend_infer():
 
 
 # ---------------------------------------------------------------------------
+# ollama_cloud_backend
+# ---------------------------------------------------------------------------
+
+@pytest.mark.anyio
+async def test_ollama_cloud_backend_infer():
+    from worker_agent.backends import ollama_cloud_backend
+
+    fake_response = _mock_httpx_response(
+        {
+            "message": {"content": "Hello from Ollama Cloud"},
+            "prompt_eval_count": 9,
+            "eval_count": 4,
+        }
+    )
+    mock_client = AsyncMock()
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    mock_client.post = AsyncMock(return_value=fake_response)
+
+    with patch(
+        "worker_agent.backends.ollama_cloud_backend.httpx.AsyncClient",
+        return_value=mock_client,
+    ):
+        result = await ollama_cloud_backend.infer(
+            model="glm-5.2:cloud",
+            messages=[{"role": "user", "content": "hi"}],
+            params={},
+            api_key="test-key",
+        )
+
+    assert result["output"] == "Hello from Ollama Cloud"
+    assert result["usage"]["prompt_tokens"] == 9
+    assert mock_client.post.call_args.kwargs["headers"]["Authorization"] == "Bearer test-key"
+
+
+# ---------------------------------------------------------------------------
 # openai_backend
 # ---------------------------------------------------------------------------
 
@@ -187,7 +223,8 @@ def worker_app():
     app.state.worker_config = {
         "ollama_host": "http://localhost:11434",
         "capabilities": [
-            {"type": "llm", "provider": "ollama", "models": ["llama3"]}
+            {"type": "llm", "provider": "ollama", "models": ["llama3"]},
+            {"type": "llm", "provider": "ollama_cloud", "models": ["glm-5.2:cloud"]},
         ],
     }
     return app
@@ -228,6 +265,28 @@ async def test_infer_endpoint_unsupported_provider(worker_app):
             },
         )
     assert resp.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_infer_endpoint_ollama_cloud(worker_app):
+    async with AsyncClient(
+        transport=ASGITransport(app=worker_app), base_url="http://test"
+    ) as client:
+        with patch(
+            "worker_agent.backends.ollama_cloud_backend.infer",
+            new=AsyncMock(return_value={"output": "cloud ok", "usage": {}}),
+        ):
+            response = await client.post(
+                "/infer",
+                json={
+                    "model": "glm-5.2:cloud",
+                    "provider": "ollama_cloud",
+                    "messages": [{"role": "user", "content": "hello"}],
+                },
+            )
+
+    assert response.status_code == 200
+    assert response.json()["output"] == "cloud ok"
 
 
 @pytest.mark.anyio

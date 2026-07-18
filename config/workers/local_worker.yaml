@@ -3,6 +3,10 @@ name: "Local Worker 01"
 host: "worker_agent"
 port: 8001
 status: "offline"
-capabilities: []
+capabilities:
+  - type: "llm"
+    provider: "ollama_cloud"
+    models:
+      - "glm-5.2:cloud"
 tooling:
   cli_tools: []
