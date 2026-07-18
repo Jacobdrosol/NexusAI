@@ -218,10 +218,16 @@ async function probeWorker(id) {
   }
   const status = payload.probe_status || 'unknown';
   const failedChecks = (payload.checks || []).filter(check => check.status === 'fail');
+  const attestation = payload.capability_attestation || {};
+  const unauthenticatedTools = (attestation.unauthenticated_cli_tools || []).filter(Boolean);
+  const authDetail = unauthenticatedTools.length
+    ? `CLI authentication required: ${unauthenticatedTools.join(', ')}`
+    : '';
   resultEl.className = 'worker-probe-result worker-probe-' + status;
-  resultEl.textContent = failedChecks.length
+  const baseDetail = failedChecks.length
     ? `${status}: ${failedChecks.map(check => check.detail).join(' | ')}`
     : `${status}: runtime and capability contract verified`;
+  resultEl.textContent = authDetail ? `${baseDetail} | ${authDetail}` : baseDetail;
 }
 
 async function toggleWorker(id, enable) {

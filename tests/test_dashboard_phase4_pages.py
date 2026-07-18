@@ -1944,6 +1944,23 @@ def test_worker_detail_page_loads_when_logged_in(dashboard_client):
     assert b"Last Heartbeat" in resp.data
 
 
+def test_worker_probe_view_exposes_nonsecret_cli_authentication_blockers():
+    from dashboard.routes.workers import _worker_probe_view
+
+    view = _worker_probe_view(
+        {
+            "probe_status": "ready",
+            "checked_at": "2026-07-18T18:37:38+00:00",
+            "checks": [],
+            "capability_attestation": {"unauthenticated_cli_tools": ["codex", "claude"]},
+        }
+    )
+
+    assert view is not None
+    assert view["status"] == "ready"
+    assert view["detail"] == "CLI authentication required: codex, claude"
+
+
 def test_settings_page_loads_for_admin(dashboard_client):
     _login_admin(dashboard_client)
     resp = dashboard_client.get("/settings")

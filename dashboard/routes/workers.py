@@ -65,7 +65,17 @@ def _worker_probe_view(probe: Any) -> dict[str, Any] | None:
         for check in probe.get("checks") or []
         if isinstance(check, dict) and str(check.get("status") or "").strip().lower() == "fail"
     ]
-    detail = " | ".join(item for item in failed_checks if item)
+    detail_parts = [item for item in failed_checks if item]
+    raw_attestation = probe.get("capability_attestation")
+    attestation = raw_attestation if isinstance(raw_attestation, dict) else {}
+    unauthenticated_tools = [
+        str(tool).strip()
+        for tool in attestation.get("unauthenticated_cli_tools") or []
+        if str(tool).strip()
+    ]
+    if unauthenticated_tools:
+        detail_parts.append("CLI authentication required: " + ", ".join(unauthenticated_tools))
+    detail = " | ".join(detail_parts)
     if not detail:
         detail = "runtime and capability contract verified" if status == "ready" else "runtime probe requires attention"
     checked_at = str(probe.get("checked_at") or "").strip().replace("T", " ")[:19]
