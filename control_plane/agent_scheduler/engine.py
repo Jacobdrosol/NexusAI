@@ -16,6 +16,11 @@ from control_plane.sqlite_helpers import open_sqlite
 from shared.models import TaskMetadata
 
 _DEFAULT_DB_PATH = str(Path(__file__).parent.parent.parent / "data" / "nexusai.db")
+_DEFAULT_SCHEDULE_RETRY_MAX = 2
+_MAX_SCHEDULE_RETRY_MAX = 5
+_DEFAULT_SCHEDULE_RETRY_BACKOFF_SECONDS = 30
+_MIN_SCHEDULE_RETRY_BACKOFF_SECONDS = 5
+_MAX_SCHEDULE_RETRY_BACKOFF_SECONDS = 3600
 
 _CREATE_SCHEDULES = """
 CREATE TABLE IF NOT EXISTS agent_schedules (
@@ -192,6 +197,25 @@ def _normalize_schedule_status(value: Any) -> str:
     return status
 
 
+def _normalize_retry_settings(retry_max: Any, retry_backoff_seconds: Any) -> tuple[int, int]:
+    """Validate bounded retry settings before they become persisted schedule policy."""
+    if isinstance(retry_max, bool) or isinstance(retry_backoff_seconds, bool):
+        raise ValueError("retry settings must be integers")
+    try:
+        normalized_retry_max = int(retry_max)
+        normalized_backoff_seconds = int(retry_backoff_seconds)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("retry settings must be integers") from exc
+    if not 0 <= normalized_retry_max <= _MAX_SCHEDULE_RETRY_MAX:
+        raise ValueError(f"retry_max must be between 0 and {_MAX_SCHEDULE_RETRY_MAX}")
+    if not _MIN_SCHEDULE_RETRY_BACKOFF_SECONDS <= normalized_backoff_seconds <= _MAX_SCHEDULE_RETRY_BACKOFF_SECONDS:
+        raise ValueError(
+            "retry_backoff_seconds must be between "
+            f"{_MIN_SCHEDULE_RETRY_BACKOFF_SECONDS} and {_MAX_SCHEDULE_RETRY_BACKOFF_SECONDS}"
+        )
+    return normalized_retry_max, normalized_backoff_seconds
+
+
 def _validate_schedule_dispatch(
     *,
     prompt: str,
@@ -268,6 +292,10 @@ class AgentScheduleEngine:
         task_payload = payload.get("task_payload") if isinstance(payload.get("task_payload"), dict) else {}
         if "task_payload" in payload:
             metadata["task_payload"] = task_payload
+        retry_max, retry_backoff_seconds = _normalize_retry_settings(
+            payload.get("retry_max", _DEFAULT_SCHEDULE_RETRY_MAX),
+            payload.get("retry_backoff_seconds", _DEFAULT_SCHEDULE_RETRY_BACKOFF_SECONDS),
+        )
         schedule = {
             "id": str(uuid.uuid4()),
             "name": str(payload.get("name") or "").strip() or "Scheduled Agent",
@@ -281,8 +309,8 @@ class AgentScheduleEngine:
             "project_id": str(payload.get("project_id") or "").strip() or None,
             "node_overrides": payload.get("node_overrides") if isinstance(payload.get("node_overrides"), dict) else {},
             "task_payload": task_payload,
-            "retry_max": max(0, int(payload.get("retry_max", 2))),
-            "retry_backoff_seconds": max(1, int(payload.get("retry_backoff_seconds", 30))),
+            "retry_max": retry_max,
+            "retry_backoff_seconds": retry_backoff_seconds,
             "metadata": metadata,
             "last_scheduled_at": None,
             "next_run_at": _iso(next_run),
@@ -421,6 +449,10 @@ class AgentScheduleEngine:
             _next_run_time(merged["cron_expression"], merged["timezone"], after=_now())
         )
         merged["updated_at"] = _iso(_now())
+        retry_max, retry_backoff_seconds = _normalize_retry_settings(
+            merged.get("retry_max", _DEFAULT_SCHEDULE_RETRY_MAX),
+            merged.get("retry_backoff_seconds", _DEFAULT_SCHEDULE_RETRY_BACKOFF_SECONDS),
+        )
 
         async with open_sqlite(self._db_path) as db:
             await db.execute(
@@ -442,8 +474,8 @@ class AgentScheduleEngine:
                     str(merged.get("conversation_id") or "") or None,
                     str(merged.get("project_id") or "") or None,
                     _json_dump(merged.get("node_overrides") or {}),
-                    max(0, int(merged.get("retry_max") or 0)),
-                    max(1, int(merged.get("retry_backoff_seconds") or 30)),
+                    retry_max,
+                    retry_backoff_seconds,
                     _json_dump(merged.get("metadata") or {}),
                     merged["next_run_at"],
                     merged["updated_at"],
@@ -649,9 +681,15 @@ class AgentScheduleEngine:
         if str(run.get("task_id") or "").strip():
             return None
         try:
-            retry_max = max(0, int(schedule.get("retry_max") or 0))
+            retry_max = min(_MAX_SCHEDULE_RETRY_MAX, max(0, int(schedule.get("retry_max") or 0)))
             attempt = max(0, int(run.get("attempt") or 0))
-            backoff_seconds = max(1, int(schedule.get("retry_backoff_seconds") or 30))
+            configured_backoff_seconds = int(
+                schedule.get("retry_backoff_seconds") or _DEFAULT_SCHEDULE_RETRY_BACKOFF_SECONDS
+            )
+            backoff_seconds = min(
+                _MAX_SCHEDULE_RETRY_BACKOFF_SECONDS,
+                max(_MIN_SCHEDULE_RETRY_BACKOFF_SECONDS, configured_backoff_seconds),
+            )
         except (TypeError, ValueError):
             return None
         if attempt >= retry_max:

@@ -103,6 +103,16 @@
           <option value="control_plane_fleet_summary_v1">Control-plane fleet health summary (read-only monitoring only)</option>
         </select>
       </div>
+      <div class="split-grid" style="grid-template-columns:1fr 1fr;gap:0.75rem;">
+        <div class="form-group">
+          <label for="schedule-retry-max">Pre-dispatch Retry Limit</label>
+          <input class="form-control" id="schedule-retry-max" name="retry_max" type="number" value="2" min="0" max="5" step="1" required>
+        </div>
+        <div class="form-group">
+          <label for="schedule-retry-backoff">Retry Delay (seconds)</label>
+          <input class="form-control" id="schedule-retry-backoff" name="retry_backoff_seconds" type="number" value="30" min="5" max="3600" step="1" required>
+        </div>
+      </div>
       <div class="form-group">
         <label><input type="checkbox" id="schedule-active" name="active"> Enable recurring dispatch</label>
       </div>
@@ -223,6 +233,8 @@ document.getElementById('form-create-schedule').addEventListener('submit', async
     project_id: String(form.get('project_id') || '').trim() || null,
     prompt: String(form.get('prompt') || '').trim(),
     task_payload: taskPayload,
+    retry_max: Number(form.get('retry_max')),
+    retry_backoff_seconds: Number(form.get('retry_backoff_seconds')),
     status: document.getElementById('schedule-active').checked ? 'active' : 'paused',
     metadata: {
       source: 'dashboard_schedule_manager',
@@ -241,6 +253,14 @@ document.getElementById('form-create-schedule').addEventListener('submit', async
   }
   if (!payload.name || !payload.target_bot_id || !payload.cron_expression || !payload.prompt) {
     setScheduleCreateStatus('Name, target bot, cron expression, and task instruction are required.', true);
+    return;
+  }
+  if (!Number.isInteger(payload.retry_max) || payload.retry_max < 0 || payload.retry_max > 5) {
+    setScheduleCreateStatus('Pre-dispatch retry limit must be a whole number from 0 to 5.', true);
+    return;
+  }
+  if (!Number.isInteger(payload.retry_backoff_seconds) || payload.retry_backoff_seconds < 5 || payload.retry_backoff_seconds > 3600) {
+    setScheduleCreateStatus('Retry delay must be a whole number from 5 to 3600 seconds.', true);
     return;
   }
   if (payload.status === 'active') {

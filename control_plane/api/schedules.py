@@ -6,6 +6,13 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from control_plane.audit.utils import record_audit_event
+from control_plane.agent_scheduler.engine import (
+    _DEFAULT_SCHEDULE_RETRY_BACKOFF_SECONDS,
+    _DEFAULT_SCHEDULE_RETRY_MAX,
+    _MAX_SCHEDULE_RETRY_BACKOFF_SECONDS,
+    _MAX_SCHEDULE_RETRY_MAX,
+    _MIN_SCHEDULE_RETRY_BACKOFF_SECONDS,
+)
 from control_plane.bot_readiness import assess_bot_readiness
 from control_plane.schedule_safety import ScheduleAutonomySafetyError, require_schedule_autonomy_safety
 
@@ -73,8 +80,16 @@ class CreateScheduleRequest(BaseModel):
     project_id: Optional[str] = None
     node_overrides: Dict[str, Any] = Field(default_factory=dict)
     task_payload: Dict[str, Any] = Field(default_factory=dict)
-    retry_max: int = 2
-    retry_backoff_seconds: int = 30
+    retry_max: int = Field(
+        default=_DEFAULT_SCHEDULE_RETRY_MAX,
+        ge=0,
+        le=_MAX_SCHEDULE_RETRY_MAX,
+    )
+    retry_backoff_seconds: int = Field(
+        default=_DEFAULT_SCHEDULE_RETRY_BACKOFF_SECONDS,
+        ge=_MIN_SCHEDULE_RETRY_BACKOFF_SECONDS,
+        le=_MAX_SCHEDULE_RETRY_BACKOFF_SECONDS,
+    )
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -90,8 +105,12 @@ class UpdateScheduleRequest(BaseModel):
     project_id: Optional[str] = None
     node_overrides: Optional[Dict[str, Any]] = None
     task_payload: Optional[Dict[str, Any]] = None
-    retry_max: Optional[int] = None
-    retry_backoff_seconds: Optional[int] = None
+    retry_max: Optional[int] = Field(default=None, ge=0, le=_MAX_SCHEDULE_RETRY_MAX)
+    retry_backoff_seconds: Optional[int] = Field(
+        default=None,
+        ge=_MIN_SCHEDULE_RETRY_BACKOFF_SECONDS,
+        le=_MAX_SCHEDULE_RETRY_BACKOFF_SECONDS,
+    )
     metadata: Optional[Dict[str, Any]] = None
 
 

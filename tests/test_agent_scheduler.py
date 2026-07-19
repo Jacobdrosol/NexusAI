@@ -244,6 +244,24 @@ async def test_schedule_retry_schema_migrates_existing_run_history(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_schedule_retry_policy_is_bounded_for_creates_and_updates(tmp_path):
+    engine = AgentScheduleEngine(
+        assignment_service=object(),
+        task_manager=_FakeTaskManager(),
+        db_path=str(tmp_path / "schedules.db"),
+    )
+
+    with pytest.raises(ValueError, match="retry_max"):
+        await engine.create_schedule({**_schedule_payload(), "retry_max": 6})
+    with pytest.raises(ValueError, match="retry_backoff_seconds"):
+        await engine.create_schedule({**_schedule_payload(), "retry_backoff_seconds": 4})
+
+    schedule = await engine.create_schedule(_schedule_payload())
+    with pytest.raises(ValueError, match="retry_backoff_seconds"):
+        await engine.update_schedule(schedule["id"], {"retry_backoff_seconds": 3601})
+
+
+@pytest.mark.anyio
 async def test_schedule_tick_uses_cron_window_and_dispatches_it_once(tmp_path, monkeypatch):
     import control_plane.agent_scheduler.engine as scheduler_module
 
