@@ -149,19 +149,6 @@ async def lifespan(app: FastAPI):
         connection_resolver=connection_resolver,
     )
     platform_ai_session_store = PlatformAISessionStore()
-    platform_ai_runtime = PlatformAISessionRuntime(
-        platform_ai_session_store,
-        assignment_service=assignment_service,
-        run_store=orchestration_run_store,
-        task_manager=task_manager,
-        bot_registry=bot_registry,
-        scheduler=scheduler,
-        worker_registry=worker_registry,
-        connection_resolver=connection_resolver,
-        worker_probe_store=worker_probe_store,
-        key_vault=key_vault,
-        model_registry=model_registry,
-    )
     async def _schedule_dispatch_guard(schedule: dict) -> None:
         await require_schedule_autonomy_safety(
             schedule,
@@ -193,6 +180,20 @@ async def lifespan(app: FastAPI):
         task_manager=task_manager,
         autonomy_guard=_schedule_dispatch_guard,
         payload_materializer=_schedule_payload_materializer,
+    )
+    platform_ai_runtime = PlatformAISessionRuntime(
+        platform_ai_session_store,
+        assignment_service=assignment_service,
+        run_store=orchestration_run_store,
+        task_manager=task_manager,
+        bot_registry=bot_registry,
+        scheduler=scheduler,
+        agent_schedule_engine=agent_schedule_engine,
+        worker_registry=worker_registry,
+        connection_resolver=connection_resolver,
+        worker_probe_store=worker_probe_store,
+        key_vault=key_vault,
+        model_registry=model_registry,
     )
 
     # Store on app state

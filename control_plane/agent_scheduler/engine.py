@@ -323,9 +323,16 @@ class AgentScheduleEngine:
             await db.commit()
         self._ready = True
 
-    async def create_schedule(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        await self._ensure_db()
-        now = _now()
+    @staticmethod
+    def validate_schedule_payload(
+        payload: Dict[str, Any],
+        *,
+        now: Optional[datetime] = None,
+    ) -> Dict[str, Any]:
+        """Normalize and validate a schedule without persisting or dispatching it."""
+        if not isinstance(payload, dict):
+            raise ValueError("schedule payload must be an object")
+        timestamp = now or _now()
         cron_expression = str(payload.get("cron_expression") or "").strip()
         timezone_name = str(payload.get("timezone") or "UTC").strip() or "UTC"
         prompt = str(payload.get("prompt") or "").strip()
@@ -340,7 +347,6 @@ class AgentScheduleEngine:
             assignment_pm_bot_id=assignment_pm_bot_id,
             conversation_id=conversation_id,
         )
-        next_run = _next_run_time(cron_expression, timezone_name, after=now)
         metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
         metadata = dict(metadata)
         overlap_policy = _normalize_schedule_overlap_policy(
@@ -354,8 +360,7 @@ class AgentScheduleEngine:
             payload.get("retry_max", _DEFAULT_SCHEDULE_RETRY_MAX),
             payload.get("retry_backoff_seconds", _DEFAULT_SCHEDULE_RETRY_BACKOFF_SECONDS),
         )
-        schedule = {
-            "id": str(uuid.uuid4()),
+        return {
             "name": str(payload.get("name") or "").strip() or "Scheduled Agent",
             "status": _normalize_schedule_status(payload.get("status")),
             "cron_expression": cron_expression,
@@ -371,8 +376,17 @@ class AgentScheduleEngine:
             "retry_backoff_seconds": retry_backoff_seconds,
             "overlap_policy": overlap_policy,
             "metadata": metadata,
+            "next_run_at": _iso(_next_run_time(cron_expression, timezone_name, after=timestamp)),
+        }
+
+    async def create_schedule(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        await self._ensure_db()
+        now = _now()
+        normalized = self.validate_schedule_payload(payload, now=now)
+        schedule = {
+            "id": str(uuid.uuid4()),
+            **normalized,
             "last_scheduled_at": None,
-            "next_run_at": _iso(next_run),
             "last_run_at": None,
             "last_run_status": None,
             "created_at": _iso(now),

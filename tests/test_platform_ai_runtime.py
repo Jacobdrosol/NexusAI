@@ -7,6 +7,7 @@ import sys
 from contextlib import suppress
 
 from control_plane.api.platform_ai import _apply_cli_backend_profile
+from control_plane.agent_scheduler.engine import AgentScheduleEngine
 from control_plane.platform_ai.runtime import PlatformAISessionRuntime
 from control_plane.platform_ai.session_store import PlatformAISessionStore
 from control_plane.registry.bot_registry import BotRegistry
@@ -1983,6 +1984,83 @@ async def test_specialist_proposal_rejects_project_scope_mismatch(tmp_path):
     actions = result.get("actions") if isinstance(result.get("actions"), list) else []
     assert (actions[0].get("result") or {}).get("detail") == "specialist_project_scope_mismatch"
     assert await store.list_patch_proposals(session["id"]) == []
+
+
+@pytest.mark.anyio
+async def test_schedule_proposal_is_paused_project_bound_and_owner_approved(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_CONFIGURATION_MUTATIONS_ENABLED", "true")
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_OWNER_ALLOWLIST", "operator")
+    store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+    bot_registry = BotRegistry(db_path=str(tmp_path / "bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="project-monitor",
+            name="Project Monitor",
+            role="monitor",
+            enabled=False,
+            backends=[{"type": "cloud_api", "provider": "ollama_cloud", "model": "glm-5.2:cloud"}],
+            routing_rules={
+                "specialist": {"project_id": "globeiq", "kind": "monitoring", "risk_level": "read_only"},
+                "worker_profile": {"role": "monitor", "task_scope": "read-only-monitoring", "can_edit": False},
+            },
+        )
+    )
+    schedule_engine = AgentScheduleEngine(
+        assignment_service=object(),
+        task_manager=object(),
+        db_path=str(tmp_path / "schedules.db"),
+    )
+    runtime = PlatformAISessionRuntime(
+        store,
+        bot_registry=bot_registry,
+        agent_schedule_engine=schedule_engine,
+    )
+    session = await store.create_session(
+        mode="bot_creator",
+        status="running",
+        operator_id="operator",
+        metadata={"project_id": "globeiq"},
+    )
+
+    result = await runtime._apply_operator_directives(
+        session["id"],
+        session=session,
+        content=json.dumps(
+            {
+                "platform_ai_action": "propose_schedule",
+                "schedule": {
+                    "name": "Nightly project monitor",
+                    "cron_expression": "0 2 * * *",
+                    "timezone": "America/Chicago",
+                    "prompt": "Prepare a read-only operations summary.",
+                    "target_bot_id": "project-monitor",
+                    "status": "paused",
+                },
+            }
+        ),
+    )
+
+    proposal_id = str((((result.get("actions") or [])[0].get("result") or {}).get("proposal_id") or ""))
+    assert proposal_id
+    proposal = await store.get_patch_proposal(proposal_id)
+    assert proposal is not None
+    after_state = proposal.get("after_state") if isinstance(proposal.get("after_state"), dict) else {}
+    schedule_payload = after_state.get("schedule") if isinstance(after_state.get("schedule"), dict) else {}
+    assert schedule_payload["status"] == "paused"
+    assert schedule_payload["project_id"] == "globeiq"
+    assert schedule_payload["metadata"]["mutation_safe"] is True
+
+    preflight = await runtime.preflight_patch_proposal(session["id"], proposal_id, operator_id="operator")
+    assert preflight["status"] == "ready"
+    assert preflight["preflight"]["runtime_readiness"]["deferred"] is True
+
+    approval = await runtime.approve_patch_proposal(session["id"], proposal_id, operator_id="operator")
+    assert approval["status"] == "applied"
+    created = await schedule_engine.get_schedule(str(approval["schedule"]["id"]))
+    assert created is not None
+    assert created["status"] == "paused"
+    assert created["target_bot_id"] == "project-monitor"
+    assert created["project_id"] == "globeiq"
 
 
 @pytest.mark.anyio

@@ -38,6 +38,27 @@ def _schedule_payload() -> dict:
     }
 
 
+def test_schedule_payload_validation_normalizes_without_persisting() -> None:
+    payload = _schedule_payload()
+    payload.update(
+        {
+            "status": "paused",
+            "project_id": "globeiq",
+            "task_payload": {"scope": "read_only"},
+            "metadata": {"mutation_safe": True},
+        }
+    )
+
+    normalized = AgentScheduleEngine.validate_schedule_payload(payload)
+
+    assert normalized["status"] == "paused"
+    assert normalized["project_id"] == "globeiq"
+    assert normalized["task_payload"] == {"scope": "read_only"}
+    assert normalized["metadata"]["mutation_safe"] is True
+    assert normalized["metadata"]["task_payload"] == {"scope": "read_only"}
+    assert normalized["next_run_at"]
+
+
 @pytest.mark.anyio
 async def test_schedule_run_stays_running_until_linked_task_completes(tmp_path):
     task_manager = _FakeTaskManager()
