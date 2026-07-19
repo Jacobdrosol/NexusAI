@@ -124,6 +124,8 @@ async def fleet_health_summary(
 
     runtime_attention = []
     for worker in workers:
+        if not bool(getattr(worker, "enabled", True)):
+            continue
         worker_id = str(getattr(worker, "id", "") or "").strip()
         probe = stored_probes.get(worker_id)
         if not isinstance(probe, dict):

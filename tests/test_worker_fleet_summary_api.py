@@ -96,3 +96,34 @@ async def test_fleet_summary_exposes_safe_runtime_attention_reason_codes(cp_app,
             "reason_codes": ["browser_session_unavailable"],
         }
     ]
+
+
+@pytest.mark.anyio
+async def test_fleet_summary_ignores_disabled_worker_probe_noise(cp_app, cp_client):
+    worker = await cp_client.post(
+        "/v1/workers",
+        json={
+            "id": "retired-worker",
+            "name": "Retired Worker",
+            "host": "worker.internal",
+            "port": 8010,
+            "enabled": False,
+            "status": "offline",
+            "capabilities": [],
+        },
+    )
+    assert worker.status_code == 200
+    await cp_app.state.worker_probe_store.record(
+        {
+            "worker_id": "retired-worker",
+            "probe_status": "unreachable",
+            "checked_at": "2026-07-19T00:00:00+00:00",
+            "dispatch_eligible": False,
+            "checks": [],
+        }
+    )
+
+    response = await cp_client.get("/v1/workers/fleet-summary")
+
+    assert response.status_code == 200
+    assert response.json()["workers"]["runtime_attention"] == []
