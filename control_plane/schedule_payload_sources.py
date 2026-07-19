@@ -178,14 +178,25 @@ async def fleet_health_summary(
         for schedule in (schedules or [])
         if isinstance(schedule, dict) and str(schedule.get("last_run_status") or "").lower() == "failed"
     ]
+    enabled_workers = [worker for worker in workers if bool(getattr(worker, "enabled", True))]
 
     return {
         "source": FLEET_HEALTH_SUMMARY_SOURCE,
         "generated_at": generated_at.isoformat(),
         "workers": {
             "registered": len(workers),
-            "online": sum(1 for worker in workers if str(getattr(worker, "status", "")).lower() == "online"),
-            "offline": sum(1 for worker in workers if str(getattr(worker, "status", "")).lower() == "offline"),
+            "enabled": len(enabled_workers),
+            "disabled": len(workers) - len(enabled_workers),
+            "online": sum(
+                1
+                for worker in enabled_workers
+                if str(getattr(worker, "status", "")).lower() == "online"
+            ),
+            "offline": sum(
+                1
+                for worker in enabled_workers
+                if str(getattr(worker, "status", "")).lower() == "offline"
+            ),
             "runtime_attention": runtime_attention[:50],
         },
         "bots": {

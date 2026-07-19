@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -96,6 +97,51 @@ async def test_materialized_fleet_summary_is_sanitized_and_bounded():
     assert "prompt" not in payload["monitoring_events"]
     assert "policy" not in payload["monitoring_events"]
     assert "private-token-must-not-leak" not in payload["monitoring_events"]
+
+
+@pytest.mark.anyio
+async def test_fleet_summary_excludes_disabled_workers_from_live_offline_count():
+    class WorkerRegistry:
+        async def list(self):
+            return [
+                SimpleNamespace(id="online", status="online", enabled=True),
+                SimpleNamespace(id="retired", status="offline", enabled=False),
+            ]
+
+    class ProbeStore:
+        async def list_for_workers(self, worker_ids):
+            return {}
+
+    class BotRegistry:
+        async def list(self):
+            return []
+
+    class TaskManager:
+        async def list_tasks(self, limit):
+            return []
+
+    class ScheduleEngine:
+        async def list_schedules(self, limit):
+            return []
+
+    payload = await materialize_system_schedule_payload(
+        {"metadata": {"system_payload_source": {"type": FLEET_HEALTH_SUMMARY_SOURCE}}},
+        worker_registry=WorkerRegistry(),
+        worker_probe_store=ProbeStore(),
+        bot_registry=BotRegistry(),
+        task_manager=TaskManager(),
+        schedule_engine=ScheduleEngine(),
+    )
+
+    summary = json.loads(payload["monitoring_events"])
+    assert summary["workers"] == {
+        "registered": 2,
+        "enabled": 1,
+        "disabled": 1,
+        "online": 1,
+        "offline": 0,
+        "runtime_attention": [],
+    }
 
 
 def test_system_payload_source_requires_read_only_monitoring_worker():
