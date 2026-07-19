@@ -92,6 +92,28 @@ def _parse_json(raw: str, default: Any) -> Any:
         return default
 
 
+def _cp_error_payload(cp, fallback: str) -> tuple[dict[str, Any], int]:
+    """Normalize a control-plane error without losing safe readiness details."""
+    err = cp.last_error() if hasattr(cp, "last_error") else {}
+    raw_detail = err.get("detail") if isinstance(err, dict) else None
+    try:
+        parsed = json.loads(raw_detail) if isinstance(raw_detail, str) else raw_detail
+    except (TypeError, json.JSONDecodeError):
+        parsed = raw_detail
+    detail = parsed.get("detail") if isinstance(parsed, dict) else parsed
+    detail = detail if isinstance(detail, dict) else {}
+    message = str(detail.get("message") or raw_detail or fallback)
+    status = int((err or {}).get("status_code") or 502) if isinstance(err, dict) else 502
+    if status < 400 or status > 599:
+        status = 502
+
+    payload: dict[str, Any] = {"error": message}
+    for key in ("reason_code", "readiness", "validation_errors"):
+        if key in detail:
+            payload[key] = detail[key]
+    return payload, status
+
+
 def _bot_connections_payload(db, bot_ref: str) -> list[dict[str, Any]]:
     links = db.query(BotConnection).filter(BotConnection.bot_ref == str(bot_ref)).all()
     ids = [link.connection_id for link in links]
@@ -436,10 +458,8 @@ def api_create_bot_blueprint():
     cp = get_cp_client()
     data = cp.create_bot_blueprint(request.get_json(silent=True) or {})
     if data is None:
-        err = cp.last_error()
-        detail = str((err or {}).get("detail") or "failed to create specialist bot")
-        status = int((err or {}).get("status_code") or 502)
-        return jsonify({"error": detail}), status if 400 <= status <= 599 else 502
+        error, status = _cp_error_payload(cp, "failed to create specialist bot")
+        return jsonify(error), status
     return jsonify(data), 201
 
 

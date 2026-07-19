@@ -2459,6 +2459,38 @@ def test_bots_page_and_proxy_support_specialist_creation(dashboard_client):
     assert created.status_code == 201
 
 
+def test_specialist_create_returns_actionable_readiness_blocker(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def create_bot_blueprint(self, body):
+            return None
+
+        def last_error(self):
+            return {
+                "status_code": 409,
+                "detail": json.dumps(
+                    {
+                        "detail": {
+                            "reason_code": "bot_not_ready",
+                            "message": "Bot cannot be enabled until its dispatch checks pass.",
+                            "readiness": {"ready": False},
+                        }
+                    }
+                ),
+            }
+
+    with patch("dashboard.cp_client.get_cp_client", return_value=FakeCP()):
+        response = dashboard_client.post("/api/bot-blueprints/create", json={"name": "Blocked"})
+
+    assert response.status_code == 409
+    assert response.get_json() == {
+        "error": "Bot cannot be enabled until its dispatch checks pass.",
+        "reason_code": "bot_not_ready",
+        "readiness": {"ready": False},
+    }
+
+
 def test_schedules_page_and_proxy_support_operational_schedule_management(dashboard_client):
     _login_admin(dashboard_client)
 
