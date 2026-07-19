@@ -21,6 +21,7 @@ async def cp_app(tmp_path):
     from control_plane.chat.pm_orchestrator import PMOrchestrator
     from control_plane.github.webhook_store import GitHubWebhookStore
     from control_plane.audit.audit_log import AuditLog
+    from control_plane.browser_action_approvals import BrowserActionApprovalStore
     from control_plane.registry.model_registry import ModelRegistry
     from control_plane.registry.project_registry import ProjectRegistry
     from control_plane.scheduler.scheduler import Scheduler
@@ -40,6 +41,7 @@ async def cp_app(tmp_path):
     from control_plane.api import (
         assignments,
         audit,
+        browser_action_approvals,
         bot_blueprints,
         bots,
         chat,
@@ -56,6 +58,7 @@ async def cp_app(tmp_path):
     app = FastAPI(title="NexusAI Control Plane Test")
     install_observability(app)
     app.include_router(tasks.router)
+    app.include_router(browser_action_approvals.router)
     app.include_router(bot_blueprints.router)
     app.include_router(bots.router)
     app.include_router(workers_api.router)
@@ -79,6 +82,9 @@ async def cp_app(tmp_path):
     mcp_broker = MCPBroker(vault_manager=vault_manager)
     github_webhook_store = GitHubWebhookStore(db_path=str(tmp_path / "github_webhooks.db"))
     audit_log = AuditLog(db_path=str(tmp_path / "audit.db"))
+    browser_action_approval_store = BrowserActionApprovalStore(
+        db_path=str(tmp_path / "browser_action_approvals.db")
+    )
     orchestration_workspace_store = OrchestrationWorkspaceStore()
     connection_resolver = ConnectionResolver(db_path=str(tmp_path / "dashboard.db"))
     worker_probe_store = WorkerProbeStore(db_path=str(tmp_path / "worker_probes.db"))
@@ -91,6 +97,7 @@ async def cp_app(tmp_path):
         project_registry=project_registry,
         connection_resolver=connection_resolver,
         worker_probe_store=worker_probe_store,
+        browser_action_approval_store=browser_action_approval_store,
     )
     task_manager = TaskManager(
         scheduler,
@@ -131,6 +138,7 @@ async def cp_app(tmp_path):
     app.state.mcp_broker = mcp_broker
     app.state.github_webhook_store = github_webhook_store
     app.state.audit_log = audit_log
+    app.state.browser_action_approval_store = browser_action_approval_store
     app.state.orchestration_workspace_store = orchestration_workspace_store
     app.state.repo_workspace_usage_store = repo_workspace_usage_store
     app.state.worker_probe_store = worker_probe_store

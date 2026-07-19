@@ -149,6 +149,23 @@ def validate_reference_graph(bot: Bot) -> List[str]:
 
 def validate_bot_configuration(bot: Bot) -> List[str]:
     errors = validate_reference_graph(bot)
+    execution_policy = bot_execution_policy(bot)
+    approval_required = {
+        str(action or "").strip()
+        for action in execution_policy.browser_action_owner_approval_required
+        if str(action or "").strip()
+    }
+    authorized_browser_actions = {
+        str(action or "").strip()
+        for action in execution_policy.browser_action_allowlist
+        if str(action or "").strip()
+    }
+    unrecognized_approval_actions = sorted(approval_required - authorized_browser_actions)
+    if unrecognized_approval_actions:
+        errors.append(
+            f"Bot '{bot.id}' requires owner approval for browser actions not present in its allowlist: "
+            + ", ".join(unrecognized_approval_actions)
+        )
     if bot_is_project_manager(bot) and not bot_has_explicit_workflow(bot):
         errors.append(f"Bot '{bot.id}' is marked as a project manager but has no explicit workflow triggers.")
     routing = getattr(bot, "routing_rules", None)

@@ -12,6 +12,7 @@ from control_plane.agent_scheduler.engine import AgentScheduleEngine
 from control_plane.api import (
     assignments,
     audit,
+    browser_action_approvals,
     bot_blueprints,
     bots,
     chat,
@@ -27,6 +28,7 @@ from control_plane.api import (
     workers,
 )
 from control_plane.audit.audit_log import AuditLog
+from control_plane.browser_action_approvals import BrowserActionApprovalStore
 from control_plane.chat.chat_manager import ChatManager
 from control_plane.chat.pm_orchestrator import PMOrchestrator
 from control_plane.connections.resolver import ConnectionResolver
@@ -90,6 +92,7 @@ async def lifespan(app: FastAPI):
     mcp_broker = MCPBroker(vault_manager)
     github_webhook_store = GitHubWebhookStore()
     audit_log = AuditLog()
+    browser_action_approval_store = BrowserActionApprovalStore()
     repo_workspace_usage_store = RepoWorkspaceUsageStore()
     orchestration_workspace_store = OrchestrationWorkspaceStore()
     worker_probe_store = WorkerProbeStore()
@@ -120,6 +123,7 @@ async def lifespan(app: FastAPI):
         project_registry=project_registry,
         connection_resolver=connection_resolver,
         worker_probe_store=worker_probe_store,
+        browser_action_approval_store=browser_action_approval_store,
     )
     task_manager = TaskManager(
         scheduler,
@@ -202,6 +206,7 @@ async def lifespan(app: FastAPI):
     app.state.mcp_broker = mcp_broker
     app.state.github_webhook_store = github_webhook_store
     app.state.audit_log = audit_log
+    app.state.browser_action_approval_store = browser_action_approval_store
     app.state.repo_workspace_usage_store = repo_workspace_usage_store
     app.state.orchestration_workspace_store = orchestration_workspace_store
     app.state.worker_probe_store = worker_probe_store
@@ -326,6 +331,7 @@ def create_app() -> FastAPI:
     install_observability(app)
 
     app.include_router(tasks.router)
+    app.include_router(browser_action_approvals.router)
     app.include_router(bot_blueprints.router)
     app.include_router(bots.router)
     app.include_router(workers.router)

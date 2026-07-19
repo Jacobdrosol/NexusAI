@@ -14,6 +14,7 @@ import httpx
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 
+from control_plane.browser_action_approvals import browser_action_payload_digest
 from control_plane.connections.resolver import ConnectionResolver
 from control_plane.worker_probe import WorkerProbeError, worker_base_url
 from shared.bot_policy import bot_allows_repo_output, bot_execution_policy
@@ -2027,6 +2028,7 @@ class Scheduler:
         project_registry: Any = None,
         connection_resolver: Any = None,
         worker_probe_store: Any = None,
+        browser_action_approval_store: Any = None,
     ) -> None:
         self.bot_registry = bot_registry
         self.worker_registry = worker_registry
@@ -2035,6 +2037,7 @@ class Scheduler:
         self.project_registry = project_registry
         self._connection_resolver = connection_resolver or ConnectionResolver()
         self._worker_probe_store = worker_probe_store
+        self._browser_action_approval_store = browser_action_approval_store
         self._inflight_by_worker: dict[str, int] = {}
         self._latency_ema_ms: dict[str, float] = {}
         self._latency_alpha = float(os.environ.get("NEXUSAI_WORKER_LATENCY_EMA_ALPHA", "0.30"))
@@ -3922,6 +3925,54 @@ class Scheduler:
         await self._require_task_worker_tools(worker, task)
         return worker
 
+    async def _consume_required_browser_action_approval(
+        self,
+        *,
+        bot: Any,
+        action_key: str,
+        payload: dict[str, Any],
+    ) -> None:
+        """Consume a one-time owner approval when a bot marks an action as sensitive."""
+
+        policy = bot_execution_policy(bot)
+        required_actions = {
+            str(item or "").strip()
+            for item in policy.browser_action_owner_approval_required
+            if str(item or "").strip()
+        }
+        if action_key not in required_actions:
+            return
+        approval_id = str(payload.get("owner_approval_id") or "").strip()
+        if not approval_id:
+            raise BackendError(f"{action_key} requires a valid, unused owner approval")
+        if self._browser_action_approval_store is None:
+            raise BackendError("Browser action approval service is unavailable")
+        try:
+            # Calculate the digest here as well so malformed payloads fail before any worker request.
+            browser_action_payload_digest(payload)
+            consumed = await self._browser_action_approval_store.consume(
+                approval_id=approval_id,
+                bot_id=bot.id,
+                action_key=action_key,
+                payload=payload,
+            )
+        except ValueError as exc:
+            raise BackendError("Browser action approval payload is invalid") from exc
+        if not consumed:
+            raise BackendError(f"{action_key} requires a valid, unused owner approval")
+
+    @staticmethod
+    def _browser_action_request_body(
+        payload: dict[str, Any], allowed_fields: set[str]
+    ) -> dict[str, Any]:
+        """Keep control-plane approval material out of worker-bound payloads."""
+
+        return {
+            field: payload[field]
+            for field in allowed_fields - {"browser_action", "owner_approval_id"}
+            if field in payload
+        }
+
     async def _dispatch_browser_inspection(
         self,
         worker: Worker,
@@ -4025,6 +4076,7 @@ class Scheduler:
             "action",
             "mode",
             "confirmation",
+            "owner_approval_id",
             "course_id",
             "lesson_id",
             "title",
@@ -4048,6 +4100,8 @@ class Scheduler:
             raise BackendError("Unsupported Test Builder action")
         if str(payload.get("mode") or "").strip().lower() != "draft":
             raise BackendError("Test Builder actions are limited to draft mode")
+        if not str(payload.get("confirmation") or "").strip():
+            raise BackendError("Test Builder actions require explicit confirmation")
         if task is None:
             raise BackendError("Test Builder actions require a persisted task")
         try:
@@ -4057,6 +4111,11 @@ class Scheduler:
         action_key = f"test_builder.{action}"
         if action_key not in bot_execution_policy(bot).browser_action_allowlist:
             raise BackendError(f"Bot {bot.id} is not authorized for {action_key}")
+        await self._consume_required_browser_action_approval(
+            bot=bot,
+            action_key=action_key,
+            payload=payload,
+        )
         if action == "build_from_banks" and payload.get("acknowledge_attempt_reset") is not True:
             raise BackendError("Building from banks requires explicit attempt-reset acknowledgement")
         if not backend.api_key_ref:
@@ -4069,7 +4128,7 @@ class Scheduler:
         except WorkerProbeError as exc:
             raise BackendError(f"Worker {worker.id} has an invalid address") from exc
 
-        body = {field: payload[field] for field in allowed_fields - {"browser_action"} if field in payload}
+        body = self._browser_action_request_body(payload, allowed_fields)
         self._inflight_by_worker[worker.id] = int(self._inflight_by_worker.get(worker.id, 0)) + 1
         started = time.perf_counter()
         async with httpx.AsyncClient(timeout=_worker_timeout()) as client:
@@ -4107,6 +4166,7 @@ class Scheduler:
             "browser_action",
             "action",
             "confirmation",
+            "owner_approval_id",
             "bank_id",
             "question_id",
             "expected",
@@ -4125,6 +4185,8 @@ class Scheduler:
             raise BackendError("Browser workers cannot publish")
         if action != "patch_existing":
             raise BackendError("Unsupported Question Bank action")
+        if not str(payload.get("confirmation") or "").strip():
+            raise BackendError("Question Bank patches require explicit confirmation")
         if (
             not isinstance(payload.get("expected"), dict)
             or not isinstance(payload.get("changes"), dict)
@@ -4140,6 +4202,11 @@ class Scheduler:
         action_key = f"question_bank.{action}"
         if action_key not in bot_execution_policy(bot).browser_action_allowlist:
             raise BackendError(f"Bot {bot.id} is not authorized for {action_key}")
+        await self._consume_required_browser_action_approval(
+            bot=bot,
+            action_key=action_key,
+            payload=payload,
+        )
         if not backend.api_key_ref:
             raise BackendError("Browser backends require api_key_ref for the worker request token")
         token = await self._resolve_api_key(backend.api_key_ref, "")
@@ -4150,7 +4217,7 @@ class Scheduler:
         except WorkerProbeError as exc:
             raise BackendError(f"Worker {worker.id} has an invalid address") from exc
 
-        body = {field: payload[field] for field in allowed_fields - {"browser_action"} if field in payload}
+        body = self._browser_action_request_body(payload, allowed_fields)
         self._inflight_by_worker[worker.id] = int(self._inflight_by_worker.get(worker.id, 0)) + 1
         started = time.perf_counter()
         async with httpx.AsyncClient(timeout=_worker_timeout()) as client:
@@ -4188,6 +4255,7 @@ class Scheduler:
             "browser_action",
             "action",
             "confirmation",
+            "owner_approval_id",
             "bank_id",
             "candidate",
             "review_evidence",
@@ -4202,6 +4270,8 @@ class Scheduler:
             raise BackendError("Browser actions must declare browser_action=question_bank")
         if str(payload.get("action") or "").strip().lower() != "create_one":
             raise BackendError("Unsupported Question Bank creation action")
+        if not str(payload.get("confirmation") or "").strip():
+            raise BackendError("Question Bank creation requires explicit confirmation")
         if not isinstance(payload.get("candidate"), dict) or not isinstance(
             payload.get("review_evidence"), dict
         ):
@@ -4217,6 +4287,11 @@ class Scheduler:
         action_key = "question_bank.create_one"
         if action_key not in bot_execution_policy(bot).browser_action_allowlist:
             raise BackendError(f"Bot {bot.id} is not authorized for {action_key}")
+        await self._consume_required_browser_action_approval(
+            bot=bot,
+            action_key=action_key,
+            payload=payload,
+        )
         if not backend.api_key_ref:
             raise BackendError("Browser backends require api_key_ref for the worker request token")
         token = await self._resolve_api_key(backend.api_key_ref, "")
@@ -4227,7 +4302,7 @@ class Scheduler:
         except WorkerProbeError as exc:
             raise BackendError(f"Worker {worker.id} has an invalid address") from exc
 
-        body = {field: payload[field] for field in allowed_fields - {"browser_action"} if field in payload}
+        body = self._browser_action_request_body(payload, allowed_fields)
         self._inflight_by_worker[worker.id] = int(self._inflight_by_worker.get(worker.id, 0)) + 1
         started = time.perf_counter()
         async with httpx.AsyncClient(timeout=_worker_timeout()) as client:
