@@ -24,7 +24,7 @@ from control_plane.bot_blueprints import (
 from control_plane.platform_ai.session_store import PlatformAISessionStore
 from control_plane.schedule_safety import ScheduleAutonomySafetyError, require_schedule_autonomy_safety
 from shared.bot_policy import validate_bot_configuration
-from shared.exceptions import BotNotFoundError
+from shared.exceptions import BotNotFoundError, ProjectNotFoundError
 from shared.models import BackendConfig, BackendParams, Bot, CatalogModel, TaskMetadata
 
 
@@ -638,6 +638,7 @@ class PlatformAISessionRuntime:
         worker_probe_store: Any = None,
         key_vault: Any = None,
         model_registry: Any = None,
+        project_registry: Any = None,
     ) -> None:
         self._store = store
         self._assignment_service = assignment_service
@@ -651,6 +652,7 @@ class PlatformAISessionRuntime:
         self._worker_probe_store = worker_probe_store
         self._key_vault = key_vault
         self._model_registry = model_registry
+        self._project_registry = project_registry
         self._session_tasks: Dict[str, asyncio.Task[None]] = {}
         self._deploy_tasks: Dict[str, asyncio.Task[None]] = {}
         self._repo_edit_tasks: Dict[str, asyncio.Task[None]] = {}
@@ -661,6 +663,40 @@ class PlatformAISessionRuntime:
         self._bot_name_cache: Dict[str, str] = {}
         self._session_wake_events: Dict[str, asyncio.Event] = {}
         self._session_task_lock = asyncio.Lock()
+
+    async def _project_binding_error(self, project_id: str) -> Optional[str]:
+        """Return a stable denial code when a persisted project binding is unusable."""
+        safe_project_id = str(project_id or "").strip()
+        if not safe_project_id or self._project_registry is None:
+            return None
+        try:
+            project = await self._project_registry.get(safe_project_id)
+        except ProjectNotFoundError:
+            return "project_not_found"
+        except Exception:
+            return "project_lookup_unavailable"
+        if not bool(getattr(project, "enabled", False)):
+            return "project_disabled"
+        return None
+
+    async def _resolve_bot_project_binding(
+        self,
+        *,
+        session: Dict[str, Any],
+        bot: Bot,
+    ) -> tuple[Optional[Bot], Optional[str]]:
+        metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
+        session_project_id = str(metadata.get("project_id") or "").strip()
+        bot_project_id = str(bot.project_id or "").strip()
+        if session_project_id and bot_project_id and session_project_id != bot_project_id:
+            return None, "bot_project_scope_mismatch"
+        project_id = session_project_id or bot_project_id
+        project_error = await self._project_binding_error(project_id)
+        if project_error:
+            return None, project_error
+        if project_id and bot_project_id != project_id:
+            bot = bot.model_copy(update={"project_id": project_id})
+        return bot, None
 
     async def ensure_session_loop(self, session_id: str) -> None:
         sid = str(session_id or "").strip()
@@ -1822,6 +1858,12 @@ class PlatformAISessionRuntime:
             proposed_bot = Bot.model_validate(payload)
         except Exception as exc:
             return {"ok": False, "detail": f"invalid_bot_payload:{exc}"}
+        proposed_bot, project_error = await self._resolve_bot_project_binding(
+            session=session,
+            bot=proposed_bot,
+        )
+        if project_error or proposed_bot is None:
+            return {"ok": False, "detail": project_error or "project_binding_invalid"}
         safety_error = self._proposal_bot_safety_error(
             proposed_bot,
             specialist_request=specialist_request,
@@ -1937,6 +1979,10 @@ class PlatformAISessionRuntime:
             )
             return {"ok": False, "detail": "specialist_project_scope_mismatch"}
 
+        project_error = await self._project_binding_error(session_project_id or requested_project_id)
+        if project_error:
+            return {"ok": False, "detail": project_error}
+
         request = request.model_copy(
             update={
                 "activate": False,
@@ -1977,6 +2023,9 @@ class PlatformAISessionRuntime:
             return {"ok": False, "detail": "schedule_project_scope_required"}
         if requested_project_id and requested_project_id != session_project_id:
             return {"ok": False, "detail": "schedule_project_scope_mismatch"}
+        project_error = await self._project_binding_error(session_project_id)
+        if project_error:
+            return {"ok": False, "detail": project_error}
         if str(payload.get("assignment_pm_bot_id") or "").strip() or str(payload.get("conversation_id") or "").strip():
             return {"ok": False, "detail": "schedule_pipeline_not_allowed"}
         requested_status = str(payload.get("status") or "").strip().lower()
@@ -2194,6 +2243,12 @@ class PlatformAISessionRuntime:
             bot = Bot.model_validate(payload)
         except Exception as exc:
             return {"ok": False, "detail": f"invalid_bot_payload:{exc}"}
+        bot, project_error = await self._resolve_bot_project_binding(
+            session=session,
+            bot=bot,
+        )
+        if project_error or bot is None:
+            return {"ok": False, "detail": project_error or "project_binding_invalid"}
         safe_id = str(bot.id or "").strip()
         if not safe_id:
             return {"ok": False, "detail": "bot_id_missing"}
@@ -5053,6 +5108,9 @@ class PlatformAISessionRuntime:
         schedule_project_id = str(schedule_payload.get("project_id") or "").strip()
         if not session_project_id or schedule_project_id != session_project_id:
             preflight["policy_errors"] = ["schedule_project_scope_mismatch"]
+        project_error = await self._project_binding_error(session_project_id or schedule_project_id)
+        if project_error:
+            preflight["policy_errors"].append(project_error)
         if str(schedule_payload.get("status") or "").strip().lower() != "paused":
             preflight["policy_errors"].append("schedule_proposal_status_must_be_paused")
         if self._agent_schedule_engine is None:
@@ -5154,6 +5212,26 @@ class PlatformAISessionRuntime:
 
         preflight["schema_valid"] = True
         preflight["bot_id"] = str(bot.id or "")
+        session = await self._store.get_session(session_id)
+        if session is None:
+            preflight["policy_errors"] = ["session_not_found"]
+            return await self._record_proposal_preflight(
+                session_id,
+                proposal,
+                after_state,
+                preflight,
+                operator_id=operator_id,
+            )
+        bot, project_error = await self._resolve_bot_project_binding(session=session, bot=bot)
+        if project_error or bot is None:
+            preflight["policy_errors"] = [project_error or "project_binding_invalid"]
+            return await self._record_proposal_preflight(
+                session_id,
+                proposal,
+                after_state,
+                preflight,
+                operator_id=operator_id,
+            )
         policy_errors = validate_bot_configuration(bot)
         preflight["policy_errors"] = policy_errors
         specialist_request = (

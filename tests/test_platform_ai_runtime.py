@@ -11,6 +11,7 @@ from control_plane.agent_scheduler.engine import AgentScheduleEngine
 from control_plane.platform_ai.runtime import PlatformAISessionRuntime
 from control_plane.platform_ai.session_store import PlatformAISessionStore
 from control_plane.registry.bot_registry import BotRegistry
+from control_plane.registry.project_registry import ProjectRegistry
 from control_plane.registry.worker_registry import WorkerRegistry
 from control_plane.connections.resolver import ConnectionResolver
 from control_plane.worker_probe_store import WorkerProbeStore
@@ -1983,6 +1984,41 @@ async def test_specialist_proposal_rejects_project_scope_mismatch(tmp_path):
 
     actions = result.get("actions") if isinstance(result.get("actions"), list) else []
     assert (actions[0].get("result") or {}).get("detail") == "specialist_project_scope_mismatch"
+    assert await store.list_patch_proposals(session["id"]) == []
+
+
+@pytest.mark.anyio
+async def test_specialist_proposal_rejects_unknown_project_binding(tmp_path):
+    store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+    bot_registry = BotRegistry(db_path=str(tmp_path / "bots.db"))
+    project_registry = ProjectRegistry(db_path=str(tmp_path / "projects.db"))
+    runtime = PlatformAISessionRuntime(
+        store,
+        bot_registry=bot_registry,
+        project_registry=project_registry,
+    )
+    session = await store.create_session(
+        mode="bot_creator",
+        status="running",
+        metadata={"project_id": "missing-project"},
+    )
+    directive = {
+        "platform_ai_action": "propose_specialist_bot",
+        "specialist": {
+            "kind": "researcher",
+            "name": "Unknown Project Researcher",
+            "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "glm-5.2:cloud"}],
+        },
+    }
+
+    result = await runtime._apply_operator_directives(
+        session["id"],
+        session=session,
+        content=json.dumps(directive),
+    )
+
+    actions = result.get("actions") if isinstance(result.get("actions"), list) else []
+    assert (actions[0].get("result") or {}).get("detail") == "project_not_found"
     assert await store.list_patch_proposals(session["id"]) == []
 
 

@@ -194,6 +194,7 @@ async def lifespan(app: FastAPI):
         worker_probe_store=worker_probe_store,
         key_vault=key_vault,
         model_registry=model_registry,
+        project_registry=project_registry,
     )
 
     # Store on app state
