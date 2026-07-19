@@ -29,6 +29,48 @@ def test_specialist_catalog_exposes_specialized_roles_without_secrets():
     assert all("api_key" not in item for item in catalog)
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "kind": "researcher",
+            "name": "Unsafe Credential Field",
+            "api_key": "secret-value",
+            "backends": [_backend().model_dump()],
+        },
+        {
+            "kind": "researcher",
+            "name": "Unsafe Backend Credential Field",
+            "backends": [{**_backend().model_dump(), "access_token": "secret-value"}],
+        },
+        {
+            "kind": "researcher",
+            "name": "Unsafe Credential Reference",
+            "backends": [{**_backend().model_dump(), "api_key_ref": "sk-live-secret"}],
+        },
+    ],
+)
+def test_specialist_blueprint_rejects_raw_credential_material(payload):
+    with pytest.raises(ValueError, match="credential|api_key_ref"):
+        SpecialistBlueprintRequest.model_validate(payload)
+
+
+def test_specialist_blueprint_rejects_raw_credential_reference_from_backend_model():
+    with pytest.raises(ValueError, match="api_key_ref"):
+        SpecialistBlueprintRequest(
+            kind="researcher",
+            name="Unsafe Backend Object",
+            backends=[
+                BackendConfig(
+                    type="cloud_api",
+                    provider="ollama_cloud",
+                    model="qwen3.5:cloud",
+                    api_key_ref="sk-live-secret",
+                )
+            ],
+        )
+
+
 def test_assessment_and_lesson_specialists_are_bounded_by_default():
     catalog = list_specialist_blueprints()
     catalog_by_kind = {item["kind"]: item for item in catalog}

@@ -18,6 +18,7 @@ from control_plane.bot_readiness import assess_bot_instance_readiness
 from control_plane.bot_blueprints import (
     SpecialistBlueprintRequest,
     build_specialist_bot,
+    is_safe_credential_reference,
     list_specialist_blueprints,
 )
 from control_plane.platform_ai.session_store import PlatformAISessionStore
@@ -36,7 +37,6 @@ _SESSION_STATUSES = {"ready", "running", "stopped"}
 _CONFIGURATION_MUTATION_ACTIONS = {"upsert_bot", "upsert_bots", "delete_bot", "remove_bot", "configure_pipeline_entry"}
 _AUTONOMOUS_PIPELINE_ACTIONS = {"set_pipeline_target", "launch_pipeline"}
 _APPROVABLE_PROPOSAL_BACKEND_TYPES = {"local_llm", "remote_llm", "cloud_api"}
-_DIRECT_CREDENTIAL_PREFIXES = ("sk-", "ghp_", "github_pat_", "xoxb-", "xoxp-", "akia", "aiza")
 _PROPOSAL_PREFLIGHT_TTL_SECONDS = 300
 
 
@@ -1797,10 +1797,7 @@ class PlatformAISessionRuntime:
             if str(getattr(backend, "command", "") or "").strip():
                 return "proposal_backend_command_not_allowed"
             credential_ref = str(getattr(backend, "api_key_ref", "") or "").strip()
-            normalized_ref = credential_ref.lower()
-            if normalized_ref.startswith(_DIRECT_CREDENTIAL_PREFIXES) or "=" in credential_ref or any(
-                char.isspace() for char in credential_ref
-            ):
+            if credential_ref and not is_safe_credential_reference(credential_ref):
                 return "proposal_direct_credential_not_allowed"
         return None
 

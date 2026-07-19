@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from shared.models import (
     BackendConfig,
@@ -34,12 +34,52 @@ SpecialistKind = Literal[
 ]
 
 
+_DIRECT_CREDENTIAL_PREFIXES = (
+    "sk-",
+    "sk_",
+    "ghp_",
+    "github_pat_",
+    "xoxb-",
+    "xoxp-",
+    "akia",
+    "aiza",
+    "hf_",
+)
+_RAW_CREDENTIAL_FIELDS = frozenset(
+    {
+        "api_key",
+        "api_token",
+        "access_token",
+        "secret",
+        "password",
+        "private_key",
+    }
+)
+
+
+def is_safe_credential_reference(value: object) -> bool:
+    """Return whether ``value`` is an opaque credential reference, never a secret."""
+    if not isinstance(value, str):
+        return False
+    reference = value.strip()
+    if not reference or reference != value or len(reference) > 128:
+        return False
+    normalized = reference.lower()
+    return not (
+        normalized.startswith(_DIRECT_CREDENTIAL_PREFIXES)
+        or "=" in reference
+        or any(character.isspace() for character in reference)
+    )
+
+
 class SpecialistBlueprintRequest(BaseModel):
     """The operator-controlled inputs used to compose a specialist bot.
 
     Credentials are intentionally referenced by name through ``BackendConfig`` and
     never accepted as raw secret values.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     kind: SpecialistKind
     name: str = Field(min_length=1, max_length=120)
@@ -51,6 +91,39 @@ class SpecialistBlueprintRequest(BaseModel):
     allow_repo_writes: bool = False
     cli_command_profile: Literal["claude_ollama_json"] | None = None
     cli_runtime_model: str | None = Field(default=None, max_length=128)
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_raw_credential_material(cls, value: object) -> object:
+        """Keep secret values out of public, exportable bot configuration."""
+        if not isinstance(value, dict):
+            return value
+        unexpected_top_level = _RAW_CREDENTIAL_FIELDS.intersection(value)
+        if unexpected_top_level:
+            raise ValueError("Raw credential fields are not accepted; use api_key_ref.")
+
+        backends = value.get("backends")
+        if not isinstance(backends, list):
+            return value
+        for backend in backends:
+            if not isinstance(backend, dict):
+                continue
+            unexpected_backend_fields = _RAW_CREDENTIAL_FIELDS.intersection(backend)
+            if unexpected_backend_fields:
+                raise ValueError("Raw backend credential fields are not accepted; use api_key_ref.")
+            credential_reference = backend.get("api_key_ref")
+            if credential_reference is not None and not is_safe_credential_reference(credential_reference):
+                raise ValueError("api_key_ref must be a named vault or environment reference, not a secret value.")
+        return value
+
+    @model_validator(mode="after")
+    def validate_credential_references(self) -> "SpecialistBlueprintRequest":
+        """Apply the same secret guard to programmatic ``BackendConfig`` inputs."""
+        for backend in self.backends:
+            credential_reference = backend.api_key_ref
+            if credential_reference is not None and not is_safe_credential_reference(credential_reference):
+                raise ValueError("api_key_ref must be a named vault or environment reference, not a secret value.")
+        return self
 
 
 _BLUEPRINTS: dict[str, dict[str, Any]] = {
