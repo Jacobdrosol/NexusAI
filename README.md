@@ -252,6 +252,8 @@ Copy `.env.example` to `.env` and set the following variables before starting th
 | Variable | Default | Description |
 |---|---|---|
 | `NEXUSAI_SECRET_KEY` | `dev-secret-change-in-production` | Flask session secret key — **must be changed in production** |
+| `NEXUSAI_ENV` | `development` | Set `production` or `prod` to reject development vault-encryption keys at startup |
+| `NEXUS_MASTER_KEY` | — | Dedicated encryption seed for the API-key vault; use a long random value in production |
 | `DATABASE_URL` | `sqlite:///data/nexusai.db` | SQLAlchemy connection URL (SQLite or PostgreSQL) |
 | `CONTROL_PLANE_URL` | — | Control-plane URL for the dashboard and standalone workers; use a host-reachable URL for a split blue/green dashboard topology |
 | `WORKER_CONTROL_PLANE_URL` | `http://control_plane:8000` | Control-plane URL for the bundled Docker `worker_agent`; keep the Docker-network default unless it runs outside the compose stack |
@@ -399,9 +401,10 @@ Bot export validation helper:
 
 ## Bootstrap Secrets
 
-Two values should always be set in `.env` for secure deployments:
+Three values should always be set in `.env` for secure deployments:
 
 - `NEXUSAI_SECRET_KEY`: signs dashboard sessions and CSRF state.
+- `NEXUS_MASTER_KEY`: encrypts stored provider credentials in the API-key vault.
 - `CONTROL_PLANE_API_TOKEN`: protects control-plane API routes (`/v1/*`).
 
 Generate values:

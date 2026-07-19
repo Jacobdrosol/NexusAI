@@ -7,6 +7,8 @@ This guide covers production-minded operations, security controls, troubleshooti
 Required for non-dev environments:
 
 - set strong `NEXUSAI_SECRET_KEY`
+- set a dedicated strong `NEXUS_MASTER_KEY` for the encrypted API-key vault
+- set `NEXUSAI_ENV=production` (or `prod`) so placeholder encryption keys fail at startup
 - set `CONTROL_PLANE_API_TOKEN`
 - run behind TLS reverse proxy
 - restrict direct access to internal ports

@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import hashlib
+import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,6 +13,15 @@ from cryptography.fernet import Fernet, InvalidToken
 from shared.exceptions import APIKeyNotFoundError
 
 _DEFAULT_DB_PATH = str(Path(__file__).parent.parent.parent / "data" / "nexusai.db")
+_DEVELOPMENT_FALLBACK_KEY = "nexusai-dev-insecure-default-key"
+_INSECURE_KEY_VALUES = {
+    "",
+    _DEVELOPMENT_FALLBACK_KEY,
+    "dev-secret-change-in-production",
+    "change-me-in-production",
+}
+_PRODUCTION_ENVIRONMENTS = {"production", "prod"}
+logger = logging.getLogger(__name__)
 
 _CREATE_API_KEYS = """
 CREATE TABLE IF NOT EXISTS api_keys (
@@ -54,12 +64,31 @@ class KeyVault:
             self._db_ready = True
 
     def _derive_fernet_key(self, explicit_key: Optional[str]) -> bytes:
-        seed = (
+        seed = str(
             explicit_key
             or os.environ.get("NEXUS_MASTER_KEY")
             or os.environ.get("NEXUSAI_SECRET_KEY")
-            or "nexusai-dev-insecure-default-key"
-        )
+            or ""
+        ).strip()
+        environment = str(
+            os.environ.get("NEXUSAI_ENV")
+            or os.environ.get("NEXUSAI_ENVIRONMENT")
+            or os.environ.get("ENVIRONMENT")
+            or os.environ.get("ENV")
+            or ""
+        ).strip().lower()
+        requires_configured_key = environment in _PRODUCTION_ENVIRONMENTS
+        if seed in _INSECURE_KEY_VALUES:
+            if requires_configured_key:
+                raise ValueError(
+                    "A non-default NEXUS_MASTER_KEY or NEXUSAI_SECRET_KEY is required in production."
+                )
+            logger.warning(
+                "KeyVault is using a development-only default encryption seed; "
+                "set NEXUS_MASTER_KEY before shared or production use."
+            )
+            if not seed:
+                seed = _DEVELOPMENT_FALLBACK_KEY
         digest = hashlib.sha256(seed.encode("utf-8")).digest()
         return base64.urlsafe_b64encode(digest)
 

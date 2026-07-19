@@ -41,3 +41,30 @@ async def test_master_key_mismatch_fails_decrypt(tmp_path):
     vault_2 = KeyVault(db_path=db_path, master_key="master-b")
     with pytest.raises(ValueError):
         await vault_2.get_secret("gemini-dev")
+
+
+@pytest.mark.parametrize("environment_name", ["NEXUSAI_ENV", "ENVIRONMENT", "ENV"])
+def test_key_vault_rejects_development_key_in_production(tmp_path, monkeypatch, environment_name):
+    from control_plane.keys.key_vault import KeyVault
+
+    monkeypatch.delenv("NEXUS_MASTER_KEY", raising=False)
+    monkeypatch.delenv("NEXUSAI_SECRET_KEY", raising=False)
+    monkeypatch.setenv(environment_name, "production")
+
+    with pytest.raises(ValueError, match="required in production"):
+        KeyVault(db_path=str(tmp_path / "keys.db"))
+
+
+def test_key_vault_warns_when_development_fallback_is_used(tmp_path, monkeypatch, caplog):
+    from control_plane.keys.key_vault import KeyVault
+
+    monkeypatch.delenv("NEXUS_MASTER_KEY", raising=False)
+    monkeypatch.delenv("NEXUSAI_SECRET_KEY", raising=False)
+    monkeypatch.delenv("NEXUSAI_ENV", raising=False)
+    monkeypatch.delenv("NEXUSAI_ENVIRONMENT", raising=False)
+    monkeypatch.delenv("ENVIRONMENT", raising=False)
+    monkeypatch.delenv("ENV", raising=False)
+
+    KeyVault(db_path=str(tmp_path / "keys.db"))
+
+    assert "development-only default encryption seed" in caplog.text
