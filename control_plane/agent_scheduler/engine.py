@@ -452,8 +452,9 @@ class AgentScheduleEngine:
         schedule = await self.get_schedule(schedule_id)
         if schedule is None:
             raise ValueError("schedule not found")
-        run = await self._create_run(schedule, scheduled_for=_iso(_now()), manual=True)
-        await self._dispatch_run(schedule, run)
+        run, created = await self._create_run(schedule, scheduled_for=_iso(_now()), manual=True)
+        if created:
+            await self._dispatch_run(schedule, run)
         return run
 
     async def list_runs(self, schedule_id: str, *, limit: int = 50) -> List[Dict[str, Any]]:
@@ -493,6 +494,7 @@ class AgentScheduleEngine:
                     rows = await cursor.fetchall()
                 due = [self._row_to_schedule(row) for row in rows if row is not None]
                 for schedule in due:
+                    scheduled_for = str(schedule.get("next_run_at") or now_iso)
                     next_run = _next_run_time(
                         str(schedule.get("cron_expression") or ""),
                         str(schedule.get("timezone") or "UTC"),
@@ -504,17 +506,29 @@ class AgentScheduleEngine:
                         SET last_scheduled_at = ?, next_run_at = ?, updated_at = ?
                         WHERE id = ?
                         """,
-                        (now_iso, _iso(next_run), _iso(_now()), schedule["id"]),
+                        (scheduled_for, _iso(next_run), _iso(_now()), schedule["id"]),
                     )
+                    schedule["last_scheduled_at"] = scheduled_for
                 await db.commit()
         runs: List[Dict[str, Any]] = []
         for schedule in due:
-            run = await self._create_run(schedule, scheduled_for=schedule.get("last_scheduled_at") or _iso(_now()), manual=False)
+            run, created = await self._create_run(
+                schedule,
+                scheduled_for=schedule.get("last_scheduled_at") or _iso(_now()),
+                manual=False,
+            )
             runs.append(run)
-            await self._dispatch_run(schedule, run)
+            if created:
+                await self._dispatch_run(schedule, run)
         return runs
 
-    async def _create_run(self, schedule: Dict[str, Any], *, scheduled_for: str, manual: bool) -> Dict[str, Any]:
+    async def _create_run(
+        self,
+        schedule: Dict[str, Any],
+        *,
+        scheduled_for: str,
+        manual: bool,
+    ) -> tuple[Dict[str, Any], bool]:
         run = {
             "id": str(uuid.uuid4()),
             "schedule_id": str(schedule.get("id") or ""),
@@ -531,37 +545,36 @@ class AgentScheduleEngine:
             "manual": manual,
         }
         async with open_sqlite(self._db_path) as db:
-            try:
-                await db.execute(
-                    """
-                    INSERT INTO agent_schedule_runs (
-                        id, schedule_id, dedupe_key, scheduled_for, started_at, finished_at,
-                        status, orchestration_id, task_id, error_json, attempt, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        run["id"],
-                        run["schedule_id"],
-                        run["dedupe_key"],
-                        run["scheduled_for"],
-                        None,
-                        None,
-                        run["status"],
-                        None,
-                        None,
-                        None,
-                        0,
-                        run["created_at"],
-                    ),
-                )
-            except Exception:
-                await db.rollback()
-                existing = await self._get_run_by_dedupe(run["dedupe_key"])
-                if existing is not None:
-                    return existing
-                raise
+            cursor = await db.execute(
+                """
+                INSERT OR IGNORE INTO agent_schedule_runs (
+                    id, schedule_id, dedupe_key, scheduled_for, started_at, finished_at,
+                    status, orchestration_id, task_id, error_json, attempt, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run["id"],
+                    run["schedule_id"],
+                    run["dedupe_key"],
+                    run["scheduled_for"],
+                    None,
+                    None,
+                    run["status"],
+                    None,
+                    None,
+                    None,
+                    0,
+                    run["created_at"],
+                ),
+            )
             await db.commit()
-        return run
+        if cursor.rowcount == 1:
+            return run, True
+
+        existing = await self._get_run_by_dedupe(run["dedupe_key"])
+        if existing is not None:
+            return existing, False
+        raise RuntimeError("schedule run was not created and no matching dedupe record exists")
 
     async def _get_run_by_dedupe(self, dedupe_key: str) -> Optional[Dict[str, Any]]:
         async with open_sqlite(self._db_path) as db:

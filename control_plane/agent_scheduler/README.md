@@ -99,8 +99,8 @@ await engine.trigger_schedule(schedule["id"])
 When `tick_once()` runs:
 1. Load all enabled schedules
 2. For each schedule, compute the last expected fire time
-3. Check `agent_schedule_runs` for a recent run with a matching `dedupe_key`
-4. If no dedup hit → create a run record → dispatch task via `TaskManager`
+3. Insert an `agent_schedule_runs` record keyed to that scheduled cron window
+4. Only the scheduler instance that inserted that record may dispatch task work
 5. Bind returned `task_id` and `orchestration_id` to the run record
 
 The `dedupe_key` is `{schedule_id}:{cron_window}` where `cron_window` is the ISO timestamp of the computed fire time (minute-level precision).
@@ -111,9 +111,9 @@ The `dedupe_key` is `{schedule_id}:{cron_window}` where `cron_window` is the ISO
 
 | # | Severity | Issue |
 |---|----------|-------|
-| 1 | High | No distributed lock; multiple control plane instances can dispatch the same schedule simultaneously |
+| 1 | High | Scheduler replicas must share the same schedule database; independently configured databases cannot coordinate cron-window ownership |
 | 2 | High | `retry_max` and `retry_backoff_seconds` are stored but never used; retries are not implemented |
-| 3 | Medium | Scheduled runs use a schedule/timestamp key; cross-process coordination still needs a distributed lock |
+| 3 | Medium | SQLite write contention should be monitored before running high-volume multi-instance scheduling |
 | 4 | Low | No pruning of old run records; the table grows unbounded |
 
 ---

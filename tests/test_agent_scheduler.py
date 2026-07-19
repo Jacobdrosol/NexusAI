@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -165,6 +166,55 @@ async def test_schedule_dispatch_materializes_bounded_system_payload(tmp_path):
     payload = task_manager.create_calls[0]["payload"]
     assert payload["monitoring_events"] == "sanitized fleet snapshot"
     assert payload["source"] == "agent_schedule"
+
+
+@pytest.mark.anyio
+async def test_schedule_tick_uses_cron_window_and_dispatches_it_once(tmp_path, monkeypatch):
+    import control_plane.agent_scheduler.engine as scheduler_module
+
+    task_manager = _FakeTaskManager()
+    db_path = str(tmp_path / "schedules.db")
+    created_at = datetime(2026, 7, 19, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(scheduler_module, "_now", lambda: created_at)
+    first_engine = AgentScheduleEngine(
+        assignment_service=object(),
+        task_manager=task_manager,
+        db_path=db_path,
+    )
+    schedule = await first_engine.create_schedule(
+        {**_schedule_payload(), "cron_expression": "*/5 * * * *", "status": "active"}
+    )
+    expected_window = "2026-07-19T12:05:00+00:00"
+    assert schedule["next_run_at"] == expected_window
+
+    monkeypatch.setattr(scheduler_module, "_now", lambda: created_at + timedelta(minutes=5, seconds=1))
+    second_engine = AgentScheduleEngine(
+        assignment_service=object(),
+        task_manager=task_manager,
+        db_path=db_path,
+    )
+
+    first_run, first_created = await first_engine._create_run(
+        schedule,
+        scheduled_for=expected_window,
+        manual=False,
+    )
+    duplicate_run, duplicate_created = await second_engine._create_run(
+        schedule,
+        scheduled_for=expected_window,
+        manual=False,
+    )
+
+    assert first_created is True
+    assert duplicate_created is False
+    assert duplicate_run["id"] == first_run["id"]
+
+    await first_engine._dispatch_run(schedule, first_run)
+    await first_engine.tick_once()
+    runs = await first_engine.list_runs(schedule["id"])
+    assert len(runs) == 1
+    assert runs[0]["scheduled_for"] == expected_window
+    assert len(task_manager.create_calls) == 1
 
 
 @pytest.mark.anyio
