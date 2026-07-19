@@ -30,6 +30,7 @@ _TASKS_TABLE = "cp_tasks"
 _TASK_DEPENDENCIES_TABLE = "cp_task_dependencies"
 _BOT_RUNS_TABLE = "cp_bot_runs"
 _BOT_RUN_ARTIFACTS_TABLE = "cp_bot_run_artifacts"
+_ORCHESTRATION_CANCELLATIONS_TABLE = "cp_orchestration_cancellations"
 _STATUS_UPDATE_UNSET = object()
 
 _CREATE_TASKS = f"""
@@ -86,6 +87,14 @@ CREATE TABLE IF NOT EXISTS {_BOT_RUN_ARTIFACTS_TABLE} (
     path TEXT,
     metadata TEXT,
     created_at TEXT NOT NULL
+)
+"""
+
+_CREATE_ORCHESTRATION_CANCELLATIONS = f"""
+CREATE TABLE IF NOT EXISTS {_ORCHESTRATION_CANCELLATIONS_TABLE} (
+    orchestration_id TEXT PRIMARY KEY,
+    reason TEXT NOT NULL,
+    cancelled_at TEXT NOT NULL
 )
 """
 
@@ -3318,6 +3327,7 @@ class TaskManager:
         self._watchdog_task: Optional[asyncio.Task[Any]] = None
         self._watchdog_state: Dict[str, Dict[str, Any]] = {}
         self._trigger_dispatch_pending: Set[str] = set()
+        self._cancelled_orchestrations: Dict[str, Dict[str, str]] = {}
         self._is_closing = False
         self._max_concurrency = max(1, int(os.environ.get("NEXUSAI_TASK_MAX_CONCURRENCY", "4")))
         if db_path is not None:
@@ -3352,6 +3362,7 @@ class TaskManager:
             self._running_task_ids.clear()
             self._watchdog_state.clear()
             self._trigger_dispatch_pending.clear()
+            self._cancelled_orchestrations.clear()
             self._watchdog_task = None
 
     def __del__(self) -> None:
@@ -3441,8 +3452,21 @@ class TaskManager:
                 await db.execute(_CREATE_TASK_DEPENDENCIES)
                 await db.execute(_CREATE_BOT_RUNS)
                 await db.execute(_CREATE_BOT_RUN_ARTIFACTS)
+                await db.execute(_CREATE_ORCHESTRATION_CANCELLATIONS)
                 await self._migrate_tasks_table(db)
                 await db.commit()
+                async with db.execute(
+                    f"SELECT orchestration_id, reason, cancelled_at FROM {_ORCHESTRATION_CANCELLATIONS_TABLE}"
+                ) as cancellation_cursor:
+                    cancellation_rows = await cancellation_cursor.fetchall()
+                    self._cancelled_orchestrations = {
+                        str(row["orchestration_id"]): {
+                            "reason": str(row["reason"] or "operator_cancelled"),
+                            "cancelled_at": str(row["cancelled_at"] or ""),
+                        }
+                        for row in cancellation_rows
+                        if str(row["orchestration_id"] or "").strip()
+                    }
                 dep_map: Dict[str, List[str]] = {}
                 async with db.execute(
                     f"SELECT task_id, depends_on_task_id FROM {_TASK_DEPENDENCIES_TABLE}"
@@ -3973,17 +3997,24 @@ class TaskManager:
         await self._ensure_db()
         await self._validate_task_payload(bot_id, payload, metadata=metadata)
         dependencies = depends_on or []
-        async with self._lock:
-            for dep_id in dependencies:
-                if dep_id not in self._tasks:
-                    raise TaskNotFoundError(f"Dependency task not found: {dep_id}")
         task_id = str(uuid.uuid4())
-        now = datetime.now(timezone.utc).isoformat()
-        initial_status = "blocked" if dependencies else "queued"
         if metadata is not None and not metadata.workflow_root_task_id:
             metadata = metadata.model_copy(update={"workflow_root_task_id": task_id})
         elif metadata is None:
             metadata = TaskMetadata(workflow_root_task_id=task_id)
+        orchestration_id = str(metadata.orchestration_id or "").strip()
+        async with self._lock:
+            cancellation = self._cancelled_orchestrations.get(orchestration_id) if orchestration_id else None
+            if cancellation is not None:
+                reason = str(cancellation.get("reason") or "operator_cancelled")
+                raise ValueError(
+                    f"orchestration '{orchestration_id}' was cancelled and cannot accept new tasks ({reason})"
+                )
+            for dep_id in dependencies:
+                if dep_id not in self._tasks:
+                    raise TaskNotFoundError(f"Dependency task not found: {dep_id}")
+        now = datetime.now(timezone.utc).isoformat()
+        initial_status = "blocked" if dependencies else "queued"
         task = Task(
             id=task_id,
             bot_id=bot_id,
@@ -4063,25 +4094,92 @@ class TaskManager:
         await self._record_artifacts_for_task(updated_original)
         return retried_task
 
-    async def cancel_task(self, task_id: str) -> Task:
+    async def cancel_task(self, task_id: str, *, reason: str = "operator_cancelled") -> Task:
         await self._ensure_db()
         task = await self.get_task(task_id)
         if task.status in {"completed", "failed", "cancelled", "retried"}:
             return task
+
+        safe_reason = str(reason or "operator_cancelled").strip() or "operator_cancelled"
+        message = (
+            "Task cancelled because its orchestration was cancelled"
+            if safe_reason != "operator_cancelled"
+            else "Task cancelled by operator"
+        )
+        cancelled_error = TaskError(
+            message=message,
+            code="cancelled",
+            details={"reason": safe_reason},
+        )
 
         runner: Optional[asyncio.Task[Any]] = None
         async with self._lock:
             runner = self._runner_tasks.get(task_id)
 
         if task.status in {"queued", "blocked"} or runner is None:
-            cancelled_error = TaskError(message="Task cancelled by operator", code="cancelled")
             await self.update_status(task_id, "cancelled", error=cancelled_error)
             return await self.get_task(task_id)
 
-        cancelled_error = TaskError(message="Task cancelled by operator", code="cancelled")
         await self.update_status(task_id, "cancelled", error=cancelled_error)
         runner.cancel()
         return await self.get_task(task_id)
+
+    async def cancel_orchestration(
+        self,
+        orchestration_id: str,
+        *,
+        reason: str = "operator_cancelled",
+    ) -> Dict[str, Any]:
+        """Cancel every active task in one orchestration and block later fan-out."""
+        await self._ensure_db()
+        safe_id = str(orchestration_id or "").strip()
+        if not safe_id:
+            raise ValueError("orchestration_id required")
+        safe_reason = str(reason or "operator_cancelled").strip() or "operator_cancelled"
+        cancelled_at = datetime.now(timezone.utc).isoformat()
+
+        async with self._lock:
+            previous_cancellation = self._cancelled_orchestrations.get(safe_id)
+            self._cancelled_orchestrations[safe_id] = {
+                "reason": safe_reason,
+                "cancelled_at": cancelled_at,
+            }
+            matching_tasks = [
+                task
+                for task in self._tasks.values()
+                if task.metadata and str(task.metadata.orchestration_id or "").strip() == safe_id
+            ]
+            active_task_ids = [
+                task.id for task in matching_tasks if task.status not in self._TERMINAL_TASK_STATUSES
+            ]
+
+        async with open_sqlite(self._db_path) as db:
+            await db.execute(
+                f"""
+                INSERT INTO {_ORCHESTRATION_CANCELLATIONS_TABLE} (orchestration_id, reason, cancelled_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(orchestration_id) DO UPDATE SET
+                    reason = excluded.reason,
+                    cancelled_at = excluded.cancelled_at
+                """,
+                (safe_id, safe_reason, cancelled_at),
+            )
+            await db.commit()
+
+        cancelled_task_ids: List[str] = []
+        for task_id in active_task_ids:
+            task = await self.cancel_task(task_id, reason="orchestration_cancelled")
+            if task.status == "cancelled":
+                cancelled_task_ids.append(task.id)
+        return {
+            "orchestration_id": safe_id,
+            "reason": safe_reason,
+            "cancelled_at": cancelled_at,
+            "already_cancelled": previous_cancellation is not None,
+            "task_count": len(matching_tasks),
+            "cancelled_task_ids": cancelled_task_ids,
+            "cancelled_task_count": len(cancelled_task_ids),
+        }
 
     async def list_tasks(
         self,
@@ -4514,6 +4612,9 @@ class TaskManager:
             if task_id not in self._tasks:
                 raise TaskNotFoundError(f"Task not found: {task_id}")
             existing_task = self._tasks[task_id]
+            if existing_task.status == "cancelled" and status in {"queued", "running", "completed", "failed"}:
+                logger.info("Ignoring status update for cancelled task %s: %s", task_id, status)
+                return
             active_runner = self._runner_tasks.get(task_id)
             current_async_task = asyncio.current_task()
             if (
@@ -6212,6 +6313,17 @@ class TaskManager:
 
     async def _dispatch_triggers(self, task: Task) -> None:
         metadata = task.metadata or TaskMetadata()
+        orchestration_id = str(metadata.orchestration_id or "").strip()
+        if orchestration_id:
+            async with self._lock:
+                cancellation = self._cancelled_orchestrations.get(orchestration_id)
+            if cancellation is not None:
+                logger.info(
+                    "Skipping workflow triggers for task %s because orchestration %s was cancelled",
+                    task.id,
+                    orchestration_id,
+                )
+                return
         test_mode = str(getattr(metadata, "execution_mode", "") or "").strip().lower() == "test"
         legacy_test_source = str(getattr(metadata, "source", "") or "").strip().lower() == "bot_test"
         if test_mode or legacy_test_source:

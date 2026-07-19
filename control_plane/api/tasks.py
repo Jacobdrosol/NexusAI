@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
+from control_plane.audit.utils import record_audit_event
 from shared.exceptions import BotNotFoundError, TaskNotFoundError
 from shared.models import Task, TaskMetadata
 
@@ -18,6 +19,10 @@ class CreateTaskRequest(BaseModel):
 
 class RetryTaskRequest(BaseModel):
     payload: Optional[Any] = None
+
+
+class CancelOrchestrationRequest(BaseModel):
+    reason: Optional[str] = Field(default=None, max_length=500)
 
 
 class TaskListItem(BaseModel):
@@ -127,6 +132,37 @@ async def get_task(task_id: str, request: Request) -> Task:
         return await task_manager.get_task(task_id)
     except TaskNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/orchestrations/{orchestration_id}/cancel")
+async def cancel_orchestration(
+    orchestration_id: str,
+    request: Request,
+    body: CancelOrchestrationRequest,
+) -> Dict[str, Any]:
+    """Stop all active work for one orchestration and prevent new trigger fan-out."""
+    task_manager = request.app.state.task_manager
+    safe_id = str(orchestration_id or "").strip()
+    if not safe_id:
+        raise HTTPException(status_code=400, detail="orchestration_id required")
+    try:
+        result = await task_manager.cancel_orchestration(
+            safe_id,
+            reason=str(body.reason or "operator_cancelled").strip() or "operator_cancelled",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await record_audit_event(
+        request,
+        action="tasks.cancel_orchestration",
+        resource=f"orchestration:{safe_id}",
+        details={
+            "reason": result["reason"],
+            "cancelled_task_count": result["cancelled_task_count"],
+            "task_count": result["task_count"],
+        },
+    )
+    return result
 
 
 @router.post("/{task_id}/retry", response_model=Task)

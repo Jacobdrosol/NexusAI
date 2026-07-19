@@ -382,6 +382,18 @@ def api_get_pipeline(orchestration_id: str):
     return jsonify(detail)
 
 
+@bp.post("/api/pipelines/<orchestration_id>/cancel")
+@login_required
+def api_cancel_pipeline(orchestration_id: str):
+    cp = get_cp_client()
+    body = request.get_json(silent=True) or {}
+    reason = str(body.get("reason") or "operator_cancelled_from_pipeline_detail").strip()
+    cancelled = cp.cancel_orchestration(orchestration_id, reason=reason)
+    if cancelled is None:
+        return _cp_error_response(cp, "Pipeline cancellation failed")
+    return jsonify(cancelled), 200
+
+
 @bp.get("/api/pipelines/<orchestration_id>/tests")
 @login_required
 def api_list_pipeline_tests(orchestration_id: str):

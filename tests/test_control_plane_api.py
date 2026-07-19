@@ -827,6 +827,29 @@ async def test_list_tasks_filtered_by_orchestration_id(cp_client):
 
 
 @pytest.mark.anyio
+async def test_cancel_orchestration_endpoint_returns_task_scope(cp_client):
+    create = await cp_client.post(
+        "/v1/tasks",
+        json={
+            "bot_id": "bot-a",
+            "payload": {"instruction": "cancel"},
+            "metadata": {"source": "chat_assign", "orchestration_id": "orch-api-cancel"},
+        },
+    )
+    assert create.status_code == 200
+
+    response = await cp_client.post(
+        "/v1/tasks/orchestrations/orch-api-cancel/cancel",
+        json={"reason": "operator_test"},
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert result["orchestration_id"] == "orch-api-cancel"
+    assert result["reason"] == "operator_test"
+    assert result["task_count"] == 1
+
+
+@pytest.mark.anyio
 async def test_bot_runs_and_artifacts_endpoints_expose_task_history(cp_client):
     await cp_client.post(
         "/v1/bots",

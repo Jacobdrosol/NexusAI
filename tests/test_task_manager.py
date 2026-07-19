@@ -1035,6 +1035,49 @@ async def test_cancel_queued_task_marks_cancelled(tmp_path, monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_cancel_orchestration_cancels_active_tasks_and_blocks_later_dispatch(tmp_path, monkeypatch):
+    import asyncio
+
+    from control_plane.task_manager.task_manager import TaskManager
+
+    class StubScheduler:
+        async def schedule(self, task):
+            await asyncio.sleep(1)
+            return {"ok": task.id}
+
+    monkeypatch.setenv("NEXUSAI_TASK_MAX_CONCURRENCY", "1")
+    db_path = str(tmp_path / "cancel-orchestration.db")
+    tm = TaskManager(StubScheduler(), db_path=db_path)
+    metadata = TaskMetadata(source="chat_assign", orchestration_id="orch-cancel")
+    first = await tm.create_task(bot_id="bot1", payload={"i": 1}, metadata=metadata)
+    second = await tm.create_task(bot_id="bot1", payload={"i": 2}, metadata=metadata)
+
+    for _ in range(20):
+        if (await tm.get_task(first.id)).status == "running":
+            break
+        await asyncio.sleep(0.05)
+
+    result = await tm.cancel_orchestration("orch-cancel", reason="operator_test")
+    assert result["cancelled_task_count"] == 2
+    assert {first.id, second.id} == set(result["cancelled_task_ids"])
+
+    for _ in range(40):
+        statuses = {(await tm.get_task(first.id)).status, (await tm.get_task(second.id)).status}
+        if statuses == {"cancelled"}:
+            break
+        await asyncio.sleep(0.05)
+    assert (await tm.get_task(first.id)).status == "cancelled"
+    assert (await tm.get_task(second.id)).status == "cancelled"
+
+    with pytest.raises(ValueError, match="was cancelled"):
+        await tm.create_task(bot_id="bot1", payload={"i": 3}, metadata=metadata)
+
+    restarted = TaskManager(StubScheduler(), db_path=db_path)
+    with pytest.raises(ValueError, match="was cancelled"):
+        await restarted.create_task(bot_id="bot1", payload={"i": 4}, metadata=metadata)
+
+
+@pytest.mark.anyio
 async def test_dependent_task_unblocks_after_dependency_completes():
     import asyncio
     from control_plane.task_manager.task_manager import TaskManager

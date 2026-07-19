@@ -2833,3 +2833,27 @@ def test_pipelines_pages_render_grouped_pipeline_runs(dashboard_client):
     assert b"proj-1" in detail_resp.data
     assert b"Artifacts and Reports" in detail_resp.data
     assert b"Execution Report" in detail_resp.data
+    assert b"Cancel Pipeline" in detail_resp.data
+
+
+def test_pipeline_cancel_proxy_uses_control_plane(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def __init__(self):
+            self.request = None
+
+        def cancel_orchestration(self, orchestration_id, reason=None):
+            self.request = {"orchestration_id": orchestration_id, "reason": reason}
+            return {"orchestration_id": orchestration_id, "cancelled_task_count": 2}
+
+    fake_cp = FakeCP()
+    with patch("dashboard.routes.pipelines.get_cp_client", return_value=fake_cp):
+        response = dashboard_client.post(
+            "/api/pipelines/orch-cancel/cancel",
+            json={"reason": "operator_test"},
+        )
+
+    assert response.status_code == 200
+    assert response.get_json()["cancelled_task_count"] == 2
+    assert fake_cp.request == {"orchestration_id": "orch-cancel", "reason": "operator_test"}

@@ -12,6 +12,9 @@
     <button class="btn" type="button" onclick="reviewAssignmentFiles('{{ pipeline.id }}', this)" {% if not pipeline.project_id %}disabled title="No project repo workspace is attached to this pipeline."{% endif %}>Review Files</button>
     <button class="btn" type="button" onclick="applyAssignmentFiles('{{ pipeline.id }}', this)" {% if not pipeline.project_id %}disabled title="No project repo workspace is attached to this pipeline."{% endif %}>Apply Files to Repo</button>
     <button class="btn" type="button" onclick="openPipelineTestModal()">Test</button>
+    {% if pipeline.status == 'running' %}
+    <button class="btn btn-danger" type="button" onclick="cancelPipeline('{{ pipeline.id }}')">Cancel Pipeline</button>
+    {% endif %}
     {% endif %}
   </div>
 </div>
@@ -230,6 +233,24 @@ function retryTask(taskId) {
     location.reload();
   })
   .catch((e) => alert(e.message || 'Retry failed'));
+}
+
+function cancelPipeline(orchestrationId) {
+  if (!window.confirm('Cancel every active task in this pipeline? Completed work will remain available, but no new workflow steps will be dispatched.')) {
+    return;
+  }
+  fetch('/api/pipelines/' + encodeURIComponent(orchestrationId) + '/cancel', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify({reason: 'operator_cancelled_from_pipeline_detail'})
+  })
+  .then(async (response) => {
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || 'Pipeline cancellation failed');
+    alert('Pipeline cancellation requested for ' + String(data.cancelled_task_count || 0) + ' active task(s).');
+    location.reload();
+  })
+  .catch((error) => alert(error.message || 'Pipeline cancellation failed'));
 }
 
 async function loadTaskPayload(taskId) {

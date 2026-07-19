@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from control_plane.audit.utils import record_audit_event
 router = APIRouter(prefix="/v1/orchestration", tags=["orchestration"])
 
 
@@ -193,17 +194,36 @@ async def cancel_orchestration_run(
     safe_id = str(run_id or "").strip()
     if not safe_id:
         raise HTTPException(status_code=400, detail="run_id required")
-    try:
-        result = await run_store.cancel_orchestration(
-            safe_id,
-            reason=str(body.reason or "operator_cancelled").strip() or "operator_cancelled",
-            actor=str(body.operator_id or "").strip() or "operator",
-        )
-    except AttributeError:
-        raise HTTPException(
-            status_code=501,
-            detail="cancel_orchestration not available (run_store not upgraded — Pass 2 pending)",
-        )
-    if result is None:
+    run = await run_store.get_run(safe_id)
+    if run is None:
         raise HTTPException(status_code=404, detail="orchestration run not found")
-    return {"run_id": safe_id, "cancelled": True, "run": result}
+    reason = str(body.reason or "operator_cancelled").strip() or "operator_cancelled"
+    orchestration_id = str(run.get("orchestration_id") or "").strip()
+    task_result: Dict[str, Any] | None = None
+    if orchestration_id:
+        task_result = await request.app.state.task_manager.cancel_orchestration(
+            orchestration_id,
+            reason=reason,
+        )
+    result = await run_store.cancel_orchestration(
+        safe_id,
+        reason=reason,
+        actor=str(body.operator_id or "").strip() or "operator",
+    )
+    await record_audit_event(
+        request,
+        action="orchestration.cancel",
+        resource=f"orchestration_run:{safe_id}",
+        details={
+            "orchestration_id": orchestration_id or None,
+            "reason": reason,
+            "cancelled_task_count": (task_result or {}).get("cancelled_task_count", 0),
+        },
+    )
+    return {
+        "run_id": safe_id,
+        "cancelled": True,
+        "orchestration_id": orchestration_id or None,
+        "task_cancellation": task_result,
+        "run": result,
+    }

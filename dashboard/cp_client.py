@@ -284,6 +284,12 @@ class CPClient:
     def cancel_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         return self._post(f"/v1/tasks/{task_id}/cancel", {})
 
+    def cancel_orchestration(self, orchestration_id: str, reason: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        body: Dict[str, Any] = {}
+        if reason:
+            body["reason"] = reason
+        return self._post(f"/v1/tasks/orchestrations/{orchestration_id}/cancel", body)
+
     def create_task(self, bot_id: str, payload: Any) -> Optional[Dict]:
         return self._post("/v1/tasks", {"bot_id": bot_id, "payload": payload})
 
