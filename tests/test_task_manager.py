@@ -3983,6 +3983,55 @@ async def test_output_contract_extracts_json_from_text_result(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_output_contract_preserves_structured_browser_evidence_with_text_field(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {
+                "url": "https://example.test/admin/courses/57",
+                "title": "Course Management",
+                "text": "Visible page evidence is plain text, not a JSON response.",
+                "elements": [{"role": "link", "text": "Lesson"}],
+            }
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "browser-contract-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="browser-evidence-bot",
+            name="Browser Evidence",
+            role="browser-inspector",
+            backends=[],
+            routing_rules={
+                "output_contract": {
+                    "enabled": True,
+                    "format": "json_object",
+                    "required_fields": ["url", "title", "text", "elements"],
+                    "non_empty_fields": ["url", "title"],
+                }
+            },
+        )
+    )
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "browser-contract.db"), bot_registry=bot_registry)
+    task = await tm.create_task(bot_id="browser-evidence-bot", payload={"path": "/admin/courses/57"})
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.1)
+
+    assert updated.status == "completed"
+    assert updated.result["text"] == "Visible page evidence is plain text, not a JSON response."
+    assert updated.result["elements"] == [{"role": "link", "text": "Lesson"}]
+
+
+@pytest.mark.anyio
 async def test_output_contract_fails_when_required_fields_are_missing(tmp_path, monkeypatch):
     import asyncio
 

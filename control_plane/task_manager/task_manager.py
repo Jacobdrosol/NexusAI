@@ -4516,6 +4516,16 @@ class TaskManager:
             parsed = None
             if isinstance(result, (dict, list)) and output_format == "json_array" and isinstance(result, list):
                 parsed = result
+            elif isinstance(result, dict) and output_format in {"json_object", "any"} and _payload_satisfies_output_contract(
+                result,
+                [str(field) for field in required_fields],
+                [str(field) for field in non_empty_fields],
+                allow_blocked_status=allow_blocked_status,
+            ):
+                # Browser and tool backends can already return a contract-shaped object
+                # whose visible evidence includes a plain-text "text" field. Prefer that
+                # object over treating its evidence text as model JSON.
+                parsed = result
             elif raw_text:
                 try:
                     parsed = _extract_json_payload(raw_text)
