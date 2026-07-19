@@ -564,6 +564,57 @@ async def test_scheduler_dispatches_scoped_browser_inspection_with_worker_token(
 
 
 @pytest.mark.anyio
+async def test_scheduler_captures_pinned_worker_execution_provenance(monkeypatch):
+    from control_plane.scheduler.scheduler import Scheduler
+
+    worker = Worker(
+        id="browser-worker",
+        name="Browser Worker",
+        host="browser.local",
+        port=8010,
+        capabilities=[Capability(type="tool", provider="browser", models=["browser-ui"])],
+        status="online",
+        enabled=True,
+    )
+    backend = BackendConfig(
+        type="browser",
+        provider="browser",
+        model="browser-ui",
+        worker_id=worker.id,
+        api_key_ref="BROWSER_WORKER_TOKEN",
+    )
+    task = Task(
+        id="task-browser-provenance",
+        bot_id="browser-bot",
+        payload={"path": "/admin/courses"},
+        created_at="now",
+        updated_at="now",
+    )
+    monkeypatch.setenv("BROWSER_WORKER_TOKEN", "worker-token")
+    fake_response = MagicMock()
+    fake_response.raise_for_status.return_value = None
+    fake_response.json.return_value = {"url": "https://app.example/admin/courses", "text": "Courses"}
+    mock_client = AsyncMock()
+    mock_client.__aenter__.return_value = mock_client
+    mock_client.__aexit__.return_value = False
+    mock_client.post.return_value = fake_response
+    worker_registry = AsyncMock()
+    worker_registry.get.return_value = worker
+    scheduler = Scheduler(bot_registry=AsyncMock(), worker_registry=worker_registry)
+
+    with patch("control_plane.scheduler.scheduler.httpx.AsyncClient", return_value=mock_client):
+        await scheduler._dispatch_backend(backend, task.payload, task=task)
+
+    provenance = scheduler.consume_task_execution_provenance(task.id)
+    assert provenance is not None
+    assert provenance["backend_type"] == "browser"
+    assert provenance["provider"] == "browser"
+    assert provenance["model"] == "browser-ui"
+    assert provenance["worker_id"] == worker.id
+    assert scheduler.consume_task_execution_provenance(task.id) is None
+
+
+@pytest.mark.anyio
 async def test_scheduler_rejects_browser_backend_without_a_pinned_attested_worker():
     from control_plane.scheduler.scheduler import BackendError, Scheduler
 

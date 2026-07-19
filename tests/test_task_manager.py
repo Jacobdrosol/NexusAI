@@ -3936,6 +3936,53 @@ async def test_run_reports_capture_usage_metadata(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_task_execution_provenance_persists_without_changing_result_contract(tmp_path):
+    import asyncio
+
+    from control_plane.task_manager.task_manager import TaskManager
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {"output": "done", "usage": {"total_tokens": 1}}
+
+        def consume_task_execution_provenance(self, task_id):
+            assert task_id
+            return {
+                "backend_type": "browser",
+                "provider": "browser",
+                "model": "browser-ui",
+                "worker_id": "browser-inspector-01",
+                "captured_at": "2026-07-19T00:00:00+00:00",
+            }
+
+    db_path = str(tmp_path / "provenance.db")
+    manager = TaskManager(StubScheduler(), db_path=db_path)
+    task = await manager.create_task(bot_id="browser-bot", payload={"path": "/admin/dashboard"})
+
+    for _ in range(40):
+        updated = await manager.get_task(task.id)
+        if updated.status == "completed":
+            break
+        await asyncio.sleep(0.1)
+
+    assert updated.status == "completed"
+    assert updated.result == {"output": "done", "usage": {"total_tokens": 1}}
+    assert updated.metadata is not None
+    assert updated.metadata.execution_provenance == {
+        "backend_type": "browser",
+        "provider": "browser",
+        "model": "browser-ui",
+        "worker_id": "browser-inspector-01",
+        "captured_at": "2026-07-19T00:00:00+00:00",
+    }
+
+    restarted = TaskManager(StubScheduler(), db_path=db_path)
+    reloaded = await restarted.get_task(task.id)
+    assert reloaded.metadata is not None
+    assert reloaded.metadata.execution_provenance["worker_id"] == "browser-inspector-01"
+
+
+@pytest.mark.anyio
 async def test_output_contract_extracts_json_from_text_result(tmp_path):
     import asyncio
 

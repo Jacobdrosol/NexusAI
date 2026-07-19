@@ -232,6 +232,10 @@ class TaskMetadata(BaseModel):
     # join gates can operate without parsing the opaque step_id string.
     branch_id: Optional[str] = None       # stable per-lane key (e.g. "branch:0")
     fan_out_source: Optional[str] = None  # fanout_id that spawned this branch
+    # Captured by the scheduler once a backend has been selected. This stays in
+    # task metadata instead of the bot's output contract so operational routing
+    # evidence cannot alter a worker's functional result.
+    execution_provenance: Optional[Dict[str, Any]] = None
 
 
 class TaskError(BaseModel):

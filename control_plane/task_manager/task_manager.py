@@ -3704,6 +3704,7 @@ class TaskManager:
                      created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
+                    metadata   = excluded.metadata,
                     depends_on = excluded.depends_on,
                     status     = excluded.status,
                     result     = excluded.result,
@@ -3724,6 +3725,38 @@ class TaskManager:
                 ),
             )
             await db.commit()
+
+    async def _persist_scheduler_execution_provenance(self, task_id: str) -> None:
+        """Persist scheduler route evidence without changing worker result payloads."""
+        # Query the class rather than the instance: dynamic test doubles such as
+        # AsyncMock fabricate arbitrary attributes and must not be treated as
+        # schedulers that implement this optional capability.
+        consume = getattr(type(self._scheduler), "consume_task_execution_provenance", None)
+        if not callable(consume):
+            return
+        try:
+            provenance = consume(self._scheduler, task_id)
+        except Exception:
+            logger.warning("Unable to read execution provenance for task %s", task_id, exc_info=True)
+            return
+        if not isinstance(provenance, dict) or not provenance:
+            return
+
+        async with self._lock:
+            existing_task = self._tasks.get(task_id)
+            if existing_task is None:
+                return
+            metadata = existing_task.metadata or TaskMetadata()
+            updated_metadata = metadata.model_copy(update={"execution_provenance": dict(provenance)})
+            updated_task = existing_task.model_copy(
+                update={
+                    "metadata": updated_metadata,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+            self._tasks[task_id] = updated_task
+        await self._persist_task(updated_task)
+        await self._upsert_bot_run(updated_task)
 
     async def _upsert_bot_run(self, task: Task) -> None:
         metadata = task.metadata.model_dump() if task.metadata else None
@@ -5161,6 +5194,7 @@ class TaskManager:
 
     async def _run_task(self, task_id: str) -> None:
         raw_result: Any = None
+        execution_provenance_persisted = False
         try:
             if self._is_closing:
                 return
@@ -5305,6 +5339,8 @@ class TaskManager:
                 # pm-final-qc → pm-orchestrator trigger doesn't forward assignment_scope).
                 task_for_execution = await self._inherit_orchestration_assignment_scope(task_for_execution)
                 raw_result = await self._scheduler.schedule(task_for_execution)
+                await self._persist_scheduler_execution_provenance(task_id)
+                execution_provenance_persisted = True
             result = await self._normalize_task_result(task_for_execution, copy.deepcopy(raw_result))
             if bot is not None and not bot_allows_repo_output_for_task:
                 result = _strip_repo_output_claims_for_deny_policy(result)
@@ -5410,6 +5446,8 @@ class TaskManager:
             task = await self.get_task(task_id)
             await self.update_status(task_id, "failed", result=e.result, error=task_error)
         except Exception as e:
+            if not execution_provenance_persisted:
+                await self._persist_scheduler_execution_provenance(task_id)
             logger.error("Task %s failed: %s", task_id, e)
             task = await self.get_task(task_id)
             error_message = str(e)

@@ -2032,6 +2032,36 @@ class Scheduler:
         self._latency_alpha = float(os.environ.get("NEXUSAI_WORKER_LATENCY_EMA_ALPHA", "0.30"))
         self._default_latency_ms = float(os.environ.get("NEXUSAI_WORKER_DEFAULT_LATENCY_MS", "800"))
         self._vertex_token_cache: dict[str, tuple[str, float]] = {}
+        self._execution_provenance_by_task: dict[str, dict[str, Any]] = {}
+
+    def _record_execution_provenance(
+        self,
+        task: "Task | None",
+        backend: "BackendConfig",
+        *,
+        worker: "Worker | None" = None,
+    ) -> None:
+        """Store the selected execution route until the task manager persists it.
+
+        This is operational metadata only. Keeping it separate from backend
+        responses avoids weakening strict bot output contracts.
+        """
+        if task is None:
+            return
+        task_id = str(getattr(task, "id", "") or "").strip()
+        if not task_id:
+            return
+        self._execution_provenance_by_task[task_id] = {
+            "backend_type": str(getattr(backend, "type", "") or ""),
+            "provider": str(getattr(backend, "provider", "") or ""),
+            "model": str(getattr(backend, "model", "") or ""),
+            "worker_id": str(getattr(worker, "id", "") or "") or None,
+            "captured_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    def consume_task_execution_provenance(self, task_id: str) -> Optional[dict[str, Any]]:
+        """Return and clear execution route metadata for a completed task attempt."""
+        return self._execution_provenance_by_task.pop(str(task_id or ""), None)
 
     def _worker_capacity_limit(self, worker: Worker, backend: BackendConfig) -> int:
         if str(getattr(backend, "type", "") or "").strip().lower() == "local_llm":
@@ -2819,8 +2849,10 @@ class Scheduler:
                 raise BackendError(
                     f"Worker {worker.id} is not online (status={worker.status})"
                 )
+            self._record_execution_provenance(task, backend, worker=worker)
             return await self._dispatch_to_worker(worker, backend, safe_payload)
         elif backend.type == "cloud_api":
+            self._record_execution_provenance(task, backend)
             if backend.provider == "openai":
                 return await self._call_openai(backend, safe_payload)
             elif backend.provider == "ollama_cloud":
@@ -2842,12 +2874,15 @@ class Scheduler:
                 raise BackendError(f"Worker not found: {backend.worker_id}") from e
             await self._require_fresh_autonomous_worker_probe(worker, task)
             await self._require_task_worker_tools(worker, task)
+            self._record_execution_provenance(task, backend, worker=worker)
             return await self._dispatch_to_worker(worker, backend, safe_payload)
         elif backend.type == "browser":
             worker = await self._resolve_browser_worker(backend, task=task)
             await self._require_fresh_autonomous_worker_probe(worker, task)
+            self._record_execution_provenance(task, backend, worker=worker)
             return await self._dispatch_browser_inspection(worker, backend, safe_payload, task=task)
         elif backend.type == "custom":
+            self._record_execution_provenance(task, backend)
             return await self._dispatch_custom_backend(backend, safe_payload, task=task)
         else:
             raise BackendError(f"Unsupported backend type: {backend.type}")
