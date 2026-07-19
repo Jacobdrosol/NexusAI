@@ -18,6 +18,8 @@ jobs:
           python-version: '3.11'
       - name: Install dependencies
         run: pip install -r requirements.txt ruff pytest
+      - name: Verify public release hygiene
+        run: python scripts/verify_public_release.py
       - name: Lint
         run: ruff check . --ignore E501
       - name: Test
