@@ -2776,6 +2776,85 @@ def test_overview_shows_latest_bounded_fleet_health_report(dashboard_client):
     assert b"secret: 99" not in resp.data
 
 
+def test_overview_shows_bounded_operational_qc_report(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def health(self):
+            return True
+
+        def list_workers(self):
+            return []
+
+        def list_worker_probes(self):
+            return {"probes": []}
+
+        def list_bots(self):
+            return []
+
+        def list_projects(self):
+            return []
+
+        def list_tasks(self, **kwargs):
+            return []
+
+        def list_schedules(self, **kwargs):
+            return {
+                "schedules": [
+                    {
+                        "id": "operational-qc",
+                        "status": "active",
+                        "last_run_status": "completed",
+                        "metadata": {
+                            "system_payload_source": {
+                                "type": "control_plane_operational_quality_v1"
+                            }
+                        },
+                    }
+                ]
+            }
+
+        def list_schedule_runs(self, schedule_id, limit=50):
+            assert schedule_id == "operational-qc"
+            assert limit == 1
+            return {
+                "runs": [
+                    {
+                        "status": "completed",
+                        "finished_at": "2026-07-19T11:17:15+00:00",
+                        "task_id": "qc-task",
+                    }
+                ]
+            }
+
+        def get_task(self, task_id):
+            assert task_id == "qc-task"
+            return {
+                "id": task_id,
+                "result": {
+                    "status": "pass",
+                    "acceptance_result": "pass",
+                    "findings": ["No concrete operational risks."],
+                    "evidence": ["aggregate-only"],
+                    "recommended_next_step": "Continue routine monitoring.",
+                    "handoff_notes": "This must not be rendered.",
+                },
+            }
+
+        def probe_paths(self, paths):
+            return [{"path": path, "ok": True, "status_code": 200, "detail": "ok"} for path in paths]
+
+    with patch("dashboard.cp_client.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/")
+
+    assert resp.status_code == 200
+    assert b"Latest Operational QC" in resp.data
+    assert b"Acceptance:</strong> pass" in resp.data
+    assert b"Reported findings:</strong> 1" in resp.data
+    assert b"Continue routine monitoring." in resp.data
+    assert b"This must not be rendered." not in resp.data
+
+
 def test_overview_page_shows_saved_launch_profiles(dashboard_client):
     _login_admin(dashboard_client)
 
