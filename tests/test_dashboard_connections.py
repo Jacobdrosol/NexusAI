@@ -230,7 +230,8 @@ def test_bot_export_includes_full_bot_config_and_connections(dashboard_client):
         assert bundle["bot"]["launch_profile"]["label"] == "Run Bot"
         assert len(bundle["connections"]) == 1
         assert bundle["connections"][0]["config"]["base_url"] == "https://api.example.com"
-        assert bundle["connections"][0]["auth"]["api_key"] == "secret-token"
+        assert bundle["connections"][0]["auth"]["api_key"] == "[REDACTED]"
+        assert b"secret-token" not in export_resp.data
 
 
 def test_bot_import_can_overwrite_existing_bot_config_and_connections(dashboard_client):

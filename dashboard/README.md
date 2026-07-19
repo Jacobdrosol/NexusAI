@@ -87,10 +87,10 @@ Template expressions use `{{payload.some.nested.field}}` and `json:payload.field
 Provides auth secret handling, OpenAPI schema parsing, and connectivity tests for `http` and `database` connections. No Flask routes — consumed by `routes/connections.py` and `routes/bots.py`.
 
 **Secret handling:**
-- Secret fields: `api_key`, `bearer_token`, `password`.
-- `normalize_auth_payload()` — encrypts incoming secrets using Fernet (key derived from SHA-256 of `NEXUSAI_SECRET_KEY`), prefixing stored values with `enc:`.
-- `resolve_auth_payload()` — decrypts stored values.
-- `mask_auth_payload()` — replaces secret values with `[REDACTED]` for display.
+- Secret auth fields: `api_key`, `bearer_token`, `password`; connection config also protects DSNs, connection strings, common token fields, and configured HTTP headers.
+- `normalize_auth_payload()` and `normalize_connection_config()` encrypt incoming secrets using Fernet (key derived from SHA-256 of `NEXUSAI_SECRET_KEY`), prefixing stored values with `enc:`.
+- `resolve_auth_payload()` and `resolve_connection_config()` decrypt stored values only for internal connection execution.
+- `mask_auth_payload()` and `mask_connection_config()` replace credentials with `[REDACTED]` for display, API responses, exports, and worker task context.
 
 **OpenAPI parsing:**
 - `parse_openapi_actions(schema_text)` — parses JSON or YAML OpenAPI schema and returns a list of `{operation_id, method, path}` dicts for all HTTP operations.

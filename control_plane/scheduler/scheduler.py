@@ -1386,8 +1386,9 @@ def _static_connection_context_prompt(rows: list[Any], config: dict[str, Any]) -
         return ""
 
     try:
-        from dashboard.connections_service import parse_openapi_actions
+        from dashboard.connections_service import mask_connection_config, parse_openapi_actions
     except Exception:
+        mask_connection_config = None  # type: ignore[assignment]
         parse_openapi_actions = None  # type: ignore[assignment]
 
     parts: list[str] = [
@@ -1414,6 +1415,8 @@ def _static_connection_context_prompt(rows: list[Any], config: dict[str, Any]) -
                 connection_config = json.loads(str(_connection_row_value(row, "config_json", "{}") or "{}"))
             except Exception:
                 connection_config = {}
+        if mask_connection_config and isinstance(connection_config, dict):
+            connection_config = mask_connection_config(connection_config)
         if isinstance(connection_config, dict):
             if row_kind == "http":
                 base_url = str(connection_config.get("base_url") or "").strip()
@@ -1475,7 +1478,11 @@ def _dynamic_connection_fetch_prompt(rows: list[Any], config: dict[str, Any], pa
         return ""
 
     try:
-        from dashboard.connections_service import resolve_auth_payload, test_http_connection
+        from dashboard.connections_service import (
+            resolve_auth_payload,
+            resolve_connection_config,
+            test_http_connection,
+        )
     except Exception:
         return ""
 
@@ -1487,6 +1494,8 @@ def _dynamic_connection_fetch_prompt(rows: list[Any], config: dict[str, Any], pa
             connection_config = json.loads(str(_connection_row_value(connection, "config_json", "{}") or "{}"))
         except Exception:
             connection_config = {}
+    if isinstance(connection_config, dict):
+        connection_config = resolve_connection_config(connection_config)
     raw_auth = _connection_row_value(connection, "auth", None)
     if isinstance(raw_auth, dict):
         auth_payload = resolve_auth_payload(raw_auth)
@@ -2913,7 +2922,11 @@ class Scheduler:
         return await asyncio.to_thread(self._run_http_connection_backend_sync, payload, task.bot_id)
 
     def _run_http_connection_backend_sync(self, payload: dict[str, Any], bot_id: str) -> dict[str, Any]:
-        from dashboard.connections_service import resolve_auth_payload, test_http_connection
+        from dashboard.connections_service import (
+            resolve_auth_payload,
+            resolve_connection_config,
+            test_http_connection,
+        )
 
         connection_ref = payload.get("connection") if isinstance(payload.get("connection"), dict) else {}
         requested_name = str(connection_ref.get("name") or payload.get("connection_name") or "").strip()
@@ -2945,6 +2958,7 @@ class Scheduler:
             raise BackendError("http_connection backend only supports HTTP connections")
 
         config = connection.get("config") if isinstance(connection.get("config"), dict) else {}
+        config = resolve_connection_config(config)
         auth = resolve_auth_payload(connection.get("auth") if isinstance(connection.get("auth"), dict) else {})
         schema_text = str(connection.get("schema_text") or "")
 

@@ -5522,14 +5522,26 @@ class TaskManager:
                             raise _TaskExecutionFailure(
                                 f"project-scoped connection binding '{connection_id}' is unavailable for project '{project_id}'"
                             )
+                        try:
+                            from dashboard.connections_service import mask_auth_payload, mask_connection_config
+
+                            safe_config = mask_connection_config(
+                                resolved.get("config") if isinstance(resolved.get("config"), dict) else {}
+                            )
+                            safe_auth = mask_auth_payload(
+                                resolved.get("auth") if isinstance(resolved.get("auth"), dict) else {}
+                            )
+                        except Exception:
+                            safe_config = {}
+                            safe_auth = {}
                         scoped_connections.append(
                             {
                                 "slot": slot,
                                 "connection_id": resolved.get("id"),
                                 "name": resolved.get("name"),
                                 "kind": resolved.get("kind"),
-                                "config": resolved.get("config"),
-                                "auth": resolved.get("auth"),
+                                "config": safe_config,
+                                "auth": safe_auth,
                                 "schema_text": resolved.get("schema_text"),
                             }
                         )

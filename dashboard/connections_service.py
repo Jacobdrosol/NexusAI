@@ -2,9 +2,7 @@
 from __future__ import annotations
 
 import base64
-import hashlib
 import json
-import os
 import shlex
 import ssl
 import urllib.error
@@ -13,12 +11,29 @@ import urllib.request
 from typing import Any
 
 import yaml
-from cryptography.fernet import Fernet
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import URL, make_url
 
+from shared.connection_secrets import (
+    mask_auth_payload,
+    mask_connection_config,
+    normalize_auth_payload,
+    normalize_connection_config,
+    resolve_auth_payload,
+    resolve_connection_config,
+)
 
-_SECRET_KEYS = {"api_key", "bearer_token", "password"}
+__all__ = (
+    "mask_auth_payload",
+    "mask_connection_config",
+    "normalize_auth_payload",
+    "normalize_connection_config",
+    "resolve_auth_payload",
+    "resolve_connection_config",
+    "parse_openapi_actions",
+    "test_database_connection",
+    "test_http_connection",
+)
 
 
 def _mask_dsn_password(dsn: str) -> str:
@@ -32,63 +47,6 @@ def _mask_dsn_password(dsn: str) -> str:
         return raw
     except Exception:
         return raw
-
-
-def _fernet() -> Fernet:
-    secret = (os.environ.get("NEXUSAI_SECRET_KEY") or "dev-secret-change-in-production").encode("utf-8")
-    digest = hashlib.sha256(secret).digest()
-    key = base64.urlsafe_b64encode(digest)
-    return Fernet(key)
-
-
-def _encrypt(raw: str) -> str:
-    if not raw:
-        return ""
-    return "enc:" + _fernet().encrypt(raw.encode("utf-8")).decode("utf-8")
-
-
-def _decrypt(raw: str) -> str:
-    if not raw:
-        return ""
-    if not raw.startswith("enc:"):
-        return raw
-    token = raw[4:]
-    try:
-        return _fernet().decrypt(token.encode("utf-8")).decode("utf-8")
-    except Exception:
-        return ""
-
-
-def normalize_auth_payload(payload: dict[str, Any], existing: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Merge and encrypt secret fields in auth payload."""
-    base = dict(existing or {})
-    incoming = dict(payload or {})
-    for key, value in incoming.items():
-        if key in _SECRET_KEYS:
-            if str(value or "").strip() == "":
-                continue
-            base[key] = _encrypt(str(value))
-        else:
-            base[key] = value
-    return base
-
-
-def mask_auth_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    """Return auth payload with secret values redacted."""
-    out = dict(payload or {})
-    for key in _SECRET_KEYS:
-        if key in out and str(out.get(key) or "").strip():
-            out[key] = "[REDACTED]"
-    return out
-
-
-def resolve_auth_payload(payload: dict[str, Any]) -> dict[str, Any]:
-    """Return auth payload with encrypted values decrypted."""
-    out = dict(payload or {})
-    for key in _SECRET_KEYS:
-        if key in out:
-            out[key] = _decrypt(str(out.get(key) or ""))
-    return out
 
 
 def parse_openapi_actions(schema_text: str) -> list[dict[str, str]]:

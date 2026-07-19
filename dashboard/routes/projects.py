@@ -12,8 +12,10 @@ from flask_login import login_required
 
 from dashboard.connections_service import (
     inspect_database_schema,
+    normalize_connection_config,
     normalize_database_dsn,
     render_database_schema_document,
+    resolve_connection_config,
     test_database_connection,
     _mask_dsn_password,
 )
@@ -50,7 +52,7 @@ def _parse_json(raw: str, default: Any) -> Any:
 
 
 def _project_connection_to_dict(row: Connection) -> dict[str, Any]:
-    config = _parse_json(row.config_json or "{}", {})
+    config = resolve_connection_config(_parse_json(row.config_json or "{}", {}))
     schema_text = row.schema_text or ""
     schema_snapshot = _parse_json(schema_text, {}) if schema_text else {}
     schema_totals = schema_snapshot.get("totals") if isinstance(schema_snapshot, dict) else {}
@@ -917,7 +919,9 @@ def api_create_project_connection(project_id: str):
             name=name,
             kind="database",
             description=str(body.get("description") or ""),
-            config_json=json.dumps({"dsn": normalized_dsn, "readonly": bool(body.get("readonly", True))}),
+            config_json=json.dumps(
+                normalize_connection_config({"dsn": normalized_dsn, "readonly": bool(body.get("readonly", True))})
+            ),
             auth_json="{}",
             schema_text="",
             enabled=bool(body.get("enabled", True)),
@@ -990,7 +994,7 @@ def api_test_project_connection(project_id: str, connection_id: int):
         row = db.get(Connection, connection_id)
         if row is None or row.kind != "database":
             return jsonify({"error": "not found"}), 404
-        config = _parse_json(row.config_json or "{}", {})
+        config = resolve_connection_config(_parse_json(row.config_json or "{}", {}))
         try:
             result = test_database_connection(config=config if isinstance(config, dict) else {}, payload=body)
         except Exception as exc:
@@ -1024,7 +1028,7 @@ def api_ingest_project_connection_schema(project_id: str, connection_id: int):
         row = db.get(Connection, connection_id)
         if row is None or row.kind != "database":
             return jsonify({"error": "not found"}), 404
-        config = _parse_json(row.config_json or "{}", {})
+        config = resolve_connection_config(_parse_json(row.config_json or "{}", {}))
         try:
             snapshot = inspect_database_schema(config=config if isinstance(config, dict) else {})
         except Exception as exc:

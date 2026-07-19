@@ -10,9 +10,12 @@ from flask_login import login_required
 
 from dashboard.connections_service import (
     mask_auth_payload,
+    mask_connection_config,
     normalize_auth_payload,
+    normalize_connection_config,
     parse_openapi_actions,
     resolve_auth_payload,
+    resolve_connection_config,
     test_database_connection,
     test_http_connection,
 )
@@ -29,7 +32,7 @@ def _parse_json(raw: str, default: Any) -> Any:
         return default
 
 
-def _connection_to_dict(c: Connection, *, include_auth: bool = False) -> dict[str, Any]:
+def _connection_to_dict(c: Connection) -> dict[str, Any]:
     cfg = _parse_json(c.config_json or "{}", {})
     auth = _parse_json(c.auth_json or "{}", {})
     return {
@@ -37,8 +40,8 @@ def _connection_to_dict(c: Connection, *, include_auth: bool = False) -> dict[st
         "name": c.name,
         "kind": c.kind,
         "description": c.description or "",
-        "config": cfg if isinstance(cfg, dict) else {},
-        "auth": resolve_auth_payload(auth) if include_auth else mask_auth_payload(auth if isinstance(auth, dict) else {}),
+        "config": mask_connection_config(cfg if isinstance(cfg, dict) else {}),
+        "auth": mask_auth_payload(auth if isinstance(auth, dict) else {}),
         "schema_text": c.schema_text or "",
         "actions": parse_openapi_actions(c.schema_text or "") if c.kind == "http" else [],
         "enabled": bool(c.enabled),
@@ -124,11 +127,12 @@ def create_bot_connection(bot_id: str):
     db = get_db()
     try:
         auth = normalize_auth_payload(auth_in)
+        normalized_config = normalize_connection_config(config)
         row = Connection(
             name=name,
             kind=kind,
             description=str(body.get("description") or ""),
-            config_json=json.dumps(config),
+            config_json=json.dumps(normalized_config),
             auth_json=json.dumps(auth),
             schema_text=schema_text,
             enabled=bool(body.get("enabled", True)),
@@ -167,7 +171,13 @@ def update_connection(connection_id: int):
         if "enabled" in body:
             row.enabled = bool(body.get("enabled"))
         if "config" in body and isinstance(body.get("config"), dict):
-            row.config_json = json.dumps(body["config"])
+            existing_config = _parse_json(row.config_json or "{}", {})
+            row.config_json = json.dumps(
+                normalize_connection_config(
+                    body["config"],
+                    existing=existing_config if isinstance(existing_config, dict) else {},
+                )
+            )
         if "schema_text" in body:
             row.schema_text = str(body.get("schema_text") or "")
         if "auth" in body and isinstance(body.get("auth"), dict):
@@ -261,7 +271,7 @@ def test_connection(connection_id: int):
         if not row:
             return jsonify({"error": "not found"}), 404
 
-        config = _parse_json(row.config_json or "{}", {})
+        config = resolve_connection_config(_parse_json(row.config_json or "{}", {}))
         auth = resolve_auth_payload(_parse_json(row.auth_json or "{}", {}))
 
         if row.kind == "database":

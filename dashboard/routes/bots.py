@@ -12,7 +12,12 @@ from typing import Any
 from flask import Blueprint, flash, jsonify, render_template, request, send_file
 from flask_login import login_required
 
-from dashboard.connections_service import normalize_auth_payload, resolve_auth_payload
+from dashboard.connections_service import (
+    mask_auth_payload,
+    mask_connection_config,
+    normalize_auth_payload,
+    normalize_connection_config,
+)
 from dashboard.db import get_db
 from dashboard.models import Bot, BotConnection, Connection, ProjectConnection, Task
 
@@ -127,13 +132,17 @@ def _bot_connections_payload(db, bot_ref: str) -> list[dict[str, Any]]:
                 "name": row.name,
                 "kind": row.kind,
                 "description": row.description or "",
-                "config": _parse_json(row.config_json or "{}", {}),
-                "auth": resolve_auth_payload(_parse_json(row.auth_json or "{}", {})),
+                "config": mask_connection_config(_parse_json(row.config_json or "{}", {})),
+                "auth": mask_auth_payload(_parse_json(row.auth_json or "{}", {})),
                 "schema_text": row.schema_text or "",
                 "enabled": bool(row.enabled),
             }
         )
     return payloads
+
+
+def _connection_identity(name: Any, kind: Any) -> tuple[str, str]:
+    return (str(name or "").strip().lower(), str(kind or "http").strip().lower())
 
 
 def _cleanup_orphaned_connection(db, connection_id: int) -> None:
@@ -149,6 +158,14 @@ def _cleanup_orphaned_connection(db, connection_id: int) -> None:
 def _replace_bot_connections(db, bot_ref: str, connection_payloads: list[dict[str, Any]]) -> None:
     existing_links = db.query(BotConnection).filter(BotConnection.bot_ref == str(bot_ref)).all()
     existing_ids = [link.connection_id for link in existing_links]
+    existing_rows = db.query(Connection).filter(Connection.id.in_(existing_ids)).all() if existing_ids else []
+    existing_by_identity = {
+        _connection_identity(row.name, row.kind): (
+            _parse_json(row.config_json or "{}", {}),
+            _parse_json(row.auth_json or "{}", {}),
+        )
+        for row in existing_rows
+    }
     db.query(BotConnection).filter(BotConnection.bot_ref == str(bot_ref)).delete()
     db.flush()
     for connection_id in existing_ids:
@@ -158,13 +175,26 @@ def _replace_bot_connections(db, bot_ref: str, connection_payloads: list[dict[st
     for payload in connection_payloads:
         if not isinstance(payload, dict):
             continue
+        name = str(payload.get("name") or "").strip() or "Imported Connection"
+        kind = str(payload.get("kind") or "http").strip().lower() or "http"
+        existing_config, existing_auth = existing_by_identity.get(
+            _connection_identity(name, kind), ({}, {})
+        )
         row = Connection(
-            name=str(payload.get("name") or "").strip() or "Imported Connection",
-            kind=str(payload.get("kind") or "http").strip().lower() or "http",
+            name=name,
+            kind=kind,
             description=str(payload.get("description") or ""),
-            config_json=json.dumps(payload.get("config") if isinstance(payload.get("config"), dict) else {}),
+            config_json=json.dumps(
+                normalize_connection_config(
+                    payload.get("config") if isinstance(payload.get("config"), dict) else {},
+                    existing=existing_config if isinstance(existing_config, dict) else {},
+                )
+            ),
             auth_json=json.dumps(
-                normalize_auth_payload(payload.get("auth") if isinstance(payload.get("auth"), dict) else {})
+                normalize_auth_payload(
+                    payload.get("auth") if isinstance(payload.get("auth"), dict) else {},
+                    existing=existing_auth if isinstance(existing_auth, dict) else {},
+                )
             ),
             schema_text=str(payload.get("schema_text") or ""),
             enabled=bool(payload.get("enabled", True)),
