@@ -37,9 +37,14 @@
         {% elif p.autonomy_coverage.active_schedule_count %}
         <span class="badge badge-enabled">active</span>
         <div class="mini-note">{{ p.autonomy_coverage.active_schedule_count }} active schedule{{ '' if p.autonomy_coverage.active_schedule_count == 1 else 's' }} / {{ p.autonomy_coverage.scheduled_bot_count }} bot{{ '' if p.autonomy_coverage.scheduled_bot_count == 1 else 's' }}</div>
+        {% if p.autonomy_coverage.readiness_available and p.autonomy_coverage.ready_unscheduled_bot_count %}
+        <div class="mini-note">{{ p.autonomy_coverage.ready_unscheduled_bot_count }} ready but unscheduled</div>
+        {% elif p.autonomy_coverage.readiness_available and p.autonomy_coverage.blocked_enabled_bot_count %}
+        <div class="mini-note">{{ p.autonomy_coverage.blocked_enabled_bot_count }} enabled but blocked</div>
+        {% endif %}
         {% elif p.autonomy_coverage.enabled_configured_bot_count %}
         <span class="badge badge-disabled">configured only</span>
-        <div class="mini-note">No active schedules</div>
+        <div class="mini-note">No active schedules{% if p.autonomy_coverage.readiness_available %} / {{ p.autonomy_coverage.ready_unscheduled_bot_count }} ready but unscheduled{% endif %}</div>
         {% else %}
         <span class="empty">No bot coverage</span>
         {% endif %}

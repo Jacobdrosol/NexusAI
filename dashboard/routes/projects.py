@@ -202,6 +202,7 @@ def _attach_project_autonomy_coverage(
     projects: list[dict[str, Any]],
     bots: Any,
     schedules_response: Any,
+    readiness_response: Any = None,
 ) -> list[dict[str, Any]]:
     """Add read-only bot and schedule coverage to project rows for the overview."""
     bot_rows = [row for row in bots if isinstance(row, dict)] if isinstance(bots, list) else None
@@ -211,6 +212,16 @@ def _attach_project_autonomy_coverage(
         else None
     )
     coverage_available = bot_rows is not None and schedule_rows is not None
+    readiness_rows = (
+        [row for row in readiness_response.get("readiness", []) if isinstance(row, dict)]
+        if isinstance(readiness_response, dict) and isinstance(readiness_response.get("readiness"), list)
+        else None
+    )
+    readiness_by_bot_id = {
+        str(row.get("bot_id") or "").strip(): row
+        for row in readiness_rows or []
+        if str(row.get("bot_id") or "").strip()
+    }
     enriched: list[dict[str, Any]] = []
 
     for project in projects:
@@ -242,13 +253,28 @@ def _attach_project_autonomy_coverage(
             for schedule in active_schedules
             if str(schedule.get("target_bot_id") or "").strip()
         }
+        ready_enabled_bot_ids = {
+            str(bot.get("id") or "").strip()
+            for bot in enabled_configured_bots
+            if bool((readiness_by_bot_id.get(str(bot.get("id") or "").strip()) or {}).get("ready"))
+        }
+        blocked_enabled_bot_count = sum(
+            1
+            for bot in enabled_configured_bots
+            if str(bot.get("id") or "").strip() in readiness_by_bot_id
+            and not bool((readiness_by_bot_id.get(str(bot.get("id") or "").strip()) or {}).get("ready"))
+        )
         row["autonomy_coverage"] = {
             "available": coverage_available,
+            "readiness_available": readiness_rows is not None,
             "registered_bot_count": len(registered_bot_ids),
             "configured_bot_count": len(configured_bots),
             "enabled_configured_bot_count": len(enabled_configured_bots),
             "active_schedule_count": len(active_schedules),
             "scheduled_bot_count": len(scheduled_bot_ids),
+            "ready_enabled_bot_count": len(ready_enabled_bot_ids),
+            "ready_unscheduled_bot_count": len(ready_enabled_bot_ids - scheduled_bot_ids),
+            "blocked_enabled_bot_count": blocked_enabled_bot_count,
         }
         enriched.append(row)
     return enriched
@@ -268,6 +294,7 @@ def projects_page() -> str:
             [project for project in projects if isinstance(project, dict)],
             cp.list_bots() if hasattr(cp, "list_bots") else None,
             cp.list_schedules() if hasattr(cp, "list_schedules") else None,
+            cp.list_bot_readiness() if hasattr(cp, "list_bot_readiness") else None,
         )
     return render_template("projects.html", projects=projects, error=error)
 

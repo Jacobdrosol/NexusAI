@@ -47,6 +47,7 @@ def test_projects_page_shows_configured_bot_and_schedule_coverage(dashboard_clie
             return [
                 {"id": "writer", "project_id": "globeiq", "enabled": True},
                 {"id": "reviewer", "project_id": "globeiq", "enabled": False},
+                {"id": "researcher", "project_id": "globeiq", "enabled": True},
                 {"id": "other", "project_id": "other-project", "enabled": True},
             ]
 
@@ -58,14 +59,24 @@ def test_projects_page_shows_configured_bot_and_schedule_coverage(dashboard_clie
                 ]
             }
 
+        def list_bot_readiness(self):
+            return {
+                "readiness": [
+                    {"bot_id": "writer", "ready": True},
+                    {"bot_id": "researcher", "ready": True},
+                    {"bot_id": "other", "ready": True},
+                ]
+            }
+
     with patch("dashboard.routes.projects.get_cp_client", return_value=FakeCP()):
         resp = dashboard_client.get("/projects")
 
     assert resp.status_code == 200
     assert b"Configured Bots" in resp.data
-    assert b"1 enabled" in resp.data
-    assert b"2 configured" in resp.data
+    assert b"2 enabled" in resp.data
+    assert b"3 configured" in resp.data
     assert b"1 active schedule" in resp.data
+    assert b"1 ready but unscheduled" in resp.data
 
 
 def test_schedule_bot_readiness_api_proxies_non_secret_readiness(dashboard_client):
