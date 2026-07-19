@@ -2345,6 +2345,46 @@ def test_bots_page_supports_multi_file_import(dashboard_client):
     assert b'multiple' in resp.data
 
 
+def test_bots_page_identifies_scheduled_and_manual_dispatch_modes(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_bots(self):
+            return [
+                {"id": "scheduled-bot", "name": "Scheduled Bot", "role": "monitor", "enabled": True, "backends": []},
+                {"id": "manual-bot", "name": "Manual Bot", "role": "researcher", "enabled": True, "backends": []},
+                {"id": "paused-bot", "name": "Paused Bot", "role": "reviewer", "enabled": True, "backends": []},
+                {"id": "disabled-bot", "name": "Disabled Bot", "role": "writer", "enabled": False, "backends": []},
+            ]
+
+        def list_bot_readiness(self):
+            return {
+                "readiness": [
+                    {"bot_id": "scheduled-bot", "ready": True, "checks": []},
+                    {"bot_id": "manual-bot", "ready": True, "checks": []},
+                    {"bot_id": "paused-bot", "ready": True, "checks": []},
+                ]
+            }
+
+        def list_schedules(self, **kwargs):
+            return {
+                "schedules": [
+                    {"id": "schedule-1", "status": "active", "target_bot_id": "scheduled-bot"},
+                    {"id": "schedule-2", "status": "paused", "assignment_pm_bot_id": "paused-bot"},
+                ]
+            }
+
+    with patch("dashboard.cp_client.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/bots")
+
+    assert resp.status_code == 200
+    assert b"Dispatch mode" in resp.data
+    assert b"scheduled" in resp.data
+    assert b"manual" in resp.data
+    assert b"paused" in resp.data
+    assert b"disabled" in resp.data
+
+
 def test_worker_live_endpoint_returns_payload(dashboard_client):
     _login_admin(dashboard_client)
     from dashboard.db import get_db

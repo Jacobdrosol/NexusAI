@@ -263,17 +263,68 @@ def _bot_dependency_view(payload: Any) -> dict[str, Any] | None:
     }
 
 
-def _with_bot_readiness(bots: list[dict[str, Any]], payload: Any) -> list[dict[str, Any]]:
-    raw_readiness = payload.get("readiness") if isinstance(payload, dict) else []
+def _bot_schedule_mode(schedule_payload: Any) -> dict[str, dict[str, Any]]:
+    schedules = schedule_payload.get("schedules") if isinstance(schedule_payload, dict) else []
+    schedule_refs: dict[str, list[dict[str, Any]]] = {}
+    for schedule in schedules if isinstance(schedules, list) else []:
+        if not isinstance(schedule, dict):
+            continue
+        for field in ("target_bot_id", "assignment_pm_bot_id"):
+            bot_id = str(schedule.get(field) or "").strip()
+            if bot_id:
+                schedule_refs.setdefault(bot_id, []).append(schedule)
+
+    modes: dict[str, dict[str, Any]] = {}
+    for bot_id, references in schedule_refs.items():
+        active_count = sum(
+            1 for schedule in references if str(schedule.get("status") or "").strip().lower() == "active"
+        )
+        paused_count = sum(
+            1 for schedule in references if str(schedule.get("status") or "").strip().lower() == "paused"
+        )
+        if active_count:
+            modes[bot_id] = {
+                "state": "scheduled",
+                "detail": f"{active_count} active recurring schedule(s).",
+            }
+        elif paused_count:
+            modes[bot_id] = {
+                "state": "paused",
+                "detail": f"{paused_count} paused schedule(s); no recurring dispatch is active.",
+            }
+    return modes
+
+
+def _with_bot_operating_mode(
+    bots: list[dict[str, Any]],
+    readiness_payload: Any,
+    schedule_payload: Any,
+) -> list[dict[str, Any]]:
+    raw_readiness = readiness_payload.get("readiness") if isinstance(readiness_payload, dict) else []
     readiness_by_id = {
         str(item.get("bot_id") or "").strip(): item
         for item in raw_readiness
         if isinstance(item, dict) and str(item.get("bot_id") or "").strip()
     }
+    schedule_mode_by_bot_id = _bot_schedule_mode(schedule_payload)
     enriched: list[dict[str, Any]] = []
     for bot in bots:
         row = dict(bot)
-        row["readiness"] = _bot_readiness_view(readiness_by_id.get(str(row.get("id") or "").strip()))
+        bot_id = str(row.get("id") or "").strip()
+        row["readiness"] = _bot_readiness_view(readiness_by_id.get(bot_id))
+        if not bool(row.get("enabled")):
+            row["operating_mode"] = {
+                "state": "disabled",
+                "detail": "This bot is disabled and cannot receive dispatch.",
+            }
+        else:
+            row["operating_mode"] = schedule_mode_by_bot_id.get(
+                bot_id,
+                {
+                    "state": "manual",
+                    "detail": "No recurring schedule is active; this bot runs only through an explicit task or workflow trigger.",
+                },
+            )
         enriched.append(row)
     return enriched
 
@@ -289,9 +340,11 @@ def bots_page() -> str:
     if cp_data is not None:
         readiness_getter = getattr(cp, "list_bot_readiness", None)
         readiness_payload = readiness_getter() if callable(readiness_getter) else None
+        schedule_getter = getattr(cp, "list_schedules", None)
+        schedule_payload = schedule_getter(limit=200) if callable(schedule_getter) else None
         return render_template(
             "bots.html",
-            bots=_with_bot_readiness(cp_data, readiness_payload),
+            bots=_with_bot_operating_mode(cp_data, readiness_payload, schedule_payload),
             workers=_cp_catalog_items(cp, "list_workers"),
             models=_cp_catalog_items(cp, "list_models"),
             api_keys=_cp_catalog_items(cp, "list_keys"),
