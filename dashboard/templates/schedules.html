@@ -110,6 +110,7 @@
         <select class="form-control" id="schedule-system-payload-source" name="system_payload_source">
           <option value="">None</option>
           <option value="control_plane_fleet_summary_v1">Control-plane fleet health summary (read-only monitoring only)</option>
+          <option value="control_plane_operational_quality_v1">Aggregate operational quality snapshot (read-only QC only)</option>
         </select>
       </div>
       <div class="split-grid" style="grid-template-columns:1fr 1fr;gap:0.75rem;">
@@ -262,12 +263,27 @@ document.getElementById('form-create-schedule').addEventListener('submit', async
   };
   const systemPayloadSource = String(form.get('system_payload_source') || '').trim();
   if (systemPayloadSource) {
+    const systemPayloadConfig = {
+      control_plane_fleet_summary_v1: {
+        targetField: 'monitoring_events',
+        placeholder: 'A current internal control-plane summary will be materialized at dispatch.',
+      },
+      control_plane_operational_quality_v1: {
+        targetField: 'artifact',
+        placeholder: 'A current aggregate operational quality snapshot will be materialized at dispatch.',
+      },
+    };
+    const sourceConfig = systemPayloadConfig[systemPayloadSource];
+    if (!sourceConfig) {
+      setScheduleCreateStatus('Unsupported system data source.', true);
+      return;
+    }
     payload.metadata.system_payload_source = {
       type: systemPayloadSource,
-      target_field: 'monitoring_events',
+      target_field: sourceConfig.targetField,
     };
-    if (!Object.prototype.hasOwnProperty.call(taskPayload, 'monitoring_events')) {
-      taskPayload.monitoring_events = 'A current internal control-plane summary will be materialized at dispatch.';
+    if (!Object.prototype.hasOwnProperty.call(taskPayload, sourceConfig.targetField)) {
+      taskPayload[sourceConfig.targetField] = sourceConfig.placeholder;
     }
   }
   if (!payload.name || !payload.target_bot_id || !payload.cron_expression || !payload.prompt) {

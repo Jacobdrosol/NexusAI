@@ -13,6 +13,7 @@ from typing import Any, Dict
 
 
 FLEET_HEALTH_SUMMARY_SOURCE = "control_plane_fleet_summary_v1"
+OPERATIONAL_QUALITY_SNAPSHOT_SOURCE = "control_plane_operational_quality_v1"
 CSV_WORK_ITEMS_SOURCE = "csv_work_items_v1"
 _SYSTEM_PAYLOAD_SOURCE_KEY = "system_payload_source"
 _SAFE_FIELD_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
@@ -145,7 +146,11 @@ def system_payload_source_config(schedule: Dict[str, Any]) -> Dict[str, Any] | N
         raise SystemPayloadSourceError("system_payload_source must be an object")
     source_type = str(raw.get("type") or "").strip()
     target_field = str(raw.get("target_field") or "monitoring_events").strip()
-    if source_type not in {FLEET_HEALTH_SUMMARY_SOURCE, CSV_WORK_ITEMS_SOURCE}:
+    if source_type not in {
+        FLEET_HEALTH_SUMMARY_SOURCE,
+        OPERATIONAL_QUALITY_SNAPSHOT_SOURCE,
+        CSV_WORK_ITEMS_SOURCE,
+    }:
         raise SystemPayloadSourceError(f"unsupported system_payload_source type: {source_type or 'unset'}")
     if not _SAFE_FIELD_NAME.fullmatch(target_field):
         raise SystemPayloadSourceError("system_payload_source target_field must be a simple payload field name")
@@ -168,6 +173,13 @@ def validate_system_payload_source(schedule: Dict[str, Any], bot: Any) -> None:
     if source_config["type"] == FLEET_HEALTH_SUMMARY_SOURCE and not task_scope.startswith("read-only-monitoring"):
         raise SystemPayloadSourceError(
             "system payload sources require a worker_profile with a read-only monitoring task scope"
+        )
+    if (
+        source_config["type"] == OPERATIONAL_QUALITY_SNAPSHOT_SOURCE
+        and not task_scope.startswith("read-only-quality-review")
+    ):
+        raise SystemPayloadSourceError(
+            "operational quality snapshots require a worker_profile with a read-only quality-review task scope"
         )
     if source_config["type"] == CSV_WORK_ITEMS_SOURCE and not task_scope.startswith(("read-only", "draft-only")):
         raise SystemPayloadSourceError(
@@ -402,6 +414,13 @@ async def fleet_health_summary(
         for schedule in (schedules or [])
         if isinstance(schedule, dict) and str(schedule.get("last_run_status") or "").lower() == "failed"
     ]
+    failed_active_schedule_count = sum(
+        1
+        for schedule in (schedules or [])
+        if isinstance(schedule, dict)
+        and str(schedule.get("status") or "").lower() == "active"
+        and str(schedule.get("last_run_status") or "").lower() == "failed"
+    )
     enabled_workers = [worker for worker in workers if bool(getattr(worker, "enabled", True))]
 
     return {
@@ -450,6 +469,69 @@ async def fleet_health_summary(
                 if isinstance(schedule, dict) and str(schedule.get("status") or "").lower() == "active"
             ),
             "failed_recent_schedule_ids": failed_schedules[:50],
+            "failed_active_last_run_count": failed_active_schedule_count,
+        },
+    }
+
+
+async def operational_quality_snapshot(
+    *,
+    worker_registry: Any,
+    worker_probe_store: Any,
+    bot_registry: Any,
+    task_manager: Any,
+    schedule_engine: Any,
+) -> Dict[str, Any]:
+    """Return aggregate operational evidence for a non-mutating quality review.
+
+    This deliberately excludes task, worker, schedule, backend, and provider identifiers.
+    The target quality worker receives enough evidence to assess the control plane's
+    operational posture without receiving task content, error text, or a fleet map.
+    """
+    summary = await fleet_health_summary(
+        worker_registry=worker_registry,
+        worker_probe_store=worker_probe_store,
+        bot_registry=bot_registry,
+        task_manager=task_manager,
+        schedule_engine=schedule_engine,
+    )
+    workers = summary.get("workers") if isinstance(summary.get("workers"), dict) else {}
+    bots = summary.get("bots") if isinstance(summary.get("bots"), dict) else {}
+    tasks = summary.get("tasks") if isinstance(summary.get("tasks"), dict) else {}
+    schedules = summary.get("schedules") if isinstance(summary.get("schedules"), dict) else {}
+    runtime_attention = workers.get("runtime_attention")
+
+    return {
+        "source": OPERATIONAL_QUALITY_SNAPSHOT_SOURCE,
+        "generated_at": summary.get("generated_at"),
+        "scope": "aggregate control-plane operational metadata only",
+        "quality_dimensions": {
+            "worker_readiness": {
+                "enabled": int(workers.get("enabled") or 0),
+                "online": int(workers.get("online") or 0),
+                "offline": int(workers.get("offline") or 0),
+                "runtime_attention_count": len(runtime_attention) if isinstance(runtime_attention, list) else 0,
+            },
+            "bot_readiness": {
+                "enabled": int(bots.get("enabled") or 0),
+                "enabled_with_runtime_attention": int(bots.get("enabled_with_runtime_attention") or 0),
+            },
+            "task_reliability": {
+                "recent_window_hours": int(tasks.get("recent_window_hours") or 0),
+                "current_by_status": dict(tasks.get("by_status") or {}),
+                "recent_by_status": dict(tasks.get("recent_by_status") or {}),
+                "recent_failed_by_category": dict(tasks.get("recent_failed_by_category") or {}),
+                "recent_unrecovered_failed_by_category": dict(
+                    tasks.get("recent_unrecovered_failed_by_category") or {}
+                ),
+                "recent_recovered_failed_by_category": dict(
+                    tasks.get("recent_recovered_failed_by_category") or {}
+                ),
+            },
+            "schedule_reliability": {
+                "active": int(schedules.get("active") or 0),
+                "failed_active_last_run_count": int(schedules.get("failed_active_last_run_count") or 0),
+            },
         },
     }
 
@@ -476,6 +558,15 @@ async def materialize_system_schedule_payload(
             schedule_engine=schedule_engine,
         )
         return {config["target_field"]: json.dumps(summary, sort_keys=True, separators=(",", ":"))}
+    if config["type"] == OPERATIONAL_QUALITY_SNAPSHOT_SOURCE:
+        snapshot = await operational_quality_snapshot(
+            worker_registry=worker_registry,
+            worker_probe_store=worker_probe_store,
+            bot_registry=bot_registry,
+            task_manager=task_manager,
+            schedule_engine=schedule_engine,
+        )
+        return {config["target_field"]: json.dumps(snapshot, sort_keys=True, separators=(",", ":"))}
     if config["type"] == CSV_WORK_ITEMS_SOURCE:
         payload = csv_work_items_payload(config)
         return {config["target_field"]: json.dumps(payload, sort_keys=True, separators=(",", ":"))}

@@ -2553,6 +2553,7 @@ def test_schedules_page_and_proxy_support_operational_schedule_management(dashbo
     assert page.status_code == 200
     assert b"Create Schedule" in page.data
     assert b"Control-plane fleet health summary" in page.data
+    assert b"Aggregate operational quality snapshot" in page.data
     assert b"Daily Review" in page.data
     assert b"Retry After" in page.data
     assert b"retry_not_before" in page.data

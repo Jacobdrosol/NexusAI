@@ -8,6 +8,7 @@ import pytest
 from control_plane.schedule_payload_sources import (
     CSV_WORK_ITEMS_SOURCE,
     FLEET_HEALTH_SUMMARY_SOURCE,
+    OPERATIONAL_QUALITY_SNAPSHOT_SOURCE,
     SystemPayloadSourceError,
     materialize_system_schedule_payload,
     validate_system_payload_source,
@@ -292,6 +293,63 @@ async def test_fleet_summary_reports_latest_bounded_activity_per_worker():
         "provider": "browser",
         "model": "browser-ui",
     }
+
+
+@pytest.mark.anyio
+async def test_operational_quality_snapshot_is_aggregate_only():
+    payload = await materialize_system_schedule_payload(
+        {
+            "metadata": {
+                "system_payload_source": {
+                    "type": OPERATIONAL_QUALITY_SNAPSHOT_SOURCE,
+                    "target_field": "artifact",
+                }
+            }
+        },
+        worker_registry=_FakeWorkerRegistry(),
+        worker_probe_store=_FakeProbeStore(),
+        bot_registry=_FakeBotRegistry(),
+        task_manager=_FakeTaskManager(),
+        schedule_engine=_FakeScheduleEngine(),
+    )
+
+    snapshot = json.loads(payload["artifact"])
+    assert snapshot["source"] == OPERATIONAL_QUALITY_SNAPSHOT_SOURCE
+    assert snapshot["scope"] == "aggregate control-plane operational metadata only"
+    assert snapshot["quality_dimensions"]["worker_readiness"] == {
+        "enabled": 2,
+        "online": 2,
+        "offline": 0,
+        "runtime_attention_count": 1,
+    }
+    assert snapshot["quality_dimensions"]["task_reliability"]["recent_failed_by_category"] == {
+        "authentication": 1
+    }
+    assert snapshot["quality_dimensions"]["schedule_reliability"] == {
+        "active": 1,
+        "failed_active_last_run_count": 0,
+    }
+    assert "recent_worker_activity" not in payload["artifact"]
+    assert "private-token-must-not-leak" not in payload["artifact"]
+    assert '"browser"' not in payload["artifact"]
+
+
+def test_operational_quality_snapshot_requires_read_only_quality_review_worker():
+    schedule = {
+        "metadata": {
+            "system_payload_source": {"type": OPERATIONAL_QUALITY_SNAPSHOT_SOURCE}
+        }
+    }
+    allowed = SimpleNamespace(
+        routing_rules={"worker_profile": {"can_edit": False, "task_scope": "read-only-quality-review"}}
+    )
+    validate_system_payload_source(schedule, allowed)
+
+    blocked = SimpleNamespace(
+        routing_rules={"worker_profile": {"can_edit": False, "task_scope": "read-only-monitoring-analysis"}}
+    )
+    with pytest.raises(SystemPayloadSourceError, match="quality-review"):
+        validate_system_payload_source(schedule, blocked)
 
 
 def test_system_payload_source_requires_read_only_monitoring_worker():
