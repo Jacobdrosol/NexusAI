@@ -1,6 +1,8 @@
 fleet:
   control_plane_url: http://control_plane:8000
   control_plane_token_env: CONTROL_PLANE_API_TOKEN
+  # Use a unique, stable name so repeated `docker compose -f` runs update this fleet.
+  compose_project_name: example-worker-fleet
   docker_network: nexusai_nexus-net
   worker_node_source: ../../../nexus-worker-node
   image: nexus-worker-node:latest

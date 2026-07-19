@@ -44,6 +44,7 @@ _DEFAULT_RESOURCE_LIMITS = {
     "pids_limit": 256,
 }
 _MEMORY_LIMIT = re.compile(r"^[1-9][0-9]*(?:b|k|kb|kib|m|mb|mib|g|gb|gib)?$", re.IGNORECASE)
+_COMPOSE_PROJECT_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 
 def _read_env_file(path: Path) -> dict[str, str]:
@@ -83,6 +84,17 @@ def _load_profile(path: Path) -> dict[str, Any]:
     if not isinstance(data.get("workers"), list):
         raise ValueError("Worker fleet profile must contain a workers list.")
     return data
+
+
+def _compose_project_name(fleet: dict[str, Any]) -> str:
+    value = str(fleet.get("compose_project_name") or "").strip()
+    if not value:
+        return ""
+    if not _COMPOSE_PROJECT_NAME.fullmatch(value):
+        raise ValueError(
+            "fleet.compose_project_name must contain only lowercase letters, digits, hyphens, or underscores"
+        )
+    return value
 
 
 def _slug(value: str) -> str:
@@ -680,6 +692,7 @@ def render(profile_path: Path, output_dir: Path, env: dict[str, str], *, allow_m
     )
     control_plane_url = str(fleet.get("control_plane_url") or "http://control_plane:8000").strip()
     network_name = str(fleet.get("docker_network") or "nexusai_nexus-net").strip()
+    compose_project_name = _compose_project_name(fleet)
     image = str(fleet.get("image") or "nexus-worker-node:latest").strip()
     cloud_context_policy = str(fleet.get("cloud_context_policy") or "redact").strip().lower()
     if cloud_context_policy not in {"allow", "redact", "block"}:
@@ -704,6 +717,8 @@ def render(profile_path: Path, output_dir: Path, env: dict[str, str], *, allow_m
             }
         },
     }
+    if compose_project_name:
+        compose["name"] = compose_project_name
     rendered_workers: list[dict[str, str]] = []
     rendered_bots: list[str] = []
 
@@ -786,6 +801,7 @@ def render(profile_path: Path, output_dir: Path, env: dict[str, str], *, allow_m
         "output_dir": str(output_dir),
         "compose_path": str(compose_path),
         "worker_node_source": str(worker_node_source),
+        "compose_project_name": compose_project_name,
         "docker_network": network_name,
         "workers": rendered_workers,
         "bots": rendered_bots,

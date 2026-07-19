@@ -33,6 +33,7 @@ def _profile(path: Path) -> Path:
             {
                 "fleet": {
                     "control_plane_url": "http://control_plane:8000",
+                    "compose_project_name": "test-worker-fleet",
                     "docker_network": "nexusai_nexus-net",
                     "worker_node_source": "../nexus-worker-node",
                     "provider": "ollama_cloud",
@@ -75,8 +76,10 @@ def test_render_worker_fleet_outputs_compose_worker_config_and_bot(tmp_path):
     )
 
     assert summary["workers"][0]["id"] == "content-repair-01"
+    assert summary["compose_project_name"] == "test-worker-fleet"
 
     compose = yaml.safe_load((out / "docker-compose.worker-node.generated.yml").read_text())
+    assert compose["name"] == "test-worker-fleet"
     service = compose["services"]["worker-content"]
     assert service["networks"] == ["nexus-net"]
     assert service["env_file"][0].endswith("content-repair-01.env")
@@ -117,6 +120,21 @@ def test_render_worker_fleet_requires_ollama_key_by_default(tmp_path):
             profile,
             tmp_path / "runtime",
             {"CONTROL_PLANE_API_TOKEN": "control-token"},
+        )
+
+
+def test_render_worker_fleet_rejects_invalid_compose_project_name(tmp_path):
+    renderer = _load_renderer()
+    profile = _profile(tmp_path / "workers.yaml")
+    profile_data = yaml.safe_load(profile.read_text(encoding="utf-8"))
+    profile_data["fleet"]["compose_project_name"] = "invalid/project"
+    profile.write_text(yaml.safe_dump(profile_data, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="compose_project_name"):
+        renderer.render(
+            profile,
+            tmp_path / "runtime",
+            {"CONTROL_PLANE_API_TOKEN": "control-token", "OLLAMA_API_KEY": "ollama-token"},
         )
 
 
