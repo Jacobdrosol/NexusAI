@@ -8,6 +8,13 @@ from typing import Iterable
 
 
 _ALLOWED_RUNTIME_PATHS = {".env.example", "data/.gitkeep"}
+_PUBLIC_CONFIG_EXAMPLES = {
+    "config/bots/README.md",
+    "config/bots/assistant_bot.yaml",
+    "config/bots/example_bot.yaml",
+    "config/workers/example_worker.yaml",
+    "config/workers/local_worker.yaml",
+}
 _TRACKED_PATH_MARKERS = (
     "/.env",
     ".env",
@@ -53,6 +60,13 @@ def _is_database_path(relative_path: str) -> bool:
     return relative_path.casefold().endswith(_DATABASE_SUFFIXES)
 
 
+def _is_private_config_path(relative_path: str) -> bool:
+    normalized = relative_path.replace("\\", "/").lstrip("/")
+    if normalized in _PUBLIC_CONFIG_EXAMPLES:
+        return False
+    return normalized.startswith("config/bots/") or normalized.startswith("config/workers/")
+
+
 def find_public_release_violations(repo_root: Path) -> list[str]:
     """Return publish-safety violations without including any matched secret text."""
     violations: list[str] = []
@@ -66,6 +80,9 @@ def find_public_release_violations(repo_root: Path) -> list[str]:
             continue
         if _is_database_path(relative):
             violations.append(f"tracked database file: {relative}")
+            continue
+        if _is_private_config_path(relative):
+            violations.append(f"tracked private bot or worker config: {relative}")
             continue
         if path.is_dir() or path.stat().st_size > 2_000_000:
             continue

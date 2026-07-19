@@ -35,3 +35,17 @@ def test_release_hygiene_rejects_tracked_temporary_probe_files(tmp_path: Path) -
     assert find_public_release_violations(repo_root) == [
         "tracked temporary probe file: tmp_pm_probe/notes.txt"
     ]
+
+
+def test_release_hygiene_rejects_personal_bot_and_worker_configs(tmp_path: Path) -> None:
+    repo_root = _tracked_repo(tmp_path)
+    (repo_root / "config" / "bots").mkdir(parents=True)
+    (repo_root / "config" / "workers").mkdir(parents=True)
+    (repo_root / "config" / "bots" / "customer-bot.yaml").write_text("id: customer-bot\n", encoding="utf-8")
+    (repo_root / "config" / "workers" / "customer-worker.yaml").write_text("id: customer-worker\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo_root), "add", "config"], check=True)
+
+    assert find_public_release_violations(repo_root) == [
+        "tracked private bot or worker config: config/bots/customer-bot.yaml",
+        "tracked private bot or worker config: config/workers/customer-worker.yaml",
+    ]

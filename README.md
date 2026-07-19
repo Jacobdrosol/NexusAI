@@ -512,23 +512,27 @@ logging:
   file_path: data/nexus.log
 ```
 
-### Worker YAML (`config/workers/<name>.yaml`)
+### Worker YAML (private configuration)
+
+Keep real worker files outside the public checkout. The files under `config/workers/` are generic examples only.
 
 ```yaml
-id: worker-main-4070
-name: Main 4070 Box
-host: 192.168.1.10
+id: example-ollama-worker
+name: Example Ollama Worker
+host: worker.example.internal
 port: 8001
 capabilities:
   - type: llm
     provider: ollama
     models:
-      - llama3-8b-instruct-q4
+      - example-model
     gpus:
       - GPU-0
 ```
 
-### Bot YAML (`config/bots/<name>.yaml`)
+### Bot YAML (private configuration)
+
+Keep real bot files outside the public checkout. The files under `config/bots/` are generic examples only.
 
 ```yaml
 id: bot-coder-14b
@@ -538,8 +542,8 @@ priority: 10
 enabled: true
 backends:
   - type: local_llm
-    worker_id: worker-main-4070
-    model: llama3-8b-instruct-q4
+    worker_id: example-ollama-worker
+    model: example-model
     provider: ollama
     gpu_id: GPU-0
     params:
@@ -728,7 +732,7 @@ curl http://localhost:8001/capabilities
 # Run inference
 curl -X POST http://localhost:8001/infer \
   -H "Content-Type: application/json" \
-  -d '{"model": "llama3-8b-instruct-q4", "provider": "ollama", "messages": [{"role": "user", "content": "Hi"}]}'
+  -d '{"model": "example-model", "provider": "ollama", "messages": [{"role": "user", "content": "Hi"}]}'
 
 # Prometheus-compatible metrics
 curl http://localhost:8001/metrics
@@ -738,12 +742,12 @@ curl http://localhost:8001/metrics
 
 ## How to Add a New Worker Machine
 
-1. Create a YAML file in `config/workers/`, e.g. `config/workers/gpu-box-2.yaml`:
+1. Create a YAML file outside the public checkout, e.g. `~/nexusai-private-configs/workers/gpu-box-2.yaml`:
 
 ```yaml
 id: worker-gpu-box-2
 name: GPU Box 2
-host: 192.168.1.20
+host: worker.example.internal
 port: 8001
 capabilities:
   - type: llm
@@ -758,7 +762,7 @@ capabilities:
 2. On the new machine, run the worker agent:
 
 ```bash
-WORKER_CONFIG_PATH=config/workers/gpu-box-2.yaml \
+WORKER_CONFIG_PATH=~/nexusai-private-configs/workers/gpu-box-2.yaml \
 CONTROL_PLANE_URL=http://<control-plane-ip>:8000 \
 uvicorn worker_agent.main:app --host 0.0.0.0 --port 8001
 ```
@@ -769,7 +773,7 @@ The worker will self-register and begin sending heartbeats.
 
 ## How to Define a New Bot
 
-1. Create a YAML file in `config/bots/`, e.g. `config/bots/summarizer.yaml`:
+1. Create a YAML file outside the public checkout, e.g. `~/nexusai-private-configs/bots/summarizer.yaml`:
 
 ```yaml
 id: bot-summarizer
@@ -816,7 +820,7 @@ workflow:
 ```yaml
 id: worker-orchestrator
 name: Agent Orchestrator
-host: 192.168.1.30
+host: orchestrator.example.internal
 port: 8090
 capabilities:
   - type: llm
@@ -826,7 +830,7 @@ capabilities:
 ```
 
 3. Create a bot with `type: remote_llm` pointing to this worker.
-4. NexusAI will POST inference requests to `http://192.168.1.30:8090/infer`.
+4. NexusAI will POST inference requests to the worker's configured `/infer` endpoint.
 
 ---
 
