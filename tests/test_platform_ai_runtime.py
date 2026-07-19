@@ -676,6 +676,146 @@ async def test_autonomous_tuner_pauses_when_platform_brain_unavailable(tmp_path,
 
 
 @pytest.mark.anyio
+async def test_autonomous_tuner_requires_configuration_approval_before_refining_live_bot(tmp_path, monkeypatch):
+    store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+    bot_registry = BotRegistry(db_path=str(tmp_path / "bots.db"))
+    original_prompt = "Preserve this live prompt."
+    await bot_registry.register(
+        Bot.model_validate(
+            {
+                "id": "pm-orchestrator",
+                "name": "PM Orchestrator",
+                "role": "assistant",
+                "enabled": True,
+                "system_prompt": original_prompt,
+                "backends": [{"type": "cloud_api", "provider": "openai", "model": "gpt-4o-mini"}],
+            }
+        )
+    )
+    runtime = PlatformAISessionRuntime(store, bot_registry=bot_registry)
+    session = await store.create_session(
+        mode="pipeline_tuner",
+        status="running",
+        metadata={
+            "autonomous_enabled": True,
+            "pipeline_bot_id": "pm-orchestrator",
+            "pipeline_name": "Coding Pipeline",
+            "autonomous_goal": "Produce a complete validated artifact.",
+        },
+        assignment_id="assign-1",
+        run_id="run-1",
+        orchestration_id="orch-1",
+    )
+
+    async def fake_resolve_context(_session):  # noqa: ANN001
+        return {
+            "assignment_id": "assign-1",
+            "run_id": "run-1",
+            "orchestration_id": "orch-1",
+            "graph": {"nodes": [{"id": "pm-orchestrator", "title": "PM Orchestrator"}], "edges": []},
+            "tasks": [
+                {
+                    "id": "task-1",
+                    "bot_id": "pm-orchestrator",
+                    "status": "failed",
+                    "updated_at": "2026-04-08T14:00:00+00:00",
+                    "result": {"errors": ["failure"]},
+                }
+            ],
+        }
+
+    async def fake_backfill(session_id, *, context, session_metadata):  # noqa: ANN001
+        _ = (session_id, context)
+        return dict(session_metadata)
+
+    async def fake_pipeline_name(_bot_id):  # noqa: ANN001
+        return "Coding Pipeline"
+
+    async def fake_invoke(session_id, *, session, operator_message, recent_messages):  # noqa: ANN001
+        _ = (session_id, session, operator_message, recent_messages)
+        return {"ok": True, "reply": "Evaluation reviewed.", "actions": []}
+
+    launch_calls = {"count": 0}
+
+    async def fake_launch(**kwargs):  # noqa: ANN001
+        _ = kwargs
+        launch_calls["count"] += 1
+        return "orch-next"
+
+    runtime._resolve_context = fake_resolve_context  # type: ignore[method-assign]
+    runtime._backfill_seed_binding_from_context = fake_backfill  # type: ignore[method-assign]
+    runtime._pipeline_name_for_bot_id = fake_pipeline_name  # type: ignore[method-assign]
+    runtime._invoke_platform_brain = fake_invoke  # type: ignore[method-assign]
+    runtime._launch_autonomous_orchestration = fake_launch  # type: ignore[method-assign]
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_AUTONOMOUS_PIPELINES_ENABLED", "1")
+    monkeypatch.delenv("NEXUS_PLATFORM_AI_CONFIGURATION_MUTATIONS_ENABLED", raising=False)
+
+    await runtime._run_autonomous_pipeline_tuner(
+        session["id"],
+        session=session,
+        snapshot={
+            "orchestration_id": "orch-1",
+            "status_counts": {"failed": 1},
+            "active_tasks": [],
+            "runtime_state": {"task_total": 1},
+        },
+    )
+
+    unchanged = await bot_registry.get("pm-orchestrator")
+    assert unchanged.system_prompt == original_prompt
+    assert launch_calls["count"] == 0
+    suites = await store.list_test_suites(session_id=session["id"], pipeline_bot_id="pm-orchestrator", limit=10)
+    assert len(suites) == 1
+    proposals = await store.list_patch_proposals(session["id"])
+    assert len(proposals) == 1
+    assert proposals[0]["after_state"]["proposal_kind"] == "bot_system_prompt_refinement"
+    assert proposals[0]["after_state"]["requires_direct_operator_edit"] is True
+    updated = await store.get_session(session["id"])
+    assert str((updated or {}).get("status") or "") == "ready"
+    metadata = (updated or {}).get("metadata") if isinstance((updated or {}).get("metadata"), dict) else {}
+    assert metadata.get("checkpoint_reason") == "configuration_proposal_pending"
+    approval = await runtime.approve_patch_proposal(session["id"], proposals[0]["id"], operator_id="operator")
+    assert approval["status"] == "approved"
+    assert approval["detail"] == "approved_direct_operator_edit_required"
+    assert (await bot_registry.get("pm-orchestrator")).system_prompt == original_prompt
+
+
+@pytest.mark.anyio
+async def test_bot_refinement_write_boundary_requires_configuration_mutation_grant(tmp_path, monkeypatch):
+    store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+    bot_registry = BotRegistry(db_path=str(tmp_path / "bots.db"))
+    await bot_registry.register(
+        Bot.model_validate(
+            {
+                "id": "pm-orchestrator",
+                "name": "PM Orchestrator",
+                "role": "assistant",
+                "enabled": True,
+                "system_prompt": "Keep unchanged.",
+                "backends": [{"type": "cloud_api", "provider": "openai", "model": "gpt-4o-mini"}],
+            }
+        )
+    )
+    runtime = PlatformAISessionRuntime(store, bot_registry=bot_registry)
+    monkeypatch.delenv("NEXUS_PLATFORM_AI_CONFIGURATION_MUTATIONS_ENABLED", raising=False)
+
+    result = await runtime._apply_bot_refinement(
+        session_id="session-1",
+        pipeline_bot_id="pm-orchestrator",
+        iteration=1,
+        goal="Improve quality.",
+        evaluation={"status": "failed", "score": 0.0, "tests": []},
+    )
+
+    assert result == {
+        "updated": False,
+        "reason": "configuration_mutations_disabled",
+        "proposal_only": True,
+    }
+    assert (await bot_registry.get("pm-orchestrator")).system_prompt == "Keep unchanged."
+
+
+@pytest.mark.anyio
 async def test_handle_stall_without_halt_checkpoints_ready_when_brain_unavailable(tmp_path, monkeypatch):
     store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
     runtime = PlatformAISessionRuntime(store)

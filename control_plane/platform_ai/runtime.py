@@ -3216,6 +3216,14 @@ class PlatformAISessionRuntime:
         goal: str,
         evaluation: Dict[str, Any],
     ) -> Dict[str, Any]:
+        # The autonomous evaluator may run in proposal-only mode. Keep this
+        # guard at the write boundary so no caller can bypass that policy.
+        if not _configuration_mutations_enabled():
+            return {
+                "updated": False,
+                "reason": "configuration_mutations_disabled",
+                "proposal_only": True,
+            }
         if self._bot_registry is None:
             return {"updated": False, "reason": "bot_registry_unavailable"}
         safe_bot_id = str(pipeline_bot_id or "").strip()
@@ -3851,10 +3859,27 @@ class PlatformAISessionRuntime:
                 action_id=action["id"],
                 target_config=f"bot:{pipeline_bot_id}:system_prompt",
                 before_state={"system_prompt_preview": _existing_prompt_preview},
-                after_state={"directives_applied": f"iteration_{_next_iter_for_pp}_refinement"},
+                after_state={
+                    "proposal_kind": "bot_system_prompt_refinement",
+                    "pipeline_bot_id": pipeline_bot_id,
+                    "iteration": _next_iter_for_pp,
+                    "directives_applied": f"iteration_{_next_iter_for_pp}_refinement",
+                    "failed_tests": [
+                        str(item.get("id") or item.get("name") or "test")
+                        for item in _failed_tests_for_pp[:5]
+                    ],
+                    "failed_assertions": _failed_assertions_for_pp[:8],
+                    "requires_direct_operator_edit": True,
+                },
                 rationale=f"Bot refinement for iteration {_next_iter_for_pp} based on failed tests: {_failed_assertions_for_pp[:5]}",
                 expected_effect=f"Pipeline quality score improvement from {eval_score:.3f} toward target {target_score:.3f}",
-                validation_steps=["launch_new_orchestration", "evaluate_suite", "compare_score"],
+                validation_steps=[
+                    "review_prompt_refinement",
+                    "apply_direct_operator_edit",
+                    "launch_new_orchestration",
+                    "evaluate_suite",
+                    "compare_score",
+                ],
                 rollback_note="Remove [[NEXUS_PLATFORM_AI_AUTOTUNE_START]]...[[NEXUS_PLATFORM_AI_AUTOTUNE_END]] block from system_prompt",
             )
             await self._store.append_event(session_id, "action_trace", {
@@ -3862,6 +3887,56 @@ class PlatformAISessionRuntime:
                 "proposal_id": _patch_proposal["id"],
                 "target_config": _patch_proposal["target_config"],
             })
+            if not _configuration_mutations_enabled():
+                await self._store.update_session(
+                    session_id,
+                    status="ready",
+                    metadata={
+                        "checkpoint_reason": "configuration_proposal_pending",
+                        "autonomous_state": "ready_checkpoint",
+                        "autonomous_pending_proposal_id": _patch_proposal["id"],
+                        "autonomous_last_refine_signature": eval_signature,
+                    },
+                )
+                await self._store.append_event(
+                    session_id,
+                    "action_trace",
+                    {
+                        "action": "autonomous_bot_refinement_proposed",
+                        "proposal_id": _patch_proposal["id"],
+                        "pipeline_bot_id": pipeline_bot_id,
+                        "iteration": _next_iter_for_pp,
+                        "configuration_mutations_enabled": False,
+                    },
+                )
+                await self._store.append_message(
+                    session_id,
+                    role="assistant",
+                    content=(
+                        f"Created a prompt-refinement proposal for `{pipeline_name or pipeline_bot_id}` after "
+                        f"quality score {eval_score:.3f}. Configuration mutations are disabled, so the live bot, "
+                        "quality suite, and orchestration remain unchanged. Review the proposal, apply any approved "
+                        "prompt change through the Bot editor, then resume this session to run a fresh iteration."
+                    ),
+                    metadata={
+                        "source": "autonomous_tuner",
+                        "state": "configuration_proposal_pending",
+                        "proposal_id": _patch_proposal["id"],
+                    },
+                )
+                await self._complete_action_record(
+                    action["id"],
+                    output_snapshot={
+                        "eval_status": eval_status,
+                        "eval_score": eval_score,
+                        "launched": False,
+                        "proposal_id": _patch_proposal["id"],
+                        "configuration_mutations_enabled": False,
+                    },
+                    had_effect=True,
+                    summary="Paused after recording a prompt-refinement proposal; live configuration remains unchanged.",
+                )
+                return
 
         if passed_target and consecutive_passes >= 3:
             await self._store.append_event(
@@ -4733,6 +4808,37 @@ class PlatformAISessionRuntime:
             return {"status": "error", "detail": "proposal_not_pending", "proposal": proposal}
 
         after_state = proposal.get("after_state") if isinstance(proposal.get("after_state"), dict) else {}
+        if str(after_state.get("proposal_kind") or "").strip() == "bot_system_prompt_refinement":
+            updated = await self._store.update_patch_proposal_status(proposal_id, "approved")
+            await self._store.append_event(
+                session_id,
+                "action_trace",
+                {
+                    "action": "bot_system_prompt_refinement_approved",
+                    "proposal_id": proposal_id,
+                    "target_config": proposal.get("target_config"),
+                    "operator_id": str(operator_id or "").strip() or None,
+                    "notes": str(notes or "").strip() or None,
+                },
+            )
+            await self._store.append_message(
+                session_id,
+                role="assistant",
+                content=(
+                    "Prompt-refinement proposal approved as a review checkpoint. The live bot remains unchanged; "
+                    "apply the reviewed prompt change through the Bot editor before resuming an autonomous iteration."
+                ),
+                metadata={
+                    "source": "proposal_approval",
+                    "proposal_id": proposal_id,
+                    "requires_direct_operator_edit": True,
+                },
+            )
+            return {
+                "status": "approved",
+                "detail": "approved_direct_operator_edit_required",
+                "proposal": updated,
+            }
         if str(after_state.get("proposal_kind") or "").strip() == "bot_configuration":
             session = await self._store.get_session(session_id)
             if session is None:

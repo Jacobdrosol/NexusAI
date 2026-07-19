@@ -1085,6 +1085,7 @@ function renderProposals(proposals) {
     const proposalId = String(proposal?.id || '').trim();
     const rationale = String(proposal?.rationale || '').trim();
     const created = displayTs(proposal?.created_at || '');
+    const directOperatorEdit = Boolean(after?.requires_direct_operator_edit);
     const preflight = after && typeof after.preflight === 'object' ? after.preflight : null;
     const preflightReady = Boolean(preflight?.ready_for_operator_review);
     const preflightText = preflight
@@ -1101,6 +1102,7 @@ function renderProposals(proposals) {
       </div>
       ${summary.detail ? `<div class="mini-note" style="margin-top:0.2rem;">${htmlEscape(summary.detail)}</div>` : ''}
       ${rationale ? `<div class="mini-note" style="margin-top:0.35rem;white-space:pre-wrap;">${htmlEscape(rationale)}</div>` : ''}
+      ${directOperatorEdit ? '<div class="mini-note" style="margin-top:0.25rem;">Approval records review only. The live bot remains unchanged until an operator updates it in the Bot editor.</div>' : ''}
       ${preflightText ? `<div class="mini-note" style="margin-top:0.25rem;">${htmlEscape(preflightText)}</div>` : ''}
       ${preflightDetail ? `<div class="mini-note" style="margin-top:0.2rem;white-space:pre-wrap;">${htmlEscape(preflightDetail)}</div>` : ''}
       <div class="mini-note" style="margin-top:0.25rem;">${htmlEscape(created)}</div>
@@ -1153,7 +1155,15 @@ async function reviewProposal(proposalId, decision) {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || `Failed to ${safeDecision} proposal`);
     const result = data && typeof data.result === 'object' ? data.result : {};
-    setStatus('proposal-review-status', `Proposal ${String(result.status || safeDecision)}.`, false);
+    const detail = String(result.detail || '').trim();
+    const reviewOnly = detail === 'approved_direct_operator_edit_required';
+    setStatus(
+      'proposal-review-status',
+      reviewOnly
+        ? 'Proposal approved. The live bot remains unchanged until you apply the reviewed change in the Bot editor.'
+        : `Proposal ${String(result.status || safeDecision)}.`,
+      false,
+    );
     await refreshProposals();
     await refreshEvents(true);
     await refreshSessionHeader();
