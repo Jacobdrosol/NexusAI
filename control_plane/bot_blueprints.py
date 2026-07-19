@@ -27,6 +27,7 @@ SpecialistKind = Literal[
     "quality_reviewer",
     "customer_service_triage",
     "marketing_analyst",
+    "operations_manager",
     "website_monitor",
     "code_reviewer",
     "code_implementer",
@@ -269,6 +270,20 @@ _BLUEPRINTS: dict[str, dict[str, Any]] = {
         "rules": [
             "Analyze supplied or explicitly attached data only.",
             "Do not launch, pause, or modify a campaign.",
+        ],
+    },
+    "operations_manager": {
+        "label": "Operations Manager",
+        "role": "operations_manager",
+        "description": "Aggregates bounded worker reports and platform health evidence into an operator decision brief.",
+        "risk_level": "read_only",
+        "outputs": ["status", "operational_summary", "worker_reports", "risks", "decisions_needed", "handoff_notes"],
+        "receives": ["instruction", "monitoring_events", "subordinate_reports", "recent_changes", "operating_policies"],
+        "self_serve": ["vault"],
+        "rules": [
+            "Analyze supplied reports and approved vault context only.",
+            "Do not enable workers, dispatch tasks, modify configurations, restart services, or deploy changes.",
+            "Separate verified operating evidence from assumptions and identify every decision that needs an operator.",
         ],
     },
     "website_monitor": {

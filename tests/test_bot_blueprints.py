@@ -116,6 +116,30 @@ def test_content_writer_blueprint_is_disabled_and_draft_only_by_default():
     assert "never publish" in bot.system_prompt.lower()
 
 
+def test_operations_manager_blueprint_stays_read_only_and_requests_operator_decisions():
+    bot = build_specialist_bot(
+        SpecialistBlueprintRequest(
+            kind="operations_manager",
+            name="GlobeIQ Operations Manager",
+            project_id="globeiq",
+            backends=[_backend()],
+        )
+    )
+
+    assert bot.enabled is False
+    assert bot.execution_policy.repo_output_mode == "deny"
+    assert bot.routing_rules["specialist"]["risk_level"] == "read_only"
+    assert bot.routing_rules["output_contract"]["required_fields"] == [
+        "status",
+        "operational_summary",
+        "worker_reports",
+        "risks",
+        "decisions_needed",
+        "handoff_notes",
+    ]
+    assert "do not enable workers" in bot.system_prompt.lower()
+
+
 def test_code_implementer_requires_explicit_write_escalation():
     base_request = {
         "kind": "code_implementer",
