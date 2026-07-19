@@ -84,15 +84,23 @@ def validate_system_payload_source(schedule: Dict[str, Any], bot: Any) -> None:
         )
 
 
-def _probe_requires_attention(probe: Dict[str, Any]) -> bool:
+def _probe_attention_reason_codes(probe: Dict[str, Any]) -> list[str]:
+    """Return stable, non-secret reason codes for an attention-worthy worker probe."""
+    reasons: list[str] = []
     if str(probe.get("probe_status") or "unknown").strip().lower() != "ready":
-        return True
+        reasons.append("runtime_probe_not_ready")
     attestation = probe.get("capability_attestation")
     attestation = attestation if isinstance(attestation, dict) else {}
     browser = attestation.get("browser")
     if isinstance(browser, dict) and bool(browser.get("configured")) and not bool(browser.get("ready")):
-        return True
-    return bool(attestation.get("unauthenticated_cli_tools"))
+        reasons.append("browser_session_unavailable")
+    if attestation.get("unauthenticated_cli_tools"):
+        reasons.append("cli_authentication_required")
+    return reasons
+
+
+def _probe_requires_attention(probe: Dict[str, Any]) -> bool:
+    return bool(_probe_attention_reason_codes(probe))
 
 
 async def _await_if_needed(value: Any) -> Any:
@@ -118,12 +126,16 @@ async def fleet_health_summary(
     for worker in workers:
         worker_id = str(getattr(worker, "id", "") or "").strip()
         probe = stored_probes.get(worker_id)
-        if not isinstance(probe, dict) or not _probe_requires_attention(probe):
+        if not isinstance(probe, dict):
+            continue
+        reason_codes = _probe_attention_reason_codes(probe)
+        if not reason_codes:
             continue
         runtime_attention.append(
             {
                 "worker_id": worker_id,
                 "probe_status": str(probe.get("probe_status") or "unknown").strip().lower(),
+                "reason_codes": reason_codes,
             }
         )
 
