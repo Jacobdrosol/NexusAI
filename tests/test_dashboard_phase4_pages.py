@@ -738,6 +738,7 @@ def test_bot_launch_api_marks_pipeline_runs(dashboard_client):
                         "payload": {"topic": "AP World History"},
                         "is_pipeline": True,
                         "pipeline_name": "Course Generation Pipeline",
+                        "concurrency_limit": 2,
                     }
                 },
             }
@@ -753,6 +754,7 @@ def test_bot_launch_api_marks_pipeline_runs(dashboard_client):
     assert body["metadata"]["source"] == "saved_launch_pipeline"
     assert body["metadata"]["pipeline_name"] == "Course Generation Pipeline"
     assert body["metadata"]["pipeline_entry_bot_id"] == "course-intake"
+    assert body["metadata"]["orchestration_concurrency_limit"] == 2
     assert body["pipeline_id"]
 
 

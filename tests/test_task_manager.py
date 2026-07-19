@@ -724,6 +724,108 @@ async def test_task_manager_respects_max_concurrency(tmp_path, monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_task_manager_respects_per_orchestration_concurrency_limit(tmp_path, monkeypatch):
+    import asyncio
+
+    from control_plane.task_manager.task_manager import TaskManager
+
+    active_by_orchestration = {"course-pipeline": 0, "support-pipeline": 0}
+    peak_by_orchestration = {"course-pipeline": 0, "support-pipeline": 0}
+
+    class StubScheduler:
+        async def schedule(self, task):
+            orchestration_id = task.metadata.orchestration_id
+            active_by_orchestration[orchestration_id] += 1
+            peak_by_orchestration[orchestration_id] = max(
+                peak_by_orchestration[orchestration_id],
+                active_by_orchestration[orchestration_id],
+            )
+            await asyncio.sleep(0.05)
+            active_by_orchestration[orchestration_id] -= 1
+            return {"task": task.id}
+
+    monkeypatch.setenv("NEXUSAI_TASK_MAX_CONCURRENCY", "4")
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "orchestration-queue.db"))
+    for idx in range(4):
+        await tm.create_task(
+            bot_id="course-writer",
+            payload={"i": idx},
+            metadata=TaskMetadata(
+                orchestration_id="course-pipeline",
+                orchestration_concurrency_limit=1,
+            ),
+        )
+    for idx in range(3):
+        await tm.create_task(
+            bot_id="support-writer",
+            payload={"i": idx},
+            metadata=TaskMetadata(
+                orchestration_id="support-pipeline",
+                orchestration_concurrency_limit=2,
+            ),
+        )
+
+    for _ in range(120):
+        tasks = await tm.list_tasks()
+        if len(tasks) == 7 and all(task.status == "completed" for task in tasks):
+            break
+        await asyncio.sleep(0.05)
+
+    tasks = await tm.list_tasks()
+    assert len(tasks) == 7
+    assert all(task.status == "completed" for task in tasks)
+    assert peak_by_orchestration["course-pipeline"] <= 1
+    assert peak_by_orchestration["support-pipeline"] <= 2
+    assert peak_by_orchestration["support-pipeline"] == 2
+
+
+@pytest.mark.anyio
+async def test_task_manager_snapshots_pipeline_launch_concurrency_for_children(tmp_path):
+    from control_plane.task_manager.task_manager import TaskManager
+
+    class StubRegistry:
+        async def get(self, bot_id):
+            assert bot_id == "course-entry"
+            return Bot(
+                id="course-entry",
+                name="Course Entry",
+                role="orchestrator",
+                backends=[],
+                routing_rules={
+                    "launch_profile": {
+                        "is_pipeline": True,
+                        "pipeline_name": "Course Revision",
+                        "concurrency_limit": 2,
+                    }
+                },
+            )
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {"task": task.id}
+
+    tm = TaskManager(
+        StubScheduler(),
+        db_path=str(tmp_path / "pipeline-metadata.db"),
+        bot_registry=StubRegistry(),
+    )
+    root = await tm.create_task(bot_id="course-entry", payload={"instruction": "run"})
+    metadata = root.metadata
+    assert metadata.pipeline_entry_bot_id == "course-entry"
+    assert metadata.pipeline_name == "Course Revision"
+    assert metadata.orchestration_id
+    assert metadata.orchestration_concurrency_limit == 2
+
+    child_metadata = tm._trigger_child_metadata(
+        metadata,
+        parent_task_id=root.id,
+        trigger_rule_id="entry-to-qc",
+    )
+    assert child_metadata.orchestration_id == metadata.orchestration_id
+    assert child_metadata.orchestration_concurrency_limit == 2
+
+
+@pytest.mark.anyio
 async def test_task_manager_respects_provider_concurrency_limits(tmp_path, monkeypatch):
     import asyncio
 

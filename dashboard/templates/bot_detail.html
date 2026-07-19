@@ -561,6 +561,11 @@
     </div>
   </div>
   <div class="form-group">
+    <label>Max Concurrent Pipeline Tasks (optional)</label>
+    <input class="form-control" id="launch-profile-concurrency-limit" type="number" min="1" max="64" step="1" placeholder="Use the platform-wide limit">
+    <div class="mini-note">Caps this pipeline run only. Its downstream tasks still obey worker and provider limits.</div>
+  </div>
+  <div class="form-group">
     <label>Description</label>
     <textarea class="form-control" id="launch-profile-description" rows="3" placeholder="Explain what this saved launch does and what operators should expect."></textarea>
   </div>
@@ -1455,6 +1460,9 @@ function normalizedLaunchProfile() {
     show_on_tasks: profile.show_on_tasks !== false,
     is_pipeline: profile.is_pipeline === true,
     pipeline_name: String(profile.pipeline_name || profile.label || BOT.name || BOT.id || 'Pipeline').trim(),
+    concurrency_limit: Number.isInteger(Number(profile.concurrency_limit)) && Number(profile.concurrency_limit) >= 1 && Number(profile.concurrency_limit) <= 64
+      ? Number(profile.concurrency_limit)
+      : null,
   };
 }
 
@@ -1563,6 +1571,7 @@ function loadLaunchProfileEditor() {
   document.getElementById('launch-profile-show-tasks').checked = profile.show_on_tasks !== false;
   document.getElementById('launch-profile-is-pipeline').checked = pipelineChecked;
   document.getElementById('launch-profile-pipeline-name').value = capabilityPipelineName || profile.pipeline_name || profile.label || '';
+  document.getElementById('launch-profile-concurrency-limit').value = profile.concurrency_limit ?? '';
   document.getElementById('launch-profile-payload').value = JSON.stringify(profile.payload || {}, null, 2);
 }
 
@@ -1580,6 +1589,12 @@ function saveLaunchProfile() {
     return;
   }
   const priorityRaw = String(document.getElementById('launch-profile-priority')?.value || '').trim();
+  const concurrencyRaw = String(document.getElementById('launch-profile-concurrency-limit')?.value || '').trim();
+  const concurrencyLimit = concurrencyRaw ? Number.parseInt(concurrencyRaw, 10) : null;
+  if (concurrencyRaw && (!Number.isInteger(concurrencyLimit) || concurrencyLimit < 1 || concurrencyLimit > 64)) {
+    alert('Max concurrent pipeline tasks must be an integer from 1 to 64.');
+    return;
+  }
   BOT.launch_profile = {
     enabled: document.getElementById('launch-profile-enabled').checked,
     label: String(document.getElementById('launch-profile-label')?.value || '').trim() || BOT.name || BOT.id,
@@ -1590,6 +1605,7 @@ function saveLaunchProfile() {
     show_on_tasks: document.getElementById('launch-profile-show-tasks').checked,
     is_pipeline: document.getElementById('launch-profile-is-pipeline').checked,
     pipeline_name: String(document.getElementById('launch-profile-pipeline-name')?.value || '').trim() || String(document.getElementById('launch-profile-label')?.value || '').trim() || BOT.name || BOT.id,
+    concurrency_limit: concurrencyLimit,
     payload,
   };
   BOT.assignment_capabilities = BOT.assignment_capabilities && typeof BOT.assignment_capabilities === 'object'

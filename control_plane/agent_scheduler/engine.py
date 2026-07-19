@@ -645,6 +645,7 @@ class AgentScheduleEngine:
                     run["id"],
                     "running",
                     task_id=task_id,
+                    orchestration_id=str(result.get("orchestration_id") or "") or None,
                 )
                 await self._update_schedule_last_run(schedule["id"], status="running")
                 return
@@ -856,7 +857,13 @@ class AgentScheduleEngine:
                     project_id=str(schedule.get("project_id") or "").strip() or None,
                 ),
             )
-            return {"task_id": task.id}
+            task_metadata = getattr(task, "metadata", None)
+            orchestration_id = (
+                str(task_metadata.get("orchestration_id") or "").strip()
+                if isinstance(task_metadata, dict)
+                else str(getattr(task_metadata, "orchestration_id", "") or "").strip()
+            )
+            return {"task_id": task.id, "orchestration_id": orchestration_id or None}
         raise ValueError("schedule requires either (assignment_pm_bot_id + conversation_id) or target_bot_id with prompt")
 
     async def _set_run_status(

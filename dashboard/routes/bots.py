@@ -751,6 +751,9 @@ def api_launch_bot(bot_id: str):
         metadata["orchestration_id"] = orchestration_id
         metadata["pipeline_name"] = str(launch_profile.get("pipeline_name") or launch_profile.get("label") or bot.get("name") or bot_id).strip()
         metadata["pipeline_entry_bot_id"] = str(bot_id)
+        concurrency_limit = launch_profile.get("concurrency_limit")
+        if concurrency_limit is not None:
+            metadata["orchestration_concurrency_limit"] = concurrency_limit
     task = cp.create_task_full(
         bot_id=bot_id,
         payload=payload,

@@ -228,6 +228,9 @@ class TaskMetadata(BaseModel):
     workflow_root_task_id: Optional[str] = None
     pipeline_name: Optional[str] = None
     pipeline_entry_bot_id: Optional[str] = None
+    # Optional per-run ceiling inherited by every downstream task in a pipeline.
+    # The task manager applies this in addition to global and provider limits.
+    orchestration_concurrency_limit: Optional[int] = Field(default=None, ge=1, le=64)
     root_pm_bot_id: Optional[str] = None
     allowed_bot_ids: List[str] = Field(default_factory=list)
     workflow_graph_id: Optional[str] = None

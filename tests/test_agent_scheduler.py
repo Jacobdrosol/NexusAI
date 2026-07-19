@@ -76,6 +76,25 @@ async def test_schedule_run_stays_running_until_linked_task_completes(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_schedule_run_records_pipeline_orchestration_from_created_task(tmp_path):
+    task_manager = _FakeTaskManager()
+    task_manager.task.metadata = SimpleNamespace(orchestration_id="scheduled-course-pipeline")
+    engine = AgentScheduleEngine(
+        assignment_service=object(),
+        task_manager=task_manager,
+        db_path=str(tmp_path / "pipeline-schedules.db"),
+    )
+    schedule = await engine.create_schedule(_schedule_payload())
+
+    await engine.trigger_schedule(schedule["id"])
+
+    run = (await engine.list_runs(schedule["id"]))[0]
+    assert run["status"] == "running"
+    assert run["task_id"] == task_manager.task.id
+    assert run["orchestration_id"] == "scheduled-course-pipeline"
+
+
+@pytest.mark.anyio
 async def test_schedule_run_records_linked_task_failure(tmp_path):
     task_manager = _FakeTaskManager(status="failed", error_message="worker backend timed out")
     engine = AgentScheduleEngine(

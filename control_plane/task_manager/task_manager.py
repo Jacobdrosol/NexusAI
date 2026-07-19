@@ -3421,6 +3421,75 @@ class TaskManager:
             limits[key] = parsed
         return limits
 
+    @staticmethod
+    def _orchestration_concurrency_limit(metadata: Optional[TaskMetadata]) -> Optional[int]:
+        if metadata is None:
+            return None
+        try:
+            limit = int(metadata.orchestration_concurrency_limit or 0)
+        except (TypeError, ValueError):
+            return None
+        return limit if 1 <= limit <= 64 else None
+
+    @staticmethod
+    def _pipeline_launch_profile(bot: Any) -> dict[str, Any]:
+        routing_rules = getattr(bot, "routing_rules", None)
+        if not isinstance(routing_rules, dict):
+            return {}
+        profile = routing_rules.get("launch_profile")
+        return dict(profile) if isinstance(profile, dict) else {}
+
+    async def _apply_root_pipeline_metadata(
+        self,
+        bot_id: str,
+        metadata: TaskMetadata,
+    ) -> TaskMetadata:
+        """Snapshot a pipeline launch cap onto a root task before it can fan out."""
+        if self._bot_registry is None:
+            return metadata
+        if str(metadata.source or "").strip().lower() == "bot_trigger" or metadata.parent_task_id:
+            return metadata
+        try:
+            bot = await self._bot_registry.get(bot_id)
+        except Exception:
+            return metadata
+
+        profile = self._pipeline_launch_profile(bot)
+        capabilities = getattr(bot, "assignment_capabilities", None)
+        capability_pipeline_entry = (
+            bool(capabilities.get("is_pipeline_entry") or capabilities.get("pipeline"))
+            if isinstance(capabilities, dict)
+            else bool(
+                getattr(capabilities, "is_pipeline_entry", False)
+                or getattr(capabilities, "pipeline", False)
+            )
+        )
+        is_pipeline = bool(
+            profile.get("is_pipeline")
+            or capability_pipeline_entry
+        )
+        if not is_pipeline:
+            return metadata
+
+        updates: dict[str, Any] = {}
+        if not str(metadata.orchestration_id or "").strip():
+            updates["orchestration_id"] = str(uuid.uuid4())
+        if not str(metadata.pipeline_entry_bot_id or "").strip():
+            updates["pipeline_entry_bot_id"] = bot_id
+        if not str(metadata.pipeline_name or "").strip():
+            updates["pipeline_name"] = str(
+                profile.get("pipeline_name") or profile.get("label") or getattr(bot, "name", None) or bot_id
+            ).strip()
+        if self._orchestration_concurrency_limit(metadata) is None:
+            raw_limit = profile.get("concurrency_limit")
+            try:
+                configured_limit = int(raw_limit) if raw_limit not in (None, "") else 0
+            except (TypeError, ValueError):
+                configured_limit = 0
+            if 1 <= configured_limit <= 64:
+                updates["orchestration_concurrency_limit"] = configured_limit
+        return metadata.model_copy(update=updates) if updates else metadata
+
     async def _bot_provider_keys_for_tasks(self, tasks: list[Task]) -> dict[str, str]:
         if not tasks or self._bot_registry is None:
             return {}
@@ -4031,13 +4100,12 @@ class TaskManager:
         depends_on: Optional[List[str]] = None,
     ) -> Task:
         await self._ensure_db()
+        metadata = await self._apply_root_pipeline_metadata(bot_id, metadata or TaskMetadata())
         await self._validate_task_payload(bot_id, payload, metadata=metadata)
         dependencies = depends_on or []
         task_id = str(uuid.uuid4())
-        if metadata is not None and not metadata.workflow_root_task_id:
+        if not metadata.workflow_root_task_id:
             metadata = metadata.model_copy(update={"workflow_root_task_id": task_id})
-        elif metadata is None:
-            metadata = TaskMetadata(workflow_root_task_id=task_id)
         orchestration_id = str(metadata.orchestration_id or "").strip()
         async with self._lock:
             cancellation = self._cancelled_orchestrations.get(orchestration_id) if orchestration_id else None
@@ -5570,6 +5638,25 @@ class TaskManager:
                 if task_id in self._tasks
             ]
         provider_limits = self._provider_concurrency_limits()
+        orchestration_counts: dict[str, int] = {}
+        for task in running_snapshot:
+            metadata = task.metadata or TaskMetadata()
+            orchestration_id = str(metadata.orchestration_id or "").strip()
+            if orchestration_id and self._orchestration_concurrency_limit(metadata) is not None:
+                orchestration_counts[orchestration_id] = orchestration_counts.get(orchestration_id, 0) + 1
+
+        def _has_orchestration_capacity(task: Task) -> bool:
+            metadata = task.metadata or TaskMetadata()
+            orchestration_id = str(metadata.orchestration_id or "").strip()
+            limit = self._orchestration_concurrency_limit(metadata)
+            return not orchestration_id or limit is None or orchestration_counts.get(orchestration_id, 0) < limit
+
+        def _reserve_orchestration_slot(task: Task) -> None:
+            metadata = task.metadata or TaskMetadata()
+            orchestration_id = str(metadata.orchestration_id or "").strip()
+            if orchestration_id and self._orchestration_concurrency_limit(metadata) is not None:
+                orchestration_counts[orchestration_id] = orchestration_counts.get(orchestration_id, 0) + 1
+
         if provider_limits:
             provider_keys = await self._bot_provider_keys_for_tasks([*queued, *running_snapshot])
             provider_counts: dict[str, int] = {}
@@ -5582,15 +5669,25 @@ class TaskManager:
             for task in queued:
                 if len(selected) >= available_slots:
                     break
+                if not _has_orchestration_capacity(task):
+                    continue
                 provider_key = provider_keys.get(task.id, "")
                 limit = provider_limits.get(provider_key)
                 if limit is not None and provider_counts.get(provider_key, 0) >= limit:
                     continue
                 selected.append(task)
+                _reserve_orchestration_slot(task)
                 if provider_key:
                     provider_counts[provider_key] = provider_counts.get(provider_key, 0) + 1
         else:
-            selected = queued[:available_slots]
+            selected = []
+            for task in queued:
+                if len(selected) >= available_slots:
+                    break
+                if not _has_orchestration_capacity(task):
+                    continue
+                selected.append(task)
+                _reserve_orchestration_slot(task)
 
         async with self._lock:
             still_selected: list[Task] = []
@@ -7233,6 +7330,9 @@ class TaskManager:
             orchestration_id=metadata.orchestration_id if inherit_metadata else None,
             pipeline_name=metadata.pipeline_name if inherit_metadata else None,
             pipeline_entry_bot_id=metadata.pipeline_entry_bot_id if inherit_metadata else None,
+            orchestration_concurrency_limit=(
+                metadata.orchestration_concurrency_limit if inherit_metadata else None
+            ),
             parent_task_id=parent_task_id,
             trigger_rule_id=trigger_rule_id,
             trigger_depth=int(metadata.trigger_depth or 0) + 1,
