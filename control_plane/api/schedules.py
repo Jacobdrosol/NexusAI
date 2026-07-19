@@ -150,8 +150,11 @@ async def create_schedule(request: Request, body: CreateScheduleRequest) -> Dict
         return {"schedule": schedule}
     except HTTPException:
         raise
+    except ValueError as exc:
+        status_code = 409 if str(exc) == "schedule_duplicate_exists" else 400
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.patch("/{schedule_id}")
@@ -172,8 +175,11 @@ async def update_schedule(schedule_id: str, request: Request, body: UpdateSchedu
         return {"schedule": schedule}
     except HTTPException:
         raise
+    except ValueError as exc:
+        status_code = 409 if str(exc) == "schedule_duplicate_exists" else 400
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/{schedule_id}")
