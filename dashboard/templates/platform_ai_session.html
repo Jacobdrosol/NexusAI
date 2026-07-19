@@ -1032,6 +1032,8 @@ function proposalSummary(proposal) {
   const botId = String(bot.id || '').trim();
   const name = String(bot.name || '').trim();
   const role = String(bot.role || '').trim();
+  const specialistRequest = after && typeof after.specialist_request === 'object' ? after.specialist_request : {};
+  const specialistKind = String(specialistRequest.kind || '').trim();
   const backends = Array.isArray(bot.backends) ? bot.backends : [];
   const backendSummary = backends.map((backend) => {
     const type = String(backend?.type || '').trim();
@@ -1042,7 +1044,8 @@ function proposalSummary(proposal) {
   return {
     botId: botId,
     label: name || botId || String(proposal.target_config || 'configuration'),
-    detail: [role, backendSummary].filter(Boolean).join(' · '),
+    detail: [specialistKind ? `catalog specialist: ${specialistKind}` : '', role, backendSummary].filter(Boolean).join(' · '),
+    specialistKind: specialistKind,
   };
 }
 
@@ -1102,6 +1105,7 @@ function renderProposals(proposals) {
         <span class="badge badge-${htmlEscape(status)}">${htmlEscape(status)}</span>
       </div>
       ${summary.detail ? `<div class="mini-note" style="margin-top:0.2rem;">${htmlEscape(summary.detail)}</div>` : ''}
+      ${summary.specialistKind ? '<div class="mini-note" style="margin-top:0.25rem;">Catalog-derived configuration. It remains disabled until preflight and operator approval; repository writes are denied.</div>' : ''}
       ${rationale ? `<div class="mini-note" style="margin-top:0.35rem;white-space:pre-wrap;">${htmlEscape(rationale)}</div>` : ''}
       ${directOperatorEdit ? '<div class="mini-note" style="margin-top:0.25rem;">Approval records review only. The live bot remains unchanged until an operator updates it in the Bot editor.</div>' : ''}
       ${suggestedAutotuneBlock ? `<details style="margin-top:0.45rem;"><summary class="mini-note">Suggested prompt refinement</summary><pre style="margin:0.4rem 0 0;max-height:16rem;overflow:auto;white-space:pre-wrap;">${htmlEscape(suggestedAutotuneBlock)}</pre></details>` : ''}

@@ -2260,19 +2260,26 @@ class PlatformAISessionRuntime:
             if not action and self._looks_like_bot_payload(directive):
                 action = "upsert_bot"
             if action == "propose_specialist_bot":
-                specialist_payload = (
-                    directive.get("specialist")
-                    if isinstance(directive.get("specialist"), dict)
-                    else directive.get("blueprint")
-                    if isinstance(directive.get("blueprint"), dict)
-                    else {}
-                )
-                result = await self._create_specialist_bot_configuration_proposal(
-                    session_id=session_id,
-                    session=session,
-                    payload=specialist_payload,
-                    rationale=str(directive.get("rationale") or directive.get("reason") or "").strip(),
-                )
+                if mode != "bot_creator":
+                    result = {
+                        "ok": False,
+                        "detail": "specialist_proposal_requires_bot_creator_mode",
+                        "proposal_only": True,
+                    }
+                else:
+                    specialist_payload = (
+                        directive.get("specialist")
+                        if isinstance(directive.get("specialist"), dict)
+                        else directive.get("blueprint")
+                        if isinstance(directive.get("blueprint"), dict)
+                        else {}
+                    )
+                    result = await self._create_specialist_bot_configuration_proposal(
+                        session_id=session_id,
+                        session=session,
+                        payload=specialist_payload,
+                        rationale=str(directive.get("rationale") or directive.get("reason") or "").strip(),
+                    )
                 actions_taken.append({"action": "propose_specialist_bot", "result": result})
                 continue
             if action in _CONFIGURATION_MUTATION_ACTIONS:
