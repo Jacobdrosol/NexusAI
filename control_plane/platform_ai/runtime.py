@@ -15,6 +15,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from control_plane.bot_readiness import assess_bot_instance_readiness
+from control_plane.bot_blueprints import (
+    SpecialistBlueprintRequest,
+    build_specialist_bot,
+    list_specialist_blueprints,
+)
 from control_plane.platform_ai.session_store import PlatformAISessionStore
 from shared.bot_policy import validate_bot_configuration
 from shared.exceptions import BotNotFoundError
@@ -824,12 +829,17 @@ class PlatformAISessionRuntime:
             if not _configuration_mutations_enabled() or not _autonomous_pipeline_runs_enabled()
             else "Configuration changes and autonomous pipeline launches are enabled for this deployment."
         )
+        specialist_kinds = ", ".join(item["kind"] for item in list_specialist_blueprints())
         system_prompt = (
             "You are Platform AI, an autonomous operator for NexusAI sessions. "
             "Session mode decides scope: bot_tuner edits only target_bot_id, pipeline_tuner edits only pipeline graph bots. "
             "Keep responses concise and actionable. "
             "If a concrete tool action is needed, return JSON with actions using `platform_ai_action` values. "
-            "Allowed actions include upsert_bot, upsert_bots, delete_bot, set_pipeline_target, launch_pipeline, "
+            "For a new specialist, prefer propose_specialist_bot with a typed specialist request; do not use "
+            "upsert_bot to invent a specialist configuration. Specialist proposals remain disabled and cannot "
+            "grant repository writes. Its specialist object requires kind, name, and backends; valid kinds are: "
+            f"{specialist_kinds}. Allowed actions include propose_specialist_bot, upsert_bot, upsert_bots, "
+            "delete_bot, set_pipeline_target, launch_pipeline, "
             "project_code_edit, repo_edit, external_repo_edit, deploy. "
             "Never produce actions outside scope. "
             f"{runtime_policy}"
@@ -1754,15 +1764,35 @@ class PlatformAISessionRuntime:
         return bool(bot_id and role and isinstance(backends, list))
 
     @staticmethod
-    def _proposal_bot_safety_error(bot: Bot) -> Optional[str]:
+    def _proposal_bot_safety_error(
+        bot: Bot,
+        *,
+        specialist_request: Optional[Dict[str, Any]] = None,
+    ) -> Optional[str]:
         """Keep approval-time bot changes bounded to declarative model backends.
 
         CLI, browser, and custom backends can carry host tooling or arbitrary commands.
-        Those require a direct operator configuration path, not an AI-generated proposal.
+        A CLI backend is permitted only when a separately validated specialist
+        request recreates this exact bot through the approved Claude-via-Ollama
+        profile. Generic model-generated CLI commands remain disallowed.
         """
+        canonical_specialist: Optional[Bot] = None
+        if specialist_request is not None:
+            try:
+                request = SpecialistBlueprintRequest.model_validate(specialist_request)
+                request = request.model_copy(update={"activate": False, "allow_repo_writes": False})
+                canonical_specialist = build_specialist_bot(request)
+            except Exception:
+                return "proposal_specialist_request_invalid"
+            if bot.model_dump(mode="json", exclude_none=True) != canonical_specialist.model_dump(
+                mode="json", exclude_none=True
+            ):
+                return "proposal_specialist_bot_mismatch"
         for backend in list(getattr(bot, "backends", None) or []):
             backend_type = str(getattr(backend, "type", "") or "").strip().lower()
             if backend_type not in _APPROVABLE_PROPOSAL_BACKEND_TYPES:
+                if backend_type == "cli" and canonical_specialist is not None:
+                    continue
                 return f"proposal_backend_type_not_approvable:{backend_type or 'missing'}"
             if str(getattr(backend, "command", "") or "").strip():
                 return "proposal_backend_command_not_allowed"
@@ -1781,6 +1811,7 @@ class PlatformAISessionRuntime:
         session: Dict[str, Any],
         payload: Dict[str, Any],
         rationale: str = "",
+        specialist_request: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Persist a bounded bot configuration for individual operator approval."""
         if self._bot_registry is None:
@@ -1789,7 +1820,10 @@ class PlatformAISessionRuntime:
             proposed_bot = Bot.model_validate(payload)
         except Exception as exc:
             return {"ok": False, "detail": f"invalid_bot_payload:{exc}"}
-        safety_error = self._proposal_bot_safety_error(proposed_bot)
+        safety_error = self._proposal_bot_safety_error(
+            proposed_bot,
+            specialist_request=specialist_request,
+        )
         if safety_error:
             return {"ok": False, "detail": safety_error}
 
@@ -1832,6 +1866,7 @@ class PlatformAISessionRuntime:
                 "proposal_kind": "bot_configuration",
                 "action": "upsert_bot",
                 "bot": proposed_bot.model_dump(mode="json", exclude_none=True),
+                "specialist_request": specialist_request,
             },
             rationale=str(rationale or "").strip() or "Platform AI proposed a bounded bot configuration.",
             expected_effect="Create or update a disabled bot after individual operator approval.",
@@ -1865,6 +1900,34 @@ class PlatformAISessionRuntime:
             "proposal_id": proposal["id"],
             "bot_id": safe_id,
         }
+
+    async def _create_specialist_bot_configuration_proposal(
+        self,
+        *,
+        session_id: str,
+        session: Dict[str, Any],
+        payload: Dict[str, Any],
+        rationale: str = "",
+    ) -> Dict[str, Any]:
+        """Build a proposal from the specialist catalog, never model-supplied commands.
+
+        Platform AI may choose a specialist and its declarative backend references,
+        but it cannot activate the bot or grant repository writes. The catalog builds
+        the complete prompt, contracts, execution policy, and approved CLI profile.
+        """
+        try:
+            request = SpecialistBlueprintRequest.model_validate(payload)
+            request = request.model_copy(update={"activate": False, "allow_repo_writes": False})
+            proposed_bot = build_specialist_bot(request)
+        except Exception as exc:
+            return {"ok": False, "detail": f"invalid_specialist_request:{exc}"}
+        return await self._create_bot_configuration_proposal(
+            session_id=session_id,
+            session=session,
+            payload=proposed_bot.model_dump(mode="json", exclude_none=True),
+            rationale=rationale or f"Platform AI proposed the {request.kind} specialist from the approved catalog.",
+            specialist_request=request.model_dump(mode="json", exclude_none=True),
+        )
 
     def _mode_mutation_policy(self, *, mode: str, metadata: Dict[str, Any]) -> Dict[str, bool]:
         defaults = {
@@ -2196,6 +2259,22 @@ class PlatformAISessionRuntime:
             action = str(directive.get("platform_ai_action") or directive.get("action") or "").strip().lower()
             if not action and self._looks_like_bot_payload(directive):
                 action = "upsert_bot"
+            if action == "propose_specialist_bot":
+                specialist_payload = (
+                    directive.get("specialist")
+                    if isinstance(directive.get("specialist"), dict)
+                    else directive.get("blueprint")
+                    if isinstance(directive.get("blueprint"), dict)
+                    else {}
+                )
+                result = await self._create_specialist_bot_configuration_proposal(
+                    session_id=session_id,
+                    session=session,
+                    payload=specialist_payload,
+                    rationale=str(directive.get("rationale") or directive.get("reason") or "").strip(),
+                )
+                actions_taken.append({"action": "propose_specialist_bot", "result": result})
+                continue
             if action in _CONFIGURATION_MUTATION_ACTIONS:
                 if action == "upsert_bot":
                     bot_payload = directive.get("bot") if isinstance(directive.get("bot"), dict) else directive
@@ -4818,7 +4897,15 @@ class PlatformAISessionRuntime:
         preflight["bot_id"] = str(bot.id or "")
         policy_errors = validate_bot_configuration(bot)
         preflight["policy_errors"] = policy_errors
-        safety_error = self._proposal_bot_safety_error(bot)
+        specialist_request = (
+            after_state.get("specialist_request")
+            if isinstance(after_state.get("specialist_request"), dict)
+            else None
+        )
+        safety_error = self._proposal_bot_safety_error(
+            bot,
+            specialist_request=specialist_request,
+        )
         preflight["safety_error"] = safety_error or None
         if self._worker_registry is None or self._connection_resolver is None:
             preflight["policy_errors"] = [*policy_errors, "runtime_readiness_unavailable"]
@@ -4959,7 +5046,15 @@ class PlatformAISessionRuntime:
                 bot = Bot.model_validate(bot_payload)
             except Exception as exc:
                 return {"status": "blocked", "detail": f"invalid_proposed_bot:{exc}", "proposal": proposal}
-            safety_error = self._proposal_bot_safety_error(bot)
+            specialist_request = (
+                after_state.get("specialist_request")
+                if isinstance(after_state.get("specialist_request"), dict)
+                else None
+            )
+            safety_error = self._proposal_bot_safety_error(
+                bot,
+                specialist_request=specialist_request,
+            )
             if safety_error:
                 return {"status": "blocked", "detail": safety_error, "proposal": proposal}
             if self._bot_registry is None:

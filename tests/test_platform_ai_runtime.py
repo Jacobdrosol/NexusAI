@@ -1833,6 +1833,59 @@ async def test_configuration_proposal_rejects_cli_backend(tmp_path, monkeypatch)
 
 
 @pytest.mark.anyio
+async def test_specialist_proposal_uses_approved_claude_ollama_profile_and_stays_disabled(tmp_path, monkeypatch):
+    monkeypatch.delenv("NEXUS_PLATFORM_AI_CONFIGURATION_MUTATIONS_ENABLED", raising=False)
+    store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+    bot_registry = BotRegistry(db_path=str(tmp_path / "bots.db"))
+    runtime = PlatformAISessionRuntime(store, bot_registry=bot_registry)
+    session = await store.create_session(mode="bot_creator", status="running")
+    directive = {
+        "platform_ai_action": "propose_specialist_bot",
+        "specialist": {
+            "kind": "code_reviewer",
+            "name": "Claude via Ollama Reviewer",
+            "activate": True,
+            "allow_repo_writes": True,
+            "backends": [
+                {
+                    "type": "cli",
+                    "worker_id": "coding-worker",
+                    "provider": "cli",
+                    "model": "claude",
+                }
+            ],
+            "cli_command_profile": "claude_ollama_json",
+            "cli_runtime_model": "glm-5.2:cloud",
+        },
+    }
+
+    result = await runtime._apply_operator_directives(
+        session["id"],
+        session=session,
+        content=json.dumps(directive),
+    )
+
+    actions = result.get("actions") if isinstance(result.get("actions"), list) else []
+    assert len(actions) == 1
+    proposal_id = str((actions[0].get("result") or {}).get("proposal_id") or "")
+    assert proposal_id
+    proposal = await store.get_patch_proposal(proposal_id)
+    assert proposal is not None
+    after_state = proposal.get("after_state") if isinstance(proposal.get("after_state"), dict) else {}
+    bot = after_state.get("bot") if isinstance(after_state.get("bot"), dict) else {}
+    specialist_request = after_state.get("specialist_request") if isinstance(after_state.get("specialist_request"), dict) else {}
+    assert bot["enabled"] is False
+    assert bot["execution_policy"]["repo_output_mode"] == "deny"
+    assert bot["backends"][0]["command"] == "claude -p --model glm-5.2:cloud --output-format json"
+    assert specialist_request["activate"] is False
+    assert specialist_request["allow_repo_writes"] is False
+    preflight = await runtime.preflight_patch_proposal(session["id"], proposal_id)
+    assert preflight["preflight"]["safety_error"] is None
+    with pytest.raises(BotNotFoundError):
+        await bot_registry.get("claude-via-ollama-reviewer")
+
+
+@pytest.mark.anyio
 async def test_configuration_proposal_rejects_direct_credential_value(tmp_path, monkeypatch):
     monkeypatch.delenv("NEXUS_PLATFORM_AI_CONFIGURATION_MUTATIONS_ENABLED", raising=False)
     store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
