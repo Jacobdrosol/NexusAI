@@ -198,6 +198,62 @@ def _git_working_tree_status() -> dict[str, Any]:
     }
 
 
+def _attach_project_autonomy_coverage(
+    projects: list[dict[str, Any]],
+    bots: Any,
+    schedules_response: Any,
+) -> list[dict[str, Any]]:
+    """Add read-only bot and schedule coverage to project rows for the overview."""
+    bot_rows = [row for row in bots if isinstance(row, dict)] if isinstance(bots, list) else None
+    schedule_rows = (
+        [row for row in schedules_response.get("schedules", []) if isinstance(row, dict)]
+        if isinstance(schedules_response, dict) and isinstance(schedules_response.get("schedules"), list)
+        else None
+    )
+    coverage_available = bot_rows is not None and schedule_rows is not None
+    enriched: list[dict[str, Any]] = []
+
+    for project in projects:
+        row = dict(project) if isinstance(project, dict) else {}
+        project_id = str(row.get("id") or "").strip()
+        registered_bot_ids = {
+            str(bot_id).strip()
+            for bot_id in (row.get("bot_ids") or [])
+            if str(bot_id).strip()
+        }
+        configured_bots = (
+            [bot for bot in bot_rows or [] if str(bot.get("project_id") or "").strip() == project_id]
+            if coverage_available
+            else []
+        )
+        enabled_configured_bots = [bot for bot in configured_bots if bool(bot.get("enabled", True))]
+        active_schedules = (
+            [
+                schedule
+                for schedule in schedule_rows or []
+                if str(schedule.get("project_id") or "").strip() == project_id
+                and str(schedule.get("status") or "").strip().lower() == "active"
+            ]
+            if coverage_available
+            else []
+        )
+        scheduled_bot_ids = {
+            str(schedule.get("target_bot_id") or "").strip()
+            for schedule in active_schedules
+            if str(schedule.get("target_bot_id") or "").strip()
+        }
+        row["autonomy_coverage"] = {
+            "available": coverage_available,
+            "registered_bot_count": len(registered_bot_ids),
+            "configured_bot_count": len(configured_bots),
+            "enabled_configured_bot_count": len(enabled_configured_bots),
+            "active_schedule_count": len(active_schedules),
+            "scheduled_bot_count": len(scheduled_bot_ids),
+        }
+        enriched.append(row)
+    return enriched
+
+
 @bp.get("/projects")
 @login_required
 def projects_page() -> str:
@@ -207,6 +263,12 @@ def projects_page() -> str:
     if projects is None:
         projects = []
         error = cp.unavailable_reason()
+    else:
+        projects = _attach_project_autonomy_coverage(
+            [project for project in projects if isinstance(project, dict)],
+            cp.list_bots() if hasattr(cp, "list_bots") else None,
+            cp.list_schedules() if hasattr(cp, "list_schedules") else None,
+        )
     return render_template("projects.html", projects=projects, error=error)
 
 

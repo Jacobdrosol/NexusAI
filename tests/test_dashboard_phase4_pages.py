@@ -36,6 +36,38 @@ def test_projects_page_loads_when_logged_in(dashboard_client):
     assert b"Projects" in resp.data
 
 
+def test_projects_page_shows_configured_bot_and_schedule_coverage(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_projects(self):
+            return [{"id": "globeiq", "name": "GlobeIQ", "mode": "isolated", "enabled": True, "bot_ids": []}]
+
+        def list_bots(self):
+            return [
+                {"id": "writer", "project_id": "globeiq", "enabled": True},
+                {"id": "reviewer", "project_id": "globeiq", "enabled": False},
+                {"id": "other", "project_id": "other-project", "enabled": True},
+            ]
+
+        def list_schedules(self):
+            return {
+                "schedules": [
+                    {"project_id": "globeiq", "target_bot_id": "writer", "status": "active"},
+                    {"project_id": "globeiq", "target_bot_id": "reviewer", "status": "paused"},
+                ]
+            }
+
+    with patch("dashboard.routes.projects.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/projects")
+
+    assert resp.status_code == 200
+    assert b"Configured Bots" in resp.data
+    assert b"1 enabled" in resp.data
+    assert b"2 configured" in resp.data
+    assert b"1 active schedule" in resp.data
+
+
 def test_schedule_bot_readiness_api_proxies_non_secret_readiness(dashboard_client):
     _login_admin(dashboard_client)
 
