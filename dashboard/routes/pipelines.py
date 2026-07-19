@@ -72,7 +72,9 @@ def _pipeline_status(tasks: list[dict[str, Any]]) -> str:
         return "running"
     if summary["failed"]:
         return "failed"
-    if summary["cancelled"] and not summary["completed"] and not summary["retried"]:
+    # An operator cancellation is terminal for the pipeline even when earlier
+    # steps completed before the cancellation request.
+    if summary["cancelled"]:
         return "cancelled"
     if summary["completed"]:
         return "completed"

@@ -2857,3 +2857,14 @@ def test_pipeline_cancel_proxy_uses_control_plane(dashboard_client):
     assert response.status_code == 200
     assert response.get_json()["cancelled_task_count"] == 2
     assert fake_cp.request == {"orchestration_id": "orch-cancel", "reason": "operator_test"}
+
+
+def test_pipeline_status_reports_cancelled_when_prior_steps_completed():
+    from dashboard.routes.pipelines import _pipeline_status
+
+    assert _pipeline_status(
+        [
+            {"status": "completed"},
+            {"status": "cancelled"},
+        ]
+    ) == "cancelled"
