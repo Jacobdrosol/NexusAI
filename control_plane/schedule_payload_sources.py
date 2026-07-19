@@ -24,6 +24,8 @@ _CSV_SOURCE_MAX_FILE_BYTES = 1_000_000
 _CSV_SOURCE_MAX_VALUE_CHARS = 2_000
 _CSV_SOURCE_MAX_AGE_HOURS = 168
 _CSV_SOURCE_MAX_PAYLOAD_FIELD_MAPPINGS = 12
+_CSV_SOURCE_MAX_CATALOG_FILES = 100
+_CSV_SOURCE_MAX_CATALOG_HEADERS = 64
 _CSV_RESERVED_PAYLOAD_FIELDS = {
     "bot_id",
     "error",
@@ -269,17 +271,80 @@ def validate_system_payload_source(schedule: Dict[str, Any], bot: Any) -> None:
         )
 
 
-def _csv_source_path(relative_path: str) -> Path:
+def _csv_source_root() -> Path:
     root_raw = str(os.environ.get("NEXUSAI_READONLY_CSV_ROOT") or "").strip()
     if not root_raw:
         raise SystemPayloadSourceError("NEXUSAI_READONLY_CSV_ROOT is not configured")
     root = Path(root_raw).resolve()
     if not root.is_dir():
         raise SystemPayloadSourceError("NEXUSAI_READONLY_CSV_ROOT is not an accessible directory")
+    return root
+
+
+def _csv_source_path(relative_path: str) -> Path:
+    root = _csv_source_root()
     candidate = (root / relative_path).resolve()
     if not candidate.is_relative_to(root):
         raise SystemPayloadSourceError("csv_work_items_v1 path escapes NEXUSAI_READONLY_CSV_ROOT")
     return candidate
+
+
+def list_csv_work_items_sources() -> list[Dict[str, Any]]:
+    """List bounded, non-content metadata for operator-selectable CSV work queues."""
+    root = _csv_source_root()
+    sources: list[Dict[str, Any]] = []
+    for candidate in sorted(root.rglob("*.csv"), key=lambda path: path.as_posix().casefold()):
+        if len(sources) >= _CSV_SOURCE_MAX_CATALOG_FILES:
+            break
+        try:
+            source_path = candidate.resolve()
+            if not source_path.is_relative_to(root) or not source_path.is_file():
+                continue
+            source_stat = source_path.stat()
+        except OSError:
+            continue
+
+        modified_at = datetime.fromtimestamp(source_stat.st_mtime, tz=timezone.utc)
+        source_age_seconds = max(0, int((datetime.now(timezone.utc) - modified_at).total_seconds()))
+        headers: list[str] = []
+        row_count = 0
+        issue = ""
+        if source_stat.st_size > _CSV_SOURCE_MAX_FILE_BYTES:
+            issue = f"source exceeds the {_CSV_SOURCE_MAX_FILE_BYTES}-byte limit"
+        else:
+            try:
+                with source_path.open("r", encoding="utf-8-sig", newline="") as source_file:
+                    reader = csv.reader(source_file)
+                    raw_headers = next(reader, [])
+                    headers = [str(field or "").strip() for field in raw_headers]
+                    row_count = sum(1 for _ in reader)
+            except (OSError, UnicodeDecodeError, csv.Error):
+                issue = "source cannot be read as UTF-8 CSV"
+
+        if not issue:
+            if not headers:
+                issue = "source has no header row"
+            elif len(headers) > _CSV_SOURCE_MAX_CATALOG_HEADERS:
+                issue = f"source has more than {_CSV_SOURCE_MAX_CATALOG_HEADERS} header fields"
+            elif any(not _SAFE_FIELD_NAME.fullmatch(field) for field in headers):
+                issue = "source has unsupported header field names"
+            elif len(set(headers)) != len(headers):
+                issue = "source has duplicate header field names"
+
+        sources.append(
+            {
+                "relative_path": source_path.relative_to(root).as_posix(),
+                "headers": headers if not issue else [],
+                "row_count": row_count,
+                "size_bytes": int(source_stat.st_size),
+                "modified_at": modified_at.isoformat(),
+                "source_age_seconds": source_age_seconds,
+                "max_supported_age_hours": _CSV_SOURCE_MAX_AGE_HOURS,
+                "available": not issue,
+                "issue": issue or None,
+            }
+        )
+    return sources
 
 
 def _truncate_csv_value(value: Any) -> str:

@@ -11,6 +11,7 @@ from control_plane.schedule_payload_sources import (
     OPERATIONAL_QUALITY_SNAPSHOT_SOURCE,
     SystemPayloadSourceError,
     _failure_category,
+    list_csv_work_items_sources,
     materialize_system_schedule_payload,
     system_payload_source_config,
     validate_system_payload_source,
@@ -645,3 +646,40 @@ async def test_empty_mapped_csv_queue_skips_without_creating_a_task(tmp_path, mo
     assert run["status"] == "skipped"
     assert run["error"] == {"reason": "csv_work_items_v1 has no eligible work item for this run"}
     assert (await engine.get_schedule(schedule["id"]))["last_run_status"] == "skipped"
+
+
+def test_csv_work_item_catalog_returns_only_non_content_metadata(tmp_path, monkeypatch):
+    source = tmp_path / "queues" / "course-62.csv"
+    source.parent.mkdir()
+    source.write_text(
+        "course_id,lesson_id,instruction\n62,1001,Do not expose this value\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("NEXUSAI_READONLY_CSV_ROOT", str(tmp_path))
+
+    sources = list_csv_work_items_sources()
+
+    assert len(sources) == 1
+    item = sources[0]
+    assert item["relative_path"] == "queues/course-62.csv"
+    assert item["headers"] == ["course_id", "lesson_id", "instruction"]
+    assert item["row_count"] == 1
+    assert item["size_bytes"] == source.stat().st_size
+    assert item["available"] is True
+    assert item["issue"] is None
+    assert "Do not expose this value" not in json.dumps(item)
+
+
+@pytest.mark.anyio
+async def test_schedule_queue_source_catalog_api_returns_queue_metadata(cp_client, tmp_path, monkeypatch):
+    source = tmp_path / "draft-work.csv"
+    source.write_text("lesson_id,instruction\n1001,Do not expose this value\n", encoding="utf-8")
+    monkeypatch.setenv("NEXUSAI_READONLY_CSV_ROOT", str(tmp_path))
+
+    response = await cp_client.get("/v1/schedules/queue-sources")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sources"][0]["relative_path"] == "draft-work.csv"
+    assert payload["sources"][0]["headers"] == ["lesson_id", "instruction"]
+    assert "Do not expose this value" not in response.text

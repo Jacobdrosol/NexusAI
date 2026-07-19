@@ -18,6 +18,7 @@ from control_plane.schedule_safety import (
     require_schedule_autonomy_safety,
     require_schedule_runtime_readiness,
 )
+from control_plane.schedule_payload_sources import SystemPayloadSourceError, list_csv_work_items_sources
 
 
 router = APIRouter(prefix="/v1/schedules", tags=["schedules"])
@@ -125,6 +126,15 @@ async def list_schedules(
         )
         return {"schedules": schedules}
     except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/queue-sources")
+async def list_schedule_queue_sources() -> Dict[str, Any]:
+    """Return non-content metadata for bounded CSV work queues available to schedules."""
+    try:
+        return {"sources": list_csv_work_items_sources()}
+    except SystemPayloadSourceError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
