@@ -237,6 +237,35 @@ async def test_verify_worker_inference_records_only_safe_completion_metadata():
 
 
 @pytest.mark.anyio
+async def test_verify_worker_inference_uses_declared_worker_request_token(monkeypatch):
+    monkeypatch.setenv("NEXUS_WORKER_REQUEST_TOKEN", "node-token")
+
+    async def handler(request):
+        assert request.headers["X-Nexus-Worker-Token"] == "node-token"
+        return httpx.Response(200, json={"output": "READY"})
+
+    result = await verify_worker_inference(
+        _worker(request_token_env="NEXUS_WORKER_REQUEST_TOKEN"),
+        client_factory=_client_factory(handler),
+    )
+
+    assert result["verification_status"] == "ready"
+
+
+@pytest.mark.anyio
+async def test_verify_worker_inference_fails_closed_when_declared_token_is_missing(monkeypatch):
+    monkeypatch.delenv("NEXUS_WORKER_REQUEST_TOKEN", raising=False)
+
+    result = await verify_worker_inference(
+        _worker(request_token_env="NEXUS_WORKER_REQUEST_TOKEN"),
+        client_factory=_client_factory(lambda request: httpx.Response(200)),
+    )
+
+    assert result["verification_status"] == "failed"
+    assert result["detail"] == "worker request token is not configured on the control plane"
+
+
+@pytest.mark.anyio
 async def test_verify_worker_inference_rejects_empty_final_output():
     async def handler(request):
         return httpx.Response(200, json={"output": ""})

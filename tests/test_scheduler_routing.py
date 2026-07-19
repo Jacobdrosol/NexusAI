@@ -476,6 +476,43 @@ async def test_scheduler_dispatch_tracks_latency_and_inflight():
 
 
 @pytest.mark.anyio
+async def test_scheduler_dispatch_uses_declared_worker_request_token(monkeypatch):
+    from control_plane.scheduler.scheduler import Scheduler
+
+    worker = Worker(
+        id="w-token",
+        name="Worker Token",
+        host="token.local",
+        port=8001,
+        capabilities=[Capability(type="llm", provider="ollama", models=["llama3"])],
+        request_token_env="NEXUS_WORKER_REQUEST_TOKEN",
+        status="online",
+        enabled=True,
+    )
+    backend = BackendConfig(type="local_llm", provider="ollama", model="llama3", worker_id=worker.id)
+    monkeypatch.setenv("NEXUS_WORKER_REQUEST_TOKEN", "node-token")
+
+    fake_response = MagicMock()
+    fake_response.raise_for_status.return_value = None
+    fake_response.json.return_value = {"output": "ok"}
+    mock_client = AsyncMock()
+    mock_client.__aenter__.return_value = mock_client
+    mock_client.__aexit__.return_value = False
+    mock_client.post.return_value = fake_response
+
+    scheduler = Scheduler(bot_registry=AsyncMock(), worker_registry=AsyncMock())
+    with patch("control_plane.scheduler.scheduler.httpx.AsyncClient", return_value=mock_client):
+        result = await scheduler._dispatch_to_worker(
+            worker,
+            backend,
+            [{"role": "user", "content": "hello"}],
+        )
+
+    assert result == {"output": "ok"}
+    assert mock_client.post.await_args.kwargs["headers"] == {"X-Nexus-Worker-Token": "node-token"}
+
+
+@pytest.mark.anyio
 async def test_scheduler_dispatches_fixed_cli_command_to_worker():
     from control_plane.scheduler.scheduler import Scheduler
 

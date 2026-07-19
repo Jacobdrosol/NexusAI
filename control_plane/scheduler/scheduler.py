@@ -3129,10 +3129,23 @@ class Scheduler:
             return override
         return "allow"
 
+    async def _worker_request_headers(self, worker: Worker) -> dict[str, str]:
+        """Resolve an optional node request token without exposing it in task data."""
+        token_ref = str(getattr(worker, "request_token_env", "") or "").strip()
+        if not token_ref:
+            return {}
+        token = os.environ.get(token_ref, "").strip()
+        if not token:
+            raise BackendError(
+                f"Worker {worker.id} declares request token '{token_ref}', but it is not configured."
+            )
+        return {"X-Nexus-Worker-Token": token}
+
     async def _dispatch_to_worker(
         self, worker: Worker, backend: BackendConfig, payload: Any
     ) -> Any:
         url = f"http://{worker.host}:{worker.port}/infer"
+        headers = await self._worker_request_headers(worker)
         params_dict = backend.params.model_dump(exclude_none=True) if backend.params else {}
         # Apply provider-specific param normalization (e.g., Ollama num_predict default)
         if str(backend.provider or "").strip().lower() == "ollama":
@@ -3151,7 +3164,7 @@ class Scheduler:
         started = time.perf_counter()
         async with httpx.AsyncClient(timeout=_worker_timeout()) as client:
             try:
-                response = await client.post(url, json=body)
+                response = await client.post(url, json=body, headers=headers)
                 response.raise_for_status()
                 return response.json()
             finally:
@@ -3167,6 +3180,7 @@ class Scheduler:
         self, worker: Worker, backend: BackendConfig, payload: Any
     ) -> AsyncGenerator[dict[str, Any], None]:
         url = f"http://{worker.host}:{worker.port}/infer/stream"
+        headers = await self._worker_request_headers(worker)
         params_dict = backend.params.model_dump(exclude_none=True) if backend.params else {}
         # Apply provider-specific param normalization (e.g., Ollama num_predict default)
         if str(backend.provider or "").strip().lower() == "ollama":
@@ -3193,7 +3207,7 @@ class Scheduler:
         )
         async with httpx.AsyncClient(timeout=_worker_timeout()) as client:
             try:
-                async with client.stream("POST", url, json=body) as response:
+                async with client.stream("POST", url, json=body, headers=headers) as response:
                     response.raise_for_status()
                     buffer = ""
                     event_type = "message"

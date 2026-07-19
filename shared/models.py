@@ -51,6 +51,12 @@ class Worker(BaseModel):
     status: Literal["online", "offline", "degraded"] = "offline"
     metrics: Optional[WorkerMetrics] = None
     runtime_limits: Optional[WorkerRuntimeLimits] = None
+    # Name of a node-local environment variable used to authenticate control-plane
+    # inference requests. The token value is never registered or returned by the API.
+    request_token_env: Optional[str] = Field(
+        default=None,
+        pattern=r"^[A-Za-z_][A-Za-z0-9_]*$",
+    )
     enabled: bool = True
     last_heartbeat_at: Optional[datetime] = None
 

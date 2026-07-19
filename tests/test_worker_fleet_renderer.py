@@ -122,6 +122,30 @@ def test_render_worker_fleet_outputs_compose_worker_config_and_bot(tmp_path):
     ]
 
 
+def test_render_worker_fleet_propagates_declared_worker_request_token(tmp_path):
+    renderer = _load_renderer()
+    profile = _profile(tmp_path / "workers.yaml")
+    profile_data = yaml.safe_load(profile.read_text(encoding="utf-8"))
+    profile_data["fleet"]["worker_request_token_env"] = "NEXUS_WORKER_REQUEST_TOKEN"
+    profile.write_text(yaml.safe_dump(profile_data, sort_keys=False), encoding="utf-8")
+    out = tmp_path / "runtime"
+
+    renderer.render(
+        profile,
+        out,
+        {
+            "CONTROL_PLANE_API_TOKEN": "control-token",
+            "OLLAMA_API_KEY": "ollama-token",
+            "NEXUS_WORKER_REQUEST_TOKEN": "node-token",
+        },
+    )
+
+    worker_cfg = yaml.safe_load((out / "workers" / "content-repair-01.yaml").read_text())
+    assert worker_cfg["request_token_env"] == "NEXUS_WORKER_REQUEST_TOKEN"
+    env_text = (out / "env" / "content-repair-01.env").read_text()
+    assert "NEXUS_WORKER_REQUEST_TOKEN=node-token" in env_text
+
+
 def test_apply_models_creates_only_missing_models(tmp_path, monkeypatch):
     renderer = _load_renderer()
     profile = _profile(tmp_path / "workers.yaml")

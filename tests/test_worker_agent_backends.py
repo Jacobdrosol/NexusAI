@@ -253,6 +253,27 @@ async def test_infer_endpoint_ollama(worker_app):
 
 
 @pytest.mark.anyio
+async def test_infer_endpoint_rejects_missing_declared_worker_request_token(worker_app, monkeypatch):
+    worker_app.state.worker_config["request_token_env"] = "NEXUS_WORKER_REQUEST_TOKEN"
+    monkeypatch.setenv("NEXUS_WORKER_REQUEST_TOKEN", "node-token")
+
+    async with AsyncClient(
+        transport=ASGITransport(app=worker_app), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/infer",
+            json={
+                "model": "llama3",
+                "provider": "ollama",
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Worker request token is invalid"
+
+
+@pytest.mark.anyio
 async def test_infer_endpoint_unsupported_provider(worker_app):
     async with AsyncClient(
         transport=ASGITransport(app=worker_app), base_url="http://test"
