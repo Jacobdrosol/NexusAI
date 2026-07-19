@@ -265,7 +265,7 @@ async def test_schedule_retries_only_a_failed_pre_dispatch_attempt(tmp_path, mon
 
 
 @pytest.mark.anyio
-async def test_schedule_retry_schema_migrates_existing_run_history(tmp_path):
+async def test_schedule_run_schema_migrates_existing_run_history(tmp_path):
     db_path = tmp_path / "schedules.db"
     with sqlite3.connect(db_path) as db:
         db.execute(
@@ -289,6 +289,7 @@ async def test_schedule_retry_schema_migrates_existing_run_history(tmp_path):
     with sqlite3.connect(db_path) as db:
         columns = {row[1] for row in db.execute("PRAGMA table_info(agent_schedule_runs)")}
     assert "retry_not_before" in columns
+    assert "manual" in columns
 
 
 @pytest.mark.anyio
@@ -428,7 +429,37 @@ async def test_schedule_tick_uses_cron_window_and_dispatches_it_once(tmp_path, m
     runs = await first_engine.list_runs(schedule["id"])
     assert len(runs) == 1
     assert runs[0]["scheduled_for"] == expected_window
+    assert runs[0]["manual"] is False
     assert len(task_manager.create_calls) == 1
+
+
+@pytest.mark.anyio
+async def test_schedule_run_persists_manual_origin(tmp_path):
+    task_manager = _FakeTaskManager()
+    engine = AgentScheduleEngine(
+        assignment_service=object(),
+        task_manager=task_manager,
+        db_path=str(tmp_path / "schedules.db"),
+    )
+    schedule = await engine.create_schedule({**_schedule_payload(), "overlap_policy": "allow"})
+
+    manual_run = await engine.trigger_schedule(schedule["id"])
+    scheduled_for = (datetime.fromisoformat(manual_run["scheduled_for"]) + timedelta(seconds=1)).isoformat()
+    scheduled_run, scheduled_created = await engine._create_run(
+        schedule,
+        scheduled_for=scheduled_for,
+        manual=False,
+    )
+
+    assert manual_run["manual"] is True
+    assert scheduled_created is True
+    assert scheduled_run["manual"] is False
+    persisted_by_id = {
+        run["id"]: run
+        for run in await engine.list_runs(schedule["id"])
+    }
+    assert persisted_by_id[manual_run["id"]]["manual"] is True
+    assert persisted_by_id[scheduled_run["id"]]["manual"] is False
 
 
 @pytest.mark.anyio

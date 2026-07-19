@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS agent_schedule_runs (
     error_json TEXT,
     attempt INTEGER NOT NULL DEFAULT 0,
     retry_not_before TEXT,
+    manual INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL
 )
 """
@@ -273,6 +274,8 @@ class AgentScheduleEngine:
                 run_columns = {str(row[1]) for row in await cursor.fetchall()}
             if "retry_not_before" not in run_columns:
                 await db.execute("ALTER TABLE agent_schedule_runs ADD COLUMN retry_not_before TEXT")
+            if "manual" not in run_columns:
+                await db.execute("ALTER TABLE agent_schedule_runs ADD COLUMN manual INTEGER NOT NULL DEFAULT 0")
             for statement in _CREATE_INDEXES:
                 await db.execute(statement)
             await db.commit()
@@ -618,7 +621,7 @@ class AgentScheduleEngine:
             "error": None,
             "attempt": 0,
             "created_at": created_at,
-            "manual": manual,
+            "manual": bool(manual),
         }
         async with open_sqlite(self._db_path) as db:
             await db.execute("BEGIN IMMEDIATE")
@@ -656,8 +659,9 @@ class AgentScheduleEngine:
                         """
                         INSERT INTO agent_schedule_runs (
                             id, schedule_id, dedupe_key, scheduled_for, started_at, finished_at,
-                            status, orchestration_id, task_id, error_json, attempt, retry_not_before, created_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            status, orchestration_id, task_id, error_json, attempt, retry_not_before, created_at,
+                            manual
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             run["id"],
@@ -673,6 +677,7 @@ class AgentScheduleEngine:
                             0,
                             None,
                             run["created_at"],
+                            int(run["manual"]),
                         ),
                     )
                     await db.commit()
@@ -682,8 +687,9 @@ class AgentScheduleEngine:
                 """
                     INSERT OR IGNORE INTO agent_schedule_runs (
                         id, schedule_id, dedupe_key, scheduled_for, started_at, finished_at,
-                    status, orchestration_id, task_id, error_json, attempt, retry_not_before, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        status, orchestration_id, task_id, error_json, attempt, retry_not_before, created_at,
+                        manual
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run["id"],
@@ -699,6 +705,7 @@ class AgentScheduleEngine:
                     0,
                     None,
                     run["created_at"],
+                    int(run["manual"]),
                 ),
             )
             await db.commit()
@@ -1041,6 +1048,7 @@ class AgentScheduleEngine:
         }
 
     def _row_to_run(self, row: Any) -> Dict[str, Any]:
+        row_keys = set(row.keys()) if hasattr(row, "keys") else set()
         return {
             "id": str(row["id"]),
             "schedule_id": str(row["schedule_id"]),
@@ -1054,5 +1062,6 @@ class AgentScheduleEngine:
             "error": _json_load(row["error_json"], None),
             "attempt": int(row["attempt"] or 0),
             "retry_not_before": str(row["retry_not_before"] or "") or None,
+            "manual": bool(row["manual"]) if "manual" in row_keys else False,
             "created_at": str(row["created_at"]),
         }
