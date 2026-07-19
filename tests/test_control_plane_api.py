@@ -7,6 +7,7 @@ import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from email.utils import format_datetime
+from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -109,6 +110,18 @@ async def test_list_workers_empty(cp_client):
     resp = await cp_client.get("/v1/workers")
     assert resp.status_code == 200
     assert resp.json() == []
+
+
+def test_public_default_config_keeps_example_bot_seeding_opt_in():
+    from shared.config_loader import ConfigLoader
+
+    repo_root = Path(__file__).resolve().parents[1]
+    control_plane = ConfigLoader.load_yaml(str(repo_root / "config" / "nexus_config.yaml"))["control_plane"]
+    example_bot = ConfigLoader.load_yaml(str(repo_root / "config" / "bots" / "example_bot.yaml"))
+
+    assert control_plane["seed_bots_from_config"] is False
+    assert control_plane["force_seed_bots_from_config"] is False
+    assert example_bot["enabled"] is False
 
 
 def test_create_app_does_not_seed_workers_from_config_by_default(tmp_path, monkeypatch):

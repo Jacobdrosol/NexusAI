@@ -2,7 +2,7 @@ id: bot-coder-14b
 name: Coder 14B
 role: coder
 priority: 10
-enabled: true
+enabled: false
 
 # ── Backends ──────────────────────────────────────────────────────────────────
 # The scheduler tries backends in order and picks the first one whose worker is
