@@ -34,7 +34,12 @@ def _failure_category(task: Any) -> str:
 
     if any(token in haystack for token in ("policy", "scope", "approval", "forbidden")):
         return "policy"
-    if "output contract" in haystack or "schema" in haystack:
+    if (
+        code == "output_contract_invalid"
+        or "output contract" in haystack
+        or "no valid json object or array found" in haystack
+        or "requires structured json output" in haystack
+    ):
         return "output_contract"
     if any(token in haystack for token in ("timeout", "timed out", "deadline")):
         return "timeout"

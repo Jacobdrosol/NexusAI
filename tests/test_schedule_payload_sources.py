@@ -10,6 +10,7 @@ from control_plane.schedule_payload_sources import (
     FLEET_HEALTH_SUMMARY_SOURCE,
     OPERATIONAL_QUALITY_SNAPSHOT_SOURCE,
     SystemPayloadSourceError,
+    _failure_category,
     materialize_system_schedule_payload,
     system_payload_source_config,
     validate_system_payload_source,
@@ -72,6 +73,15 @@ class _FakeScheduleEngine:
             {"id": "healthy", "status": "active", "last_run_status": "completed"},
             {"id": "failing", "status": "paused", "last_run_status": "failed"},
         ]
+
+
+def test_failure_category_classifies_current_and_historical_output_contract_errors():
+    assert _failure_category(
+        SimpleNamespace(error=SimpleNamespace(code="output_contract_invalid", message=""))
+    ) == "output_contract"
+    assert _failure_category(
+        SimpleNamespace(error=SimpleNamespace(code=None, message="no valid JSON object or array found"))
+    ) == "output_contract"
 
 
 @pytest.mark.anyio
