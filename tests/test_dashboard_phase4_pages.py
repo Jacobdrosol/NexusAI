@@ -2555,8 +2555,10 @@ def test_schedules_page_and_proxy_support_operational_schedule_management(dashbo
     assert b"Control-plane fleet health summary" in page.data
     assert b"Aggregate operational quality snapshot" in page.data
     assert b"Daily Review" in page.data
+    assert b"Origin" in page.data
     assert b"Retry After" in page.data
     assert b"retry_not_before" in page.data
+    assert b"run.manual === true" in page.data
     assert b"schedule-retry-max" in page.data
     assert b"schedule-retry-backoff" in page.data
     assert listed.get_json()["schedules"][0]["id"] == "schedule-1"
