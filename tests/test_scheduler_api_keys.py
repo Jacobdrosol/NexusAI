@@ -313,7 +313,7 @@ async def test_scheduler_vertex_claude_uses_rawpredict_partner_endpoint():
 
     key_vault = AsyncMock()
     key_vault.get_secret.return_value = (
-        '{"project_id":"demo-project","client_email":"svc@example.com","private_key":"-----BEGIN PRIVATE KEY-----\\nabc\\n-----END PRIVATE KEY-----\\n"}'
+        '{"project_id":"demo-project","client_email":"svc@example.com","private_key":"test-private-key"}'
     )
     scheduler = Scheduler(bot_registry=AsyncMock(), worker_registry=AsyncMock(), key_vault=key_vault)
     scheduler._vertex_access_token = AsyncMock(return_value="vertex-token")  # type: ignore[method-assign]
@@ -370,7 +370,7 @@ async def test_scheduler_vertex_google_model_still_uses_generate_content():
 
     key_vault = AsyncMock()
     key_vault.get_secret.return_value = (
-        '{"project_id":"demo-project","client_email":"svc@example.com","private_key":"-----BEGIN PRIVATE KEY-----\\nabc\\n-----END PRIVATE KEY-----\\n"}'
+        '{"project_id":"demo-project","client_email":"svc@example.com","private_key":"test-private-key"}'
     )
     scheduler = Scheduler(bot_registry=AsyncMock(), worker_registry=AsyncMock(), key_vault=key_vault)
     scheduler._vertex_access_token = AsyncMock(return_value="vertex-token")  # type: ignore[method-assign]
