@@ -2,7 +2,13 @@
 
 import bcrypt
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
+
+import yaml
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def _login_admin(dashboard_client):
@@ -25,6 +31,13 @@ def _login_admin(dashboard_client):
         follow_redirects=False,
     )
     assert resp.status_code in (302, 303)
+
+
+def test_bluegreen_dashboard_services_restart_after_host_reboot():
+    compose = yaml.safe_load((ROOT / "docker-compose.bluegreen.yml").read_text(encoding="utf-8"))
+
+    for service_name in ("dashboard_gateway", "dashboard_blue", "dashboard_green"):
+        assert compose["services"][service_name]["restart"] == "unless-stopped"
 
 
 def test_deploy_status_endpoint_returns_payload(dashboard_client):
