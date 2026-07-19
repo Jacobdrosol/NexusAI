@@ -37,6 +37,13 @@
         {% elif p.autonomy_coverage.active_schedule_count %}
         <span class="badge badge-enabled">active</span>
         <div class="mini-note">{{ p.autonomy_coverage.active_schedule_count }} active schedule{{ '' if p.autonomy_coverage.active_schedule_count == 1 else 's' }} / {{ p.autonomy_coverage.scheduled_bot_count }} bot{{ '' if p.autonomy_coverage.scheduled_bot_count == 1 else 's' }}</div>
+        {% if p.autonomy_coverage.attention_schedule_count %}
+        <div class="mini-note"><span class="badge badge-degraded">attention</span> {{ p.autonomy_coverage.attention_schedule_count }} latest run{{ '' if p.autonomy_coverage.attention_schedule_count == 1 else 's' }} needs attention</div>
+        {% elif p.autonomy_coverage.awaiting_first_run_count %}
+        <div class="mini-note">{{ p.autonomy_coverage.awaiting_first_run_count }} awaiting first run</div>
+        {% else %}
+        <div class="mini-note">{{ p.autonomy_coverage.completed_schedule_count }} latest run{{ '' if p.autonomy_coverage.completed_schedule_count == 1 else 's' }} complete</div>
+        {% endif %}
         {% if p.autonomy_coverage.readiness_available and p.autonomy_coverage.ready_unscheduled_bot_count %}
         <div class="mini-note">{{ p.autonomy_coverage.ready_unscheduled_bot_count }} ready but unscheduled</div>
         {% elif p.autonomy_coverage.readiness_available and p.autonomy_coverage.blocked_enabled_bot_count %}

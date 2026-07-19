@@ -54,7 +54,12 @@ def test_projects_page_shows_configured_bot_and_schedule_coverage(dashboard_clie
         def list_schedules(self):
             return {
                 "schedules": [
-                    {"project_id": "globeiq", "target_bot_id": "writer", "status": "active"},
+                    {
+                        "project_id": "globeiq",
+                        "target_bot_id": "writer",
+                        "status": "active",
+                        "last_run_status": "completed",
+                    },
                     {"project_id": "globeiq", "target_bot_id": "reviewer", "status": "paused"},
                 ]
             }
@@ -76,6 +81,7 @@ def test_projects_page_shows_configured_bot_and_schedule_coverage(dashboard_clie
     assert b"2 enabled" in resp.data
     assert b"3 configured" in resp.data
     assert b"1 active schedule" in resp.data
+    assert b"1 latest run complete" in resp.data
     assert b"1 ready but unscheduled" in resp.data
 
 

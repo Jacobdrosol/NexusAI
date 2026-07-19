@@ -248,6 +248,22 @@ def _attach_project_autonomy_coverage(
             if coverage_available
             else []
         )
+        completed_schedule_count = sum(
+            1
+            for schedule in active_schedules
+            if str(schedule.get("last_run_status") or "").strip().lower() == "completed"
+        )
+        attention_schedule_count = sum(
+            1
+            for schedule in active_schedules
+            if (last_run_status := str(schedule.get("last_run_status") or "").strip().lower())
+            and last_run_status != "completed"
+        )
+        awaiting_first_run_count = sum(
+            1
+            for schedule in active_schedules
+            if not str(schedule.get("last_run_status") or "").strip()
+        )
         scheduled_bot_ids = {
             str(schedule.get("target_bot_id") or "").strip()
             for schedule in active_schedules
@@ -272,6 +288,9 @@ def _attach_project_autonomy_coverage(
             "enabled_configured_bot_count": len(enabled_configured_bots),
             "active_schedule_count": len(active_schedules),
             "scheduled_bot_count": len(scheduled_bot_ids),
+            "completed_schedule_count": completed_schedule_count,
+            "attention_schedule_count": attention_schedule_count,
+            "awaiting_first_run_count": awaiting_first_run_count,
             "ready_enabled_bot_count": len(ready_enabled_bot_ids),
             "ready_unscheduled_bot_count": len(ready_enabled_bot_ids - scheduled_bot_ids),
             "blocked_enabled_bot_count": blocked_enabled_bot_count,
