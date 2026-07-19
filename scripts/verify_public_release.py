@@ -15,6 +15,7 @@ _TRACKED_PATH_MARKERS = (
     "/data/",
     "/data.backup.",
 )
+_DATABASE_SUFFIXES = (".db", ".db-shm", ".db-wal", ".db-journal")
 _SECRET_PATTERNS = (
     re.compile(r"(?<![A-Za-z0-9_])sk-[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-])"),
     re.compile(r"(?<![A-Za-z0-9_])sk-ant-[A-Za-z0-9_-]{20,}(?![A-Za-z0-9_-])"),
@@ -44,6 +45,14 @@ def _has_runtime_path_marker(relative_path: str) -> bool:
     return any(marker in normalized for marker in _TRACKED_PATH_MARKERS)
 
 
+def _is_temporary_probe_path(relative_path: str) -> bool:
+    return any(part.startswith("tmp_") for part in Path(relative_path).parts)
+
+
+def _is_database_path(relative_path: str) -> bool:
+    return relative_path.casefold().endswith(_DATABASE_SUFFIXES)
+
+
 def find_public_release_violations(repo_root: Path) -> list[str]:
     """Return publish-safety violations without including any matched secret text."""
     violations: list[str] = []
@@ -51,6 +60,12 @@ def find_public_release_violations(repo_root: Path) -> list[str]:
         relative = path.relative_to(repo_root).as_posix()
         if relative not in _ALLOWED_RUNTIME_PATHS and _has_runtime_path_marker(relative):
             violations.append(f"tracked runtime or environment file: {relative}")
+            continue
+        if _is_temporary_probe_path(relative):
+            violations.append(f"tracked temporary probe file: {relative}")
+            continue
+        if _is_database_path(relative):
+            violations.append(f"tracked database file: {relative}")
             continue
         if path.is_dir() or path.stat().st_size > 2_000_000:
             continue

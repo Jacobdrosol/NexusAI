@@ -12,6 +12,10 @@ data/*.db-shm
 data/*.db-wal
 data/*.db-journal
 **/data/*.db
+*.db
+*.db-shm
+*.db-wal
+*.db-journal
 data/active_color.txt
 data/deploy_status.json
 data/tool_installs/
@@ -32,6 +36,7 @@ build/
 .ruff_cache/
 .uat-logs/
 worker_node/
+tmp_pm_probe*/
 
 # Personal bot configurations — import via UI, never commit
 *.bot.json
