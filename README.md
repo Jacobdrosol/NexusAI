@@ -2,7 +2,7 @@
 
 **NexusAI** is a modular, distributed LLM Control Plane that orchestrates multiple machines, GPUs, cloud APIs, and CLI-based models via specialized **bots** (logical agents) and **workers** (compute backends).
 
-> **⚠️ Platform AI is in active development:** As of April 2026, the in-platform autonomous AI copilot (`control_plane/platform_ai/`) is under active testing and **not yet functioning reliably**. The feature provides automated pipeline quality evaluation and bot prompt tuning. See `control_plane/platform_ai/README.md` for status and known issues.
+> **⚠️ Platform AI is in active development:** The in-platform copilot supports typed specialist proposals, preflight validation, and operator approval. Autonomous pipeline tuning and privileged execution remain opt-in and require deployment-specific validation before production use. See `control_plane/platform_ai/README.md` for scope and known limitations.
 
 ---
 
@@ -52,7 +52,7 @@
 | `control_plane/github/` | [control_plane/github/README.md](control_plane/github/README.md) |
 | `control_plane/platform_ai/` ⚠️ | [control_plane/platform_ai/README.md](control_plane/platform_ai/README.md) — **In testing, not yet stable** |
 | `control_plane/orchestration/` | [control_plane/orchestration/README.md](control_plane/orchestration/README.md) — run lineage, splice, assignment service |
-| `control_plane/agent_scheduler/` ⚠️ | [control_plane/agent_scheduler/README.md](control_plane/agent_scheduler/README.md) — cron-based agent dispatch, **incomplete** |
+| `control_plane/agent_scheduler/` | [control_plane/agent_scheduler/README.md](control_plane/agent_scheduler/README.md) — bounded cron-based dispatch for a single control-plane instance |
 | `control_plane/connections/` | [control_plane/connections/README.md](control_plane/connections/README.md) — connection resolver |
 | `shared/` | [shared/README.md](shared/README.md) |
 | `dashboard/` | [dashboard/README.md](dashboard/README.md) |
@@ -162,6 +162,7 @@ Dashboard and workflow:
 - Improved dashboard link contrast for worker and bot names on dark tables/cards.
 - Worker detail pages with live load, queue, and GPU graphs.
 - Bot detail editor with backend chain management, workflow triggers, saved input contracts, saved launch profiles, test runs, run history, and task board.
+- Typed specialist blueprints for bounded roles such as content work, quality review, research, monitoring, operations reporting, and code review or implementation; each specialist is preflighted before activation.
 - Bot export from the bot detail page and bot import from the bots index page, including bot configuration and bot-scoped connections, with overwrite confirmation on ID conflicts.
 - Bot-scoped external Connections workspace for HTTP/OpenAPI and database integration setup.
 - Attached connection schemas are injected into model-backed bot runs as authoring context, so bots can follow shared API and JSON structure definitions without exposing auth secrets in prompts.
