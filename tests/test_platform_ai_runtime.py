@@ -275,6 +275,100 @@ async def test_process_operator_message_invokes_platform_brain_backend(tmp_path)
 
 
 @pytest.mark.anyio
+async def test_platform_brain_specialist_catalog_exposes_only_ready_nonsecret_worker_metadata(tmp_path):
+    store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+    workers = WorkerRegistry(db_path=str(tmp_path / "workers.db"))
+    probes = WorkerProbeStore(db_path=str(tmp_path / "probes.db"))
+    await workers.register(
+        Worker.model_validate(
+            {
+                "id": "ready-catalog-worker",
+                "name": "Private Worker Name",
+                "host": "10.24.8.19",
+                "port": 9911,
+                "status": "online",
+                "enabled": True,
+                "request_token_env": "PRIVATE_REQUEST_TOKEN",
+                "capabilities": [
+                    {"type": "llm", "provider": "ollama_cloud", "models": ["glm-5.2:cloud"]}
+                ],
+            }
+        )
+    )
+    await workers.register(
+        Worker.model_validate(
+            {
+                "id": "unready-catalog-worker",
+                "name": "Unready Worker",
+                "host": "10.24.8.20",
+                "port": 9912,
+                "status": "online",
+                "enabled": True,
+                "capabilities": [
+                    {"type": "llm", "provider": "ollama_cloud", "models": ["qwen3.5:cloud"]}
+                ],
+            }
+        )
+    )
+    await probes.record(
+        {
+            "worker_id": "ready-catalog-worker",
+            "probe_status": "ready",
+            "capability_attestation": {
+                "enabled_cli_tools": ["claude"],
+                "browser": {"configured": True, "ready": True, "reason": ""},
+                "provider_credentials": {"ollama_cloud": "do-not-disclose"},
+            },
+        }
+    )
+    await probes.record({"worker_id": "unready-catalog-worker", "probe_status": "unreachable"})
+
+    class FakeScheduler:
+        def __init__(self) -> None:
+            self.payload = None
+
+        async def _dispatch_backend(self, backend, payload, task=None):  # noqa: ANN001
+            _ = (backend, task)
+            self.payload = payload
+            return {"output": "{\"assistant_reply\":\"Catalog received.\",\"actions\":[]}"}
+
+    scheduler = FakeScheduler()
+    runtime = PlatformAISessionRuntime(
+        store,
+        scheduler=scheduler,
+        worker_registry=workers,
+        worker_probe_store=probes,
+    )
+    session = await store.create_session(
+        mode="bot_creator",
+        status="running",
+        metadata={
+            "backend": {
+                "provider": "ollama_cloud",
+                "model": "glm-5.2:cloud",
+                "backend_type": "remote_llm",
+                "worker_id": "ready-catalog-worker",
+            }
+        },
+    )
+    await store.append_message(session["id"], role="operator", content="Create a researcher.", metadata={})
+    await runtime._process_operator_messages(session["id"])
+
+    assert isinstance(scheduler.payload, list)
+    system_prompt = str(scheduler.payload[0]["content"])
+    assert "Non-secret execution catalog" in system_prompt
+    assert "ready-catalog-worker" in system_prompt
+    assert "glm-5.2:cloud" in system_prompt
+    assert "claude" in system_prompt
+    assert "unready-catalog-worker" not in system_prompt
+    assert "10.24.8.19" not in system_prompt
+    assert "9911" not in system_prompt
+    assert "Private Worker Name" not in system_prompt
+    assert "PRIVATE_REQUEST_TOKEN" not in system_prompt
+    assert "do-not-disclose" not in system_prompt
+
+
+@pytest.mark.anyio
 async def test_platform_brain_actions_create_bot_proposals_within_mode_policy(tmp_path, monkeypatch):
     monkeypatch.setenv("NEXUS_PLATFORM_AI_CONFIGURATION_MUTATIONS_ENABLED", "true")
     store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))

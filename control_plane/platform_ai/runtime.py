@@ -39,6 +39,10 @@ _CONFIGURATION_MUTATION_ACTIONS = {"upsert_bot", "upsert_bots", "delete_bot", "r
 _AUTONOMOUS_PIPELINE_ACTIONS = {"set_pipeline_target", "launch_pipeline"}
 _APPROVABLE_PROPOSAL_BACKEND_TYPES = {"local_llm", "remote_llm", "cloud_api"}
 _PROPOSAL_PREFLIGHT_TTL_SECONDS = 300
+_EXECUTION_CATALOG_MAX_WORKERS = 40
+_EXECUTION_CATALOG_MAX_MODELS_PER_PROVIDER = 12
+_EXECUTION_CATALOG_MAX_CLI_TOOLS = 12
+_EXECUTION_CATALOG_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
 
 
 @dataclass(frozen=True)
@@ -832,7 +836,103 @@ class PlatformAISessionRuntime:
         except Exception:
             return None
 
-    def _build_platform_brain_messages(
+    @staticmethod
+    def _safe_execution_catalog_values(values: Any, *, limit: int) -> List[str]:
+        """Return bounded execution metadata suitable for a cloud reasoning prompt."""
+        if not isinstance(values, list):
+            return []
+        result: List[str] = []
+        for value in values:
+            item = str(value or "").strip()
+            if not _EXECUTION_CATALOG_VALUE_PATTERN.fullmatch(item) or item in result:
+                continue
+            result.append(item)
+            if len(result) >= limit:
+                break
+        return result
+
+    async def _platform_execution_catalog(self) -> Dict[str, Any]:
+        """Build a non-secret inventory of currently viable execution nodes.
+
+        The platform brain needs concrete worker/model choices to propose a usable
+        specialist, but it must never receive network coordinates, key references,
+        metrics, or raw probe payloads.
+        """
+        catalog: Dict[str, Any] = {
+            "schema_version": "nexusai.execution-catalog.v1",
+            "workers": [],
+            "selection_rules": [
+                "Use only worker_id values listed here.",
+                "A catalog entry is not permission to activate a bot or access credentials.",
+                "Every proposed configuration remains disabled until preflight and operator approval.",
+            ],
+        }
+        if self._worker_registry is None:
+            catalog["availability"] = "worker_registry_unavailable"
+            return catalog
+
+        try:
+            workers = await self._worker_registry.list()
+        except Exception:
+            catalog["availability"] = "worker_registry_unavailable"
+            return catalog
+
+        probes: Dict[str, Dict[str, Any]] = {}
+        probe_store = self._worker_probe_store
+        if probe_store is not None and hasattr(probe_store, "list_for_workers"):
+            try:
+                worker_ids = [str(getattr(worker, "id", "") or "").strip() for worker in workers]
+                stored = await probe_store.list_for_workers(worker_ids)
+                probes = stored if isinstance(stored, dict) else {}
+            except Exception:
+                probes = {}
+
+        catalog_workers: List[Dict[str, Any]] = []
+        for worker in sorted(workers, key=lambda item: str(getattr(item, "id", "") or "")):
+            worker_id = str(getattr(worker, "id", "") or "").strip()
+            if not worker_id or not bool(getattr(worker, "enabled", False)):
+                continue
+            if str(getattr(worker, "status", "") or "").strip().lower() != "online":
+                continue
+            probe = probes.get(worker_id)
+            if probe_store is not None and (
+                not isinstance(probe, dict) or str(probe.get("probe_status") or "").strip().lower() != "ready"
+            ):
+                continue
+
+            llm_backends: List[Dict[str, Any]] = []
+            for capability in list(getattr(worker, "capabilities", None) or []):
+                if str(getattr(capability, "type", "") or "").strip().lower() != "llm":
+                    continue
+                provider = str(getattr(capability, "provider", "") or "").strip().lower()
+                models = self._safe_execution_catalog_values(
+                    getattr(capability, "models", None),
+                    limit=_EXECUTION_CATALOG_MAX_MODELS_PER_PROVIDER,
+                )
+                if provider and models:
+                    llm_backends.append({"provider": provider, "models": models})
+
+            attestation = probe.get("capability_attestation") if isinstance(probe, dict) else {}
+            attestation = attestation if isinstance(attestation, dict) else {}
+            enabled_cli_tools = self._safe_execution_catalog_values(
+                attestation.get("enabled_cli_tools"),
+                limit=_EXECUTION_CATALOG_MAX_CLI_TOOLS,
+            )
+            browser = attestation.get("browser") if isinstance(attestation.get("browser"), dict) else {}
+            entry: Dict[str, Any] = {"worker_id": worker_id, "llm_backends": llm_backends}
+            if enabled_cli_tools:
+                entry["enabled_cli_tools"] = enabled_cli_tools
+            if browser.get("ready") is True:
+                entry["browser_ready"] = True
+            catalog_workers.append(entry)
+            if len(catalog_workers) >= _EXECUTION_CATALOG_MAX_WORKERS:
+                break
+
+        catalog["workers"] = catalog_workers
+        catalog["availability"] = "ready_workers_only"
+        return catalog
+
+    async def _build_platform_brain_messages(
         self,
         *,
         session: Dict[str, Any],
@@ -869,6 +969,7 @@ class PlatformAISessionRuntime:
             else "Configuration changes and autonomous pipeline launches are enabled for this deployment."
         )
         specialist_kinds = ", ".join(item["kind"] for item in list_specialist_blueprints())
+        execution_catalog = await self._platform_execution_catalog()
         system_prompt = (
             "You are Platform AI, an autonomous operator for NexusAI sessions. "
             "Session mode decides scope: bot_tuner edits only target_bot_id, pipeline_tuner edits only pipeline graph bots. "
@@ -885,6 +986,13 @@ class PlatformAISessionRuntime:
             "Never produce actions outside scope. "
             f"{runtime_policy}"
         )
+        if mode in {"bot_creator", "pipeline_creator"}:
+            system_prompt += (
+                "\n\nNon-secret execution catalog for specialist proposals:\n"
+                f"{json.dumps(execution_catalog, ensure_ascii=False, separators=(',', ':'))}\n"
+                "Choose only catalog worker_id and provider/model pairs. If no viable entry fits the request, "
+                "ask for a worker/tooling decision instead of inventing a backend."
+            )
         user_prompt = (
             f"Session scope:\n{json.dumps(session_scope, ensure_ascii=False)}\n\n"
             f"Conversation excerpt:\n{transcript}\n\n"
@@ -1066,7 +1174,7 @@ class PlatformAISessionRuntime:
         backend = self._platform_backend_from_session(session)
         if backend is None:
             return {"ok": False, "skipped": "session_backend_unconfigured"}
-        messages = self._build_platform_brain_messages(
+        messages = await self._build_platform_brain_messages(
             session=session,
             operator_message=operator_message,
             recent_messages=recent_messages,
