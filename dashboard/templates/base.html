@@ -8,33 +8,69 @@
 </head>
 <body class="{% if active_page %}page-{{ active_page }}{% endif %}">
   <div class="ambient-bg"></div>
-  <nav>
-    <a href="{{ url_for('main.index') }}" class="brand">NexusAI</a>
-    <a href="{{ url_for('main.index') }}" {% if active_page == 'overview' %}class="active"{% endif %}>Overview</a>
-    <a href="{{ url_for('projects.projects_page') }}" {% if active_page == 'projects' %}class="active"{% endif %}>Projects</a>
-    <a href="{{ url_for('chat.chat_page') }}" {% if active_page == 'chat' %}class="active"{% endif %}>Chat</a>
-    <a href="{{ url_for('vault.vault_page') }}" {% if active_page == 'vault' %}class="active"{% endif %}>Vault</a>
-    <a href="{{ url_for('workers.workers_page') }}" {% if active_page == 'workers' %}class="active"{% endif %}>Workers</a>
-    <a href="{{ url_for('bots.bots_page') }}" {% if active_page == 'bots' %}class="active"{% endif %}>Bots</a>
-    <a href="{{ url_for('schedules.schedules_page') }}" {% if active_page == 'schedules' %}class="active"{% endif %}>Schedules</a>
-    <a href="{{ url_for('pipelines.pipelines_page') }}" {% if active_page == 'pipelines' %}class="active"{% endif %}>Pipelines</a>
-    <a href="{{ url_for('platform_ai.platform_ai_page') }}" {% if active_page == 'platform_ai' %}class="active"{% endif %}>Platform AI</a>
-    <a href="{{ url_for('tasks.tasks_page') }}" {% if active_page == 'tasks' %}class="active"{% endif %}>Tasks</a>
-    {% if current_user.role == 'admin' %}
-    <a href="{{ url_for('users.users_page') }}" {% if active_page == 'users' %}class="active"{% endif %}>Users</a>
-    <a href="{{ url_for('settings.settings_page') }}" {% if active_page == 'settings' %}class="active"{% endif %}>Settings</a>
-    {% endif %}
-    <span class="nav-spacer"></span>
-    <span class="nav-user">{{ current_user.email }}</span>
-    <a href="{{ url_for('auth.logout') }}" class="nav-logout">Logout</a>
-  </nav>
-  <div class="container">
-    {% with messages = get_flashed_messages(with_categories=true) %}
-      {% for category, message in messages %}
-        <div class="alert alert-{{ category }}">{{ message }}</div>
-      {% endfor %}
-    {% endwith %}
-    {% block content %}{% endblock %}
+  <div class="app-shell">
+    <nav class="app-sidebar" aria-label="Primary navigation">
+      <a href="{{ url_for('main.index') }}" class="brand">
+        <span class="brand-mark" aria-hidden="true">N</span>
+        <span class="brand-lockup">
+          <span>NexusAI</span>
+          <small>Control plane</small>
+        </span>
+      </a>
+
+      <div class="nav-section">
+        <span class="nav-section-label">Workspace</span>
+        <a href="{{ url_for('main.index') }}" {% if active_page == 'overview' %}class="active"{% endif %}>Overview</a>
+        <a href="{{ url_for('projects.projects_page') }}" {% if active_page == 'projects' %}class="active"{% endif %}>Projects</a>
+        <a href="{{ url_for('chat.chat_page') }}" {% if active_page == 'chat' %}class="active"{% endif %}>Chat</a>
+      </div>
+
+      <div class="nav-section">
+        <span class="nav-section-label">Operations</span>
+        <a href="{{ url_for('bots.bots_page') }}" {% if active_page == 'bots' %}class="active"{% endif %}>Bots</a>
+        <a href="{{ url_for('workers.workers_page') }}" {% if active_page == 'workers' %}class="active"{% endif %}>Workers</a>
+        <a href="{{ url_for('schedules.schedules_page') }}" {% if active_page == 'schedules' %}class="active"{% endif %}>Schedules</a>
+        <a href="{{ url_for('tasks.tasks_page') }}" {% if active_page == 'tasks' %}class="active"{% endif %}>Tasks</a>
+      </div>
+
+      <div class="nav-section">
+        <span class="nav-section-label">Build</span>
+        <a href="{{ url_for('pipelines.pipelines_page') }}" {% if active_page == 'pipelines' %}class="active"{% endif %}>Pipelines</a>
+        <a href="{{ url_for('platform_ai.platform_ai_page') }}" {% if active_page == 'platform_ai' %}class="active"{% endif %}>Platform AI</a>
+        <a href="{{ url_for('vault.vault_page') }}" {% if active_page == 'vault' %}class="active"{% endif %}>Vault</a>
+      </div>
+
+      {% if current_user.role == 'admin' %}
+      <div class="nav-section nav-section-admin">
+        <span class="nav-section-label">Admin</span>
+        <a href="{{ url_for('users.users_page') }}" {% if active_page == 'users' %}class="active"{% endif %}>Users</a>
+        <a href="{{ url_for('settings.settings_page') }}" {% if active_page == 'settings' %}class="active"{% endif %}>Settings</a>
+      </div>
+      {% endif %}
+
+      <div class="nav-account">
+        <span class="nav-account-label">Signed in as</span>
+        <span class="nav-user">{{ current_user.email }}</span>
+        <a href="{{ url_for('auth.logout') }}" class="nav-logout">Logout</a>
+      </div>
+    </nav>
+
+    <main class="app-main">
+      <header class="app-topbar">
+        <div>
+          <strong>NexusAI</strong>
+          <span>Operational workspace</span>
+        </div>
+      </header>
+      <div class="container">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% for category, message in messages %}
+            <div class="alert alert-{{ category }}">{{ message }}</div>
+          {% endfor %}
+        {% endwith %}
+        {% block content %}{% endblock %}
+      </div>
+    </main>
   </div>
   {% block scripts %}{% endblock %}
 </body>

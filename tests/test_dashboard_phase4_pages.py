@@ -276,6 +276,9 @@ def test_chat_page_loads_when_logged_in(dashboard_client):
     _login_admin(dashboard_client)
     resp = dashboard_client.get("/chat")
     assert resp.status_code == 200
+    assert b'class="app-shell"' in resp.data
+    assert b'class="app-sidebar"' in resp.data
+    assert b'class="app-main"' in resp.data
     assert b"Chat" in resp.data
     assert b"New Conversation" in resp.data
     assert b"chat-project-filter" in resp.data
