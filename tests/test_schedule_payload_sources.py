@@ -203,6 +203,97 @@ async def test_fleet_summary_separates_recovered_failures_from_live_failures():
     assert summary["tasks"]["recent_unrecovered_failed_by_category"] == {"policy": 1}
 
 
+@pytest.mark.anyio
+async def test_fleet_summary_reports_latest_bounded_activity_per_worker():
+    now = datetime.now(timezone.utc)
+
+    class WorkerRegistry:
+        async def list(self):
+            return []
+
+    class ProbeStore:
+        async def list_for_workers(self, worker_ids):
+            return {}
+
+    class BotRegistry:
+        async def list(self):
+            return []
+
+    class TaskManager:
+        async def list_tasks(self, limit):
+            return [
+                SimpleNamespace(
+                    id="older-browser-task",
+                    bot_id="browser-inspector",
+                    status="completed",
+                    updated_at=(now - timedelta(minutes=3)).isoformat(),
+                    metadata={
+                        "execution_provenance": {
+                            "worker_id": "browser-worker",
+                            "backend_type": "browser",
+                            "provider": "browser",
+                            "model": "browser-ui",
+                        }
+                    },
+                ),
+                SimpleNamespace(
+                    id="latest-browser-task",
+                    bot_id="browser-inspector",
+                    status="completed",
+                    updated_at=(now - timedelta(minutes=1)).isoformat(),
+                    metadata={
+                        "execution_provenance": {
+                            "worker_id": "browser-worker",
+                            "backend_type": "browser",
+                            "provider": "browser",
+                            "model": "browser-ui",
+                        }
+                    },
+                ),
+                SimpleNamespace(
+                    id="planner-task",
+                    bot_id="content-planner",
+                    status="failed",
+                    updated_at=now.isoformat(),
+                    metadata={
+                        "execution_provenance": {
+                            "worker_id": "planner-worker",
+                            "backend_type": "remote_llm",
+                            "provider": "ollama_cloud",
+                            "model": "glm-5.2:cloud",
+                        }
+                    },
+                ),
+            ]
+
+    class ScheduleEngine:
+        async def list_schedules(self, limit):
+            return []
+
+    payload = await materialize_system_schedule_payload(
+        {"metadata": {"system_payload_source": {"type": FLEET_HEALTH_SUMMARY_SOURCE}}},
+        worker_registry=WorkerRegistry(),
+        worker_probe_store=ProbeStore(),
+        bot_registry=BotRegistry(),
+        task_manager=TaskManager(),
+        schedule_engine=ScheduleEngine(),
+    )
+
+    activity = json.loads(payload["monitoring_events"])["tasks"]["recent_worker_activity"]
+    assert len(activity) == 2
+    assert activity[0]["worker_id"] == "planner-worker"
+    assert activity[1] == {
+        "worker_id": "browser-worker",
+        "bot_id": "browser-inspector",
+        "task_id": "latest-browser-task",
+        "status": "completed",
+        "updated_at": (now - timedelta(minutes=1)).isoformat(),
+        "backend_type": "browser",
+        "provider": "browser",
+        "model": "browser-ui",
+    }
+
+
 def test_system_payload_source_requires_read_only_monitoring_worker():
     schedule = {
         "metadata": {

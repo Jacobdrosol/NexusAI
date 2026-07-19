@@ -59,6 +59,17 @@ def _task_updated_at(task: Any) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+def _task_execution_provenance(task: Any) -> dict[str, Any]:
+    """Return the bounded route evidence persisted for one task, if present."""
+    metadata = getattr(task, "metadata", None)
+    if hasattr(metadata, "model_dump"):
+        metadata = metadata.model_dump()
+    if not isinstance(metadata, dict):
+        return {}
+    provenance = metadata.get("execution_provenance")
+    return provenance if isinstance(provenance, dict) else {}
+
+
 class SystemPayloadSourceError(ValueError):
     """A schedule requested an unsupported or unsafe internal data source."""
 
@@ -322,6 +333,26 @@ async def fleet_health_summary(
     recent_task_statuses = Counter(
         str(getattr(task, "status", "unknown") or "unknown") for task in recent_tasks
     )
+    latest_worker_activity: dict[str, dict[str, str]] = {}
+    for task in recent_tasks:
+        provenance = _task_execution_provenance(task)
+        worker_id = str(provenance.get("worker_id") or "").strip()
+        updated_at = _task_updated_at(task)
+        if not worker_id or updated_at is None:
+            continue
+        previous = latest_worker_activity.get(worker_id)
+        if previous and previous["updated_at"] >= updated_at.isoformat():
+            continue
+        latest_worker_activity[worker_id] = {
+            "worker_id": worker_id,
+            "bot_id": str(getattr(task, "bot_id", "") or "").strip(),
+            "task_id": str(getattr(task, "id", "") or "").strip(),
+            "status": str(getattr(task, "status", "unknown") or "unknown").strip().lower(),
+            "updated_at": updated_at.isoformat(),
+            "backend_type": str(provenance.get("backend_type") or "").strip(),
+            "provider": str(provenance.get("provider") or "").strip(),
+            "model": str(provenance.get("model") or "").strip(),
+        }
     recent_failure_categories = Counter(
         _failure_category(task)
         for task in recent_tasks
@@ -402,6 +433,11 @@ async def fleet_health_summary(
             "by_status": dict(sorted(task_statuses.items())),
             "recent_window_hours": _FLEET_HEALTH_RECENT_WINDOW_HOURS,
             "recent_by_status": dict(sorted(recent_task_statuses.items())),
+            "recent_worker_activity": sorted(
+                latest_worker_activity.values(),
+                key=lambda item: (item["updated_at"], item["worker_id"]),
+                reverse=True,
+            )[:50],
             "recent_failed_by_category": dict(sorted(recent_failure_categories.items())),
             "recent_unrecovered_failed_by_category": dict(sorted(unrecovered_failure_categories.items())),
             "recent_recovered_failed_by_category": dict(sorted(recovered_failure_categories.items())),
