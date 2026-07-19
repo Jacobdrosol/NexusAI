@@ -684,6 +684,55 @@ class PlatformAISessionRuntime:
             return "project_disabled"
         return None
 
+    @staticmethod
+    def _schedule_configuration_identity(schedule: Dict[str, Any]) -> Dict[str, Any]:
+        """Return the execution-relevant fields used to reject duplicate schedules."""
+        metadata = schedule.get("metadata") if isinstance(schedule.get("metadata"), dict) else {}
+        identity: Dict[str, Any] = {
+            "project_id": str(schedule.get("project_id") or "").strip() or None,
+            "target_bot_id": str(schedule.get("target_bot_id") or "").strip() or None,
+            "assignment_pm_bot_id": str(schedule.get("assignment_pm_bot_id") or "").strip() or None,
+            "conversation_id": str(schedule.get("conversation_id") or "").strip() or None,
+            "cron_expression": str(schedule.get("cron_expression") or "").strip(),
+            "timezone": str(schedule.get("timezone") or "UTC").strip() or "UTC",
+            "prompt": str(schedule.get("prompt") or "").strip(),
+            "task_payload": copy.deepcopy(schedule.get("task_payload") if isinstance(schedule.get("task_payload"), dict) else {}),
+        }
+        for key in ("connection_operation", "system_payload_source"):
+            if key in metadata:
+                identity[key] = copy.deepcopy(metadata[key])
+        return identity
+
+    async def _find_duplicate_schedule_configuration(
+        self,
+        schedule_payload: Dict[str, Any],
+    ) -> tuple[Optional[Dict[str, str]], Optional[str]]:
+        """Find an equivalent active or paused schedule without exposing its content."""
+        if self._agent_schedule_engine is None:
+            return None, "schedule_engine_unavailable"
+        target_bot_id = str(schedule_payload.get("target_bot_id") or "").strip()
+        if not target_bot_id:
+            return None, "schedule_duplicate_check_invalid_target"
+        try:
+            existing_schedules = await self._agent_schedule_engine.list_schedules(
+                limit=500,
+                target_bot_id=target_bot_id,
+            )
+        except Exception:
+            return None, "schedule_duplicate_check_unavailable"
+
+        proposed_hash = self._compute_state_hash(self._schedule_configuration_identity(schedule_payload))
+        for existing in existing_schedules:
+            if str(existing.get("status") or "").strip().lower() not in {"active", "paused"}:
+                continue
+            existing_hash = self._compute_state_hash(self._schedule_configuration_identity(existing))
+            if existing_hash == proposed_hash:
+                return {
+                    "schedule_id": str(existing.get("id") or "").strip(),
+                    "status": str(existing.get("status") or "").strip().lower(),
+                }, None
+        return None, None
+
     async def _resolve_bot_project_binding(
         self,
         *,
@@ -2204,6 +2253,17 @@ class PlatformAISessionRuntime:
             self._agent_schedule_engine.validate_schedule_payload(schedule_payload)
         except Exception as exc:
             return {"ok": False, "detail": f"invalid_schedule_payload:{exc}"}
+        duplicate, duplicate_error = await self._find_duplicate_schedule_configuration(schedule_payload)
+        if duplicate_error:
+            return {"ok": False, "detail": duplicate_error}
+        if duplicate is not None:
+            return {
+                "ok": False,
+                "detail": "schedule_duplicate_exists",
+                "proposal_only": True,
+                "existing_schedule_id": duplicate["schedule_id"],
+                "existing_schedule_status": duplicate["status"],
+            }
 
         target_bot_id = str(schedule_payload.get("target_bot_id") or "").strip()
         action_record = await self._create_action_record(
@@ -5254,8 +5314,15 @@ class PlatformAISessionRuntime:
             preflight["policy_errors"].append("schedule_engine_unavailable")
         else:
             try:
-                self._agent_schedule_engine.validate_schedule_payload(schedule_payload)
+                normalized_schedule = self._agent_schedule_engine.validate_schedule_payload(schedule_payload)
                 preflight["schema_valid"] = True
+                duplicate, duplicate_error = await self._find_duplicate_schedule_configuration(normalized_schedule)
+                if duplicate_error:
+                    preflight["policy_errors"].append(duplicate_error)
+                elif duplicate is not None:
+                    preflight["policy_errors"].append("schedule_duplicate_exists")
+                    preflight["existing_schedule_id"] = duplicate["schedule_id"]
+                    preflight["existing_schedule_status"] = duplicate["status"]
             except Exception as exc:
                 preflight["policy_errors"].append(f"invalid_schedule_payload:{exc}")
         preflight["target_bot_id"] = str(schedule_payload.get("target_bot_id") or "").strip()
@@ -5540,6 +5607,17 @@ class PlatformAISessionRuntime:
                     bot_registry=self._bot_registry,
                     only_when_active=False,
                 )
+                duplicate, duplicate_error = await self._find_duplicate_schedule_configuration(normalized_schedule)
+                if duplicate_error:
+                    return {"status": "blocked", "detail": duplicate_error, "proposal": proposal}
+                if duplicate is not None:
+                    return {
+                        "status": "blocked",
+                        "detail": "schedule_duplicate_exists",
+                        "proposal": proposal,
+                        "existing_schedule_id": duplicate["schedule_id"],
+                        "existing_schedule_status": duplicate["status"],
+                    }
                 schedule = await self._agent_schedule_engine.create_schedule(normalized_schedule)
             except ScheduleAutonomySafetyError as exc:
                 return {"status": "blocked", "detail": exc.reason_code, "proposal": proposal}

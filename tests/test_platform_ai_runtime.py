@@ -2163,27 +2163,35 @@ async def test_schedule_proposal_is_paused_project_bound_and_owner_approved(tmp_
         operator_id="operator",
         metadata={"project_id": "globeiq"},
     )
+    schedule_directive = {
+        "platform_ai_action": "propose_schedule",
+        "schedule": {
+            "name": "Nightly project monitor",
+            "cron_expression": "0 2 * * *",
+            "timezone": "America/Chicago",
+            "prompt": "Prepare a read-only operations summary.",
+            "target_bot_id": "project-monitor",
+            "status": "paused",
+        },
+    }
 
     result = await runtime._apply_operator_directives(
         session["id"],
         session=session,
-        content=json.dumps(
-            {
-                "platform_ai_action": "propose_schedule",
-                "schedule": {
-                    "name": "Nightly project monitor",
-                    "cron_expression": "0 2 * * *",
-                    "timezone": "America/Chicago",
-                    "prompt": "Prepare a read-only operations summary.",
-                    "target_bot_id": "project-monitor",
-                    "status": "paused",
-                },
-            }
-        ),
+        content=json.dumps(schedule_directive),
     )
 
     proposal_id = str((((result.get("actions") or [])[0].get("result") or {}).get("proposal_id") or ""))
     assert proposal_id
+    duplicate_pending = await runtime._apply_operator_directives(
+        session["id"],
+        session=session,
+        content=json.dumps(schedule_directive),
+    )
+    duplicate_pending_id = str(
+        ((((duplicate_pending.get("actions") or [])[0].get("result") or {}).get("proposal_id") or ""))
+    )
+    assert duplicate_pending_id
     proposal = await store.get_patch_proposal(proposal_id)
     assert proposal is not None
     after_state = proposal.get("after_state") if isinstance(proposal.get("after_state"), dict) else {}
@@ -2195,6 +2203,12 @@ async def test_schedule_proposal_is_paused_project_bound_and_owner_approved(tmp_
     preflight = await runtime.preflight_patch_proposal(session["id"], proposal_id, operator_id="operator")
     assert preflight["status"] == "ready"
     assert preflight["preflight"]["runtime_readiness"]["deferred"] is True
+    duplicate_preflight = await runtime.preflight_patch_proposal(
+        session["id"],
+        duplicate_pending_id,
+        operator_id="operator",
+    )
+    assert duplicate_preflight["status"] == "ready"
 
     approval = await runtime.approve_patch_proposal(session["id"], proposal_id, operator_id="operator")
     assert approval["status"] == "applied"
@@ -2203,6 +2217,22 @@ async def test_schedule_proposal_is_paused_project_bound_and_owner_approved(tmp_
     assert created["status"] == "paused"
     assert created["target_bot_id"] == "project-monitor"
     assert created["project_id"] == "globeiq"
+
+    duplicate_approval = await runtime.approve_patch_proposal(
+        session["id"],
+        duplicate_pending_id,
+        operator_id="operator",
+    )
+    assert duplicate_approval["status"] == "blocked"
+    assert duplicate_approval["detail"] == "schedule_duplicate_exists"
+
+    duplicate_after_creation = await runtime._apply_operator_directives(
+        session["id"],
+        session=session,
+        content=json.dumps(schedule_directive),
+    )
+    duplicate_result = (duplicate_after_creation.get("actions") or [])[0].get("result") or {}
+    assert duplicate_result["detail"] == "schedule_duplicate_exists"
 
 
 @pytest.mark.anyio
