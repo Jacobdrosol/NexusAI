@@ -286,8 +286,26 @@ function renderTaskDetail(task) {
   const retriedBy = task.metadata && task.metadata.retried_by_task_id
     ? (' | retried by ' + String(task.metadata.retried_by_task_id).slice(0, 8) + '...')
     : '';
+  const executionProvenance = task.metadata && task.metadata.execution_provenance
+    ? task.metadata.execution_provenance
+    : null;
+  const executionWorkerId = executionProvenance && executionProvenance.worker_id
+    ? String(executionProvenance.worker_id)
+    : '';
+  const executionBackend = executionProvenance && executionProvenance.backend_type
+    ? String(executionProvenance.backend_type)
+    : '';
+  const executionProvider = executionProvenance && executionProvenance.provider
+    ? String(executionProvenance.provider)
+    : '';
+  const executionModel = executionProvenance && executionProvenance.model
+    ? String(executionProvenance.model)
+    : '';
   statusEl.textContent = task.status + ' | ' + task.bot_id + retriedBy;
-  summaryEl.textContent = 'Task ' + task.id;
+  const executionRoute = executionWorkerId
+    ? ('Executed by ' + executionWorkerId)
+    : (executionBackend ? ('Executed by ' + [executionBackend, executionProvider, executionModel].filter(Boolean).join(' / ')) : '');
+  summaryEl.textContent = 'Task ' + task.id + (executionRoute ? (' | ' + executionRoute) : '');
   if (actionsEl) actionsEl.style.display = 'flex';
   if (retryBtn) {
     retryBtn.style.display = task.status === 'failed' ? 'inline-flex' : 'none';

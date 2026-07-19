@@ -896,6 +896,7 @@ def test_tasks_page_shows_quick_launch_buttons(dashboard_client):
     assert b"Recent Completed (24h)" in resp.data
     assert b"Task Detail" in resp.data
     assert b"Load only when needed" in resp.data
+    assert b"Executed by" in resp.data
 
 
 def test_tasks_api_summary_and_download(dashboard_client):
