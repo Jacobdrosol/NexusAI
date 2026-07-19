@@ -228,6 +228,49 @@ async def test_register_worker(cp_client):
 
 
 @pytest.mark.anyio
+async def test_register_worker_queues_delayed_runtime_probe(cp_client, cp_app, monkeypatch):
+    from control_plane.api import workers as workers_api
+
+    worker = {
+        "id": "registration-probe-worker",
+        "name": "Registration Probe Worker",
+        "host": "worker.test",
+        "port": 8001,
+        "status": "offline",
+        "capabilities": [],
+        "metrics": {},
+        "enabled": True,
+    }
+    captured = []
+
+    def capture_task(coroutine):
+        captured.append(coroutine)
+        return None
+
+    async def fake_probe(registered_worker):
+        return {
+            "worker_id": registered_worker.id,
+            "probe_status": "ready",
+            "checked_at": "2026-07-19T00:00:00+00:00",
+            "dispatch_eligible": True,
+            "checks": [],
+        }
+
+    monkeypatch.setattr(workers_api.asyncio, "create_task", capture_task)
+    monkeypatch.setattr(workers_api, "_REGISTRATION_PROBE_DELAY_SECONDS", 0)
+    monkeypatch.setattr(workers_api, "probe_worker", fake_probe)
+
+    response = await cp_client.post("/v1/workers", json=worker)
+
+    assert response.status_code == 200
+    assert len(captured) == 1
+    await captured[0]
+    stored = await cp_app.state.worker_probe_store.get("registration-probe-worker")
+    assert stored is not None
+    assert stored["probe_status"] == "ready"
+
+
+@pytest.mark.anyio
 async def test_provision_worker_starts_offline(cp_client):
     worker = {
         "id": "provisioned-worker",

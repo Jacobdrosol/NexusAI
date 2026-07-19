@@ -1,3 +1,5 @@
+import asyncio
+import logging
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Request
@@ -9,6 +11,9 @@ from shared.exceptions import WorkerNotFoundError
 from shared.models import Worker, WorkerMetrics
 
 router = APIRouter(prefix="/v1/workers", tags=["workers"])
+logger = logging.getLogger(__name__)
+
+_REGISTRATION_PROBE_DELAY_SECONDS = 2.0
 
 
 class HeartbeatRequest(BaseModel):
@@ -20,11 +25,25 @@ class VerifyInferenceRequest(BaseModel):
     model: Optional[str] = None
 
 
+async def _refresh_registered_worker_probe(request: Request, worker_id: str) -> None:
+    """Refresh persisted readiness evidence after a worker has finished registering."""
+    await asyncio.sleep(_REGISTRATION_PROBE_DELAY_SECONDS)
+    try:
+        worker = await request.app.state.worker_registry.get(worker_id)
+        result = await probe_worker(worker)
+        await request.app.state.worker_probe_store.record(result)
+    except WorkerNotFoundError:
+        return
+    except Exception as exc:
+        logger.warning("Worker registration probe failed for %s: %s", worker_id, exc)
+
+
 @router.post("", response_model=Worker)
 async def register_worker(request: Request, worker: Worker) -> Worker:
     worker_registry = request.app.state.worker_registry
     await worker_registry.register(worker)
     await worker_registry.update_status(worker.id, "online")
+    asyncio.create_task(_refresh_registered_worker_probe(request, worker.id))
     return await worker_registry.get(worker.id)
 
 

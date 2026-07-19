@@ -286,6 +286,10 @@ async def _worker_probe_loop(
 ) -> None:
     """Continuously record runtime evidence without changing worker state."""
     while True:
+        # Let actively managed workers register before probing their runtime.
+        # Registration also queues a short delayed probe, so live readiness
+        # recovers promptly while the periodic loop handles ongoing drift.
+        await asyncio.sleep(max(15, int(interval_seconds)))
         try:
             workers = await worker_registry.list()
             for worker in workers:
@@ -296,7 +300,6 @@ async def _worker_probe_loop(
                     logger.warning("Worker probe failed for %s: %s", worker.id, exc)
         except Exception as exc:
             logger.error("Worker probe loop error: %s", exc)
-        await asyncio.sleep(max(15, int(interval_seconds)))
 
 
 def create_app() -> FastAPI:
