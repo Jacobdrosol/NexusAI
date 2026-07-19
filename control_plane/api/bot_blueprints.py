@@ -4,15 +4,36 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request
 
 from control_plane.audit.utils import record_audit_event
+from control_plane.bot_readiness import assess_bot_instance_readiness
 from control_plane.bot_blueprints import (
     SpecialistBlueprintRequest,
     build_specialist_bot,
     list_specialist_blueprints,
 )
 from shared.exceptions import BotNotFoundError
+from shared.models import Bot
 
 
 router = APIRouter(prefix="/v1/bot-blueprints", tags=["bot-blueprints"])
+
+
+async def _require_specialist_ready_to_enable(bot: Bot, request: Request) -> None:
+    """Apply the same dispatch gate used by the normal bot creation route."""
+    readiness = await assess_bot_instance_readiness(
+        bot,
+        worker_registry=request.app.state.worker_registry,
+        connection_resolver=request.app.state.connection_resolver,
+        worker_probe_store=request.app.state.worker_probe_store,
+    )
+    if not readiness["ready"]:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "reason_code": "bot_not_ready",
+                "message": f"Bot '{bot.id}' cannot be enabled until its dispatch checks pass.",
+                "readiness": readiness,
+            },
+        )
 
 
 @router.get("")
@@ -43,6 +64,9 @@ async def create_blueprint_bot(payload: SpecialistBlueprintRequest, request: Req
         pass
     else:
         raise HTTPException(status_code=409, detail=f"Bot '{bot.id}' already exists")
+
+    if bot.enabled:
+        await _require_specialist_ready_to_enable(bot, request)
 
     await bot_registry.register(bot)
     await record_audit_event(

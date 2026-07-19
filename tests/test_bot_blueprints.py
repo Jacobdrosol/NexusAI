@@ -165,3 +165,52 @@ async def test_specialist_blueprint_api_previews_and_registers_disabled_bot(cp_a
     assert create_response.status_code == 200
     assert create_response.json()["bot"]["id"] == "release-researcher"
     assert duplicate_response.status_code == 409
+
+
+@pytest.mark.anyio
+async def test_specialist_blueprint_api_rejects_unready_activation(cp_app):
+    payload = {
+        "kind": "website_monitor",
+        "name": "Unready Website Monitor",
+        "activate": True,
+        "backends": [
+            {
+                "type": "remote_llm",
+                "provider": "ollama_cloud",
+                "model": "qwen3.5:cloud",
+                "worker_id": "missing-worker",
+            }
+        ],
+    }
+
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        response = await client.post("/v1/bot-blueprints/create", json=payload)
+        stored = await client.get("/v1/bots/unready-website-monitor")
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason_code"] == "bot_not_ready"
+    assert response.json()["detail"]["readiness"]["ready"] is False
+    assert stored.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_specialist_blueprint_api_allows_ready_activation(cp_app):
+    payload = {
+        "kind": "researcher",
+        "name": "Ready Researcher",
+        "activate": True,
+        "backends": [
+            {
+                "type": "cloud_api",
+                "provider": "ollama_cloud",
+                "model": "qwen3.5:cloud",
+                "api_key_ref": "ollama-cloud",
+            }
+        ],
+    }
+
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        response = await client.post("/v1/bot-blueprints/create", json=payload)
+
+    assert response.status_code == 200
+    assert response.json()["bot"]["enabled"] is True
