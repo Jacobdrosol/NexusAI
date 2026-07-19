@@ -12,15 +12,15 @@
 <style>
 .chat-compose-dropzone {
   border: 1px solid rgba(255,255,255,0.12);
-  border-radius: 14px;
+  border-radius: 8px;
   padding: 0.7rem;
-  background: rgba(10, 17, 30, 0.72);
+  background: #262626;
   transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
 }
 .chat-compose-dropzone.drag-active {
-  border-color: #4fd1c5;
-  background: rgba(28, 56, 66, 0.88);
-  box-shadow: 0 0 0 1px rgba(79, 209, 197, 0.35);
+  border-color: #737373;
+  background: #303030;
+  box-shadow: 0 0 0 1px rgba(163, 163, 163, 0.35);
 }
 .chat-compose-top {
   display: flex;
@@ -114,7 +114,7 @@
   width: 72px;
   height: 36px;
   padding: 0;
-  border-radius: 12px;
+  border-radius: 6px;
   font-size: 1.25rem;
   line-height: 1;
 }
@@ -170,13 +170,13 @@
   max-width: min(100%, 360px);
   padding: 0.48rem 0.72rem;
   border: 1px solid rgba(255,255,255,0.12);
-  border-radius: 14px;
+  border-radius: 6px;
   background: rgba(255,255,255,0.05);
 }
 .message-attachment-preview {
   max-width: 96px;
   max-height: 72px;
-  border-radius: 10px;
+  border-radius: 6px;
   border: 1px solid rgba(255,255,255,0.12);
   object-fit: cover;
   flex: 0 0 auto;
@@ -273,7 +273,9 @@
 
     {% if selected_conversation %}
     <hr class="chat-divider">
-    <h3 class="chat-section-title">Context Picker</h3>
+    <details class="chat-workspace-context">
+    <summary class="chat-summary chat-workspace-context-summary">Message context and tools</summary>
+    <div class="chat-workspace-context-content">
     <div class="form-group">
       <label>Past Chats</label>
       <select class="form-control" id="context-conversation-select">
@@ -290,7 +292,7 @@
       {% for section in repo_context_sections %}
       <details class="chat-context-details">
         <summary class="chat-summary">
-          {{ section.project_id }} ({{ section.namespace }}) Â· {{ section["items"]|length }} item{{ '' if section["items"]|length == 1 else 's' }}
+          {{ section.project_id }} ({{ section.namespace }}) &middot; {{ section["items"]|length }} item{{ '' if section["items"]|length == 1 else 's' }}
         </summary>
         <div class="context-picker-list chat-context-list">
           {% for v in section["items"] %}
@@ -346,6 +348,8 @@
       </div>
       <p class="mini-note">Tool usage is allowed only when bot + project + chat switches are all enabled.</p>
     </div>
+    </div>
+    </details>
     {% endif %}
   </section>
 
@@ -1922,7 +1926,7 @@ function upsertTaskEvent(task) {
           <strong>${title}</strong>
           <span class="badge badge-${t.status}">${t.status}</span>
         </div>
-        <div class="mini-note">Task ${t.task_id} Â· Bot ${t.bot_id || 'unknown'}</div>
+        <div class="mini-note">Task ${t.task_id} &middot; Bot ${t.bot_id || 'unknown'}</div>
         ${errorText}
       </div>
     `;

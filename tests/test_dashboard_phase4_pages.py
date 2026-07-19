@@ -286,6 +286,8 @@ def test_chat_page_loads_when_logged_in(dashboard_client):
     assert b"CHAT_ATTACHMENT_MAX_FILES" in resp.data
     assert b"CHAT_ATTACHMENT_MAX_TOTAL_BYTES" in resp.data
     assert b"scrollMessagesToLatest" in resp.data
+    assert b"Message context and tools" in resp.data
+    assert b"chat-workspace-context" in resp.data
 
 
 def test_chat_page_handles_legacy_selected_conversation_shapes(dashboard_client):
