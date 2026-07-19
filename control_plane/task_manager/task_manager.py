@@ -3508,6 +3508,27 @@ class TaskManager:
             providers_by_bot[bot_id] = provider
         return {task.id: providers_by_bot.get(str(task.bot_id or "").strip(), "") for task in tasks}
 
+    async def _browser_worker_keys_for_tasks(self, tasks: list[Task]) -> dict[str, str]:
+        """Return a pinned browser worker only when a bot has one unambiguous target."""
+        if not tasks or self._bot_registry is None:
+            return {}
+        bot_ids = {str(task.bot_id or "").strip() for task in tasks if str(task.bot_id or "").strip()}
+        workers_by_bot: dict[str, str] = {}
+        for bot_id in bot_ids:
+            try:
+                bot = await self._bot_registry.get(bot_id)
+            except Exception:
+                workers_by_bot[bot_id] = ""
+                continue
+            worker_ids = {
+                str(getattr(backend, "worker_id", "") or "").strip()
+                for backend in list(getattr(bot, "backends", []) or [])
+                if str(getattr(backend, "type", "") or "").strip().lower() == "browser"
+                and str(getattr(backend, "worker_id", "") or "").strip()
+            }
+            workers_by_bot[bot_id] = next(iter(worker_ids)) if len(worker_ids) == 1 else ""
+        return {task.id: workers_by_bot.get(str(task.bot_id or "").strip(), "") for task in tasks}
+
     async def _ensure_db(self) -> None:
         """Lazily initialise the SQLite tasks table and load existing rows."""
         if self._db_ready:
@@ -5638,6 +5659,12 @@ class TaskManager:
                 if task_id in self._tasks
             ]
         provider_limits = self._provider_concurrency_limits()
+        browser_worker_keys = await self._browser_worker_keys_for_tasks([*queued, *running_snapshot])
+        browser_worker_counts: dict[str, int] = {}
+        for task in running_snapshot:
+            worker_id = browser_worker_keys.get(task.id, "")
+            if worker_id:
+                browser_worker_counts[worker_id] = browser_worker_counts.get(worker_id, 0) + 1
         orchestration_counts: dict[str, int] = {}
         for task in running_snapshot:
             metadata = task.metadata or TaskMetadata()
@@ -5657,6 +5684,15 @@ class TaskManager:
             if orchestration_id and self._orchestration_concurrency_limit(metadata) is not None:
                 orchestration_counts[orchestration_id] = orchestration_counts.get(orchestration_id, 0) + 1
 
+        def _has_browser_worker_capacity(task: Task) -> bool:
+            worker_id = browser_worker_keys.get(task.id, "")
+            return not worker_id or browser_worker_counts.get(worker_id, 0) < 1
+
+        def _reserve_browser_worker_slot(task: Task) -> None:
+            worker_id = browser_worker_keys.get(task.id, "")
+            if worker_id:
+                browser_worker_counts[worker_id] = browser_worker_counts.get(worker_id, 0) + 1
+
         if provider_limits:
             provider_keys = await self._bot_provider_keys_for_tasks([*queued, *running_snapshot])
             provider_counts: dict[str, int] = {}
@@ -5671,12 +5707,15 @@ class TaskManager:
                     break
                 if not _has_orchestration_capacity(task):
                     continue
+                if not _has_browser_worker_capacity(task):
+                    continue
                 provider_key = provider_keys.get(task.id, "")
                 limit = provider_limits.get(provider_key)
                 if limit is not None and provider_counts.get(provider_key, 0) >= limit:
                     continue
                 selected.append(task)
                 _reserve_orchestration_slot(task)
+                _reserve_browser_worker_slot(task)
                 if provider_key:
                     provider_counts[provider_key] = provider_counts.get(provider_key, 0) + 1
         else:
@@ -5686,8 +5725,11 @@ class TaskManager:
                     break
                 if not _has_orchestration_capacity(task):
                     continue
+                if not _has_browser_worker_capacity(task):
+                    continue
                 selected.append(task)
                 _reserve_orchestration_slot(task)
+                _reserve_browser_worker_slot(task)
 
         async with self._lock:
             still_selected: list[Task] = []

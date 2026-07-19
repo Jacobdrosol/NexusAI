@@ -899,6 +899,72 @@ async def test_task_manager_respects_provider_concurrency_limits(tmp_path, monke
 
 
 @pytest.mark.anyio
+async def test_task_manager_queues_browser_tasks_for_the_same_worker(tmp_path, monkeypatch):
+    import asyncio
+
+    from control_plane.task_manager.task_manager import TaskManager
+
+    active_by_worker = {"browser-a": 0, "browser-b": 0}
+    peak_by_worker = {"browser-a": 0, "browser-b": 0}
+
+    class StubRegistry:
+        def __init__(self):
+            self._bots = {
+                "browser-a-one": Bot(
+                    id="browser-a-one",
+                    name="Browser A One",
+                    role="inspector",
+                    backends=[{"type": "browser", "provider": "browser", "model": "browser-ui", "worker_id": "browser-a"}],
+                ),
+                "browser-a-two": Bot(
+                    id="browser-a-two",
+                    name="Browser A Two",
+                    role="inspector",
+                    backends=[{"type": "browser", "provider": "browser", "model": "browser-ui", "worker_id": "browser-a"}],
+                ),
+                "browser-b": Bot(
+                    id="browser-b",
+                    name="Browser B",
+                    role="inspector",
+                    backends=[{"type": "browser", "provider": "browser", "model": "browser-ui", "worker_id": "browser-b"}],
+                ),
+            }
+
+        async def get(self, bot_id):
+            return self._bots[bot_id]
+
+    class StubScheduler:
+        async def schedule(self, task):
+            worker_id = "browser-b" if task.bot_id == "browser-b" else "browser-a"
+            active_by_worker[worker_id] += 1
+            peak_by_worker[worker_id] = max(peak_by_worker[worker_id], active_by_worker[worker_id])
+            await asyncio.sleep(0.05)
+            active_by_worker[worker_id] -= 1
+            return {"task": task.id, "worker_id": worker_id}
+
+    monkeypatch.setenv("NEXUSAI_TASK_MAX_CONCURRENCY", "3")
+    tm = TaskManager(
+        StubScheduler(),
+        db_path=str(tmp_path / "browser-worker-queue.db"),
+        bot_registry=StubRegistry(),
+    )
+    for bot_id in ("browser-a-one", "browser-a-two", "browser-b"):
+        await tm.create_task(bot_id=bot_id, payload={"instruction": "inspect"})
+
+    for _ in range(80):
+        tasks = await tm.list_tasks()
+        if len(tasks) == 3 and all(task.status == "completed" for task in tasks):
+            break
+        await asyncio.sleep(0.05)
+
+    tasks = await tm.list_tasks()
+    assert len(tasks) == 3
+    assert all(task.status == "completed" for task in tasks)
+    assert peak_by_worker["browser-a"] == 1
+    assert peak_by_worker["browser-b"] == 1
+
+
+@pytest.mark.anyio
 async def test_task_fails_on_scheduler_error():
     import asyncio
     from control_plane.task_manager.task_manager import TaskManager
