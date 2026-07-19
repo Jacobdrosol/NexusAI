@@ -20,8 +20,9 @@ def test_init_db_ignores_sqlite_table_exists_race(monkeypatch):
 
     monkeypatch.setattr(db_module.Base.metadata, "create_all", _raise_already_exists)
 
-    # Should not raise for the known concurrent-startup race.
+    # Should not query a schema a sibling initializer has not finished creating.
     db_module.init_db()
+    assert db_module._INITIALIZED is False
 
 
 def test_init_db_raises_other_operational_errors(monkeypatch):

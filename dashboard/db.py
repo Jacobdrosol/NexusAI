@@ -6,7 +6,7 @@ import os
 import threading
 from pathlib import Path
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -44,9 +44,14 @@ def _create_all_tables() -> None:
             raise
 
 
-def _migrate_connection_secrets() -> None:
-    """Encrypt legacy connection secrets once the shared schema is available."""
+def _migrate_connection_secrets() -> bool:
+    """Encrypt legacy connection secrets once the connections table is available."""
     from dashboard.connections_service import normalize_auth_payload, normalize_connection_config
+
+    if not inspect(engine).has_table(Connection.__tablename__):
+        # A sibling process can still be creating tables after this process lost a
+        # SQLite CREATE TABLE race. Leave initialization retryable in that case.
+        return False
 
     session = SessionLocal()
     try:
@@ -72,6 +77,7 @@ def _migrate_connection_secrets() -> None:
             session.commit()
     finally:
         session.close()
+    return True
 
 
 def init_db() -> None:
@@ -84,7 +90,8 @@ def init_db() -> None:
         if _INITIALIZED:
             return
         _create_all_tables()
-        _migrate_connection_secrets()
+        if not _migrate_connection_secrets():
+            return
         _INITIALIZED = True
 
 
