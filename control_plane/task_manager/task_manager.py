@@ -3930,6 +3930,30 @@ class TaskManager:
         await self._persist_task(updated_task)
         await self._upsert_bot_run(updated_task)
 
+    async def _evict_standalone_terminal_task(self, task: Task) -> None:
+        """Release completed standalone work while retaining all workflow context."""
+        if task.status not in self._TERMINAL_TASK_STATUSES:
+            return
+        metadata = task.metadata or TaskMetadata()
+        if metadata.parent_task_id or metadata.trigger_rule_id or self._bot_registry is None:
+            return
+        try:
+            bot = await self._bot_registry.get(task.bot_id)
+        except Exception:
+            return
+        workflow = self._bot_workflow(bot)
+        if any(bool(getattr(trigger, "enabled", False)) for trigger in (getattr(workflow, "triggers", None) or [])):
+            return
+        async with self._lock:
+            current_task = self._tasks.get(task.id)
+            has_active_dependent = any(
+                candidate.status not in self._TERMINAL_TASK_STATUSES
+                and task.id in candidate.depends_on
+                for candidate in self._tasks.values()
+            )
+            if current_task is not None and current_task.status in self._TERMINAL_TASK_STATUSES and not has_active_dependent:
+                self._tasks.pop(task.id, None)
+
     async def _upsert_bot_run(self, task: Task) -> None:
         metadata = task.metadata.model_dump() if task.metadata else None
         started_at = task.updated_at if task.status == "running" else None
@@ -5107,6 +5131,8 @@ class TaskManager:
                     self._trigger_dispatch_pending.discard(task_id)
         if status == "failed":
             await self._cleanup_failed_orchestration_workspace(updated_task)
+        if status in self._TERMINAL_TASK_STATUSES:
+            await self._evict_standalone_terminal_task(updated_task)
 
     async def _retry_stuck_task(
         self,

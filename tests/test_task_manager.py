@@ -4391,6 +4391,38 @@ async def test_restart_keeps_only_active_task_context_and_lazily_reads_terminal_
 
 
 @pytest.mark.anyio
+async def test_completed_standalone_task_evicts_from_runtime_cache(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {"outcome": "complete"}
+
+    registry = BotRegistry(db_path=str(tmp_path / "standalone-bots.db"))
+    await registry.register(Bot(id="standalone-bot", name="Standalone", role="reader", backends=[]))
+    manager = TaskManager(
+        StubScheduler(),
+        db_path=str(tmp_path / "standalone-tasks.db"),
+        bot_registry=registry,
+    )
+    task = await manager.create_task(bot_id="standalone-bot", payload={"body": "complete"})
+
+    for _ in range(40):
+        completed = await manager.get_task(task.id)
+        if completed.status == "completed":
+            break
+        await asyncio.sleep(0.1)
+
+    assert completed.status == "completed"
+    assert task.id not in manager._tasks
+    assert (await manager.get_task(task.id)).result == {"outcome": "complete"}
+
+
+@pytest.mark.anyio
 async def test_output_contract_fails_when_required_fields_are_missing(tmp_path, monkeypatch):
     import asyncio
 
