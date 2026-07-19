@@ -99,7 +99,7 @@ async def _await_if_needed(value: Any) -> Any:
     return await value if inspect.isawaitable(value) else value
 
 
-async def _fleet_health_summary(
+async def fleet_health_summary(
     *,
     worker_registry: Any,
     worker_probe_store: Any,
@@ -212,7 +212,7 @@ async def materialize_system_schedule_payload(
     if config is None:
         return {}
     if config["type"] == FLEET_HEALTH_SUMMARY_SOURCE:
-        summary = await _fleet_health_summary(
+        summary = await fleet_health_summary(
             worker_registry=worker_registry,
             worker_probe_store=worker_probe_store,
             bot_registry=bot_registry,

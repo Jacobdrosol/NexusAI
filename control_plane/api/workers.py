@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from control_plane.audit.utils import record_audit_event
+from control_plane.schedule_payload_sources import fleet_health_summary
 from control_plane.worker_probe import WorkerProbeError, probe_worker, verify_worker_inference
 from shared.exceptions import WorkerNotFoundError
 from shared.models import Worker, WorkerMetrics
@@ -85,6 +86,18 @@ async def list_registered_worker_probes(request: Request) -> dict:
             }
         probes.append(probe)
     return {"probes": probes, "count": len(probes)}
+
+
+@router.get("/fleet-summary")
+async def get_fleet_summary(request: Request) -> dict:
+    """Return a bounded, non-secret operational snapshot for manager workflows."""
+    return await fleet_health_summary(
+        worker_registry=request.app.state.worker_registry,
+        worker_probe_store=request.app.state.worker_probe_store,
+        bot_registry=request.app.state.bot_registry,
+        task_manager=request.app.state.task_manager,
+        schedule_engine=request.app.state.agent_schedule_engine,
+    )
 
 
 @router.get("/{worker_id}", response_model=Worker)
