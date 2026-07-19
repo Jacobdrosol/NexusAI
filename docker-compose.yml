@@ -30,7 +30,11 @@ services:
       retries: 3
 
   worker_agent:
-    shm_size: "24gb"
+    shm_size: "${NEXUSAI_CORE_WORKER_SHM_SIZE:-512m}"
+    cpus: "${NEXUSAI_CORE_WORKER_CPUS:-1.0}"
+    mem_limit: "${NEXUSAI_CORE_WORKER_MEM_LIMIT:-1g}"
+    memswap_limit: "${NEXUSAI_CORE_WORKER_MEMSWAP_LIMIT:-2g}"
+    pids_limit: ${NEXUSAI_CORE_WORKER_PIDS_LIMIT:-256}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     build:
@@ -39,6 +43,8 @@ services:
     ports:
       - "127.0.0.1:8001:8001"
     env_file: .env
+    environment:
+      CONTROL_PLANE_URL: ${WORKER_CONTROL_PLANE_URL:-http://control_plane:8000}
     volumes:
       - ./data:/app/data
     networks:

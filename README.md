@@ -253,7 +253,8 @@ Copy `.env.example` to `.env` and set the following variables before starting th
 |---|---|---|
 | `NEXUSAI_SECRET_KEY` | `dev-secret-change-in-production` | Flask session secret key — **must be changed in production** |
 | `DATABASE_URL` | `sqlite:///data/nexusai.db` | SQLAlchemy connection URL (SQLite or PostgreSQL) |
-| `CONTROL_PLANE_URL` | — | URL the dashboard and worker use to reach the control plane, e.g. `http://localhost:8000` |
+| `CONTROL_PLANE_URL` | — | Control-plane URL for the dashboard and standalone workers; use a host-reachable URL for a split blue/green dashboard topology |
+| `WORKER_CONTROL_PLANE_URL` | `http://control_plane:8000` | Control-plane URL for the bundled Docker `worker_agent`; keep the Docker-network default unless it runs outside the compose stack |
 | `CONTROL_PLANE_API_TOKEN` | — | Optional shared token for control-plane API auth; when set, dashboard/worker send `X-Nexus-API-Key` and CP enforces auth on API routes |
 | `CP_INGEST_TIMEOUT` | `1800` | Dashboard timeout in seconds for long-running project ingestion calls such as GitHub full-context sync |
 | `NEXUSAI_CLOUD_CONTEXT_POLICY` | `allow` | Cloud egress policy for context blocks (`allow`, `redact`, `block`) on control-plane scheduler cloud backends |
