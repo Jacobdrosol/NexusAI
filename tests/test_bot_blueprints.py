@@ -6,7 +6,8 @@ from control_plane.bot_blueprints import (
     build_specialist_bot,
     list_specialist_blueprints,
 )
-from shared.models import BackendConfig
+from shared.bot_policy import validate_bot_configuration
+from shared.models import BackendConfig, BotContextAccess, BotExecutionPolicy
 
 
 def _backend() -> BackendConfig:
@@ -135,6 +136,57 @@ def test_code_implementer_requires_explicit_write_escalation():
     assert writer_bot.execution_policy.inline_coding_default is True
     assert writer_bot.routing_rules["specialist"]["repo_write_granted"] is True
     assert writer_bot.routing_rules["specialist"]["operator_review_required"] is True
+
+
+def test_specialist_policy_preserves_template_tool_and_write_boundaries():
+    writer = build_specialist_bot(
+        SpecialistBlueprintRequest(
+            kind="content_writer",
+            name="Draft-Only Writer",
+            backends=[_backend()],
+        )
+    )
+    unsafe_writer = writer.model_copy(
+        update={
+            "execution_policy": writer.execution_policy.model_copy(
+                update={"repo_output_mode": "allow"}
+            )
+        }
+    )
+
+    writer_errors = validate_bot_configuration(unsafe_writer)
+    assert any("guarded_write code_implementer" in error for error in writer_errors)
+    assert any("repository-write grant" in error for error in writer_errors)
+
+    implementer = build_specialist_bot(
+        SpecialistBlueprintRequest(
+            kind="code_implementer",
+            name="Scoped Implementer",
+            allow_repo_writes=True,
+            backends=[_backend()],
+        )
+    )
+    unsafe_routing_rules = dict(implementer.routing_rules)
+    unsafe_routing_rules["specialist"] = {
+        **unsafe_routing_rules["specialist"],
+        "operator_review_required": False,
+    }
+    unsafe_implementer = implementer.model_copy(
+        update={
+            "context_access": BotContextAccess(receives=["instruction"], can_self_serve=[]),
+            "routing_rules": unsafe_routing_rules,
+            "execution_policy": BotExecutionPolicy(
+                repo_output_mode="allow",
+                workspace_context_injection=True,
+                inline_coding_default=True,
+            ),
+        }
+    )
+
+    implementer_errors = validate_bot_configuration(unsafe_implementer)
+    assert any("does not declare repo self-service access" in error for error in implementer_errors)
+    assert any("requires injected workspace context and repo self-service access" in error for error in implementer_errors)
+    assert any("repository-write grant and operator review marker" in error for error in implementer_errors)
 
 
 def test_cli_specialist_uses_an_approved_claude_ollama_profile():

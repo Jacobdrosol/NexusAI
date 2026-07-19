@@ -183,6 +183,38 @@ def validate_bot_configuration(bot: Bot) -> List[str]:
             errors.append(
                 f"Bot '{bot.id}' external_trigger.auth_token_ref is required when external triggering is enabled."
             )
+    specialist = routing.get("specialist") if isinstance(routing, dict) else None
+    if isinstance(specialist, dict):
+        specialist_kind = str(specialist.get("kind") or "").strip()
+        specialist_risk = str(specialist.get("risk_level") or "").strip()
+        context_access = getattr(bot, "context_access", None)
+        if isinstance(context_access, dict):
+            self_serve = context_access.get("can_self_serve") or []
+        else:
+            self_serve = getattr(context_access, "can_self_serve", None) or []
+        self_serve_sources = {
+            str(source or "").strip().lower()
+            for source in self_serve
+            if str(source or "").strip()
+        }
+
+        if execution_policy.workspace_context_injection and "repo" not in self_serve_sources:
+            errors.append(
+                f"Specialist bot '{bot.id}' enables workspace context but does not declare repo self-service access."
+            )
+        if execution_policy.repo_output_mode == "allow":
+            if specialist_kind != "code_implementer" or specialist_risk != "guarded_write":
+                errors.append(
+                    f"Specialist bot '{bot.id}' may grant repository writes only to a guarded_write code_implementer."
+                )
+            if not execution_policy.workspace_context_injection or "repo" not in self_serve_sources:
+                errors.append(
+                    f"Writable specialist bot '{bot.id}' requires injected workspace context and repo self-service access."
+                )
+            if specialist.get("repo_write_granted") is not True or specialist.get("operator_review_required") is not True:
+                errors.append(
+                    f"Writable specialist bot '{bot.id}' requires an explicit repository-write grant and operator review marker."
+                )
     return errors
 
 
