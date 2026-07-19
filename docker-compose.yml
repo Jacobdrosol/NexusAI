@@ -24,8 +24,11 @@ services:
     ports:
       - "8000:8000"
     env_file: .env
+    environment:
+      NEXUSAI_READONLY_CSV_ROOT: ${NEXUSAI_READONLY_CSV_ROOT:-/app/data/read-only-csv}
     volumes:
       - ./data:/app/data
+      - ./data/read-only-csv:/app/data/read-only-csv:ro
     networks:
       - nexus-net
     healthcheck:
