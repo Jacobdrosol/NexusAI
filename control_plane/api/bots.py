@@ -9,7 +9,7 @@ from control_plane.audit.utils import record_audit_event
 from control_plane.bot_readiness import assess_bot_instance_readiness
 from control_plane.security.guards import enforce_body_size, enforce_rate_limit
 from shared.exceptions import BotNotFoundError
-from shared.bot_policy import validate_bot_configuration
+from shared.bot_policy import bot_autonomous_dispatch_blockers, validate_bot_configuration
 from shared.models import Bot, BotRun, BotRunArtifact, Task, TaskMetadata
 from shared.settings_manager import SettingsManager
 
@@ -247,6 +247,7 @@ def _parse_external_trigger_config(bot: Bot) -> Dict[str, Any]:
     default_source = _settings_str("external_trigger_default_source", "external_trigger")
     return {
         "enabled": bool(cfg.get("enabled", False)),
+        "autonomy_safe": bool(cfg.get("autonomy_safe", False)),
         "require_auth": bool(cfg.get("require_auth", True)),
         "auth_header": str(cfg.get("auth_header") or default_header).strip() or default_header,
         "auth_token": str(cfg.get("auth_token") or "").strip(),
@@ -254,6 +255,41 @@ def _parse_external_trigger_config(bot: Bot) -> Dict[str, Any]:
         "payload_field": str(cfg.get("payload_field") or "").strip(),
         "allow_metadata": bool(cfg.get("allow_metadata", False)),
     }
+
+
+async def _require_external_trigger_target_safe(
+    bot: Bot,
+    config: Dict[str, Any],
+    request: Request,
+) -> None:
+    """Permit external events only for explicit, ready, non-mutating bot targets."""
+
+    if not bool(config.get("autonomy_safe", False)):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "reason_code": "external_trigger_autonomy_not_attested",
+                "message": (
+                    "External triggers require external_trigger.autonomy_safe=true and "
+                    "a read-only or draft-only target bot."
+                ),
+            },
+        )
+    blockers = bot_autonomous_dispatch_blockers(bot)
+    if blockers:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "reason_code": "external_trigger_target_not_autonomy_safe",
+                "message": (
+                    f"External trigger target '{bot.id}' cannot run autonomously because "
+                    + "; ".join(blockers)
+                    + "."
+                ),
+                "blockers": blockers,
+            },
+        )
+    await _require_bot_ready_to_enable(bot, request)
 
 
 def _build_external_trigger_metadata(config: Dict[str, Any], body: Any) -> TaskMetadata:
@@ -480,17 +516,26 @@ async def trigger_bot_external(bot_id: str, request: Request) -> Task:
     if not config["enabled"]:
         raise HTTPException(status_code=403, detail="external trigger is disabled for this bot")
 
-    if config["require_auth"]:
-        expected = str(config.get("auth_token") or "").strip()
-        if not expected:
-            logger.warning("External trigger for bot %s requires auth but no auth_token is configured", bot_id)
-            raise HTTPException(status_code=500, detail="external trigger is misconfigured")
-        header_name = str(config.get("auth_header") or "X-Nexus-Trigger-Token").strip()
-        provided = str(request.headers.get(header_name, "") or "").strip()
-        if not provided:
-            raise HTTPException(status_code=401, detail=f"missing auth header: {header_name}")
-        if not hmac.compare_digest(provided, expected):
-            raise HTTPException(status_code=401, detail="invalid trigger auth token")
+    if not config["require_auth"]:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "reason_code": "external_trigger_auth_required",
+                "message": "External triggers must require a dedicated trigger authentication token.",
+            },
+        )
+    expected = str(config.get("auth_token") or "").strip()
+    if not expected:
+        logger.warning("External trigger for bot %s requires auth but no auth_token is configured", bot_id)
+        raise HTTPException(status_code=500, detail="external trigger is misconfigured")
+    header_name = str(config.get("auth_header") or "X-Nexus-Trigger-Token").strip()
+    provided = str(request.headers.get(header_name, "") or "").strip()
+    if not provided:
+        raise HTTPException(status_code=401, detail=f"missing auth header: {header_name}")
+    if not hmac.compare_digest(provided, expected):
+        raise HTTPException(status_code=401, detail="invalid trigger auth token")
+
+    await _require_external_trigger_target_safe(bot, config, request)
 
     try:
         body = await request.json()

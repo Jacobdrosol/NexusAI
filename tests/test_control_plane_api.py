@@ -564,10 +564,11 @@ async def test_external_bot_trigger_creates_task_with_auth_and_payload_field(cp_
             "name": "External Trigger Bot",
             "role": "assistant",
             "enabled": True,
-            "backends": [],
+            "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "test-model"}],
             "routing_rules": {
                 "external_trigger": {
                     "enabled": True,
+                    "autonomy_safe": True,
                     "require_auth": True,
                     "auth_header": "X-Nexus-Trigger-Token",
                     "auth_token": "topsecret",
@@ -595,6 +596,100 @@ async def test_external_bot_trigger_creates_task_with_auth_and_payload_field(cp_
     assert (body.get("metadata") or {}).get("source") == "webhook"
     assert (body.get("metadata") or {}).get("project_id") == "proj-1"
     assert (body.get("metadata") or {}).get("priority") == 3
+
+
+@pytest.mark.anyio
+async def test_external_bot_trigger_requires_explicit_autonomy_attestation(cp_client):
+    create = await cp_client.post(
+        "/v1/bots",
+        json={
+            "id": "bot-ext-unattested",
+            "name": "Unattested External Trigger",
+            "role": "assistant",
+            "enabled": True,
+            "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "test-model"}],
+            "routing_rules": {
+                "external_trigger": {
+                    "enabled": True,
+                    "require_auth": True,
+                    "auth_token": "topsecret",
+                }
+            },
+        },
+    )
+    assert create.status_code == 200
+
+    trigger = await cp_client.post(
+        "/v1/bots/bot-ext-unattested/trigger",
+        json={"payload": {"instruction": "run"}},
+        headers={"X-Nexus-Trigger-Token": "topsecret"},
+    )
+
+    assert trigger.status_code == 409
+    assert trigger.json()["detail"]["reason_code"] == "external_trigger_autonomy_not_attested"
+
+
+@pytest.mark.anyio
+async def test_external_bot_trigger_rejects_mutation_capable_target(cp_client):
+    create = await cp_client.post(
+        "/v1/bots",
+        json={
+            "id": "bot-ext-writer",
+            "name": "External Trigger Writer",
+            "role": "writer",
+            "enabled": True,
+            "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "test-model"}],
+            "execution_policy": {"repo_output_mode": "allow"},
+            "routing_rules": {
+                "external_trigger": {
+                    "enabled": True,
+                    "autonomy_safe": True,
+                    "require_auth": True,
+                    "auth_token": "topsecret",
+                }
+            },
+        },
+    )
+    assert create.status_code == 200
+
+    trigger = await cp_client.post(
+        "/v1/bots/bot-ext-writer/trigger",
+        json={"payload": {"instruction": "run"}},
+        headers={"X-Nexus-Trigger-Token": "topsecret"},
+    )
+
+    assert trigger.status_code == 409
+    assert trigger.json()["detail"]["reason_code"] == "external_trigger_target_not_autonomy_safe"
+
+
+@pytest.mark.anyio
+async def test_external_bot_trigger_requires_dedicated_auth(cp_client):
+    create = await cp_client.post(
+        "/v1/bots",
+        json={
+            "id": "bot-ext-open",
+            "name": "Open External Trigger",
+            "role": "assistant",
+            "enabled": True,
+            "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "test-model"}],
+            "routing_rules": {
+                "external_trigger": {
+                    "enabled": True,
+                    "autonomy_safe": True,
+                    "require_auth": False,
+                }
+            },
+        },
+    )
+    assert create.status_code == 200
+
+    trigger = await cp_client.post(
+        "/v1/bots/bot-ext-open/trigger",
+        json={"payload": {"instruction": "run"}},
+    )
+
+    assert trigger.status_code == 409
+    assert trigger.json()["detail"]["reason_code"] == "external_trigger_auth_required"
 
 
 @pytest.mark.anyio
@@ -626,15 +721,16 @@ async def test_external_bot_trigger_bypasses_global_cp_token_when_bot_auth_is_va
         create = await client.post(
             "/v1/bots",
             json={
-                "id": "bot-ext-auth",
-                "name": "External Trigger Auth",
-                "role": "assistant",
-                "enabled": True,
-                "backends": [],
-                "routing_rules": {
-                    "external_trigger": {
-                        "enabled": True,
-                        "require_auth": True,
+            "id": "bot-ext-auth",
+            "name": "External Trigger Auth",
+            "role": "assistant",
+            "enabled": True,
+            "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "test-model"}],
+            "routing_rules": {
+                "external_trigger": {
+                    "enabled": True,
+                    "autonomy_safe": True,
+                    "require_auth": True,
                         "auth_header": "X-External-Token",
                         "auth_token": "external-secret",
                     }
