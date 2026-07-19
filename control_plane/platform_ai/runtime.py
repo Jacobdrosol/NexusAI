@@ -684,25 +684,6 @@ class PlatformAISessionRuntime:
             return "project_disabled"
         return None
 
-    @staticmethod
-    def _schedule_configuration_identity(schedule: Dict[str, Any]) -> Dict[str, Any]:
-        """Return the execution-relevant fields used to reject duplicate schedules."""
-        metadata = schedule.get("metadata") if isinstance(schedule.get("metadata"), dict) else {}
-        identity: Dict[str, Any] = {
-            "project_id": str(schedule.get("project_id") or "").strip() or None,
-            "target_bot_id": str(schedule.get("target_bot_id") or "").strip() or None,
-            "assignment_pm_bot_id": str(schedule.get("assignment_pm_bot_id") or "").strip() or None,
-            "conversation_id": str(schedule.get("conversation_id") or "").strip() or None,
-            "cron_expression": str(schedule.get("cron_expression") or "").strip(),
-            "timezone": str(schedule.get("timezone") or "UTC").strip() or "UTC",
-            "prompt": str(schedule.get("prompt") or "").strip(),
-            "task_payload": copy.deepcopy(schedule.get("task_payload") if isinstance(schedule.get("task_payload"), dict) else {}),
-        }
-        for key in ("connection_operation", "system_payload_source"):
-            if key in metadata:
-                identity[key] = copy.deepcopy(metadata[key])
-        return identity
-
     async def _find_duplicate_schedule_configuration(
         self,
         schedule_payload: Dict[str, Any],
@@ -710,28 +691,11 @@ class PlatformAISessionRuntime:
         """Find an equivalent active or paused schedule without exposing its content."""
         if self._agent_schedule_engine is None:
             return None, "schedule_engine_unavailable"
-        target_bot_id = str(schedule_payload.get("target_bot_id") or "").strip()
-        if not target_bot_id:
-            return None, "schedule_duplicate_check_invalid_target"
         try:
-            existing_schedules = await self._agent_schedule_engine.list_schedules(
-                limit=500,
-                target_bot_id=target_bot_id,
-            )
+            duplicate = await self._agent_schedule_engine.find_equivalent_schedule(schedule_payload)
         except Exception:
             return None, "schedule_duplicate_check_unavailable"
-
-        proposed_hash = self._compute_state_hash(self._schedule_configuration_identity(schedule_payload))
-        for existing in existing_schedules:
-            if str(existing.get("status") or "").strip().lower() not in {"active", "paused"}:
-                continue
-            existing_hash = self._compute_state_hash(self._schedule_configuration_identity(existing))
-            if existing_hash == proposed_hash:
-                return {
-                    "schedule_id": str(existing.get("id") or "").strip(),
-                    "status": str(existing.get("status") or "").strip().lower(),
-                }, None
-        return None, None
+        return duplicate, None
 
     async def _resolve_bot_project_binding(
         self,

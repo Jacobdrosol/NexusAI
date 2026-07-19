@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import uuid
@@ -51,7 +52,8 @@ CREATE TABLE IF NOT EXISTS agent_schedules (
     last_run_at TEXT,
     last_run_status TEXT,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    configuration_hash TEXT
 )
 """
 
@@ -76,6 +78,7 @@ CREATE TABLE IF NOT EXISTS agent_schedule_runs (
 
 _CREATE_INDEXES = (
     "CREATE INDEX IF NOT EXISTS idx_agent_schedules_due ON agent_schedules(status, next_run_at)",
+    "CREATE INDEX IF NOT EXISTS idx_agent_schedules_configuration_hash ON agent_schedules(configuration_hash)",
     "CREATE INDEX IF NOT EXISTS idx_agent_schedule_runs_schedule ON agent_schedule_runs(schedule_id, created_at)",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_schedule_runs_dedupe ON agent_schedule_runs(dedupe_key)",
 )
@@ -312,12 +315,34 @@ class AgentScheduleEngine:
         async with open_sqlite(self._db_path) as db:
             await db.execute(_CREATE_SCHEDULES)
             await db.execute(_CREATE_SCHEDULE_RUNS)
+            db.row_factory = aiosqlite.Row
+            async with db.execute("PRAGMA table_info(agent_schedules)") as cursor:
+                schedule_columns = {str(row[1]) for row in await cursor.fetchall()}
+            configuration_hash_added = "configuration_hash" not in schedule_columns
+            if configuration_hash_added:
+                await db.execute("ALTER TABLE agent_schedules ADD COLUMN configuration_hash TEXT")
             async with db.execute("PRAGMA table_info(agent_schedule_runs)") as cursor:
                 run_columns = {str(row[1]) for row in await cursor.fetchall()}
             if "retry_not_before" not in run_columns:
                 await db.execute("ALTER TABLE agent_schedule_runs ADD COLUMN retry_not_before TEXT")
             if "manual" not in run_columns:
                 await db.execute("ALTER TABLE agent_schedule_runs ADD COLUMN manual INTEGER NOT NULL DEFAULT 0")
+            if configuration_hash_added:
+                async with db.execute("SELECT * FROM agent_schedules ORDER BY created_at ASC, id ASC") as cursor:
+                    schedules = await cursor.fetchall()
+                seen_hashes: Set[str] = set()
+                for row in schedules:
+                    schedule = self._row_to_schedule(row)
+                    if schedule is None:
+                        continue
+                    configuration_hash = self._schedule_configuration_hash(schedule)
+                    if configuration_hash in seen_hashes:
+                        continue
+                    seen_hashes.add(configuration_hash)
+                    await db.execute(
+                        "UPDATE agent_schedules SET configuration_hash = ? WHERE id = ?",
+                        (configuration_hash, schedule["id"]),
+                    )
             for statement in _CREATE_INDEXES:
                 await db.execute(statement)
             await db.commit()
@@ -379,10 +404,55 @@ class AgentScheduleEngine:
             "next_run_at": _iso(_next_run_time(cron_expression, timezone_name, after=timestamp)),
         }
 
+    @staticmethod
+    def _schedule_configuration_identity(schedule: Dict[str, Any]) -> Dict[str, Any]:
+        """Return fields that define the work a recurring schedule will perform."""
+        metadata = schedule.get("metadata") if isinstance(schedule.get("metadata"), dict) else {}
+        identity: Dict[str, Any] = {
+            "project_id": str(schedule.get("project_id") or "").strip() or None,
+            "target_bot_id": str(schedule.get("target_bot_id") or "").strip() or None,
+            "assignment_pm_bot_id": str(schedule.get("assignment_pm_bot_id") or "").strip() or None,
+            "conversation_id": str(schedule.get("conversation_id") or "").strip() or None,
+            "cron_expression": str(schedule.get("cron_expression") or "").strip(),
+            "timezone": str(schedule.get("timezone") or "UTC").strip() or "UTC",
+            "prompt": str(schedule.get("prompt") or "").strip(),
+            "task_payload": _schedule_task_payload(schedule),
+            "node_overrides": schedule.get("node_overrides") if isinstance(schedule.get("node_overrides"), dict) else {},
+            "overlap_policy": str(schedule.get("overlap_policy") or _DEFAULT_SCHEDULE_OVERLAP_POLICY).strip().lower(),
+        }
+        for key in ("connection_operation", "system_payload_source"):
+            if key in metadata:
+                identity[key] = metadata[key]
+        return identity
+
+    @classmethod
+    def _schedule_configuration_hash(cls, schedule: Dict[str, Any]) -> str:
+        identity = cls._schedule_configuration_identity(schedule)
+        return hashlib.sha256(
+            json.dumps(identity, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+
+    async def find_equivalent_schedule(self, payload: Dict[str, Any]) -> Optional[Dict[str, str]]:
+        """Return non-content metadata for an equivalent persisted schedule, if any."""
+        await self._ensure_db()
+        normalized = self.validate_schedule_payload(payload)
+        configuration_hash = self._schedule_configuration_hash(normalized)
+        async with open_sqlite(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT id, status FROM agent_schedules WHERE configuration_hash = ? LIMIT 1",
+                (configuration_hash,),
+            ) as cursor:
+                row = await cursor.fetchone()
+        if row is None:
+            return None
+        return {"schedule_id": str(row["id"]), "status": str(row["status"] or "").strip().lower()}
+
     async def create_schedule(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         await self._ensure_db()
         now = _now()
         normalized = self.validate_schedule_payload(payload, now=now)
+        configuration_hash = self._schedule_configuration_hash(normalized)
         schedule = {
             "id": str(uuid.uuid4()),
             **normalized,
@@ -393,38 +463,52 @@ class AgentScheduleEngine:
             "updated_at": _iso(now),
         }
         async with open_sqlite(self._db_path) as db:
-            await db.execute(
-                """
-                INSERT INTO agent_schedules (
-                    id, name, status, cron_expression, timezone, prompt, target_bot_id, assignment_pm_bot_id,
-                    conversation_id, project_id, node_overrides_json, retry_max, retry_backoff_seconds,
-                    metadata_json, last_scheduled_at, next_run_at, last_run_at, last_run_status, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    schedule["id"],
-                    schedule["name"],
-                    schedule["status"],
-                    schedule["cron_expression"],
-                    schedule["timezone"],
-                    schedule["prompt"],
-                    schedule["target_bot_id"],
-                    schedule["assignment_pm_bot_id"],
-                    schedule["conversation_id"],
-                    schedule["project_id"],
-                    _json_dump(schedule["node_overrides"]),
-                    schedule["retry_max"],
-                    schedule["retry_backoff_seconds"],
-                    _json_dump(schedule["metadata"]),
-                    schedule["last_scheduled_at"],
-                    schedule["next_run_at"],
-                    schedule["last_run_at"],
-                    schedule["last_run_status"],
-                    schedule["created_at"],
-                    schedule["updated_at"],
-                ),
-            )
-            await db.commit()
+            try:
+                await db.execute("BEGIN IMMEDIATE")
+                async with db.execute(
+                    "SELECT id FROM agent_schedules WHERE configuration_hash = ? LIMIT 1",
+                    (configuration_hash,),
+                ) as cursor:
+                    duplicate = await cursor.fetchone()
+                if duplicate is not None:
+                    raise ValueError("schedule_duplicate_exists")
+                await db.execute(
+                    """
+                    INSERT INTO agent_schedules (
+                        id, name, status, cron_expression, timezone, prompt, target_bot_id, assignment_pm_bot_id,
+                        conversation_id, project_id, node_overrides_json, retry_max, retry_backoff_seconds,
+                        metadata_json, last_scheduled_at, next_run_at, last_run_at, last_run_status, created_at, updated_at,
+                        configuration_hash
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        schedule["id"],
+                        schedule["name"],
+                        schedule["status"],
+                        schedule["cron_expression"],
+                        schedule["timezone"],
+                        schedule["prompt"],
+                        schedule["target_bot_id"],
+                        schedule["assignment_pm_bot_id"],
+                        schedule["conversation_id"],
+                        schedule["project_id"],
+                        _json_dump(schedule["node_overrides"]),
+                        schedule["retry_max"],
+                        schedule["retry_backoff_seconds"],
+                        _json_dump(schedule["metadata"]),
+                        schedule["last_scheduled_at"],
+                        schedule["next_run_at"],
+                        schedule["last_run_at"],
+                        schedule["last_run_status"],
+                        schedule["created_at"],
+                        schedule["updated_at"],
+                        configuration_hash,
+                    ),
+                )
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
         return schedule
 
     async def get_schedule(self, schedule_id: str) -> Optional[Dict[str, Any]]:
@@ -531,36 +615,51 @@ class AgentScheduleEngine:
             merged.get("retry_max", _DEFAULT_SCHEDULE_RETRY_MAX),
             merged.get("retry_backoff_seconds", _DEFAULT_SCHEDULE_RETRY_BACKOFF_SECONDS),
         )
+        configuration_hash = self._schedule_configuration_hash(merged)
 
         async with open_sqlite(self._db_path) as db:
-            await db.execute(
-                """
-                UPDATE agent_schedules
-                SET name=?, status=?, cron_expression=?, timezone=?, prompt=?, target_bot_id=?,
-                    assignment_pm_bot_id=?, conversation_id=?, project_id=?, node_overrides_json=?,
-                    retry_max=?, retry_backoff_seconds=?, metadata_json=?, next_run_at=?, updated_at=?
-                WHERE id=?
-                """,
-                (
-                    str(merged.get("name") or ""),
-                    str(merged.get("status") or "active"),
-                    merged["cron_expression"],
-                    merged["timezone"],
-                    str(merged.get("prompt") or ""),
-                    str(merged.get("target_bot_id") or "") or None,
-                    str(merged.get("assignment_pm_bot_id") or "") or None,
-                    str(merged.get("conversation_id") or "") or None,
-                    str(merged.get("project_id") or "") or None,
-                    _json_dump(merged.get("node_overrides") or {}),
-                    retry_max,
-                    retry_backoff_seconds,
-                    _json_dump(merged.get("metadata") or {}),
-                    merged["next_run_at"],
-                    merged["updated_at"],
-                    schedule_id,
-                ),
-            )
-            await db.commit()
+            try:
+                await db.execute("BEGIN IMMEDIATE")
+                async with db.execute(
+                    "SELECT id FROM agent_schedules WHERE configuration_hash = ? AND id != ? LIMIT 1",
+                    (configuration_hash, schedule_id),
+                ) as cursor:
+                    duplicate = await cursor.fetchone()
+                if duplicate is not None:
+                    raise ValueError("schedule_duplicate_exists")
+                await db.execute(
+                    """
+                    UPDATE agent_schedules
+                    SET name=?, status=?, cron_expression=?, timezone=?, prompt=?, target_bot_id=?,
+                        assignment_pm_bot_id=?, conversation_id=?, project_id=?, node_overrides_json=?,
+                        retry_max=?, retry_backoff_seconds=?, metadata_json=?, next_run_at=?, updated_at=?,
+                        configuration_hash=?
+                    WHERE id=?
+                    """,
+                    (
+                        str(merged.get("name") or ""),
+                        str(merged.get("status") or "active"),
+                        merged["cron_expression"],
+                        merged["timezone"],
+                        str(merged.get("prompt") or ""),
+                        str(merged.get("target_bot_id") or "") or None,
+                        str(merged.get("assignment_pm_bot_id") or "") or None,
+                        str(merged.get("conversation_id") or "") or None,
+                        str(merged.get("project_id") or "") or None,
+                        _json_dump(merged.get("node_overrides") or {}),
+                        retry_max,
+                        retry_backoff_seconds,
+                        _json_dump(merged.get("metadata") or {}),
+                        merged["next_run_at"],
+                        merged["updated_at"],
+                        configuration_hash,
+                        schedule_id,
+                    ),
+                )
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                raise
         return await self.get_schedule(schedule_id)
 
     async def trigger_schedule(self, schedule_id: str) -> Dict[str, Any]:

@@ -557,3 +557,27 @@ async def test_schedule_listing_filters_status_and_rejects_invalid_status(tmp_pa
         await engine.update_schedule(paused["id"], {"assignment_pm_bot_id": "pm-bot", "conversation_id": "thread-1"})
     with pytest.raises(ValueError, match="exactly one dispatch target"):
         await engine.update_schedule(paused["id"], {"target_bot_id": ""})
+
+
+@pytest.mark.anyio
+async def test_scheduler_rejects_equivalent_schedule_creates_and_updates(tmp_path):
+    engine = AgentScheduleEngine(
+        assignment_service=object(),
+        task_manager=_FakeTaskManager(),
+        db_path=str(tmp_path / "schedules.db"),
+    )
+    first = await engine.create_schedule({**_schedule_payload(), "project_id": "globeiq"})
+
+    with pytest.raises(ValueError, match="schedule_duplicate_exists"):
+        await engine.create_schedule(
+            {**_schedule_payload(), "name": "Renamed duplicate", "status": "active", "project_id": "globeiq"}
+        )
+
+    second = await engine.create_schedule(
+        {**_schedule_payload(), "name": "Different cadence", "cron_expression": "30 * * * *", "project_id": "globeiq"}
+    )
+    duplicate = await engine.find_equivalent_schedule({**_schedule_payload(), "project_id": "globeiq"})
+    assert duplicate == {"schedule_id": first["id"], "status": "paused"}
+
+    with pytest.raises(ValueError, match="schedule_duplicate_exists"):
+        await engine.update_schedule(second["id"], {"cron_expression": "0 * * * *"})
