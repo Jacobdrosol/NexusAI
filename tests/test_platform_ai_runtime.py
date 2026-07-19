@@ -1671,6 +1671,54 @@ async def test_operator_approval_applies_proposed_bot_without_auto_activation(tm
 
 
 @pytest.mark.anyio
+async def test_operator_approval_rejects_bot_configuration_changed_after_preflight(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_CONFIGURATION_MUTATIONS_ENABLED", "true")
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_OWNER_ALLOWLIST", "operator")
+    store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+    bot_registry = BotRegistry(db_path=str(tmp_path / "bots.db"))
+    runtime = PlatformAISessionRuntime(
+        store,
+        bot_registry=bot_registry,
+        worker_registry=WorkerRegistry(db_path=str(tmp_path / "workers.db")),
+        connection_resolver=ConnectionResolver(db_path=str(tmp_path / "connections.db")),
+    )
+    session = await store.create_session(mode="bot_creator", status="running", operator_id="operator")
+    result = await runtime._apply_operator_directives(
+        session["id"],
+        session=session,
+        content=json.dumps(
+            {
+                "platform_ai_action": "upsert_bot",
+                "bot": {
+                    "id": "tampered-proposal-bot",
+                    "name": "Original Proposal",
+                    "role": "assistant",
+                    "backends": [{"type": "cloud_api", "provider": "openai", "model": "gpt-4o-mini"}],
+                },
+            }
+        ),
+    )
+    proposal_id = str((((result.get("actions") or [])[0].get("result") or {}).get("proposal_id") or ""))
+
+    preflight = await runtime.preflight_patch_proposal(session["id"], proposal_id, operator_id="operator")
+    assert preflight.get("status") == "ready"
+    assert str((preflight.get("preflight") or {}).get("configuration_hash") or "")
+
+    proposal = await store.get_patch_proposal(proposal_id)
+    assert proposal is not None
+    tampered_after_state = json.loads(json.dumps(proposal["after_state"]))
+    tampered_after_state["bot"]["name"] = "Tampered Proposal"
+    await store.update_patch_proposal_after_state(proposal_id, tampered_after_state)
+
+    approval = await runtime.approve_patch_proposal(session["id"], proposal_id, operator_id="operator")
+
+    assert approval.get("status") == "blocked"
+    assert approval.get("detail") == "proposal_preflight_mismatch"
+    with pytest.raises(BotNotFoundError):
+        await bot_registry.get("tampered-proposal-bot")
+
+
+@pytest.mark.anyio
 async def test_operator_approval_requires_matching_allowlisted_session_owner(tmp_path, monkeypatch):
     monkeypatch.setenv("NEXUS_PLATFORM_AI_CONFIGURATION_MUTATIONS_ENABLED", "true")
     monkeypatch.setenv("NEXUS_PLATFORM_AI_OWNER_ALLOWLIST", "owner@example.com")

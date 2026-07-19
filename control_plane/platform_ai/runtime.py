@@ -767,6 +767,21 @@ class PlatformAISessionRuntime:
     def _compute_state_hash(self, data: Dict[str, Any]) -> str:
         return hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
 
+    def _bot_configuration_proposal_hash(self, after_state: Dict[str, Any]) -> str:
+        """Hash every proposal field that can change bot approval semantics."""
+        bot_payload = after_state.get("bot") if isinstance(after_state.get("bot"), dict) else {}
+        specialist_request = (
+            after_state.get("specialist_request")
+            if isinstance(after_state.get("specialist_request"), dict)
+            else None
+        )
+        return self._compute_state_hash(
+            {
+                "bot": bot_payload,
+                "specialist_request": specialist_request,
+            }
+        )
+
     async def _synthesize_session_brief(
         self,
         session_id: str,
@@ -5380,6 +5395,7 @@ class PlatformAISessionRuntime:
 
         preflight["schema_valid"] = True
         preflight["bot_id"] = str(bot.id or "")
+        preflight["configuration_hash"] = self._bot_configuration_proposal_hash(after_state)
         session = await self._store.get_session(session_id)
         if session is None:
             preflight["policy_errors"] = ["session_not_found"]
@@ -5400,6 +5416,7 @@ class PlatformAISessionRuntime:
                 preflight,
                 operator_id=operator_id,
             )
+        preflight["project_id"] = str(bot.project_id or "") or None
         policy_errors = validate_bot_configuration(bot)
         preflight["policy_errors"] = policy_errors
         specialist_request = (
@@ -5627,6 +5644,8 @@ class PlatformAISessionRuntime:
             if not _proposal_preflight_is_fresh(preflight):
                 return {"status": "blocked", "detail": "proposal_preflight_stale", "proposal": proposal}
             bot_payload = after_state.get("bot") if isinstance(after_state.get("bot"), dict) else {}
+            if str(preflight.get("configuration_hash") or "") != self._bot_configuration_proposal_hash(after_state):
+                return {"status": "blocked", "detail": "proposal_preflight_mismatch", "proposal": proposal}
             try:
                 bot = Bot.model_validate(bot_payload)
             except Exception as exc:
@@ -5636,6 +5655,11 @@ class PlatformAISessionRuntime:
                 if isinstance(after_state.get("specialist_request"), dict)
                 else None
             )
+            bot, project_error = await self._resolve_bot_project_binding(session=session, bot=bot)
+            if project_error or bot is None:
+                return {"status": "blocked", "detail": project_error or "project_binding_invalid", "proposal": proposal}
+            if str(preflight.get("project_id") or "") != str(bot.project_id or ""):
+                return {"status": "blocked", "detail": "proposal_preflight_project_scope_mismatch", "proposal": proposal}
             safety_error = self._proposal_bot_safety_error(
                 bot,
                 specialist_request=specialist_request,
