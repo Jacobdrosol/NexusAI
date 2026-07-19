@@ -3559,6 +3559,53 @@ class TaskManager:
                 updates["orchestration_concurrency_limit"] = configured_limit
         return metadata.model_copy(update=updates) if updates else metadata
 
+    @staticmethod
+    def _bound_bot_project_id(bot: Any) -> str:
+        project_id = str(getattr(bot, "project_id", "") or "").strip()
+        if project_id:
+            return project_id
+        routing_rules = getattr(bot, "routing_rules", None)
+        specialist = routing_rules.get("specialist") if isinstance(routing_rules, dict) else None
+        if not isinstance(specialist, dict):
+            return ""
+        return str(specialist.get("project_id") or "").strip()
+
+    async def _apply_bot_project_scope(
+        self,
+        bot_id: str,
+        payload: Any,
+        metadata: TaskMetadata,
+    ) -> TaskMetadata:
+        """Bind direct task creation to a specialist bot's declared project."""
+        if self._bot_registry is None:
+            return metadata
+        try:
+            bot = await self._bot_registry.get(bot_id)
+        except Exception:
+            return metadata
+
+        bound_project_id = self._bound_bot_project_id(bot)
+        if not bound_project_id:
+            return metadata
+
+        metadata_project_id = str(metadata.project_id or "").strip()
+        payload_project_id = (
+            str(payload.get("project_id") or "").strip()
+            if isinstance(payload, dict)
+            else ""
+        )
+        if metadata_project_id and metadata_project_id != bound_project_id:
+            raise ValueError(
+                f"Task project '{metadata_project_id}' does not match bot '{bot_id}' project '{bound_project_id}'."
+            )
+        if payload_project_id and payload_project_id != bound_project_id:
+            raise ValueError(
+                f"Task payload project '{payload_project_id}' does not match bot '{bot_id}' project '{bound_project_id}'."
+            )
+        if metadata_project_id:
+            return metadata
+        return metadata.model_copy(update={"project_id": bound_project_id})
+
     async def _bot_provider_keys_for_tasks(self, tasks: list[Task]) -> dict[str, str]:
         if not tasks or self._bot_registry is None:
             return {}
@@ -4253,6 +4300,7 @@ class TaskManager:
     ) -> Task:
         await self._ensure_db()
         metadata = await self._apply_root_pipeline_metadata(bot_id, metadata or TaskMetadata())
+        metadata = await self._apply_bot_project_scope(bot_id, payload, metadata)
         await self._validate_task_payload(bot_id, payload, metadata=metadata)
         dependencies = depends_on or []
         for dependency_id in dependencies:

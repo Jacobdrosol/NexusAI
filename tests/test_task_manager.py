@@ -1319,6 +1319,49 @@ async def test_create_task_rejects_payloads_that_violate_input_contract(tmp_path
 
 
 @pytest.mark.anyio
+async def test_create_task_enforces_and_inherits_bound_bot_project_scope(tmp_path):
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {"project_id": task.metadata.project_id if task.metadata else None}
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "project-bound-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="globeiq-reviewer",
+            name="GlobeIQ Reviewer",
+            role="quality_reviewer",
+            project_id="globeiq",
+            backends=[],
+        )
+    )
+    tm = TaskManager(
+        StubScheduler(),
+        db_path=str(tmp_path / "project-bound-tasks.db"),
+        bot_registry=bot_registry,
+    )
+
+    task = await tm.create_task(bot_id="globeiq-reviewer", payload={"instruction": "Review lesson"})
+    assert task.metadata is not None
+    assert task.metadata.project_id == "globeiq"
+
+    with pytest.raises(ValueError, match="does not match bot 'globeiq-reviewer' project 'globeiq'"):
+        await tm.create_task(
+            bot_id="globeiq-reviewer",
+            payload={"instruction": "Review lesson"},
+            metadata=TaskMetadata(project_id="another-project"),
+        )
+
+    with pytest.raises(ValueError, match="Task payload project 'another-project'"):
+        await tm.create_task(
+            bot_id="globeiq-reviewer",
+            payload={"instruction": "Review lesson", "project_id": "another-project"},
+        )
+
+
+@pytest.mark.anyio
 async def test_create_task_rejects_empty_required_input_fields(tmp_path):
     from control_plane.registry.bot_registry import BotRegistry
     from control_plane.task_manager.task_manager import TaskManager
