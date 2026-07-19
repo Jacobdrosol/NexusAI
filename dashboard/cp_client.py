@@ -191,6 +191,10 @@ class CPClient:
     def list_worker_probes(self) -> Optional[Dict[str, Any]]:
         return self._get("/v1/workers/probes")
 
+    def get_fleet_summary(self) -> Optional[Dict[str, Any]]:
+        """Return the bounded, non-secret fleet health summary."""
+        return self._get("/v1/workers/fleet-summary")
+
     def verify_worker_inference(self, worker_id: str, body: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
         return self._post(f"/v1/workers/{worker_id}/verify-inference", body or {})
 

@@ -239,6 +239,13 @@
             Runtime capability evidence is unavailable.
             {% elif worker_runtime_attention %}
             {{ worker_runtime_attention }} online worker(s) need capability attention. <a class="quick-link" href="{{ url_for('workers.workers_page') }}">Review workers</a>
+            {% if fleet_runtime_attention_details %}
+            <div class="mini-note" style="margin-top:0.5rem;">
+              {% for item in fleet_runtime_attention_details %}
+              <code>{{ item.worker_id }}</code>: {{ item.reason_codes|join(', ') }}{% if not loop.last %}; {% endif %}
+              {% endfor %}
+            </div>
+            {% endif %}
             {% else %}
             {{ worker_runtime_ready }} enabled online worker(s) have ready runtime capability evidence.
             {% endif %}

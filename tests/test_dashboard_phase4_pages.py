@@ -2601,6 +2601,18 @@ def test_overview_reports_worker_capability_and_schedule_attention(dashboard_cli
                 ]
             }
 
+        def get_fleet_summary(self):
+            return {
+                "workers": {
+                    "runtime_attention": [
+                        {
+                            "worker_id": "browser-worker",
+                            "reason_codes": ["browser_session_unavailable"],
+                        }
+                    ]
+                }
+            }
+
         def list_bots(self):
             return []
 
@@ -2631,6 +2643,7 @@ def test_overview_reports_worker_capability_and_schedule_attention(dashboard_cli
     assert b"1 online worker(s) need capability attention" in resp.data
     assert b"runtime degraded" in resp.data
     assert b"browser_session_check_failed" in resp.data
+    assert b"browser-worker</code>: browser_session_unavailable" in resp.data
     assert b"1 most-recent run(s) failed" in resp.data
 
 

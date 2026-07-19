@@ -20,6 +20,9 @@ _DATA_DIR = Path(__file__).parent.parent / "data"
 _FLEET_FAILURE_CATEGORIES = frozenset(
     {"policy", "output_contract", "timeout", "authentication", "transport", "model", "other"}
 )
+_FLEET_RUNTIME_REASON_CODES = frozenset(
+    {"runtime_probe_not_ready", "browser_session_unavailable", "cli_authentication_required"}
+)
 
 
 def _fleet_health_failure_categories(task: object) -> dict[str, int]:
@@ -58,6 +61,35 @@ def _fleet_health_failure_categories(task: object) -> dict[str, int]:
         if 0 < value <= 1_000_000:
             safe_categories[label] = value
     return dict(sorted(safe_categories.items()))
+
+
+def _fleet_runtime_attention_details(payload: object) -> list[dict[str, object]]:
+    """Extract a short, fixed-vocabulary operator summary from fleet health data."""
+    if not isinstance(payload, dict):
+        return []
+    workers = payload.get("workers")
+    if not isinstance(workers, dict):
+        return []
+    attention = workers.get("runtime_attention")
+    if not isinstance(attention, list):
+        return []
+
+    details: list[dict[str, object]] = []
+    for item in attention[:12]:
+        if not isinstance(item, dict):
+            continue
+        worker_id = str(item.get("worker_id") or "").strip()[:120]
+        raw_reason_codes = item.get("reason_codes")
+        if not isinstance(raw_reason_codes, list):
+            continue
+        reason_codes = [
+            code
+            for code in (str(value).strip() for value in raw_reason_codes)
+            if code in _FLEET_RUNTIME_REASON_CODES
+        ]
+        if worker_id and reason_codes:
+            details.append({"worker_id": worker_id, "reason_codes": reason_codes})
+    return details
 
 
 def create_app() -> Flask:
@@ -178,6 +210,7 @@ def create_app() -> Flask:
         schedules_unavailable = False
         worker_runtime_attention = None
         worker_runtime_ready = None
+        fleet_runtime_attention_details = []
         active_schedules = 0
         failed_schedule_runs = 0
         fleet_health_report = None
@@ -198,6 +231,12 @@ def create_app() -> Flask:
                     worker_probes_unavailable = True
             else:
                 worker_probes_unavailable = True
+
+            fleet_summary_getter = getattr(cp, "get_fleet_summary", None)
+            if callable(fleet_summary_getter):
+                fleet_runtime_attention_details = _fleet_runtime_attention_details(
+                    fleet_summary_getter()
+                )
 
             schedule_getter = getattr(cp, "list_schedules", None)
             if callable(schedule_getter):
@@ -676,6 +715,7 @@ def create_app() -> Flask:
             worker_health=worker_health,
             worker_runtime_ready=worker_runtime_ready,
             worker_runtime_attention=worker_runtime_attention,
+            fleet_runtime_attention_details=fleet_runtime_attention_details,
             worker_probes_unavailable=worker_probes_unavailable,
             active_schedules=active_schedules,
             failed_schedule_runs=failed_schedule_runs,
