@@ -4327,6 +4327,70 @@ async def test_history_retention_previews_and_purges_only_unreferenced_terminal_
 
 
 @pytest.mark.anyio
+async def test_restart_keeps_only_active_task_context_and_lazily_reads_terminal_history(tmp_path):
+    from control_plane.task_manager.task_manager import TaskManager
+
+    class StubScheduler:
+        pass
+
+    db_path = str(tmp_path / "lazy-history.db")
+    manager = TaskManager(StubScheduler(), db_path=db_path)
+    await manager._ensure_db()
+    timestamp = "2026-07-19T00:00:00+00:00"
+    dependency = Task(
+        id="completed-dependency",
+        bot_id="history-bot",
+        payload={"body": "dependency"},
+        metadata=TaskMetadata(),
+        status="completed",
+        result={"outcome": "pass"},
+        created_at=timestamp,
+        updated_at=timestamp,
+    )
+    unrelated_terminal = Task(
+        id="unrelated-terminal",
+        bot_id="history-bot",
+        payload={"body": "archive-me"},
+        metadata=TaskMetadata(),
+        status="completed",
+        result={"report": "historical result"},
+        created_at=timestamp,
+        updated_at=timestamp,
+    )
+    active = Task(
+        id="active-blocked",
+        bot_id="history-bot",
+        payload={"body": "wait-for-dependency"},
+        metadata=TaskMetadata(),
+        depends_on=[dependency.id],
+        status="blocked",
+        created_at=timestamp,
+        updated_at=timestamp,
+    )
+    for task in (dependency, unrelated_terminal, active):
+        manager._tasks[task.id] = task
+        await manager._persist_task(task)
+        await manager._upsert_bot_run(task)
+        await manager._persist_dependencies(task)
+    await manager.close()
+
+    restarted = TaskManager(StubScheduler(), db_path=db_path)
+    await restarted._ensure_db()
+
+    assert active.id in restarted._tasks
+    assert dependency.id in restarted._tasks
+    assert unrelated_terminal.id not in restarted._tasks
+
+    loaded = await restarted.get_task(unrelated_terminal.id)
+    assert loaded.result == {"report": "historical result"}
+    assert unrelated_terminal.id not in restarted._tasks
+
+    completed = await restarted.list_tasks(statuses=["completed"])
+    assert {task.id for task in completed} == {dependency.id, unrelated_terminal.id}
+    assert await restarted.count_tasks_by_status() == {"blocked": 1, "completed": 2}
+
+
+@pytest.mark.anyio
 async def test_output_contract_fails_when_required_fields_are_missing(tmp_path, monkeypatch):
     import asyncio
 

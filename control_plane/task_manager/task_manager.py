@@ -1,6 +1,5 @@
 import asyncio
 import copy
-import heapq
 import json
 import logging
 import os
@@ -96,6 +95,11 @@ CREATE TABLE IF NOT EXISTS {_ORCHESTRATION_CANCELLATIONS_TABLE} (
     reason TEXT NOT NULL,
     cancelled_at TEXT NOT NULL
 )
+"""
+
+_CREATE_TASK_INDEXES = f"""
+CREATE INDEX IF NOT EXISTS idx_cp_tasks_status_updated_at
+ON {_TASKS_TABLE} (status, updated_at DESC)
 """
 
 
@@ -3422,6 +3426,58 @@ class TaskManager:
         return limits
 
     @staticmethod
+    def _task_from_db_row(
+        row: aiosqlite.Row,
+        dependency_map: Optional[Dict[str, List[str]]] = None,
+    ) -> Task:
+        depends_on: List[str] = []
+        if row["depends_on"]:
+            depends_on = json.loads(row["depends_on"])
+        elif dependency_map is not None:
+            depends_on = list(dependency_map.get(str(row["id"]), []))
+        return Task(
+            id=row["id"],
+            bot_id=row["bot_id"],
+            payload=json.loads(row["payload"]) if row["payload"] else {},
+            metadata=(
+                TaskMetadata(**json.loads(row["metadata"]))
+                if row["metadata"]
+                else None
+            ),
+            depends_on=depends_on,
+            status=row["status"],
+            result=json.loads(row["result"]) if row["result"] else None,
+            error=(
+                TaskError(**json.loads(row["error"]))
+                if row["error"]
+                else None
+            ),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+    async def _load_task_from_db(self, task_id: str) -> Optional[Task]:
+        async with open_sqlite(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                f"SELECT * FROM {_TASKS_TABLE} WHERE id = ? LIMIT 1",
+                (task_id,),
+            ) as cursor:
+                row = await cursor.fetchone()
+            if row is None:
+                return None
+            dependency_map: Dict[str, List[str]] = {}
+            async with db.execute(
+                f"SELECT depends_on_task_id FROM {_TASK_DEPENDENCIES_TABLE} WHERE task_id = ?",
+                (task_id,),
+            ) as cursor:
+                dependency_map[task_id] = [
+                    str(dependency_row[0])
+                    for dependency_row in await cursor.fetchall()
+                ]
+        return self._task_from_db_row(row, dependency_map)
+
+    @staticmethod
     def _orchestration_concurrency_limit(metadata: Optional[TaskMetadata]) -> Optional[int]:
         if metadata is None:
             return None
@@ -3547,6 +3603,7 @@ class TaskManager:
                 await db.execute(_CREATE_BOT_RUN_ARTIFACTS)
                 await db.execute(_CREATE_ORCHESTRATION_CANCELLATIONS)
                 await self._migrate_tasks_table(db)
+                await db.execute(_CREATE_TASK_INDEXES)
                 await db.commit()
                 async with db.execute(
                     f"SELECT orchestration_id, reason, cancelled_at FROM {_ORCHESTRATION_CANCELLATIONS_TABLE}"
@@ -3568,35 +3625,60 @@ class TaskManager:
                     for dep_row in dep_rows:
                         dep_map.setdefault(dep_row["task_id"], []).append(dep_row["depends_on_task_id"])
 
-                async with db.execute(f"SELECT * FROM {_TASKS_TABLE}") as cursor:
+                terminal_statuses = tuple(sorted(self._TERMINAL_TASK_STATUSES))
+                placeholders = ", ".join("?" for _ in terminal_statuses)
+                async with db.execute(
+                    f"SELECT * FROM {_TASKS_TABLE} WHERE status NOT IN ({placeholders})",
+                    terminal_statuses,
+                ) as cursor:
                     rows = await cursor.fetchall()
                     for row in rows:
-                        depends_on = []
-                        if row["depends_on"]:
-                            depends_on = json.loads(row["depends_on"])
-                        elif row["id"] in dep_map:
-                            depends_on = dep_map[row["id"]]
-                        task = Task(
-                            id=row["id"],
-                            bot_id=row["bot_id"],
-                            payload=json.loads(row["payload"]) if row["payload"] else {},
-                            metadata=(
-                                TaskMetadata(**json.loads(row["metadata"]))
-                                if row["metadata"]
-                                else None
-                            ),
-                            depends_on=depends_on,
-                            status=row["status"],
-                            result=json.loads(row["result"]) if row["result"] else None,
-                            error=(
-                                TaskError(**json.loads(row["error"]))
-                                if row["error"]
-                                else None
-                            ),
-                            created_at=row["created_at"],
-                            updated_at=row["updated_at"],
-                        )
+                        task = self._task_from_db_row(row, dep_map)
                         self._tasks[task.id] = task
+
+                # A live orchestration can need earlier terminal outputs for join
+                # gates and final QC. Keep only those related rows, never all history.
+                active_orchestration_ids = sorted(
+                    {
+                        str(task.metadata.orchestration_id or "").strip()
+                        for task in self._tasks.values()
+                        if task.metadata and str(task.metadata.orchestration_id or "").strip()
+                    }
+                )
+
+                # Active tasks must retain their completed prerequisites so blocked
+                # work can still evaluate dependencies after a process restart.
+                dependency_ids = sorted(
+                    {
+                        dependency_id
+                        for task in self._tasks.values()
+                        for dependency_id in task.depends_on
+                        if dependency_id not in self._tasks
+                    }
+                )
+                if dependency_ids:
+                    dependency_placeholders = ", ".join("?" for _ in dependency_ids)
+                    async with db.execute(
+                        f"SELECT * FROM {_TASKS_TABLE} WHERE id IN ({dependency_placeholders})",
+                        tuple(dependency_ids),
+                    ) as cursor:
+                        for row in await cursor.fetchall():
+                            task = self._task_from_db_row(row, dep_map)
+                            self._tasks[task.id] = task
+
+                for orchestration_id in active_orchestration_ids:
+                    async with db.execute(
+                        f"""
+                        SELECT * FROM {_TASKS_TABLE}
+                        WHERE metadata IS NOT NULL
+                          AND json_valid(metadata)
+                          AND json_extract(metadata, '$.orchestration_id') = ?
+                        """,
+                        (orchestration_id,),
+                    ) as cursor:
+                        for row in await cursor.fetchall():
+                            task = self._task_from_db_row(row, dep_map)
+                            self._tasks[task.id] = task
 
                 # Recover orphaned tasks that were left in "running" state from a previous session.
                 # Their asyncio runner no longer exists so they would block the queue forever.
@@ -4124,6 +4206,12 @@ class TaskManager:
         metadata = await self._apply_root_pipeline_metadata(bot_id, metadata or TaskMetadata())
         await self._validate_task_payload(bot_id, payload, metadata=metadata)
         dependencies = depends_on or []
+        for dependency_id in dependencies:
+            dependency = await self._load_task_from_db(dependency_id)
+            if dependency is None:
+                raise TaskNotFoundError(f"Dependency task not found: {dependency_id}")
+            async with self._lock:
+                self._tasks.setdefault(dependency.id, dependency)
         task_id = str(uuid.uuid4())
         if not metadata.workflow_root_task_id:
             metadata = metadata.model_copy(update={"workflow_root_task_id": task_id})
@@ -4162,9 +4250,13 @@ class TaskManager:
     async def get_task(self, task_id: str) -> Task:
         await self._ensure_db()
         async with self._lock:
-            if task_id not in self._tasks:
-                raise TaskNotFoundError(f"Task not found: {task_id}")
-            return self._tasks[task_id]
+            cached_task = self._tasks.get(task_id)
+        if cached_task is not None:
+            return cached_task
+        task = await self._load_task_from_db(task_id)
+        if task is None:
+            raise TaskNotFoundError(f"Task not found: {task_id}")
+        return task
 
     async def retry_task(self, task_id: str, payload_override: Any = None) -> Task:
         await self._ensure_db()
@@ -4189,10 +4281,10 @@ class TaskManager:
             return retried_task
 
         now = datetime.now(timezone.utc).isoformat()
+        updated_original: Optional[Task] = None
         async with self._lock:
             existing = self._tasks.get(task_id)
-            if existing is None:
-                return retried_task
+            existing = existing or original
             existing_metadata = existing.metadata or TaskMetadata()
             updated_metadata = existing_metadata.model_copy(
                 update={"retried_by_task_id": retried_task.id}
@@ -4214,6 +4306,16 @@ class TaskManager:
                 }
             )
             updated_original = self._tasks[task_id]
+            if original.status in self._TERMINAL_TASK_STATUSES:
+                retained_for_active_dependency = any(
+                    task.status not in self._TERMINAL_TASK_STATUSES
+                    and task_id in task.depends_on
+                    for task in self._tasks.values()
+                )
+                if not retained_for_active_dependency:
+                    self._tasks.pop(task_id, None)
+        if updated_original is None:
+            return retried_task
         await self._persist_task(updated_original)
         await self._upsert_bot_run(updated_original)
         await self._record_artifacts_for_task(updated_original)
@@ -4314,42 +4416,77 @@ class TaskManager:
         limit: Optional[int] = None,
     ) -> List[Task]:
         await self._ensure_db()
+        clauses: List[str] = []
+        params: List[Any] = []
+        if orchestration_id:
+            clauses.extend([
+                "metadata IS NOT NULL",
+                "json_valid(metadata)",
+                "json_extract(metadata, '$.orchestration_id') = ?",
+            ])
+            params.append(str(orchestration_id))
+        if statuses:
+            wanted = sorted(
+                {str(status).strip().lower() for status in statuses if str(status).strip()}
+            )
+            if wanted:
+                clauses.append(f"lower(status) IN ({', '.join('?' for _ in wanted)})")
+                params.extend(wanted)
+        if bot_id:
+            clauses.append("bot_id = ?")
+            params.append(str(bot_id))
+        query = f"SELECT * FROM {_TASKS_TABLE}"
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY updated_at DESC, created_at DESC"
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(max(1, int(limit)))
+        async with open_sqlite(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(query, tuple(params)) as cursor:
+                rows = await cursor.fetchall()
+        missing_dependency_task_ids = [
+            str(row["id"])
+            for row in rows
+            if not row["depends_on"]
+        ]
+        dependency_map: Dict[str, List[str]] = {}
+        if missing_dependency_task_ids:
+            dependency_placeholders = ", ".join("?" for _ in missing_dependency_task_ids)
+            async with open_sqlite(self._db_path) as db:
+                async with db.execute(
+                    f"""
+                    SELECT task_id, depends_on_task_id
+                    FROM {_TASK_DEPENDENCIES_TABLE}
+                    WHERE task_id IN ({dependency_placeholders})
+                    """,
+                    tuple(missing_dependency_task_ids),
+                ) as cursor:
+                    for dependency_row in await cursor.fetchall():
+                        dependency_map.setdefault(str(dependency_row[0]), []).append(
+                            str(dependency_row[1])
+                        )
+        tasks = [self._task_from_db_row(row, dependency_map) for row in rows]
         async with self._lock:
-            tasks = list(self._tasks.values())
             pending_dispatch = set(self._trigger_dispatch_pending)
         if pending_dispatch:
-            visible_tasks: List[Task] = []
-            for task in tasks:
-                if task.id in pending_dispatch and task.status == "completed":
-                    visible_tasks.append(task.model_copy(update={"status": "running"}))
-                    continue
-                visible_tasks.append(task)
-            tasks = visible_tasks
-        if orchestration_id:
             tasks = [
-                t
-                for t in tasks
-                if t.metadata and t.metadata.orchestration_id == orchestration_id
+                task.model_copy(update={"status": "running"})
+                if task.id in pending_dispatch and task.status == "completed"
+                else task
+                for task in tasks
             ]
-        if statuses:
-            wanted = {str(status).strip().lower() for status in statuses if str(status).strip()}
-            tasks = [t for t in tasks if t.status.lower() in wanted]
-        if bot_id:
-            tasks = [t for t in tasks if str(t.bot_id) == str(bot_id)]
-        safe_limit: Optional[int] = None
-        if limit is not None:
-            safe_limit = max(1, int(limit))
-        if safe_limit is not None and len(tasks) > safe_limit:
-            tasks = heapq.nlargest(
-                safe_limit,
-                tasks,
-                key=lambda task: (task.updated_at or "", task.created_at or ""),
-            )
-        else:
-            tasks.sort(key=lambda task: (task.updated_at or "", task.created_at or ""), reverse=True)
-            if safe_limit is not None:
-                tasks = tasks[:safe_limit]
         return tasks
+
+    async def count_tasks_by_status(self) -> Dict[str, int]:
+        await self._ensure_db()
+        async with open_sqlite(self._db_path) as db:
+            async with db.execute(
+                f"SELECT status, COUNT(*) FROM {_TASKS_TABLE} GROUP BY status"
+            ) as cursor:
+                rows = await cursor.fetchall()
+        return {str(row[0]): int(row[1] or 0) for row in rows}
 
     async def list_bot_runs(self, bot_id: str, limit: int = 50) -> List[BotRun]:
         await self._ensure_db()

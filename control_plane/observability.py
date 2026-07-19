@@ -86,10 +86,9 @@ def install_observability(app: FastAPI) -> None:
         if task_manager:
             statuses = ["queued", "blocked", "running", "completed", "failed"]
             counts = {s: 0 for s in statuses}
-            tasks = await task_manager.list_tasks()
-            for task in tasks:
-                if task.status in counts:
-                    counts[task.status] += 1
+            stored_counts = await task_manager.count_tasks_by_status()
+            for status in statuses:
+                counts[status] = int(stored_counts.get(status, 0))
             for status, count in counts.items():
                 metrics.set_gauge("nexus_control_plane_tasks_by_status", {"status": status}, count)
 
@@ -124,4 +123,3 @@ def install_observability(app: FastAPI) -> None:
                 )
 
         return PlainTextResponse(metrics.render(), media_type="text/plain; version=0.0.4")
-
