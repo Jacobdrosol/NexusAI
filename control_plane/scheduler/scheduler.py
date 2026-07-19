@@ -3939,12 +3939,29 @@ class Scheduler:
         path = payload.get("path")
         if not isinstance(path, str) or not path.strip():
             raise BackendError("Browser inspection payload requires a non-empty path")
+        normalized_path = path.strip()
+        if task is not None:
+            try:
+                bot = await self.bot_registry.get(task.bot_id)
+            except Exception as exc:
+                raise BackendError(
+                    f"Bot {task.bot_id} was not found for browser inspection authorization"
+                ) from exc
+            allowed_paths = {
+                str(candidate).strip()
+                for candidate in bot_execution_policy(bot).browser_inspection_path_allowlist
+                if str(candidate).strip()
+            }
+            if allowed_paths and normalized_path not in allowed_paths:
+                raise BackendError(
+                    f"Bot {bot.id} is not authorized to inspect path {normalized_path}"
+                )
         if not backend.api_key_ref:
             raise BackendError("Browser backends require api_key_ref for the worker request token")
         token = await self._resolve_api_key(backend.api_key_ref, "")
         if not token:
             raise BackendError("Browser worker request token is not configured")
-        body = {"path": path.strip()}
+        body = {"path": normalized_path}
         for field in ("text_limit", "element_limit"):
             if field in payload:
                 body[field] = payload[field]

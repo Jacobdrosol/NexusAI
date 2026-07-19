@@ -601,6 +601,112 @@ async def test_scheduler_dispatches_scoped_browser_inspection_with_worker_token(
 
 
 @pytest.mark.anyio
+async def test_scheduler_allows_browser_inspection_in_bot_path_allowlist(monkeypatch):
+    from control_plane.scheduler.scheduler import Scheduler
+
+    worker = Worker(
+        id="browser-worker",
+        name="Browser Worker",
+        host="browser.local",
+        port=8010,
+        capabilities=[Capability(type="tool", provider="browser", models=["browser-ui"])],
+        status="online",
+        enabled=True,
+    )
+    backend = BackendConfig(
+        type="browser",
+        provider="browser",
+        model="browser-ui",
+        worker_id=worker.id,
+        api_key_ref="BROWSER_WORKER_TOKEN",
+    )
+    bot = Bot(
+        id="course-evidence",
+        name="Course Evidence",
+        role="browser-evidence-inspector",
+        execution_policy={
+            "required_worker_tools": ["browser-ui"],
+            "browser_inspection_path_allowlist": ["/admin/courses/57/lessons"],
+        },
+        backends=[backend],
+    )
+    task = Task(
+        id="task-course-evidence",
+        bot_id=bot.id,
+        payload={"path": "/admin/courses/57/lessons"},
+        created_at="now",
+        updated_at="now",
+    )
+    monkeypatch.setenv("BROWSER_WORKER_TOKEN", "worker-token")
+    fake_response = MagicMock()
+    fake_response.raise_for_status.return_value = None
+    fake_response.json.return_value = {"url": "https://app.example/admin/courses/57/lessons", "text": "Lessons"}
+    mock_client = AsyncMock()
+    mock_client.__aenter__.return_value = mock_client
+    mock_client.__aexit__.return_value = False
+    mock_client.post.return_value = fake_response
+    worker_registry = AsyncMock()
+    worker_registry.get.return_value = worker
+    bot_registry = AsyncMock()
+    bot_registry.get.return_value = bot
+    scheduler = Scheduler(bot_registry=bot_registry, worker_registry=worker_registry)
+
+    with patch("control_plane.scheduler.scheduler.httpx.AsyncClient", return_value=mock_client):
+        result = await scheduler._dispatch_backend(backend, task.payload, task=task)
+
+    assert result["text"] == "Lessons"
+    assert mock_client.post.await_args.kwargs["json"] == {"path": "/admin/courses/57/lessons"}
+
+
+@pytest.mark.anyio
+async def test_scheduler_rejects_browser_inspection_outside_bot_path_allowlist(monkeypatch):
+    from control_plane.scheduler.scheduler import BackendError, Scheduler
+
+    worker = Worker(
+        id="browser-worker",
+        name="Browser Worker",
+        host="browser.local",
+        port=8010,
+        capabilities=[Capability(type="tool", provider="browser", models=["browser-ui"])],
+        status="online",
+        enabled=True,
+    )
+    backend = BackendConfig(
+        type="browser",
+        provider="browser",
+        model="browser-ui",
+        worker_id=worker.id,
+        api_key_ref="BROWSER_WORKER_TOKEN",
+    )
+    bot = Bot(
+        id="course-evidence",
+        name="Course Evidence",
+        role="browser-evidence-inspector",
+        execution_policy={
+            "required_worker_tools": ["browser-ui"],
+            "browser_inspection_path_allowlist": ["/admin/courses/57/lessons"],
+        },
+        backends=[backend],
+    )
+    task = Task(
+        id="task-course-evidence",
+        bot_id=bot.id,
+        payload={"path": "/admin/courses/57"},
+        created_at="now",
+        updated_at="now",
+    )
+    monkeypatch.setenv("BROWSER_WORKER_TOKEN", "worker-token")
+    worker_registry = AsyncMock()
+    worker_registry.get.return_value = worker
+    bot_registry = AsyncMock()
+    bot_registry.get.return_value = bot
+    scheduler = Scheduler(bot_registry=bot_registry, worker_registry=worker_registry)
+
+    with pytest.raises(BackendError, match="is not authorized to inspect path /admin/courses/57"):
+        await scheduler._dispatch_backend(backend, task.payload, task=task)
+
+
+@pytest.mark.anyio
 async def test_scheduler_captures_pinned_worker_execution_provenance(monkeypatch):
     from control_plane.scheduler.scheduler import Scheduler
 

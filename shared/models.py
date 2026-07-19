@@ -138,6 +138,7 @@ class BotExecutionPolicy(BaseModel):
     db_action_policy: Optional[DBActionPolicy] = None
     allow_run_result_ingest: bool = True
     browser_action_allowlist: List[str] = Field(default_factory=list)
+    browser_inspection_path_allowlist: List[str] = Field(default_factory=list)
 
 
 class BotContextAccess(BaseModel):
