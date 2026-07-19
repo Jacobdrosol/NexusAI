@@ -2438,6 +2438,13 @@ def test_bots_page_and_proxy_support_specialist_creation(dashboard_client):
         def preview_bot_blueprint(self, body):
             return {"bot": {"id": "researcher", "name": body["name"]}}
 
+        def preflight_bot_blueprint(self, body):
+            return {
+                "bot_id": body["id"],
+                "ready_to_enable": True,
+                "readiness": {"ready": True, "checks": []},
+            }
+
         def create_bot_blueprint(self, body):
             return {"bot": {"id": "researcher", "name": body["name"]}}
 
@@ -2447,6 +2454,10 @@ def test_bots_page_and_proxy_support_specialist_creation(dashboard_client):
         catalog = dashboard_client.get("/api/bot-blueprints")
         preview = dashboard_client.post(
             "/api/bot-blueprints/preview",
+            json={"name": "Researcher"},
+        )
+        preflight = dashboard_client.post(
+            "/api/bot-blueprints/preflight",
             json={"name": "Researcher"},
         )
         created = dashboard_client.post(
@@ -2459,6 +2470,7 @@ def test_bots_page_and_proxy_support_specialist_creation(dashboard_client):
     assert b"specialist-model-options" in page.data
     assert catalog.get_json()["blueprints"][0]["kind"] == "researcher"
     assert preview.get_json()["bot"]["id"] == "researcher"
+    assert preflight.get_json()["preflight"]["ready_to_enable"] is True
     assert created.status_code == 201
 
 

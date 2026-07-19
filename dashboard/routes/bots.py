@@ -450,6 +450,25 @@ def api_preview_bot_blueprint():
     return jsonify(data)
 
 
+@bp.post("/api/bot-blueprints/preflight")
+@login_required
+def api_preflight_bot_blueprint():
+    """Build and validate a specialist before it can be enabled or registered."""
+    from dashboard.cp_client import get_cp_client
+
+    cp = get_cp_client()
+    preview = cp.preview_bot_blueprint(request.get_json(silent=True) or {})
+    if preview is None or not isinstance(preview.get("bot"), dict):
+        error, status = _cp_error_payload(cp, "failed to generate specialist configuration")
+        return jsonify(error), status
+
+    preflight = cp.preflight_bot_blueprint(preview["bot"])
+    if preflight is None:
+        error, status = _cp_error_payload(cp, "specialist preflight failed")
+        return jsonify(error), status
+    return jsonify({"bot": preview["bot"], "preflight": preflight})
+
+
 @bp.post("/api/bot-blueprints/create")
 @login_required
 def api_create_bot_blueprint():

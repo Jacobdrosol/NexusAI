@@ -166,12 +166,16 @@
         </div>
       </div>
       <div id="specialist-status" class="mini-note" style="margin-bottom:0.75rem;"></div>
+      <div id="specialist-preflight" class="mini-note" style="display:none;margin-bottom:0.75rem;">
+        <strong id="specialist-preflight-summary"></strong>
+        <ul id="specialist-preflight-checks" style="margin:0.45rem 0 0;padding-left:1.2rem;"></ul>
+      </div>
       <details id="specialist-preview-wrap" style="display:none;margin-bottom:0.75rem;">
         <summary style="cursor:pointer;">Configuration Preview</summary>
         <pre id="specialist-preview" style="margin-top:0.65rem;max-height:270px;overflow:auto;white-space:pre-wrap;"></pre>
       </details>
       <div class="modal-actions">
-        <button type="button" class="btn" onclick="previewSpecialist()">Preview</button>
+        <button type="button" class="btn" onclick="previewSpecialist()">Review &amp; Preflight</button>
         <button type="submit" class="btn btn-primary">Create Specialist</button>
         <button type="button" class="btn" onclick="closeSpecialistModal()">Cancel</button>
       </div>
@@ -183,6 +187,7 @@
 <script>
 const SPECIALIST_MODELS = {{ models|tojson }};
 let SPECIALIST_CATALOG = [];
+let SPECIALIST_PREFLIGHT = null;
 
 function showAddBot() { document.getElementById('modal-add-bot').style.display='flex'; }
 function hideModal(id) { document.getElementById(id).style.display='none'; }
@@ -199,12 +204,49 @@ function setSpecialistStatus(message, isError=false) {
   el.style.color = isError ? '#dc2626' : '#64748b';
 }
 
+function specialistFingerprint(payload) {
+  return JSON.stringify(payload);
+}
+
+function clearSpecialistPreflight() {
+  SPECIALIST_PREFLIGHT = null;
+  const container = document.getElementById('specialist-preflight');
+  const checks = document.getElementById('specialist-preflight-checks');
+  if (container) container.style.display = 'none';
+  if (checks) checks.replaceChildren();
+}
+
+function renderSpecialistPreflight(preflight) {
+  const container = document.getElementById('specialist-preflight');
+  const summary = document.getElementById('specialist-preflight-summary');
+  const checks = document.getElementById('specialist-preflight-checks');
+  if (!container || !summary || !checks) return;
+
+  const readiness = preflight && typeof preflight.readiness === 'object' ? preflight.readiness : {};
+  const ready = preflight && preflight.ready_to_enable === true;
+  summary.textContent = ready
+    ? 'Ready to enable: declared worker, model, and credential checks passed.'
+    : 'Not ready to enable: correct the failed checks or create this specialist disabled.';
+  summary.style.color = ready ? '#166534' : '#b45309';
+  checks.replaceChildren();
+  (Array.isArray(readiness.checks) ? readiness.checks : []).forEach((check) => {
+    const item = document.createElement('li');
+    const status = String(check.status || 'unknown');
+    const component = String(check.component || 'check');
+    const message = String(check.message || 'No detail provided.');
+    item.textContent = `${status}: ${component} - ${message}`;
+    checks.appendChild(item);
+  });
+  container.style.display = 'block';
+}
+
 function selectedSpecialist() {
   const kind = String(document.getElementById('specialist-kind')?.value || '');
   return SPECIALIST_CATALOG.find((item) => String(item.kind) === kind) || null;
 }
 
 function refreshSpecialistDetails() {
+  clearSpecialistPreflight();
   const selected = selectedSpecialist();
   const description = document.getElementById('specialist-description');
   const writeOption = document.getElementById('specialist-write-option');
@@ -217,6 +259,7 @@ function refreshSpecialistDetails() {
 }
 
 function refreshSpecialistBackendControls() {
+  clearSpecialistPreflight();
   const backendType = String(document.getElementById('specialist-backend-type')?.value || '');
   const cliOptions = document.getElementById('specialist-cli-options');
   const provider = document.getElementById('specialist-provider');
@@ -236,6 +279,7 @@ function refreshSpecialistBackendControls() {
 }
 
 function refreshSpecialistModels() {
+  clearSpecialistPreflight();
   const provider = String(document.getElementById('specialist-provider')?.value || '').trim().toLowerCase();
   const options = document.getElementById('specialist-model-options');
   if (!options) return;
@@ -265,6 +309,7 @@ async function loadSpecialistCatalog() {
 
 async function openSpecialistModal() {
   document.getElementById('modal-create-specialist').style.display = 'flex';
+  clearSpecialistPreflight();
   setSpecialistStatus('');
   await loadSpecialistCatalog();
   refreshSpecialistBackendControls();
@@ -313,31 +358,51 @@ async function previewSpecialist() {
   try {
     const payload = specialistPayload();
     if (!payload.kind || !payload.name) throw new Error('Specialty and name are required.');
-    setSpecialistStatus('Generating configuration preview...');
-    const response = await fetch('/api/bot-blueprints/preview', {
+    setSpecialistStatus('Generating configuration and checking dispatch readiness...');
+    const response = await fetch('/api/bot-blueprints/preflight', {
       method: 'POST',
       headers: {'Content-Type': 'application/json', 'X-CSRFToken': specialistCsrf()},
       body: JSON.stringify(payload),
     });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.error || 'Unable to preview specialist.');
+    if (!response.ok) throw new Error(data.error || 'Unable to preflight specialist.');
     document.getElementById('specialist-preview').textContent = JSON.stringify(data.bot || {}, null, 2);
     document.getElementById('specialist-preview-wrap').style.display = 'block';
-    setSpecialistStatus('Preview generated.');
+    SPECIALIST_PREFLIGHT = {fingerprint: specialistFingerprint(payload), data: data.preflight || {}};
+    renderSpecialistPreflight(SPECIALIST_PREFLIGHT.data);
+    setSpecialistStatus('Configuration preview and preflight completed.');
   } catch (error) {
-    setSpecialistStatus(error.message || 'Unable to preview specialist.', true);
+    clearSpecialistPreflight();
+    setSpecialistStatus(error.message || 'Unable to preflight specialist.', true);
   }
 }
 
 document.getElementById('specialist-kind').addEventListener('change', refreshSpecialistDetails);
 document.getElementById('specialist-provider').addEventListener('input', refreshSpecialistModels);
 document.getElementById('specialist-backend-type').addEventListener('change', refreshSpecialistBackendControls);
+document.getElementById('specialist-model').addEventListener('input', clearSpecialistPreflight);
+document.getElementById('specialist-worker').addEventListener('change', clearSpecialistPreflight);
+document.getElementById('specialist-key').addEventListener('change', clearSpecialistPreflight);
+document.getElementById('specialist-project').addEventListener('change', clearSpecialistPreflight);
+document.getElementById('specialist-name').addEventListener('input', clearSpecialistPreflight);
+document.getElementById('specialist-mission').addEventListener('input', clearSpecialistPreflight);
+document.getElementById('specialist-activate').addEventListener('change', clearSpecialistPreflight);
+document.getElementById('specialist-allow-writes').addEventListener('change', clearSpecialistPreflight);
+document.getElementById('specialist-cli-profile').addEventListener('change', clearSpecialistPreflight);
+document.getElementById('specialist-cli-runtime-model').addEventListener('input', clearSpecialistPreflight);
 
 document.getElementById('form-create-specialist').addEventListener('submit', async function(event) {
   event.preventDefault();
   try {
     const payload = specialistPayload();
     if (!payload.kind || !payload.name) throw new Error('Specialty and name are required.');
+    if (payload.activate && (
+      !SPECIALIST_PREFLIGHT
+      || SPECIALIST_PREFLIGHT.fingerprint !== specialistFingerprint(payload)
+      || SPECIALIST_PREFLIGHT.data.ready_to_enable !== true
+    )) {
+      throw new Error('Run Review & Preflight and resolve any failed checks before creating an enabled specialist.');
+    }
     setSpecialistStatus('Creating specialist...');
     const response = await fetch('/api/bot-blueprints/create', {
       method: 'POST',

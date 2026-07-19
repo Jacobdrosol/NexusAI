@@ -44,6 +44,8 @@ async def test_fleet_summary_aggregates_operational_counts_without_task_content(
     assert payload["source"] == "control_plane_fleet_summary_v1"
     assert payload["workers"] == {
         "registered": 1,
+        "enabled": 1,
+        "disabled": 0,
         "online": 1,
         "offline": 0,
         "runtime_attention": [],
@@ -53,6 +55,7 @@ async def test_fleet_summary_aggregates_operational_counts_without_task_content(
     assert payload["schedules"] == {
         "registered": 1,
         "active": 0,
+        "failed_active_last_run_count": 0,
         "failed_recent_schedule_ids": [],
     }
     assert "error" not in payload["tasks"]

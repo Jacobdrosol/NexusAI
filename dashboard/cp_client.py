@@ -226,6 +226,10 @@ class CPClient:
     def preview_bot_blueprint(self, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return self._post("/v1/bot-blueprints/preview", body)
 
+    def preflight_bot_blueprint(self, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Validate a generated specialist config without registering it."""
+        return self.preflight_bot(body)
+
     def create_bot_blueprint(self, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return self._post("/v1/bot-blueprints/create", body)
 
