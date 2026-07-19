@@ -3928,6 +3928,10 @@ class Scheduler:
             if browser_action == "test_builder":
                 return await self._dispatch_browser_test_builder_action(worker, backend, payload, task=task)
             if browser_action == "question_bank":
+                if str(payload.get("action") or "").strip().lower() == "create_one":
+                    return await self._dispatch_browser_question_bank_create(
+                        worker, backend, payload, task=task
+                    )
                 return await self._dispatch_browser_question_bank_patch(worker, backend, payload, task=task)
             raise BackendError("Unsupported browser action")
         allowed_fields = {"path", "text_limit", "element_limit"}
@@ -4147,6 +4151,83 @@ class Scheduler:
                 result = response.json()
                 if not isinstance(result, dict):
                     raise BackendError("Browser worker returned an invalid Question Bank response")
+                return result
+            finally:
+                elapsed_ms = (time.perf_counter() - started) * 1000.0
+                previous = float(self._latency_ema_ms.get(worker.id, self._default_latency_ms))
+                alpha = min(max(self._latency_alpha, 0.01), 1.0)
+                self._latency_ema_ms[worker.id] = (alpha * elapsed_ms) + ((1.0 - alpha) * previous)
+                self._inflight_by_worker[worker.id] = max(
+                    0, int(self._inflight_by_worker.get(worker.id, 1)) - 1
+                )
+
+    async def _dispatch_browser_question_bank_create(
+        self,
+        worker: Worker,
+        backend: BackendConfig,
+        payload: dict[str, Any],
+        *,
+        task: Task | None,
+    ) -> dict[str, Any]:
+        """Dispatch one shortage-approved Question Bank creation through the fixed UI workflow."""
+
+        allowed_fields = {
+            "browser_action",
+            "action",
+            "confirmation",
+            "bank_id",
+            "candidate",
+            "review_evidence",
+        }
+        unexpected_fields = sorted(set(payload) - allowed_fields)
+        if unexpected_fields:
+            raise BackendError(
+                "Question Bank creation payload contains unsupported fields: "
+                + ", ".join(unexpected_fields)
+            )
+        if str(payload.get("browser_action") or "").strip() != "question_bank":
+            raise BackendError("Browser actions must declare browser_action=question_bank")
+        if str(payload.get("action") or "").strip().lower() != "create_one":
+            raise BackendError("Unsupported Question Bank creation action")
+        if not isinstance(payload.get("candidate"), dict) or not isinstance(
+            payload.get("review_evidence"), dict
+        ):
+            raise BackendError("Question Bank creation requires candidate and reviewer evidence objects")
+        if task is None:
+            raise BackendError("Question Bank creation requires a persisted task")
+        try:
+            bot = await self.bot_registry.get(task.bot_id)
+        except Exception as exc:
+            raise BackendError(
+                f"Bot {task.bot_id} was not found for Question Bank authorization"
+            ) from exc
+        action_key = "question_bank.create_one"
+        if action_key not in bot_execution_policy(bot).browser_action_allowlist:
+            raise BackendError(f"Bot {bot.id} is not authorized for {action_key}")
+        if not backend.api_key_ref:
+            raise BackendError("Browser backends require api_key_ref for the worker request token")
+        token = await self._resolve_api_key(backend.api_key_ref, "")
+        if not token:
+            raise BackendError("Browser worker request token is not configured")
+        try:
+            url = f"{worker_base_url(worker)}/browser/question-bank-create"
+        except WorkerProbeError as exc:
+            raise BackendError(f"Worker {worker.id} has an invalid address") from exc
+
+        body = {field: payload[field] for field in allowed_fields - {"browser_action"} if field in payload}
+        self._inflight_by_worker[worker.id] = int(self._inflight_by_worker.get(worker.id, 0)) + 1
+        started = time.perf_counter()
+        async with httpx.AsyncClient(timeout=_worker_timeout()) as client:
+            try:
+                response = await client.post(
+                    url,
+                    json=body,
+                    headers={"X-Nexus-Worker-Token": token},
+                )
+                response.raise_for_status()
+                result = response.json()
+                if not isinstance(result, dict):
+                    raise BackendError("Browser worker returned an invalid Question Bank creation response")
                 return result
             finally:
                 elapsed_ms = (time.perf_counter() - started) * 1000.0

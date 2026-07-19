@@ -993,6 +993,144 @@ async def test_scheduler_rejects_question_bank_create_before_worker_dispatch(mon
 
 
 @pytest.mark.anyio
+async def test_scheduler_dispatches_only_authorized_single_question_creation(monkeypatch):
+    from control_plane.scheduler.scheduler import Scheduler
+
+    worker = Worker(
+        id="browser-worker",
+        name="Browser Worker",
+        host="browser.local",
+        port=8010,
+        capabilities=[Capability(type="tool", provider="browser", models=["browser-ui"])],
+        status="online",
+        enabled=True,
+    )
+    backend = BackendConfig(
+        type="browser",
+        provider="browser",
+        model="browser-ui",
+        worker_id=worker.id,
+        api_key_ref="BROWSER_WORKER_TOKEN",
+    )
+    bot = Bot(
+        id="question-adder",
+        name="Question Adder",
+        role="question-bank-shortage-adder",
+        execution_policy={
+            "required_worker_tools": ["browser-ui"],
+            "browser_action_allowlist": ["question_bank.create_one"],
+        },
+        backends=[backend],
+    )
+    task = Task(
+        id="task-question-create",
+        bot_id=bot.id,
+        payload={},
+        created_at="now",
+        updated_at="now",
+    )
+    monkeypatch.setenv("BROWSER_WORKER_TOKEN", "worker-token")
+    fake_response = MagicMock()
+    fake_response.raise_for_status.return_value = None
+    fake_response.json.return_value = {"status": "Question Bank question created and verified"}
+    mock_client = AsyncMock()
+    mock_client.__aenter__.return_value = mock_client
+    mock_client.__aexit__.return_value = False
+    mock_client.post.return_value = fake_response
+    worker_registry = AsyncMock()
+    worker_registry.get.return_value = worker
+    bot_registry = AsyncMock()
+    bot_registry.get.return_value = bot
+    scheduler = Scheduler(bot_registry=bot_registry, worker_registry=worker_registry)
+    review_task_id = "review-42-shortage"
+
+    with patch("control_plane.scheduler.scheduler.httpx.AsyncClient", return_value=mock_client):
+        result = await scheduler._dispatch_backend(
+            backend,
+            {
+                "browser_action": "question_bank",
+                "action": "create_one",
+                "confirmation": f"approved:question-bank:create_one:42:{review_task_id}",
+                "bank_id": 42,
+                "candidate": {
+                    "prompt": "A shopper has two apples and receives one more. How many apples are there?",
+                    "question_type": "MCQ",
+                    "difficulty": "easy",
+                    "category": "Counting",
+                    "is_active": True,
+                    "options": ["2", "3", "4"],
+                    "correct_option_index": 1,
+                },
+                "review_evidence": {
+                    "reviewer_bot_id": "globeiq-question-bank-review-01-bot",
+                    "review_task_id": review_task_id,
+                    "approved_create": True,
+                    "semantic_duplicate_risk": "materially_distinct_context",
+                    "reviewed_question_ids": [7, 8, 9],
+                    "existing_question_count": 3,
+                    "minimum_required_count": 4,
+                    "shortage_detected": True,
+                    "rationale": "The reviewer inspected every existing question and found a verified shortage.",
+                },
+            },
+            task=task,
+        )
+
+    assert result["status"] == "Question Bank question created and verified"
+    assert mock_client.post.await_args.args[0] == "http://browser.local:8010/browser/question-bank-create"
+    assert mock_client.post.await_args.kwargs["json"]["action"] == "create_one"
+    assert "browser_action" not in mock_client.post.await_args.kwargs["json"]
+
+
+@pytest.mark.anyio
+async def test_scheduler_rejects_question_bank_creation_without_create_allowlist(monkeypatch):
+    from control_plane.scheduler.scheduler import BackendError, Scheduler
+
+    worker = Worker(
+        id="browser-worker",
+        name="Browser Worker",
+        host="browser.local",
+        port=8010,
+        capabilities=[Capability(type="tool", provider="browser", models=["browser-ui"])],
+        status="online",
+        enabled=True,
+    )
+    backend = BackendConfig(
+        type="browser",
+        provider="browser",
+        model="browser-ui",
+        worker_id=worker.id,
+        api_key_ref="BROWSER_WORKER_TOKEN",
+    )
+    bot_registry = AsyncMock()
+    bot_registry.get.return_value = Bot(
+        id="question-patcher",
+        name="Question Patcher",
+        role="question-patcher",
+        execution_policy={"browser_action_allowlist": ["question_bank.patch_existing"]},
+        backends=[backend],
+    )
+    worker_registry = AsyncMock()
+    worker_registry.get.return_value = worker
+    scheduler = Scheduler(bot_registry=bot_registry, worker_registry=worker_registry)
+    task = Task(id="task-question-create", bot_id="question-patcher", payload={}, created_at="now", updated_at="now")
+
+    with pytest.raises(BackendError, match="not authorized for question_bank.create_one"):
+        await scheduler._dispatch_backend(
+            backend,
+            {
+                "browser_action": "question_bank",
+                "action": "create_one",
+                "confirmation": "approved:question-bank:create_one:42:review-42-shortage",
+                "bank_id": 42,
+                "candidate": {},
+                "review_evidence": {},
+            },
+            task=task,
+        )
+
+
+@pytest.mark.anyio
 async def test_scheduler_injects_bot_system_prompt_into_payload():
     from control_plane.scheduler.scheduler import Scheduler
 
