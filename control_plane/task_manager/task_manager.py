@@ -9,7 +9,7 @@ import re
 import shutil
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -4328,6 +4328,166 @@ class TaskManager:
             metadata=json.loads(row["metadata"]) if row["metadata"] else {},
             created_at=row["created_at"],
         )
+
+    @staticmethod
+    def _history_retention_statuses(statuses: Optional[List[str]]) -> List[str]:
+        requested = {
+            str(status or "").strip().lower()
+            for status in (statuses or ["completed", "retried", "cancelled"])
+            if str(status or "").strip()
+        }
+        if not requested or not requested.issubset(TaskManager._TERMINAL_TASK_STATUSES):
+            raise ValueError("History retention only accepts terminal task statuses")
+        return sorted(requested)
+
+    @staticmethod
+    def _history_retention_cutoff(older_than_days: int) -> str:
+        safe_days = max(1, min(int(older_than_days), 3_650))
+        return (datetime.now(timezone.utc) - timedelta(days=safe_days)).isoformat()
+
+    @staticmethod
+    def _history_retention_candidate_sql(statuses: List[str]) -> tuple[str, tuple[str, ...]]:
+        placeholders = ", ".join("?" for _ in statuses)
+        terminal_placeholders = ", ".join("?" for _ in TaskManager._TERMINAL_TASK_STATUSES)
+        sql = f"""
+            SELECT candidate.id
+            FROM {_TASKS_TABLE} AS candidate
+            WHERE candidate.status IN ({placeholders})
+              AND candidate.updated_at < ?
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM {_TASK_DEPENDENCIES_TABLE} AS dependency
+                  INNER JOIN {_TASKS_TABLE} AS dependent ON dependent.id = dependency.task_id
+                  WHERE dependency.depends_on_task_id = candidate.id
+                    AND dependent.status NOT IN ({terminal_placeholders})
+              )
+        """
+        return sql, tuple(statuses) + tuple(sorted(TaskManager._TERMINAL_TASK_STATUSES))
+
+    async def preview_history_retention(
+        self,
+        *,
+        older_than_days: int = 90,
+        statuses: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Summarize terminal history eligible for an explicit operator-approved purge."""
+
+        await self._ensure_db()
+        safe_statuses = self._history_retention_statuses(statuses)
+        cutoff = self._history_retention_cutoff(older_than_days)
+        candidate_sql, status_params = self._history_retention_candidate_sql(safe_statuses)
+        candidate_params = status_params[: len(safe_statuses)] + (cutoff,) + status_params[len(safe_statuses) :]
+        protected_sql = f"""
+            SELECT COUNT(DISTINCT candidate.id)
+            FROM {_TASKS_TABLE} AS candidate
+            INNER JOIN {_TASK_DEPENDENCIES_TABLE} AS dependency
+                ON dependency.depends_on_task_id = candidate.id
+            INNER JOIN {_TASKS_TABLE} AS dependent ON dependent.id = dependency.task_id
+            WHERE candidate.status IN ({", ".join("?" for _ in safe_statuses)})
+              AND candidate.updated_at < ?
+              AND dependent.status NOT IN ({", ".join("?" for _ in self._TERMINAL_TASK_STATUSES)})
+        """
+        async with open_sqlite(self._db_path) as db:
+            async with db.execute(
+                f"SELECT COUNT(*) FROM ({candidate_sql})",
+                candidate_params,
+            ) as cursor:
+                eligible_task_count = int((await cursor.fetchone())[0] or 0)
+            async with db.execute(
+                f"SELECT COUNT(*) FROM {_BOT_RUNS_TABLE} WHERE task_id IN ({candidate_sql})",
+                candidate_params,
+            ) as cursor:
+                eligible_run_count = int((await cursor.fetchone())[0] or 0)
+            async with db.execute(
+                f"""
+                SELECT COUNT(*), COALESCE(SUM(LENGTH(COALESCE(content, ''))), 0)
+                FROM {_BOT_RUN_ARTIFACTS_TABLE}
+                WHERE task_id IN ({candidate_sql})
+                """,
+                candidate_params,
+            ) as cursor:
+                artifact_row = await cursor.fetchone()
+            async with db.execute(protected_sql, candidate_params) as cursor:
+                protected_by_active_dependency_count = int((await cursor.fetchone())[0] or 0)
+
+        return {
+            "cutoff_before": cutoff,
+            "statuses": safe_statuses,
+            "eligible_task_count": eligible_task_count,
+            "eligible_bot_run_count": eligible_run_count,
+            "eligible_artifact_count": int(artifact_row[0] or 0),
+            "eligible_artifact_content_bytes": int(artifact_row[1] or 0),
+            "protected_by_active_dependency_count": protected_by_active_dependency_count,
+            "requires_explicit_confirmation": True,
+        }
+
+    async def purge_history_retention(
+        self,
+        *,
+        older_than_days: int = 90,
+        statuses: Optional[List[str]] = None,
+        max_tasks: int = 500,
+        confirmation: str,
+    ) -> Dict[str, Any]:
+        """Delete a bounded batch of previewed terminal history after explicit confirmation."""
+
+        if str(confirmation or "").strip() != "delete-terminal-history":
+            raise ValueError("History retention requires confirmation 'delete-terminal-history'")
+        safe_limit = max(1, min(int(max_tasks), 10_000))
+        preview = await self.preview_history_retention(
+            older_than_days=older_than_days,
+            statuses=statuses,
+        )
+        safe_statuses = list(preview["statuses"])
+        cutoff = str(preview["cutoff_before"])
+        candidate_sql, status_params = self._history_retention_candidate_sql(safe_statuses)
+        candidate_params = status_params[: len(safe_statuses)] + (cutoff,) + status_params[len(safe_statuses) :]
+        selection_sql = f"""
+            SELECT candidate.id
+            FROM {_TASKS_TABLE} AS candidate
+            WHERE candidate.id IN ({candidate_sql})
+            ORDER BY candidate.updated_at ASC, candidate.id ASC
+            LIMIT ?
+        """
+        async with open_sqlite(self._db_path) as db:
+            async with db.execute(selection_sql, candidate_params + (safe_limit,)) as cursor:
+                task_ids = [str(row[0]) for row in await cursor.fetchall()]
+            if not task_ids:
+                return {**preview, "deleted_task_count": 0, "deleted_artifact_count": 0}
+            placeholders = ", ".join("?" for _ in task_ids)
+            async with db.execute(
+                f"SELECT COUNT(*) FROM {_BOT_RUN_ARTIFACTS_TABLE} WHERE task_id IN ({placeholders})",
+                tuple(task_ids),
+            ) as cursor:
+                deleted_artifact_count = int((await cursor.fetchone())[0] or 0)
+            await db.execute(
+                f"DELETE FROM {_BOT_RUN_ARTIFACTS_TABLE} WHERE task_id IN ({placeholders})",
+                tuple(task_ids),
+            )
+            await db.execute(
+                f"DELETE FROM {_BOT_RUNS_TABLE} WHERE task_id IN ({placeholders})",
+                tuple(task_ids),
+            )
+            await db.execute(
+                f"DELETE FROM {_TASK_DEPENDENCIES_TABLE} WHERE task_id IN ({placeholders})",
+                tuple(task_ids),
+            )
+            await db.execute(
+                f"DELETE FROM {_TASKS_TABLE} WHERE id IN ({placeholders})",
+                tuple(task_ids),
+            )
+            await db.commit()
+        async with self._lock:
+            for task_id in task_ids:
+                self._tasks.pop(task_id, None)
+                self._watchdog_state.pop(task_id, None)
+                self._trigger_dispatch_pending.discard(task_id)
+        return {
+            **preview,
+            "deleted_task_count": len(task_ids),
+            "deleted_artifact_count": deleted_artifact_count,
+            "remaining_eligible_task_count": max(0, int(preview["eligible_task_count"]) - len(task_ids)),
+        }
 
     async def _bot_output_contract(self, bot_id: str) -> dict[str, Any]:
         if self._bot_registry is None:

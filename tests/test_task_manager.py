@@ -4032,6 +4032,86 @@ async def test_output_contract_preserves_structured_browser_evidence_with_text_f
 
 
 @pytest.mark.anyio
+async def test_history_retention_previews_and_purges_only_unreferenced_terminal_records(tmp_path):
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import BotRunArtifact, Task, TaskMetadata
+
+    class StubScheduler:
+        pass
+
+    manager = TaskManager(StubScheduler(), db_path=str(tmp_path / "retention.db"))
+    await manager._ensure_db()
+    old_time = "2024-01-01T00:00:00+00:00"
+    active_time = "2026-01-01T00:00:00+00:00"
+    purgeable = Task(
+        id="purgeable-task",
+        bot_id="retention-bot",
+        payload={"safe": True},
+        metadata=TaskMetadata(),
+        status="completed",
+        created_at=old_time,
+        updated_at=old_time,
+    )
+    protected = Task(
+        id="protected-task",
+        bot_id="retention-bot",
+        payload={"safe": True},
+        metadata=TaskMetadata(),
+        status="completed",
+        created_at=old_time,
+        updated_at=old_time,
+    )
+    dependent = Task(
+        id="active-dependent-task",
+        bot_id="retention-bot",
+        payload={"safe": True},
+        metadata=TaskMetadata(),
+        depends_on=[protected.id],
+        status="blocked",
+        created_at=active_time,
+        updated_at=active_time,
+    )
+    for task in (purgeable, protected, dependent):
+        manager._tasks[task.id] = task
+        await manager._persist_task(task)
+        await manager._upsert_bot_run(task)
+    await manager._persist_dependencies(dependent)
+    await manager._upsert_artifact(
+        BotRunArtifact(
+            id="purgeable-task:result",
+            run_id=purgeable.id,
+            task_id=purgeable.id,
+            bot_id=purgeable.bot_id,
+            kind="result",
+            label="Result",
+            content="retained output",
+            metadata={},
+            created_at=old_time,
+        )
+    )
+
+    preview = await manager.preview_history_retention(older_than_days=30)
+
+    assert preview["eligible_task_count"] == 1
+    assert preview["protected_by_active_dependency_count"] == 1
+    assert preview["eligible_artifact_count"] == 1
+    with pytest.raises(ValueError, match="confirmation"):
+        await manager.purge_history_retention(older_than_days=30, confirmation="no")
+
+    result = await manager.purge_history_retention(
+        older_than_days=30,
+        max_tasks=10,
+        confirmation="delete-terminal-history",
+    )
+
+    assert result["deleted_task_count"] == 1
+    assert result["deleted_artifact_count"] == 1
+    assert purgeable.id not in manager._tasks
+    assert protected.id in manager._tasks
+    await manager.close()
+
+
+@pytest.mark.anyio
 async def test_output_contract_fails_when_required_fields_are_missing(tmp_path, monkeypatch):
     import asyncio
 

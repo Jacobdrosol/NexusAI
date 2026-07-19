@@ -21,6 +21,13 @@ class RetryTaskRequest(BaseModel):
     payload: Optional[Any] = None
 
 
+class HistoryRetentionPurgeRequest(BaseModel):
+    older_than_days: int = Field(default=90, ge=1, le=3650)
+    statuses: List[str] = Field(default_factory=lambda: ["completed", "retried", "cancelled"], min_length=1)
+    max_tasks: int = Field(default=500, ge=1, le=10_000)
+    confirmation: str = Field(min_length=1, max_length=80)
+
+
 class CancelOrchestrationRequest(BaseModel):
     reason: Optional[str] = Field(default=None, max_length=500)
 
@@ -101,6 +108,48 @@ async def create_task(request: Request, body: CreateTaskRequest) -> Task:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/history-retention/preview")
+async def preview_history_retention(
+    request: Request,
+    older_than_days: int = Query(default=90, ge=1, le=3650),
+    statuses: Optional[str] = Query(default=None),
+) -> Dict[str, Any]:
+    requested_statuses = [value.strip() for value in str(statuses or "").split(",") if value.strip()] or None
+    try:
+        return await request.app.state.task_manager.preview_history_retention(
+            older_than_days=older_than_days,
+            statuses=requested_statuses,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/history-retention/purge")
+async def purge_history_retention(request: Request, body: HistoryRetentionPurgeRequest) -> Dict[str, Any]:
+    try:
+        result = await request.app.state.task_manager.purge_history_retention(
+            older_than_days=body.older_than_days,
+            statuses=body.statuses,
+            max_tasks=body.max_tasks,
+            confirmation=body.confirmation,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await record_audit_event(
+        request,
+        action="tasks.history_retention_purge",
+        resource="task_history",
+        details={
+            "older_than_days": body.older_than_days,
+            "statuses": body.statuses,
+            "max_tasks": body.max_tasks,
+            "deleted_task_count": result.get("deleted_task_count", 0),
+            "deleted_artifact_count": result.get("deleted_artifact_count", 0),
+        },
+    )
+    return result
 
 
 @router.get("", response_model=List[TaskListItem])
