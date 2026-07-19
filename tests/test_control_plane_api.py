@@ -473,6 +473,61 @@ async def test_worker_update_rejects_worker_id_change(cp_client):
 
 
 @pytest.mark.anyio
+async def test_bot_lifecycle_rejects_disabling_or_deleting_referenced_bot(cp_app, cp_client):
+    target = {"id": "target-bot", "name": "Target Bot", "role": "assistant", "enabled": True, "backends": []}
+    upstream = {
+        "id": "upstream-bot",
+        "name": "Upstream Bot",
+        "role": "assistant",
+        "enabled": True,
+        "backends": [],
+        "workflow": {
+            "triggers": [
+                {
+                    "id": "handoff",
+                    "event": "task_completed",
+                    "target_bot_id": "target-bot",
+                    "enabled": True,
+                }
+            ]
+        },
+    }
+    assert (await cp_client.post("/v1/bots", json=target)).status_code == 200
+    assert (await cp_client.post("/v1/bots", json=upstream)).status_code == 200
+    await cp_app.state.agent_schedule_engine.create_schedule(
+        {
+            "name": "Target schedule",
+            "cron_expression": "*/5 * * * *",
+            "timezone": "UTC",
+            "prompt": "Read-only status check.",
+            "status": "active",
+            "target_bot_id": "target-bot",
+        }
+    )
+
+    dependencies = await cp_client.get("/v1/bots/target-bot/dependencies")
+    assert dependencies.status_code == 200
+    payload = dependencies.json()
+    assert payload["can_disable"] is False
+    assert payload["can_delete"] is False
+    assert payload["schedule_references"][0]["relation"] == "target_bot"
+    assert payload["workflow_references"][0]["relation"] == "workflow_trigger"
+
+    target["enabled"] = False
+    update = await cp_client.put("/v1/bots/target-bot", json=target)
+    assert update.status_code == 409
+    assert update.json()["detail"]["reason_code"] == "bot_disable_blocked"
+
+    disable = await cp_client.post("/v1/bots/target-bot/disable")
+    assert disable.status_code == 409
+    assert disable.json()["detail"]["reason_code"] == "bot_disable_blocked"
+
+    delete = await cp_client.delete("/v1/bots/target-bot")
+    assert delete.status_code == 409
+    assert delete.json()["detail"]["reason_code"] == "bot_delete_blocked"
+
+
+@pytest.mark.anyio
 async def test_list_bots_empty(cp_client):
     resp = await cp_client.get("/v1/bots")
     assert resp.status_code == 200

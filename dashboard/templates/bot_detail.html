@@ -85,6 +85,48 @@
 </section>
 
 <section class="panel" style="margin-bottom:1rem;">
+  <div class="panel-heading-row">
+    <div>
+      <h2 class="panel-title">Lifecycle Dependencies</h2>
+      <p class="panel-subtitle">Schedules and workflow routes must be updated before this bot can be disabled or removed.</p>
+    </div>
+    {% if bot_dependencies %}
+    <div class="worker-dependency-status">
+      <span class="badge badge-{{ 'ready' if bot_dependencies.can_disable else 'degraded' }}">{{ 'disable ready' if bot_dependencies.can_disable else 'disable blocked' }}</span>
+      <span class="badge badge-{{ 'ready' if bot_dependencies.can_delete else 'degraded' }}">{{ 'delete ready' if bot_dependencies.can_delete else 'delete blocked' }}</span>
+    </div>
+    {% endif %}
+  </div>
+  {% if bot_dependencies and bot_dependencies.schedule_references %}
+  <table>
+    <thead><tr><th>Schedule</th><th>Relation</th><th>Project</th><th>State</th></tr></thead>
+    <tbody>
+      {% for schedule in bot_dependencies.schedule_references %}
+      <tr>
+        <td>{{ schedule.name or schedule.id }}<div class="metrics">{{ schedule.id }}</div></td>
+        <td>{{ schedule.relation | replace('_', ' ') }}</td>
+        <td>{{ schedule.project_id or 'Global' }}</td>
+        <td><span class="badge badge-{{ schedule.status or 'disabled' }}">{{ schedule.status or 'unknown' }}</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="state-empty">No schedule points to this bot.</div>
+  {% endif %}
+  {% if bot_dependencies and bot_dependencies.workflow_references %}
+  <div class="worker-dependent-schedules">
+    <h3 class="subsection-title">Workflow References</h3>
+    <ul class="dependency-list">
+      {% for reference in bot_dependencies.workflow_references %}
+      <li><a href="{{ url_for('bots.bot_detail_page', bot_id=reference.source_bot_id) }}">{{ reference.source_bot_name or reference.source_bot_id }}</a> uses this bot as {{ reference.relation | replace('_', ' ') }}{% if reference.trigger_enabled is not none %} (trigger {{ 'enabled' if reference.trigger_enabled else 'disabled' }}){% endif %}.</li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+</section>
+
+<section class="panel" style="margin-bottom:1rem;">
   <div class="page-header" style="margin-bottom:0.75rem;">
     <h2 class="panel-title">Dispatch Readiness</h2>
     {% if readiness %}

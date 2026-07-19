@@ -128,6 +128,129 @@ def _validate_bot_or_400(bot: Bot) -> None:
         )
 
 
+def _bot_dependency_detail(
+    *,
+    bot_id: str,
+    schedule_references: List[Dict[str, Any]],
+    workflow_references: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    active_schedules = [
+        reference
+        for reference in schedule_references
+        if str(reference.get("status") or "").strip().lower() == "active"
+    ]
+    enabled_trigger_references = [
+        reference
+        for reference in workflow_references
+        if reference.get("relation") == "workflow_trigger"
+        and bool(reference.get("source_bot_enabled"))
+        and bool(reference.get("trigger_enabled"))
+    ]
+    return {
+        "bot_id": bot_id,
+        "schedule_references": schedule_references,
+        "workflow_references": workflow_references,
+        "active_schedule_ids": [str(reference["id"]) for reference in active_schedules],
+        "enabled_trigger_source_ids": [
+            str(reference["source_bot_id"])
+            for reference in enabled_trigger_references
+        ],
+        "can_disable": not active_schedules and not enabled_trigger_references,
+        "can_delete": not schedule_references and not workflow_references,
+    }
+
+
+async def _bot_dependencies(request: Request, bot_id: str) -> Dict[str, Any]:
+    """Return schedule and workflow references that would outlive a bot mutation."""
+    safe_bot_id = str(bot_id or "").strip()
+    schedules = await request.app.state.agent_schedule_engine.list_schedules(limit=500)
+    schedule_references: List[Dict[str, Any]] = []
+    for schedule in schedules:
+        for relation, field_name in (
+            ("target_bot", "target_bot_id"),
+            ("assignment_pm", "assignment_pm_bot_id"),
+        ):
+            if str(schedule.get(field_name) or "").strip() != safe_bot_id:
+                continue
+            schedule_references.append(
+                {
+                    "id": str(schedule.get("id") or ""),
+                    "name": str(schedule.get("name") or ""),
+                    "status": str(schedule.get("status") or ""),
+                    "relation": relation,
+                    "project_id": str(schedule.get("project_id") or "") or None,
+                }
+            )
+
+    workflow_references: List[Dict[str, Any]] = []
+    for source_bot in await request.app.state.bot_registry.list():
+        if str(source_bot.id or "").strip() == safe_bot_id:
+            continue
+        workflow = source_bot.workflow
+        if workflow is None:
+            continue
+        source = {
+            "source_bot_id": str(source_bot.id or ""),
+            "source_bot_name": str(source_bot.name or ""),
+            "source_bot_enabled": bool(source_bot.enabled),
+        }
+        for trigger in workflow.triggers or []:
+            if str(trigger.target_bot_id or "").strip() != safe_bot_id:
+                continue
+            workflow_references.append(
+                {
+                    **source,
+                    "relation": "workflow_trigger",
+                    "trigger_id": str(trigger.id or ""),
+                    "trigger_enabled": bool(trigger.enabled),
+                }
+            )
+        graph = workflow.reference_graph
+        if graph is None:
+            continue
+        for node in graph.nodes or []:
+            if str(node.bot_id or "").strip() != safe_bot_id:
+                continue
+            workflow_references.append(
+                {
+                    **source,
+                    "relation": "reference_graph_node",
+                    "trigger_id": None,
+                    "trigger_enabled": None,
+                }
+            )
+        for edge in graph.edges or []:
+            source_id = str(edge.source_bot_id or "").strip()
+            target_id = str(edge.target_bot_id or "").strip()
+            if safe_bot_id not in {source_id, target_id}:
+                continue
+            workflow_references.append(
+                {
+                    **source,
+                    "relation": "reference_graph_edge",
+                    "trigger_id": None,
+                    "trigger_enabled": None,
+                    "edge": {"source_bot_id": source_id, "target_bot_id": target_id},
+                }
+            )
+    return _bot_dependency_detail(
+        bot_id=safe_bot_id,
+        schedule_references=schedule_references,
+        workflow_references=workflow_references,
+    )
+
+
+def _raise_bot_dependency_error(*, reason_code: str, message: str, dependencies: Dict[str, Any]) -> None:
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "reason_code": reason_code,
+            "message": message,
+            "dependencies": dependencies,
+        },
+    )
+
+
 async def _require_known_enabled_bot_project(bot: Bot, request: Request) -> None:
     """Reject bindings to missing or disabled projects before persisting a bot."""
     project_id = str(bot.project_id or "").strip()
@@ -494,6 +617,15 @@ async def get_bot_readiness(bot_id: str, request: Request) -> Dict[str, Any]:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@router.get("/{bot_id}/dependencies")
+async def get_bot_dependencies(bot_id: str, request: Request) -> Dict[str, Any]:
+    try:
+        await request.app.state.bot_registry.get(bot_id)
+    except BotNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return await _bot_dependencies(request, bot_id)
+
+
 @router.get("/{bot_id}", response_model=Bot)
 async def get_bot(bot_id: str, request: Request) -> Bot:
     bot_registry = request.app.state.bot_registry
@@ -523,6 +655,14 @@ async def update_bot(bot_id: str, request: Request, payload: Any = Body(...)) ->
     try:
         current = await bot_registry.get(bot_id)
         await _require_known_enabled_bot_project(bot, request)
+        if bool(current.enabled) and not bool(bot.enabled):
+            dependencies = await _bot_dependencies(request, bot_id)
+            if not bool(dependencies["can_disable"]):
+                _raise_bot_dependency_error(
+                    reason_code="bot_disable_blocked",
+                    message="Pause dependent schedules and disable upstream workflow triggers before disabling this bot.",
+                    dependencies=dependencies,
+                )
         requires_readiness_check = bot.enabled and (
             not current.enabled
             or current.backends != bot.backends
@@ -541,6 +681,14 @@ async def update_bot(bot_id: str, request: Request, payload: Any = Body(...)) ->
 async def delete_bot(bot_id: str, request: Request) -> dict:
     bot_registry = request.app.state.bot_registry
     try:
+        await bot_registry.get(bot_id)
+        dependencies = await _bot_dependencies(request, bot_id)
+        if not bool(dependencies["can_delete"]):
+            _raise_bot_dependency_error(
+                reason_code="bot_delete_blocked",
+                message="Remove or repoint every dependent schedule and workflow reference before deleting this bot.",
+                dependencies=dependencies,
+            )
         await bot_registry.remove(bot_id)
         await record_audit_event(request, action="bots.delete", resource=f"bot:{bot_id}")
         return {"message": f"Bot {bot_id} removed"}
@@ -565,6 +713,15 @@ async def enable_bot(bot_id: str, request: Request) -> Bot:
 async def disable_bot(bot_id: str, request: Request) -> Bot:
     bot_registry = request.app.state.bot_registry
     try:
+        bot = await bot_registry.get(bot_id)
+        if bot.enabled:
+            dependencies = await _bot_dependencies(request, bot_id)
+            if not bool(dependencies["can_disable"]):
+                _raise_bot_dependency_error(
+                    reason_code="bot_disable_blocked",
+                    message="Pause dependent schedules and disable upstream workflow triggers before disabling this bot.",
+                    dependencies=dependencies,
+                )
         await bot_registry.disable(bot_id)
         await record_audit_event(request, action="bots.disable", resource=f"bot:{bot_id}")
         return await bot_registry.get(bot_id)

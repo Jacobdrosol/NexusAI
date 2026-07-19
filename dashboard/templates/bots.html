@@ -509,7 +509,8 @@ function submitBotImport(bundle, overwrite, fileName) {
 async function deleteBot(id) {
   if (!confirm('Delete this bot?')) return;
   const res = await fetch('/api/bots/'+id, {method:'DELETE', headers:{'X-CSRFToken': getCsrf()}});
-  if (res.ok) location.reload(); else alert('Delete failed');
+  const data = await res.json().catch(() => ({}));
+  if (res.ok) location.reload(); else alert(data.error || 'Delete failed');
 }
 
 async function toggleBot(id, enable) {

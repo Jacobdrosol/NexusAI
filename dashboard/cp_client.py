@@ -211,6 +211,9 @@ class CPClient:
     def get_bot(self, bot_id: str) -> Optional[Dict]:
         return self._get(f"/v1/bots/{bot_id}")
 
+    def get_bot_dependencies(self, bot_id: str) -> Optional[Dict[str, Any]]:
+        return self._get(f"/v1/bots/{bot_id}/dependencies")
+
     def get_bot_readiness(self, bot_id: str) -> Optional[Dict[str, Any]]:
         return self._get(f"/v1/bots/{bot_id}/readiness")
 

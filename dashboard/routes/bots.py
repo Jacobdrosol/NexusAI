@@ -108,7 +108,7 @@ def _cp_error_payload(cp, fallback: str) -> tuple[dict[str, Any], int]:
         status = 502
 
     payload: dict[str, Any] = {"error": message}
-    for key in ("reason_code", "readiness", "validation_errors"):
+    for key in ("reason_code", "readiness", "validation_errors", "dependencies"):
         if key in detail:
             payload[key] = detail[key]
     return payload, status
@@ -220,6 +220,19 @@ def _bot_readiness_view(readiness: Any) -> dict[str, Any] | None:
     return {"ready": ready, "state": state, "detail": detail, "failed": len(failures)}
 
 
+def _bot_dependency_view(payload: Any) -> dict[str, Any] | None:
+    if not isinstance(payload, dict):
+        return None
+    schedules = [item for item in payload.get("schedule_references") or [] if isinstance(item, dict)]
+    workflows = [item for item in payload.get("workflow_references") or [] if isinstance(item, dict)]
+    return {
+        "schedule_references": schedules,
+        "workflow_references": workflows,
+        "can_disable": bool(payload.get("can_disable", not schedules and not workflows)),
+        "can_delete": bool(payload.get("can_delete", not schedules and not workflows)),
+    }
+
+
 def _with_bot_readiness(bots: list[dict[str, Any]], payload: Any) -> list[dict[str, Any]]:
     raw_readiness = payload.get("readiness") if isinstance(payload, dict) else []
     readiness_by_id = {
@@ -283,6 +296,8 @@ def bot_detail_page(bot_id: str):
     cp_bot = cp.get_bot(bot_id)
     readiness_getter = getattr(cp, "get_bot_readiness", None)
     cp_readiness = readiness_getter(bot_id) if callable(readiness_getter) else None
+    dependency_getter = getattr(cp, "get_bot_dependencies", None)
+    cp_dependencies = _bot_dependency_view(dependency_getter(bot_id) if callable(dependency_getter) else None)
     cp_tasks = _cp_list_tasks_safe(cp, bot_id=bot_id, limit=300, include_content=False)
     cp_runs = cp.list_bot_runs(bot_id) or []
     cp_artifacts = cp.list_bot_artifacts(bot_id, limit=300, include_content=False) or []
@@ -302,6 +317,7 @@ def bot_detail_page(bot_id: str):
             models=cp_models,
             api_keys=cp_keys,
             readiness=cp_readiness,
+            bot_dependencies=cp_dependencies,
             error=None,
         )
 
@@ -309,10 +325,10 @@ def bot_detail_page(bot_id: str):
     try:
         # Fallback local bot IDs are integer PKs.
         if not str(bot_id).isdigit():
-            return render_template("bot_detail.html", bot=None, tasks=[], error="Bot not found")
+            return render_template("bot_detail.html", bot=None, tasks=[], bot_dependencies=None, error="Bot not found")
         bot = db.get(Bot, int(bot_id))
         if not bot:
-            return render_template("bot_detail.html", bot=None, tasks=[], error="Bot not found")
+            return render_template("bot_detail.html", bot=None, tasks=[], bot_dependencies=None, error="Bot not found")
         local_tasks = db.query(Task).filter_by(bot_id=bot.id).all()
         tasks = []
         for t in local_tasks:
@@ -338,6 +354,7 @@ def bot_detail_page(bot_id: str):
             models=[],
             api_keys=[],
             readiness=None,
+            bot_dependencies=None,
             error=None,
         )
     finally:
@@ -684,7 +701,8 @@ def api_delete_bot(bot_id: str):
     if cp_bot is not None:
         ok = cp.delete_bot(bot_id)
         if not ok:
-            return jsonify({"error": "delete failed"}), 502
+            error, status = _cp_error_payload(cp, "bot deletion failed")
+            return jsonify(error), status
         return "", 204
 
     db = get_db()
