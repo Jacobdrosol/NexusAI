@@ -43,6 +43,27 @@ def _schedule_task_payload(schedule: Dict[str, Any]) -> Dict[str, Any]:
     return {}
 
 
+def _is_attested_read_only_browser_inspection(bot: Any, schedule: Dict[str, Any]) -> bool:
+    """Allow the single browser shape that cannot interact with the target UI."""
+    metadata = schedule.get("metadata") if isinstance(schedule.get("metadata"), dict) else {}
+    if str(metadata.get("connection_operation") or "").strip().lower() != "inspect":
+        return False
+    routing_rules = getattr(bot, "routing_rules", None)
+    profile = routing_rules.get("worker_profile") if isinstance(routing_rules, dict) else None
+    profile = profile if isinstance(profile, dict) else {}
+    execution_policy = getattr(bot, "execution_policy", None)
+    if hasattr(execution_policy, "model_dump"):
+        execution_policy = execution_policy.model_dump()
+    execution_policy = execution_policy if isinstance(execution_policy, dict) else {}
+    return (
+        str(profile.get("role") or "").strip().lower() == "browser-inspector"
+        and str(profile.get("task_scope") or "").strip().lower() == "read-only-browser-inspection"
+        and profile.get("can_edit") is False
+        and str(execution_policy.get("repo_output_mode") or "").strip().lower() == "deny"
+        and execution_policy.get("can_apply_db_actions") is False
+    )
+
+
 def _payload_field_value(payload: Dict[str, Any], field_path: str) -> Any:
     value: Any = payload
     for segment in (part.strip() for part in str(field_path or "").split(".") if part.strip()):
@@ -142,6 +163,10 @@ async def require_schedule_autonomy_safety(
             str(backend.type or "").strip().lower()
             for backend in bot.backends
             if str(backend.type or "").strip().lower() in _AUTONOMOUSLY_UNSAFE_BACKEND_TYPES
+            and not (
+                str(backend.type or "").strip().lower() == "browser"
+                and _is_attested_read_only_browser_inspection(bot, schedule)
+            )
         }
     )
     if unsafe_backends:

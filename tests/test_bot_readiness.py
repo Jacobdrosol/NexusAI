@@ -407,6 +407,73 @@ async def test_active_schedule_rejects_mutation_capable_target(cp_client):
 
 
 @pytest.mark.anyio
+async def test_active_schedule_allows_attested_read_only_browser_inspection(cp_client):
+    worker_id = "scheduled-browser-inspector-worker"
+    bot_id = "scheduled-browser-inspector-bot"
+    await cp_client.post(
+        "/v1/workers",
+        json={
+            "id": worker_id,
+            "name": "Scheduled Browser Inspector Worker",
+            "host": "browser-worker",
+            "port": 8010,
+            "status": "online",
+            "capabilities": [{"type": "tool", "provider": "browser", "models": ["browser-ui"]}],
+        },
+    )
+    await cp_client.post(
+        "/v1/bots",
+        json={
+            "id": bot_id,
+            "name": "Scheduled Browser Inspector",
+            "role": "browser-inspector",
+            "backends": [
+                {
+                    "type": "browser",
+                    "worker_id": worker_id,
+                    "provider": "browser",
+                    "model": "browser-ui",
+                    "api_key_ref": "BROWSER_WORKER_TOKEN",
+                }
+            ],
+            "execution_policy": {
+                "repo_output_mode": "deny",
+                "can_apply_db_actions": False,
+                "required_worker_tools": ["browser-ui"],
+            },
+            "routing_rules": {
+                "worker_profile": {
+                    "role": "browser-inspector",
+                    "task_scope": "read-only-browser-inspection",
+                    "can_edit": False,
+                },
+                "input_contract": {
+                    "enabled": True,
+                    "required_fields": ["path"],
+                    "non_empty_fields": ["path"],
+                },
+            },
+        },
+    )
+
+    response = await cp_client.post(
+        "/v1/schedules",
+        json={
+            "name": "Read-only browser inspection",
+            "cron_expression": "0 * * * *",
+            "prompt": "Inspect the approved page without mutation.",
+            "target_bot_id": bot_id,
+            "status": "active",
+            "task_payload": {"path": "/admin/dashboard"},
+            "metadata": {"mutation_safe": True, "connection_operation": "inspect"},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["schedule"]["status"] == "active"
+
+
+@pytest.mark.anyio
 async def test_active_schedule_requires_complete_task_payload(cp_client):
     bot_id = "scheduled-structured-review-bot"
     await cp_client.post(

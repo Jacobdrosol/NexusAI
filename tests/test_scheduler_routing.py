@@ -2645,6 +2645,47 @@ def test_prepare_payload_for_browser_backend_preserves_inspection_request():
     assert prepared == payload
 
 
+def test_prepare_payload_for_scheduled_browser_backend_removes_only_scheduler_envelope():
+    from control_plane.scheduler.scheduler import _prepare_payload_for_backend
+
+    bot = Bot(
+        id="browser-inspector",
+        name="Browser Inspector",
+        role="browser-inspector",
+        backends=[
+            BackendConfig(
+                type="browser",
+                provider="browser",
+                model="browser-ui",
+                worker_id="browser-worker",
+                api_key_ref="BROWSER_TOKEN",
+            )
+        ],
+    )
+    payload = {
+        "path": "/admin/dashboard",
+        "text_limit": 200,
+        "element_limit": 5,
+        "instruction": "Inspect without mutation.",
+        "source": "agent_schedule",
+        "schedule_id": "schedule-1",
+        "project_id": None,
+        "node_overrides": {},
+    }
+    task = Task(
+        id="scheduled-browser-task",
+        bot_id=bot.id,
+        payload=payload,
+        metadata=TaskMetadata(source="agent_schedule"),
+        created_at="2026-07-19T00:00:00+00:00",
+        updated_at="2026-07-19T00:00:00+00:00",
+    )
+
+    prepared = _prepare_payload_for_backend(bot, bot.backends[0], payload, task=task)
+
+    assert prepared == {"path": "/admin/dashboard", "text_limit": 200, "element_limit": 5}
+
+
 @pytest.mark.anyio
 async def test_scheduler_appends_docs_only_upstream_artifact_guidance_to_system_prompt():
     from control_plane.scheduler.scheduler import Scheduler

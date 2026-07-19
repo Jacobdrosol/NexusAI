@@ -1779,7 +1779,12 @@ def _repo_output_policy_prompt_suffix(bot: Any, payload: Any = None) -> str:
 
 
 def _prepare_payload_for_backend(bot: Any, backend: BackendConfig, payload: Any, *, task: Task | None = None) -> Any:
-    if backend.type in {"browser", "custom"}:
+    if backend.type == "browser":
+        if _is_autonomous_schedule_task(task) and isinstance(payload, dict):
+            schedule_envelope_fields = {"instruction", "source", "schedule_id", "project_id", "node_overrides"}
+            return {key: value for key, value in payload.items() if key not in schedule_envelope_fields}
+        return payload
+    if backend.type == "custom":
         return payload
     payload = _reduce_payload_for_context_limits(payload)
     return _inject_system_prompt(
