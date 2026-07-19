@@ -221,6 +221,10 @@ There is **no explicit deregistration call** on shutdown. The control plane is e
 | `CONTROL_PLANE_URL` | `http://localhost:8000` | Base URL of the NexusAI control plane |
 | `HEARTBEAT_INTERVAL` | `15` | Seconds between heartbeat POSTs |
 | `CONTROL_PLANE_API_TOKEN` | *(empty)* | API token sent as `X-Nexus-API-Key`; omitted from headers when empty |
+| `NEXUSAI_WORKER_RUNTIME_CPUS` | *(unset)* | Declared CPU limit for operator capacity and scheduling visibility |
+| `NEXUSAI_WORKER_RUNTIME_MEMORY_LIMIT` | *(unset)* | Declared memory limit; this is metadata only and should match the container limit |
+| `NEXUSAI_WORKER_RUNTIME_MEMORY_RESERVATION` | *(unset)* | Declared memory reservation, when configured by the runtime |
+| `NEXUSAI_WORKER_RUNTIME_PIDS_LIMIT` | *(unset)* | Declared process limit for operator capacity and scheduling visibility |
 | `OPENAI_API_KEY` | *(empty)* | OpenAI API key for the `openai` provider |
 | `ANTHROPIC_API_KEY` | *(empty)* | Anthropic API key for the `claude` provider |
 | `GEMINI_API_KEY` | *(empty)* | Google Gemini API key for the `gemini` provider |

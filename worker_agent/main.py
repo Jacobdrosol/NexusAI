@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
+from typing import Any
 
 import httpx
 from fastapi import FastAPI, Request
@@ -18,6 +19,64 @@ WORKER_CONFIG_PATH = os.environ.get("WORKER_CONFIG_PATH", "config/workers/local_
 CONTROL_PLANE_URL = os.environ.get("CONTROL_PLANE_URL", "http://localhost:8000")
 HEARTBEAT_INTERVAL = int(os.environ.get("HEARTBEAT_INTERVAL", "15"))
 CONTROL_PLANE_API_TOKEN = os.environ.get("CONTROL_PLANE_API_TOKEN", "").strip()
+
+
+def _positive_float_env(name: str) -> float | None:
+    raw_value = str(os.environ.get(name, "") or "").strip()
+    if not raw_value:
+        return None
+    try:
+        value = float(raw_value)
+    except ValueError:
+        logger.warning("Ignoring invalid %s value for worker runtime registration", name)
+        return None
+    if value <= 0:
+        logger.warning("Ignoring non-positive %s value for worker runtime registration", name)
+        return None
+    return value
+
+
+def _positive_int_env(name: str) -> int | None:
+    raw_value = str(os.environ.get(name, "") or "").strip()
+    if not raw_value:
+        return None
+    try:
+        value = int(raw_value)
+    except ValueError:
+        logger.warning("Ignoring invalid %s value for worker runtime registration", name)
+        return None
+    if value <= 0:
+        logger.warning("Ignoring non-positive %s value for worker runtime registration", name)
+        return None
+    return value
+
+
+def _with_runtime_limits_from_environment(worker_config: dict[str, Any]) -> dict[str, Any]:
+    """Declare container limits to the control plane without exposing host state."""
+    configured_limits = worker_config.get("runtime_limits")
+    runtime_limits = dict(configured_limits) if isinstance(configured_limits, dict) else {}
+
+    cpus = _positive_float_env("NEXUSAI_WORKER_RUNTIME_CPUS")
+    if cpus is not None:
+        runtime_limits["cpus"] = cpus
+
+    memory_limit = str(os.environ.get("NEXUSAI_WORKER_RUNTIME_MEMORY_LIMIT", "") or "").strip()
+    if memory_limit:
+        runtime_limits["memory_limit"] = memory_limit
+
+    memory_reservation = str(
+        os.environ.get("NEXUSAI_WORKER_RUNTIME_MEMORY_RESERVATION", "") or ""
+    ).strip()
+    if memory_reservation:
+        runtime_limits["memory_reservation"] = memory_reservation
+
+    pids_limit = _positive_int_env("NEXUSAI_WORKER_RUNTIME_PIDS_LIMIT")
+    if pids_limit is not None:
+        runtime_limits["pids_limit"] = pids_limit
+
+    if not runtime_limits:
+        return worker_config
+    return {**worker_config, "runtime_limits": runtime_limits}
 
 
 def _cp_headers() -> dict:
@@ -55,6 +114,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("Failed to load worker config from %s: %s", WORKER_CONFIG_PATH, e)
         worker_config = {"id": "unknown-worker", "name": "Unknown Worker", "host": "localhost", "port": 8080, "capabilities": []}
+    worker_config = _with_runtime_limits_from_environment(worker_config)
 
     app.state.worker_config = worker_config
 
