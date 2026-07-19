@@ -6,8 +6,10 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -31,6 +33,13 @@ _AUTONOMOUS_PIPELINE_ACTIONS = {"set_pipeline_target", "launch_pipeline"}
 _APPROVABLE_PROPOSAL_BACKEND_TYPES = {"local_llm", "remote_llm", "cloud_api"}
 _DIRECT_CREDENTIAL_PREFIXES = ("sk-", "ghp_", "github_pat_", "xoxb-", "xoxp-", "akia", "aiza")
 _PROPOSAL_PREFLIGHT_TTL_SECONDS = 300
+
+
+@dataclass(frozen=True)
+class _RestrictedRunnerSpec:
+    argv: List[str]
+    cwd: Path
+    env: Dict[str, str]
 
 
 def _env_enabled(name: str) -> bool:
@@ -101,6 +110,66 @@ def _safe_timeout_seconds(env_name: str, default: float, *, min_value: float, ma
     except Exception:
         return default
     return max(min_value, min(max_value, value))
+
+
+def _path_is_within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def _restricted_runner_spec(*, run_cmd: str, cwd_env: str, session_env: Dict[str, str]) -> _RestrictedRunnerSpec:
+    """Build the only supported local runner shape; production uses worker runners instead."""
+    if not _env_enabled("NEXUS_PLATFORM_AI_LOCAL_SUBPROCESS_RUNNERS_ENABLED"):
+        raise ValueError("control-plane local subprocess runners are disabled; use an isolated worker runner")
+
+    workspace_root_raw = str(os.environ.get("NEXUS_PLATFORM_AI_RUNNER_WORKSPACE_ROOT", "") or "").strip()
+    if not workspace_root_raw:
+        raise ValueError("NEXUS_PLATFORM_AI_RUNNER_WORKSPACE_ROOT is required for local subprocess runners")
+    workspace_root = Path(workspace_root_raw).resolve()
+    if not workspace_root.is_dir():
+        raise ValueError("NEXUS_PLATFORM_AI_RUNNER_WORKSPACE_ROOT must resolve to an existing directory")
+
+    configured_cwd = str(os.environ.get(cwd_env, "") or "").strip()
+    if not configured_cwd:
+        raise ValueError(f"{cwd_env} is required for local subprocess runners")
+    cwd_path = Path(configured_cwd).resolve()
+    if not cwd_path.is_dir() or not _path_is_within(cwd_path, workspace_root):
+        raise ValueError(f"{cwd_env} must be an existing directory inside NEXUS_PLATFORM_AI_RUNNER_WORKSPACE_ROOT")
+
+    try:
+        argv = shlex.split(run_cmd, posix=os.name != "nt")
+    except ValueError as exc:
+        raise ValueError("runner command could not be parsed") from exc
+    if not argv:
+        raise ValueError("runner command is empty")
+
+    executable_path = Path(argv[0])
+    if not executable_path.is_absolute():
+        raise ValueError("runner executable must be an executable absolute file path")
+    executable = executable_path.resolve()
+    if not executable.is_file() or not os.access(executable, os.X_OK):
+        raise ValueError("runner executable must be an executable absolute file path")
+    allowed_executables = {Path(value).resolve() for value in _csv_env_values("NEXUS_PLATFORM_AI_RUNNER_EXECUTABLE_ALLOWLIST")}
+    if not allowed_executables or executable not in allowed_executables:
+        raise ValueError("runner executable is not in NEXUS_PLATFORM_AI_RUNNER_EXECUTABLE_ALLOWLIST")
+    argv[0] = str(executable)
+
+    env = {key: value for key in ("PATH", "LANG", "LC_ALL", "TZ") if (value := os.environ.get(key))}
+    env.update(
+        {
+            "GIT_TERMINAL_PROMPT": "0",
+            "NEXUS_PLATFORM_AI_SESSION_ID": session_env["session_id"],
+            "NEXUS_PLATFORM_AI_REQUESTED_BY": session_env["requested_by"],
+            "NEXUS_PLATFORM_AI_OPERATOR_INSTRUCTION": session_env["instruction"],
+            "NEXUS_PLATFORM_AI_REPO_EDIT_KIND": session_env["kind"],
+            "NEXUS_PLATFORM_AI_SESSION_PROJECT_ID": session_env["project_id"],
+            "NEXUS_PLATFORM_AI_SESSION_MODE": session_env["mode"],
+        }
+    )
+    return _RestrictedRunnerSpec(argv=argv, cwd=cwd_path, env=env)
 
 
 def _extract_json_chunks(text: str) -> List[Any]:
@@ -1433,6 +1502,11 @@ class PlatformAISessionRuntime:
         )
         if not bool(scope_gate.get("ok")):
             return {"status": str(scope_gate.get("status") or "denied"), "detail": str(scope_gate.get("detail") or "project scope denied")}
+        if not _env_enabled("NEXUS_PLATFORM_AI_LOCAL_SUBPROCESS_RUNNERS_ENABLED"):
+            return {
+                "status": "disabled",
+                "detail": "project_code_edit requires an isolated worker runner; control-plane subprocess runners are disabled",
+            }
         existing = self._project_edit_tasks.get(sid)
         if existing is not None and not existing.done():
             return {"status": "running", "detail": "project edit runner already active"}
@@ -1506,6 +1580,11 @@ class PlatformAISessionRuntime:
                 }
         else:
             scope_gate = {"project_id": None}
+        if not _env_enabled("NEXUS_PLATFORM_AI_LOCAL_SUBPROCESS_RUNNERS_ENABLED"):
+            return {
+                "status": "disabled",
+                "detail": "repo edit requires an isolated worker runner; control-plane subprocess runners are disabled",
+            }
         existing = self._repo_edit_tasks.get(sid)
         if existing is not None and not existing.done():
             return {"status": "running", "detail": "repo edit runner already active"}
@@ -4328,23 +4407,41 @@ class PlatformAISessionRuntime:
             )
             return
 
-        default_cwd = Path(__file__).resolve().parents[2]
-        configured_cwd = str(os.environ.get("NEXUS_PLATFORM_AI_PROJECT_EDIT_CWD", "") or "").strip()
-        cwd_path = Path(configured_cwd).resolve() if configured_cwd else default_cwd
-        if not cwd_path.exists() or not cwd_path.is_dir():
-            cwd_path = default_cwd
-
         live_session = await self._store.get_session(session_id)
         live_metadata = live_session.get("metadata") if isinstance((live_session or {}).get("metadata"), dict) else {}
         session_project_id = str(live_metadata.get("project_id") or "").strip()
         session_mode = str((live_session or {}).get("mode") or "").strip()
-        env = os.environ.copy()
-        env["NEXUS_PLATFORM_AI_SESSION_ID"] = str(session_id)
-        env["NEXUS_PLATFORM_AI_REQUESTED_BY"] = str(requested_by or "")
-        env["NEXUS_PLATFORM_AI_OPERATOR_INSTRUCTION"] = str(instruction or "")
-        env["NEXUS_PLATFORM_AI_REPO_EDIT_KIND"] = kind
-        env["NEXUS_PLATFORM_AI_SESSION_PROJECT_ID"] = session_project_id
-        env["NEXUS_PLATFORM_AI_SESSION_MODE"] = session_mode
+        try:
+            runner = _restricted_runner_spec(
+                run_cmd=run_cmd,
+                cwd_env="NEXUS_PLATFORM_AI_PROJECT_EDIT_CWD",
+                session_env={
+                    "session_id": str(session_id),
+                    "requested_by": str(requested_by or ""),
+                    "instruction": str(instruction or ""),
+                    "kind": kind,
+                    "project_id": session_project_id,
+                    "mode": session_mode,
+                },
+            )
+        except ValueError as exc:
+            await self._store.update_session(
+                session_id,
+                status="ready",
+                metadata={
+                    "project_edit_runner_state": "failed",
+                    "project_edit_runner_last_error": str(exc),
+                    "project_edit_runner_finished_at": _now(),
+                    "checkpoint_reason": "project_edit_runner_unavailable",
+                },
+            )
+            await self._store.append_message(
+                session_id,
+                role="assistant",
+                content=f"Project code edit runner is unavailable: {exc}",
+                metadata={"source": "project_edit_runner", "state": "failed"},
+            )
+            return
         timeout_seconds = _safe_timeout_seconds(
             "NEXUS_PLATFORM_AI_PROJECT_EDIT_TIMEOUT_SECONDS",
             1800.0,
@@ -4352,18 +4449,18 @@ class PlatformAISessionRuntime:
             max_value=14400.0,
         )
         try:
-            proc = await asyncio.create_subprocess_shell(
-                run_cmd,
-                cwd=str(cwd_path),
+            proc = await asyncio.create_subprocess_exec(
+                *runner.argv,
+                cwd=str(runner.cwd),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
-                env=env,
+                env=runner.env,
             )
             assert proc.stdout is not None
             await self._store.append_event(
                 session_id,
                 "action_trace",
-                {"action": "project_edit_requested", "cwd": str(cwd_path), "command_env": cmd_env},
+                {"action": "project_edit_requested", "cwd": str(runner.cwd), "command_env": cmd_env},
             )
             lines: List[str] = []
             async def _stream_lines() -> None:
@@ -4525,23 +4622,40 @@ class PlatformAISessionRuntime:
             )
             return
 
-        default_cwd = Path(__file__).resolve().parents[2]
-        configured_cwd = str(os.environ.get("NEXUS_PLATFORM_AI_REPO_EDIT_CWD", "") or "").strip()
-        cwd_path = Path(configured_cwd).resolve() if configured_cwd else default_cwd
-        if not cwd_path.exists() or not cwd_path.is_dir():
-            cwd_path = default_cwd
-
         live_session = await self._store.get_session(session_id)
         live_metadata = live_session.get("metadata") if isinstance((live_session or {}).get("metadata"), dict) else {}
         session_project_id = str(live_metadata.get("project_id") or "").strip()
         session_mode = str((live_session or {}).get("mode") or "").strip()
-        env = os.environ.copy()
-        env["NEXUS_PLATFORM_AI_SESSION_ID"] = str(session_id)
-        env["NEXUS_PLATFORM_AI_REQUESTED_BY"] = str(requested_by or "")
-        env["NEXUS_PLATFORM_AI_OPERATOR_INSTRUCTION"] = str(instruction or "")
-        env["NEXUS_PLATFORM_AI_REPO_EDIT_KIND"] = kind
-        env["NEXUS_PLATFORM_AI_SESSION_PROJECT_ID"] = session_project_id
-        env["NEXUS_PLATFORM_AI_SESSION_MODE"] = session_mode
+        try:
+            runner = _restricted_runner_spec(
+                run_cmd=run_cmd,
+                cwd_env="NEXUS_PLATFORM_AI_REPO_EDIT_CWD",
+                session_env={
+                    "session_id": str(session_id),
+                    "requested_by": str(requested_by or ""),
+                    "instruction": str(instruction or ""),
+                    "kind": kind,
+                    "project_id": session_project_id,
+                    "mode": session_mode,
+                },
+            )
+        except ValueError as exc:
+            await self._store.update_session(
+                session_id,
+                status="ready",
+                metadata={
+                    "repo_edit_runner_state": "failed",
+                    "repo_edit_runner_last_error": str(exc),
+                    "repo_edit_runner_finished_at": _now(),
+                },
+            )
+            await self._store.append_message(
+                session_id,
+                role="assistant",
+                content=f"Repo edit runner is unavailable: {exc}",
+                metadata={"source": "repo_edit_runner", "state": "failed", "kind": kind},
+            )
+            return
         timeout_seconds = _safe_timeout_seconds(
             "NEXUS_PLATFORM_AI_REPO_EDIT_TIMEOUT_SECONDS",
             1800.0,
@@ -4550,12 +4664,12 @@ class PlatformAISessionRuntime:
         )
 
         try:
-            proc = await asyncio.create_subprocess_shell(
-                run_cmd,
-                cwd=str(cwd_path),
+            proc = await asyncio.create_subprocess_exec(
+                *runner.argv,
+                cwd=str(runner.cwd),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
-                env=env,
+                env=runner.env,
             )
             assert proc.stdout is not None
             await self._store.append_event(
@@ -4564,7 +4678,7 @@ class PlatformAISessionRuntime:
                 {
                     "action": "repo_edit_requested",
                     "kind": kind,
-                    "cwd": str(cwd_path),
+                    "cwd": str(runner.cwd),
                     "command_env": cmd_env,
                 },
             )

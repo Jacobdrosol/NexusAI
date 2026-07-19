@@ -919,6 +919,9 @@ async def test_repo_edit_runner_executes_command_and_reports_terminal_event(tmp_
     monkeypatch.setenv("NEXUS_PLATFORM_AI_REPO_EDIT_ENABLED", "1")
     monkeypatch.setenv("NEXUS_PLATFORM_AI_REPO_EDIT_RUN_CMD", cmd)
     monkeypatch.setenv("NEXUS_PLATFORM_AI_REPO_EDIT_CWD", str(tmp_path))
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_LOCAL_SUBPROCESS_RUNNERS_ENABLED", "1")
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_RUNNER_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_RUNNER_EXECUTABLE_ALLOWLIST", sys.executable)
     result = await runtime.start_repo_edit_run(
         session["id"],
         requested_by="tester@example.com",
@@ -944,6 +947,31 @@ async def test_repo_edit_runner_executes_command_and_reports_terminal_event(tmp_
         for event in events
         if isinstance(event, dict)
     )
+
+
+@pytest.mark.anyio
+async def test_repo_edit_runner_requires_isolated_worker_when_local_runner_is_not_explicitly_enabled(tmp_path, monkeypatch):
+    store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+    runtime = PlatformAISessionRuntime(store)
+    session = await store.create_session(
+        mode="bot_creator",
+        status="running",
+        operator_id="tester@example.com",
+        privileged=True,
+        metadata={},
+    )
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_PRIVILEGED_ENABLED", "1")
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_OWNER_ALLOWLIST", "tester@example.com")
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_REPO_EDIT_ENABLED", "1")
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_REPO_EDIT_RUN_CMD", f'"{sys.executable}" -c "raise SystemExit(99)"')
+    result = await runtime.start_repo_edit_run(
+        session["id"],
+        requested_by="tester@example.com",
+        instruction="This must not run locally",
+        external=False,
+    )
+    assert str(result.get("status") or "") == "disabled"
+    assert "isolated worker runner" in str(result.get("detail") or "")
 
 
 @pytest.mark.anyio
@@ -1035,6 +1063,9 @@ async def test_project_edit_runner_completes_and_checkpoints_ready(tmp_path, mon
     monkeypatch.setenv("NEXUS_PLATFORM_AI_PROJECT_EDIT_ENABLED", "1")
     monkeypatch.setenv("NEXUS_PLATFORM_AI_PROJECT_EDIT_RUN_CMD", cmd)
     monkeypatch.setenv("NEXUS_PLATFORM_AI_PROJECT_EDIT_CWD", str(tmp_path))
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_LOCAL_SUBPROCESS_RUNNERS_ENABLED", "1")
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_RUNNER_WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_RUNNER_EXECUTABLE_ALLOWLIST", sys.executable)
     result = await runtime.start_project_edit_run(
         session["id"],
         requested_by="owner@example.com",
