@@ -2853,6 +2853,30 @@ async def test_running_task_watchdog_respects_progress_heartbeat(tmp_path, monke
 
 
 @pytest.mark.anyio
+async def test_task_manager_watchdog_does_not_retain_unmanaged_manager(tmp_path):
+    import asyncio
+
+    from control_plane.task_manager.task_manager import TaskManager
+
+    class StubScheduler:
+        async def schedule(self, _task):
+            return {"ok": True}
+
+    manager = TaskManager(StubScheduler(), db_path=str(tmp_path / "watchdog-lifecycle.db"))
+    try:
+        await manager._ensure_db()
+        watchdog = manager._watchdog_task
+        assert watchdog is not None
+        await asyncio.sleep(0)
+
+        frame = watchdog.get_coro().cr_frame
+        assert frame is not None
+        assert all(value is not manager for value in frame.f_locals.values())
+    finally:
+        await manager.close()
+
+
+@pytest.mark.anyio
 async def test_trigger_can_resolve_target_bot_from_result_field(tmp_path):
     import asyncio
 
@@ -3712,6 +3736,54 @@ async def test_course_pipeline_cardinality_matches_expected_branch_counts(tmp_pa
     for task in unit_aggregators:
         assert task.payload["join_expected_count"] == 4
         assert task.payload["join_count"] == 4
+
+
+@pytest.mark.anyio
+async def test_task_creation_cannot_overwrite_a_completed_triggered_task(tmp_path):
+    import asyncio
+
+    from control_plane.task_manager.task_manager import TaskManager
+
+    started = asyncio.Event()
+    initial_upsert_started = asyncio.Event()
+    allow_initial_upsert = asyncio.Event()
+
+    class StubScheduler:
+        async def schedule(self, task):
+            started.set()
+            return {"ok": True}
+
+    manager = TaskManager(StubScheduler(), db_path=str(tmp_path / "creation-race.db"))
+    original_upsert = manager._upsert_bot_run
+
+    async def delayed_upsert(task):
+        if task.bot_id == "race-bot" and task.status == "queued" and not initial_upsert_started.is_set():
+            initial_upsert_started.set()
+            await allow_initial_upsert.wait()
+        await original_upsert(task)
+
+    manager._upsert_bot_run = delayed_upsert
+    try:
+        create_task = asyncio.create_task(manager.create_task(bot_id="race-bot", payload={"instruction": "run"}))
+        await initial_upsert_started.wait()
+
+        await manager._schedule_ready_tasks()
+        assert not started.is_set()
+
+        allow_initial_upsert.set()
+        created = await create_task
+        for _ in range(50):
+            task = await manager.get_task(created.id)
+            if task.status == "completed":
+                break
+            await asyncio.sleep(0.02)
+
+        task = await manager.get_task(created.id)
+        assert task.status == "completed"
+        assert started.is_set()
+    finally:
+        await manager.close()
+
 
 @pytest.mark.anyio
 async def test_trigger_can_fan_out_from_bare_result_field(tmp_path):

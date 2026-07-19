@@ -8,6 +8,7 @@ import re
 import shutil
 import time
 import uuid
+import weakref
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -3339,6 +3340,7 @@ class TaskManager:
         self._orchestration_workspace_store = orchestration_workspace_store
         self._db_ready = False
         self._running_task_ids: set[str] = set()
+        self._pending_task_creations: Set[str] = set()
         self._runner_tasks: Dict[str, asyncio.Task[Any]] = {}
         self._retry_tasks: Set[asyncio.Task[Any]] = set()
         self._watchdog_task: Optional[asyncio.Task[Any]] = None
@@ -3377,6 +3379,7 @@ class TaskManager:
             self._runner_tasks.clear()
             self._retry_tasks.clear()
             self._running_task_ids.clear()
+            self._pending_task_creations.clear()
             self._watchdog_state.clear()
             self._trigger_dispatch_pending.clear()
             self._cancelled_orchestrations.clear()
@@ -3742,21 +3745,33 @@ class TaskManager:
         async with self._lock:
             if self._watchdog_task is not None and not self._watchdog_task.done():
                 return
-            self._watchdog_task = asyncio.create_task(self._running_task_watchdog())
+            self._watchdog_task = asyncio.create_task(self._running_task_watchdog(weakref.ref(self)))
 
-    async def _running_task_watchdog(self) -> None:
+    @staticmethod
+    async def _running_task_watchdog(manager_ref: weakref.ReferenceType["TaskManager"]) -> None:
+        """Poll watchdog state without retaining an otherwise-unmanaged manager."""
         try:
-            while not self._is_closing:
+            while True:
+                manager = manager_ref()
+                if manager is None or manager._is_closing:
+                    return
                 poll_seconds = max(0.1, _settings_float("running_task_watchdog_poll_seconds", 30.0))
+                manager = None
                 await asyncio.sleep(poll_seconds)
-                if self._is_closing or not _settings_bool("running_task_watchdog_enabled", True):
+                manager = manager_ref()
+                if manager is None or manager._is_closing:
+                    return
+                if not _settings_bool("running_task_watchdog_enabled", True):
+                    manager = None
                     continue
                 try:
-                    await self._check_running_tasks_for_stall()
+                    await manager._check_running_tasks_for_stall()
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
                     logger.warning("Running task watchdog check failed: %s", exc)
+                finally:
+                    manager = None
         except asyncio.CancelledError:
             raise
 
@@ -4274,9 +4289,18 @@ class TaskManager:
         )
         async with self._lock:
             self._tasks[task_id] = task
-        await self._persist_task(task)
-        await self._persist_dependencies(task)
-        await self._upsert_bot_run(task)
+            self._pending_task_creations.add(task_id)
+        try:
+            await self._persist_task(task)
+            await self._persist_dependencies(task)
+            await self._upsert_bot_run(task)
+        except Exception:
+            async with self._lock:
+                self._pending_task_creations.discard(task_id)
+                self._tasks.pop(task_id, None)
+            raise
+        async with self._lock:
+            self._pending_task_creations.discard(task_id)
         if task.status == "queued":
             await self._schedule_ready_tasks()
         return task
@@ -5839,7 +5863,11 @@ class TaskManager:
                 (
                     task
                     for task in self._tasks.values()
-                    if task.status == "queued" and task.id not in self._running_task_ids
+                    if (
+                        task.status == "queued"
+                        and task.id not in self._running_task_ids
+                        and task.id not in self._pending_task_creations
+                    )
                 ),
                 key=lambda item: (item.created_at or "", item.updated_at or ""),
             )
