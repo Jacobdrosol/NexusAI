@@ -4,7 +4,12 @@ set -eu
 TARGET_COLOR="${1:-${NEXUSAI_TARGET_COLOR:-}}"
 COMPOSE_PROJECT_NAME="${NEXUSAI_COMPOSE_PROJECT_NAME:-nexusai}"
 COMPOSE_ARGS="-p $COMPOSE_PROJECT_NAME -f docker-compose.bluegreen.yml"
-RUNTIME_DATA_DIR="${NEXUSAI_RUNTIME_DATA_DIR:-data}"
+RUNTIME_DATA_DIR="${NEXUSAI_RUNTIME_DATA_DIR:-}"
+if [ -z "$RUNTIME_DATA_DIR" ] && [ -f .env ]; then
+  RUNTIME_DATA_DIR="$(sed -n 's/^NEXUSAI_RUNTIME_DATA_DIR=//p' .env | tail -n 1 | tr -d '\r')"
+fi
+RUNTIME_DATA_DIR="${RUNTIME_DATA_DIR:-data}"
+export NEXUSAI_RUNTIME_DATA_DIR="$RUNTIME_DATA_DIR"
 if [ -z "$TARGET_COLOR" ]; then
   echo "[switch] blocked: target color not provided"
   exit 2

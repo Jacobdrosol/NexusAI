@@ -4,7 +4,12 @@ set -eu
 echo "[deploy] starting blue/green deploy runner"
 COMPOSE_PROJECT_NAME="${NEXUSAI_COMPOSE_PROJECT_NAME:-nexusai}"
 export COMPOSE_PROJECT_NAME
-RUNTIME_DATA_DIR="${NEXUSAI_RUNTIME_DATA_DIR:-data}"
+RUNTIME_DATA_DIR="${NEXUSAI_RUNTIME_DATA_DIR:-}"
+if [ -z "$RUNTIME_DATA_DIR" ] && [ -f .env ]; then
+  RUNTIME_DATA_DIR="$(sed -n 's/^NEXUSAI_RUNTIME_DATA_DIR=//p' .env | tail -n 1 | tr -d '\r')"
+fi
+RUNTIME_DATA_DIR="${RUNTIME_DATA_DIR:-data}"
+export NEXUSAI_RUNTIME_DATA_DIR="$RUNTIME_DATA_DIR"
 COMPOSE_ARGS="-p $COMPOSE_PROJECT_NAME -f docker-compose.bluegreen.yml"
 CORE_COMPOSE_ARGS="-p $COMPOSE_PROJECT_NAME -f docker-compose.yml"
 STOP_PREVIOUS_COLOR="${NEXUSAI_STOP_PREVIOUS_COLOR:-1}"

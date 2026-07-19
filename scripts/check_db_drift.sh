@@ -12,7 +12,12 @@ set -eu
 # - both present + differ => copy newer DB over older DB
 # Set NEXUSAI_DB_DRIFT_AUTO_SYNC=0 for strict fail-closed behavior.
 
-RUNTIME_DATA_DIR="${NEXUSAI_RUNTIME_DATA_DIR:-data}"
+RUNTIME_DATA_DIR="${NEXUSAI_RUNTIME_DATA_DIR:-}"
+if [ -z "$RUNTIME_DATA_DIR" ] && [ -f .env ]; then
+  RUNTIME_DATA_DIR="$(sed -n 's/^NEXUSAI_RUNTIME_DATA_DIR=//p' .env | tail -n 1 | tr -d '\r')"
+fi
+RUNTIME_DATA_DIR="${RUNTIME_DATA_DIR:-data}"
+export NEXUSAI_RUNTIME_DATA_DIR="$RUNTIME_DATA_DIR"
 HOST_DB="$RUNTIME_DATA_DIR/nexusai.db"
 LEGACY_VOL="${NEXUSAI_LEGACY_DATA_VOLUME:-nexusai_nexus-data}"
 AUTO_SYNC="${NEXUSAI_DB_DRIFT_AUTO_SYNC:-1}"
