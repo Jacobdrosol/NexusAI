@@ -22,7 +22,19 @@ fi
 cp deploy/nginx/default.blue.conf data/nginx/default.conf
 
 echo "[bootstrap] starting gateway + blue dashboard"
-docker compose -f docker-compose.bluegreen.yml --profile blue up -d --build dashboard_gateway dashboard_blue
+BOOTSTRAP_BUILD="${NEXUSAI_BOOTSTRAP_BUILD:-1}"
+case "$BOOTSTRAP_BUILD" in
+  1|true|TRUE|yes|YES)
+    docker compose -f docker-compose.bluegreen.yml --profile blue up -d --build dashboard_gateway dashboard_blue
+    ;;
+  0|false|FALSE|no|NO)
+    docker compose -f docker-compose.bluegreen.yml --profile blue up -d dashboard_gateway dashboard_blue
+    ;;
+  *)
+    echo "[bootstrap] blocked: NEXUSAI_BOOTSTRAP_BUILD must be true or false"
+    exit 2
+    ;;
+esac
 
 echo "[bootstrap] switching gateway to blue"
 NEXUSAI_TARGET_COLOR=blue sh ./scripts/switch-dashboard-color.sh blue

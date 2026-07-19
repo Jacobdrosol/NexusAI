@@ -1,0 +1,21 @@
+[Unit]
+Description=NexusAI stack
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/NexusAI
+Environment=NEXUSAI_BOOTSTRAP_BUILD=0
+RemainAfterExit=yes
+TimeoutStartSec=15min
+Restart=on-failure
+RestartSec=30
+ExecStart=/usr/bin/docker compose up -d control_plane worker_agent prometheus
+ExecStart=/bin/sh -lc 'cd /opt/NexusAI && sh ./scripts/bootstrap_bluegreen.sh'
+ExecStop=/usr/bin/docker compose down
+ExecStop=/usr/bin/docker compose -f docker-compose.bluegreen.yml down
+
+[Install]
+WantedBy=multi-user.target

@@ -40,6 +40,24 @@ def test_bluegreen_dashboard_services_restart_after_host_reboot():
         assert compose["services"][service_name]["restart"] == "unless-stopped"
 
 
+def test_bootstrap_can_recover_without_rebuilding_images():
+    bootstrap = (ROOT / "scripts" / "bootstrap_bluegreen.sh").read_text(encoding="utf-8")
+
+    assert 'BOOTSTRAP_BUILD="${NEXUSAI_BOOTSTRAP_BUILD:-1}"' in bootstrap
+    assert "--profile blue up -d --build dashboard_gateway dashboard_blue" in bootstrap
+    assert "--profile blue up -d dashboard_gateway dashboard_blue" in bootstrap
+
+
+def test_systemd_recovery_unit_uses_shell_and_skips_boot_rebuilds():
+    unit = (ROOT / "deploy" / "systemd" / "nexusai.service").read_text(encoding="utf-8")
+
+    assert "Environment=NEXUSAI_BOOTSTRAP_BUILD=0" in unit
+    assert "ExecStart=/usr/bin/docker compose up -d control_plane worker_agent prometheus" in unit
+    assert "ExecStart=/bin/sh -lc 'cd /opt/NexusAI && sh ./scripts/bootstrap_bluegreen.sh'" in unit
+    assert "Restart=on-failure" in unit
+    assert "--build" not in unit
+
+
 def test_deploy_status_endpoint_returns_payload(dashboard_client):
     _login_admin(dashboard_client)
     resp = dashboard_client.get("/api/settings/deploy/status")
