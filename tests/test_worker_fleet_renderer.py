@@ -110,6 +110,115 @@ def test_render_worker_fleet_outputs_compose_worker_config_and_bot(tmp_path):
     assert bot["backends"][0]["provider"] == "ollama_cloud"
     assert bot["routing_rules"]["worker_profile"]["course_scope"] == ["60"]
 
+    catalog_models = json.loads((out / "models" / "catalog-models.json").read_text())
+    assert catalog_models == [
+        {
+            "id": "fleet-ollama_cloud-glm-5-2-cloud",
+            "name": "glm-5.2:cloud",
+            "provider": "ollama_cloud",
+            "capabilities": [],
+            "enabled": True,
+        }
+    ]
+
+
+def test_apply_models_creates_only_missing_models(tmp_path, monkeypatch):
+    renderer = _load_renderer()
+    profile = _profile(tmp_path / "workers.yaml")
+    out = tmp_path / "runtime"
+    renderer.render(
+        profile,
+        out,
+        {"CONTROL_PLANE_API_TOKEN": "control-token", "OLLAMA_API_KEY": "ollama-token"},
+    )
+
+    class _Response:
+        def __init__(self, status_code, payload=None):
+            self.status_code = status_code
+            self._payload = payload
+            self.text = ""
+
+        def json(self):
+            return self._payload
+
+        def raise_for_status(self):
+            assert 200 <= self.status_code < 300
+
+    created = []
+
+    def _get(*_args, **_kwargs):
+        return _Response(200, [{"id": "operator-model", "name": "other-model", "provider": "ollama_cloud"}])
+
+    def _post(_url, *, data, **_kwargs):
+        created.append(json.loads(data))
+        return _Response(201, created[-1])
+
+    monkeypatch.setattr(renderer.requests, "get", _get)
+    monkeypatch.setattr(renderer.requests, "post", _post)
+
+    results = renderer.apply_models(out, api_url="http://control-plane.test", api_token="control-token")
+
+    assert results[0]["action"] == "created"
+    assert results[0]["ok"] is True
+    assert created == [
+        {
+            "id": "fleet-ollama_cloud-glm-5-2-cloud",
+            "name": "glm-5.2:cloud",
+            "provider": "ollama_cloud",
+            "capabilities": [],
+            "enabled": True,
+        }
+    ]
+
+
+def test_apply_models_preserves_existing_catalog_entry(tmp_path, monkeypatch):
+    renderer = _load_renderer()
+    profile = _profile(tmp_path / "workers.yaml")
+    out = tmp_path / "runtime"
+    renderer.render(
+        profile,
+        out,
+        {"CONTROL_PLANE_API_TOKEN": "control-token", "OLLAMA_API_KEY": "ollama-token"},
+    )
+
+    class _Response:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return [
+                {
+                    "id": "operator-curated-glm",
+                    "name": "glm-5.2:cloud",
+                    "provider": "ollama_cloud",
+                    "enabled": True,
+                    "notes": "managed by an operator",
+                }
+            ]
+
+        def raise_for_status(self):
+            return None
+
+    monkeypatch.setattr(renderer.requests, "get", lambda *_args, **_kwargs: _Response())
+    monkeypatch.setattr(
+        renderer.requests,
+        "post",
+        lambda *_args, **_kwargs: pytest.fail("existing catalog models must not be overwritten"),
+    )
+
+    results = renderer.apply_models(out, api_url="http://control-plane.test", api_token="control-token")
+
+    assert results == [
+        {
+            "model_id": "fleet-ollama_cloud-glm-5-2-cloud",
+            "provider": "ollama_cloud",
+            "name": "glm-5.2:cloud",
+            "ok": True,
+            "action": "existing",
+            "catalog_model_id": "operator-curated-glm",
+        }
+    ]
+
 
 def test_render_worker_fleet_requires_ollama_key_by_default(tmp_path):
     renderer = _load_renderer()

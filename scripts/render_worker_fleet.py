@@ -572,6 +572,50 @@ def _bot_payload(worker: dict[str, Any], fleet: dict[str, Any]) -> dict[str, Any
     }
 
 
+def _catalog_model_id(provider: str, model: str) -> str:
+    return f"fleet-{_slug(provider)}-{_slug(model)}"
+
+
+def _catalog_models_for_bots(bots: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Build the non-secret catalog entries required by generated bot backends."""
+
+    models_by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    keys_by_id: dict[str, tuple[str, str]] = {}
+    for bot in bots:
+        for backend in bot.get("backends") or []:
+            if not isinstance(backend, dict):
+                continue
+            if str(backend.get("type") or "").strip().lower() == "browser":
+                continue
+            provider = str(backend.get("provider") or "").strip()
+            model = str(backend.get("model") or "").strip()
+            if not provider or not model:
+                continue
+            key = (provider.casefold(), model.casefold())
+            model_id = _catalog_model_id(provider, model)
+            existing_key = keys_by_id.get(model_id)
+            if existing_key is not None and existing_key != key:
+                raise ValueError(
+                    "Generated catalog model id collision between "
+                    f"{existing_key[0]}/{existing_key[1]} and {provider}/{model}."
+                )
+            keys_by_id[model_id] = key
+            models_by_key.setdefault(
+                key,
+                {
+                    "id": model_id,
+                    "name": model,
+                    "provider": provider,
+                    "capabilities": [],
+                    "enabled": True,
+                },
+            )
+    return sorted(
+        models_by_key.values(),
+        key=lambda item: (item["provider"].casefold(), item["name"].casefold()),
+    )
+
+
 def _write_env_file(
     path: Path,
     *,
@@ -708,10 +752,12 @@ def render(profile_path: Path, output_dir: Path, env: dict[str, str], *, allow_m
     configs_dir = output_dir / "workers"
     env_dir = output_dir / "env"
     bots_dir = output_dir / "bots"
+    models_dir = output_dir / "models"
     output_dir.mkdir(parents=True, exist_ok=True)
     configs_dir.mkdir(parents=True, exist_ok=True)
     env_dir.mkdir(parents=True, exist_ok=True)
     bots_dir.mkdir(parents=True, exist_ok=True)
+    models_dir.mkdir(parents=True, exist_ok=True)
 
     compose: dict[str, Any] = {
         "services": {},
@@ -726,6 +772,7 @@ def render(profile_path: Path, output_dir: Path, env: dict[str, str], *, allow_m
         compose["name"] = compose_project_name
     rendered_workers: list[dict[str, str]] = []
     rendered_bots: list[str] = []
+    rendered_bot_payloads: list[dict[str, Any]] = []
     emitted_builds: set[str] = set()
 
     for worker in workers:
@@ -751,6 +798,7 @@ def render(profile_path: Path, output_dir: Path, env: dict[str, str], *, allow_m
         bot_payload = _bot_payload(worker, fleet)
         bot_path.write_text(json.dumps(bot_payload, indent=2) + "\n", encoding="utf-8")
         rendered_bots.append(bot_payload["id"])
+        rendered_bot_payloads.append(bot_payload)
 
         image, build = _service_image_and_build(
             worker,
@@ -801,6 +849,10 @@ def render(profile_path: Path, output_dir: Path, env: dict[str, str], *, allow_m
             }
         )
 
+    catalog_models = _catalog_models_for_bots(rendered_bot_payloads)
+    catalog_models_path = models_dir / "catalog-models.json"
+    catalog_models_path.write_text(json.dumps(catalog_models, indent=2) + "\n", encoding="utf-8")
+
     compose_path = output_dir / "docker-compose.worker-node.generated.yml"
     with compose_path.open("w", encoding="utf-8") as fh:
         yaml.safe_dump(compose, fh, sort_keys=False)
@@ -814,6 +866,7 @@ def render(profile_path: Path, output_dir: Path, env: dict[str, str], *, allow_m
         "docker_network": network_name,
         "workers": rendered_workers,
         "bots": rendered_bots,
+        "models": catalog_models,
         "warnings": warnings,
     }
     (output_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
@@ -825,6 +878,106 @@ def _headers(token: str) -> dict[str, str]:
     if token:
         headers["X-Nexus-API-Key"] = token
     return headers
+
+
+def apply_models(output_dir: Path, *, api_url: str, api_token: str) -> list[dict[str, Any]]:
+    """Register only catalog entries missing from the control plane.
+
+    A fleet profile declares what its generated bots need, but should never overwrite a
+    catalog record that an operator has already curated with cost or capability metadata.
+    """
+
+    models_path = output_dir / "models" / "catalog-models.json"
+    if not models_path.exists():
+        raise ValueError(f"Rendered catalog model file not found: {models_path}")
+    desired = json.loads(models_path.read_text(encoding="utf-8"))
+    if not isinstance(desired, list):
+        raise ValueError("Rendered catalog model file must contain a list.")
+
+    headers = _headers(api_token)
+    base = api_url.rstrip("/")
+    existing_response = requests.get(f"{base}/v1/models", headers=headers, timeout=30)
+    existing_response.raise_for_status()
+    existing = existing_response.json()
+    if not isinstance(existing, list):
+        raise ValueError("Control-plane model catalog response must be a list.")
+
+    existing_by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    existing_by_id: dict[str, dict[str, Any]] = {}
+    for item in existing:
+        if not isinstance(item, dict):
+            continue
+        model_id = str(item.get("id") or "").strip()
+        provider = str(item.get("provider") or "").strip()
+        name = str(item.get("name") or "").strip()
+        if model_id:
+            existing_by_id[model_id] = item
+        if provider and name:
+            existing_by_key[(provider.casefold(), name.casefold())] = item
+
+    results: list[dict[str, Any]] = []
+    for model in desired:
+        if not isinstance(model, dict):
+            results.append({"ok": False, "action": "validate", "detail": "invalid rendered model"})
+            continue
+        model_id = str(model.get("id") or "").strip()
+        provider = str(model.get("provider") or "").strip()
+        name = str(model.get("name") or "").strip()
+        if not model_id or not provider or not name:
+            results.append(
+                {
+                    "ok": False,
+                    "action": "validate",
+                    "detail": "rendered model is missing id, provider, or name",
+                }
+            )
+            continue
+        key = (provider.casefold(), name.casefold())
+        current = existing_by_key.get(key)
+        if current is not None:
+            results.append(
+                {
+                    "model_id": model_id,
+                    "provider": provider,
+                    "name": name,
+                    "ok": True,
+                    "action": "existing",
+                    "catalog_model_id": str(current.get("id") or ""),
+                }
+            )
+            continue
+        collision = existing_by_id.get(model_id)
+        if collision is not None:
+            results.append(
+                {
+                    "model_id": model_id,
+                    "provider": provider,
+                    "name": name,
+                    "ok": False,
+                    "action": "collision",
+                    "detail": "catalog model id is already assigned to a different provider/model",
+                }
+            )
+            continue
+        response = requests.post(f"{base}/v1/models", headers=headers, data=json.dumps(model), timeout=30)
+        ok = 200 <= response.status_code < 300
+        results.append(
+            {
+                "model_id": model_id,
+                "provider": provider,
+                "name": name,
+                "ok": ok,
+                "action": "created",
+                "status_code": response.status_code,
+                "detail": "" if ok else response.text[:500],
+            }
+        )
+        if ok:
+            existing_by_key[key] = model
+            existing_by_id[model_id] = model
+
+    (output_dir / "apply-models-summary.json").write_text(json.dumps(results, indent=2) + "\n", encoding="utf-8")
+    return results
 
 
 def apply_bots(output_dir: Path, *, api_url: str, api_token: str) -> list[dict[str, Any]]:
@@ -894,6 +1047,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR), help="Private generated runtime output directory.")
     parser.add_argument("--env-file", action="append", default=[str(ROOT / ".env")], help="Env file to read. May be repeated.")
     parser.add_argument("--allow-missing-ollama-key", action="store_true", help="Render ollama_cloud workers even when OLLAMA_API_KEY is not set.")
+    parser.add_argument(
+        "--apply-models",
+        action="store_true",
+        help="Register missing rendered catalog models without changing existing catalog entries.",
+    )
     parser.add_argument("--apply-bots", action="store_true", help="Create or update rendered bot records in the control plane.")
     parser.add_argument("--api-url", default="", help="Host-reachable control-plane API URL for apply/wait.")
     parser.add_argument("--wait-workers", action="store_true", help="Wait until rendered workers self-register as online.")
@@ -914,6 +1072,11 @@ def main(argv: list[str] | None = None) -> int:
 
         api_url = str(args.api_url or env.get("CONTROL_PLANE_URL") or "http://127.0.0.1:8000").strip()
         api_token = str(env.get("CONTROL_PLANE_API_TOKEN") or "").strip()
+        if args.apply_models:
+            results = apply_models(output_dir, api_url=api_url, api_token=api_token)
+            print(json.dumps({"apply_models": results}, indent=2))
+            if any(not item.get("ok") for item in results):
+                return 1
         if args.apply_bots:
             results = apply_bots(output_dir, api_url=api_url, api_token=api_token)
             print(json.dumps({"apply_bots": results}, indent=2))
