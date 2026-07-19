@@ -2,7 +2,8 @@
 set -eu
 
 # DB drift guard: detect drift between host-mounted data and legacy volume data.
-# Current runtime should use host-mounted ./data as the primary storage path.
+# Current runtime should use the configured host-mounted runtime data directory
+# as the primary storage path. It defaults to ./data for ordinary self-hosting.
 # This guard exists to migrate safely from older installs that still used
 # the legacy Docker volume. Default behavior auto-synchronizes using the newer
 # copy as canonical:
@@ -11,7 +12,8 @@ set -eu
 # - both present + differ => copy newer DB over older DB
 # Set NEXUSAI_DB_DRIFT_AUTO_SYNC=0 for strict fail-closed behavior.
 
-HOST_DB="data/nexusai.db"
+RUNTIME_DATA_DIR="${NEXUSAI_RUNTIME_DATA_DIR:-data}"
+HOST_DB="$RUNTIME_DATA_DIR/nexusai.db"
 LEGACY_VOL="${NEXUSAI_LEGACY_DATA_VOLUME:-nexusai_nexus-data}"
 AUTO_SYNC="${NEXUSAI_DB_DRIFT_AUTO_SYNC:-1}"
 
@@ -29,18 +31,19 @@ if ! docker volume inspect "$LEGACY_VOL" >/dev/null 2>&1; then
   exit 0
 fi
 
-mkdir -p data
+mkdir -p "$RUNTIME_DATA_DIR"
+RUNTIME_DATA_DIR_ABS="$(cd "$RUNTIME_DATA_DIR" && pwd -P)"
 
 sync_vol_to_host() {
-  docker run --rm -v "$LEGACY_VOL:/from" -v "$(pwd)/data:/to" alpine sh -lc "cp -av /from/nexusai.db /to/nexusai.db"
+  docker run --rm -v "$LEGACY_VOL:/from" -v "$RUNTIME_DATA_DIR_ABS:/to" alpine sh -lc "cp -av /from/nexusai.db /to/nexusai.db"
 }
 
 sync_host_to_vol() {
-  docker run --rm -v "$(pwd)/data:/from" -v "$LEGACY_VOL:/to" alpine sh -lc "cp -av /from/nexusai.db /to/nexusai.db"
+  docker run --rm -v "$RUNTIME_DATA_DIR_ABS:/from" -v "$LEGACY_VOL:/to" alpine sh -lc "cp -av /from/nexusai.db /to/nexusai.db"
 }
 
 host_mtime() {
-  docker run --rm -v "$(pwd)/data:/from" alpine sh -lc "stat -c %Y /from/nexusai.db"
+  docker run --rm -v "$RUNTIME_DATA_DIR_ABS:/from" alpine sh -lc "stat -c %Y /from/nexusai.db"
 }
 
 vol_mtime() {
