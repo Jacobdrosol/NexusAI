@@ -11,6 +11,7 @@ from control_plane.schedule_payload_sources import (
     OPERATIONAL_QUALITY_SNAPSHOT_SOURCE,
     SystemPayloadSourceError,
     materialize_system_schedule_payload,
+    system_payload_source_config,
     validate_system_payload_source,
 )
 
@@ -394,6 +395,7 @@ def _csv_schedule(*, max_age_hours: int = 48):
                     "lesson_type": ["assessment", "project"],
                     "owner_action_needed": ["true", "yes"],
                 },
+                "require_non_empty_fields": ["recommended_fix_summary"],
                 "max_rows": 2,
                 "max_age_hours": max_age_hours,
             }
@@ -406,6 +408,7 @@ async def test_csv_work_items_source_is_bounded_filtered_and_draft_only(tmp_path
     source = tmp_path / "course-62.csv"
     source.write_text(
         "course_id,lesson_id,lesson_title,lesson_type,audit_status,work_status,owner_action_needed,recommended_fix_summary,secret_notes\n"
+        "62,1000,Missing evidence,lesson,audited-needs-fixes,not_started,false,,do-not-send\n"
         "62,1001,Normal lesson,lesson,audited-needs-fixes,not_started,false,Repair body,do-not-send\n"
         "62,1002,Assessment,assessment,audited-needs-fixes,not_started,false,Repair questions,do-not-send\n"
         "62,1003,Blocked lesson,lesson,audited-needs-fixes,not_started,true,Wait for owner,do-not-send\n",
@@ -443,6 +446,15 @@ async def test_csv_work_items_source_is_bounded_filtered_and_draft_only(tmp_path
         }
     ]
     assert "secret_notes" not in payload["revision_items"]
+
+
+def test_csv_work_items_source_requires_selected_evidence_columns():
+    schedule = _csv_schedule()
+    source = schedule["metadata"]["system_payload_source"]
+    source["require_non_empty_fields"] = ["issue_summary"]
+
+    with pytest.raises(SystemPayloadSourceError, match="selected columns"):
+        system_payload_source_config(schedule)
 
 
 @pytest.mark.anyio

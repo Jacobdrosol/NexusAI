@@ -125,13 +125,28 @@ def _csv_source_config(raw: Dict[str, Any], *, target_field: str) -> Dict[str, A
         raise SystemPayloadSourceError(
             f"csv_work_items_v1 max_age_hours must be between 1 and {_CSV_SOURCE_MAX_AGE_HOURS}"
         )
+    columns = _safe_csv_field_list(raw.get("columns"), field_name="csv_work_items_v1 columns")
+    required_raw = raw.get("require_non_empty_fields")
+    require_non_empty_fields = (
+        _safe_csv_field_list(
+            required_raw,
+            field_name="csv_work_items_v1 require_non_empty_fields",
+        )
+        if required_raw is not None
+        else []
+    )
+    if any(field not in columns for field in require_non_empty_fields):
+        raise SystemPayloadSourceError(
+            "csv_work_items_v1 require_non_empty_fields must reference selected columns"
+        )
     return {
         "type": CSV_WORK_ITEMS_SOURCE,
         "target_field": target_field,
         "relative_path": relative_path,
-        "columns": _safe_csv_field_list(raw.get("columns"), field_name="csv_work_items_v1 columns"),
+        "columns": columns,
         "include_equals": _csv_filter_map(raw.get("include_equals"), field_name="csv_work_items_v1 include_equals"),
         "exclude_equals": _csv_filter_map(raw.get("exclude_equals"), field_name="csv_work_items_v1 exclude_equals"),
+        "require_non_empty_fields": require_non_empty_fields,
         "max_rows": max_rows,
         "max_age_hours": max_age_hours,
     }
@@ -210,6 +225,7 @@ def _matches_csv_filters(
     *,
     include_equals: Dict[str, set[str]],
     exclude_equals: Dict[str, set[str]],
+    require_non_empty_fields: list[str],
 ) -> bool:
     for field, allowed in include_equals.items():
         if _truncate_csv_value(row.get(field)).casefold() not in allowed:
@@ -217,6 +233,8 @@ def _matches_csv_filters(
     for field, blocked in exclude_equals.items():
         if _truncate_csv_value(row.get(field)).casefold() in blocked:
             return False
+    if any(not _truncate_csv_value(row.get(field)) for field in require_non_empty_fields):
+        return False
     return True
 
 
@@ -243,7 +261,12 @@ def csv_work_items_payload(config: Dict[str, Any]) -> Dict[str, Any]:
         with source_path.open("r", encoding="utf-8-sig", newline="") as source_file:
             reader = csv.DictReader(source_file)
             headers = {str(header or "").strip() for header in (reader.fieldnames or [])}
-            required_fields = set(config["columns"]) | set(config["include_equals"]) | set(config["exclude_equals"])
+            required_fields = (
+                set(config["columns"])
+                | set(config["include_equals"])
+                | set(config["exclude_equals"])
+                | set(config["require_non_empty_fields"])
+            )
             missing_fields = sorted(field for field in required_fields if field not in headers)
             if missing_fields:
                 raise SystemPayloadSourceError(
@@ -256,6 +279,7 @@ def csv_work_items_payload(config: Dict[str, Any]) -> Dict[str, Any]:
                     row,
                     include_equals=config["include_equals"],
                     exclude_equals=config["exclude_equals"],
+                    require_non_empty_fields=config["require_non_empty_fields"],
                 ):
                     continue
                 selected_rows.append({field: _truncate_csv_value(row.get(field)) for field in config["columns"]})
