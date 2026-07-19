@@ -3520,8 +3520,10 @@ class TaskManager:
             return metadata
         try:
             bot = await self._bot_registry.get(bot_id)
-        except Exception:
-            return metadata
+        except Exception as exc:
+            raise ValueError(
+                f"Task bot '{bot_id}' is unavailable; refusing task creation until its scope can be verified."
+            ) from exc
 
         profile = self._pipeline_launch_profile(bot)
         capabilities = getattr(bot, "assignment_capabilities", None)

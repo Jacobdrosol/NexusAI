@@ -1362,6 +1362,27 @@ async def test_create_task_enforces_and_inherits_bound_bot_project_scope(tmp_pat
 
 
 @pytest.mark.anyio
+async def test_create_task_refuses_an_unavailable_bot_when_registry_is_configured(tmp_path):
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {"task_id": task.id}
+
+    tm = TaskManager(
+        StubScheduler(),
+        db_path=str(tmp_path / "unavailable-bot-tasks.db"),
+        bot_registry=BotRegistry(db_path=str(tmp_path / "unavailable-bot-registry.db")),
+    )
+
+    with pytest.raises(ValueError, match="refusing task creation until its scope can be verified"):
+        await tm.create_task(bot_id="missing-bot", payload={"instruction": "must not queue"})
+
+    assert await tm.list_tasks() == []
+
+
+@pytest.mark.anyio
 async def test_trigger_keeps_project_scope_when_optional_metadata_is_not_inherited(tmp_path):
     import asyncio
 
