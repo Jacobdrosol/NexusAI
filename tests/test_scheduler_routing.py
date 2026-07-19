@@ -741,6 +741,15 @@ async def test_scheduler_dispatches_only_authorized_existing_question_patch(monk
                 "question_id": 7,
                 "expected": {"prompt": "What is 2 + 2?", "question_type": "MCQ"},
                 "changes": {"prompt": "What is 3 + 1?"},
+                "review_evidence": {
+                    "reviewer_bot_id": "globeiq-question-bank-review-01-bot",
+                    "review_task_id": "review-42-7",
+                    "approved_patch": True,
+                    "semantic_duplicate_risk": "materially_distinct_context",
+                    "reviewed_question_ids": [7],
+                    "shortage_detected": False,
+                    "rationale": "The reviewer checked the target and comparable questions for duplication.",
+                },
             },
             task=task,
         )

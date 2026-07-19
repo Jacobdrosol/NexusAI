@@ -4023,6 +4023,7 @@ class Scheduler:
             "question_id",
             "expected",
             "changes",
+            "review_evidence",
         }
         unexpected_fields = sorted(set(payload) - allowed_fields)
         if unexpected_fields:
@@ -4036,8 +4037,12 @@ class Scheduler:
             raise BackendError("Browser workers cannot publish")
         if action != "patch_existing":
             raise BackendError("Unsupported Question Bank action")
-        if not isinstance(payload.get("expected"), dict) or not isinstance(payload.get("changes"), dict):
-            raise BackendError("Question Bank patches require expected and changes objects")
+        if (
+            not isinstance(payload.get("expected"), dict)
+            or not isinstance(payload.get("changes"), dict)
+            or not isinstance(payload.get("review_evidence"), dict)
+        ):
+            raise BackendError("Question Bank patches require expected, changes, and reviewer evidence objects")
         if task is None:
             raise BackendError("Question Bank patches require a persisted task")
         try:
