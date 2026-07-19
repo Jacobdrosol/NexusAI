@@ -273,6 +273,8 @@ Copy `.env.example` to `.env` and set the following variables before starting th
 | `NEXUS_CONFIG_PATH` | — | Path to `nexus_config.yaml` for the control plane |
 | `WORKER_CONFIG_PATH` | — | Path to a worker YAML file for the worker agent |
 | `DASHBOARD_PORT` | `5000` | Port the dashboard listens on (used when running directly) |
+| `NEXUS_PLATFORM_AI_CONFIGURATION_MUTATIONS_ENABLED` | `0` | Allow Platform AI to change bot configuration; otherwise it records proposals for review only |
+| `NEXUS_PLATFORM_AI_AUTONOMOUS_PIPELINES_ENABLED` | `0` | Allow Platform AI to launch and relaunch autonomous pipeline iterations |
 | `OPENAI_API_KEY` | — | OpenAI API key for cloud LLM backends |
 | `ANTHROPIC_API_KEY` | — | Anthropic Claude API key |
 | `GEMINI_API_KEY` | — | Google Gemini API key |

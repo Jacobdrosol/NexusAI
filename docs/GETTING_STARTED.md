@@ -40,6 +40,12 @@ Minimum recommended values for safe first run:
 - `CONTROL_PLANE_API_TOKEN`: long random token.
 - `NEXUSAI_CLOUD_CONTEXT_POLICY=block`
 - `NEXUS_WORKER_CLOUD_CONTEXT_POLICY=block`
+- `NEXUS_PLATFORM_AI_CONFIGURATION_MUTATIONS_ENABLED=0`
+- `NEXUS_PLATFORM_AI_AUTONOMOUS_PIPELINES_ENABLED=0`
+
+Keep the two Platform AI switches disabled until you have reviewed a worker's scope,
+runtime readiness, and rollback path. With either switch disabled, Platform AI records
+the relevant proposal instead of changing bot configuration or relaunching a pipeline.
 
 Recommended values for repo-workspace PM/test execution in the default Docker deployment:
 
