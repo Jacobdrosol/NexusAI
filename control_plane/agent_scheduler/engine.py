@@ -23,6 +23,12 @@ _MIN_SCHEDULE_RETRY_BACKOFF_SECONDS = 5
 _MAX_SCHEDULE_RETRY_BACKOFF_SECONDS = 3600
 _DEFAULT_SCHEDULE_OVERLAP_POLICY = "forbid"
 _SCHEDULE_OVERLAP_POLICIES = {"forbid", "allow"}
+_DEFAULT_SCHEDULE_TERMINAL_RUN_RETENTION_PER_SCHEDULE = 500
+_MIN_SCHEDULE_TERMINAL_RUN_RETENTION_PER_SCHEDULE = 1
+_MAX_SCHEDULE_TERMINAL_RUN_RETENTION_PER_SCHEDULE = 10_000
+_DEFAULT_SCHEDULE_TERMINAL_RUN_PRUNE_BATCH_SIZE = 250
+_MAX_SCHEDULE_TERMINAL_RUN_PRUNE_BATCH_SIZE = 1_000
+_TERMINAL_SCHEDULE_RUN_STATUSES = ("cancelled", "completed", "failed", "retried", "skipped")
 
 _CREATE_SCHEDULES = """
 CREATE TABLE IF NOT EXISTS agent_schedules (
@@ -226,6 +232,36 @@ def _normalize_retry_settings(retry_max: Any, retry_backoff_seconds: Any) -> tup
     return normalized_retry_max, normalized_backoff_seconds
 
 
+def _terminal_run_retention_per_schedule(value: Optional[int] = None) -> int:
+    """Resolve a bounded history retention setting without accepting unsafe values."""
+    raw_value: Any = value
+    if raw_value is None:
+        raw_value = os.environ.get(
+            "NEXUSAI_SCHEDULE_TERMINAL_RUN_RETENTION_PER_SCHEDULE",
+            _DEFAULT_SCHEDULE_TERMINAL_RUN_RETENTION_PER_SCHEDULE,
+        )
+    try:
+        parsed_value = int(raw_value)
+    except (TypeError, ValueError):
+        parsed_value = _DEFAULT_SCHEDULE_TERMINAL_RUN_RETENTION_PER_SCHEDULE
+    return min(
+        _MAX_SCHEDULE_TERMINAL_RUN_RETENTION_PER_SCHEDULE,
+        max(_MIN_SCHEDULE_TERMINAL_RUN_RETENTION_PER_SCHEDULE, parsed_value),
+    )
+
+
+def _terminal_run_prune_batch_size(value: Optional[int] = None) -> int:
+    """Bound each maintenance transaction so schedule cleanup cannot monopolize SQLite."""
+    raw_value: Any = value
+    if raw_value is None:
+        raw_value = _DEFAULT_SCHEDULE_TERMINAL_RUN_PRUNE_BATCH_SIZE
+    try:
+        parsed_value = int(raw_value)
+    except (TypeError, ValueError):
+        parsed_value = _DEFAULT_SCHEDULE_TERMINAL_RUN_PRUNE_BATCH_SIZE
+    return min(_MAX_SCHEDULE_TERMINAL_RUN_PRUNE_BATCH_SIZE, max(1, parsed_value))
+
+
 def _validate_schedule_dispatch(
     *,
     prompt: str,
@@ -254,12 +290,18 @@ class AgentScheduleEngine:
         db_path: Optional[str] = None,
         autonomy_guard: Optional[Callable[[Dict[str, Any]], Awaitable[None]]] = None,
         payload_materializer: Optional[Callable[[Dict[str, Any]], Awaitable[Dict[str, Any]]]] = None,
+        terminal_run_retention_per_schedule: Optional[int] = None,
+        terminal_run_prune_batch_size: Optional[int] = None,
     ) -> None:
         self._assignment_service = assignment_service
         self._task_manager = task_manager
         self._db_path = db_path or _db_path()
         self._autonomy_guard = autonomy_guard
         self._payload_materializer = payload_materializer
+        self._terminal_run_retention_per_schedule = _terminal_run_retention_per_schedule(
+            terminal_run_retention_per_schedule
+        )
+        self._terminal_run_prune_batch_size = _terminal_run_prune_batch_size(terminal_run_prune_batch_size)
         self._ready = False
         self._tick_lock = asyncio.Lock()
 
@@ -552,6 +594,7 @@ class AgentScheduleEngine:
         await self._ensure_db()
         await self._reconcile_task_runs()
         await self._retry_failed_dispatch_runs()
+        await self._prune_terminal_runs()
         due: List[Dict[str, Any]] = []
         async with self._tick_lock:
             now_iso = _iso(_now())
@@ -598,6 +641,52 @@ class AgentScheduleEngine:
             elif run.get("status") == "skipped":
                 await self._update_schedule_last_run(schedule["id"], status="skipped")
         return runs
+
+    async def _prune_terminal_runs(self) -> int:
+        """Keep recent terminal history while preserving all work that can still run or reconcile."""
+        placeholders = ", ".join("?" for _ in _TERMINAL_SCHEDULE_RUN_STATUSES)
+        pruned = 0
+        async with open_sqlite(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            await db.execute("BEGIN IMMEDIATE")
+            async with db.execute(
+                f"""
+                SELECT DISTINCT schedule_id
+                FROM agent_schedule_runs
+                WHERE status IN ({placeholders})
+                """,
+                _TERMINAL_SCHEDULE_RUN_STATUSES,
+            ) as cursor:
+                schedule_rows = await cursor.fetchall()
+            for schedule_row in schedule_rows:
+                schedule_id = str(schedule_row["schedule_id"] or "").strip()
+                if not schedule_id:
+                    continue
+                async with db.execute(
+                    f"""
+                    SELECT id
+                    FROM agent_schedule_runs
+                    WHERE schedule_id = ? AND status IN ({placeholders})
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT ? OFFSET ?
+                    """,
+                    (
+                        schedule_id,
+                        *_TERMINAL_SCHEDULE_RUN_STATUSES,
+                        self._terminal_run_prune_batch_size,
+                        self._terminal_run_retention_per_schedule,
+                    ),
+                ) as cursor:
+                    rows = await cursor.fetchall()
+                if not rows:
+                    continue
+                await db.executemany(
+                    "DELETE FROM agent_schedule_runs WHERE id = ?",
+                    [(str(row["id"]),) for row in rows],
+                )
+                pruned += len(rows)
+            await db.commit()
+        return pruned
 
     async def _create_run(
         self,

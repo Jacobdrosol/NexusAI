@@ -463,6 +463,51 @@ async def test_schedule_run_persists_manual_origin(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_schedule_tick_prunes_only_excess_terminal_history(tmp_path, monkeypatch):
+    import control_plane.agent_scheduler.engine as scheduler_module
+
+    started_at = datetime(2026, 7, 19, 12, 0, tzinfo=timezone.utc)
+    current_time = started_at
+    monkeypatch.setattr(scheduler_module, "_now", lambda: current_time)
+    engine = AgentScheduleEngine(
+        assignment_service=object(),
+        task_manager=_FakeTaskManager(),
+        db_path=str(tmp_path / "schedules.db"),
+        terminal_run_retention_per_schedule=2,
+        terminal_run_prune_batch_size=10,
+    )
+    schedule = await engine.create_schedule({**_schedule_payload(), "overlap_policy": "allow"})
+
+    terminal_run_ids = []
+    for offset in range(4):
+        current_time = started_at + timedelta(minutes=offset + 1)
+        run, created = await engine._create_run(
+            schedule,
+            scheduled_for=(started_at + timedelta(minutes=offset + 1)).isoformat(),
+            manual=False,
+        )
+        assert created is True
+        terminal_run_ids.append(run["id"])
+        await engine._set_run_status(run["id"], "completed", finished_at=current_time.isoformat())
+
+    current_time = started_at + timedelta(minutes=6)
+    active_run, created = await engine._create_run(
+        schedule,
+        scheduled_for=current_time.isoformat(),
+        manual=False,
+    )
+    assert created is True
+    assert active_run["status"] == "queued"
+
+    await engine.tick_once()
+
+    persisted = await engine.list_runs(schedule["id"], limit=20)
+    persisted_by_id = {run["id"]: run for run in persisted}
+    assert set(persisted_by_id) == set(terminal_run_ids[-2:]) | {active_run["id"]}
+    assert persisted_by_id[active_run["id"]]["status"] == "queued"
+
+
+@pytest.mark.anyio
 async def test_schedule_listing_filters_status_and_rejects_invalid_status(tmp_path):
     engine = AgentScheduleEngine(
         assignment_service=object(),
