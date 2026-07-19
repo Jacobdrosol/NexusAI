@@ -40,6 +40,7 @@ _AUTONOMOUS_PIPELINE_ACTIONS = {"set_pipeline_target", "launch_pipeline"}
 _APPROVABLE_PROPOSAL_BACKEND_TYPES = {"local_llm", "remote_llm", "cloud_api"}
 _PROPOSAL_PREFLIGHT_TTL_SECONDS = 300
 _EXECUTION_CATALOG_MAX_WORKERS = 40
+_EXECUTION_CATALOG_MAX_PROJECTS = 80
 _EXECUTION_CATALOG_MAX_MODELS_PER_PROVIDER = 12
 _EXECUTION_CATALOG_MAX_CLI_TOOLS = 12
 _EXECUTION_CATALOG_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
@@ -861,12 +862,40 @@ class PlatformAISessionRuntime:
         catalog: Dict[str, Any] = {
             "schema_version": "nexusai.execution-catalog.v1",
             "workers": [],
+            "projects": [],
             "selection_rules": [
                 "Use only worker_id values listed here.",
+                "Use only enabled project_id values listed here when proposing project-scoped work.",
                 "A catalog entry is not permission to activate a bot or access credentials.",
                 "Every proposed configuration remains disabled until preflight and operator approval.",
             ],
         }
+        if self._project_registry is None:
+            catalog["project_availability"] = "project_registry_unavailable"
+        else:
+            try:
+                projects = await self._project_registry.list()
+            except Exception:
+                catalog["project_availability"] = "project_registry_unavailable"
+            else:
+                catalog_projects: List[Dict[str, str]] = []
+                for project in sorted(projects, key=lambda item: str(getattr(item, "id", "") or "")):
+                    project_id = str(getattr(project, "id", "") or "").strip()
+                    if not project_id or not bool(getattr(project, "enabled", False)):
+                        continue
+                    if not _EXECUTION_CATALOG_VALUE_PATTERN.fullmatch(project_id):
+                        continue
+                    mode = str(getattr(project, "mode", "") or "").strip().lower()
+                    catalog_projects.append(
+                        {
+                            "project_id": project_id,
+                            "mode": mode if mode in {"isolated", "bridged"} else "isolated",
+                        }
+                    )
+                    if len(catalog_projects) >= _EXECUTION_CATALOG_MAX_PROJECTS:
+                        break
+                catalog["projects"] = catalog_projects
+                catalog["project_availability"] = "enabled_projects_only"
         if self._worker_registry is None:
             catalog["availability"] = "worker_registry_unavailable"
             return catalog

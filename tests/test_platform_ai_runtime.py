@@ -16,7 +16,7 @@ from control_plane.registry.worker_registry import WorkerRegistry
 from control_plane.connections.resolver import ConnectionResolver
 from control_plane.worker_probe_store import WorkerProbeStore
 from shared.exceptions import BotNotFoundError
-from shared.models import Bot, Worker
+from shared.models import Bot, Project, Worker
 
 
 def test_platform_ai_cli_backend_uses_approved_ollama_profile():
@@ -279,6 +279,13 @@ async def test_platform_brain_specialist_catalog_exposes_only_ready_nonsecret_wo
     store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
     workers = WorkerRegistry(db_path=str(tmp_path / "workers.db"))
     probes = WorkerProbeStore(db_path=str(tmp_path / "probes.db"))
+    projects = ProjectRegistry(db_path=str(tmp_path / "projects.db"))
+    await projects.register(
+        Project(id="globeiq", name="Private GlobeIQ Project", mode="isolated", enabled=True)
+    )
+    await projects.register(
+        Project(id="disabled-project", name="Disabled Private Project", mode="isolated", enabled=False)
+    )
     await workers.register(
         Worker.model_validate(
             {
@@ -338,6 +345,7 @@ async def test_platform_brain_specialist_catalog_exposes_only_ready_nonsecret_wo
         scheduler=scheduler,
         worker_registry=workers,
         worker_probe_store=probes,
+        project_registry=projects,
     )
     session = await store.create_session(
         mode="bot_creator",
@@ -360,10 +368,14 @@ async def test_platform_brain_specialist_catalog_exposes_only_ready_nonsecret_wo
     assert "ready-catalog-worker" in system_prompt
     assert "glm-5.2:cloud" in system_prompt
     assert "claude" in system_prompt
+    assert "globeiq" in system_prompt
     assert "unready-catalog-worker" not in system_prompt
+    assert "disabled-project" not in system_prompt
     assert "10.24.8.19" not in system_prompt
     assert "9911" not in system_prompt
     assert "Private Worker Name" not in system_prompt
+    assert "Private GlobeIQ Project" not in system_prompt
+    assert "Disabled Private Project" not in system_prompt
     assert "PRIVATE_REQUEST_TOKEN" not in system_prompt
     assert "do-not-disclose" not in system_prompt
 
