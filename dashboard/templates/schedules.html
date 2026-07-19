@@ -40,6 +40,7 @@
         </td>
         <td class="actions">
           <button class="btn btn-sm" type="button" onclick='triggerSchedule({{ schedule.id|tojson }}, {{ ((schedule.metadata or {}).mutation_safe or false)|tojson }})'>Run</button>
+          <button class="btn btn-sm" type="button" onclick='previewSchedule({{ schedule.id|tojson }}, {{ schedule.name|tojson }})'>Preview</button>
           <button class="btn btn-sm" type="button" onclick='toggleSchedule({{ schedule.id|tojson }}, {{ ('paused' if schedule.status == 'active' else 'active')|tojson }}, {{ (schedule.target_bot_id or schedule.assignment_pm_bot_id or '')|tojson }}, {{ ((schedule.metadata or {}).mutation_safe or false)|tojson }})'>{{ 'Pause' if schedule.status == 'active' else 'Enable' }}</button>
           <button class="btn btn-sm" type="button" onclick='showScheduleRuns({{ schedule.id|tojson }}, {{ schedule.name|tojson }})'>Runs</button>
         </td>
@@ -147,6 +148,15 @@
       </table>
     </div>
     <div class="modal-actions"><button type="button" class="btn" onclick="closeScheduleRuns()">Close</button></div>
+  </div>
+</div>
+
+<div id="modal-schedule-preview" class="modal" style="display:none;">
+  <div class="modal-content" style="max-width:860px;">
+    <h2 id="schedule-preview-title">Schedule Preview</h2>
+    <div id="schedule-preview-status" class="mini-note" style="margin-bottom:0.75rem;"></div>
+    <pre id="schedule-preview-body" style="max-height:460px;overflow:auto;white-space:pre-wrap;"></pre>
+    <div class="modal-actions"><button type="button" class="btn" onclick="closeSchedulePreview()">Close</button></div>
   </div>
 </div>
 {% endblock %}
@@ -366,6 +376,28 @@ async function triggerSchedule(scheduleId, mutationSafe) {
     return;
   }
   window.location.reload();
+}
+
+function closeSchedulePreview() {
+  document.getElementById('modal-schedule-preview').style.display = 'none';
+}
+
+async function previewSchedule(scheduleId, scheduleName) {
+  document.getElementById('modal-schedule-preview').style.display = 'flex';
+  document.getElementById('schedule-preview-title').textContent = scheduleName + ' Preview';
+  document.getElementById('schedule-preview-status').textContent = 'Resolving bounded payload...';
+  document.getElementById('schedule-preview-body').textContent = '';
+  const response = await fetch('/api/schedules/' + encodeURIComponent(scheduleId) + '/preview', {
+    method: 'POST',
+    headers: {'X-CSRFToken': getScheduleCsrf()},
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    document.getElementById('schedule-preview-status').textContent = data.error || 'Unable to preview schedule payload.';
+    return;
+  }
+  document.getElementById('schedule-preview-status').textContent = '';
+  document.getElementById('schedule-preview-body').textContent = JSON.stringify(data.task_payload || {}, null, 2);
 }
 
 function closeScheduleRuns() {

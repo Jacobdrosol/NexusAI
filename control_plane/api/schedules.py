@@ -193,6 +193,25 @@ async def trigger_schedule(schedule_id: str, request: Request) -> Dict[str, Any]
         raise HTTPException(status_code=400, detail=str(exc))
 
 
+@router.post("/{schedule_id}/preview")
+async def preview_schedule(schedule_id: str, request: Request) -> Dict[str, Any]:
+    engine = request.app.state.agent_schedule_engine
+    try:
+        schedule = await engine.get_schedule(schedule_id)
+        if schedule is None:
+            raise HTTPException(status_code=404, detail="schedule not found")
+        await _require_schedule_autonomy_safety(request, schedule, only_when_active=False)
+        preview = await engine.preview_schedule_payload(schedule_id)
+        await record_audit_event(request, action="schedules.preview", resource=f"schedule:{schedule_id}")
+        return preview
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/{schedule_id}/runs")
 async def list_schedule_runs(schedule_id: str, request: Request, limit: int = 50) -> Dict[str, Any]:
     engine = request.app.state.agent_schedule_engine

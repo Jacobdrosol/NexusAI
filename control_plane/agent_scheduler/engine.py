@@ -515,6 +515,19 @@ class AgentScheduleEngine:
             await self._update_schedule_last_run(schedule["id"], status="skipped")
         return run
 
+    async def preview_schedule_payload(self, schedule_id: str) -> Dict[str, Any]:
+        """Resolve a schedule's bounded payload without creating a task or run record."""
+        schedule = await self.get_schedule(schedule_id)
+        if schedule is None:
+            raise ValueError("schedule not found")
+        payload = _schedule_task_payload(schedule)
+        if self._payload_materializer is not None:
+            generated_payload = await self._payload_materializer(schedule)
+            if not isinstance(generated_payload, dict):
+                raise ValueError("schedule payload materializer must return an object")
+            payload.update(generated_payload)
+        return {"schedule": schedule, "task_payload": payload}
+
     async def list_runs(self, schedule_id: str, *, limit: int = 50) -> List[Dict[str, Any]]:
         await self._ensure_db()
         safe_limit = max(1, min(int(limit), 500))

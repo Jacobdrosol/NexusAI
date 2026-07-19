@@ -192,6 +192,35 @@ async def test_schedule_dispatch_materializes_bounded_system_payload(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_schedule_preview_materializes_payload_without_creating_a_task_or_run(tmp_path):
+    task_manager = _FakeTaskManager()
+
+    async def materialize(schedule):
+        assert schedule["id"]
+        return {"revision_items": "sanitized CSV snapshot"}
+
+    engine = AgentScheduleEngine(
+        assignment_service=object(),
+        task_manager=task_manager,
+        db_path=str(tmp_path / "schedules.db"),
+        payload_materializer=materialize,
+    )
+    schedule = await engine.create_schedule(
+        {**_schedule_payload(), "task_payload": {"artifact": "draft only"}}
+    )
+
+    preview = await engine.preview_schedule_payload(schedule["id"])
+
+    assert preview["schedule"]["id"] == schedule["id"]
+    assert preview["task_payload"] == {
+        "artifact": "draft only",
+        "revision_items": "sanitized CSV snapshot",
+    }
+    assert task_manager.create_calls == []
+    assert await engine.list_runs(schedule["id"]) == []
+
+
+@pytest.mark.anyio
 async def test_schedule_retries_only_a_failed_pre_dispatch_attempt(tmp_path, monkeypatch):
     import control_plane.agent_scheduler.engine as scheduler_module
 

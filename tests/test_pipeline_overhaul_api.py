@@ -788,6 +788,15 @@ async def test_agent_scheduler_create_and_manual_trigger(cp_client):
     assert created_schedule["overlap_policy"] == "forbid"
     schedule_id = created_schedule["id"]
 
+    preview_resp = await cp_client.post(f"/v1/schedules/{schedule_id}/preview")
+    assert preview_resp.status_code == 200
+    assert preview_resp.json()["schedule"]["id"] == schedule_id
+    assert preview_resp.json()["task_payload"] == {}
+
+    preview_runs_resp = await cp_client.get(f"/v1/schedules/{schedule_id}/runs")
+    assert preview_runs_resp.status_code == 200
+    assert preview_runs_resp.json()["runs"] == []
+
     list_schedules_resp = await cp_client.get("/v1/schedules?status=active")
     assert list_schedules_resp.status_code == 200
     assert any(row["id"] == schedule_id for row in list_schedules_resp.json()["schedules"])

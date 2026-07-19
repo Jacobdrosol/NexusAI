@@ -2531,6 +2531,9 @@ def test_schedules_page_and_proxy_support_operational_schedule_management(dashbo
         def trigger_schedule(self, schedule_id):
             return {"run": {"id": "run-1", "schedule_id": schedule_id}}
 
+        def preview_schedule(self, schedule_id):
+            return {"schedule": {"id": schedule_id}, "task_payload": {"revision_items": "preview"}}
+
         def list_schedule_runs(self, schedule_id, limit=50):
             return {"schedule_id": schedule_id, "runs": []}
 
@@ -2544,6 +2547,7 @@ def test_schedules_page_and_proxy_support_operational_schedule_management(dashbo
         )
         toggled = dashboard_client.patch("/api/schedules/schedule-1", json={"status": "active"})
         triggered = dashboard_client.post("/api/schedules/schedule-1/trigger")
+        preview = dashboard_client.post("/api/schedules/schedule-1/preview")
         runs = dashboard_client.get("/api/schedules/schedule-1/runs")
 
     assert page.status_code == 200
@@ -2558,6 +2562,7 @@ def test_schedules_page_and_proxy_support_operational_schedule_management(dashbo
     assert created.status_code == 201
     assert toggled.get_json()["schedule"]["status"] == "active"
     assert triggered.get_json()["run"]["schedule_id"] == "schedule-1"
+    assert preview.get_json()["task_payload"]["revision_items"] == "preview"
     assert runs.get_json()["runs"] == []
 
 

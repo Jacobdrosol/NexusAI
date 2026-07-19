@@ -843,6 +843,9 @@ class CPClient:
     def trigger_schedule(self, schedule_id: str) -> Optional[Dict[str, Any]]:
         return self._post(f"/v1/schedules/{schedule_id}/trigger", {})
 
+    def preview_schedule(self, schedule_id: str) -> Optional[Dict[str, Any]]:
+        return self._post(f"/v1/schedules/{schedule_id}/preview", {})
+
     def list_schedule_runs(self, schedule_id: str, limit: int = 50) -> Optional[Dict[str, Any]]:
         return self._get(f"/v1/schedules/{schedule_id}/runs?limit={max(1, int(limit))}")
 

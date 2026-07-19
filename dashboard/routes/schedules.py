@@ -104,6 +104,16 @@ def api_trigger_schedule(schedule_id: str):
     return jsonify(data)
 
 
+@bp.post("/api/schedules/<schedule_id>/preview")
+@login_required
+def api_preview_schedule(schedule_id: str):
+    cp = get_cp_client()
+    data = cp.preview_schedule(schedule_id)
+    if data is None:
+        return _cp_error_response(cp, "failed to preview schedule payload")
+    return jsonify(data)
+
+
 @bp.get("/api/schedules/<schedule_id>/runs")
 @login_required
 def api_schedule_runs(schedule_id: str):
