@@ -96,6 +96,47 @@
   </div>
 </section>
 
+<section class="panel worker-dependencies-panel">
+  <div class="panel-heading-row">
+    <div>
+      <h2 class="panel-title">Lifecycle Dependencies</h2>
+      <p class="panel-subtitle">Bot routes must be updated before this worker can be disabled or removed.</p>
+    </div>
+    {% if worker_dependencies %}
+    <div class="worker-dependency-status">
+      <span class="badge badge-{{ 'ready' if worker_dependencies.can_disable else 'degraded' }}">{{ 'disable ready' if worker_dependencies.can_disable else 'disable blocked' }}</span>
+      <span class="badge badge-{{ 'ready' if worker_dependencies.can_delete else 'degraded' }}">{{ 'delete ready' if worker_dependencies.can_delete else 'delete blocked' }}</span>
+    </div>
+    {% endif %}
+  </div>
+  {% if worker_dependencies and worker_dependencies.dependent_bots %}
+  <table>
+    <thead><tr><th>Dependent Bot</th><th>Project</th><th>State</th></tr></thead>
+    <tbody>
+      {% for bot in worker_dependencies.dependent_bots %}
+      <tr>
+        <td><a href="{{ url_for('bots.bot_detail_page', bot_id=bot.id) }}">{{ bot.name or bot.id }}</a><div class="metrics">{{ bot.id }}</div></td>
+        <td>{{ bot.project_id or 'Global' }}</td>
+        <td><span class="badge badge-{{ 'enabled' if bot.enabled else 'disabled' }}">{{ 'enabled' if bot.enabled else 'disabled' }}</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="state-empty">No direct bot backend references this worker.</div>
+  {% endif %}
+  {% if worker_dependencies and worker_dependencies.active_schedules %}
+  <div class="worker-dependent-schedules">
+    <h3 class="subsection-title">Active Schedules</h3>
+    <ul class="dependency-list">
+      {% for schedule in worker_dependencies.active_schedules %}
+      <li>{{ schedule.name or schedule.id }} <span class="metrics">{{ schedule.project_id or 'Global' }}</span></li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+</section>
+
 <section class="panel worker-metrics-panel">
   <h2 class="panel-title">Resource Snapshot</h2>
   {% set m = worker.metrics or {} %}
@@ -289,7 +330,8 @@ async function toggleWorker(id, enable) {
     headers: {'Content-Type':'application/json','X-CSRFToken': getCsrf()},
     body: JSON.stringify(worker)
   });
-  if (res.ok) location.reload(); else alert('Update failed');
+  const payload = await res.json().catch(() => ({}));
+  if (res.ok) location.reload(); else alert(payload.error || 'Update failed');
 }
 
 async function deleteWorker(id) {
@@ -298,8 +340,9 @@ async function deleteWorker(id) {
     method: 'DELETE',
     headers: {'X-CSRFToken': getCsrf()}
   });
+  const payload = await res.json().catch(() => ({}));
   if (res.ok) window.location = '/workers';
-  else alert('Delete failed');
+  else alert(payload.error || 'Delete failed');
 }
 
 const workerId = {{ worker.id|tojson }};

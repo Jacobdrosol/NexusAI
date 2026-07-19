@@ -1310,6 +1310,41 @@ select.form-control {
 .worker-probe-degraded,
 .worker-probe-error { color: #fcd34d; }
 
+.worker-dependencies-panel {
+  margin-bottom: 1rem;
+}
+
+.panel-heading-row {
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 0.9rem;
+}
+
+.panel-subtitle {
+  margin: 0.2rem 0 0;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.worker-dependency-status {
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.worker-dependent-schedules {
+  margin-top: 0.9rem;
+}
+
+.dependency-list {
+  margin: 0;
+  padding-left: 1.2rem;
+  color: var(--ink);
+}
+
 .subsection-title {
   font-size: 0.95rem;
   color: var(--ink);

@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
@@ -24,6 +24,75 @@ class HeartbeatRequest(BaseModel):
 class VerifyInferenceRequest(BaseModel):
     provider: Optional[str] = None
     model: Optional[str] = None
+
+
+def _worker_dependency_detail(
+    *,
+    worker_id: str,
+    dependent_bots: List[Any],
+    active_schedules: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    bot_rows = [
+        {
+            "id": str(bot.id or ""),
+            "name": str(bot.name or ""),
+            "enabled": bool(bot.enabled),
+            "project_id": str(bot.project_id or "") or None,
+        }
+        for bot in dependent_bots
+    ]
+    return {
+        "worker_id": worker_id,
+        "dependent_bots": bot_rows,
+        "enabled_bot_ids": [row["id"] for row in bot_rows if row["enabled"]],
+        "active_schedules": [
+            {
+                "id": str(schedule.get("id") or ""),
+                "name": str(schedule.get("name") or ""),
+                "target_bot_id": str(schedule.get("target_bot_id") or ""),
+                "project_id": str(schedule.get("project_id") or "") or None,
+            }
+            for schedule in active_schedules
+        ],
+        "can_disable": not any(row["enabled"] for row in bot_rows),
+        "can_delete": not bot_rows,
+    }
+
+
+async def _worker_dependencies(request: Request, worker_id: str) -> Dict[str, Any]:
+    """Return bounded bot and active-schedule dependencies for one worker."""
+    safe_worker_id = str(worker_id or "").strip()
+    bots = await request.app.state.bot_registry.list()
+    dependent_bots = [
+        bot
+        for bot in bots
+        if any(str(getattr(backend, "worker_id", "") or "").strip() == safe_worker_id for backend in bot.backends)
+    ]
+    dependent_bot_ids = {str(bot.id or "").strip() for bot in dependent_bots}
+    active_schedules: List[Dict[str, Any]] = []
+    if dependent_bot_ids:
+        schedules = await request.app.state.agent_schedule_engine.list_schedules(limit=500, status="active")
+        active_schedules = [
+            schedule
+            for schedule in schedules
+            if str(schedule.get("target_bot_id") or "").strip() in dependent_bot_ids
+        ]
+    return _worker_dependency_detail(
+        worker_id=safe_worker_id,
+        dependent_bots=dependent_bots,
+        active_schedules=active_schedules,
+    )
+
+
+def _raise_worker_dependency_error(*, reason_code: str, message: str, dependencies: Dict[str, Any]) -> None:
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "reason_code": reason_code,
+            "message": message,
+            "dependencies": dependencies,
+        },
+    )
 
 
 async def _refresh_registered_worker_probe(request: Request, worker_id: str) -> None:
@@ -109,6 +178,16 @@ async def get_worker(worker_id: str, request: Request) -> Worker:
         raise HTTPException(status_code=404, detail=str(e))
 
 
+@router.get("/{worker_id}/dependencies")
+async def get_worker_dependencies(worker_id: str, request: Request) -> Dict[str, Any]:
+    worker_registry = request.app.state.worker_registry
+    try:
+        await worker_registry.get(worker_id)
+    except WorkerNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    return await _worker_dependencies(request, worker_id)
+
+
 @router.post("/{worker_id}/probe")
 async def probe_registered_worker(worker_id: str, request: Request) -> dict:
     """Perform a non-mutating runtime and capability probe for one worker."""
@@ -192,6 +271,23 @@ async def verify_registered_worker_inference(
 async def update_worker(worker_id: str, request: Request, worker: Worker) -> Worker:
     worker_registry = request.app.state.worker_registry
     try:
+        current = await worker_registry.get(worker_id)
+        if str(worker.id or "").strip() != str(worker_id or "").strip():
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "reason_code": "worker_id_immutable",
+                    "message": "Worker ID cannot be changed through an update.",
+                },
+            )
+        if bool(current.enabled) and not bool(worker.enabled):
+            dependencies = await _worker_dependencies(request, worker_id)
+            if not bool(dependencies["can_disable"]):
+                _raise_worker_dependency_error(
+                    reason_code="worker_disable_blocked",
+                    message="Disable dependent bots before disabling this worker.",
+                    dependencies=dependencies,
+                )
         await worker_registry.update(worker_id, worker)
         return await worker_registry.get(worker_id)
     except WorkerNotFoundError as e:
@@ -202,6 +298,14 @@ async def update_worker(worker_id: str, request: Request, worker: Worker) -> Wor
 async def remove_worker(worker_id: str, request: Request) -> dict:
     worker_registry = request.app.state.worker_registry
     try:
+        await worker_registry.get(worker_id)
+        dependencies = await _worker_dependencies(request, worker_id)
+        if not bool(dependencies["can_delete"]):
+            _raise_worker_dependency_error(
+                reason_code="worker_delete_blocked",
+                message="Remove or repoint every dependent bot before deleting this worker.",
+                dependencies=dependencies,
+            )
         await worker_registry.remove(worker_id)
         return {"message": f"Worker {worker_id} removed"}
     except WorkerNotFoundError as e:

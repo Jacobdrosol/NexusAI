@@ -420,6 +420,59 @@ async def test_update_worker(cp_client):
 
 
 @pytest.mark.anyio
+async def test_worker_lifecycle_rejects_disabling_or_deleting_dependent_worker(cp_app, cp_client):
+    worker = {
+        "id": "dependent-worker",
+        "name": "Dependent Worker",
+        "host": "worker.internal",
+        "port": 8010,
+        "status": "online",
+        "capabilities": [],
+        "metrics": {},
+        "enabled": True,
+    }
+    assert (await cp_client.post("/v1/workers", json=worker)).status_code == 200
+    bot_payload = {
+        "id": "dependent-bot",
+        "name": "Dependent Bot",
+        "role": "assistant",
+        "enabled": False,
+        "backends": [
+            {"type": "remote_llm", "provider": "ollama_cloud", "model": "qwen3.5:cloud", "worker_id": "dependent-worker"}
+        ],
+    }
+    assert (await cp_client.post("/v1/bots", json=bot_payload)).status_code == 200
+    bot = await cp_app.state.bot_registry.get("dependent-bot")
+    await cp_app.state.bot_registry.update("dependent-bot", bot.model_copy(update={"enabled": True}))
+
+    dependencies = await cp_client.get("/v1/workers/dependent-worker/dependencies")
+    assert dependencies.status_code == 200
+    assert dependencies.json()["enabled_bot_ids"] == ["dependent-bot"]
+    assert dependencies.json()["can_disable"] is False
+    assert dependencies.json()["can_delete"] is False
+
+    worker["enabled"] = False
+    disable = await cp_client.put("/v1/workers/dependent-worker", json=worker)
+    assert disable.status_code == 409
+    assert disable.json()["detail"]["reason_code"] == "worker_disable_blocked"
+
+    delete = await cp_client.delete("/v1/workers/dependent-worker")
+    assert delete.status_code == 409
+    assert delete.json()["detail"]["reason_code"] == "worker_delete_blocked"
+
+
+@pytest.mark.anyio
+async def test_worker_update_rejects_worker_id_change(cp_client):
+    worker = {"id": "fixed-worker", "name": "Fixed Worker", "host": "worker.internal", "port": 8010, "capabilities": []}
+    assert (await cp_client.post("/v1/workers", json=worker)).status_code == 200
+    worker["id"] = "different-worker"
+
+    response = await cp_client.put("/v1/workers/fixed-worker", json=worker)
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason_code"] == "worker_id_immutable"
+
+
+@pytest.mark.anyio
 async def test_list_bots_empty(cp_client):
     resp = await cp_client.get("/v1/bots")
     assert resp.status_code == 200

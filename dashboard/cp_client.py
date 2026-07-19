@@ -167,6 +167,9 @@ class CPClient:
     def get_worker(self, worker_id: str) -> Optional[Dict]:
         return self._get(f"/v1/workers/{worker_id}")
 
+    def get_worker_dependencies(self, worker_id: str) -> Optional[Dict[str, Any]]:
+        return self._get(f"/v1/workers/{worker_id}/dependencies")
+
     def register_worker(self, worker: Dict) -> Optional[Dict]:
         return self._post("/v1/workers", worker)
 
