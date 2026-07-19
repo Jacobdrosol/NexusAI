@@ -159,6 +159,31 @@ async def fleet_health_summary(
         for task in recent_tasks
         if str(getattr(task, "status", "") or "").strip().lower() == "failed"
     )
+    latest_completion_by_bot: dict[str, datetime] = {}
+    for task in recent_tasks:
+        if str(getattr(task, "status", "") or "").strip().lower() != "completed":
+            continue
+        bot_id = str(getattr(task, "bot_id", "") or "").strip()
+        completed_at = _task_updated_at(task)
+        if not bot_id or completed_at is None:
+            continue
+        previous = latest_completion_by_bot.get(bot_id)
+        if previous is None or completed_at > previous:
+            latest_completion_by_bot[bot_id] = completed_at
+
+    unrecovered_failure_categories = Counter()
+    recovered_failure_categories = Counter()
+    for task in recent_tasks:
+        if str(getattr(task, "status", "") or "").strip().lower() != "failed":
+            continue
+        category = _failure_category(task)
+        bot_id = str(getattr(task, "bot_id", "") or "").strip()
+        failed_at = _task_updated_at(task)
+        completed_at = latest_completion_by_bot.get(bot_id)
+        if bot_id and failed_at is not None and completed_at is not None and completed_at > failed_at:
+            recovered_failure_categories[category] += 1
+        else:
+            unrecovered_failure_categories[category] += 1
     runtime_attention_worker_ids = {
         str(item.get("worker_id") or "").strip()
         for item in runtime_attention
@@ -210,6 +235,8 @@ async def fleet_health_summary(
             "recent_window_hours": _FLEET_HEALTH_RECENT_WINDOW_HOURS,
             "recent_by_status": dict(sorted(recent_task_statuses.items())),
             "recent_failed_by_category": dict(sorted(recent_failure_categories.items())),
+            "recent_unrecovered_failed_by_category": dict(sorted(unrecovered_failure_categories.items())),
+            "recent_recovered_failed_by_category": dict(sorted(recovered_failure_categories.items())),
         },
         "schedules": {
             "registered": len(schedules or []),

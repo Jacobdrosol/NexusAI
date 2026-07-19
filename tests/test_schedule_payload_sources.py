@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -142,6 +142,63 @@ async def test_fleet_summary_excludes_disabled_workers_from_live_offline_count()
         "offline": 0,
         "runtime_attention": [],
     }
+
+
+@pytest.mark.anyio
+async def test_fleet_summary_separates_recovered_failures_from_live_failures():
+    now = datetime.now(timezone.utc)
+
+    class WorkerRegistry:
+        async def list(self):
+            return []
+
+    class ProbeStore:
+        async def list_for_workers(self, worker_ids):
+            return {}
+
+    class BotRegistry:
+        async def list(self):
+            return []
+
+    class TaskManager:
+        async def list_tasks(self, limit):
+            return [
+                SimpleNamespace(
+                    bot_id="browser-inspector",
+                    status="failed",
+                    updated_at=(now - timedelta(minutes=2)).isoformat(),
+                    error=SimpleNamespace(message="connection refused", code=None),
+                ),
+                SimpleNamespace(
+                    bot_id="browser-inspector",
+                    status="completed",
+                    updated_at=(now - timedelta(minutes=1)).isoformat(),
+                ),
+                SimpleNamespace(
+                    bot_id="health-analyst",
+                    status="failed",
+                    updated_at=now.isoformat(),
+                    error=SimpleNamespace(message="policy blocked", code="policy_violation"),
+                ),
+            ]
+
+    class ScheduleEngine:
+        async def list_schedules(self, limit):
+            return []
+
+    payload = await materialize_system_schedule_payload(
+        {"metadata": {"system_payload_source": {"type": FLEET_HEALTH_SUMMARY_SOURCE}}},
+        worker_registry=WorkerRegistry(),
+        worker_probe_store=ProbeStore(),
+        bot_registry=BotRegistry(),
+        task_manager=TaskManager(),
+        schedule_engine=ScheduleEngine(),
+    )
+
+    summary = json.loads(payload["monitoring_events"])
+    assert summary["tasks"]["recent_failed_by_category"] == {"policy": 1, "transport": 1}
+    assert summary["tasks"]["recent_recovered_failed_by_category"] == {"transport": 1}
+    assert summary["tasks"]["recent_unrecovered_failed_by_category"] == {"policy": 1}
 
 
 def test_system_payload_source_requires_read_only_monitoring_worker():
