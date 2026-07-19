@@ -1917,6 +1917,75 @@ async def test_specialist_proposal_is_limited_to_bot_creator_sessions(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_specialist_proposal_is_bound_to_its_creator_session_project(tmp_path):
+    store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+    bot_registry = BotRegistry(db_path=str(tmp_path / "bots.db"))
+    runtime = PlatformAISessionRuntime(store, bot_registry=bot_registry)
+    session = await store.create_session(
+        mode="bot_creator",
+        status="running",
+        metadata={"project_id": "globeiq"},
+    )
+    directive = {
+        "platform_ai_action": "propose_specialist_bot",
+        "specialist": {
+            "kind": "researcher",
+            "name": "Project Bound Researcher",
+            "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "glm-5.2:cloud"}],
+        },
+    }
+
+    result = await runtime._apply_operator_directives(
+        session["id"],
+        session=session,
+        content=json.dumps(directive),
+    )
+
+    actions = result.get("actions") if isinstance(result.get("actions"), list) else []
+    proposal_id = str((actions[0].get("result") or {}).get("proposal_id") or "")
+    assert proposal_id
+    proposal = await store.get_patch_proposal(proposal_id)
+    assert proposal is not None
+    after_state = proposal.get("after_state") if isinstance(proposal.get("after_state"), dict) else {}
+    specialist_request = after_state.get("specialist_request") if isinstance(after_state.get("specialist_request"), dict) else {}
+    bot = after_state.get("bot") if isinstance(after_state.get("bot"), dict) else {}
+
+    assert specialist_request["project_id"] == "globeiq"
+    assert bot["routing_rules"]["specialist"]["project_id"] == "globeiq"
+
+
+@pytest.mark.anyio
+async def test_specialist_proposal_rejects_project_scope_mismatch(tmp_path):
+    store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+    bot_registry = BotRegistry(db_path=str(tmp_path / "bots.db"))
+    runtime = PlatformAISessionRuntime(store, bot_registry=bot_registry)
+    session = await store.create_session(
+        mode="bot_creator",
+        status="running",
+        metadata={"project_id": "globeiq"},
+    )
+    directive = {
+        "platform_ai_action": "propose_specialist_bot",
+        "specialist": {
+            "kind": "researcher",
+            "name": "Cross Project Researcher",
+            "project_id": "another-project",
+            "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "glm-5.2:cloud"}],
+        },
+    }
+
+    result = await runtime._apply_operator_directives(
+        session["id"],
+        session=session,
+        content=json.dumps(directive),
+    )
+
+    actions = result.get("actions") if isinstance(result.get("actions"), list) else []
+    assert (actions[0].get("result") or {}).get("detail") == "specialist_project_scope_mismatch"
+    assert await store.list_patch_proposals(session["id"]) == []
+
+
+@pytest.mark.anyio
 async def test_configuration_proposal_rejects_direct_credential_value(tmp_path, monkeypatch):
     monkeypatch.delenv("NEXUS_PLATFORM_AI_CONFIGURATION_MUTATIONS_ENABLED", raising=False)
     store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))

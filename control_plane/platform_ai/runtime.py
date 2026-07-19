@@ -1914,7 +1914,32 @@ class PlatformAISessionRuntime:
         """
         try:
             request = SpecialistBlueprintRequest.model_validate(payload)
-            request = request.model_copy(update={"activate": False, "allow_repo_writes": False})
+        except Exception as exc:
+            return {"ok": False, "detail": f"invalid_specialist_request:{exc}"}
+
+        metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
+        session_project_id = str(metadata.get("project_id") or "").strip()
+        requested_project_id = str(request.project_id or "").strip()
+        if session_project_id and requested_project_id and requested_project_id != session_project_id:
+            await self._store.append_event(
+                session_id,
+                "action_trace",
+                {
+                    "action": "specialist_project_scope_denied",
+                    "session_project_id": session_project_id,
+                    "requested_project_id": requested_project_id,
+                },
+            )
+            return {"ok": False, "detail": "specialist_project_scope_mismatch"}
+
+        request = request.model_copy(
+            update={
+                "activate": False,
+                "allow_repo_writes": False,
+                "project_id": session_project_id or requested_project_id or None,
+            }
+        )
+        try:
             proposed_bot = build_specialist_bot(request)
         except Exception as exc:
             return {"ok": False, "detail": f"invalid_specialist_request:{exc}"}
