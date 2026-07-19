@@ -111,8 +111,58 @@
           <option value="">None</option>
           <option value="control_plane_fleet_summary_v1">Control-plane fleet health summary (read-only monitoring only)</option>
           <option value="control_plane_operational_quality_v1">Aggregate operational quality snapshot (read-only QC only)</option>
+          <option value="csv_work_items_v1">Read-only CSV work queue</option>
         </select>
       </div>
+      <fieldset id="schedule-csv-options" style="display:none;margin:0 0 0.75rem;padding:0.75rem;">
+        <legend>CSV Work Queue</legend>
+        <div class="split-grid" style="grid-template-columns:1fr 1fr;gap:0.75rem;">
+          <div class="form-group">
+            <label for="schedule-csv-source">Queue Source</label>
+            <select class="form-control" id="schedule-csv-source" name="csv_source">
+              <option value="">Loading available queues...</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="schedule-csv-target-field">Task Payload Field</label>
+            <input class="form-control" id="schedule-csv-target-field" name="csv_target_field" value="work_items" maxlength="128">
+          </div>
+        </div>
+        <div id="schedule-csv-source-summary" class="mini-note" style="margin-bottom:0.5rem;"></div>
+        <div class="form-group">
+          <label>Queue Columns</label>
+          <div id="schedule-csv-columns" class="mini-note">Select a queue source to choose up to 16 columns.</div>
+        </div>
+        <div class="form-group">
+          <label>Required Non-Empty Columns</label>
+          <div id="schedule-csv-required-columns" class="mini-note">Required columns select eligible rows without exposing their values.</div>
+        </div>
+        <div class="split-grid" style="grid-template-columns:1fr 1fr;gap:0.75rem;">
+          <div class="form-group">
+            <label for="schedule-csv-max-rows">Maximum Rows Per Run</label>
+            <input class="form-control" id="schedule-csv-max-rows" name="csv_max_rows" type="number" value="1" min="1" max="20" step="1">
+          </div>
+          <div class="form-group">
+            <label for="schedule-csv-max-age-hours">Maximum Source Age (hours)</label>
+            <input class="form-control" id="schedule-csv-max-age-hours" name="csv_max_age_hours" type="number" value="48" min="1" max="168" step="1">
+          </div>
+        </div>
+        <div class="split-grid" style="grid-template-columns:1fr 1fr;gap:0.75rem;">
+          <div class="form-group">
+            <label for="schedule-csv-include-equals">Include Filters JSON</label>
+            <textarea class="form-control" id="schedule-csv-include-equals" rows="3" placeholder='{"audit_status":["audited-needs-fixes"]}'></textarea>
+          </div>
+          <div class="form-group">
+            <label for="schedule-csv-exclude-equals">Exclude Filters JSON</label>
+            <textarea class="form-control" id="schedule-csv-exclude-equals" rows="3" placeholder='{"work_status":["parked"]}'></textarea>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="schedule-csv-payload-map">Direct Task Field Mapping</label>
+          <textarea class="form-control" id="schedule-csv-payload-map" rows="3" placeholder="lesson_id=lesson_id&#10;instruction=recommended_fix_summary"></textarea>
+          <div class="mini-note">One <code>task_field=required_queue_column</code> mapping per line. Mappings require one row per run.</div>
+        </div>
+      </fieldset>
       <div class="split-grid" style="grid-template-columns:1fr 1fr;gap:0.75rem;">
         <div class="form-group">
           <label for="schedule-retry-max">Pre-dispatch Retry Limit</label>
@@ -177,6 +227,202 @@ function setScheduleCreateStatus(message, isError=false) {
 
 let selectedScheduleBotReadiness = null;
 let selectedScheduleBotId = '';
+let scheduleQueueSources = [];
+let scheduleQueueSourcesLoaded = false;
+
+function isSimplePayloadField(value) {
+  return /^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(String(value || '').trim());
+}
+
+function getSelectedQueueSource() {
+  const selected = String(document.getElementById('schedule-csv-source').value || '').trim();
+  return scheduleQueueSources.find((source) => source && source.relative_path === selected) || null;
+}
+
+function selectedQueueColumns(className) {
+  return Array.from(document.querySelectorAll('.' + className + ':checked'))
+    .map((input) => String(input.value || '').trim())
+    .filter(Boolean);
+}
+
+function appendQueueColumnChoice(container, className, field, checked) {
+  const label = document.createElement('label');
+  label.style.display = 'inline-flex';
+  label.style.alignItems = 'center';
+  label.style.gap = '0.3rem';
+  label.style.margin = '0 0.75rem 0.35rem 0';
+  const input = document.createElement('input');
+  input.type = 'checkbox';
+  input.className = className;
+  input.value = field;
+  input.checked = checked;
+  const code = document.createElement('code');
+  code.textContent = field;
+  label.appendChild(input);
+  label.appendChild(code);
+  container.appendChild(label);
+}
+
+function renderQueueColumns() {
+  const columns = document.getElementById('schedule-csv-columns');
+  const required = document.getElementById('schedule-csv-required-columns');
+  const source = getSelectedQueueSource();
+  columns.replaceChildren();
+  required.replaceChildren();
+  if (!source || !Array.isArray(source.headers) || !source.headers.length) {
+    columns.textContent = 'Select an available queue source to choose up to 16 columns.';
+    required.textContent = 'Required columns select eligible rows without exposing their values.';
+    return;
+  }
+  const preferred = new Set([
+    'course_id', 'unit_id', 'lesson_id', 'lesson_title', 'lesson_type', 'audit_status',
+    'work_status', 'owner_action_needed', 'recommended_fix_summary', 'instruction',
+    'source_material', 'research_request', 'question_bank',
+  ]);
+  let defaults = source.headers.filter((header) => preferred.has(header)).slice(0, 16);
+  if (!defaults.length) {
+    defaults = source.headers.slice(0, Math.min(6, source.headers.length));
+  }
+  const requiredDefaults = new Set(defaults.filter((field) => (
+    field === 'lesson_id' || field === 'instruction' || field === 'recommended_fix_summary'
+  )));
+  if (!requiredDefaults.size && defaults.length) {
+    requiredDefaults.add(defaults[0]);
+  }
+  source.headers.forEach((field) => {
+    appendQueueColumnChoice(columns, 'schedule-csv-column', field, defaults.includes(field));
+    appendQueueColumnChoice(required, 'schedule-csv-required-column', field, requiredDefaults.has(field));
+  });
+}
+
+function updateQueueSourceSummary() {
+  const summary = document.getElementById('schedule-csv-source-summary');
+  const source = getSelectedQueueSource();
+  if (!source) {
+    summary.textContent = 'Only source metadata is listed here; queue row values remain on the worker runtime.';
+    return;
+  }
+  const age = Number.isFinite(Number(source.source_age_seconds))
+    ? Math.floor(Number(source.source_age_seconds) / 60) + ' minutes old'
+    : 'source age unavailable';
+  summary.textContent = String(source.row_count || 0) + ' rows, ' + age + '. Queue row values are not displayed.';
+}
+
+async function loadScheduleQueueSources() {
+  if (scheduleQueueSourcesLoaded) {
+    return;
+  }
+  const select = document.getElementById('schedule-csv-source');
+  select.replaceChildren(new Option('Loading available queues...', ''));
+  const response = await fetch('/api/schedules/queue-sources');
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    select.replaceChildren(new Option('Unable to load queue sources', ''));
+    setScheduleCreateStatus(data.error || 'Unable to load read-only queue sources.', true);
+    return;
+  }
+  scheduleQueueSources = (Array.isArray(data.sources) ? data.sources : []).filter((source) => source && source.available === true);
+  select.replaceChildren(new Option('Select queue source', ''));
+  scheduleQueueSources.forEach((source) => {
+    select.appendChild(new Option(String(source.relative_path || ''), String(source.relative_path || '')));
+  });
+  scheduleQueueSourcesLoaded = true;
+  updateQueueSourceSummary();
+}
+
+async function updateScheduleDataSourceControls() {
+  const isCsv = document.getElementById('schedule-system-payload-source').value === 'csv_work_items_v1';
+  document.getElementById('schedule-csv-options').style.display = isCsv ? 'block' : 'none';
+  if (isCsv) {
+    await loadScheduleQueueSources();
+  }
+}
+
+function parseQueueFilter(id, label) {
+  const raw = String(document.getElementById(id).value || '').trim();
+  if (!raw) {
+    return {};
+  }
+  try {
+    const value = JSON.parse(raw);
+    if (!value || Array.isArray(value) || typeof value !== 'object') {
+      throw new Error('not an object');
+    }
+    return value;
+  } catch (error) {
+    setScheduleCreateStatus(label + ' must be a JSON object.', true);
+    return null;
+  }
+}
+
+function buildCsvWorkQueueSource() {
+  const source = getSelectedQueueSource();
+  const targetField = String(document.getElementById('schedule-csv-target-field').value || '').trim();
+  const columns = selectedQueueColumns('schedule-csv-column');
+  const required = selectedQueueColumns('schedule-csv-required-column');
+  const maxRows = Number(document.getElementById('schedule-csv-max-rows').value);
+  const maxAgeHours = Number(document.getElementById('schedule-csv-max-age-hours').value);
+  if (!source) {
+    setScheduleCreateStatus('Select an available read-only queue source.', true);
+    return null;
+  }
+  if (!isSimplePayloadField(targetField)) {
+    setScheduleCreateStatus('Task payload field must use letters, numbers, and underscores only.', true);
+    return null;
+  }
+  if (!columns.length || columns.length > 16) {
+    setScheduleCreateStatus('Choose between 1 and 16 queue columns.', true);
+    return null;
+  }
+  if (!required.length || required.some((field) => !columns.includes(field))) {
+    setScheduleCreateStatus('Choose at least one required non-empty column from the selected queue columns.', true);
+    return null;
+  }
+  if (!Number.isInteger(maxRows) || maxRows < 1 || maxRows > 20) {
+    setScheduleCreateStatus('Maximum rows per run must be a whole number from 1 to 20.', true);
+    return null;
+  }
+  if (!Number.isInteger(maxAgeHours) || maxAgeHours < 1 || maxAgeHours > 168) {
+    setScheduleCreateStatus('Maximum source age must be a whole number from 1 to 168 hours.', true);
+    return null;
+  }
+  const includeEquals = parseQueueFilter('schedule-csv-include-equals', 'Include filters');
+  const excludeEquals = parseQueueFilter('schedule-csv-exclude-equals', 'Exclude filters');
+  if (includeEquals === null || excludeEquals === null) {
+    return null;
+  }
+  const payloadFieldMap = {};
+  const reserved = new Set(['bot_id', 'error', 'id', 'metadata', 'node_overrides', 'project_id', 'result', 'schedule_id', 'source', 'task_id']);
+  const mappingLines = String(document.getElementById('schedule-csv-payload-map').value || '').split(/\r?\n/);
+  for (const rawLine of mappingLines) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const separator = line.indexOf('=');
+    const target = separator < 0 ? '' : line.slice(0, separator).trim();
+    const sourceField = separator < 0 ? '' : line.slice(separator + 1).trim();
+    if (!isSimplePayloadField(target) || reserved.has(target) || !required.includes(sourceField)) {
+      setScheduleCreateStatus('Each direct mapping must be task_field=required_queue_column and cannot use reserved task fields.', true);
+      return null;
+    }
+    payloadFieldMap[target] = sourceField;
+  }
+  if (Object.keys(payloadFieldMap).length && maxRows !== 1) {
+    setScheduleCreateStatus('Direct task field mappings require one row per run.', true);
+    return null;
+  }
+  return {
+    type: 'csv_work_items_v1',
+    target_field: targetField,
+    relative_path: source.relative_path,
+    columns,
+    include_equals: includeEquals,
+    exclude_equals: excludeEquals,
+    require_non_empty_fields: required,
+    payload_field_map: payloadFieldMap,
+    max_rows: maxRows,
+    max_age_hours: maxAgeHours,
+  };
+}
 
 function scheduleReadinessBlockers(readiness) {
   const checks = readiness && Array.isArray(readiness.checks) ? readiness.checks : [];
@@ -263,6 +509,16 @@ document.getElementById('form-create-schedule').addEventListener('submit', async
   };
   const systemPayloadSource = String(form.get('system_payload_source') || '').trim();
   if (systemPayloadSource) {
+    if (systemPayloadSource === 'csv_work_items_v1') {
+      const sourceConfig = buildCsvWorkQueueSource();
+      if (!sourceConfig) {
+        return;
+      }
+      payload.metadata.system_payload_source = sourceConfig;
+      if (!Object.prototype.hasOwnProperty.call(taskPayload, sourceConfig.target_field)) {
+        taskPayload[sourceConfig.target_field] = 'A bounded read-only queue item will be materialized at dispatch.';
+      }
+    } else {
     const systemPayloadConfig = {
       control_plane_fleet_summary_v1: {
         targetField: 'monitoring_events',
@@ -284,6 +540,7 @@ document.getElementById('form-create-schedule').addEventListener('submit', async
     };
     if (!Object.prototype.hasOwnProperty.call(taskPayload, sourceConfig.targetField)) {
       taskPayload[sourceConfig.targetField] = sourceConfig.placeholder;
+    }
     }
   }
   if (!payload.name || !payload.target_bot_id || !payload.cron_expression || !payload.prompt) {
@@ -325,6 +582,11 @@ document.getElementById('form-create-schedule').addEventListener('submit', async
 });
 
 document.getElementById('schedule-bot').addEventListener('change', refreshSelectedScheduleBotReadiness);
+document.getElementById('schedule-system-payload-source').addEventListener('change', updateScheduleDataSourceControls);
+document.getElementById('schedule-csv-source').addEventListener('change', function() {
+  updateQueueSourceSummary();
+  renderQueueColumns();
+});
 
 async function markScheduleMutationSafe(scheduleId) {
   const response = await fetch('/api/schedules/' + encodeURIComponent(scheduleId), {

@@ -63,6 +63,17 @@ def api_list_schedules():
     return jsonify(data)
 
 
+@bp.get("/api/schedules/queue-sources")
+@login_required
+def api_list_schedule_queue_sources():
+    """Proxy non-content queue metadata for bounded recurring schedule setup."""
+    cp = get_cp_client()
+    data = cp.list_schedule_queue_sources()
+    if data is None:
+        return _cp_error_response(cp, "failed to list schedule queue sources")
+    return jsonify(data)
+
+
 @bp.get("/api/schedules/bots/<bot_id>/readiness")
 @login_required
 def api_get_schedule_bot_readiness(bot_id: str):

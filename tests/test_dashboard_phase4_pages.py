@@ -2623,6 +2623,19 @@ def test_schedules_page_and_proxy_support_operational_schedule_management(dashbo
         def list_projects(self):
             return []
 
+        def list_schedule_queue_sources(self):
+            return {
+                "sources": [
+                    {
+                        "relative_path": "queues/draft-work.csv",
+                        "headers": ["lesson_id", "instruction"],
+                        "row_count": 1,
+                        "available": True,
+                        "issue": None,
+                    }
+                ]
+            }
+
         def create_schedule(self, body):
             return {"schedule": {"id": "schedule-2", **body}}
 
@@ -2642,6 +2655,7 @@ def test_schedules_page_and_proxy_support_operational_schedule_management(dashbo
     with patch("dashboard.routes.schedules.get_cp_client", return_value=fake_cp):
         page = dashboard_client.get("/schedules")
         listed = dashboard_client.get("/api/schedules")
+        queue_sources = dashboard_client.get("/api/schedules/queue-sources")
         created = dashboard_client.post(
             "/api/schedules",
             json={"name": "Daily Review", "target_bot_id": "reviewer", "cron_expression": "0 8 * * *", "prompt": "Review"},
@@ -2655,6 +2669,9 @@ def test_schedules_page_and_proxy_support_operational_schedule_management(dashbo
     assert b"Create Schedule" in page.data
     assert b"Control-plane fleet health summary" in page.data
     assert b"Aggregate operational quality snapshot" in page.data
+    assert b"csv_work_items_v1" in page.data
+    assert b"schedule-csv-source" in page.data
+    assert b"schedule-csv-payload-map" in page.data
     assert b"Daily Review" in page.data
     assert b"Origin" in page.data
     assert b"Retry After" in page.data
@@ -2663,6 +2680,7 @@ def test_schedules_page_and_proxy_support_operational_schedule_management(dashbo
     assert b"schedule-retry-max" in page.data
     assert b"schedule-retry-backoff" in page.data
     assert listed.get_json()["schedules"][0]["id"] == "schedule-1"
+    assert queue_sources.get_json()["sources"][0]["relative_path"] == "queues/draft-work.csv"
     assert created.status_code == 201
     assert toggled.get_json()["schedule"]["status"] == "active"
     assert triggered.get_json()["run"]["schedule_id"] == "schedule-1"

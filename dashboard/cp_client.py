@@ -841,6 +841,10 @@ class CPClient:
             params.append(f"target_bot_id={requests.utils.quote(str(target_bot_id), safe='')}")
         return self._get(f"/v1/schedules?{'&'.join(params)}")
 
+    def list_schedule_queue_sources(self) -> Optional[Dict[str, Any]]:
+        """Return non-content metadata for read-only schedule work queues."""
+        return self._get("/v1/schedules/queue-sources")
+
     def create_schedule(self, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return self._post("/v1/schedules", body)
 
