@@ -29,6 +29,8 @@ async def test_bot_readiness_reports_ready_worker_backend(cp_client):
 
     assert response.status_code == 200
     assert response.json()["ready"] is True
+    assert response.json()["enabled"] is True
+    assert response.json()["state"] == "ready"
     assert response.json()["summary"]["failed"] == 0
 
 
@@ -122,6 +124,43 @@ async def test_bot_readiness_list_returns_each_registered_bot(cp_client):
     assert response.json()["count"] == 1
     assert response.json()["readiness"][0]["bot_id"] == "listed-bot"
     assert response.json()["readiness"][0]["ready"] is False
+    assert response.json()["readiness"][0]["enabled"] is True
+    assert response.json()["readiness"][0]["state"] == "blocked"
+    assert response.json()["summary"] == {"ready": 0, "blocked": 1, "disabled": 0}
+
+
+@pytest.mark.anyio
+async def test_bot_readiness_list_separates_disabled_templates_from_active_blockers(cp_client):
+    await cp_client.post(
+        "/v1/bots",
+        json={
+            "id": "disabled-template",
+            "name": "Disabled Template",
+            "role": "worker",
+            "enabled": False,
+            "backends": [],
+        },
+    )
+    await cp_client.post(
+        "/v1/bots",
+        json={
+            "id": "enabled-blocker",
+            "name": "Enabled Blocker",
+            "role": "worker",
+            "backends": [],
+        },
+    )
+
+    response = await cp_client.get("/v1/bots/readiness")
+
+    assert response.status_code == 200
+    payload = response.json()
+    readiness_by_id = {item["bot_id"]: item for item in payload["readiness"]}
+    assert readiness_by_id["disabled-template"]["enabled"] is False
+    assert readiness_by_id["disabled-template"]["state"] == "disabled"
+    assert readiness_by_id["enabled-blocker"]["enabled"] is True
+    assert readiness_by_id["enabled-blocker"]["state"] == "blocked"
+    assert payload["summary"] == {"ready": 0, "blocked": 1, "disabled": 1}
 
 
 @pytest.mark.anyio

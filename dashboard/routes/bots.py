@@ -178,19 +178,24 @@ def _cp_catalog_items(cp, method_name: str) -> list[dict[str, Any]]:
 def _bot_readiness_view(readiness: Any) -> dict[str, Any] | None:
     if not isinstance(readiness, dict):
         return None
+    state = str(readiness.get("state") or "").strip().lower()
     failures = [
         str(check.get("message") or "").strip()
         for check in readiness.get("checks") or []
         if isinstance(check, dict) and str(check.get("status") or "").strip().lower() == "failed"
     ]
     ready = bool(readiness.get("ready"))
-    if ready and failures:
+    if state not in {"ready", "blocked", "disabled"}:
+        state = "ready" if ready else "blocked"
+    if state == "disabled":
+        detail = "This bot is disabled and will not receive dispatch."
+    elif ready and failures:
         detail = f"Fallback dispatch is available; {len(failures)} backend check(s) are unavailable."
     elif ready:
         detail = "At least one declared backend is ready for dispatch."
     else:
         detail = failures[0] if failures else "No declared backend is ready for dispatch."
-    return {"ready": ready, "detail": detail, "failed": len(failures)}
+    return {"ready": ready, "state": state, "detail": detail, "failed": len(failures)}
 
 
 def _with_bot_readiness(bots: list[dict[str, Any]], payload: Any) -> list[dict[str, Any]]:

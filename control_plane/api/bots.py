@@ -6,7 +6,7 @@ from fastapi import APIRouter, Body, HTTPException, Query, Request
 from pydantic import ValidationError
 
 from control_plane.audit.utils import record_audit_event
-from control_plane.bot_readiness import assess_bot_instance_readiness, assess_bot_readiness
+from control_plane.bot_readiness import assess_bot_instance_readiness
 from control_plane.security.guards import enforce_body_size, enforce_rate_limit
 from shared.exceptions import BotNotFoundError
 from shared.bot_policy import validate_bot_configuration
@@ -318,33 +318,53 @@ async def preflight_bot(request: Request, payload: Any = Body(...)) -> Dict[str,
     return await _preflight_bot_payload(payload, request)
 
 
+def _with_operational_state(bot: Bot, readiness: Dict[str, Any]) -> Dict[str, Any]:
+    """Add a dashboard-safe operational state without changing dispatch readiness."""
+    result = dict(readiness)
+    enabled = bool(bot.enabled)
+    if not enabled:
+        state = "disabled"
+    elif bool(readiness.get("ready")):
+        state = "ready"
+    else:
+        state = "blocked"
+    result.update({"enabled": enabled, "state": state})
+    return result
+
+
 @router.get("/readiness")
 async def list_bot_readiness(request: Request) -> Dict[str, Any]:
     """Return non-mutating dispatch readiness for every registered bot."""
     bot_registry = request.app.state.bot_registry
     bots = await bot_registry.list()
-    readiness = [
-        await assess_bot_instance_readiness(
+    readiness = []
+    for bot in bots:
+        assessed = await assess_bot_instance_readiness(
             bot,
             worker_registry=request.app.state.worker_registry,
             connection_resolver=request.app.state.connection_resolver,
             worker_probe_store=request.app.state.worker_probe_store,
         )
-        for bot in bots
-    ]
-    return {"readiness": readiness, "count": len(readiness)}
+        readiness.append(_with_operational_state(bot, assessed))
+    summary = {
+        state: sum(1 for item in readiness if item["state"] == state)
+        for state in ("ready", "blocked", "disabled")
+    }
+    return {"readiness": readiness, "count": len(readiness), "summary": summary}
 
 
 @router.get("/{bot_id}/readiness")
 async def get_bot_readiness(bot_id: str, request: Request) -> Dict[str, Any]:
+    bot_registry = request.app.state.bot_registry
     try:
-        return await assess_bot_readiness(
-            bot_id,
-            bot_registry=request.app.state.bot_registry,
+        bot = await bot_registry.get(bot_id)
+        readiness = await assess_bot_instance_readiness(
+            bot,
             worker_registry=request.app.state.worker_registry,
             connection_resolver=request.app.state.connection_resolver,
             worker_probe_store=request.app.state.worker_probe_store,
         )
+        return _with_operational_state(bot, readiness)
     except BotNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

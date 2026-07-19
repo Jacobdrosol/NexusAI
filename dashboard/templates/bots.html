@@ -30,8 +30,8 @@
       <td><span class="badge badge-{{ 'enabled' if b.enabled else 'disabled' }}">{{ 'enabled' if b.enabled else 'disabled' }}</span></td>
       <td>
         {% if b.readiness %}
-        <span class="badge badge-{{ 'ready' if b.readiness.ready else 'blocked' }}" title="{{ b.readiness.detail }}">{{ 'ready' if b.readiness.ready else 'blocked' }}</span>
-        {% if b.readiness.failed %}<div class="metrics">{{ b.readiness.failed }} check(s)</div>{% endif %}
+        <span class="badge badge-{{ b.readiness.state }}" title="{{ b.readiness.detail }}">{{ b.readiness.state }}</span>
+        {% if b.readiness.state != 'disabled' and b.readiness.failed %}<div class="metrics">{{ b.readiness.failed }} check(s)</div>{% endif %}
         {% else %}
         <span class="badge badge-unknown">unknown</span>
         {% endif %}

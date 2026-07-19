@@ -88,7 +88,7 @@
   <div class="page-header" style="margin-bottom:0.75rem;">
     <h2 class="panel-title">Dispatch Readiness</h2>
     {% if readiness %}
-    <span class="badge badge-{{ 'online' if readiness.ready else 'failed' }}">{{ 'ready' if readiness.ready else 'blocked' }}</span>
+    <span class="badge badge-{{ readiness.state | default('ready' if readiness.ready else 'blocked', true) }}">{{ readiness.state | default('ready' if readiness.ready else 'blocked', true) }}</span>
     {% endif %}
   </div>
   {% if readiness %}
