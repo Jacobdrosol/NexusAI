@@ -2513,6 +2513,8 @@ def test_schedules_page_and_proxy_support_operational_schedule_management(dashbo
     assert b"Create Schedule" in page.data
     assert b"Control-plane fleet health summary" in page.data
     assert b"Daily Review" in page.data
+    assert b"Retry After" in page.data
+    assert b"retry_not_before" in page.data
     assert listed.get_json()["schedules"][0]["id"] == "schedule-1"
     assert created.status_code == 201
     assert toggled.get_json()["schedule"]["status"] == "active"

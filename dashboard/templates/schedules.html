@@ -124,7 +124,7 @@
     <div id="schedule-runs-status" class="mini-note" style="margin-bottom:0.75rem;"></div>
     <div style="overflow:auto;max-height:420px;">
       <table>
-        <thead><tr><th>Scheduled</th><th>Status</th><th>Task</th><th>Finished</th><th>Error</th></tr></thead>
+        <thead><tr><th>Scheduled</th><th>Status</th><th>Attempt</th><th>Retry After</th><th>Task</th><th>Finished</th><th>Error</th></tr></thead>
         <tbody id="schedule-runs-body"></tbody>
       </table>
     </div>
@@ -346,12 +346,14 @@ function closeScheduleRuns() {
 function renderScheduleRunRows(runs) {
   const body = document.getElementById('schedule-runs-body');
   if (!Array.isArray(runs) || !runs.length) {
-    body.innerHTML = '<tr><td colspan="5" class="empty">No runs recorded</td></tr>';
+    body.innerHTML = '<tr><td colspan="7" class="empty">No runs recorded</td></tr>';
     return;
   }
   body.innerHTML = runs.map((run) => {
     const error = run.error && run.error.message ? run.error.message : '—';
-    return `<tr><td>${escapeScheduleHtml(run.scheduled_for || '—')}</td><td>${escapeScheduleHtml(run.status || '—')}</td><td><code>${escapeScheduleHtml(run.task_id || '—')}</code></td><td>${escapeScheduleHtml(run.finished_at || '—')}</td><td>${escapeScheduleHtml(error)}</td></tr>`;
+    const attempt = Number.isInteger(run.attempt) ? String(run.attempt + 1) : '—';
+    const retryAfter = run.retry_not_before || '—';
+    return `<tr><td>${escapeScheduleHtml(run.scheduled_for || '—')}</td><td>${escapeScheduleHtml(run.status || '—')}</td><td>${escapeScheduleHtml(attempt)}</td><td>${escapeScheduleHtml(retryAfter)}</td><td><code>${escapeScheduleHtml(run.task_id || '—')}</code></td><td>${escapeScheduleHtml(run.finished_at || '—')}</td><td>${escapeScheduleHtml(error)}</td></tr>`;
   }).join('');
 }
 
