@@ -105,7 +105,15 @@ def _is_autonomous_schedule_task(task: "Task | None") -> bool:
     """Return whether a task originated from an agent schedule."""
     if task is None or task.metadata is None:
         return False
-    return str(getattr(task.metadata, "source", "") or "").strip().lower() == "agent_schedule"
+    source = str(getattr(task.metadata, "source", "") or "").strip().lower()
+    if source == "agent_schedule":
+        return True
+    # Task retries retain the original scheduler envelope in their persisted payload
+    # while changing metadata.source to auto_retry. Keep that envelope out of strict
+    # browser request schemas without broadening browser authorization.
+    if source != "auto_retry" or not isinstance(task.payload, dict):
+        return False
+    return str(task.payload.get("source") or "").strip().lower() == "agent_schedule"
 
 
 def _autonomous_probe_max_age_seconds() -> float:
