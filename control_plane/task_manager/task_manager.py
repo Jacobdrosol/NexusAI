@@ -7631,7 +7631,10 @@ class TaskManager:
         ]
         return TaskMetadata(
             user_id=metadata.user_id if inherit_metadata else None,
-            project_id=metadata.project_id if inherit_metadata else None,
+            # Project scope is an isolation boundary, not optional trigger context.
+            # A workflow may intentionally omit user/conversation metadata, but it
+            # must never shed the project that authorized the parent task.
+            project_id=metadata.project_id,
             source="bot_trigger",
             priority=metadata.priority if inherit_metadata else None,
             conversation_id=metadata.conversation_id if inherit_metadata else None,

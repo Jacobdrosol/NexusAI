@@ -1362,6 +1362,62 @@ async def test_create_task_enforces_and_inherits_bound_bot_project_scope(tmp_pat
 
 
 @pytest.mark.anyio
+async def test_trigger_keeps_project_scope_when_optional_metadata_is_not_inherited(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {"bot_id": task.bot_id}
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "trigger-project-scope-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="globeiq-source",
+            name="GlobeIQ Source",
+            role="assistant",
+            project_id="globeiq",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "handoff-without-optional-context",
+                        "event": "task_completed",
+                        "target_bot_id": "shared-worker",
+                        "condition": "has_result",
+                        "inherit_metadata": False,
+                    }
+                ]
+            },
+        )
+    )
+    await bot_registry.register(Bot(id="shared-worker", name="Shared Worker", role="assistant", backends=[]))
+    tm = TaskManager(
+        StubScheduler(),
+        db_path=str(tmp_path / "trigger-project-scope-tasks.db"),
+        bot_registry=bot_registry,
+    )
+
+    root = await tm.create_task(
+        bot_id="globeiq-source",
+        payload={"instruction": "Review the GlobeIQ course"},
+    )
+    for _ in range(40):
+        tasks = await tm.list_tasks()
+        if len(tasks) == 2 and all(task.status == "completed" for task in tasks):
+            break
+        await asyncio.sleep(0.05)
+
+    tasks = await tm.list_tasks()
+    child = next(task for task in tasks if task.id != root.id)
+    assert child.metadata is not None
+    assert child.metadata.project_id == "globeiq"
+    assert child.metadata.parent_task_id == root.id
+
+
+@pytest.mark.anyio
 async def test_create_task_rejects_empty_required_input_fields(tmp_path):
     from control_plane.registry.bot_registry import BotRegistry
     from control_plane.task_manager.task_manager import TaskManager
