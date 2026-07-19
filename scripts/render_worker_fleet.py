@@ -1021,6 +1021,69 @@ def apply_bots(output_dir: Path, *, api_url: str, api_token: str) -> list[dict[s
     return results
 
 
+def verify_bots_ready(output_dir: Path, *, api_url: str, api_token: str) -> list[dict[str, Any]]:
+    """Verify rendered bots are eligible for dispatch without starting any work."""
+
+    bot_paths = sorted((output_dir / "bots").glob("*.bot.json"))
+    if not bot_paths:
+        raise ValueError(f"No rendered bot files found in: {output_dir / 'bots'}")
+
+    headers = _headers(api_token)
+    base = api_url.rstrip("/")
+    results: list[dict[str, Any]] = []
+    for path in bot_paths:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        bot_id = str(payload.get("id") or "").strip()
+        if not bot_id:
+            results.append({"path": str(path), "ok": False, "action": "validate", "detail": "missing bot id"})
+            continue
+
+        response = requests.get(f"{base}/v1/bots/{bot_id}/readiness", headers=headers, timeout=30)
+        if not (200 <= response.status_code < 300):
+            results.append(
+                {
+                    "bot_id": bot_id,
+                    "ok": False,
+                    "action": "lookup",
+                    "status_code": response.status_code,
+                    "detail": response.text[:500],
+                }
+            )
+            continue
+
+        readiness = response.json()
+        if not isinstance(readiness, dict):
+            results.append(
+                {
+                    "bot_id": bot_id,
+                    "ok": False,
+                    "action": "validate",
+                    "detail": "control-plane readiness response must be an object",
+                }
+            )
+            continue
+
+        failed_checks = [
+            str(check.get("message") or "")[:500]
+            for check in readiness.get("checks") or []
+            if isinstance(check, dict) and str(check.get("status") or "").lower() == "failed"
+        ]
+        summary = readiness.get("summary")
+        results.append(
+            {
+                "bot_id": bot_id,
+                "ok": bool(readiness.get("ready")) and str(readiness.get("state") or "") == "ready",
+                "action": "verified",
+                "state": str(readiness.get("state") or "unknown"),
+                "summary": summary if isinstance(summary, dict) else {},
+                "blockers": failed_checks[:8],
+            }
+        )
+
+    (output_dir / "verify-readiness-summary.json").write_text(json.dumps(results, indent=2) + "\n", encoding="utf-8")
+    return results
+
+
 def wait_workers(worker_ids: list[str], *, api_url: str, api_token: str, timeout_seconds: int) -> dict[str, Any]:
     headers = _headers(api_token)
     base = api_url.rstrip("/")
@@ -1053,7 +1116,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Register missing rendered catalog models without changing existing catalog entries.",
     )
     parser.add_argument("--apply-bots", action="store_true", help="Create or update rendered bot records in the control plane.")
-    parser.add_argument("--api-url", default="", help="Host-reachable control-plane API URL for apply/wait.")
+    parser.add_argument(
+        "--verify-readiness",
+        action="store_true",
+        help="Verify rendered bots are dispatch-ready without starting tasks.",
+    )
+    parser.add_argument("--api-url", default="", help="Host-reachable control-plane API URL for apply, verify, or wait.")
     parser.add_argument("--wait-workers", action="store_true", help="Wait until rendered workers self-register as online.")
     parser.add_argument("--wait-timeout-seconds", type=int, default=180)
     args = parser.parse_args(argv)
@@ -1092,6 +1160,11 @@ def main(argv: list[str] | None = None) -> int:
             )
             print(json.dumps({"wait_workers": result}, indent=2))
             if not result.get("ok"):
+                return 1
+        if args.verify_readiness:
+            results = verify_bots_ready(output_dir, api_url=api_url, api_token=api_token)
+            print(json.dumps({"verify_readiness": results}, indent=2))
+            if any(not item.get("ok") for item in results):
                 return 1
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

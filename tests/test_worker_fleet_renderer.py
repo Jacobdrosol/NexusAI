@@ -220,6 +220,134 @@ def test_apply_models_preserves_existing_catalog_entry(tmp_path, monkeypatch):
     ]
 
 
+def test_verify_bots_ready_reports_private_fleet_readiness(tmp_path, monkeypatch):
+    renderer = _load_renderer()
+    profile = _profile(tmp_path / "workers.yaml")
+    out = tmp_path / "runtime"
+    renderer.render(
+        profile,
+        out,
+        {"CONTROL_PLANE_API_TOKEN": "control-token", "OLLAMA_API_KEY": "ollama-token"},
+    )
+
+    class _Response:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {
+                "bot_id": "content-worker-bot",
+                "ready": True,
+                "state": "ready",
+                "summary": {"checks": 3, "failed": 0, "blocking": 0},
+                "checks": [{"status": "ready", "message": "Worker is online."}],
+            }
+
+    monkeypatch.setattr(renderer.requests, "get", lambda *_args, **_kwargs: _Response())
+
+    results = renderer.verify_bots_ready(out, api_url="http://control-plane.test", api_token="control-token")
+
+    assert results == [
+        {
+            "bot_id": "content-worker-bot",
+            "ok": True,
+            "action": "verified",
+            "state": "ready",
+            "summary": {"checks": 3, "failed": 0, "blocking": 0},
+            "blockers": [],
+        }
+    ]
+    assert json.loads((out / "verify-readiness-summary.json").read_text(encoding="utf-8")) == results
+
+
+def test_verify_bots_ready_blocks_disabled_or_unready_bots(tmp_path, monkeypatch):
+    renderer = _load_renderer()
+    profile = _profile(tmp_path / "workers.yaml")
+    out = tmp_path / "runtime"
+    renderer.render(
+        profile,
+        out,
+        {"CONTROL_PLANE_API_TOKEN": "control-token", "OLLAMA_API_KEY": "ollama-token"},
+    )
+
+    class _Response:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {
+                "bot_id": "content-worker-bot",
+                "ready": False,
+                "state": "blocked",
+                "summary": {"checks": 3, "failed": 1, "blocking": 1},
+                "checks": [
+                    {
+                        "status": "failed",
+                        "message": "Worker 'content-repair-01' is offline.",
+                    }
+                ],
+            }
+
+    monkeypatch.setattr(renderer.requests, "get", lambda *_args, **_kwargs: _Response())
+
+    results = renderer.verify_bots_ready(out, api_url="http://control-plane.test", api_token="control-token")
+
+    assert results[0]["ok"] is False
+    assert results[0]["state"] == "blocked"
+    assert results[0]["blockers"] == ["Worker 'content-repair-01' is offline."]
+
+
+def test_renderer_cli_waits_for_workers_before_verifying_readiness(tmp_path, monkeypatch):
+    renderer = _load_renderer()
+    sequence = []
+    env_file = tmp_path / "control-plane.env"
+    env_file.write_text("CONTROL_PLANE_API_TOKEN=control-token\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        renderer,
+        "render",
+        lambda *_args, **_kwargs: {"workers": [{"id": "content-repair-01"}]},
+    )
+    monkeypatch.setattr(
+        renderer,
+        "apply_models",
+        lambda *_args, **_kwargs: sequence.append("models") or [{"ok": True}],
+    )
+    monkeypatch.setattr(
+        renderer,
+        "apply_bots",
+        lambda *_args, **_kwargs: sequence.append("bots") or [{"ok": True}],
+    )
+    monkeypatch.setattr(
+        renderer,
+        "wait_workers",
+        lambda *_args, **_kwargs: sequence.append("wait") or {"ok": True},
+    )
+    monkeypatch.setattr(
+        renderer,
+        "verify_bots_ready",
+        lambda *_args, **_kwargs: sequence.append("verify") or [{"ok": True}],
+    )
+
+    exit_code = renderer.main(
+        [
+            "--profile",
+            str(tmp_path / "workers.yaml"),
+            "--output-dir",
+            str(tmp_path / "runtime"),
+            "--env-file",
+            str(env_file),
+            "--apply-models",
+            "--apply-bots",
+            "--wait-workers",
+            "--verify-readiness",
+        ]
+    )
+
+    assert exit_code == 0
+    assert sequence == ["models", "bots", "wait", "verify"]
+
+
 def test_render_worker_fleet_requires_ollama_key_by_default(tmp_path):
     renderer = _load_renderer()
     profile = _profile(tmp_path / "workers.yaml")
