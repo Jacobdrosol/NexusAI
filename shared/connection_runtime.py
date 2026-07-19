@@ -12,6 +12,37 @@ from typing import Any
 
 import yaml
 
+_SENSITIVE_QUERY_KEYS = frozenset(
+    {
+        "apikey",
+        "accesstoken",
+        "auth",
+        "authorization",
+        "bearertoken",
+        "clientsecret",
+        "password",
+        "passwd",
+        "secret",
+        "signature",
+        "token",
+    }
+)
+
+
+def _normalized_query_key(value: object) -> str:
+    return "".join(character for character in str(value or "").casefold() if character.isalnum())
+
+
+def _is_sensitive_query_key(query_key: str, configured_secret_key: str) -> bool:
+    normalized_key = _normalized_query_key(query_key)
+    return bool(
+        normalized_key
+        and (
+            normalized_key == _normalized_query_key(configured_secret_key)
+            or normalized_key in _SENSITIVE_QUERY_KEYS
+        )
+    )
+
 
 def parse_openapi_actions(schema_text: str) -> list[dict[str, str]]:
     """Extract the HTTP operations explicitly declared by an OpenAPI document."""
@@ -76,15 +107,16 @@ def _build_url(base_url: str, path: str, path_params: dict[str, Any] | None) -> 
 def safe_result_url(url: str, auth: dict[str, Any]) -> str:
     """Avoid returning query-string credentials in task or connection-test output."""
     parsed = urllib.parse.urlparse(url)
-    auth_type = str(auth.get("type") or "none").strip().lower()
+    auth_data = auth if isinstance(auth, dict) else {}
+    auth_type = str(auth_data.get("type") or "none").strip().lower()
     secret_query_key = ""
-    if auth_type == "api_key" and str(auth.get("in") or "header").strip().lower() == "query":
-        secret_query_key = str(auth.get("name") or "X-API-Key").strip()
+    if auth_type == "api_key" and str(auth_data.get("in") or "header").strip().lower() == "query":
+        secret_query_key = str(auth_data.get("name") or "X-API-Key").strip()
     query = [
         (
             key,
             "[REDACTED]"
-            if secret_query_key and key.casefold() == secret_query_key.casefold()
+            if _is_sensitive_query_key(key, secret_query_key)
             else value,
         )
         for key, value in urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
