@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import sqlite3
 from types import SimpleNamespace
 
 import pytest
@@ -7,16 +8,19 @@ from control_plane.agent_scheduler.engine import AgentScheduleEngine
 
 
 class _FakeTaskManager:
-    def __init__(self, *, status: str = "queued", error_message: str | None = None) -> None:
+    def __init__(self, *, status: str = "queued", error_message: str | None = None, create_failures: int = 0) -> None:
         self.task = SimpleNamespace(
             id="scheduled-task-1",
             status=status,
             error=SimpleNamespace(message=error_message) if error_message else None,
         )
         self.create_calls = []
+        self.create_failures = create_failures
 
     async def create_task(self, **kwargs):
         self.create_calls.append(kwargs)
+        if len(self.create_calls) <= self.create_failures:
+            raise RuntimeError("task persistence unavailable")
         return self.task
 
     async def get_task(self, task_id: str):
@@ -166,6 +170,77 @@ async def test_schedule_dispatch_materializes_bounded_system_payload(tmp_path):
     payload = task_manager.create_calls[0]["payload"]
     assert payload["monitoring_events"] == "sanitized fleet snapshot"
     assert payload["source"] == "agent_schedule"
+
+
+@pytest.mark.anyio
+async def test_schedule_retries_only_a_failed_pre_dispatch_attempt(tmp_path, monkeypatch):
+    import control_plane.agent_scheduler.engine as scheduler_module
+
+    started_at = datetime(2026, 7, 19, 12, 0, tzinfo=timezone.utc)
+    current_time = started_at
+    monkeypatch.setattr(scheduler_module, "_now", lambda: current_time)
+    task_manager = _FakeTaskManager(create_failures=1)
+    engine = AgentScheduleEngine(
+        assignment_service=object(),
+        task_manager=task_manager,
+        db_path=str(tmp_path / "schedules.db"),
+    )
+    schedule = await engine.create_schedule(
+        {
+            **_schedule_payload(),
+            "status": "active",
+            "retry_max": 1,
+            "retry_backoff_seconds": 30,
+        }
+    )
+
+    await engine.trigger_schedule(schedule["id"])
+    failed_run = (await engine.list_runs(schedule["id"]))[0]
+    assert failed_run["status"] == "failed"
+    assert failed_run["task_id"] is None
+    assert failed_run["retry_not_before"] == "2026-07-19T12:00:30+00:00"
+
+    current_time = started_at + timedelta(seconds=29)
+    monkeypatch.setattr(scheduler_module, "_now", lambda: current_time)
+    await engine.tick_once()
+    assert len(task_manager.create_calls) == 1
+
+    current_time = started_at + timedelta(seconds=30)
+    monkeypatch.setattr(scheduler_module, "_now", lambda: current_time)
+    await engine.tick_once()
+
+    retried_run = (await engine.list_runs(schedule["id"]))[0]
+    assert len(task_manager.create_calls) == 2
+    assert retried_run["status"] == "running"
+    assert retried_run["attempt"] == 1
+    assert retried_run["task_id"] == task_manager.task.id
+
+
+@pytest.mark.anyio
+async def test_schedule_retry_schema_migrates_existing_run_history(tmp_path):
+    db_path = tmp_path / "schedules.db"
+    with sqlite3.connect(db_path) as db:
+        db.execute(
+            """
+            CREATE TABLE agent_schedule_runs (
+                id TEXT PRIMARY KEY, schedule_id TEXT NOT NULL, dedupe_key TEXT NOT NULL,
+                scheduled_for TEXT NOT NULL, started_at TEXT, finished_at TEXT,
+                status TEXT NOT NULL, orchestration_id TEXT, task_id TEXT,
+                error_json TEXT, attempt INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL
+            )
+            """
+        )
+
+    engine = AgentScheduleEngine(
+        assignment_service=object(),
+        task_manager=_FakeTaskManager(),
+        db_path=str(db_path),
+    )
+    await engine._ensure_db()
+
+    with sqlite3.connect(db_path) as db:
+        columns = {row[1] for row in db.execute("PRAGMA table_info(agent_schedule_runs)")}
+    assert "retry_not_before" in columns
 
 
 @pytest.mark.anyio

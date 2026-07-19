@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS agent_schedule_runs (
     task_id TEXT,
     error_json TEXT,
     attempt INTEGER NOT NULL DEFAULT 0,
+    retry_not_before TEXT,
     created_at TEXT NOT NULL
 )
 """
@@ -235,6 +236,10 @@ class AgentScheduleEngine:
         async with open_sqlite(self._db_path) as db:
             await db.execute(_CREATE_SCHEDULES)
             await db.execute(_CREATE_SCHEDULE_RUNS)
+            async with db.execute("PRAGMA table_info(agent_schedule_runs)") as cursor:
+                run_columns = {str(row[1]) for row in await cursor.fetchall()}
+            if "retry_not_before" not in run_columns:
+                await db.execute("ALTER TABLE agent_schedule_runs ADD COLUMN retry_not_before TEXT")
             for statement in _CREATE_INDEXES:
                 await db.execute(statement)
             await db.commit()
@@ -477,6 +482,7 @@ class AgentScheduleEngine:
     async def tick_once(self) -> List[Dict[str, Any]]:
         await self._ensure_db()
         await self._reconcile_task_runs()
+        await self._retry_failed_dispatch_runs()
         due: List[Dict[str, Any]] = []
         async with self._tick_lock:
             now_iso = _iso(_now())
@@ -547,10 +553,10 @@ class AgentScheduleEngine:
         async with open_sqlite(self._db_path) as db:
             cursor = await db.execute(
                 """
-                INSERT OR IGNORE INTO agent_schedule_runs (
-                    id, schedule_id, dedupe_key, scheduled_for, started_at, finished_at,
-                    status, orchestration_id, task_id, error_json, attempt, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT OR IGNORE INTO agent_schedule_runs (
+                        id, schedule_id, dedupe_key, scheduled_for, started_at, finished_at,
+                    status, orchestration_id, task_id, error_json, attempt, retry_not_before, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run["id"],
@@ -564,6 +570,7 @@ class AgentScheduleEngine:
                     None,
                     None,
                     0,
+                    None,
                     run["created_at"],
                 ),
             )
@@ -582,6 +589,16 @@ class AgentScheduleEngine:
             async with db.execute(
                 "SELECT * FROM agent_schedule_runs WHERE dedupe_key = ? LIMIT 1",
                 (dedupe_key,),
+            ) as cursor:
+                row = await cursor.fetchone()
+        return self._row_to_run(row) if row is not None else None
+
+    async def _get_run(self, run_id: str) -> Optional[Dict[str, Any]]:
+        async with open_sqlite(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM agent_schedule_runs WHERE id = ? LIMIT 1",
+                (str(run_id or "").strip(),),
             ) as cursor:
                 row = await cursor.fetchone()
         return self._row_to_run(row) if row is not None else None
@@ -607,13 +624,103 @@ class AgentScheduleEngine:
             )
             await self._update_schedule_last_run(schedule["id"], status="completed")
         except Exception as exc:
+            retry_not_before = self._dispatch_retry_not_before(schedule, run)
+            error = {"message": str(exc)}
+            if retry_not_before is not None:
+                error["retry"] = {
+                    "next_attempt": int(run.get("attempt") or 0) + 1,
+                    "retry_not_before": retry_not_before,
+                }
             await self._set_run_status(
                 run["id"],
                 "failed",
                 finished_at=_iso(_now()),
-                error={"message": str(exc)},
+                error=error,
+                retry_not_before=retry_not_before,
             )
             await self._update_schedule_last_run(schedule["id"], status="failed")
+
+    def _dispatch_retry_not_before(
+        self,
+        schedule: Dict[str, Any],
+        run: Dict[str, Any],
+    ) -> Optional[str]:
+        """Retry only failures that happened before a task could be created."""
+        if str(run.get("task_id") or "").strip():
+            return None
+        try:
+            retry_max = max(0, int(schedule.get("retry_max") or 0))
+            attempt = max(0, int(run.get("attempt") or 0))
+            backoff_seconds = max(1, int(schedule.get("retry_backoff_seconds") or 30))
+        except (TypeError, ValueError):
+            return None
+        if attempt >= retry_max:
+            return None
+        return _iso(_now() + timedelta(seconds=backoff_seconds))
+
+    async def _retry_failed_dispatch_runs(self) -> None:
+        """Retry bounded failures where no task was ever handed to a worker."""
+        now_iso = _iso(_now())
+        async with open_sqlite(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                """
+                SELECT runs.*
+                FROM agent_schedule_runs AS runs
+                JOIN agent_schedules AS schedules ON schedules.id = runs.schedule_id
+                WHERE runs.status = 'failed'
+                  AND (runs.task_id IS NULL OR runs.task_id = '')
+                  AND runs.retry_not_before IS NOT NULL
+                  AND runs.retry_not_before <= ?
+                  AND runs.attempt < schedules.retry_max
+                  AND schedules.status = 'active'
+                ORDER BY runs.retry_not_before ASC
+                LIMIT 100
+                """,
+                (now_iso,),
+            ) as cursor:
+                rows = await cursor.fetchall()
+
+        for row in rows:
+            run = self._row_to_run(row)
+            schedule = await self.get_schedule(run["schedule_id"])
+            if schedule is None:
+                continue
+            claimed = await self._claim_failed_dispatch_retry(
+                run_id=run["id"],
+                retry_max=max(0, int(schedule.get("retry_max") or 0)),
+                now_iso=now_iso,
+            )
+            if claimed is not None:
+                await self._dispatch_run(schedule, claimed)
+
+    async def _claim_failed_dispatch_retry(
+        self,
+        *,
+        run_id: str,
+        retry_max: int,
+        now_iso: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Atomically claim one due retry so scheduler replicas cannot replay it twice."""
+        async with open_sqlite(self._db_path) as db:
+            cursor = await db.execute(
+                """
+                UPDATE agent_schedule_runs
+                SET status = 'queued', started_at = NULL, finished_at = NULL,
+                    error_json = NULL, retry_not_before = NULL, attempt = attempt + 1
+                WHERE id = ?
+                  AND status = 'failed'
+                  AND (task_id IS NULL OR task_id = '')
+                  AND retry_not_before IS NOT NULL
+                  AND retry_not_before <= ?
+                  AND attempt < ?
+                """,
+                (str(run_id or "").strip(), now_iso, max(0, retry_max)),
+            )
+            await db.commit()
+        if cursor.rowcount != 1:
+            return None
+        return await self._get_run(run_id)
 
     async def _reconcile_task_runs(self) -> None:
         async with open_sqlite(self._db_path) as db:
@@ -724,6 +831,7 @@ class AgentScheduleEngine:
         orchestration_id: Optional[str] = None,
         task_id: Optional[str] = None,
         error: Optional[Dict[str, Any]] = None,
+        retry_not_before: Optional[str] = None,
     ) -> None:
         async with open_sqlite(self._db_path) as db:
             await db.execute(
@@ -731,7 +839,7 @@ class AgentScheduleEngine:
                 UPDATE agent_schedule_runs
                 SET status = ?, started_at = COALESCE(?, started_at), finished_at = COALESCE(?, finished_at),
                     orchestration_id = COALESCE(?, orchestration_id), task_id = COALESCE(?, task_id),
-                    error_json = COALESCE(?, error_json)
+                    error_json = COALESCE(?, error_json), retry_not_before = COALESCE(?, retry_not_before)
                 WHERE id = ?
                 """,
                 (
@@ -741,6 +849,7 @@ class AgentScheduleEngine:
                     orchestration_id,
                     task_id,
                     _json_dump(error) if error is not None else None,
+                    retry_not_before,
                     run_id,
                 ),
             )
@@ -799,5 +908,6 @@ class AgentScheduleEngine:
             "task_id": str(row["task_id"] or "") or None,
             "error": _json_load(row["error_json"], None),
             "attempt": int(row["attempt"] or 0),
+            "retry_not_before": str(row["retry_not_before"] or "") or None,
             "created_at": str(row["created_at"]),
         }

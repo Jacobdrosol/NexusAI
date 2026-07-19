@@ -57,8 +57,8 @@ Table: `agent_schedules`
 | `target_bot_id` | TEXT | Bot that receives the task |
 | `assignment_pm_bot_id` | TEXT | Optional PM bot to root the orchestration in |
 | `status` | TEXT | `active` or `paused` |
-| `retry_max` | INT | Max retry attempts *(stored, not implemented)* |
-| `retry_backoff_seconds` | INT | Backoff between retries *(stored, not implemented)* |
+| `retry_max` | INT | Max retries for a failure before any task was created |
+| `retry_backoff_seconds` | INT | Backoff between safe pre-dispatch retries |
 | `metadata_json` | TEXT | Additional key/value metadata |
 
 Table: `agent_schedule_runs`
@@ -105,6 +105,8 @@ When `tick_once()` runs:
 
 The `dedupe_key` is `{schedule_id}:{cron_window}` where `cron_window` is the ISO timestamp of the computed fire time (minute-level precision).
 
+Retries are intentionally conservative: NexusAI retries only a failure that occurs before a task is created. A worker task that has been created, started, failed, cancelled, or retried is never replayed automatically, because its side effects may not be idempotent.
+
 ---
 
 ## Known Issues
@@ -112,9 +114,8 @@ The `dedupe_key` is `{schedule_id}:{cron_window}` where `cron_window` is the ISO
 | # | Severity | Issue |
 |---|----------|-------|
 | 1 | High | Scheduler replicas must share the same schedule database; independently configured databases cannot coordinate cron-window ownership |
-| 2 | High | `retry_max` and `retry_backoff_seconds` are stored but never used; retries are not implemented |
-| 3 | Medium | SQLite write contention should be monitored before running high-volume multi-instance scheduling |
-| 4 | Low | No pruning of old run records; the table grows unbounded |
+| 2 | Medium | SQLite write contention should be monitored before running high-volume multi-instance scheduling |
+| 3 | Low | No pruning of old run records; the table grows unbounded |
 
 ---
 
