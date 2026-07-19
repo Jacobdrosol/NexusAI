@@ -151,6 +151,21 @@ def validate_bot_configuration(bot: Bot) -> List[str]:
     errors = validate_reference_graph(bot)
     if bot_is_project_manager(bot) and not bot_has_explicit_workflow(bot):
         errors.append(f"Bot '{bot.id}' is marked as a project manager but has no explicit workflow triggers.")
+    routing = getattr(bot, "routing_rules", None)
+    external_trigger = routing.get("external_trigger") if isinstance(routing, dict) else None
+    if isinstance(external_trigger, dict) and bool(external_trigger.get("enabled", False)):
+        if external_trigger.get("require_auth") is not True:
+            errors.append(
+                f"Bot '{bot.id}' external_trigger.require_auth must be true when external triggering is enabled."
+            )
+        if str(external_trigger.get("auth_token") or "").strip():
+            errors.append(
+                f"Bot '{bot.id}' external_trigger.auth_token is not permitted; use auth_token_ref for an encrypted vault key."
+            )
+        if not str(external_trigger.get("auth_token_ref") or "").strip():
+            errors.append(
+                f"Bot '{bot.id}' external_trigger.auth_token_ref is required when external triggering is enabled."
+            )
     return errors
 
 

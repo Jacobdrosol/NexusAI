@@ -8,7 +8,7 @@ from pydantic import ValidationError
 from control_plane.audit.utils import record_audit_event
 from control_plane.bot_readiness import assess_bot_instance_readiness
 from control_plane.security.guards import enforce_body_size, enforce_rate_limit
-from shared.exceptions import BotNotFoundError
+from shared.exceptions import APIKeyNotFoundError, BotNotFoundError
 from shared.bot_policy import bot_autonomous_dispatch_blockers, validate_bot_configuration
 from shared.models import Bot, BotRun, BotRunArtifact, Task, TaskMetadata
 from shared.settings_manager import SettingsManager
@@ -250,7 +250,7 @@ def _parse_external_trigger_config(bot: Bot) -> Dict[str, Any]:
         "autonomy_safe": bool(cfg.get("autonomy_safe", False)),
         "require_auth": bool(cfg.get("require_auth", True)),
         "auth_header": str(cfg.get("auth_header") or default_header).strip() or default_header,
-        "auth_token": str(cfg.get("auth_token") or "").strip(),
+        "auth_token_ref": str(cfg.get("auth_token_ref") or "").strip(),
         "source": str(cfg.get("source") or default_source).strip() or default_source,
         "payload_field": str(cfg.get("payload_field") or "").strip(),
         "allow_metadata": bool(cfg.get("allow_metadata", False)),
@@ -290,6 +290,50 @@ async def _require_external_trigger_target_safe(
             },
         )
     await _require_bot_ready_to_enable(bot, request)
+
+
+async def _resolve_external_trigger_secret(
+    config: Dict[str, Any],
+    request: Request,
+) -> str:
+    """Resolve a webhook secret without retaining it in the bot configuration."""
+
+    key_ref = str(config.get("auth_token_ref") or "").strip()
+    if not key_ref:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "reason_code": "external_trigger_secret_ref_required",
+                "message": "External triggers require an encrypted auth_token_ref from the key vault.",
+            },
+        )
+    try:
+        secret = str(await request.app.state.key_vault.get_secret(key_ref)).strip()
+    except APIKeyNotFoundError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "reason_code": "external_trigger_secret_unavailable",
+                "message": f"External trigger credential reference '{key_ref}' is not available.",
+            },
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "reason_code": "external_trigger_secret_unavailable",
+                "message": "External trigger credential could not be resolved.",
+            },
+        ) from exc
+    if not secret:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "reason_code": "external_trigger_secret_unavailable",
+                "message": f"External trigger credential reference '{key_ref}' is empty.",
+            },
+        )
+    return secret
 
 
 def _build_external_trigger_metadata(config: Dict[str, Any], body: Any) -> TaskMetadata:
@@ -524,10 +568,7 @@ async def trigger_bot_external(bot_id: str, request: Request) -> Task:
                 "message": "External triggers must require a dedicated trigger authentication token.",
             },
         )
-    expected = str(config.get("auth_token") or "").strip()
-    if not expected:
-        logger.warning("External trigger for bot %s requires auth but no auth_token is configured", bot_id)
-        raise HTTPException(status_code=500, detail="external trigger is misconfigured")
+    expected = await _resolve_external_trigger_secret(config, request)
     header_name = str(config.get("auth_header") or "X-Nexus-Trigger-Token").strip()
     provided = str(request.headers.get(header_name, "") or "").strip()
     if not provided:

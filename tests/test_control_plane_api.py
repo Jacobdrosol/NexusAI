@@ -556,7 +556,8 @@ async def test_create_bot_returns_structured_validation_errors_for_reference_gra
 
 
 @pytest.mark.anyio
-async def test_external_bot_trigger_creates_task_with_auth_and_payload_field(cp_client):
+async def test_external_bot_trigger_creates_task_with_auth_and_payload_field(cp_app, cp_client):
+    await cp_app.state.key_vault.set_key("external-trigger-token", "webhook", "topsecret")
     create = await cp_client.post(
         "/v1/bots",
         json={
@@ -571,7 +572,7 @@ async def test_external_bot_trigger_creates_task_with_auth_and_payload_field(cp_
                     "autonomy_safe": True,
                     "require_auth": True,
                     "auth_header": "X-Nexus-Trigger-Token",
-                    "auth_token": "topsecret",
+                    "auth_token_ref": "external-trigger-token",
                     "payload_field": "event.data",
                     "allow_metadata": True,
                     "source": "webhook",
@@ -599,7 +600,8 @@ async def test_external_bot_trigger_creates_task_with_auth_and_payload_field(cp_
 
 
 @pytest.mark.anyio
-async def test_external_bot_trigger_requires_explicit_autonomy_attestation(cp_client):
+async def test_external_bot_trigger_requires_explicit_autonomy_attestation(cp_app, cp_client):
+    await cp_app.state.key_vault.set_key("external-trigger-token", "webhook", "topsecret")
     create = await cp_client.post(
         "/v1/bots",
         json={
@@ -612,7 +614,7 @@ async def test_external_bot_trigger_requires_explicit_autonomy_attestation(cp_cl
                 "external_trigger": {
                     "enabled": True,
                     "require_auth": True,
-                    "auth_token": "topsecret",
+                    "auth_token_ref": "external-trigger-token",
                 }
             },
         },
@@ -630,7 +632,8 @@ async def test_external_bot_trigger_requires_explicit_autonomy_attestation(cp_cl
 
 
 @pytest.mark.anyio
-async def test_external_bot_trigger_rejects_mutation_capable_target(cp_client):
+async def test_external_bot_trigger_rejects_mutation_capable_target(cp_app, cp_client):
+    await cp_app.state.key_vault.set_key("external-trigger-token", "webhook", "topsecret")
     create = await cp_client.post(
         "/v1/bots",
         json={
@@ -645,7 +648,7 @@ async def test_external_bot_trigger_rejects_mutation_capable_target(cp_client):
                     "enabled": True,
                     "autonomy_safe": True,
                     "require_auth": True,
-                    "auth_token": "topsecret",
+                    "auth_token_ref": "external-trigger-token",
                 }
             },
         },
@@ -677,6 +680,58 @@ async def test_external_bot_trigger_requires_dedicated_auth(cp_client):
                     "enabled": True,
                     "autonomy_safe": True,
                     "require_auth": False,
+                    "auth_token_ref": "external-trigger-token",
+                }
+            },
+        },
+    )
+    assert create.status_code == 400
+    assert create.json()["detail"]["reason_code"] == "bot_validation_failed"
+
+
+@pytest.mark.anyio
+async def test_external_bot_trigger_rejects_inline_secret_configuration(cp_client):
+    create = await cp_client.post(
+        "/v1/bots",
+        json={
+            "id": "bot-ext-inline-secret",
+            "name": "Inline Secret External Trigger",
+            "role": "assistant",
+            "enabled": True,
+            "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "test-model"}],
+            "routing_rules": {
+                "external_trigger": {
+                    "enabled": True,
+                    "autonomy_safe": True,
+                    "require_auth": True,
+                    "auth_token": "not-allowed",
+                    "auth_token_ref": "external-trigger-token",
+                }
+            },
+        },
+    )
+
+    assert create.status_code == 400
+    validation_errors = create.json()["detail"]["validation_errors"]
+    assert any("auth_token is not permitted" in item["message"] for item in validation_errors)
+
+
+@pytest.mark.anyio
+async def test_external_bot_trigger_rejects_missing_vault_secret(cp_client):
+    create = await cp_client.post(
+        "/v1/bots",
+        json={
+            "id": "bot-ext-missing-secret",
+            "name": "Missing Secret External Trigger",
+            "role": "assistant",
+            "enabled": True,
+            "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "test-model"}],
+            "routing_rules": {
+                "external_trigger": {
+                    "enabled": True,
+                    "autonomy_safe": True,
+                    "require_auth": True,
+                    "auth_token_ref": "missing-external-trigger-token",
                 }
             },
         },
@@ -684,12 +739,13 @@ async def test_external_bot_trigger_requires_dedicated_auth(cp_client):
     assert create.status_code == 200
 
     trigger = await cp_client.post(
-        "/v1/bots/bot-ext-open/trigger",
+        "/v1/bots/bot-ext-missing-secret/trigger",
         json={"payload": {"instruction": "run"}},
+        headers={"X-Nexus-Trigger-Token": "unused"},
     )
 
     assert trigger.status_code == 409
-    assert trigger.json()["detail"]["reason_code"] == "external_trigger_auth_required"
+    assert trigger.json()["detail"]["reason_code"] == "external_trigger_secret_unavailable"
 
 
 @pytest.mark.anyio
@@ -717,6 +773,7 @@ async def test_external_bot_trigger_rejects_when_disabled(cp_client):
 @pytest.mark.anyio
 async def test_external_bot_trigger_bypasses_global_cp_token_when_bot_auth_is_valid(cp_app):
     cp_app.state.control_plane_api_token = "global-cp-token"
+    await cp_app.state.key_vault.set_key("external-trigger-token", "webhook", "external-secret")
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
         create = await client.post(
             "/v1/bots",
@@ -732,7 +789,7 @@ async def test_external_bot_trigger_bypasses_global_cp_token_when_bot_auth_is_va
                     "autonomy_safe": True,
                     "require_auth": True,
                         "auth_header": "X-External-Token",
-                        "auth_token": "external-secret",
+                        "auth_token_ref": "external-trigger-token",
                     }
                 },
             },
