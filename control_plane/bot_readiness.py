@@ -1,9 +1,10 @@
 """Read-only readiness checks for bot dispatch and scheduling."""
 from __future__ import annotations
 
+import os
 from typing import Any
 
-from shared.exceptions import WorkerNotFoundError
+from shared.exceptions import APIKeyNotFoundError, WorkerNotFoundError
 from shared.models import BackendConfig, Bot, Worker
 from shared.worker_capabilities import required_worker_tools, worker_missing_tools
 
@@ -43,6 +44,29 @@ def _worker_supports_backend(worker: Worker, backend: BackendConfig) -> bool:
     return False
 
 
+def _production_credential_readiness_required() -> bool:
+    environment = str(
+        os.environ.get("NEXUSAI_ENV")
+        or os.environ.get("NEXUSAI_ENVIRONMENT")
+        or os.environ.get("ENVIRONMENT")
+        or os.environ.get("ENV")
+        or ""
+    ).strip().lower()
+    return environment in {"production", "prod"}
+
+
+async def _vault_credential_status(key_vault: Any, key_ref: str) -> tuple[bool, str]:
+    if key_vault is None:
+        return False, "Vault credential verification is unavailable."
+    try:
+        await key_vault.get_key(key_ref)
+    except APIKeyNotFoundError:
+        return False, f"Vault credential '{key_ref}' is not configured."
+    except Exception:
+        return False, "Vault credential verification failed."
+    return True, ""
+
+
 async def assess_bot_readiness(
     bot_id: str,
     *,
@@ -50,6 +74,7 @@ async def assess_bot_readiness(
     worker_registry: Any,
     connection_resolver: Any,
     worker_probe_store: Any = None,
+    key_vault: Any = None,
 ) -> dict[str, Any]:
     """Return non-secret operational checks for the bot's declared backend chain."""
     bot: Bot = await bot_registry.get(str(bot_id or "").strip())
@@ -58,6 +83,7 @@ async def assess_bot_readiness(
         worker_registry=worker_registry,
         connection_resolver=connection_resolver,
         worker_probe_store=worker_probe_store,
+        key_vault=key_vault,
     )
 
 
@@ -67,6 +93,7 @@ async def assess_bot_instance_readiness(
     worker_registry: Any,
     connection_resolver: Any,
     worker_probe_store: Any = None,
+    key_vault: Any = None,
 ) -> dict[str, Any]:
     """Assess a persisted or staged bot without exposing connection secrets."""
     checks: list[dict[str, Any]] = []
@@ -164,10 +191,28 @@ async def assess_bot_instance_readiness(
             continue
 
         if backend_type == "cloud_api":
-            viable_backends += 1
             if backend.api_key_ref:
+                if _production_credential_readiness_required():
+                    credential_ready, credential_detail = await _vault_credential_status(
+                        key_vault, backend.api_key_ref
+                    )
+                    if not credential_ready:
+                        checks.append(_check(label, "failed", credential_detail, backend_index=index))
+                        continue
+                viable_backends += 1
                 checks.append(_check(label, "ready", "Cloud API backend has a key reference.", backend_index=index))
             else:
+                if _production_credential_readiness_required():
+                    checks.append(
+                        _check(
+                            label,
+                            "failed",
+                            "Cloud API backends require an explicit vault credential reference in production.",
+                            backend_index=index,
+                        )
+                    )
+                    continue
+                viable_backends += 1
                 checks.append(_check(label, "warning", "Cloud API backend has no key reference.", backend_index=index))
             continue
 

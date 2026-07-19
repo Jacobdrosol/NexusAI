@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable
 
+from control_plane.bot_readiness import assess_bot_readiness
 from control_plane.schedule_payload_sources import SystemPayloadSourceError, validate_system_payload_source
 from shared.bot_policy import bot_allows_repo_output, bot_can_apply_db_actions, bot_is_pipeline_entry
 
@@ -159,3 +160,46 @@ async def require_schedule_autonomy_safety(
             f"Schedule target '{bot_id}' cannot use the requested system payload source: {exc}.",
         ) from exc
     _require_schedule_input_contract(schedule, bot)
+
+
+async def require_schedule_runtime_readiness(
+    schedule: Dict[str, Any],
+    *,
+    bot_registry: Any,
+    worker_registry: Any,
+    connection_resolver: Any,
+    worker_probe_store: Any = None,
+    key_vault: Any = None,
+) -> None:
+    """Verify a schedule target is dispatchable immediately before execution."""
+    bot_id = str(
+        schedule.get("assignment_pm_bot_id") or schedule.get("target_bot_id") or ""
+    ).strip()
+    if not bot_id:
+        return
+    try:
+        readiness = await assess_bot_readiness(
+            bot_id,
+            bot_registry=bot_registry,
+            worker_registry=worker_registry,
+            connection_resolver=connection_resolver,
+            worker_probe_store=worker_probe_store,
+            key_vault=key_vault,
+        )
+    except Exception as exc:
+        raise ScheduleAutonomySafetyError(
+            "schedule_target_not_ready",
+            f"Schedule target '{bot_id}' cannot be validated for dispatch.",
+        ) from exc
+    if bool(readiness.get("ready")):
+        return
+    blockers = [
+        str(check.get("message") or "").strip()
+        for check in readiness.get("checks") or []
+        if isinstance(check, dict) and str(check.get("status") or "").strip().lower() == "failed"
+    ]
+    raise ScheduleAutonomySafetyError(
+        "schedule_target_not_ready",
+        f"Schedule target '{bot_id}' is not ready for dispatch.",
+        blockers=[item for item in blockers if item][:8],
+    )

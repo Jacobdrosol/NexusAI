@@ -136,6 +136,7 @@ async def _require_bot_ready_to_enable(bot: Bot, request: Request) -> None:
         worker_registry=request.app.state.worker_registry,
         connection_resolver=request.app.state.connection_resolver,
         worker_probe_store=request.app.state.worker_probe_store,
+        key_vault=request.app.state.key_vault,
     )
     if not readiness["ready"]:
         raise HTTPException(
@@ -188,6 +189,7 @@ async def _preflight_bot_payload(payload: Any, request: Request) -> Dict[str, An
         worker_registry=request.app.state.worker_registry,
         connection_resolver=request.app.state.connection_resolver,
         worker_probe_store=request.app.state.worker_probe_store,
+        key_vault=request.app.state.key_vault,
     )
     return {
         "bot_id": bot.id,
@@ -344,6 +346,7 @@ async def list_bot_readiness(request: Request) -> Dict[str, Any]:
             worker_registry=request.app.state.worker_registry,
             connection_resolver=request.app.state.connection_resolver,
             worker_probe_store=request.app.state.worker_probe_store,
+            key_vault=request.app.state.key_vault,
         )
         readiness.append(_with_operational_state(bot, assessed))
     summary = {
@@ -363,6 +366,7 @@ async def get_bot_readiness(bot_id: str, request: Request) -> Dict[str, Any]:
             worker_registry=request.app.state.worker_registry,
             connection_resolver=request.app.state.connection_resolver,
             worker_probe_store=request.app.state.worker_probe_store,
+            key_vault=request.app.state.key_vault,
         )
         return _with_operational_state(bot, readiness)
     except BotNotFoundError as exc:

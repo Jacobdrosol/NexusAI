@@ -13,8 +13,11 @@ from control_plane.agent_scheduler.engine import (
     _MAX_SCHEDULE_RETRY_MAX,
     _MIN_SCHEDULE_RETRY_BACKOFF_SECONDS,
 )
-from control_plane.bot_readiness import assess_bot_readiness
-from control_plane.schedule_safety import ScheduleAutonomySafetyError, require_schedule_autonomy_safety
+from control_plane.schedule_safety import (
+    ScheduleAutonomySafetyError,
+    require_schedule_autonomy_safety,
+    require_schedule_runtime_readiness,
+)
 
 
 router = APIRouter(prefix="/v1/schedules", tags=["schedules"])
@@ -28,28 +31,17 @@ async def _require_schedule_target_ready(
 ) -> None:
     if only_when_active and str(schedule.get("status") or "").strip().lower() != "active":
         return
-    bot_id = str(schedule.get("assignment_pm_bot_id") or schedule.get("target_bot_id") or "").strip()
-    if not bot_id:
-        return
     try:
-        readiness = await assess_bot_readiness(
-            bot_id,
+        await require_schedule_runtime_readiness(
+            schedule,
             bot_registry=request.app.state.bot_registry,
             worker_registry=request.app.state.worker_registry,
             connection_resolver=request.app.state.connection_resolver,
             worker_probe_store=request.app.state.worker_probe_store,
+            key_vault=request.app.state.key_vault,
         )
-    except Exception as exc:
-        raise HTTPException(status_code=409, detail={
-            "reason_code": "schedule_target_not_ready",
-            "message": f"Schedule target '{bot_id}' cannot be dispatched: {exc}",
-        }) from exc
-    if not readiness["ready"]:
-        raise HTTPException(status_code=409, detail={
-            "reason_code": "schedule_target_not_ready",
-            "message": f"Schedule target '{bot_id}' is not ready.",
-            "readiness": readiness,
-        })
+    except ScheduleAutonomySafetyError as exc:
+        raise HTTPException(status_code=409, detail=exc.as_detail()) from exc
 
 
 async def _require_schedule_autonomy_safety(

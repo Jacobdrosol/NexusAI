@@ -69,6 +69,97 @@ async def test_bot_readiness_allows_a_ready_fallback_backend(cp_client):
 
 
 @pytest.mark.anyio
+async def test_production_bot_activation_requires_configured_vault_credential(cp_client, monkeypatch):
+    monkeypatch.setenv("NEXUSAI_ENV", "production")
+
+    response = await cp_client.post(
+        "/v1/bots",
+        json={
+            "id": "missing-vault-credential-bot",
+            "name": "Missing Vault Credential Bot",
+            "role": "worker",
+            "enabled": True,
+            "backends": [
+                {
+                    "type": "cloud_api",
+                    "provider": "ollama_cloud",
+                    "model": "ready-model",
+                    "api_key_ref": "MISSING_OLLAMA_KEY",
+                }
+            ],
+        },
+    )
+    stored = await cp_client.get("/v1/bots/missing-vault-credential-bot")
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["reason_code"] == "bot_not_ready"
+    assert any(
+        check["message"] == "Vault credential 'MISSING_OLLAMA_KEY' is not configured."
+        for check in detail["readiness"]["checks"]
+    )
+    assert stored.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_production_bot_activation_requires_explicit_vault_credential_reference(cp_client, monkeypatch):
+    monkeypatch.setenv("NEXUSAI_ENV", "production")
+
+    response = await cp_client.post(
+        "/v1/bots",
+        json={
+            "id": "implicit-vault-credential-bot",
+            "name": "Implicit Vault Credential Bot",
+            "role": "worker",
+            "enabled": True,
+            "backends": [
+                {
+                    "type": "cloud_api",
+                    "provider": "ollama_cloud",
+                    "model": "ready-model",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 409
+    assert any(
+        check["message"]
+        == "Cloud API backends require an explicit vault credential reference in production."
+        for check in response.json()["detail"]["readiness"]["checks"]
+    )
+
+
+@pytest.mark.anyio
+async def test_production_bot_activation_accepts_configured_vault_credential(cp_app, cp_client, monkeypatch):
+    monkeypatch.setenv("NEXUSAI_ENV", "production")
+    await cp_app.state.key_vault.set_key(
+        name="Ollama_Cloud1", provider="ollama_cloud", value="test-credential"
+    )
+
+    response = await cp_client.post(
+        "/v1/bots",
+        json={
+            "id": "configured-vault-credential-bot",
+            "name": "Configured Vault Credential Bot",
+            "role": "worker",
+            "enabled": True,
+            "backends": [
+                {
+                    "type": "cloud_api",
+                    "provider": "ollama_cloud",
+                    "model": "ready-model",
+                    "api_key_ref": "Ollama_Cloud1",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["enabled"] is True
+
+
+@pytest.mark.anyio
 async def test_bot_readiness_does_not_use_cloud_fallback_for_required_worker_tools(cp_client):
     response = await cp_client.post(
         "/v1/bots",
