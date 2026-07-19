@@ -230,7 +230,7 @@ class SchemaManager:
                     # Create standalone indexes
                     for index_sql in plan.indexes_to_create:
                         await db.execute(index_sql)
-                        result.changes_applied.append(f"Created index")
+                        result.changes_applied.append("Created index")
 
                     # Record migration
                     from datetime import datetime, timezone

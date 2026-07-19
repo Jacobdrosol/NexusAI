@@ -4577,7 +4577,7 @@ async def test_output_contract_allows_blocked_result_without_primary_artifact(tm
 
 
 @pytest.mark.anyio
-async def test_output_contract_error_includes_truncation_hint_when_finish_reason_is_length(tmp_path):
+async def test_output_contract_error_avoids_false_truncation_hint_for_closed_json(tmp_path):
     import asyncio
 
     from control_plane.registry.bot_registry import BotRegistry
@@ -4634,7 +4634,7 @@ async def test_output_contract_error_includes_truncation_hint_when_finish_reason
     assert updated.status == "failed"
     assert updated.error is not None
     assert "non-empty fields" in updated.error.message
-    assert "likely truncated model output" in updated.error.message
+    assert "likely truncated model output" not in updated.error.message
 
 
 @pytest.mark.anyio
@@ -5446,7 +5446,7 @@ async def test_chat_assign_test_execution_runs_in_repo_workspace_without_schedul
     repo_root.mkdir(parents=True, exist_ok=True)
 
     monkeypatch.setattr(projects_module, "_extract_project_repo_workspace", lambda project: project.settings_overrides["repo_workspace"])
-    monkeypatch.setattr(projects_module, "_resolve_repo_workspace_root", lambda project_id, cfg, require_enabled=True: repo_root)
+    monkeypatch.setattr(projects_module, "_resolve_repo_workspace_root", lambda project_id, cfg, require_enabled=True, allow_raw_fallback=True: repo_root)
 
     async def _snapshot(*, root, cfg):
         return {"is_repo": True, "branch": "main", "clean": False, "porcelain": [" M lesson_blocks/geometry.py"]}
@@ -5547,7 +5547,7 @@ async def test_chat_assign_test_execution_uses_orchestration_temp_workspace(tmp_
     (repo_root / ".git").mkdir()
 
     monkeypatch.setattr(projects_module, "_extract_project_repo_workspace", lambda project: project.settings_overrides["repo_workspace"])
-    monkeypatch.setattr(projects_module, "_resolve_repo_workspace_root", lambda project_id, cfg, require_enabled=True: repo_root)
+    monkeypatch.setattr(projects_module, "_resolve_repo_workspace_root", lambda project_id, cfg, require_enabled=True, allow_raw_fallback=True: repo_root)
 
     async def _snapshot(*, root, cfg):
         return {"is_repo": True, "root": str(root), "porcelain": []}
@@ -5696,7 +5696,7 @@ async def test_chat_assign_python_test_execution_writes_requested_text_report(tm
     repo_root.mkdir(parents=True, exist_ok=True)
 
     monkeypatch.setattr(projects_module, "_extract_project_repo_workspace", lambda project: project.settings_overrides["repo_workspace"])
-    monkeypatch.setattr(projects_module, "_resolve_repo_workspace_root", lambda project_id, cfg, require_enabled=True: repo_root)
+    monkeypatch.setattr(projects_module, "_resolve_repo_workspace_root", lambda project_id, cfg, require_enabled=True, allow_raw_fallback=True: repo_root)
 
     async def _snapshot(*, root, cfg):
         return {"is_repo": True, "branch": "main", "clean": False, "porcelain": [" M src/lessons/math_lesson.py"]}
@@ -5804,7 +5804,7 @@ async def test_chat_assign_test_execution_fails_when_generated_tests_do_not_matc
     (repo_root / "GlobeIQ.Tests.csproj").write_text("<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n", encoding="utf-8")
 
     monkeypatch.setattr(projects_module, "_extract_project_repo_workspace", lambda project: project.settings_overrides["repo_workspace"])
-    monkeypatch.setattr(projects_module, "_resolve_repo_workspace_root", lambda project_id, cfg, require_enabled=True: repo_root)
+    monkeypatch.setattr(projects_module, "_resolve_repo_workspace_root", lambda project_id, cfg, require_enabled=True, allow_raw_fallback=True: repo_root)
 
     async def _snapshot(*, root, cfg):
         return {"is_repo": True, "branch": "main", "clean": False, "porcelain": [" M GlobeIQ.Tests.csproj"]}
@@ -5895,7 +5895,7 @@ async def test_chat_assign_tester_step_uses_internal_execution_even_when_step_ki
     repo_root.mkdir(parents=True, exist_ok=True)
 
     monkeypatch.setattr(projects_module, "_extract_project_repo_workspace", lambda project: project.settings_overrides["repo_workspace"])
-    monkeypatch.setattr(projects_module, "_resolve_repo_workspace_root", lambda project_id, cfg, require_enabled=True: repo_root)
+    monkeypatch.setattr(projects_module, "_resolve_repo_workspace_root", lambda project_id, cfg, require_enabled=True, allow_raw_fallback=True: repo_root)
 
     async def _snapshot(*, root, cfg):
         return {"is_repo": True, "branch": "main", "clean": False, "porcelain": [" M lesson_blocks/geometry.py"]}
@@ -6001,7 +6001,7 @@ async def test_bot_trigger_final_qc_payload_from_tester_is_not_misclassified_as_
     tests_project.write_text("<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n", encoding="utf-8")
 
     monkeypatch.setattr(projects_module, "_extract_project_repo_workspace", lambda project: project.settings_overrides["repo_workspace"])
-    monkeypatch.setattr(projects_module, "_resolve_repo_workspace_root", lambda project_id, cfg, require_enabled=True: repo_root)
+    monkeypatch.setattr(projects_module, "_resolve_repo_workspace_root", lambda project_id, cfg, require_enabled=True, allow_raw_fallback=True: repo_root)
 
     async def _snapshot(*, root, cfg):
         return {"is_repo": True, "branch": "main", "clean": False, "porcelain": ["?? GlobeIQ.Server.Tests/BlockCatalogSeederTests.cs"]}
@@ -6029,6 +6029,15 @@ async def test_bot_trigger_final_qc_payload_from_tester_is_not_misclassified_as_
     monkeypatch.setattr(projects_module, "_bootstrap_command_specs", lambda root, languages: [])
 
     async def _run_repo_command(args, *, cwd, timeout_seconds=None, env_overrides=None):
+        if args[:3] == ["git", "rev-parse", "--is-inside-work-tree"]:
+            return {
+                "ok": False,
+                "command": args,
+                "exit_code": 1,
+                "stdout": "",
+                "stderr": "",
+                "resource_usage": {},
+            }
         assert args[:2] == ["dotnet", "test"]
         return {
             "ok": False,
@@ -6149,7 +6158,7 @@ async def test_chat_assign_repo_change_for_test_file_generation_does_not_use_int
         lambda name, default: 0 if name == "max_task_retries" else default,
     )
     monkeypatch.setattr(projects_module, "_extract_project_repo_workspace", lambda project: project.settings_overrides["repo_workspace"])
-    monkeypatch.setattr(projects_module, "_resolve_repo_workspace_root", lambda project_id, cfg, require_enabled=True: repo_root)
+    monkeypatch.setattr(projects_module, "_resolve_repo_workspace_root", lambda project_id, cfg, require_enabled=True, allow_raw_fallback=True: repo_root)
 
     async def _snapshot(*, root, cfg):
         return {"is_repo": True, "branch": "main", "clean": False, "porcelain": [" M src/ui/components/MathGeometryBlock.razor"]}
@@ -6246,7 +6255,7 @@ async def test_chat_assign_repo_change_fails_early_when_generated_files_mismatch
         lambda name, default: 0 if name == "max_task_retries" else default,
     )
     monkeypatch.setattr(projects_module, "_extract_project_repo_workspace", lambda project: project.settings_overrides["repo_workspace"])
-    monkeypatch.setattr(projects_module, "_resolve_repo_workspace_root", lambda project_id, cfg, require_enabled=True: repo_root)
+    monkeypatch.setattr(projects_module, "_resolve_repo_workspace_root", lambda project_id, cfg, require_enabled=True, allow_raw_fallback=True: repo_root)
 
     tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "chat-assign-repo-runtime-mismatch.db"))
     task = await tm.create_task(
@@ -6314,7 +6323,7 @@ async def test_chat_assign_test_execution_detects_and_runs_generated_dotnet_test
     (repo_root / "GlobeIQ.Tests.csproj").write_text("<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n", encoding="utf-8")
 
     monkeypatch.setattr(projects_module, "_extract_project_repo_workspace", lambda project: project.settings_overrides["repo_workspace"])
-    monkeypatch.setattr(projects_module, "_resolve_repo_workspace_root", lambda project_id, cfg, require_enabled=True: repo_root)
+    monkeypatch.setattr(projects_module, "_resolve_repo_workspace_root", lambda project_id, cfg, require_enabled=True, allow_raw_fallback=True: repo_root)
 
     async def _snapshot(*, root, cfg):
         return {"is_repo": True, "branch": "main", "clean": False, "porcelain": [" M src/lessons/MathLesson.cs"]}
@@ -6426,7 +6435,7 @@ async def test_chat_assign_test_execution_reports_missing_dotnet_toolchain(tmp_p
     repo_root.mkdir(parents=True, exist_ok=True)
 
     monkeypatch.setattr(projects_module, "_extract_project_repo_workspace", lambda project: project.settings_overrides["repo_workspace"])
-    monkeypatch.setattr(projects_module, "_resolve_repo_workspace_root", lambda project_id, cfg, require_enabled=True: repo_root)
+    monkeypatch.setattr(projects_module, "_resolve_repo_workspace_root", lambda project_id, cfg, require_enabled=True, allow_raw_fallback=True: repo_root)
 
     async def _snapshot(*, root, cfg):
         return {"is_repo": True, "branch": "main", "clean": False, "porcelain": ["?? tests/GeometryLessonServiceTests.cs"]}
@@ -6454,6 +6463,15 @@ async def test_chat_assign_test_execution_reports_missing_dotnet_toolchain(tmp_p
     monkeypatch.setattr(projects_module, "_bootstrap_command_specs", lambda root, languages: [])
 
     async def _run_repo_command(args, *, cwd, timeout_seconds=None, env_overrides=None):
+        if args[:3] == ["git", "rev-parse", "--is-inside-work-tree"]:
+            return {
+                "ok": False,
+                "command": args,
+                "exit_code": 1,
+                "stdout": "",
+                "stderr": "",
+                "resource_usage": {},
+            }
         assert args[:2] == ["dotnet", "test"]
         return {
             "ok": False,
@@ -6537,7 +6555,7 @@ async def test_chat_assign_test_execution_runs_mixed_node_and_dotnet_tests(tmp_p
     repo_root.mkdir(parents=True, exist_ok=True)
 
     monkeypatch.setattr(projects_module, "_extract_project_repo_workspace", lambda project: project.settings_overrides["repo_workspace"])
-    monkeypatch.setattr(projects_module, "_resolve_repo_workspace_root", lambda project_id, cfg, require_enabled=True: repo_root)
+    monkeypatch.setattr(projects_module, "_resolve_repo_workspace_root", lambda project_id, cfg, require_enabled=True, allow_raw_fallback=True: repo_root)
 
     async def _snapshot(*, root, cfg):
         return {"is_repo": True, "branch": "main", "clean": False, "porcelain": [" M src/components/lessons/GeometryBlock.tsx"]}
@@ -6567,6 +6585,15 @@ async def test_chat_assign_test_execution_runs_mixed_node_and_dotnet_tests(tmp_p
     monkeypatch.setattr(projects_module, "_bootstrap_command_specs", lambda root, languages: [])
 
     async def _run_repo_command(args, *, cwd, timeout_seconds=None, env_overrides=None):
+        if args[:3] == ["git", "rev-parse", "--is-inside-work-tree"]:
+            return {
+                "ok": False,
+                "command": args,
+                "exit_code": 1,
+                "stdout": "",
+                "stderr": "",
+                "resource_usage": {},
+            }
         if args[:2] == ["npm", "test"]:
             return {
                 "ok": True,
@@ -6662,7 +6689,7 @@ async def test_bot_trigger_tester_step_uses_internal_execution_and_sees_triggere
     tests_project.write_text("<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n", encoding="utf-8")
 
     monkeypatch.setattr(projects_module, "_extract_project_repo_workspace", lambda project: project.settings_overrides["repo_workspace"])
-    monkeypatch.setattr(projects_module, "_resolve_repo_workspace_root", lambda project_id, cfg, require_enabled=True: repo_root)
+    monkeypatch.setattr(projects_module, "_resolve_repo_workspace_root", lambda project_id, cfg, require_enabled=True, allow_raw_fallback=True: repo_root)
 
     async def _snapshot(*, root, cfg):
         return {"is_repo": True, "branch": "main", "clean": False, "porcelain": [" M GlobeIQ.Server.Tests/GeometryLessonServiceTests.cs"]}
@@ -6699,6 +6726,15 @@ async def test_bot_trigger_tester_step_uses_internal_execution_and_sees_triggere
     monkeypatch.setattr(projects_module, "_bootstrap_command_specs", lambda root, languages: [])
 
     async def _run_repo_command(args, *, cwd, timeout_seconds=None, env_overrides=None):
+        if args[:3] == ["git", "rev-parse", "--is-inside-work-tree"]:
+            return {
+                "ok": False,
+                "command": args,
+                "exit_code": 1,
+                "stdout": "",
+                "stderr": "",
+                "resource_usage": {},
+            }
         assert args[:2] == ["dotnet", "test"]
         return {
             "ok": True,
@@ -6804,7 +6840,7 @@ async def test_bot_trigger_tester_execution_is_scoped_to_same_fanout_branch(tmp_
     tests_project.write_text("<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n", encoding="utf-8")
 
     monkeypatch.setattr(projects_module, "_extract_project_repo_workspace", lambda project: project.settings_overrides["repo_workspace"])
-    monkeypatch.setattr(projects_module, "_resolve_repo_workspace_root", lambda project_id, cfg, require_enabled=True: repo_root)
+    monkeypatch.setattr(projects_module, "_resolve_repo_workspace_root", lambda project_id, cfg, require_enabled=True, allow_raw_fallback=True: repo_root)
 
     async def _snapshot(*, root, cfg):
         return {"is_repo": True, "branch": "main", "clean": False, "porcelain": [" M GlobeIQ.Server.Tests/GeometryLessonServiceTests.cs"]}
@@ -6835,6 +6871,15 @@ async def test_bot_trigger_tester_execution_is_scoped_to_same_fanout_branch(tmp_
     monkeypatch.setattr(projects_module, "_bootstrap_command_specs", lambda root, languages: [])
 
     async def _run_repo_command(args, *, cwd, timeout_seconds=None, env_overrides=None):
+        if args[:3] == ["git", "rev-parse", "--is-inside-work-tree"]:
+            return {
+                "ok": False,
+                "command": args,
+                "exit_code": 1,
+                "stdout": "",
+                "stderr": "",
+                "resource_usage": {},
+            }
         assert args[:2] == ["dotnet", "test"]
         return {
             "ok": True,
@@ -7837,7 +7882,7 @@ async def test_chat_assign_test_execution_runs_generated_go_tests(tmp_path, monk
     (repo_root / "go.mod").write_text("module example.com/demo\n", encoding="utf-8")
 
     monkeypatch.setattr(projects_module, "_extract_project_repo_workspace", lambda project: project.settings_overrides["repo_workspace"])
-    monkeypatch.setattr(projects_module, "_resolve_repo_workspace_root", lambda project_id, cfg, require_enabled=True: repo_root)
+    monkeypatch.setattr(projects_module, "_resolve_repo_workspace_root", lambda project_id, cfg, require_enabled=True, allow_raw_fallback=True: repo_root)
 
     async def _snapshot(*, root, cfg):
         return {"is_repo": True, "branch": "main", "clean": False, "porcelain": ["?? tests/example_test.go"]}
@@ -7864,6 +7909,15 @@ async def test_chat_assign_test_execution_runs_generated_go_tests(tmp_path, monk
     monkeypatch.setattr(projects_module, "_write_assignment_files", _write_assignment_files)
 
     async def _run_repo_command(args, *, cwd, timeout_seconds=None, env_overrides=None):
+        if args[:3] == ["git", "rev-parse", "--is-inside-work-tree"]:
+            return {
+                "ok": False,
+                "command": args,
+                "exit_code": 1,
+                "stdout": "",
+                "stderr": "",
+                "resource_usage": {},
+            }
         if args[:3] == ["go", "mod", "download"]:
             return {
                 "ok": True,
@@ -8290,7 +8344,7 @@ async def test_backward_trigger_fires_for_orchestrated_failed_tasks(tmp_path):
 
     from control_plane.registry.bot_registry import BotRegistry
     from control_plane.task_manager.task_manager import TaskManager
-    from shared.models import Bot, TaskMetadata, TaskError
+    from shared.models import Bot, TaskMetadata
 
     class FailingScheduler:
         async def schedule(self, task):
@@ -8322,7 +8376,7 @@ async def test_backward_trigger_fires_for_orchestrated_failed_tasks(tmp_path):
     tm = TaskManager(FailingScheduler(), db_path=str(tmp_path / "orchestrated-backward-trigger-tasks.db"), bot_registry=bot_registry)
     
     # Create a task WITH orchestration_id (simulating orchestrated task)
-    root = await tm.create_task(
+    await tm.create_task(
         bot_id="bot-a",
         payload={"instruction": "start"},
         metadata=TaskMetadata(
@@ -8445,10 +8499,16 @@ async def test_plan_managed_fanout_forward_trigger_is_allowed(tmp_path):
     assert all(task.metadata and task.metadata.source == "bot_trigger" for task in child_tasks)
 
 
-def test_sanitize_pm_assignment_result_caps_saved_workstreams_before_dispatch_budget():
+def test_sanitize_pm_assignment_result_caps_saved_workstreams_before_dispatch_budget(monkeypatch):
+    from control_plane.task_manager import task_manager as task_manager_module
     from control_plane.task_manager.task_manager import TaskManager
     from shared.models import Task, TaskMetadata
 
+    monkeypatch.setattr(
+        task_manager_module,
+        "_settings_int",
+        lambda name, default: 5 if name == "pm_assignment_workstream_fanout_limit" else default,
+    )
     tm = TaskManager(scheduler=object(), db_path=":memory:")
     task = Task(
         id="pm-engineer-root",

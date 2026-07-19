@@ -401,9 +401,11 @@ class OrchestrationTemplateStore:
         await self._ensure_db()
         clauses, params = [], []
         if template_id:
-            clauses.append("template_id = ?"); params.append(template_id)
+            clauses.append("template_id = ?")
+            params.append(template_id)
         if owner_id:
-            clauses.append("owner_id = ?"); params.append(owner_id)
+            clauses.append("owner_id = ?")
+            params.append(owner_id)
         where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         async with open_sqlite(self._db_path) as db:
             db.row_factory = aiosqlite.Row

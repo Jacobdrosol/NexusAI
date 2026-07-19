@@ -1,7 +1,7 @@
 import pytest
 from control_plane.chat.pm_orchestrator import PMOrchestrator
 from control_plane.task_manager.task_manager import TaskManager, _TaskPolicyViolation
-from shared.models import Task, TaskMetadata
+from shared.models import Task
 
 
 @pytest.mark.anyio

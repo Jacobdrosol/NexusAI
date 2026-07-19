@@ -729,19 +729,21 @@ class PMOrchestrator:
         self,
         assignment: Dict[str, Any],
         poll_interval_seconds: float = 0.4,
-        max_wait_seconds: float = 0.0,
+        max_wait_seconds: float | None = None,
     ) -> Dict[str, Any]:
         import asyncio
         import time
 
         # Allow override via settings; default 7200s (2 hours) so long-running PM pipelines
         # are not prematurely marked failed while coders are still executing.
-        if max_wait_seconds <= 0.0:
+        if max_wait_seconds is None:
             try:
                 from shared.settings_manager import SettingsManager
                 max_wait_seconds = float(SettingsManager.instance().get("pm_assignment_max_wait_seconds", 7200.0))
             except Exception:
                 max_wait_seconds = 7200.0
+        else:
+            max_wait_seconds = max(0.0, float(max_wait_seconds))
 
         task_ids = [str(t.get("id")) for t in assignment.get("tasks", []) if t.get("id")]
         orchestration_id = str(assignment.get("orchestration_id") or "").strip()
@@ -1381,8 +1383,6 @@ class PMOrchestrator:
             if steps:
                 first_step = steps[0]
                 first_bot_id = str(first_step.get("bot_id", "")).lower()
-                first_step_kind = str(first_step.get("step_kind", "")).lower()
-                first_title = str(first_step.get("title", "")).lower()
                 
                 # For implementation tasks, first step should be research/specification
                 # Acceptable first bots: pm-research-analyst (spec), pm-engineer (planning/architecture)
@@ -1440,7 +1440,6 @@ class PMOrchestrator:
             return workflow
 
     def _deterministic_pm_pack_plan(self, instruction: str, bots: List[Bot]) -> Dict[str, Any]:
-        enabled_ids = {str(bot.id).strip().lower() for bot in bots if getattr(bot, "enabled", False)}
         steps: List[Dict[str, Any]] = [
             {
                 "id": "step_1_code",
@@ -2581,10 +2580,9 @@ class PMOrchestrator:
         }
         sanitized_steps: List[Dict[str, Any]] = []
 
-        for idx, step in enumerate(raw_steps):
+        for step in raw_steps:
             if not isinstance(step, dict):
                 continue
-            step_id = str(step.get("id") or f"step_{idx + 1}")
             role_hint = str(step.get("role_hint") or "").strip().lower()
             step_kind = self._normalize_step_kind(
                 step.get("step_kind"),
@@ -2708,7 +2706,6 @@ class PMOrchestrator:
         deliverable_text = " ".join(deliverables).lower()
         evidence_text = " ".join(normalized).lower()
         has_repo_files = any(self._looks_like_repo_file(item) for item in deliverables)
-        mentions_links = any(token in f"{deliverable_text} {evidence_text}" for token in ("github issue", "milestone", "project board", "url", "link"))
         mentions_planning_links = any(
             token in f"{deliverable_text} {evidence_text}"
             for token in ("github issue", "issue definitions", "milestone", "project board", "tracking issue", "roadmap")

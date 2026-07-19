@@ -657,7 +657,11 @@ def _looks_like_truncated_result(result: Any) -> bool:
     output = _extract_result_output_text(result).strip()
     finish_reason = _extract_result_finish_reason(result)
     # Open-syntax tail is unambiguous — always truncated regardless of reason.
-    if output.endswith(("...", "```", "`", ":", ",", "(", "[", "{", "|")):
+    # A completed Markdown code fence also ends in ```; only an unmatched
+    # fence indicates an incomplete response.
+    if output.endswith("```"):
+        return output.count("```") % 2 == 1
+    if output.endswith(("...", "`", ":", ",", "(", "[", "{", "|")):
         return True
     # finish_reason alone is not a reliable signal for cloud/remote APIs.
     # Ollama Cloud reports "length" even when the JSON body is fully formed
@@ -2315,7 +2319,6 @@ def _synthesize_docs_only_repo_change_contract_result(
         return None
 
     files_touched = [item["path"] for item in artifacts]
-    titles = _normalize_string_list(payload.get("deliverables")) or _normalize_string_list(payload.get("title"))
     summary_prefix = "Created requested documentation deliverable"
     if len(files_touched) > 1:
         summary_prefix = "Created requested documentation deliverables"
@@ -4780,7 +4783,6 @@ class TaskManager:
                 read_workspace_file_snippet,
                 search_workspace_snippets,
             )
-            from pathlib import Path
 
             if self._project_registry is None:
                 return payload
@@ -5138,32 +5140,19 @@ class TaskManager:
                 result = _strip_repo_output_claims_for_deny_policy(result)
             result = self._sanitize_pm_assignment_result(task_for_execution, result)
             if _prefers_truncation_retry(task) and _looks_like_truncated_result(raw_result):
-                # Only retry if the normalized result is actually empty/unusable.
-                # _normalize_task_result (above) raises on contract failure, so
-                # reaching this line means the result already passed validation —
-                # don't throw it away just because the API reported finish_reason=length.
-                result_is_usable = bool(result) and isinstance(result, (dict, list))
-                if not result_is_usable:
-                    task_error = TaskError(
-                        message=(
-                            "Model output likely truncated at token limit; retrying with increased "
-                            "max_tokens/num_predict and num_width/num_ctx."
-                        )
+                task_error = TaskError(
+                    message=(
+                        "Model output likely truncated at token limit; retrying with increased "
+                        "max_tokens/num_predict and num_width/num_ctx."
                     )
-                    if await self._requeue_for_retry(task, task_error):
-                        logger.info("Task %s queued for automatic truncation retry", task_id)
-                        return
-                    raise ValueError(
-                        "Model output remained truncated after available retries; increase backend "
-                        "max_tokens/num_predict or num_width/num_ctx."
-                    )
-                else:
-                    logger.info(
-                        "Task %s raw result has finish_reason=length but normalized result is "
-                        "non-empty (%d keys/items) — skipping truncation retry.",
-                        task_id,
-                        len(result) if isinstance(result, (dict, list)) else 0,
-                    )
+                )
+                if await self._requeue_for_retry(task, task_error):
+                    logger.info("Task %s queued for automatic truncation retry", task_id)
+                    return
+                raise ValueError(
+                    "Model output remained truncated after available retries; increase backend "
+                    "max_tokens/num_predict or num_width/num_ctx."
+                )
             validation_failure = _assignment_validation_failure(task, result)
             if validation_failure:
                 raise _TaskPolicyViolation(

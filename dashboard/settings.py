@@ -260,11 +260,6 @@ def _tool_install_plan(tool_id: str) -> dict[str, Any] | None:
         "elif command -v yum >/dev/null 2>&1; then ${{PKG_PREFIX}}yum install -y {yum_packages}; "
         "else echo 'No supported Linux package manager found for {label}'; exit 1; fi"
     )
-    linux_fetch_script = (
-        "if command -v curl >/dev/null 2>&1; then curl -fsSL {url} -o {dest}; "
-        "elif command -v wget >/dev/null 2>&1; then wget -qO {dest} {url}; "
-        "else echo 'curl or wget is required to download installer assets.'; exit 1; fi"
-    )
     python_download_commands = {
         "dotnet": [
             sys.executable,

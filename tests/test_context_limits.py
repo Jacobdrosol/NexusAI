@@ -1,5 +1,4 @@
 """Tests for model-aware context limits."""
-import pytest
 from shared.settings_manager import _DEFAULTS, get_context_limits_for_model
 
 

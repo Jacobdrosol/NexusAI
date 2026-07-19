@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from typing import Dict, Iterable, List, Sequence, Set, Tuple
 
 from shared.models import Bot, BotExecutionPolicy
 

@@ -5,7 +5,7 @@ import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Iterable, Optional
 
 from dashboard.cp_client import get_cp_client
 from dashboard.project_data import ensure_project_data_layout

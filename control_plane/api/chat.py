@@ -10,8 +10,6 @@ import re
 from typing import Any, AsyncGenerator, Dict, List, Literal, Optional, Tuple
 import uuid
 
-logger = logging.getLogger(__name__)
-
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -33,6 +31,8 @@ from shared.chat_attachments import (
 from shared.exceptions import BotNotFoundError, ConversationNotFoundError
 from shared.models import ChatConversation, ChatMessage, Task, TaskMetadata
 from shared.settings_manager import get_context_limits_for_model
+
+logger = logging.getLogger(__name__)
 
 
 def _get_bot_model(bot) -> str:

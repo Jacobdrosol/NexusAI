@@ -1,8 +1,6 @@
 """Tests for the database engineer service."""
-import asyncio
 import os
 import tempfile
-from typing import Any, Dict, List
 
 import pytest
 

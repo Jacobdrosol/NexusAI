@@ -92,6 +92,9 @@ class _RunStore:
     def __init__(self):
         self.cancel_args = None
 
+    async def get_run(self, run_id):
+        return {"id": run_id}
+
     async def cancel_orchestration(self, run_id, *, reason, actor):
         self.cancel_args = {"run_id": run_id, "reason": reason, "actor": actor}
         return {"id": run_id, "orch_state": "cancelled"}

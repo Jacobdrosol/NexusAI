@@ -10,7 +10,6 @@ blocked.  Write operations are only permitted when ``allow_writes=True``.
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +17,6 @@ from control_plane.chat.workspace_tools import (
     _safe_resolve_under_root,
     _is_probably_text_file,
     list_workspace_tree,
-    normalize_workspace_root,
     search_workspace_snippets,
 )
 

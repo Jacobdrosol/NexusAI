@@ -49,7 +49,7 @@ def _connection_to_dict(c: Connection, *, include_auth: bool = False) -> dict[st
 
 def _bot_connections(db, bot_ref: str) -> list[dict[str, Any]]:
     links = db.query(BotConnection).filter(BotConnection.bot_ref == bot_ref).all()
-    ids = [l.connection_id for l in links]
+    ids = [link.connection_id for link in links]
     if not ids:
         return []
     rows = db.query(Connection).filter(Connection.id.in_(ids)).order_by(Connection.name.asc()).all()

@@ -404,7 +404,8 @@ async def test_scheduler_vertex_google_model_still_uses_generate_content():
         "/v1/projects/demo-project/locations/us-central1/publishers/google/models/gemini-2.5-pro:generateContent"
     )
     assert "generationConfig" in kwargs["json"]
-    assert kwargs["json"]["generationConfig"]["max_tokens"] == 4096
+    assert kwargs["json"]["generationConfig"]["maxOutputTokens"] == 4096
+    assert "max_tokens" not in kwargs["json"]["generationConfig"]
     assert result["output"] == "ok"
     assert result["finish_reason"] == "STOP"
 

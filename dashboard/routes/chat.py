@@ -1111,7 +1111,7 @@ def api_orchestration_graph(orchestration_id: str):
             pipeline_entry_bot_id = candidate_bot_id
             break
 
-    ordered_bot_ids: List[str] = []
+    ordered_bot_ids: list[str] = []
 
     def _add_bot_id(bot_id: str) -> None:
         normalized = str(bot_id or "").strip()
@@ -1327,7 +1327,6 @@ def api_orchestration_graph(orchestration_id: str):
             edges.append({"from": str(dep), "to": task_id})
 
     stage_index = {stage_id: index for index, stage_id in enumerate(stage_order)}
-    node_by_id = {str(node.get("id") or ""): node for node in nodes if str(node.get("id") or "")}
     for node in nodes:
         if bool(node.get("synthetic")):
             continue

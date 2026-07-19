@@ -1,5 +1,4 @@
 import json
-import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1364,66 +1363,36 @@ async def test_scheduler_retry_guidance_includes_available_docs_and_link_correct
 @pytest.mark.anyio
 async def test_scheduler_injects_attached_connection_schema_into_model_prompt(monkeypatch):
     from control_plane.scheduler.scheduler import Scheduler
-    from dashboard.models import BotConnection as DashboardBotConnection
-    from dashboard.models import Connection as DashboardConnection
-
-    class FakeQuery:
-        def __init__(self, rows):
-            self._rows = rows
-
-        def filter(self, *args, **kwargs):
-            return self
-
-        def order_by(self, *args, **kwargs):
-            return self
-
-        def all(self):
-            return list(self._rows)
-
-    class FakeSession:
-        def query(self, model):
-            if model is DashboardBotConnection:
-                return FakeQuery([type("Link", (), {"connection_id": 7})()])
-            if model is DashboardConnection:
-                return FakeQuery(
-                    [
-                        type(
-                            "Conn",
-                            (),
+    monkeypatch.setattr(
+        "control_plane.scheduler.scheduler._load_attached_connection_rows",
+        lambda _bot_id: [
+            {
+                "id": 7,
+                "name": "platform-schema",
+                "kind": "http",
+                "description": "Lesson block schema",
+                "config": {"base_url": "https://example.test"},
+                "schema_text": json.dumps(
+                    {
+                        "lesson_blocks": [
                             {
-                                "id": 7,
-                                "name": "platform-schema",
-                                "kind": "http",
-                                "description": "Lesson block schema",
-                                "config_json": json.dumps({"base_url": "https://example.test"}),
-                                "schema_text": json.dumps(
-                                    {
-                                        "lesson_blocks": [
-                                            {
-                                                "variant": "paragraph",
-                                                "html": "<p>Example paragraph</p>",
-                                                "options": {"textAlign": "left"},
-                                            },
-                                            {
-                                                "code": "console.log('Hello, World!');",
-                                                "language": "javascript",
-                                                "theme": "dark",
-                                                "showLineNumbers": True,
-                                            },
-                                        ]
-                                    }
-                                ),
-                                "enabled": True,
+                                "variant": "paragraph",
+                                "html": "<p>Example paragraph</p>",
+                                "options": {"textAlign": "left"},
                             },
-                        )()
-                    ]
-                )
-            raise AssertionError(f"Unexpected model queried: {model}")
-
-        def close(self):
-            return None
-
-    monkeypatch.setattr("dashboard.db.get_db", lambda: FakeSession())
+                            {
+                                "code": "console.log('Hello, World!');",
+                                "language": "javascript",
+                                "theme": "dark",
+                                "showLineNumbers": True,
+                            },
+                        ]
+                    }
+                ),
+                "enabled": True,
+            }
+        ],
+    )
 
     bot_registry = AsyncMock()
     bot_registry.get.return_value = Bot(
