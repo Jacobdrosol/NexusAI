@@ -3854,6 +3854,19 @@ class PlatformAISessionRuntime:
                     if isinstance(_check, dict) and not bool(_check.get("passed")):
                         _failed_assertions_for_pp.append(str(_check.get("kind") or "assertion"))
             _next_iter_for_pp = current_iteration + 1
+            _proposal_directives = [
+                f"Platform AI tuning iteration: {_next_iter_for_pp}",
+                f"Goal summary: {goal[:1200] if goal else 'Improve end-to-end execution and output quality.'}",
+                f"Failed tests: {', '.join(str(item.get('id') or item.get('name') or 'test') for item in _failed_tests_for_pp[:5]) or 'none'}",
+                f"Failed assertion kinds: {', '.join(_failed_assertions_for_pp) or 'none'}",
+                "Requirements:",
+                "- Produce deterministic, structured outputs with explicit quality sections and acceptance checks.",
+                "- Prioritize passing no_failed_tasks, completed_ratio, node_coverage_ratio, and min_avg_quality checks.",
+                "- Avoid partial/incomplete outputs; prefer complete artifacts with validation notes.",
+            ]
+            _proposal_keywords = self._goal_keywords(goal)
+            if _proposal_keywords:
+                _proposal_directives.append(f"- Ensure outputs explicitly cover: {', '.join(_proposal_keywords)}.")
             _patch_proposal = await self._store.create_patch_proposal(
                 session_id,
                 action_id=action["id"],
@@ -3869,6 +3882,7 @@ class PlatformAISessionRuntime:
                         for item in _failed_tests_for_pp[:5]
                     ],
                     "failed_assertions": _failed_assertions_for_pp[:8],
+                    "suggested_autotune_block": self._merge_autotune_directives("", "\n".join(_proposal_directives)),
                     "requires_direct_operator_edit": True,
                 },
                 rationale=f"Bot refinement for iteration {_next_iter_for_pp} based on failed tests: {_failed_assertions_for_pp[:5]}",

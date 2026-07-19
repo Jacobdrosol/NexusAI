@@ -770,6 +770,7 @@ async def test_autonomous_tuner_requires_configuration_approval_before_refining_
     assert len(proposals) == 1
     assert proposals[0]["after_state"]["proposal_kind"] == "bot_system_prompt_refinement"
     assert proposals[0]["after_state"]["requires_direct_operator_edit"] is True
+    assert "[[NEXUS_PLATFORM_AI_AUTOTUNE_START]]" in proposals[0]["after_state"]["suggested_autotune_block"]
     updated = await store.get_session(session["id"])
     assert str((updated or {}).get("status") or "") == "ready"
     metadata = (updated or {}).get("metadata") if isinstance((updated or {}).get("metadata"), dict) else {}
