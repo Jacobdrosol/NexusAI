@@ -779,11 +779,14 @@ async def test_agent_scheduler_create_and_manual_trigger(cp_client):
             "prompt": "Process queued issues",
             "target_bot_id": bot_id,
             "status": "active",
+            "overlap_policy": "forbid",
             "metadata": {"mutation_safe": True},
         },
     )
     assert create_schedule_resp.status_code == 200
-    schedule_id = create_schedule_resp.json()["schedule"]["id"]
+    created_schedule = create_schedule_resp.json()["schedule"]
+    assert created_schedule["overlap_policy"] == "forbid"
+    schedule_id = created_schedule["id"]
 
     list_schedules_resp = await cp_client.get("/v1/schedules?status=active")
     assert list_schedules_resp.status_code == 200

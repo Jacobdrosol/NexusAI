@@ -281,6 +281,79 @@ async def test_schedule_retry_policy_is_bounded_for_creates_and_updates(tmp_path
 
 
 @pytest.mark.anyio
+async def test_schedule_forbids_overlapping_runs_by_default(tmp_path, monkeypatch):
+    import control_plane.agent_scheduler.engine as scheduler_module
+
+    started_at = datetime(2026, 7, 19, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(scheduler_module, "_now", lambda: started_at)
+    task_manager = _FakeTaskManager()
+    engine = AgentScheduleEngine(
+        assignment_service=object(),
+        task_manager=task_manager,
+        db_path=str(tmp_path / "schedules.db"),
+    )
+    schedule = await engine.create_schedule(_schedule_payload())
+
+    first_run = await engine.trigger_schedule(schedule["id"])
+    monkeypatch.setattr(scheduler_module, "_now", lambda: started_at + timedelta(seconds=1))
+    skipped_run = await engine.trigger_schedule(schedule["id"])
+
+    assert schedule["overlap_policy"] == "forbid"
+    assert first_run["status"] == "queued"
+    assert skipped_run["status"] == "skipped"
+    assert skipped_run["finished_at"] == "2026-07-19T12:00:01+00:00"
+    assert skipped_run["error"] == {
+        "reason": "overlap_prevented",
+        "message": "Skipped because a previous run for this schedule is still active.",
+        "active_run_id": first_run["id"],
+    }
+    assert len(task_manager.create_calls) == 1
+    assert (await engine.get_schedule(schedule["id"]))["last_run_status"] == "skipped"
+
+
+@pytest.mark.anyio
+async def test_schedule_can_explicitly_allow_overlapping_runs(tmp_path, monkeypatch):
+    import control_plane.agent_scheduler.engine as scheduler_module
+
+    started_at = datetime(2026, 7, 19, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(scheduler_module, "_now", lambda: started_at)
+    task_manager = _FakeTaskManager()
+    engine = AgentScheduleEngine(
+        assignment_service=object(),
+        task_manager=task_manager,
+        db_path=str(tmp_path / "schedules.db"),
+    )
+    schedule = await engine.create_schedule({**_schedule_payload(), "overlap_policy": "allow"})
+
+    await engine.trigger_schedule(schedule["id"])
+    monkeypatch.setattr(scheduler_module, "_now", lambda: started_at + timedelta(seconds=1))
+    second_run = await engine.trigger_schedule(schedule["id"])
+
+    assert (await engine.get_schedule(schedule["id"]))["overlap_policy"] == "allow"
+    assert second_run["status"] == "queued"
+    assert len(task_manager.create_calls) == 2
+
+
+@pytest.mark.anyio
+async def test_schedule_rejects_invalid_overlap_policy(tmp_path):
+    engine = AgentScheduleEngine(
+        assignment_service=object(),
+        task_manager=_FakeTaskManager(),
+        db_path=str(tmp_path / "schedules.db"),
+    )
+
+    with pytest.raises(ValueError, match="overlap_policy"):
+        await engine.create_schedule({**_schedule_payload(), "overlap_policy": "queue"})
+
+    schedule = await engine.create_schedule(_schedule_payload())
+    updated = await engine.update_schedule(schedule["id"], {"overlap_policy": "allow"})
+    assert updated is not None
+    assert updated["overlap_policy"] == "allow"
+    with pytest.raises(ValueError, match="overlap_policy"):
+        await engine.update_schedule(schedule["id"], {"overlap_policy": "queue"})
+
+
+@pytest.mark.anyio
 async def test_schedule_tick_uses_cron_window_and_dispatches_it_once(tmp_path, monkeypatch):
     import control_plane.agent_scheduler.engine as scheduler_module
 

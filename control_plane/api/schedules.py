@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -83,6 +83,7 @@ class CreateScheduleRequest(BaseModel):
         ge=_MIN_SCHEDULE_RETRY_BACKOFF_SECONDS,
         le=_MAX_SCHEDULE_RETRY_BACKOFF_SECONDS,
     )
+    overlap_policy: Literal["forbid", "allow"] = "forbid"
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -104,6 +105,7 @@ class UpdateScheduleRequest(BaseModel):
         ge=_MIN_SCHEDULE_RETRY_BACKOFF_SECONDS,
         le=_MAX_SCHEDULE_RETRY_BACKOFF_SECONDS,
     )
+    overlap_policy: Optional[Literal["forbid", "allow"]] = None
     metadata: Optional[Dict[str, Any]] = None
 
 

@@ -15,7 +15,7 @@
   <table>
     <thead>
       <tr>
-        <th>Name</th><th>Bot</th><th>Status</th><th>Safety</th><th>Cadence</th><th>Next Run</th><th>Last Run</th><th>Actions</th>
+        <th>Name</th><th>Bot</th><th>Status</th><th>Safety</th><th>Overlap</th><th>Cadence</th><th>Next Run</th><th>Last Run</th><th>Actions</th>
       </tr>
     </thead>
     <tbody>
@@ -31,6 +31,7 @@
           <span class="mini-note">unattested</span>
           {% endif %}
         </td>
+        <td><span class="mini-note">{{ schedule.overlap_policy or 'forbid' }}</span></td>
         <td><code>{{ schedule.cron_expression }}</code><br><span class="mini-note">{{ schedule.timezone }}</span></td>
         <td>{{ (schedule.next_run_at[:19] if schedule.next_run_at else '—') | replace('T', ' ') }}</td>
         <td>
@@ -44,7 +45,7 @@
         </td>
       </tr>
       {% else %}
-      <tr><td colspan="8" class="empty">No schedules configured</td></tr>
+      <tr><td colspan="9" class="empty">No schedules configured</td></tr>
       {% endfor %}
     </tbody>
   </table>
@@ -78,6 +79,13 @@
           <label for="schedule-timezone">Timezone</label>
           <input class="form-control" id="schedule-timezone" name="timezone" value="UTC" required>
         </div>
+      </div>
+      <div class="form-group">
+        <label for="schedule-overlap-policy">Overlapping Runs</label>
+        <select class="form-control" id="schedule-overlap-policy" name="overlap_policy">
+          <option value="forbid" selected>Prevent a new run while this schedule is active</option>
+          <option value="allow">Allow concurrent runs</option>
+        </select>
       </div>
       <div class="form-group">
         <label for="schedule-project">Project Scope</label>
@@ -235,6 +243,7 @@ document.getElementById('form-create-schedule').addEventListener('submit', async
     task_payload: taskPayload,
     retry_max: Number(form.get('retry_max')),
     retry_backoff_seconds: Number(form.get('retry_backoff_seconds')),
+    overlap_policy: String(form.get('overlap_policy') || 'forbid'),
     status: document.getElementById('schedule-active').checked ? 'active' : 'paused',
     metadata: {
       source: 'dashboard_schedule_manager',

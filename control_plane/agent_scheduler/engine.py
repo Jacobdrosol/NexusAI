@@ -21,6 +21,8 @@ _MAX_SCHEDULE_RETRY_MAX = 5
 _DEFAULT_SCHEDULE_RETRY_BACKOFF_SECONDS = 30
 _MIN_SCHEDULE_RETRY_BACKOFF_SECONDS = 5
 _MAX_SCHEDULE_RETRY_BACKOFF_SECONDS = 3600
+_DEFAULT_SCHEDULE_OVERLAP_POLICY = "forbid"
+_SCHEDULE_OVERLAP_POLICIES = {"forbid", "allow"}
 
 _CREATE_SCHEDULES = """
 CREATE TABLE IF NOT EXISTS agent_schedules (
@@ -197,6 +199,13 @@ def _normalize_schedule_status(value: Any) -> str:
     return status
 
 
+def _normalize_schedule_overlap_policy(value: Any) -> str:
+    policy = str(value or _DEFAULT_SCHEDULE_OVERLAP_POLICY).strip().lower()
+    if policy not in _SCHEDULE_OVERLAP_POLICIES:
+        raise ValueError("overlap_policy must be 'forbid' or 'allow'")
+    return policy
+
+
 def _normalize_retry_settings(retry_max: Any, retry_backoff_seconds: Any) -> tuple[int, int]:
     """Validate bounded retry settings before they become persisted schedule policy."""
     if isinstance(retry_max, bool) or isinstance(retry_backoff_seconds, bool):
@@ -289,6 +298,10 @@ class AgentScheduleEngine:
         next_run = _next_run_time(cron_expression, timezone_name, after=now)
         metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
         metadata = dict(metadata)
+        overlap_policy = _normalize_schedule_overlap_policy(
+            payload.get("overlap_policy", metadata.get("overlap_policy"))
+        )
+        metadata["overlap_policy"] = overlap_policy
         task_payload = payload.get("task_payload") if isinstance(payload.get("task_payload"), dict) else {}
         if "task_payload" in payload:
             metadata["task_payload"] = task_payload
@@ -311,6 +324,7 @@ class AgentScheduleEngine:
             "task_payload": task_payload,
             "retry_max": retry_max,
             "retry_backoff_seconds": retry_backoff_seconds,
+            "overlap_policy": overlap_policy,
             "metadata": metadata,
             "last_scheduled_at": None,
             "next_run_at": _iso(next_run),
@@ -417,6 +431,7 @@ class AgentScheduleEngine:
             "task_payload",
             "retry_max",
             "retry_backoff_seconds",
+            "overlap_policy",
         ):
             if key in patch:
                 merged[key] = patch[key]
@@ -431,6 +446,10 @@ class AgentScheduleEngine:
             next_meta["task_payload"] = dict(patch["task_payload"])
             merged["metadata"] = next_meta
         merged["task_payload"] = _schedule_task_payload(merged)
+        merged["overlap_policy"] = _normalize_schedule_overlap_policy(merged.get("overlap_policy"))
+        merged_metadata = dict(merged.get("metadata") or {})
+        merged_metadata["overlap_policy"] = merged["overlap_policy"]
+        merged["metadata"] = merged_metadata
 
         merged["status"] = _normalize_schedule_status(merged.get("status"))
         merged["cron_expression"] = str(merged.get("cron_expression") or "").strip()
@@ -492,6 +511,8 @@ class AgentScheduleEngine:
         run, created = await self._create_run(schedule, scheduled_for=_iso(_now()), manual=True)
         if created:
             await self._dispatch_run(schedule, run)
+        elif run.get("status") == "skipped":
+            await self._update_schedule_last_run(schedule["id"], status="skipped")
         return run
 
     async def list_runs(self, schedule_id: str, *, limit: int = 50) -> List[Dict[str, Any]]:
@@ -558,6 +579,8 @@ class AgentScheduleEngine:
             runs.append(run)
             if created:
                 await self._dispatch_run(schedule, run)
+            elif run.get("status") == "skipped":
+                await self._update_schedule_last_run(schedule["id"], status="skipped")
         return runs
 
     async def _create_run(
@@ -567,6 +590,8 @@ class AgentScheduleEngine:
         scheduled_for: str,
         manual: bool,
     ) -> tuple[Dict[str, Any], bool]:
+        overlap_policy = _normalize_schedule_overlap_policy(schedule.get("overlap_policy"))
+        created_at = _iso(_now())
         run = {
             "id": str(uuid.uuid4()),
             "schedule_id": str(schedule.get("id") or ""),
@@ -579,10 +604,67 @@ class AgentScheduleEngine:
             "task_id": None,
             "error": None,
             "attempt": 0,
-            "created_at": _iso(_now()),
+            "created_at": created_at,
             "manual": manual,
         }
         async with open_sqlite(self._db_path) as db:
+            await db.execute("BEGIN IMMEDIATE")
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM agent_schedule_runs WHERE dedupe_key = ? LIMIT 1",
+                (run["dedupe_key"],),
+            ) as cursor:
+                existing_row = await cursor.fetchone()
+            if existing_row is not None:
+                await db.commit()
+                return self._row_to_run(existing_row), False
+
+            if overlap_policy == "forbid":
+                async with db.execute(
+                    """
+                    SELECT id, status FROM agent_schedule_runs
+                    WHERE schedule_id = ? AND status IN ('queued', 'running')
+                    ORDER BY created_at ASC
+                    LIMIT 1
+                    """,
+                    (run["schedule_id"],),
+                ) as cursor:
+                    active_run = await cursor.fetchone()
+                if active_run is not None:
+                    active_run_id = str(active_run["id"])
+                    run["status"] = "skipped"
+                    run["finished_at"] = _iso(_now())
+                    run["error"] = {
+                        "reason": "overlap_prevented",
+                        "message": "Skipped because a previous run for this schedule is still active.",
+                        "active_run_id": active_run_id,
+                    }
+                    await db.execute(
+                        """
+                        INSERT INTO agent_schedule_runs (
+                            id, schedule_id, dedupe_key, scheduled_for, started_at, finished_at,
+                            status, orchestration_id, task_id, error_json, attempt, retry_not_before, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            run["id"],
+                            run["schedule_id"],
+                            run["dedupe_key"],
+                            run["scheduled_for"],
+                            None,
+                            run["finished_at"],
+                            run["status"],
+                            None,
+                            None,
+                            _json_dump(run["error"]),
+                            0,
+                            None,
+                            run["created_at"],
+                        ),
+                    )
+                    await db.commit()
+                    return run, False
+
             cursor = await db.execute(
                 """
                     INSERT OR IGNORE INTO agent_schedule_runs (
@@ -916,6 +998,10 @@ class AgentScheduleEngine:
         if row is None:
             return None
         metadata = _json_load(row["metadata_json"], {})
+        if not isinstance(metadata, dict):
+            metadata = {}
+        overlap_policy = _normalize_schedule_overlap_policy(metadata.get("overlap_policy"))
+        metadata["overlap_policy"] = overlap_policy
         return {
             "id": str(row["id"]),
             "name": str(row["name"] or ""),
@@ -931,6 +1017,7 @@ class AgentScheduleEngine:
             "task_payload": _schedule_task_payload({"metadata": metadata}),
             "retry_max": int(row["retry_max"] or 0),
             "retry_backoff_seconds": int(row["retry_backoff_seconds"] or 30),
+            "overlap_policy": overlap_policy,
             "metadata": metadata,
             "last_scheduled_at": str(row["last_scheduled_at"] or "") or None,
             "next_run_at": str(row["next_run_at"] or "") or None,
