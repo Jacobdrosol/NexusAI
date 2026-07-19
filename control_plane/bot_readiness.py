@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from shared.exceptions import BotNotFoundError, WorkerNotFoundError
+from shared.exceptions import WorkerNotFoundError
 from shared.models import BackendConfig, Bot, Worker
 from shared.worker_capabilities import required_worker_tools, worker_missing_tools
 
@@ -233,6 +233,11 @@ async def _worker_attestation_blocker(
         return ""
     backend_type = str(backend.type or "").strip().lower()
     if backend_type == "cli":
+        unavailable = {
+            str(tool or "").strip().lower()
+            for tool in attestation.get("unavailable_cli_tools") or []
+            if str(tool or "").strip()
+        }
         unauthenticated = {
             str(tool or "").strip().lower()
             for tool in attestation.get("unauthenticated_cli_tools") or []
@@ -243,6 +248,12 @@ async def _worker_attestation_blocker(
         if command:
             tool_names.add(command.split(maxsplit=1)[0].rsplit("/", 1)[-1].lower())
         tool_names.discard("")
+        unavailable_tools = sorted(tool_names & unavailable)
+        if unavailable_tools:
+            return (
+                f"Worker '{worker_id}' is missing required CLI tool(s): "
+                f"{', '.join(unavailable_tools)}."
+            )
         blocked_tools = sorted(tool_names & unauthenticated)
         if blocked_tools:
             return (

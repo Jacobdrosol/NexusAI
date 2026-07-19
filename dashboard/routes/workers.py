@@ -68,6 +68,13 @@ def _worker_probe_view(probe: Any) -> dict[str, Any] | None:
     detail_parts = [item for item in failed_checks if item]
     raw_attestation = probe.get("capability_attestation")
     attestation = raw_attestation if isinstance(raw_attestation, dict) else {}
+    unavailable_tools = [
+        str(tool).strip()
+        for tool in attestation.get("unavailable_cli_tools") or []
+        if str(tool).strip()
+    ]
+    if unavailable_tools:
+        detail_parts.append("CLI tools unavailable: " + ", ".join(unavailable_tools))
     unauthenticated_tools = [
         str(tool).strip()
         for tool in attestation.get("unauthenticated_cli_tools") or []

@@ -634,3 +634,54 @@ async def test_bot_readiness_blocks_attested_unauthenticated_cli_backend(cp_clie
     assert response.json()["ready"] is False
     assert "requires CLI authentication for claude" in response.json()["checks"][-1]["message"]
     assert enabled.status_code == 409
+
+
+@pytest.mark.anyio
+async def test_bot_readiness_blocks_attested_missing_cli_backend(cp_client, cp_app):
+    worker_id = "missing-cli-worker"
+    bot_id = "missing-cli-bot"
+    await cp_client.post(
+        "/v1/workers",
+        json={
+            "id": worker_id,
+            "name": "Missing CLI Worker",
+            "host": "missing-cli-worker",
+            "port": 8010,
+            "status": "online",
+            "capabilities": [{"type": "tool", "provider": "cli", "models": ["claude"]}],
+        },
+    )
+    await cp_client.post(
+        "/v1/bots",
+        json={
+            "id": bot_id,
+            "name": "Missing CLI Bot",
+            "role": "worker",
+            "enabled": False,
+            "backends": [
+                {
+                    "type": "cli",
+                    "worker_id": worker_id,
+                    "provider": "cli",
+                    "model": "claude",
+                    "command": "claude -p",
+                }
+            ],
+        },
+    )
+    await cp_app.state.worker_probe_store.record(
+        {
+            "worker_id": worker_id,
+            "probe_status": "ready",
+            "capability_attestation": {"unavailable_cli_tools": ["claude"]},
+            "checks": [],
+        }
+    )
+
+    response = await cp_client.get(f"/v1/bots/{bot_id}/readiness")
+    enabled = await cp_client.post(f"/v1/bots/{bot_id}/enable")
+
+    assert response.status_code == 200
+    assert response.json()["ready"] is False
+    assert "missing required CLI tool(s): claude" in response.json()["checks"][-1]["message"]
+    assert enabled.status_code == 409

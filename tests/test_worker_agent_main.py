@@ -89,3 +89,53 @@ async def test_worker_capability_attestation_reports_only_cloud_credential_readi
 
     assert missing.json()["capability_attestation"]["provider_credentials"] == {"ollama_cloud": False}
     assert configured.json()["capability_attestation"]["provider_credentials"] == {"ollama_cloud": True}
+
+
+@pytest.mark.anyio
+async def test_worker_capability_attestation_requires_installed_and_authenticated_cli_tools(monkeypatch):
+    app = FastAPI()
+    app.include_router(health.router)
+    app.include_router(capabilities.router)
+    app.state.worker_config = {
+        "id": "cli-worker",
+        "capabilities": [{"type": "tool", "provider": "cli", "models": ["claude"]}],
+        "tooling": {"cli_tools": ["claude", "git"], "authenticated_cli_tools": ["claude"]},
+    }
+    monkeypatch.setattr(
+        capabilities.shutil,
+        "which",
+        lambda tool: "/usr/bin/claude" if tool == "claude" else None,
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        health_response = await client.get("/health")
+        capabilities_response = await client.get("/capabilities")
+
+    attestation = capabilities_response.json()["capability_attestation"]
+    assert attestation["configured_cli_tools"] == ["claude", "git"]
+    assert attestation["installed_cli_tools"] == ["claude"]
+    assert attestation["unavailable_cli_tools"] == ["git"]
+    assert attestation["auth_required_cli_tools"] == ["claude"]
+    assert attestation["unauthenticated_cli_tools"] == []
+    assert attestation["enabled_cli_tools"] == ["claude"]
+    assert health_response.json()["enabled_cli_tools"] == ["claude"]
+
+
+@pytest.mark.anyio
+async def test_worker_capability_attestation_keeps_cli_auth_opt_in(monkeypatch):
+    app = FastAPI()
+    app.include_router(capabilities.router)
+    app.state.worker_config = {
+        "id": "cli-worker",
+        "capabilities": [{"type": "tool", "provider": "cli", "models": ["claude"]}],
+    }
+    monkeypatch.setattr(capabilities.shutil, "which", lambda tool: "/usr/bin/claude")
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get("/capabilities")
+
+    attestation = response.json()["capability_attestation"]
+    assert attestation["installed_cli_tools"] == ["claude"]
+    assert attestation["auth_required_cli_tools"] == ["claude"]
+    assert attestation["unauthenticated_cli_tools"] == ["claude"]
+    assert attestation["enabled_cli_tools"] == []
