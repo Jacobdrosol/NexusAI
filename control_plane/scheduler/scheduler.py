@@ -16,7 +16,7 @@ from cryptography.hazmat.primitives.asymmetric import padding
 
 from control_plane.connections.resolver import ConnectionResolver
 from control_plane.worker_probe import WorkerProbeError, worker_base_url
-from shared.bot_policy import bot_allows_repo_output
+from shared.bot_policy import bot_allows_repo_output, bot_execution_policy
 from shared.exceptions import BackendError, BotNotFoundError, NoViableBackendError
 from shared.worker_capabilities import required_worker_tools, worker_missing_tools
 
@@ -2841,7 +2841,7 @@ class Scheduler:
         elif backend.type == "browser":
             worker = await self._resolve_browser_worker(backend, task=task)
             await self._require_fresh_autonomous_worker_probe(worker, task)
-            return await self._dispatch_browser_inspection(worker, backend, safe_payload)
+            return await self._dispatch_browser_inspection(worker, backend, safe_payload, task=task)
         elif backend.type == "custom":
             return await self._dispatch_custom_backend(backend, safe_payload, task=task)
         else:
@@ -3861,10 +3861,16 @@ class Scheduler:
         return worker
 
     async def _dispatch_browser_inspection(
-        self, worker: Worker, backend: BackendConfig, payload: Any
+        self,
+        worker: Worker,
+        backend: BackendConfig,
+        payload: Any,
+        task: Task | None = None,
     ) -> dict[str, Any]:
         if not isinstance(payload, dict):
             raise BackendError("Browser inspection backend requires a JSON object payload")
+        if "browser_action" in payload:
+            return await self._dispatch_browser_test_builder_action(worker, backend, payload, task=task)
         allowed_fields = {"path", "text_limit", "element_limit"}
         unexpected_fields = sorted(set(payload) - allowed_fields)
         if unexpected_fields:
@@ -3901,6 +3907,89 @@ class Scheduler:
                 result = response.json()
                 if not isinstance(result, dict):
                     raise BackendError("Browser worker returned an invalid inspection response")
+                return result
+            finally:
+                elapsed_ms = (time.perf_counter() - started) * 1000.0
+                previous = float(self._latency_ema_ms.get(worker.id, self._default_latency_ms))
+                alpha = min(max(self._latency_alpha, 0.01), 1.0)
+                self._latency_ema_ms[worker.id] = (alpha * elapsed_ms) + ((1.0 - alpha) * previous)
+                self._inflight_by_worker[worker.id] = max(
+                    0, int(self._inflight_by_worker.get(worker.id, 1)) - 1
+                )
+
+    async def _dispatch_browser_test_builder_action(
+        self,
+        worker: Worker,
+        backend: BackendConfig,
+        payload: dict[str, Any],
+        *,
+        task: Task | None,
+    ) -> dict[str, Any]:
+        """Dispatch the fixed, draft-only Test Builder workflow to a pinned worker."""
+
+        allowed_fields = {
+            "browser_action",
+            "action",
+            "mode",
+            "confirmation",
+            "course_id",
+            "lesson_id",
+            "title",
+            "pass_threshold_pct",
+            "time_limit_seconds",
+            "allow_review",
+            "banks",
+            "acknowledge_attempt_reset",
+        }
+        unexpected_fields = sorted(set(payload) - allowed_fields)
+        if unexpected_fields:
+            raise BackendError(
+                "Test Builder payload contains unsupported fields: " + ", ".join(unexpected_fields)
+            )
+        if str(payload.get("browser_action") or "").strip() != "test_builder":
+            raise BackendError("Browser actions must declare browser_action=test_builder")
+        action = str(payload.get("action") or "").strip().lower()
+        if action == "publish":
+            raise BackendError("Browser workers cannot publish")
+        if action not in {"save_configuration", "build_from_banks"}:
+            raise BackendError("Unsupported Test Builder action")
+        if str(payload.get("mode") or "").strip().lower() != "draft":
+            raise BackendError("Test Builder actions are limited to draft mode")
+        if task is None:
+            raise BackendError("Test Builder actions require a persisted task")
+        try:
+            bot = await self.bot_registry.get(task.bot_id)
+        except Exception as exc:
+            raise BackendError(f"Bot {task.bot_id} was not found for Test Builder authorization") from exc
+        action_key = f"test_builder.{action}"
+        if action_key not in bot_execution_policy(bot).browser_action_allowlist:
+            raise BackendError(f"Bot {bot.id} is not authorized for {action_key}")
+        if action == "build_from_banks" and payload.get("acknowledge_attempt_reset") is not True:
+            raise BackendError("Building from banks requires explicit attempt-reset acknowledgement")
+        if not backend.api_key_ref:
+            raise BackendError("Browser backends require api_key_ref for the worker request token")
+        token = await self._resolve_api_key(backend.api_key_ref, "")
+        if not token:
+            raise BackendError("Browser worker request token is not configured")
+        try:
+            url = f"{worker_base_url(worker)}/browser/test-builder"
+        except WorkerProbeError as exc:
+            raise BackendError(f"Worker {worker.id} has an invalid address") from exc
+
+        body = {field: payload[field] for field in allowed_fields - {"browser_action"} if field in payload}
+        self._inflight_by_worker[worker.id] = int(self._inflight_by_worker.get(worker.id, 0)) + 1
+        started = time.perf_counter()
+        async with httpx.AsyncClient(timeout=_worker_timeout()) as client:
+            try:
+                response = await client.post(
+                    url,
+                    json=body,
+                    headers={"X-Nexus-Worker-Token": token},
+                )
+                response.raise_for_status()
+                result = response.json()
+                if not isinstance(result, dict):
+                    raise BackendError("Browser worker returned an invalid Test Builder response")
                 return result
             finally:
                 elapsed_ms = (time.perf_counter() - started) * 1000.0

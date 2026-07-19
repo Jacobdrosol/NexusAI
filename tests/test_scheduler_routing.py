@@ -575,6 +575,111 @@ async def test_scheduler_rejects_browser_backend_without_a_pinned_attested_worke
 
 
 @pytest.mark.anyio
+async def test_scheduler_dispatches_only_authorized_draft_test_builder_actions(monkeypatch):
+    from control_plane.scheduler.scheduler import Scheduler
+
+    worker = Worker(
+        id="browser-worker",
+        name="Browser Worker",
+        host="browser.local",
+        port=8010,
+        capabilities=[Capability(type="tool", provider="browser", models=["browser-ui"])],
+        status="online",
+        enabled=True,
+    )
+    backend = BackendConfig(
+        type="browser",
+        provider="browser",
+        model="browser-ui",
+        worker_id=worker.id,
+        api_key_ref="BROWSER_WORKER_TOKEN",
+    )
+    bot = Bot(
+        id="assessment-configurator",
+        name="Assessment Configurator",
+        role="assessment-configurator",
+        execution_policy={
+            "required_worker_tools": ["browser-ui"],
+            "browser_action_allowlist": ["test_builder.save_configuration"],
+        },
+        backends=[backend],
+    )
+    task = Task(
+        id="task-assessment-config",
+        bot_id=bot.id,
+        payload={},
+        created_at="now",
+        updated_at="now",
+    )
+    monkeypatch.setenv("BROWSER_WORKER_TOKEN", "worker-token")
+    fake_response = MagicMock()
+    fake_response.raise_for_status.return_value = None
+    fake_response.json.return_value = {"status": "Test configuration saved successfully"}
+    mock_client = AsyncMock()
+    mock_client.__aenter__.return_value = mock_client
+    mock_client.__aexit__.return_value = False
+    mock_client.post.return_value = fake_response
+    worker_registry = AsyncMock()
+    worker_registry.get.return_value = worker
+    bot_registry = AsyncMock()
+    bot_registry.get.return_value = bot
+    scheduler = Scheduler(bot_registry=bot_registry, worker_registry=worker_registry)
+
+    with patch("control_plane.scheduler.scheduler.httpx.AsyncClient", return_value=mock_client):
+        result = await scheduler._dispatch_backend(
+            backend,
+            {
+                "browser_action": "test_builder",
+                "action": "save_configuration",
+                "mode": "draft",
+                "confirmation": "approved:test-builder:save_configuration",
+                "course_id": 60,
+                "lesson_id": 601,
+                "pass_threshold_pct": 70,
+                "allow_review": False,
+                "banks": [{"name": "Lesson 1", "easy": 1}],
+            },
+            task=task,
+        )
+
+    assert result["status"] == "Test configuration saved successfully"
+    assert mock_client.post.await_args.args[0] == "http://browser.local:8010/browser/test-builder"
+    assert mock_client.post.await_args.kwargs["json"]["action"] == "save_configuration"
+    assert "browser_action" not in mock_client.post.await_args.kwargs["json"]
+
+
+@pytest.mark.anyio
+async def test_scheduler_rejects_browser_publish_before_worker_dispatch(monkeypatch):
+    from control_plane.scheduler.scheduler import BackendError, Scheduler
+
+    worker = Worker(
+        id="browser-worker",
+        name="Browser Worker",
+        host="browser.local",
+        port=8010,
+        capabilities=[Capability(type="tool", provider="browser", models=["browser-ui"])],
+        status="online",
+        enabled=True,
+    )
+    backend = BackendConfig(
+        type="browser",
+        provider="browser",
+        model="browser-ui",
+        worker_id=worker.id,
+        api_key_ref="BROWSER_WORKER_TOKEN",
+    )
+    worker_registry = AsyncMock()
+    worker_registry.get.return_value = worker
+    scheduler = Scheduler(bot_registry=AsyncMock(), worker_registry=worker_registry)
+
+    with pytest.raises(BackendError, match="cannot publish"):
+        await scheduler._dispatch_backend(
+            backend,
+            {"browser_action": "test_builder", "action": "publish", "mode": "draft"},
+        )
+
+
+@pytest.mark.anyio
 async def test_scheduler_injects_bot_system_prompt_into_payload():
     from control_plane.scheduler.scheduler import Scheduler
 
