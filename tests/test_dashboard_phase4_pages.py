@@ -2002,6 +2002,40 @@ def test_worker_probe_view_exposes_nonsecret_cli_authentication_blockers():
     assert view["detail"] == "CLI authentication required: codex, claude"
 
 
+def test_worker_probe_view_exposes_attested_runtime_tool_evidence():
+    from dashboard.routes.workers import _worker_probe_view
+
+    view = _worker_probe_view(
+        {
+            "probe_status": "ready",
+            "checked_at": "2026-07-18T18:37:38+00:00",
+            "checks": [],
+            "capability_attestation": {
+                "provider_credentials": {"ollama_cloud": True, "other": False},
+                "installed_cli_tools": ["claude", "git"],
+                "enabled_cli_tools": ["claude"],
+                "auth_required_cli_tools": ["claude"],
+                "browser": {"configured": True, "ready": True, "browser": "chromium"},
+            },
+        }
+    )
+
+    assert view is not None
+    evidence = view["runtime_evidence"]
+    assert evidence["provider_status"] == [
+        {"provider": "ollama_cloud", "configured": True},
+        {"provider": "other", "configured": False},
+    ]
+    assert evidence["installed_cli_tools"] == ["claude", "git"]
+    assert evidence["enabled_cli_tools"] == ["claude"]
+    assert evidence["browser"] == {
+        "configured": True,
+        "ready": True,
+        "name": "chromium",
+        "reason": "",
+    }
+
+
 def test_worker_probe_view_marks_unavailable_browser_session_degraded():
     from dashboard.routes.workers import _worker_probe_view
 

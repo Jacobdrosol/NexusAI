@@ -92,7 +92,41 @@ def _worker_probe_view(probe: Any) -> dict[str, Any] | None:
     if not detail:
         detail = "runtime and capability contract verified" if status == "ready" else "runtime probe requires attention"
     checked_at = str(probe.get("checked_at") or "").strip().replace("T", " ")[:19]
-    return {"status": status, "detail": detail, "checked_at": checked_at}
+    provider_credentials = attestation.get("provider_credentials")
+    provider_status: list[dict[str, Any]] = []
+    if isinstance(provider_credentials, dict):
+        for provider, configured in sorted(provider_credentials.items(), key=lambda item: str(item[0]).lower()):
+            provider_name = str(provider or "").strip().lower()
+            if provider_name:
+                provider_status.append({"provider": provider_name, "configured": configured is True})
+
+    def _attested_tools(key: str) -> list[str]:
+        values = attestation.get(key)
+        if not isinstance(values, list):
+            return []
+        return [str(value).strip() for value in values if str(value).strip()]
+
+    runtime_evidence = {
+        "provider_status": provider_status,
+        "configured_cli_tools": _attested_tools("configured_cli_tools"),
+        "installed_cli_tools": _attested_tools("installed_cli_tools"),
+        "enabled_cli_tools": _attested_tools("enabled_cli_tools"),
+        "unavailable_cli_tools": _attested_tools("unavailable_cli_tools"),
+        "auth_required_cli_tools": _attested_tools("auth_required_cli_tools"),
+        "unauthenticated_cli_tools": _attested_tools("unauthenticated_cli_tools"),
+        "browser": {
+            "configured": bool(browser.get("configured")),
+            "ready": bool(browser.get("ready")),
+            "name": str(browser.get("browser") or "").strip(),
+            "reason": str(browser.get("reason") or "").strip(),
+        },
+    }
+    return {
+        "status": status,
+        "detail": detail,
+        "checked_at": checked_at,
+        "runtime_evidence": runtime_evidence,
+    }
 
 
 def _worker_dependency_view(payload: Any) -> dict[str, Any] | None:

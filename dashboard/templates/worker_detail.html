@@ -74,7 +74,7 @@
     </div>
 
     <div>
-      <h3 class="subsection-title">Capabilities</h3>
+      <h3 class="subsection-title">Declared Capabilities</h3>
       <div class="capability-groups">
         {% for c in worker.capabilities %}
         <div class="capability-group">
@@ -94,6 +94,62 @@
       </div>
     </div>
   </div>
+</section>
+
+<section class="panel" style="margin-bottom:1rem;">
+  <div class="panel-heading-row">
+    <div>
+      <h2 class="panel-title">Runtime Tool Evidence</h2>
+      <p class="panel-subtitle">Most recent non-mutating probe.</p>
+    </div>
+    {% if worker_probe %}
+    <span class="badge badge-{{ worker_probe.status }}">{{ worker_probe.status }}</span>
+    {% endif %}
+  </div>
+  {% set evidence = worker_probe.runtime_evidence if worker_probe and worker_probe.runtime_evidence else {} %}
+  {% if evidence %}
+  {% set browser = evidence.browser or {} %}
+  <div class="split-grid" style="grid-template-columns:1fr 1fr;">
+    <div>
+      <div><strong>Browser Runtime:</strong>
+        {% if browser.configured and browser.ready %}
+        {{ browser.name or 'browser' }} ready
+        {% elif browser.configured %}
+        unavailable{% if browser.reason %}: {{ browser.reason }}{% endif %}
+        {% else %}
+        not configured
+        {% endif %}
+      </div>
+      <div><strong>CLI Installed:</strong> {{ evidence.installed_cli_tools | join(', ') if evidence.installed_cli_tools else 'none' }}</div>
+      <div><strong>CLI Enabled:</strong> {{ evidence.enabled_cli_tools | join(', ') if evidence.enabled_cli_tools else 'none' }}</div>
+      <div><strong>CLI Authentication:</strong>
+        {% if evidence.unauthenticated_cli_tools %}
+        required for {{ evidence.unauthenticated_cli_tools | join(', ') }}
+        {% elif evidence.auth_required_cli_tools %}
+        no current blocker for {{ evidence.auth_required_cli_tools | join(', ') }}
+        {% else %}
+        not required
+        {% endif %}
+      </div>
+      {% if evidence.unavailable_cli_tools %}
+      <div><strong>Unavailable CLI:</strong> {{ evidence.unavailable_cli_tools | join(', ') }}</div>
+      {% endif %}
+    </div>
+    <div>
+      <div><strong>Provider Credentials:</strong></div>
+      <ul style="margin-top:0.35rem;padding-left:1.2rem;">
+        {% for provider in evidence.provider_status %}
+        <li><code>{{ provider.provider }}</code> {{ 'configured' if provider.configured else 'not configured' }}</li>
+        {% else %}
+        <li class="empty">No provider credential evidence</li>
+        {% endfor %}
+      </ul>
+      <div class="mini-note" style="margin-top:0.5rem;">Use Verify Model to run the bounded LLM response check.</div>
+    </div>
+  </div>
+  {% else %}
+  <div class="state-empty">No runtime evidence has been recorded for this worker.</div>
+  {% endif %}
 </section>
 
 <section class="panel worker-dependencies-panel">
