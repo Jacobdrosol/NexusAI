@@ -73,7 +73,7 @@ def _build_url(base_url: str, path: str, path_params: dict[str, Any] | None) -> 
     return resolved_path
 
 
-def _safe_result_url(url: str, auth: dict[str, Any]) -> str:
+def safe_result_url(url: str, auth: dict[str, Any]) -> str:
     """Avoid returning query-string credentials in task or connection-test output."""
     parsed = urllib.parse.urlparse(url)
     auth_type = str(auth.get("type") or "none").strip().lower()
@@ -168,7 +168,7 @@ def test_http_connection(
         headers["Content-Type"] = "application/json"
     request = urllib.request.Request(url=url, method=method, headers=headers, data=body_bytes)
     ssl_context = None if verify_ssl else ssl._create_unverified_context()
-    result_url = _safe_result_url(url, auth)
+    result_url = safe_result_url(url, auth)
     try:
         with urllib.request.urlopen(request, timeout=timeout_seconds, context=ssl_context) as response:
             body_preview = response.read(8000).decode("utf-8", errors="replace")

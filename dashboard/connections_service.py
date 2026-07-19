@@ -22,6 +22,7 @@ from shared.connection_secrets import (
     resolve_auth_payload,
     resolve_connection_config,
 )
+from shared.connection_runtime import safe_result_url
 
 __all__ = (
     "mask_auth_payload",
@@ -185,6 +186,7 @@ def test_http_connection(
     ssl_context = None
     if not verify_ssl:
         ssl_context = ssl._create_unverified_context()
+    result_url = safe_result_url(url, auth)
 
     try:
         with urllib.request.urlopen(req, timeout=timeout_seconds, context=ssl_context) as resp:
@@ -192,7 +194,7 @@ def test_http_connection(
             return {
                 "ok": 200 <= int(resp.status) < 300,
                 "status": int(resp.status),
-                "url": url,
+                "url": result_url,
                 "method": method,
                 "verify_ssl": verify_ssl,
                 "body_preview": raw,
@@ -202,7 +204,7 @@ def test_http_connection(
         return {
             "ok": False,
             "status": int(exc.code),
-            "url": url,
+            "url": result_url,
             "method": method,
             "verify_ssl": verify_ssl,
             "body_preview": raw,

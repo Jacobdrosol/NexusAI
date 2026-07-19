@@ -504,6 +504,40 @@ def test_http_connection_can_skip_tls_verification(monkeypatch):
     assert captured["context"] is not None
 
 
+def test_dashboard_http_connection_redacts_query_auth_from_result_url(monkeypatch):
+    class FakeResponse:
+        status = 200
+
+        def read(self, _limit):
+            return b'{}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(
+        "dashboard.connections_service.urllib.request.urlopen",
+        lambda *_args, **_kwargs: FakeResponse(),
+    )
+
+    result = run_http_connection_test(
+        config={"base_url": "https://api.example.test"},
+        auth={
+            "type": "api_key",
+            "name": "access_token",
+            "in": "query",
+            "api_key": "private-token",
+        },
+        schema_text="",
+        payload={"method": "GET", "path": "/records"},
+    )
+
+    assert "private-token" not in result["url"]
+    assert "access_token=%5BREDACTED%5D" in result["url"]
+
+
 def test_http_connection_merges_action_headers(monkeypatch):
     captured = {}
 
