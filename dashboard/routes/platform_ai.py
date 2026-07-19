@@ -17,6 +17,12 @@ from dashboard.routes._sse_proxy import proxy_upstream_sse_lines
 
 
 bp = Blueprint("platform_ai", __name__)
+_UPLOAD_COPY_CHUNK_BYTES = 1024 * 1024
+_UPLOAD_REQUEST_OVERHEAD_BYTES = 8 * 1024 * 1024
+
+
+class _UploadLimitExceeded(ValueError):
+    """A Platform AI attachment exceeded a configured hard boundary."""
 
 
 def _cp_error_response(cp, fallback: str = "control plane unavailable"):
@@ -61,6 +67,116 @@ def _soft_threshold(name: str, default: int) -> int:
     except Exception:
         return int(default)
     return parsed if parsed > 0 else int(default)
+
+
+def _hard_upload_limit(name: str, default: int) -> int:
+    raw = str(os.environ.get(name, "") or "").strip()
+    if not raw:
+        return int(default)
+    try:
+        parsed = int(raw)
+    except (TypeError, ValueError):
+        return int(default)
+    return parsed if parsed > 0 else int(default)
+
+
+def _platform_ai_upload_limits() -> Dict[str, int]:
+    return {
+        "max_files": _hard_upload_limit("NEXUS_PLATFORM_AI_UPLOAD_MAX_FILES", 100),
+        "max_file_bytes": _hard_upload_limit("NEXUS_PLATFORM_AI_UPLOAD_MAX_FILE_BYTES", 128 * 1024 * 1024),
+        "max_total_bytes": _hard_upload_limit("NEXUS_PLATFORM_AI_UPLOAD_MAX_TOTAL_BYTES", 1024 * 1024 * 1024),
+    }
+
+
+def _stored_upload_bytes(rows: List[Dict[str, Any]]) -> int:
+    total = 0
+    for row in rows:
+        try:
+            total += max(0, int(row.get("size_bytes") or 0))
+        except (AttributeError, TypeError, ValueError):
+            continue
+    return total
+
+
+def _validate_upload_batch(
+    *,
+    existing_file_count: int,
+    existing_total_bytes: int,
+    submitted_file_count: int,
+    declared_content_length: Optional[int],
+    limits: Dict[str, int],
+) -> None:
+    if submitted_file_count < 1:
+        raise _UploadLimitExceeded("at least one file is required")
+    if existing_file_count + submitted_file_count > limits["max_files"]:
+        raise _UploadLimitExceeded(
+            f"attachment limit exceeded: at most {limits['max_files']} files are allowed per session"
+        )
+    if existing_total_bytes >= limits["max_total_bytes"]:
+        raise _UploadLimitExceeded(
+            f"attachment limit exceeded: session already uses the {limits['max_total_bytes']}-byte allowance"
+        )
+    remaining_total_bytes = limits["max_total_bytes"] - existing_total_bytes
+    if declared_content_length is not None and declared_content_length > (
+        remaining_total_bytes + _UPLOAD_REQUEST_OVERHEAD_BYTES
+    ):
+        raise _UploadLimitExceeded(
+            "upload request exceeds the remaining session storage allowance"
+        )
+
+
+def _save_upload_limited(
+    file_storage: Any,
+    target: Path,
+    *,
+    max_file_bytes: int,
+    max_total_remaining_bytes: int,
+) -> int:
+    """Stream one attachment to disk and remove it atomically on a cap breach."""
+    if max_total_remaining_bytes <= 0:
+        raise _UploadLimitExceeded("attachment limit exceeded: no session storage remains")
+    written = 0
+    try:
+        with target.open("xb") as output:
+            while True:
+                chunk = file_storage.stream.read(_UPLOAD_COPY_CHUNK_BYTES)
+                if not chunk:
+                    break
+                if not isinstance(chunk, bytes):
+                    raise _UploadLimitExceeded("attachment stream returned invalid data")
+                written += len(chunk)
+                if written > max_file_bytes:
+                    raise _UploadLimitExceeded(
+                        f"attachment exceeds the {max_file_bytes}-byte per-file limit"
+                    )
+                if written > max_total_remaining_bytes:
+                    raise _UploadLimitExceeded("attachment exceeds the remaining session storage allowance")
+                output.write(chunk)
+        return written
+    except Exception:
+        target.unlink(missing_ok=True)
+        raise
+
+
+def _cleanup_saved_uploads(rows: List[Dict[str, Any]]) -> None:
+    for row in rows:
+        path = str(row.get("path") or "").strip()
+        if not path:
+            continue
+        try:
+            Path(path).unlink(missing_ok=True)
+        except OSError:
+            continue
+
+
+def _cleanup_empty_upload_dirs(session_dir: Path, root: Path) -> None:
+    current = session_dir
+    while current != root:
+        try:
+            current.rmdir()
+        except OSError:
+            break
+        current = current.parent
 
 
 def _upload_soft_warnings(*, file_count: int, total_bytes: int, label: str) -> List[str]:
@@ -480,6 +596,19 @@ def api_upload_platform_ai_context_files(session_id: str):
     if session is None:
         return _cp_error_response(cp, "failed to load platform ai session")
 
+    existing = _session_context_files(session)
+    existing_total_bytes = _stored_upload_bytes(existing)
+    limits = _platform_ai_upload_limits()
+    try:
+        _validate_upload_batch(
+            existing_file_count=len(existing),
+            existing_total_bytes=existing_total_bytes,
+            submitted_file_count=1,
+            declared_content_length=request.content_length,
+            limits=limits,
+        )
+    except _UploadLimitExceeded as exc:
+        return jsonify({"error": str(exc)}), 413
     files = request.files.getlist("files")
     relative_paths = request.form.getlist("relative_paths")
     if not files:
@@ -488,39 +617,61 @@ def api_upload_platform_ai_context_files(session_id: str):
     session_dir = root / secure_filename(str(session_id))
     session_dir.mkdir(parents=True, exist_ok=True)
 
-    existing = _session_context_files(session)
-    saved_rows: List[Dict[str, Any]] = []
-    for idx, file_storage in enumerate(files):
-        if file_storage is None:
-            continue
-        original_name = str(file_storage.filename or "").strip()
-        rel_hint = _sanitize_relative_path(relative_paths[idx] if idx < len(relative_paths) else "")
-        safe_name = secure_filename(Path(rel_hint or original_name).name) or f"file-{len(existing) + len(saved_rows) + 1}.bin"
-        rel_parent = _sanitize_relative_path(str(Path(rel_hint).parent)) if rel_hint else ""
-        target_dir = session_dir / rel_parent if rel_parent else session_dir
-        target_dir.mkdir(parents=True, exist_ok=True)
-        target = target_dir / safe_name
-        suffix = 1
-        while target.exists():
-            stem = target.stem
-            ext = target.suffix
-            target = target_dir / f"{stem}({suffix}){ext}"
-            suffix += 1
-        file_storage.save(target)
-        stat = target.stat()
-        file_id = f"ctx-{int(datetime.now(timezone.utc).timestamp() * 1000)}-{len(saved_rows)+1}"
-        saved_rows.append(
-            {
-                "id": file_id,
-                "name": original_name or target.name,
-                "relative_path": rel_hint or None,
-                "path": str(target),
-                "size_bytes": int(stat.st_size),
-                "content_type": str(file_storage.mimetype or "").strip() or None,
-                "uploaded_at": _now_iso(),
-                "url": f"/api/platform-ai/sessions/{secure_filename(str(session_id))}/files/{file_id}",
-            }
+    try:
+        _validate_upload_batch(
+            existing_file_count=len(existing),
+            existing_total_bytes=existing_total_bytes,
+            submitted_file_count=len(files),
+            declared_content_length=None,
+            limits=limits,
         )
+    except _UploadLimitExceeded as exc:
+        return jsonify({"error": str(exc)}), 413
+    saved_rows: List[Dict[str, Any]] = []
+    try:
+        for idx, file_storage in enumerate(files):
+            if file_storage is None:
+                continue
+            original_name = str(file_storage.filename or "").strip()
+            rel_hint = _sanitize_relative_path(relative_paths[idx] if idx < len(relative_paths) else "")
+            safe_name = secure_filename(Path(rel_hint or original_name).name) or f"file-{len(existing) + len(saved_rows) + 1}.bin"
+            rel_parent = _sanitize_relative_path(str(Path(rel_hint).parent)) if rel_hint else ""
+            target_dir = session_dir / rel_parent if rel_parent else session_dir
+            target_dir.mkdir(parents=True, exist_ok=True)
+            target = target_dir / safe_name
+            suffix = 1
+            while target.exists():
+                stem = target.stem
+                ext = target.suffix
+                target = target_dir / f"{stem}({suffix}){ext}"
+                suffix += 1
+            size_bytes = _save_upload_limited(
+                file_storage,
+                target,
+                max_file_bytes=limits["max_file_bytes"],
+                max_total_remaining_bytes=limits["max_total_bytes"] - existing_total_bytes - _stored_upload_bytes(saved_rows),
+            )
+            file_id = f"ctx-{int(datetime.now(timezone.utc).timestamp() * 1000)}-{len(saved_rows)+1}"
+            saved_rows.append(
+                {
+                    "id": file_id,
+                    "name": original_name or target.name,
+                    "relative_path": rel_hint or None,
+                    "path": str(target),
+                    "size_bytes": size_bytes,
+                    "content_type": str(file_storage.mimetype or "").strip() or None,
+                    "uploaded_at": _now_iso(),
+                    "url": f"/api/platform-ai/sessions/{secure_filename(str(session_id))}/files/{file_id}",
+                }
+            )
+    except _UploadLimitExceeded as exc:
+        _cleanup_saved_uploads(saved_rows)
+        _cleanup_empty_upload_dirs(session_dir, root)
+        return jsonify({"error": str(exc)}), 413
+    except Exception:
+        _cleanup_saved_uploads(saved_rows)
+        _cleanup_empty_upload_dirs(session_dir, root)
+        raise
     if not saved_rows:
         return jsonify({"error": "no files were saved"}), 400
 
@@ -557,6 +708,21 @@ def api_upload_platform_ai_message_files(session_id: str):
     if session is None:
         return _cp_error_response(cp, "failed to load platform ai session")
 
+    metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
+    existing = metadata.get("message_files") if isinstance(metadata.get("message_files"), list) else []
+    existing_rows = [row for row in existing if isinstance(row, dict)]
+    existing_total_bytes = _stored_upload_bytes(existing_rows)
+    limits = _platform_ai_upload_limits()
+    try:
+        _validate_upload_batch(
+            existing_file_count=len(existing_rows),
+            existing_total_bytes=existing_total_bytes,
+            submitted_file_count=1,
+            declared_content_length=request.content_length,
+            limits=limits,
+        )
+    except _UploadLimitExceeded as exc:
+        return jsonify({"error": str(exc)}), 413
     files = request.files.getlist("files")
     relative_paths = request.form.getlist("relative_paths")
     if not files:
@@ -565,40 +731,61 @@ def api_upload_platform_ai_message_files(session_id: str):
     session_dir = root / secure_filename(str(session_id)) / "messages"
     session_dir.mkdir(parents=True, exist_ok=True)
 
-    metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
-    existing = metadata.get("message_files") if isinstance(metadata.get("message_files"), list) else []
-    saved_rows: List[Dict[str, Any]] = []
-    for idx, file_storage in enumerate(files):
-        if file_storage is None:
-            continue
-        original_name = str(file_storage.filename or "").strip()
-        file_id = f"msg-{int(datetime.now(timezone.utc).timestamp() * 1000)}-{len(saved_rows)+1}"
-        rel_hint = _sanitize_relative_path(relative_paths[idx] if idx < len(relative_paths) else "")
-        safe_name = secure_filename(Path(rel_hint or original_name).name) or f"{file_id}.bin"
-        rel_parent = _sanitize_relative_path(str(Path(rel_hint).parent)) if rel_hint else ""
-        target_dir = session_dir / rel_parent if rel_parent else session_dir
-        target_dir.mkdir(parents=True, exist_ok=True)
-        target = target_dir / safe_name
-        suffix = 1
-        while target.exists():
-            stem = target.stem
-            ext = target.suffix
-            target = target_dir / f"{stem}({suffix}){ext}"
-            suffix += 1
-        file_storage.save(target)
-        stat = target.stat()
-        saved_rows.append(
-            {
-                "id": file_id,
-                "name": original_name or target.name,
-                "relative_path": rel_hint or None,
-                "path": str(target),
-                "size_bytes": int(stat.st_size),
-                "content_type": str(file_storage.mimetype or "").strip() or None,
-                "uploaded_at": _now_iso(),
-                "url": f"/api/platform-ai/sessions/{secure_filename(str(session_id))}/files/{file_id}",
-            }
+    try:
+        _validate_upload_batch(
+            existing_file_count=len(existing_rows),
+            existing_total_bytes=existing_total_bytes,
+            submitted_file_count=len(files),
+            declared_content_length=None,
+            limits=limits,
         )
+    except _UploadLimitExceeded as exc:
+        return jsonify({"error": str(exc)}), 413
+    saved_rows: List[Dict[str, Any]] = []
+    try:
+        for idx, file_storage in enumerate(files):
+            if file_storage is None:
+                continue
+            original_name = str(file_storage.filename or "").strip()
+            file_id = f"msg-{int(datetime.now(timezone.utc).timestamp() * 1000)}-{len(saved_rows)+1}"
+            rel_hint = _sanitize_relative_path(relative_paths[idx] if idx < len(relative_paths) else "")
+            safe_name = secure_filename(Path(rel_hint or original_name).name) or f"{file_id}.bin"
+            rel_parent = _sanitize_relative_path(str(Path(rel_hint).parent)) if rel_hint else ""
+            target_dir = session_dir / rel_parent if rel_parent else session_dir
+            target_dir.mkdir(parents=True, exist_ok=True)
+            target = target_dir / safe_name
+            suffix = 1
+            while target.exists():
+                stem = target.stem
+                ext = target.suffix
+                target = target_dir / f"{stem}({suffix}){ext}"
+                suffix += 1
+            size_bytes = _save_upload_limited(
+                file_storage,
+                target,
+                max_file_bytes=limits["max_file_bytes"],
+                max_total_remaining_bytes=limits["max_total_bytes"] - existing_total_bytes - _stored_upload_bytes(saved_rows),
+            )
+            saved_rows.append(
+                {
+                    "id": file_id,
+                    "name": original_name or target.name,
+                    "relative_path": rel_hint or None,
+                    "path": str(target),
+                    "size_bytes": size_bytes,
+                    "content_type": str(file_storage.mimetype or "").strip() or None,
+                    "uploaded_at": _now_iso(),
+                    "url": f"/api/platform-ai/sessions/{secure_filename(str(session_id))}/files/{file_id}",
+                }
+            )
+    except _UploadLimitExceeded as exc:
+        _cleanup_saved_uploads(saved_rows)
+        _cleanup_empty_upload_dirs(session_dir, root)
+        return jsonify({"error": str(exc)}), 413
+    except Exception:
+        _cleanup_saved_uploads(saved_rows)
+        _cleanup_empty_upload_dirs(session_dir, root)
+        raise
     if not saved_rows:
         return jsonify({"error": "no files were saved"}), 400
 
