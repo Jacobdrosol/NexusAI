@@ -680,6 +680,116 @@ async def test_scheduler_rejects_browser_publish_before_worker_dispatch(monkeypa
 
 
 @pytest.mark.anyio
+async def test_scheduler_dispatches_only_authorized_existing_question_patch(monkeypatch):
+    from control_plane.scheduler.scheduler import Scheduler
+
+    worker = Worker(
+        id="browser-worker",
+        name="Browser Worker",
+        host="browser.local",
+        port=8010,
+        capabilities=[Capability(type="tool", provider="browser", models=["browser-ui"])],
+        status="online",
+        enabled=True,
+    )
+    backend = BackendConfig(
+        type="browser",
+        provider="browser",
+        model="browser-ui",
+        worker_id=worker.id,
+        api_key_ref="BROWSER_WORKER_TOKEN",
+    )
+    bot = Bot(
+        id="question-patcher",
+        name="Question Patcher",
+        role="question-patcher",
+        execution_policy={
+            "required_worker_tools": ["browser-ui"],
+            "browser_action_allowlist": ["question_bank.patch_existing"],
+        },
+        backends=[backend],
+    )
+    task = Task(
+        id="task-question-patch",
+        bot_id=bot.id,
+        payload={},
+        created_at="now",
+        updated_at="now",
+    )
+    monkeypatch.setenv("BROWSER_WORKER_TOKEN", "worker-token")
+    fake_response = MagicMock()
+    fake_response.raise_for_status.return_value = None
+    fake_response.json.return_value = {"status": "Question Bank patch saved and verified"}
+    mock_client = AsyncMock()
+    mock_client.__aenter__.return_value = mock_client
+    mock_client.__aexit__.return_value = False
+    mock_client.post.return_value = fake_response
+    worker_registry = AsyncMock()
+    worker_registry.get.return_value = worker
+    bot_registry = AsyncMock()
+    bot_registry.get.return_value = bot
+    scheduler = Scheduler(bot_registry=bot_registry, worker_registry=worker_registry)
+
+    with patch("control_plane.scheduler.scheduler.httpx.AsyncClient", return_value=mock_client):
+        result = await scheduler._dispatch_backend(
+            backend,
+            {
+                "browser_action": "question_bank",
+                "action": "patch_existing",
+                "confirmation": "approved:question-bank:patch_existing:42:7",
+                "bank_id": 42,
+                "question_id": 7,
+                "expected": {"prompt": "What is 2 + 2?", "question_type": "MCQ"},
+                "changes": {"prompt": "What is 3 + 1?"},
+            },
+            task=task,
+        )
+
+    assert result["status"] == "Question Bank patch saved and verified"
+    assert mock_client.post.await_args.args[0] == "http://browser.local:8010/browser/question-bank"
+    assert mock_client.post.await_args.kwargs["json"]["action"] == "patch_existing"
+    assert "browser_action" not in mock_client.post.await_args.kwargs["json"]
+
+
+@pytest.mark.anyio
+async def test_scheduler_rejects_question_bank_create_before_worker_dispatch(monkeypatch):
+    from control_plane.scheduler.scheduler import BackendError, Scheduler
+
+    worker = Worker(
+        id="browser-worker",
+        name="Browser Worker",
+        host="browser.local",
+        port=8010,
+        capabilities=[Capability(type="tool", provider="browser", models=["browser-ui"])],
+        status="online",
+        enabled=True,
+    )
+    backend = BackendConfig(
+        type="browser",
+        provider="browser",
+        model="browser-ui",
+        worker_id=worker.id,
+        api_key_ref="BROWSER_WORKER_TOKEN",
+    )
+    worker_registry = AsyncMock()
+    worker_registry.get.return_value = worker
+    scheduler = Scheduler(bot_registry=AsyncMock(), worker_registry=worker_registry)
+
+    with pytest.raises(BackendError, match="Unsupported Question Bank action"):
+        await scheduler._dispatch_backend(
+            backend,
+            {
+                "browser_action": "question_bank",
+                "action": "create_question",
+                "bank_id": 42,
+                "question_id": 7,
+                "expected": {},
+                "changes": {},
+            },
+        )
+
+
+@pytest.mark.anyio
 async def test_scheduler_injects_bot_system_prompt_into_payload():
     from control_plane.scheduler.scheduler import Scheduler
 
