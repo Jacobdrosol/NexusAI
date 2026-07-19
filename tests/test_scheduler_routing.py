@@ -1131,6 +1131,130 @@ async def test_scheduler_rejects_question_bank_creation_without_create_allowlist
 
 
 @pytest.mark.anyio
+async def test_scheduler_dispatches_only_authorized_question_bank_evidence_export(monkeypatch):
+    from control_plane.scheduler.scheduler import Scheduler
+
+    worker = Worker(
+        id="browser-worker",
+        name="Browser Worker",
+        host="browser.local",
+        port=8010,
+        capabilities=[Capability(type="tool", provider="browser", models=["browser-ui"])],
+        status="online",
+        enabled=True,
+    )
+    backend = BackendConfig(
+        type="browser",
+        provider="browser",
+        model="browser-ui",
+        worker_id=worker.id,
+        api_key_ref="BROWSER_WORKER_TOKEN",
+    )
+    bot = Bot(
+        id="question-evidence-exporter",
+        name="Question Evidence Exporter",
+        role="question-bank-evidence-exporter",
+        execution_policy={
+            "required_worker_tools": ["browser-ui"],
+            "browser_action_allowlist": ["question_bank.export_evidence"],
+        },
+        backends=[backend],
+    )
+    task = Task(
+        id="task-question-evidence",
+        bot_id=bot.id,
+        payload={},
+        created_at="now",
+        updated_at="now",
+    )
+    monkeypatch.setenv("BROWSER_WORKER_TOKEN", "worker-token")
+    fake_response = MagicMock()
+    fake_response.raise_for_status.return_value = None
+    fake_response.json.return_value = {"status": "Question Bank evidence exported from the UI"}
+    mock_client = AsyncMock()
+    mock_client.__aenter__.return_value = mock_client
+    mock_client.__aexit__.return_value = False
+    mock_client.post.return_value = fake_response
+    worker_registry = AsyncMock()
+    worker_registry.get.return_value = worker
+    bot_registry = AsyncMock()
+    bot_registry.get.return_value = bot
+    scheduler = Scheduler(bot_registry=bot_registry, worker_registry=worker_registry)
+
+    with patch("control_plane.scheduler.scheduler.httpx.AsyncClient", return_value=mock_client):
+        result = await scheduler._dispatch_backend(
+            backend,
+            {
+                "browser_action": "question_bank",
+                "action": "export_evidence",
+                "bank_id": 42,
+                "approvedReadOnlyActions": ["export json"],
+            },
+            task=task,
+        )
+
+    assert result["status"] == "Question Bank evidence exported from the UI"
+    assert mock_client.post.await_args.args[0] == "http://browser.local:8010/browser/question-bank-export"
+    assert mock_client.post.await_args.kwargs["json"] == {
+        "action": "export_evidence",
+        "bank_id": 42,
+        "approvedReadOnlyActions": ["export json"],
+    }
+
+
+@pytest.mark.anyio
+async def test_scheduler_rejects_question_bank_evidence_export_without_allowlist(monkeypatch):
+    from control_plane.scheduler.scheduler import BackendError, Scheduler
+
+    worker = Worker(
+        id="browser-worker",
+        name="Browser Worker",
+        host="browser.local",
+        port=8010,
+        capabilities=[Capability(type="tool", provider="browser", models=["browser-ui"])],
+        status="online",
+        enabled=True,
+    )
+    backend = BackendConfig(
+        type="browser",
+        provider="browser",
+        model="browser-ui",
+        worker_id=worker.id,
+        api_key_ref="BROWSER_WORKER_TOKEN",
+    )
+    bot_registry = AsyncMock()
+    bot_registry.get.return_value = Bot(
+        id="question-patcher",
+        name="Question Patcher",
+        role="question-patcher",
+        execution_policy={"browser_action_allowlist": ["question_bank.patch_existing"]},
+        backends=[backend],
+    )
+    worker_registry = AsyncMock()
+    worker_registry.get.return_value = worker
+    scheduler = Scheduler(bot_registry=bot_registry, worker_registry=worker_registry)
+    task = Task(
+        id="task-question-evidence",
+        bot_id="question-patcher",
+        payload={},
+        created_at="now",
+        updated_at="now",
+    )
+
+    with pytest.raises(BackendError, match="not authorized for question_bank.export_evidence"):
+        await scheduler._dispatch_backend(
+            backend,
+            {
+                "browser_action": "question_bank",
+                "action": "export_evidence",
+                "bank_id": 42,
+                "approvedReadOnlyActions": ["export json"],
+            },
+            task=task,
+        )
+
+
+@pytest.mark.anyio
 async def test_scheduler_injects_bot_system_prompt_into_payload():
     from control_plane.scheduler.scheduler import Scheduler
 
