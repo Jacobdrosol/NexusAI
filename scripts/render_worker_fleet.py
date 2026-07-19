@@ -664,6 +664,11 @@ def _service_image_and_build(
     return image, {"context": build_context.as_posix(), "dockerfile": dockerfile}
 
 
+def _build_identity(image: str, build: dict[str, str]) -> str:
+    """Return a stable key for a reusable compose image build definition."""
+    return json.dumps({"image": image, "build": build}, sort_keys=True)
+
+
 def render(profile_path: Path, output_dir: Path, env: dict[str, str], *, allow_missing_ollama_key: bool = False) -> dict[str, Any]:
     profile = _load_profile(profile_path)
     fleet = profile.get("fleet") if isinstance(profile.get("fleet"), dict) else {}
@@ -721,6 +726,7 @@ def render(profile_path: Path, output_dir: Path, env: dict[str, str], *, allow_m
         compose["name"] = compose_project_name
     rendered_workers: list[dict[str, str]] = []
     rendered_bots: list[str] = []
+    emitted_builds: set[str] = set()
 
     for worker in workers:
         worker_id = str(worker["id"]).strip()
@@ -781,7 +787,10 @@ def render(profile_path: Path, output_dir: Path, env: dict[str, str], *, allow_m
         if shm_size:
             service_config["shm_size"] = shm_size
         if build is not None:
-            service_config["build"] = build
+            build_key = _build_identity(image, build)
+            if build_key not in emitted_builds:
+                service_config["build"] = build
+                emitted_builds.add(build_key)
         compose["services"][service] = service_config
         rendered_workers.append(
             {

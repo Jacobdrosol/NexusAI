@@ -192,6 +192,35 @@ def test_render_worker_fleet_merges_validated_resource_limits(tmp_path):
     }
 
 
+def test_render_worker_fleet_deduplicates_identical_image_builds(tmp_path):
+    renderer = _load_renderer()
+    profile = _profile(tmp_path / "workers.yaml")
+    profile_data = yaml.safe_load(profile.read_text(encoding="utf-8"))
+    duplicate = dict(profile_data["workers"][0])
+    duplicate.update(
+        {
+            "id": "content-repair-02",
+            "name": "Second Content Worker",
+            "service": "worker-content-second",
+            "bot": {"id": "content-worker-second-bot"},
+        }
+    )
+    profile_data["workers"].append(duplicate)
+    profile.write_text(yaml.safe_dump(profile_data, sort_keys=False), encoding="utf-8")
+
+    out = tmp_path / "runtime"
+    renderer.render(
+        profile,
+        out,
+        {"CONTROL_PLANE_API_TOKEN": "control-token", "OLLAMA_API_KEY": "ollama-token"},
+    )
+
+    compose = yaml.safe_load((out / "docker-compose.worker-node.generated.yml").read_text())
+    builds = [service.get("build") for service in compose["services"].values() if service.get("build")]
+
+    assert len(builds) == 1
+
+
 def test_render_worker_fleet_rejects_invalid_resource_limits(tmp_path):
     renderer = _load_renderer()
     profile = _profile(tmp_path / "workers.yaml")
