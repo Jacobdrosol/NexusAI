@@ -862,6 +862,15 @@ class AgentScheduleEngine:
             )
             await self._update_schedule_last_run(schedule["id"], status="completed")
         except Exception as exc:
+            if bool(getattr(exc, "skip_schedule_run", False)):
+                await self._set_run_status(
+                    run["id"],
+                    "skipped",
+                    finished_at=_iso(_now()),
+                    error={"reason": str(exc) or "scheduled_work_queue_empty"},
+                )
+                await self._update_schedule_last_run(run["schedule_id"], status="skipped")
+                return
             retry_not_before = self._dispatch_retry_not_before(schedule, run)
             error = {"message": str(exc)}
             if retry_not_before is not None:

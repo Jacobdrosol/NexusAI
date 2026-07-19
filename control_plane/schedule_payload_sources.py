@@ -23,6 +23,19 @@ _CSV_SOURCE_MAX_ROWS = 20
 _CSV_SOURCE_MAX_FILE_BYTES = 1_000_000
 _CSV_SOURCE_MAX_VALUE_CHARS = 2_000
 _CSV_SOURCE_MAX_AGE_HOURS = 168
+_CSV_SOURCE_MAX_PAYLOAD_FIELD_MAPPINGS = 12
+_CSV_RESERVED_PAYLOAD_FIELDS = {
+    "bot_id",
+    "error",
+    "id",
+    "metadata",
+    "node_overrides",
+    "project_id",
+    "result",
+    "schedule_id",
+    "source",
+    "task_id",
+}
 
 
 def _failure_category(task: Any) -> str:
@@ -80,6 +93,12 @@ class SystemPayloadSourceError(ValueError):
     """A schedule requested an unsupported or unsafe internal data source."""
 
 
+class ScheduleWorkQueueEmpty(SystemPayloadSourceError):
+    """A mapped CSV queue had no eligible work item for this run."""
+
+    skip_schedule_run = True
+
+
 def _safe_csv_field_list(raw: Any, *, field_name: str) -> list[str]:
     if not isinstance(raw, list) or not raw:
         raise SystemPayloadSourceError(f"{field_name} must be a non-empty list")
@@ -115,6 +134,39 @@ def _csv_filter_map(raw: Any, *, field_name: str) -> dict[str, set[str]]:
     return filters
 
 
+def _csv_payload_field_map(raw: Any, *, columns: list[str], require_non_empty_fields: list[str]) -> dict[str, str]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict) or not raw:
+        raise SystemPayloadSourceError("csv_work_items_v1 payload_field_map must be a non-empty object")
+    if len(raw) > _CSV_SOURCE_MAX_PAYLOAD_FIELD_MAPPINGS:
+        raise SystemPayloadSourceError(
+            "csv_work_items_v1 payload_field_map exceeds the maximum of "
+            f"{_CSV_SOURCE_MAX_PAYLOAD_FIELD_MAPPINGS} fields"
+        )
+
+    mapping: dict[str, str] = {}
+    for raw_target, raw_source in raw.items():
+        target = str(raw_target or "").strip()
+        source = str(raw_source or "").strip()
+        if not _SAFE_FIELD_NAME.fullmatch(target):
+            raise SystemPayloadSourceError("csv_work_items_v1 payload_field_map contains an invalid payload field name")
+        if target in _CSV_RESERVED_PAYLOAD_FIELDS:
+            raise SystemPayloadSourceError(
+                f"csv_work_items_v1 payload_field_map cannot override reserved field '{target}'"
+            )
+        if source not in columns:
+            raise SystemPayloadSourceError(
+                "csv_work_items_v1 payload_field_map values must reference selected columns"
+            )
+        if source not in require_non_empty_fields:
+            raise SystemPayloadSourceError(
+                "csv_work_items_v1 payload_field_map source columns must be required non-empty fields"
+            )
+        mapping[target] = source
+    return mapping
+
+
 def _csv_source_config(raw: Dict[str, Any], *, target_field: str) -> Dict[str, Any]:
     relative_path = str(raw.get("relative_path") or "").strip()
     candidate = Path(relative_path)
@@ -144,6 +196,15 @@ def _csv_source_config(raw: Dict[str, Any], *, target_field: str) -> Dict[str, A
         raise SystemPayloadSourceError(
             "csv_work_items_v1 require_non_empty_fields must reference selected columns"
         )
+    payload_field_map = _csv_payload_field_map(
+        raw.get("payload_field_map"),
+        columns=columns,
+        require_non_empty_fields=require_non_empty_fields,
+    )
+    if payload_field_map and max_rows != 1:
+        raise SystemPayloadSourceError(
+            "csv_work_items_v1 payload_field_map requires max_rows=1 to avoid ambiguous task inputs"
+        )
     return {
         "type": CSV_WORK_ITEMS_SOURCE,
         "target_field": target_field,
@@ -152,6 +213,7 @@ def _csv_source_config(raw: Dict[str, Any], *, target_field: str) -> Dict[str, A
         "include_equals": _csv_filter_map(raw.get("include_equals"), field_name="csv_work_items_v1 include_equals"),
         "exclude_equals": _csv_filter_map(raw.get("exclude_equals"), field_name="csv_work_items_v1 exclude_equals"),
         "require_non_empty_fields": require_non_empty_fields,
+        "payload_field_map": payload_field_map,
         "max_rows": max_rows,
         "max_age_hours": max_age_hours,
     }
@@ -293,7 +355,15 @@ def csv_work_items_payload(config: Dict[str, Any]) -> Dict[str, Any]:
     except UnicodeDecodeError as exc:
         raise SystemPayloadSourceError("csv_work_items_v1 source must be UTF-8 text") from exc
 
-    return {
+    payload_field_map = config.get("payload_field_map") or {}
+    if payload_field_map and not selected_rows:
+        raise ScheduleWorkQueueEmpty("csv_work_items_v1 has no eligible work item for this run")
+    mapped_task_payload = {
+        target: selected_rows[0][source]
+        for target, source in payload_field_map.items()
+    }
+
+    payload = {
         "source": CSV_WORK_ITEMS_SOURCE,
         "source_name": source_path.name,
         "source_modified_at": modified_at.isoformat(),
@@ -302,6 +372,9 @@ def csv_work_items_payload(config: Dict[str, Any]) -> Dict[str, Any]:
         "max_rows": int(config["max_rows"]),
         "selected_rows": selected_rows,
     }
+    if mapped_task_payload:
+        payload["mapped_task_payload"] = mapped_task_payload
+    return payload
 
 
 def _probe_attention_reason_codes(probe: Dict[str, Any]) -> list[str]:
@@ -598,5 +671,11 @@ async def materialize_system_schedule_payload(
         return {config["target_field"]: json.dumps(snapshot, sort_keys=True, separators=(",", ":"))}
     if config["type"] == CSV_WORK_ITEMS_SOURCE:
         payload = csv_work_items_payload(config)
-        return {config["target_field"]: json.dumps(payload, sort_keys=True, separators=(",", ":"))}
+        mapped_task_payload = payload.pop("mapped_task_payload", {})
+        if not isinstance(mapped_task_payload, dict):
+            mapped_task_payload = {}
+        return {
+            config["target_field"]: json.dumps(payload, sort_keys=True, separators=(",", ":")),
+            **mapped_task_payload,
+        }
     raise SystemPayloadSourceError(f"unsupported system_payload_source type: {config['type']}")

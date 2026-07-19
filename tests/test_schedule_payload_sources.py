@@ -15,6 +15,8 @@ from control_plane.schedule_payload_sources import (
     system_payload_source_config,
     validate_system_payload_source,
 )
+from control_plane.schedule_safety import require_schedule_autonomy_safety
+from shared.models import Bot
 
 
 class _FakeWorkerRegistry:
@@ -495,3 +497,151 @@ async def test_csv_work_items_source_refuses_stale_input_and_editing_profiles(tm
             task_manager=_FakeTaskManager(),
             schedule_engine=_FakeScheduleEngine(),
         )
+
+
+@pytest.mark.anyio
+async def test_csv_work_items_source_maps_one_fresh_row_to_structured_task_fields(tmp_path, monkeypatch):
+    source = tmp_path / "course-62.csv"
+    source.write_text(
+        "course_id,lesson_id,lesson_title,lesson_type,audit_status,work_status,owner_action_needed,recommended_fix_summary\n"
+        "62,1001,Normal lesson,lesson,audited-needs-fixes,not_started,false,Repair body evidence\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("NEXUSAI_READONLY_CSV_ROOT", str(tmp_path))
+    schedule = _csv_schedule()
+    source_config = schedule["metadata"]["system_payload_source"]
+    source_config["max_rows"] = 1
+    source_config["require_non_empty_fields"] = [
+        "course_id",
+        "lesson_id",
+        "recommended_fix_summary",
+    ]
+    source_config["payload_field_map"] = {
+        "course_id": "course_id",
+        "lesson_id": "lesson_id",
+        "instruction": "recommended_fix_summary",
+    }
+
+    payload = await materialize_system_schedule_payload(
+        schedule,
+        worker_registry=_FakeWorkerRegistry(),
+        worker_probe_store=_FakeProbeStore(),
+        bot_registry=_FakeBotRegistry(),
+        task_manager=_FakeTaskManager(),
+        schedule_engine=_FakeScheduleEngine(),
+    )
+
+    assert payload["course_id"] == "62"
+    assert payload["lesson_id"] == "1001"
+    assert payload["instruction"] == "Repair body evidence"
+    assert "mapped_task_payload" not in json.loads(payload["revision_items"])
+
+
+@pytest.mark.anyio
+async def test_csv_work_items_field_mapping_satisfies_schedule_input_contract():
+    class BotRegistry:
+        async def get(self, bot_id):
+            assert bot_id == "draft-planner"
+            return Bot(
+                id="draft-planner",
+                name="Draft Planner",
+                role="content-planner",
+                project_id="globeiq",
+                enabled=True,
+                backends=[],
+                routing_rules={
+                    "worker_profile": {
+                        "can_edit": False,
+                        "task_scope": "draft-only-course-unit-lesson-planning",
+                    },
+                    "input_contract": {
+                        "enabled": True,
+                        "format": "json_object",
+                        "required_fields": ["instruction", "course_id", "lesson_id"],
+                    },
+                },
+            )
+
+    schedule = _csv_schedule()
+    source_config = schedule["metadata"]["system_payload_source"]
+    source_config["max_rows"] = 1
+    source_config["require_non_empty_fields"] = [
+        "course_id",
+        "lesson_id",
+        "recommended_fix_summary",
+    ]
+    source_config["payload_field_map"] = {
+        "course_id": "course_id",
+        "lesson_id": "lesson_id",
+        "instruction": "recommended_fix_summary",
+    }
+    schedule.update(
+        {
+            "target_bot_id": "draft-planner",
+            "project_id": "globeiq",
+            "prompt": "Create a draft plan only from the supplied work item.",
+        }
+    )
+    schedule["metadata"]["mutation_safe"] = True
+
+    await require_schedule_autonomy_safety(
+        schedule,
+        bot_registry=BotRegistry(),
+        only_when_active=False,
+    )
+
+
+@pytest.mark.anyio
+async def test_empty_mapped_csv_queue_skips_without_creating_a_task(tmp_path, monkeypatch):
+    from control_plane.agent_scheduler.engine import AgentScheduleEngine
+
+    source = tmp_path / "course-62.csv"
+    source.write_text(
+        "course_id,lesson_id,lesson_title,lesson_type,audit_status,work_status,owner_action_needed,recommended_fix_summary\n"
+        "62,1001,Completed lesson,lesson,audited-needs-fixes,completed,false,Already done\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("NEXUSAI_READONLY_CSV_ROOT", str(tmp_path))
+    schedule_source = _csv_schedule()
+    source_config = schedule_source["metadata"]["system_payload_source"]
+    source_config["max_rows"] = 1
+    source_config["require_non_empty_fields"] = ["recommended_fix_summary"]
+    source_config["payload_field_map"] = {"instruction": "recommended_fix_summary"}
+
+    async def materialize(schedule):
+        return await materialize_system_schedule_payload(
+            schedule,
+            worker_registry=_FakeWorkerRegistry(),
+            worker_probe_store=_FakeProbeStore(),
+            bot_registry=_FakeBotRegistry(),
+            task_manager=_FakeTaskManager(),
+            schedule_engine=_FakeScheduleEngine(),
+        )
+
+    class TaskManager:
+        async def create_task(self, **kwargs):
+            raise AssertionError("an empty work queue must not create a task")
+
+    engine = AgentScheduleEngine(
+        assignment_service=object(),
+        task_manager=TaskManager(),
+        db_path=str(tmp_path / "schedules.db"),
+        payload_materializer=materialize,
+    )
+    schedule = await engine.create_schedule(
+        {
+            "name": "Draft queue",
+            "cron_expression": "0 * * * *",
+            "timezone": "UTC",
+            "prompt": "Draft only from the supplied work item.",
+            "target_bot_id": "draft-planner",
+            "metadata": schedule_source["metadata"],
+        }
+    )
+
+    await engine.trigger_schedule(schedule["id"])
+
+    run = (await engine.list_runs(schedule["id"]))[0]
+    assert run["status"] == "skipped"
+    assert run["error"] == {"reason": "csv_work_items_v1 has no eligible work item for this run"}
+    assert (await engine.get_schedule(schedule["id"]))["last_run_status"] == "skipped"

@@ -4,7 +4,11 @@ from __future__ import annotations
 from typing import Any, Dict, Iterable
 
 from control_plane.bot_readiness import assess_bot_readiness
-from control_plane.schedule_payload_sources import SystemPayloadSourceError, validate_system_payload_source
+from control_plane.schedule_payload_sources import (
+    SystemPayloadSourceError,
+    system_payload_source_config,
+    validate_system_payload_source,
+)
 from shared.bot_policy import bot_autonomous_dispatch_blockers
 
 
@@ -93,6 +97,17 @@ def _require_schedule_input_contract(schedule: Dict[str, Any], bot: Any) -> None
             "node_overrides": schedule.get("node_overrides") if isinstance(schedule.get("node_overrides"), dict) else {},
         }
     )
+    source_config = system_payload_source_config(schedule)
+    if isinstance(source_config, dict):
+        payload_field_map = source_config.get("payload_field_map")
+        if isinstance(payload_field_map, dict):
+            task_payload.update(
+                {
+                    str(field): "__materialized_schedule_value__"
+                    for field in payload_field_map
+                    if str(field).strip()
+                }
+            )
     required_fields = [str(field).strip() for field in contract.get("required_fields") or [] if str(field).strip()]
     non_empty_fields = [str(field).strip() for field in contract.get("non_empty_fields") or [] if str(field).strip()]
     missing = [field for field in required_fields if _payload_field_value(task_payload, field) is _MISSING]
