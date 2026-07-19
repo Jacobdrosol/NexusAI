@@ -609,7 +609,17 @@ def _is_output_contract_error_message(message: str) -> bool:
     text = str(message or "").strip().lower()
     if not text:
         return False
-    return "output contract" in text
+    return any(
+        marker in text
+        for marker in (
+            "output contract",
+            "valid json object or array",
+            "requires structured json output",
+            "requires a json object",
+            "requires a json array",
+            "required fields can only be validated",
+        )
+    )
 
 
 def _extract_result_usage(result: Any) -> dict[str, Any]:
@@ -5708,7 +5718,12 @@ class TaskManager:
                     f"{error_message} (likely truncated model output at token limit; "
                     "increase max_tokens/num_predict or reduce expected output size)"
                 )
-            task_error = TaskError(message=error_message)
+            error_code = "output_contract_invalid" if _is_output_contract_error_message(error_message) else None
+            task_error = TaskError(
+                message=error_message,
+                code=error_code,
+                details={"reason_code": error_code} if error_code else None,
+            )
             if await self._requeue_for_retry(task, task_error):
                 logger.info("Task %s queued for automatic retry", task_id)
             else:

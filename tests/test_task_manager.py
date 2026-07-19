@@ -5075,6 +5075,7 @@ async def test_output_contract_error_avoids_false_truncation_hint_for_closed_jso
     assert updated.error is not None
     assert "non-empty fields" in updated.error.message
     assert "likely truncated model output" not in updated.error.message
+    assert updated.error.code == "output_contract_invalid"
 
 
 @pytest.mark.anyio
@@ -5131,6 +5132,7 @@ async def test_output_contract_disabled_fallback_mode_does_not_mask_parse_failur
     assert updated.status == "failed"
     assert updated.error is not None
     assert "valid JSON object or array" in updated.error.message
+    assert updated.error.code == "output_contract_invalid"
 
 
 @pytest.mark.anyio
