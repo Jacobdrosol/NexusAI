@@ -200,17 +200,17 @@ def _as_list(value: Any) -> List[Dict[str, Any]]:
     return value if isinstance(value, list) else []
 
 
-def _approval_body_with_operator(body: Any) -> Dict[str, Any]:
-    """Attach the authenticated dashboard identity when an approval body omits it."""
+def _body_with_authenticated_operator(body: Any) -> Dict[str, Any]:
+    """Use the dashboard login identity instead of client-supplied attribution."""
     result = dict(body) if isinstance(body, dict) else {}
-    if str(result.get("operator_id") or "").strip():
-        return result
     try:
         identity = str(current_user.get_id() or "").strip()
     except Exception:
         identity = ""
     if identity:
         result["operator_id"] = identity[:255]
+    else:
+        result.pop("operator_id", None)
     return result
 
 
@@ -428,7 +428,7 @@ def api_list_platform_ai_sessions():
 @login_required
 def api_create_platform_ai_session():
     cp = get_cp_client()
-    body = request.get_json(silent=True) or {}
+    body = _body_with_authenticated_operator(request.get_json(silent=True) or {})
     data = cp.create_platform_ai_session(body)
     if data is None:
         return _cp_error_response(cp, "failed to create platform ai session")
@@ -470,7 +470,7 @@ def api_patch_platform_ai_session(session_id: str):
 @login_required
 def api_control_platform_ai_session(session_id: str):
     cp = get_cp_client()
-    body = request.get_json(silent=True) or {}
+    body = _body_with_authenticated_operator(request.get_json(silent=True) or {})
     data = cp.control_platform_ai_session(session_id, body)
     if data is None:
         return _cp_error_response(cp, "failed to control platform ai session")
@@ -514,7 +514,7 @@ def api_list_platform_ai_session_proposals(session_id: str):
 @login_required
 def api_approve_platform_ai_session_proposal(session_id: str, proposal_id: str):
     cp = get_cp_client()
-    body = _approval_body_with_operator(request.get_json(silent=True) or {})
+    body = _body_with_authenticated_operator(request.get_json(silent=True) or {})
     data = cp.approve_platform_ai_proposal(session_id, proposal_id, body)
     if data is None:
         return _cp_error_response(cp, "failed to approve platform ai proposal")
@@ -525,7 +525,7 @@ def api_approve_platform_ai_session_proposal(session_id: str, proposal_id: str):
 @login_required
 def api_preflight_platform_ai_session_proposal(session_id: str, proposal_id: str):
     cp = get_cp_client()
-    body = _approval_body_with_operator(request.get_json(silent=True) or {})
+    body = _body_with_authenticated_operator(request.get_json(silent=True) or {})
     data = cp.preflight_platform_ai_proposal(session_id, proposal_id, body)
     if data is None:
         return _cp_error_response(cp, "failed to preflight platform ai proposal")
@@ -536,7 +536,7 @@ def api_preflight_platform_ai_session_proposal(session_id: str, proposal_id: str
 @login_required
 def api_reject_platform_ai_session_proposal(session_id: str, proposal_id: str):
     cp = get_cp_client()
-    body = _approval_body_with_operator(request.get_json(silent=True) or {})
+    body = _body_with_authenticated_operator(request.get_json(silent=True) or {})
     data = cp.reject_platform_ai_proposal(session_id, proposal_id, body)
     if data is None:
         return _cp_error_response(cp, "failed to reject platform ai proposal")

@@ -156,7 +156,7 @@ async def test_pipeline_tuner_converged_session_completes(tmp_path):
 
 
 @pytest.mark.anyio
-async def test_process_operator_message_upserts_bot_from_json_block(tmp_path, monkeypatch):
+async def test_process_operator_message_creates_proposal_from_json_block(tmp_path, monkeypatch):
     monkeypatch.setenv("NEXUS_PLATFORM_AI_CONFIGURATION_MUTATIONS_ENABLED", "true")
     store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
     bot_registry = BotRegistry(db_path=str(tmp_path / "bots.db"))
@@ -178,13 +178,14 @@ Please create this bot config.
   }
 }
 ```
-"""
+    """
     await store.append_message(session["id"], role="operator", content=message, metadata={})
     await runtime._process_operator_messages(session["id"])
-    created = await bot_registry.get("designer-created-bot")
-    assert created.id == "designer-created-bot"
-    assert str(created.name) == "Designer Created Bot"
-    assert created.enabled is False
+    with pytest.raises(BotNotFoundError):
+        await bot_registry.get("designer-created-bot")
+    proposals = await store.list_patch_proposals(session["id"])
+    assert len(proposals) == 1
+    assert str((proposals[0].get("after_state") or {}).get("proposal_kind") or "") == "bot_configuration"
 
 
 @pytest.mark.anyio
@@ -272,7 +273,7 @@ async def test_process_operator_message_invokes_platform_brain_backend(tmp_path)
 
 
 @pytest.mark.anyio
-async def test_platform_brain_actions_can_upsert_bot_within_mode_policy(tmp_path, monkeypatch):
+async def test_platform_brain_actions_create_bot_proposals_within_mode_policy(tmp_path, monkeypatch):
     monkeypatch.setenv("NEXUS_PLATFORM_AI_CONFIGURATION_MUTATIONS_ENABLED", "true")
     store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
     bot_registry = BotRegistry(db_path=str(tmp_path / "bots.db"))
@@ -318,10 +319,11 @@ async def test_platform_brain_actions_can_upsert_bot_within_mode_policy(tmp_path
     await store.append_message(session["id"], role="operator", content="Please create a new helper bot.", metadata={})
     await runtime._process_operator_messages(session["id"])
 
-    created = await bot_registry.get("platform-brain-bot")
-    assert created.id == "platform-brain-bot"
-    assert str(created.name) == "Platform Brain Bot"
-    assert created.enabled is False
+    with pytest.raises(BotNotFoundError):
+        await bot_registry.get("platform-brain-bot")
+    proposals = await store.list_patch_proposals(session["id"])
+    assert len(proposals) == 1
+    assert str(((proposals[0].get("after_state") or {}).get("bot") or {}).get("id") or "") == "platform-brain-bot"
 
 
 @pytest.mark.anyio
@@ -344,7 +346,7 @@ async def test_platform_ai_keeps_model_actions_proposal_only_without_configurati
     messages = await store.list_messages(session["id"], limit=20)
     assert any(
         str((row.get("metadata") or {}).get("source") or "") == "operator_directive_proposal"
-        and "configuration_mutations_disabled" in str(row.get("content") or "")
+        and "configuration_proposal_required" in str(row.get("content") or "")
         for row in messages
     )
 
@@ -1506,7 +1508,8 @@ async def test_disabled_configuration_mutation_creates_disabled_bot_proposal(tmp
 
 @pytest.mark.anyio
 async def test_operator_approval_applies_proposed_bot_without_auto_activation(tmp_path, monkeypatch):
-    monkeypatch.delenv("NEXUS_PLATFORM_AI_CONFIGURATION_MUTATIONS_ENABLED", raising=False)
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_CONFIGURATION_MUTATIONS_ENABLED", "true")
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_OWNER_ALLOWLIST", "operator")
     monkeypatch.delenv("NEXUS_PLATFORM_AI_AUTO_ACTIVATE_BOTS", raising=False)
     store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
     bot_registry = BotRegistry(db_path=str(tmp_path / "bots.db"))
@@ -1516,7 +1519,7 @@ async def test_operator_approval_applies_proposed_bot_without_auto_activation(tm
         worker_registry=WorkerRegistry(db_path=str(tmp_path / "workers.db")),
         connection_resolver=ConnectionResolver(db_path=str(tmp_path / "connections.db")),
     )
-    session = await store.create_session(mode="bot_creator", status="running")
+    session = await store.create_session(mode="bot_creator", status="running", operator_id="operator")
     directive = {
         "platform_ai_action": "upsert_bot",
         "bot": {
@@ -1557,6 +1560,43 @@ async def test_operator_approval_applies_proposed_bot_without_auto_activation(tm
     proposal = await store.get_patch_proposal(proposal_id)
     assert proposal is not None
     assert proposal.get("status") == "applied"
+
+
+@pytest.mark.anyio
+async def test_operator_approval_requires_matching_allowlisted_session_owner(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_CONFIGURATION_MUTATIONS_ENABLED", "true")
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_OWNER_ALLOWLIST", "owner@example.com")
+    store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+    bot_registry = BotRegistry(db_path=str(tmp_path / "bots.db"))
+    runtime = PlatformAISessionRuntime(store, bot_registry=bot_registry)
+    session = await store.create_session(
+        mode="bot_creator",
+        status="running",
+        operator_id="owner@example.com",
+    )
+    created = await runtime._apply_operator_directives(
+        session["id"],
+        session=session,
+        content=json.dumps(
+            {
+                "platform_ai_action": "upsert_bot",
+                "bot": {
+                    "id": "owner-gated-bot",
+                    "name": "Owner Gated Bot",
+                    "role": "assistant",
+                    "backends": [{"type": "cloud_api", "provider": "openai", "model": "gpt-4o-mini"}],
+                },
+            }
+        ),
+    )
+    proposal_id = str((((created.get("actions") or [])[0].get("result") or {}).get("proposal_id") or ""))
+
+    denied = await runtime.approve_patch_proposal(session["id"], proposal_id, operator_id="other@example.com")
+
+    assert denied.get("status") == "blocked"
+    assert denied.get("detail") == "session_owner_mismatch"
+    with pytest.raises(BotNotFoundError):
+        await bot_registry.get("owner-gated-bot")
 
 
 @pytest.mark.anyio
@@ -1714,7 +1754,8 @@ async def test_platform_ai_preflight_api_keeps_proposal_disabled(cp_client, cp_a
 
 @pytest.mark.anyio
 async def test_operator_approval_refuses_to_change_active_bot(tmp_path, monkeypatch):
-    monkeypatch.delenv("NEXUS_PLATFORM_AI_CONFIGURATION_MUTATIONS_ENABLED", raising=False)
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_CONFIGURATION_MUTATIONS_ENABLED", "true")
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_OWNER_ALLOWLIST", "operator")
     store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
     bot_registry = BotRegistry(db_path=str(tmp_path / "bots.db"))
     await bot_registry.register(
@@ -1734,7 +1775,7 @@ async def test_operator_approval_refuses_to_change_active_bot(tmp_path, monkeypa
         worker_registry=WorkerRegistry(db_path=str(tmp_path / "workers.db")),
         connection_resolver=ConnectionResolver(db_path=str(tmp_path / "connections.db")),
     )
-    session = await store.create_session(mode="bot_creator", status="running")
+    session = await store.create_session(mode="bot_creator", status="running", operator_id="operator")
     directive = {
         "platform_ai_action": "upsert_bot",
         "bot": {
