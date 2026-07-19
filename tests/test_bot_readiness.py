@@ -37,6 +37,31 @@ async def test_bot_readiness_reports_ready_worker_backend(cp_client):
 
 
 @pytest.mark.anyio
+async def test_bot_project_binding_requires_an_enabled_project(cp_client):
+    payload = {
+        "id": "project-bound-bot",
+        "name": "Project Bound Bot",
+        "role": "reviewer",
+        "project_id": "globeiq",
+        "backends": [],
+    }
+
+    missing = await cp_client.post("/v1/bots", json=payload)
+    assert missing.status_code == 409
+    assert missing.json()["detail"]["reason_code"] == "bot_project_not_found"
+
+    project = await cp_client.post(
+        "/v1/projects",
+        json={"id": "globeiq", "name": "GlobeIQ", "mode": "isolated"},
+    )
+    assert project.status_code == 200
+
+    created = await cp_client.post("/v1/bots", json=payload)
+    assert created.status_code == 200
+    assert created.json()["project_id"] == "globeiq"
+
+
+@pytest.mark.anyio
 async def test_bot_activation_blocks_backend_missing_from_nonempty_model_catalog(cp_app, cp_client):
     await cp_app.state.model_registry.register(
         CatalogModel(id="other-model", name="other-model", provider="ollama_cloud")

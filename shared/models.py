@@ -199,6 +199,7 @@ class Bot(BaseModel):
     id: str
     name: str
     role: str
+    project_id: Optional[str] = None
     system_prompt: Optional[str] = None
     priority: int = 0
     enabled: bool = True

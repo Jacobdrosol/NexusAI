@@ -47,6 +47,13 @@ def test_bot_model_valid():
     assert b.backends == []
 
 
+def test_bot_model_supports_explicit_project_binding():
+    from shared.models import Bot
+
+    bot = Bot(id="globeiq-reviewer", name="GlobeIQ Reviewer", role="reviewer", project_id="globeiq", backends=[])
+    assert bot.project_id == "globeiq"
+
+
 def test_bot_model_with_backend():
     from shared.models import Bot, BackendConfig
     b = Bot(

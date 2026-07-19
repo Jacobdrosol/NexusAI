@@ -10,7 +10,7 @@ from control_plane.bot_blueprints import (
     build_specialist_bot,
     list_specialist_blueprints,
 )
-from shared.exceptions import BotNotFoundError
+from shared.exceptions import BotNotFoundError, ProjectNotFoundError
 from shared.models import Bot
 
 
@@ -34,6 +34,31 @@ async def _require_specialist_ready_to_enable(bot: Bot, request: Request) -> Non
                 "reason_code": "bot_not_ready",
                 "message": f"Bot '{bot.id}' cannot be enabled until its dispatch checks pass.",
                 "readiness": readiness,
+            },
+        )
+
+
+async def _require_specialist_project_available(bot: Bot, request: Request) -> None:
+    """Keep blueprint-created specialists bound only to an enabled, known project."""
+    project_id = str(bot.project_id or "").strip()
+    if not project_id:
+        return
+    try:
+        project = await request.app.state.project_registry.get(project_id)
+    except ProjectNotFoundError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "reason_code": "bot_project_not_found",
+                "message": f"Bot project '{project_id}' does not exist.",
+            },
+        ) from exc
+    if not bool(project.enabled):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "reason_code": "bot_project_disabled",
+                "message": f"Bot project '{project_id}' is disabled.",
             },
         )
 
@@ -67,6 +92,7 @@ async def create_blueprint_bot(payload: SpecialistBlueprintRequest, request: Req
     else:
         raise HTTPException(status_code=409, detail=f"Bot '{bot.id}' already exists")
 
+    await _require_specialist_project_available(bot, request)
     if bot.enabled:
         await _require_specialist_ready_to_enable(bot, request)
 

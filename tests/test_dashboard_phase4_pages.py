@@ -84,6 +84,17 @@ def test_project_detail_page_renders_with_partial_github_status(dashboard_client
             return [{"id": "globeiq", "name": "GlobeIQ", "mode": "isolated", "enabled": True, "bridge_project_ids": [], "bot_ids": []}]
 
         def list_bots(self):
+            return [
+                {
+                    "id": "globeiq-reviewer",
+                    "name": "GlobeIQ Reviewer",
+                    "role": "reviewer",
+                    "project_id": "globeiq",
+                }
+            ]
+
+        def list_bot_artifacts(self, bot_id, limit=20):
+            assert bot_id == "globeiq-reviewer"
             return []
 
         def list_tasks(self):
@@ -102,6 +113,7 @@ def test_project_detail_page_renders_with_partial_github_status(dashboard_client
         resp = dashboard_client.get("/projects/globeiq")
 
     assert resp.status_code == 200
+    assert b"GlobeIQ Reviewer" in resp.data
     assert b"Project Data Vault" in resp.data
     assert b"Chat Workspace Tools" in resp.data
     assert b"Repository Workspace" in resp.data

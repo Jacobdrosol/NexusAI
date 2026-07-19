@@ -106,6 +106,7 @@ def test_content_writer_blueprint_is_disabled_and_draft_only_by_default():
     )
 
     assert bot.id == "course-lesson-writer"
+    assert bot.project_id == "globeiq"
     assert bot.enabled is False
     assert bot.execution_policy.repo_output_mode == "deny"
     assert bot.routing_rules["specialist"]["risk_level"] == "draft_only"
@@ -332,3 +333,34 @@ async def test_specialist_blueprint_api_allows_ready_activation(cp_app):
 
     assert response.status_code == 200
     assert response.json()["bot"]["enabled"] is True
+
+
+@pytest.mark.anyio
+async def test_specialist_blueprint_api_requires_a_known_project_binding(cp_app):
+    payload = {
+        "kind": "researcher",
+        "name": "GlobeIQ Researcher",
+        "project_id": "globeiq",
+        "backends": [
+            {
+                "type": "cloud_api",
+                "provider": "ollama_cloud",
+                "model": "qwen3.5:cloud",
+                "api_key_ref": "ollama-cloud",
+            }
+        ],
+    }
+
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        missing = await client.post("/v1/bot-blueprints/create", json=payload)
+        project = await client.post(
+            "/v1/projects",
+            json={"id": "globeiq", "name": "GlobeIQ", "mode": "isolated"},
+        )
+        created = await client.post("/v1/bot-blueprints/create", json=payload)
+
+    assert missing.status_code == 409
+    assert missing.json()["detail"]["reason_code"] == "bot_project_not_found"
+    assert project.status_code == 200
+    assert created.status_code == 200
+    assert created.json()["bot"]["project_id"] == "globeiq"

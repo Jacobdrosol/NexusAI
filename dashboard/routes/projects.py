@@ -237,7 +237,12 @@ def project_detail_page(project_id: str):
     vault_items = cp.list_vault_items(project_id=project_id, limit=100, include_content=False) or []
 
     project_bot_ids = set(project.get("bot_ids") or [])
-    project_bots = [b for b in bots if str(b.get("id")) in project_bot_ids] if project_bot_ids else []
+    project_bots = [
+        bot
+        for bot in bots
+        if str(bot.get("id") or "") in project_bot_ids
+        or str(bot.get("project_id") or "") == str(project_id)
+    ]
     project_reports: list[dict[str, Any]] = []
     for bot in project_bots:
         bot_id = str(bot.get("id") or "")

@@ -412,6 +412,7 @@ def build_specialist_bot(request: SpecialistBlueprintRequest) -> Bot:
         id=bot_id,
         name=str(request.name).strip(),
         role=str(spec["role"]),
+        project_id=str(request.project_id or "").strip() or None,
         system_prompt=system_prompt,
         priority=0,
         enabled=bool(request.activate),

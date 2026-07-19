@@ -8,7 +8,7 @@ from pydantic import ValidationError
 from control_plane.audit.utils import record_audit_event
 from control_plane.bot_readiness import assess_bot_instance_readiness
 from control_plane.security.guards import enforce_body_size, enforce_rate_limit
-from shared.exceptions import APIKeyNotFoundError, BotNotFoundError
+from shared.exceptions import APIKeyNotFoundError, BotNotFoundError, ProjectNotFoundError
 from shared.bot_policy import bot_autonomous_dispatch_blockers, validate_bot_configuration
 from shared.models import Bot, BotRun, BotRunArtifact, Task, TaskMetadata
 from shared.settings_manager import SettingsManager
@@ -128,8 +128,44 @@ def _validate_bot_or_400(bot: Bot) -> None:
         )
 
 
+async def _require_known_enabled_bot_project(bot: Bot, request: Request) -> None:
+    """Reject bindings to missing or disabled projects before persisting a bot."""
+    project_id = str(bot.project_id or "").strip()
+    if not project_id:
+        return
+    try:
+        project = await request.app.state.project_registry.get(project_id)
+    except ProjectNotFoundError:
+        _raise_bot_validation_error(
+            reason_code="bot_project_not_found",
+            message=f"Bot project '{project_id}' does not exist.",
+            validation_errors=[
+                {
+                    "field_path": "project_id",
+                    "message": "Project binding must reference an existing project.",
+                    "invalid_value": project_id,
+                }
+            ],
+            status_code=409,
+        )
+    if not bool(project.enabled):
+        _raise_bot_validation_error(
+            reason_code="bot_project_disabled",
+            message=f"Bot project '{project_id}' is disabled.",
+            validation_errors=[
+                {
+                    "field_path": "project_id",
+                    "message": "Bots cannot be bound to a disabled project.",
+                    "invalid_value": project_id,
+                }
+            ],
+            status_code=409,
+        )
+
+
 async def _require_bot_ready_to_enable(bot: Bot, request: Request) -> None:
     """Block activation when the staged bot cannot dispatch its declared backends."""
+    await _require_known_enabled_bot_project(bot, request)
     candidate = bot.model_copy(update={"enabled": True})
     readiness = await assess_bot_instance_readiness(
         candidate,
@@ -184,7 +220,6 @@ async def _preflight_bot_payload(payload: Any, request: Request) -> Dict[str, An
                 "validation_errors": _policy_validation_errors(policy_errors),
             },
         )
-
     readiness = await assess_bot_instance_readiness(
         bot.model_copy(update={"enabled": True}),
         worker_registry=request.app.state.worker_registry,
@@ -384,6 +419,8 @@ async def create_bot(request: Request, payload: Any = Body(...)) -> Bot:
     _validate_bot_or_400(bot)
     if bot.enabled and bot.backends:
         await _require_bot_ready_to_enable(bot, request)
+    else:
+        await _require_known_enabled_bot_project(bot, request)
     bot_registry = request.app.state.bot_registry
     await bot_registry.register(bot)
     await record_audit_event(request, action="bots.create", resource=f"bot:{bot.id}")
@@ -485,6 +522,7 @@ async def update_bot(bot_id: str, request: Request, payload: Any = Body(...)) ->
     bot_registry = request.app.state.bot_registry
     try:
         current = await bot_registry.get(bot_id)
+        await _require_known_enabled_bot_project(bot, request)
         requires_readiness_check = bot.enabled and (
             not current.enabled
             or current.backends != bot.backends

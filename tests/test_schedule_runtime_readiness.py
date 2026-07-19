@@ -157,3 +157,28 @@ async def test_autonomous_schedule_allows_matching_specialist_project_scope():
         bot_registry=_BotRegistry(bot),
         only_when_active=False,
     )
+
+
+@pytest.mark.anyio
+async def test_autonomous_schedule_enforces_explicit_bot_project_scope():
+    bot = Bot(
+        id="project-bound-monitor",
+        name="Project Bound Monitor",
+        role="monitor",
+        project_id="globeiq",
+        enabled=True,
+        backends=[],
+    )
+
+    with pytest.raises(ScheduleAutonomySafetyError) as exc_info:
+        await require_schedule_autonomy_safety(
+            {
+                "target_bot_id": bot.id,
+                "project_id": "another-project",
+                "metadata": {"mutation_safe": True},
+            },
+            bot_registry=_BotRegistry(bot),
+            only_when_active=False,
+        )
+
+    assert exc_info.value.reason_code == "schedule_project_scope_mismatch"
