@@ -25,6 +25,7 @@ async def _require_specialist_ready_to_enable(bot: Bot, request: Request) -> Non
         connection_resolver=request.app.state.connection_resolver,
         worker_probe_store=request.app.state.worker_probe_store,
         key_vault=request.app.state.key_vault,
+        model_registry=request.app.state.model_registry,
     )
     if not readiness["ready"]:
         raise HTTPException(

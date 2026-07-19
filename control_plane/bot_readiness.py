@@ -67,6 +67,26 @@ async def _vault_credential_status(key_vault: Any, key_ref: str) -> tuple[bool, 
     return True, ""
 
 
+async def _catalog_model_blocker(backend: BackendConfig, model_registry: Any) -> str:
+    """Mirror scheduler catalog enforcement without exposing catalog internals."""
+
+    if str(backend.type or "").strip().lower() == "browser" or model_registry is None:
+        return ""
+    try:
+        if not await model_registry.has_any():
+            return ""
+        exists = await model_registry.exists(backend.provider, backend.model)
+    except Exception:
+        # Scheduler also fails open if catalog storage itself is unavailable.
+        return ""
+    if exists:
+        return ""
+    return (
+        f"Model '{backend.model}' (provider '{backend.provider}') "
+        "is not present/enabled in the model catalog."
+    )
+
+
 async def assess_bot_readiness(
     bot_id: str,
     *,
@@ -75,6 +95,7 @@ async def assess_bot_readiness(
     connection_resolver: Any,
     worker_probe_store: Any = None,
     key_vault: Any = None,
+    model_registry: Any = None,
 ) -> dict[str, Any]:
     """Return non-secret operational checks for the bot's declared backend chain."""
     bot: Bot = await bot_registry.get(str(bot_id or "").strip())
@@ -84,6 +105,7 @@ async def assess_bot_readiness(
         connection_resolver=connection_resolver,
         worker_probe_store=worker_probe_store,
         key_vault=key_vault,
+        model_registry=model_registry,
     )
 
 
@@ -94,6 +116,7 @@ async def assess_bot_instance_readiness(
     connection_resolver: Any,
     worker_probe_store: Any = None,
     key_vault: Any = None,
+    model_registry: Any = None,
 ) -> dict[str, Any]:
     """Assess a persisted or staged bot without exposing connection secrets."""
     checks: list[dict[str, Any]] = []
@@ -113,6 +136,11 @@ async def assess_bot_instance_readiness(
         backend_type = str(backend.type or "").strip().lower()
         provider = str(backend.provider or "").strip().lower()
         label = f"backend[{index}]"
+
+        catalog_blocker = await _catalog_model_blocker(backend, model_registry)
+        if catalog_blocker:
+            checks.append(_check(label, "failed", catalog_blocker, backend_index=index))
+            continue
 
         if backend_type in {"local_llm", "remote_llm", "cli", "browser"}:
             worker_id = str(backend.worker_id or "").strip()

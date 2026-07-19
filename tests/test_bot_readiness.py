@@ -1,5 +1,7 @@
 import pytest
 
+from shared.models import CatalogModel
+
 
 @pytest.mark.anyio
 async def test_bot_readiness_reports_ready_worker_backend(cp_client):
@@ -32,6 +34,50 @@ async def test_bot_readiness_reports_ready_worker_backend(cp_client):
     assert response.json()["enabled"] is True
     assert response.json()["state"] == "ready"
     assert response.json()["summary"]["failed"] == 0
+
+
+@pytest.mark.anyio
+async def test_bot_activation_blocks_backend_missing_from_nonempty_model_catalog(cp_app, cp_client):
+    await cp_app.state.model_registry.register(
+        CatalogModel(id="other-model", name="other-model", provider="ollama_cloud")
+    )
+    await cp_client.post(
+        "/v1/workers",
+        json={
+            "id": "catalog-worker",
+            "name": "Catalog Worker",
+            "host": "catalog-worker",
+            "port": 8001,
+            "capabilities": [
+                {"type": "llm", "provider": "ollama_cloud", "models": ["missing-model"]}
+            ],
+        },
+    )
+
+    response = await cp_client.post(
+        "/v1/bots",
+        json={
+            "id": "missing-catalog-bot",
+            "name": "Missing Catalog Bot",
+            "role": "worker",
+            "backends": [
+                {
+                    "type": "remote_llm",
+                    "worker_id": "catalog-worker",
+                    "provider": "ollama_cloud",
+                    "model": "missing-model",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 409
+    checks = response.json()["detail"]["readiness"]["checks"]
+    assert any(
+        check["message"]
+        == "Model 'missing-model' (provider 'ollama_cloud') is not present/enabled in the model catalog."
+        for check in checks
+    )
 
 
 @pytest.mark.anyio

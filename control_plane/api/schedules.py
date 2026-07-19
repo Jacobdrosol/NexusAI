@@ -39,6 +39,7 @@ async def _require_schedule_target_ready(
             connection_resolver=request.app.state.connection_resolver,
             worker_probe_store=request.app.state.worker_probe_store,
             key_vault=request.app.state.key_vault,
+            model_registry=request.app.state.model_registry,
         )
     except ScheduleAutonomySafetyError as exc:
         raise HTTPException(status_code=409, detail=exc.as_detail()) from exc

@@ -561,6 +561,7 @@ class PlatformAISessionRuntime:
         connection_resolver: Any = None,
         worker_probe_store: Any = None,
         key_vault: Any = None,
+        model_registry: Any = None,
     ) -> None:
         self._store = store
         self._assignment_service = assignment_service
@@ -572,6 +573,7 @@ class PlatformAISessionRuntime:
         self._connection_resolver = connection_resolver
         self._worker_probe_store = worker_probe_store
         self._key_vault = key_vault
+        self._model_registry = model_registry
         self._session_tasks: Dict[str, asyncio.Task[None]] = {}
         self._deploy_tasks: Dict[str, asyncio.Task[None]] = {}
         self._repo_edit_tasks: Dict[str, asyncio.Task[None]] = {}
@@ -4756,6 +4758,7 @@ class PlatformAISessionRuntime:
                 connection_resolver=self._connection_resolver,
                 worker_probe_store=self._worker_probe_store,
                 key_vault=self._key_vault,
+                model_registry=self._model_registry,
             )
         except Exception:
             readiness = {

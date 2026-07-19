@@ -156,6 +156,7 @@ async def lifespan(app: FastAPI):
         connection_resolver=connection_resolver,
         worker_probe_store=worker_probe_store,
         key_vault=key_vault,
+        model_registry=model_registry,
     )
     async def _schedule_dispatch_guard(schedule: dict) -> None:
         await require_schedule_autonomy_safety(
@@ -170,6 +171,7 @@ async def lifespan(app: FastAPI):
             connection_resolver=connection_resolver,
             worker_probe_store=worker_probe_store,
             key_vault=key_vault,
+            model_registry=model_registry,
         )
 
     async def _schedule_payload_materializer(schedule: dict) -> dict:

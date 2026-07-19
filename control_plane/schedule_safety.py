@@ -170,6 +170,7 @@ async def require_schedule_runtime_readiness(
     connection_resolver: Any,
     worker_probe_store: Any = None,
     key_vault: Any = None,
+    model_registry: Any = None,
 ) -> None:
     """Verify a schedule target is dispatchable immediately before execution."""
     bot_id = str(
@@ -185,6 +186,7 @@ async def require_schedule_runtime_readiness(
             connection_resolver=connection_resolver,
             worker_probe_store=worker_probe_store,
             key_vault=key_vault,
+            model_registry=model_registry,
         )
     except Exception as exc:
         raise ScheduleAutonomySafetyError(
