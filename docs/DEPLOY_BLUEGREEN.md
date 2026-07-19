@@ -93,6 +93,22 @@ This starts:
 - `dashboard_gateway` on `:5000`
 - `dashboard_blue` as initial active target
 
+## 5a. Start Automatically After Host Reboot
+
+NexusAI includes a systemd unit template at `deploy/systemd/nexusai.service`.
+Install it on a Linux host after the repository and `.env` are in place:
+
+```bash
+sudo install -m 0644 deploy/systemd/nexusai.service /etc/systemd/system/nexusai.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now nexusai.service
+```
+
+The unit starts the existing images and waits for their health checks; it does
+not rebuild images during boot recovery. Use the explicit deployment workflow
+for image builds and upgrades. Update the unit's `WorkingDirectory` if the
+repository is not installed at `/opt/NexusAI`.
+
 ## 6. Use the Settings Deploy Tab
 
 1. Open `http://<host>:5000/settings`
