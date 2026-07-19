@@ -4,6 +4,7 @@ import pytest
 
 from control_plane.schedule_safety import (
     ScheduleAutonomySafetyError,
+    require_schedule_autonomy_safety,
     require_schedule_runtime_readiness,
 )
 from shared.models import BackendConfig, Bot
@@ -95,3 +96,64 @@ async def test_schedule_runtime_readiness_blocks_model_missing_from_catalog():
     assert exc_info.value.blockers == [
         "Model 'missing-model' (provider 'ollama_cloud') is not present/enabled in the model catalog."
     ]
+
+
+def _project_bound_schedule_bot() -> Bot:
+    return Bot(
+        id="project-bound-reviewer",
+        name="Project Bound Reviewer",
+        role="quality_reviewer",
+        enabled=True,
+        backends=[],
+        routing_rules={
+            "specialist": {
+                "kind": "quality_reviewer",
+                "risk_level": "read_only",
+                "project_id": "globeiq",
+            }
+        },
+    )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("project_id", "reason_code"),
+    [
+        (None, "schedule_project_scope_required"),
+        ("another-project", "schedule_project_scope_mismatch"),
+    ],
+)
+async def test_autonomous_schedule_rejects_missing_or_mismatched_specialist_project_scope(
+    project_id,
+    reason_code,
+):
+    bot = _project_bound_schedule_bot()
+    schedule = {
+        "target_bot_id": bot.id,
+        "project_id": project_id,
+        "metadata": {"mutation_safe": True},
+    }
+
+    with pytest.raises(ScheduleAutonomySafetyError) as exc_info:
+        await require_schedule_autonomy_safety(
+            schedule,
+            bot_registry=_BotRegistry(bot),
+            only_when_active=False,
+        )
+
+    assert exc_info.value.reason_code == reason_code
+
+
+@pytest.mark.anyio
+async def test_autonomous_schedule_allows_matching_specialist_project_scope():
+    bot = _project_bound_schedule_bot()
+
+    await require_schedule_autonomy_safety(
+        {
+            "target_bot_id": bot.id,
+            "project_id": "globeiq",
+            "metadata": {"mutation_safe": True},
+        },
+        bot_registry=_BotRegistry(bot),
+        only_when_active=False,
+    )

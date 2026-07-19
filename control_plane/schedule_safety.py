@@ -114,6 +114,28 @@ def _require_schedule_input_contract(schedule: Dict[str, Any], bot: Any) -> None
         )
 
 
+def _require_specialist_project_scope(schedule: Dict[str, Any], bot: Any) -> None:
+    """Keep autonomous schedule dispatch inside an explicitly bound specialist project."""
+    routing_rules = getattr(bot, "routing_rules", None)
+    specialist = routing_rules.get("specialist") if isinstance(routing_rules, dict) else None
+    if not isinstance(specialist, dict):
+        return
+    specialist_project_id = str(specialist.get("project_id") or "").strip()
+    if not specialist_project_id:
+        return
+    schedule_project_id = str(schedule.get("project_id") or "").strip()
+    if not schedule_project_id:
+        raise ScheduleAutonomySafetyError(
+            "schedule_project_scope_required",
+            f"Schedule target '{bot.id}' is bound to project '{specialist_project_id}' and requires a matching schedule project_id.",
+        )
+    if schedule_project_id != specialist_project_id:
+        raise ScheduleAutonomySafetyError(
+            "schedule_project_scope_mismatch",
+            f"Schedule project '{schedule_project_id}' does not match target '{bot.id}' project '{specialist_project_id}'.",
+        )
+
+
 async def require_schedule_autonomy_safety(
     schedule: Dict[str, Any],
     *,
@@ -147,6 +169,8 @@ async def require_schedule_autonomy_safety(
             "schedule_target_not_ready",
             f"Schedule target '{bot_id}' cannot be inspected for autonomous safety.",
         ) from exc
+
+    _require_specialist_project_scope(schedule, bot)
 
     allowed_restricted_backends = (
         {"browser"} if _is_attested_read_only_browser_inspection(bot, schedule) else set()
