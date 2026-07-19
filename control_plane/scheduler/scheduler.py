@@ -21,6 +21,7 @@ from control_plane.worker_probe import (
     autonomous_worker_probe_max_age_seconds,
     worker_base_url,
 )
+from shared import connection_runtime, connection_secrets
 from shared.bot_policy import bot_allows_repo_output, bot_execution_policy
 from shared.exceptions import BackendError, BotNotFoundError, NoViableBackendError
 from shared.worker_capabilities import required_worker_tools, worker_missing_tools
@@ -1385,12 +1386,6 @@ def _static_connection_context_prompt(rows: list[Any], config: dict[str, Any]) -
     if not target_rows:
         return ""
 
-    try:
-        from dashboard.connections_service import mask_connection_config, parse_openapi_actions
-    except Exception:
-        mask_connection_config = None  # type: ignore[assignment]
-        parse_openapi_actions = None  # type: ignore[assignment]
-
     parts: list[str] = [
         "Attached connection schemas:",
         "Use these attached connection definitions as authoritative for field names, nesting, and allowed JSON shapes.",
@@ -1415,8 +1410,8 @@ def _static_connection_context_prompt(rows: list[Any], config: dict[str, Any]) -
                 connection_config = json.loads(str(_connection_row_value(row, "config_json", "{}") or "{}"))
             except Exception:
                 connection_config = {}
-        if mask_connection_config and isinstance(connection_config, dict):
-            connection_config = mask_connection_config(connection_config)
+        if isinstance(connection_config, dict):
+            connection_config = connection_secrets.mask_connection_config(connection_config)
         if isinstance(connection_config, dict):
             if row_kind == "http":
                 base_url = str(connection_config.get("base_url") or "").strip()
@@ -1427,9 +1422,9 @@ def _static_connection_context_prompt(rows: list[Any], config: dict[str, Any]) -
                 section.append(f"Readonly: {'true' if readonly else 'false'}")
 
         schema_text = str(_connection_row_value(row, "schema_text", "") or "").strip()
-        if include_actions and parse_openapi_actions and row_kind == "http" and schema_text:
+        if include_actions and row_kind == "http" and schema_text:
             try:
-                actions = parse_openapi_actions(schema_text)
+                actions = connection_runtime.parse_openapi_actions(schema_text)
             except Exception:
                 actions = []
             if actions:
@@ -1477,15 +1472,6 @@ def _dynamic_connection_fetch_prompt(rows: list[Any], config: dict[str, Any], pa
     if connection is None:
         return ""
 
-    try:
-        from dashboard.connections_service import (
-            resolve_auth_payload,
-            resolve_connection_config,
-            test_http_connection,
-        )
-    except Exception:
-        return ""
-
     raw_config = _connection_row_value(connection, "config", None)
     if isinstance(raw_config, dict):
         connection_config = raw_config
@@ -1495,13 +1481,13 @@ def _dynamic_connection_fetch_prompt(rows: list[Any], config: dict[str, Any], pa
         except Exception:
             connection_config = {}
     if isinstance(connection_config, dict):
-        connection_config = resolve_connection_config(connection_config)
+        connection_config = connection_secrets.resolve_connection_config(connection_config)
     raw_auth = _connection_row_value(connection, "auth", None)
     if isinstance(raw_auth, dict):
-        auth_payload = resolve_auth_payload(raw_auth)
+        auth_payload = connection_secrets.resolve_auth_payload(raw_auth)
     else:
         try:
-            auth_payload = resolve_auth_payload(json.loads(str(_connection_row_value(connection, "auth_json", "{}") or "{}")))
+            auth_payload = connection_secrets.resolve_auth_payload(json.loads(str(_connection_row_value(connection, "auth_json", "{}") or "{}")))
         except Exception:
             auth_payload = {}
     schema_text = str(_connection_row_value(connection, "schema_text", "") or "")
@@ -1542,7 +1528,7 @@ def _dynamic_connection_fetch_prompt(rows: list[Any], config: dict[str, Any], pa
 
     sections: list[str] = []
     for label, action in actions:
-        result = test_http_connection(
+        result = connection_runtime.test_http_connection(
             config=connection_config if isinstance(connection_config, dict) else {},
             auth=auth_payload if isinstance(auth_payload, dict) else {},
             schema_text=schema_text,
@@ -2922,12 +2908,6 @@ class Scheduler:
         return await asyncio.to_thread(self._run_http_connection_backend_sync, payload, task.bot_id)
 
     def _run_http_connection_backend_sync(self, payload: dict[str, Any], bot_id: str) -> dict[str, Any]:
-        from dashboard.connections_service import (
-            resolve_auth_payload,
-            resolve_connection_config,
-            test_http_connection,
-        )
-
         connection_ref = payload.get("connection") if isinstance(payload.get("connection"), dict) else {}
         requested_name = str(connection_ref.get("name") or payload.get("connection_name") or "").strip()
         requested_id = str(connection_ref.get("id") or payload.get("connection_id") or "").strip()
@@ -2958,8 +2938,8 @@ class Scheduler:
             raise BackendError("http_connection backend only supports HTTP connections")
 
         config = connection.get("config") if isinstance(connection.get("config"), dict) else {}
-        config = resolve_connection_config(config)
-        auth = resolve_auth_payload(connection.get("auth") if isinstance(connection.get("auth"), dict) else {})
+        config = connection_secrets.resolve_connection_config(config)
+        auth = connection_secrets.resolve_auth_payload(connection.get("auth") if isinstance(connection.get("auth"), dict) else {})
         schema_text = str(connection.get("schema_text") or "")
 
         action_results: list[dict[str, Any]] = []
@@ -2970,7 +2950,7 @@ class Scheduler:
 
         for index, action in enumerate(actions):
             op_id = str(action.get("operation_id") or action.get("path") or f"action_{index + 1}").strip()
-            result = test_http_connection(
+            result = connection_runtime.test_http_connection(
                 config=config if isinstance(config, dict) else {},
                 auth=auth if isinstance(auth, dict) else {},
                 schema_text=schema_text,

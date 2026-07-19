@@ -5523,7 +5523,7 @@ class TaskManager:
                                 f"project-scoped connection binding '{connection_id}' is unavailable for project '{project_id}'"
                             )
                         try:
-                            from dashboard.connections_service import mask_auth_payload, mask_connection_config
+                            from shared.connection_secrets import mask_auth_payload, mask_connection_config
 
                             safe_config = mask_connection_config(
                                 resolved.get("config") if isinstance(resolved.get("config"), dict) else {}

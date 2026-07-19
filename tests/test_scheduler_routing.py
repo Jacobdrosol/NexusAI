@@ -2199,8 +2199,8 @@ async def test_scheduler_fetches_dynamic_connection_context_from_payload_items(m
         }
 
     monkeypatch.setattr("dashboard.db.get_db", lambda: FakeSession())
-    monkeypatch.setattr("dashboard.connections_service.resolve_auth_payload", lambda payload: {"type": "api_key", "name": "X-GLOBEIQ-BLOCKS-KEY", "api_key": "live-key"})
-    monkeypatch.setattr("dashboard.connections_service.test_http_connection", fake_http_connection_test)
+    monkeypatch.setattr("shared.connection_secrets.resolve_auth_payload", lambda payload: {"type": "api_key", "name": "X-GLOBEIQ-BLOCKS-KEY", "api_key": "live-key"})
+    monkeypatch.setattr("shared.connection_runtime.test_http_connection", fake_http_connection_test)
 
     bot_registry = AsyncMock()
     bot_registry.get.return_value = Bot(
@@ -2706,9 +2706,9 @@ async def test_scheduler_custom_http_connection_backend_executes_actions(monkeyp
             return None
 
     monkeypatch.setattr("dashboard.db.get_db", lambda: FakeSession())
-    monkeypatch.setattr("dashboard.connections_service.resolve_auth_payload", lambda payload: {"type": "api_key", "api_key": "live-key"})
+    monkeypatch.setattr("shared.connection_secrets.resolve_auth_payload", lambda payload: {"type": "api_key", "api_key": "live-key"})
     monkeypatch.setattr(
-        "dashboard.connections_service.test_http_connection",
+        "shared.connection_runtime.test_http_connection",
         lambda **kwargs: {
             "ok": True,
             "status": 201,
@@ -2807,9 +2807,9 @@ async def test_scheduler_custom_http_connection_404_import_includes_endpoint_hin
             return None
 
     monkeypatch.setattr("dashboard.db.get_db", lambda: FakeSession())
-    monkeypatch.setattr("dashboard.connections_service.resolve_auth_payload", lambda payload: {"type": "api_key", "api_key": "live-key"})
+    monkeypatch.setattr("shared.connection_secrets.resolve_auth_payload", lambda payload: {"type": "api_key", "api_key": "live-key"})
     monkeypatch.setattr(
-        "dashboard.connections_service.test_http_connection",
+        "shared.connection_runtime.test_http_connection",
         lambda **kwargs: {
             "ok": False,
             "status": 404,
