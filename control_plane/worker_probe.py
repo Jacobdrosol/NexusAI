@@ -16,6 +16,7 @@ _HOST_RE = re.compile(r"^(?=.{1,253}$)[A-Za-z0-9_](?:[A-Za-z0-9_.-]*[A-Za-z0-9_]
 _MAX_CAPABILITIES = 64
 _MAX_LIST_ITEMS = 64
 _MAX_VALUE_LENGTH = 160
+_PROVIDER_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
 
 class WorkerProbeError(ValueError):
@@ -177,6 +178,36 @@ def _capability_contract_gaps(
     return gaps
 
 
+def _safe_provider_credentials(value: Any) -> dict[str, bool]:
+    """Preserve only bounded provider readiness flags, never credential material."""
+    if not isinstance(value, dict):
+        return {}
+    credentials: dict[str, bool] = {}
+    for provider, state in list(value.items())[:_MAX_LIST_ITEMS]:
+        normalized = _safe_text(provider).lower()
+        if not _PROVIDER_NAME_RE.fullmatch(normalized):
+            continue
+        configured = state.get("configured") if isinstance(state, dict) else state
+        credentials[normalized] = configured is True
+    return credentials
+
+
+def _missing_provider_credentials(
+    registered: list[dict[str, Any]], provider_credentials: dict[str, bool]
+) -> list[str]:
+    if not provider_credentials:
+        return []
+    return sorted(
+        {
+            capability["provider"]
+            for capability in registered
+            if capability["type"] == "llm"
+            and capability["provider"] in provider_credentials
+            and not provider_credentials[capability["provider"]]
+        }
+    )
+
+
 def _safe_attestation(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         return {}
@@ -190,6 +221,9 @@ def _safe_attestation(value: Any) -> dict[str, Any]:
         "unauthenticated_cli_tools": _safe_string_list(value.get("unauthenticated_cli_tools")),
         "discarded_declared_tool_capabilities": _safe_nonnegative_int(
             value.get("discarded_declared_tool_capabilities")
+        ),
+        "provider_credentials": _safe_provider_credentials(
+            value.get("provider_credentials")
         ),
         "browser": {
             "configured": bool(browser.get("configured")),
@@ -418,6 +452,19 @@ async def probe_worker(
                     "runtime satisfies registered capability contract",
                 )
             )
+
+    missing_credentials = _missing_provider_credentials(
+        registered,
+        result["capability_attestation"].get("provider_credentials", {}),
+    )
+    if missing_credentials:
+        checks.append(
+            _check(
+                "provider_credentials",
+                "fail",
+                "runtime reports missing credentials for: " + ", ".join(missing_credentials),
+            )
+        )
 
     if worker.enabled and worker.status == "online":
         checks.append(

@@ -47,7 +47,8 @@ async def test_register_with_control_plane_returns_false_for_an_error_response(m
 
 
 @pytest.mark.anyio
-async def test_worker_status_endpoints_use_the_capability_attestation_contract():
+async def test_worker_status_endpoints_use_the_capability_attestation_contract(monkeypatch):
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
     app = FastAPI()
     app.include_router(health.router)
     app.include_router(capabilities.router)
@@ -64,3 +65,27 @@ async def test_worker_status_endpoints_use_the_capability_attestation_contract()
     capabilities_payload = capabilities_response.json()
     assert capabilities_payload["configured_capabilities"] == app.state.worker_config["capabilities"]
     assert capabilities_payload["capability_attestation"]["enabled_cli_tools"] == []
+    assert capabilities_payload["capability_attestation"]["provider_credentials"] == {}
+
+
+@pytest.mark.anyio
+async def test_worker_capability_attestation_reports_only_cloud_credential_readiness(monkeypatch):
+    app = FastAPI()
+    app.include_router(capabilities.router)
+    app.state.worker_config = {
+        "id": "worker-1",
+        "capabilities": [
+            {"type": "llm", "provider": "ollama_cloud", "models": ["glm-5.2:cloud"]}
+        ],
+    }
+
+    monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        missing = await client.get("/capabilities")
+
+    monkeypatch.setenv("OLLAMA_API_KEY", "test-key")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        configured = await client.get("/capabilities")
+
+    assert missing.json()["capability_attestation"]["provider_credentials"] == {"ollama_cloud": False}
+    assert configured.json()["capability_attestation"]["provider_credentials"] == {"ollama_cloud": True}

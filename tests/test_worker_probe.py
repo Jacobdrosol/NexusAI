@@ -140,6 +140,34 @@ async def test_probe_worker_marks_capability_contract_mismatch_degraded():
 
 
 @pytest.mark.anyio
+async def test_probe_worker_marks_missing_declared_cloud_credentials_degraded():
+    async def handler(request):
+        if request.url.path == "/health":
+            return httpx.Response(200, json={"status": "ok", "worker_id": "worker-1"})
+        return httpx.Response(
+            200,
+            json={
+                "worker_id": "worker-1",
+                "configured_capabilities": [
+                    {"type": "llm", "provider": "ollama_cloud", "models": ["glm-5.2:cloud"]}
+                ],
+                "capability_attestation": {"provider_credentials": {"ollama_cloud": "present"}},
+            },
+        )
+
+    result = await probe_worker(_worker(), client_factory=_client_factory(handler))
+
+    assert result["probe_status"] == "degraded"
+    assert result["capability_attestation"]["provider_credentials"] == {"ollama_cloud": False}
+    credentials = next(check for check in result["checks"] if check["name"] == "provider_credentials")
+    assert credentials == {
+        "name": "provider_credentials",
+        "status": "fail",
+        "detail": "runtime reports missing credentials for: ollama_cloud",
+    }
+
+
+@pytest.mark.anyio
 async def test_probe_worker_marks_missing_capability_endpoint_degraded():
     async def handler(request):
         if request.url.path == "/health":
