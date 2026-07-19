@@ -489,7 +489,7 @@ def test_http_connection_can_skip_tls_verification(monkeypatch):
         captured["url"] = req.full_url
         return FakeResponse()
 
-    monkeypatch.setattr("dashboard.connections_service.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("shared.connection_runtime.urllib.request.urlopen", fake_urlopen)
 
     result = run_http_connection_test(
         config={"base_url": "https://100.113.128.92:5001", "timeout_seconds": 15, "verify_ssl": False},
@@ -518,7 +518,7 @@ def test_dashboard_http_connection_redacts_query_auth_from_result_url(monkeypatc
             return False
 
     monkeypatch.setattr(
-        "dashboard.connections_service.urllib.request.urlopen",
+        "shared.connection_runtime.urllib.request.urlopen",
         lambda *_args, **_kwargs: FakeResponse(),
     )
 
@@ -557,7 +557,7 @@ def test_http_connection_merges_action_headers(monkeypatch):
         captured["headers"] = dict(req.header_items())
         return FakeResponse()
 
-    monkeypatch.setattr("dashboard.connections_service.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("shared.connection_runtime.urllib.request.urlopen", fake_urlopen)
 
     result = run_http_connection_test(
         config={"base_url": "https://api.example.com"},
@@ -584,7 +584,7 @@ def test_http_connection_rejects_actions_not_declared_in_schema(monkeypatch):
         called = True
         raise AssertionError("Undeclared actions must not make an HTTP request")
 
-    monkeypatch.setattr("dashboard.connections_service.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("shared.connection_runtime.urllib.request.urlopen", fake_urlopen)
 
     result = run_http_connection_test(
         config={"base_url": "https://api.example.com"},

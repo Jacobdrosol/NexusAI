@@ -1,16 +1,9 @@
 """Helpers for bot connections: secret handling, OpenAPI parsing, and tests."""
 from __future__ import annotations
 
-import base64
-import json
 import shlex
-import ssl
-import urllib.error
-import urllib.parse
-import urllib.request
 from typing import Any
 
-import yaml
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import URL, make_url
 
@@ -22,7 +15,7 @@ from shared.connection_secrets import (
     resolve_auth_payload,
     resolve_connection_config,
 )
-from shared.connection_runtime import safe_result_url
+from shared.connection_runtime import parse_openapi_actions, test_http_connection
 
 __all__ = (
     "mask_auth_payload",
@@ -48,167 +41,6 @@ def _mask_dsn_password(dsn: str) -> str:
         return raw
     except Exception:
         return raw
-
-
-def parse_openapi_actions(schema_text: str) -> list[dict[str, str]]:
-    """Extract callable operations from an OpenAPI schema string."""
-    raw = (schema_text or "").strip()
-    if not raw:
-        return []
-    try:
-        doc = json.loads(raw)
-    except Exception:
-        try:
-            doc = yaml.safe_load(raw)
-        except Exception:
-            return []
-    if not isinstance(doc, dict):
-        return []
-    paths = doc.get("paths")
-    if not isinstance(paths, dict):
-        return []
-    actions: list[dict[str, str]] = []
-    for path, methods in paths.items():
-        if not isinstance(methods, dict):
-            continue
-        for method, op in methods.items():
-            m = str(method or "").strip().lower()
-            if m not in {"get", "post", "put", "patch", "delete", "head", "options"}:
-                continue
-            op_obj = op if isinstance(op, dict) else {}
-            op_id = str(op_obj.get("operationId") or f"{m}_{path}").strip()
-            actions.append(
-                {
-                    "operation_id": op_id,
-                    "method": m.upper(),
-                    "path": str(path),
-                }
-            )
-    return actions
-
-
-def _find_action(schema_text: str, operation_id: str | None, method: str | None, path: str | None) -> dict[str, str] | None:
-    actions = parse_openapi_actions(schema_text)
-    if operation_id:
-        for a in actions:
-            if a["operation_id"] == operation_id:
-                return a
-    if method and path:
-        m = method.upper()
-        for a in actions:
-            if a["method"] == m and a["path"] == path:
-                return a
-    return None
-
-
-def _build_url(base_url: str, path: str, path_params: dict[str, Any] | None) -> str:
-    resolved = path
-    for key, value in (path_params or {}).items():
-        resolved = resolved.replace("{" + str(key) + "}", urllib.parse.quote(str(value), safe=""))
-    if base_url:
-        return urllib.parse.urljoin(base_url.rstrip("/") + "/", resolved.lstrip("/"))
-    return resolved
-
-
-def test_http_connection(
-    *,
-    config: dict[str, Any],
-    auth: dict[str, Any],
-    schema_text: str,
-    payload: dict[str, Any],
-) -> dict[str, Any]:
-    """Execute a single HTTP action call and return response metadata."""
-    base_url = str(config.get("base_url") or "").strip()
-    timeout_seconds = int(config.get("timeout_seconds") or 15)
-    verify_ssl = bool(config.get("verify_ssl", True))
-    declared_actions = parse_openapi_actions(schema_text)
-    op = _find_action(
-        schema_text,
-        operation_id=str(payload.get("operation_id") or "").strip() or None,
-        method=str(payload.get("method") or "").strip() or None,
-        path=str(payload.get("path") or "").strip() or None,
-    )
-    if declared_actions and op is None:
-        return {
-            "ok": False,
-            "error": "Requested HTTP action is not declared in the connection schema.",
-        }
-    method = str((op or {}).get("method") or payload.get("method") or "GET").upper()
-    path = str((op or {}).get("path") or payload.get("path") or "/")
-    url = _build_url(base_url, path, payload.get("path_params") if isinstance(payload.get("path_params"), dict) else {})
-
-    headers = {}
-    cfg_headers = config.get("headers")
-    if isinstance(cfg_headers, dict):
-        headers.update({str(k): str(v) for k, v in cfg_headers.items()})
-
-    auth_type = str(auth.get("type") or "none").strip().lower()
-    if auth_type == "api_key":
-        key_name = str(auth.get("name") or "X-API-Key")
-        key_value = str(auth.get("api_key") or "")
-        where = str(auth.get("in") or "header").strip().lower()
-        if where == "query":
-            parsed = urllib.parse.urlparse(url)
-            q = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
-            q.append((key_name, key_value))
-            url = urllib.parse.urlunparse(parsed._replace(query=urllib.parse.urlencode(q)))
-        else:
-            headers[key_name] = key_value
-    elif auth_type == "bearer":
-        token = str(auth.get("bearer_token") or "")
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-    elif auth_type == "basic":
-        username = str(auth.get("username") or "")
-        password = str(auth.get("password") or "")
-        token = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("utf-8")
-        headers["Authorization"] = f"Basic {token}"
-
-    action_headers = payload.get("headers")
-    if isinstance(action_headers, dict):
-        headers.update({str(k): str(v) for k, v in action_headers.items() if v is not None})
-
-    query_params = payload.get("query_params")
-    if isinstance(query_params, dict):
-        parsed = urllib.parse.urlparse(url)
-        q = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
-        for k, v in query_params.items():
-            q.append((str(k), str(v)))
-        url = urllib.parse.urlunparse(parsed._replace(query=urllib.parse.urlencode(q)))
-
-    body_json = payload.get("body_json")
-    body_bytes = None
-    if body_json is not None:
-        body_bytes = json.dumps(body_json).encode("utf-8")
-        headers["Content-Type"] = "application/json"
-
-    req = urllib.request.Request(url=url, method=method, headers=headers, data=body_bytes)
-    ssl_context = None
-    if not verify_ssl:
-        ssl_context = ssl._create_unverified_context()
-    result_url = safe_result_url(url, auth)
-
-    try:
-        with urllib.request.urlopen(req, timeout=timeout_seconds, context=ssl_context) as resp:
-            raw = resp.read(8000).decode("utf-8", errors="replace")
-            return {
-                "ok": 200 <= int(resp.status) < 300,
-                "status": int(resp.status),
-                "url": result_url,
-                "method": method,
-                "verify_ssl": verify_ssl,
-                "body_preview": raw,
-            }
-    except urllib.error.HTTPError as exc:
-        raw = exc.read(8000).decode("utf-8", errors="replace")
-        return {
-            "ok": False,
-            "status": int(exc.code),
-            "url": result_url,
-            "method": method,
-            "verify_ssl": verify_ssl,
-            "body_preview": raw,
-        }
 
 
 def test_database_connection(*, config: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
