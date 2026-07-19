@@ -338,6 +338,64 @@ async def test_worker_heartbeat(cp_client):
     assert resp.status_code == 200
 
 
+def test_worker_probe_refresh_becomes_due_before_schedule_freshness_expires(monkeypatch):
+    from control_plane.api.workers import _worker_probe_refresh_due
+
+    monkeypatch.setenv("NEXUSAI_AUTONOMOUS_WORKER_PROBE_MAX_AGE_SECONDS", "300")
+    now = datetime(2026, 7, 19, 12, 0, tzinfo=timezone.utc)
+
+    assert _worker_probe_refresh_due(
+        {"probe_status": "ready", "checked_at": (now - timedelta(seconds=224)).isoformat()},
+        now=now,
+    ) is False
+    assert _worker_probe_refresh_due(
+        {"probe_status": "ready", "checked_at": (now - timedelta(seconds=225)).isoformat()},
+        now=now,
+    ) is True
+    assert _worker_probe_refresh_due(
+        {"probe_status": "degraded", "checked_at": (now - timedelta(seconds=30)).isoformat()},
+        now=now,
+    ) is True
+    assert _worker_probe_refresh_due(None, now=now) is True
+
+
+@pytest.mark.anyio
+async def test_worker_heartbeat_queues_due_probe_refresh(cp_client, cp_app, monkeypatch):
+    from control_plane.api import workers as workers_api
+
+    worker = {
+        "id": "refresh-on-heartbeat-worker",
+        "name": "Refresh On Heartbeat Worker",
+        "host": "worker.test",
+        "port": 8001,
+        "status": "offline",
+        "capabilities": [],
+        "metrics": {},
+        "enabled": True,
+    }
+    await cp_client.post("/v1/workers", json=worker)
+    await cp_app.state.worker_probe_store.record(
+        {
+            "worker_id": worker["id"],
+            "probe_status": "ready",
+            "checked_at": (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat(),
+            "dispatch_eligible": True,
+            "checks": [],
+        }
+    )
+    queued: list[str] = []
+    monkeypatch.setattr(
+        workers_api,
+        "_queue_worker_probe_refresh",
+        lambda _request, queued_worker_id: queued.append(queued_worker_id),
+    )
+
+    response = await cp_client.post(f"/v1/workers/{worker['id']}/heartbeat", json={})
+
+    assert response.status_code == 200
+    assert queued == [worker["id"]]
+
+
 @pytest.mark.anyio
 async def test_worker_probe_returns_non_mutating_runtime_result(cp_client, monkeypatch):
     worker = {

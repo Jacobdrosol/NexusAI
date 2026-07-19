@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Request
@@ -7,7 +8,12 @@ from pydantic import BaseModel
 
 from control_plane.audit.utils import record_audit_event
 from control_plane.schedule_payload_sources import fleet_health_summary
-from control_plane.worker_probe import WorkerProbeError, probe_worker, verify_worker_inference
+from control_plane.worker_probe import (
+    WorkerProbeError,
+    autonomous_worker_probe_max_age_seconds,
+    probe_worker,
+    verify_worker_inference,
+)
 from shared.exceptions import WorkerNotFoundError
 from shared.models import Worker, WorkerMetrics
 
@@ -15,6 +21,8 @@ router = APIRouter(prefix="/v1/workers", tags=["workers"])
 logger = logging.getLogger(__name__)
 
 _REGISTRATION_PROBE_DELAY_SECONDS = 2.0
+_PROBE_REFRESH_RETRY_SECONDS = 30.0
+_PROBE_REFRESH_FRACTION = 0.75
 
 
 class HeartbeatRequest(BaseModel):
@@ -95,9 +103,15 @@ def _raise_worker_dependency_error(*, reason_code: str, message: str, dependenci
     )
 
 
-async def _refresh_registered_worker_probe(request: Request, worker_id: str) -> None:
-    """Refresh persisted readiness evidence after a worker has finished registering."""
-    await asyncio.sleep(_REGISTRATION_PROBE_DELAY_SECONDS)
+async def _refresh_registered_worker_probe(
+    request: Request,
+    worker_id: str,
+    *,
+    delay_seconds: float = _REGISTRATION_PROBE_DELAY_SECONDS,
+) -> None:
+    """Refresh persisted, non-mutating worker readiness evidence."""
+    if delay_seconds > 0:
+        await asyncio.sleep(delay_seconds)
     try:
         worker = await request.app.state.worker_registry.get(worker_id)
         result = await probe_worker(worker)
@@ -105,7 +119,55 @@ async def _refresh_registered_worker_probe(request: Request, worker_id: str) -> 
     except WorkerNotFoundError:
         return
     except Exception as exc:
-        logger.warning("Worker registration probe failed for %s: %s", worker_id, exc)
+        logger.warning("Worker runtime probe failed for %s: %s", worker_id, exc)
+
+
+def _worker_probe_refresh_due(probe: Any, *, now: datetime | None = None) -> bool:
+    """Refresh before scheduled-dispatch evidence expires, with a short retry for failed probes."""
+    if not isinstance(probe, dict):
+        return True
+    checked_at = str(probe.get("checked_at") or "").strip()
+    try:
+        checked = datetime.fromisoformat(checked_at.replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if checked.tzinfo is None:
+        checked = checked.replace(tzinfo=timezone.utc)
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    age_seconds = (current - checked.astimezone(timezone.utc)).total_seconds()
+    if age_seconds < -30:
+        return True
+    refresh_after = max(15.0, autonomous_worker_probe_max_age_seconds() * _PROBE_REFRESH_FRACTION)
+    if str(probe.get("probe_status") or "").strip().lower() != "ready":
+        return age_seconds >= min(_PROBE_REFRESH_RETRY_SECONDS, refresh_after)
+    return age_seconds >= refresh_after
+
+
+def _queue_worker_probe_refresh(request: Request, worker_id: str) -> None:
+    """Coalesce heartbeat-triggered re-probes so one slow worker cannot create a task storm."""
+    tasks = getattr(request.app.state, "worker_probe_refresh_tasks", None)
+    if not isinstance(tasks, dict):
+        tasks = {}
+        request.app.state.worker_probe_refresh_tasks = tasks
+    existing = tasks.get(worker_id)
+    if existing is not None and not existing.done():
+        return
+    try:
+        task = asyncio.create_task(
+            _refresh_registered_worker_probe(request, worker_id, delay_seconds=0)
+        )
+    except RuntimeError as exc:
+        logger.warning("Worker probe refresh could not start for %s: %s", worker_id, exc)
+        return
+    tasks[worker_id] = task
+
+    def _clear_completed(completed_task: asyncio.Task) -> None:
+        if tasks.get(worker_id) is completed_task:
+            tasks.pop(worker_id, None)
+
+    task.add_done_callback(_clear_completed)
 
 
 @router.post("", response_model=Worker)
@@ -319,6 +381,12 @@ async def heartbeat(worker_id: str, request: Request, body: Optional[HeartbeatRe
         await worker_registry.update_heartbeat(worker_id)
         if body and body.metrics:
             await worker_registry.update_metrics(worker_id, body.metrics)
+        try:
+            probe = await request.app.state.worker_probe_store.get(worker_id)
+            if _worker_probe_refresh_due(probe):
+                _queue_worker_probe_refresh(request, worker_id)
+        except Exception as exc:
+            logger.warning("Worker probe freshness check failed for %s: %s", worker_id, exc)
         return {"status": "ok"}
     except WorkerNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))

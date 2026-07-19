@@ -16,7 +16,11 @@ from cryptography.hazmat.primitives.asymmetric import padding
 
 from control_plane.browser_action_approvals import browser_action_payload_digest
 from control_plane.connections.resolver import ConnectionResolver
-from control_plane.worker_probe import WorkerProbeError, worker_base_url
+from control_plane.worker_probe import (
+    WorkerProbeError,
+    autonomous_worker_probe_max_age_seconds,
+    worker_base_url,
+)
 from shared.bot_policy import bot_allows_repo_output, bot_execution_policy
 from shared.exceptions import BackendError, BotNotFoundError, NoViableBackendError
 from shared.worker_capabilities import required_worker_tools, worker_missing_tools
@@ -115,14 +119,6 @@ def _is_autonomous_schedule_task(task: "Task | None") -> bool:
     if source != "auto_retry" or not isinstance(task.payload, dict):
         return False
     return str(task.payload.get("source") or "").strip().lower() == "agent_schedule"
-
-
-def _autonomous_probe_max_age_seconds() -> float:
-    try:
-        value = float(os.environ.get("NEXUSAI_AUTONOMOUS_WORKER_PROBE_MAX_AGE_SECONDS", "300"))
-    except (TypeError, ValueError):
-        value = 300.0
-    return min(max(value, 30.0), 3600.0)
 
 
 def _mark_test_payload(payload: Any) -> Any:
@@ -3844,7 +3840,7 @@ class Scheduler:
         if checked.tzinfo is None:
             checked = checked.replace(tzinfo=timezone.utc)
         age_seconds = (datetime.now(timezone.utc) - checked.astimezone(timezone.utc)).total_seconds()
-        if age_seconds < -30 or age_seconds > _autonomous_probe_max_age_seconds():
+        if age_seconds < -30 or age_seconds > autonomous_worker_probe_max_age_seconds():
             raise BackendError(
                 f"Autonomous schedule dispatch blocked: worker {worker.id} probe is stale."
             )
