@@ -58,6 +58,32 @@ def test_systemd_recovery_unit_uses_shell_and_skips_boot_rebuilds():
     assert "--build" not in unit
 
 
+def test_core_and_bluegreen_services_have_resource_envelopes():
+    core = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+    bluegreen = yaml.safe_load((ROOT / "docker-compose.bluegreen.yml").read_text(encoding="utf-8"))
+
+    expected_core = {
+        "control_plane": ("${NEXUSAI_CONTROL_PLANE_MEM_LIMIT:-4g}", "${NEXUSAI_CONTROL_PLANE_PIDS_LIMIT:-768}"),
+        "worker_agent": ("${NEXUSAI_CORE_WORKER_MEM_LIMIT:-1g}", "${NEXUSAI_CORE_WORKER_PIDS_LIMIT:-256}"),
+        "dashboard": ("${NEXUSAI_DASHBOARD_MEM_LIMIT:-1g}", "${NEXUSAI_DASHBOARD_PIDS_LIMIT:-256}"),
+        "prometheus": ("${NEXUSAI_PROMETHEUS_MEM_LIMIT:-1g}", "${NEXUSAI_PROMETHEUS_PIDS_LIMIT:-256}"),
+    }
+    for service_name, (memory_limit, pids_limit) in expected_core.items():
+        service = core["services"][service_name]
+        assert service["restart"] == "unless-stopped"
+        assert service["mem_limit"] == memory_limit
+        assert service["pids_limit"] == pids_limit
+
+    gateway = bluegreen["services"]["dashboard_gateway"]
+    assert gateway["mem_limit"] == "${NEXUSAI_GATEWAY_MEM_LIMIT:-256m}"
+    assert gateway["pids_limit"] == "${NEXUSAI_GATEWAY_PIDS_LIMIT:-128}"
+
+    for service_name in ("dashboard_blue", "dashboard_green"):
+        service = bluegreen["services"][service_name]
+        assert service["mem_limit"] == "${NEXUSAI_DASHBOARD_MEM_LIMIT:-1g}"
+        assert service["pids_limit"] == "${NEXUSAI_DASHBOARD_PIDS_LIMIT:-256}"
+
+
 def test_deploy_status_endpoint_returns_payload(dashboard_client):
     _login_admin(dashboard_client)
     resp = dashboard_client.get("/api/settings/deploy/status")

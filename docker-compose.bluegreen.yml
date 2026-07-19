@@ -10,6 +10,11 @@ services:
     image: nginx:1.27-alpine
     container_name: nexus-dashboard-gateway
     restart: unless-stopped
+    shm_size: "${NEXUSAI_GATEWAY_SHM_SIZE:-64m}"
+    cpus: "${NEXUSAI_GATEWAY_CPUS:-0.5}"
+    mem_limit: "${NEXUSAI_GATEWAY_MEM_LIMIT:-256m}"
+    memswap_limit: "${NEXUSAI_GATEWAY_MEMSWAP_LIMIT:-512m}"
+    pids_limit: ${NEXUSAI_GATEWAY_PIDS_LIMIT:-128}
     ports:
       - "5000:5000"
     volumes:
@@ -25,6 +30,11 @@ services:
   dashboard_blue:
     container_name: nexus-dashboard-blue
     restart: unless-stopped
+    shm_size: "${NEXUSAI_DASHBOARD_SHM_SIZE:-256m}"
+    cpus: "${NEXUSAI_DASHBOARD_CPUS:-1.0}"
+    mem_limit: "${NEXUSAI_DASHBOARD_MEM_LIMIT:-1g}"
+    memswap_limit: "${NEXUSAI_DASHBOARD_MEMSWAP_LIMIT:-2g}"
+    pids_limit: ${NEXUSAI_DASHBOARD_PIDS_LIMIT:-256}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     build:
@@ -50,6 +60,11 @@ services:
   dashboard_green:
     container_name: nexus-dashboard-green
     restart: unless-stopped
+    shm_size: "${NEXUSAI_DASHBOARD_SHM_SIZE:-256m}"
+    cpus: "${NEXUSAI_DASHBOARD_CPUS:-1.0}"
+    mem_limit: "${NEXUSAI_DASHBOARD_MEM_LIMIT:-1g}"
+    memswap_limit: "${NEXUSAI_DASHBOARD_MEMSWAP_LIMIT:-2g}"
+    pids_limit: ${NEXUSAI_DASHBOARD_PIDS_LIMIT:-256}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     build:
