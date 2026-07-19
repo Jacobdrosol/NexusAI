@@ -294,6 +294,35 @@ async def test_scheduler_pinned_local_backend_rejects_second_inflight_task():
 
 
 @pytest.mark.anyio
+async def test_scheduler_browser_backend_rejects_second_inflight_task():
+    from control_plane.scheduler.scheduler import BackendError, Scheduler
+
+    worker = Worker(
+        id="browser-worker",
+        name="Browser Worker",
+        host="browser.example",
+        port=8001,
+        capabilities=[Capability(type="tool", provider="browser", models=["browser-ui"])],
+        status="online",
+        enabled=True,
+        metrics=WorkerMetrics(queue_depth=0),
+    )
+    worker_registry = AsyncMock()
+    worker_registry.get.return_value = worker
+    scheduler = Scheduler(bot_registry=AsyncMock(), worker_registry=worker_registry)
+    scheduler._inflight_by_worker[worker.id] = 1
+    backend = BackendConfig(
+        type="browser",
+        provider="browser",
+        model="browser-ui",
+        worker_id=worker.id,
+    )
+
+    with pytest.raises(BackendError, match="has no remaining task capacity"):
+        await scheduler._resolve_browser_worker(backend)
+
+
+@pytest.mark.anyio
 async def test_scheduler_rejects_worker_missing_declared_bot_tools():
     from control_plane.scheduler.scheduler import BackendError, Scheduler
 

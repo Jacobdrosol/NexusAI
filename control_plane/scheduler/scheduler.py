@@ -2072,7 +2072,7 @@ class Scheduler:
         return self._execution_provenance_by_task.pop(str(task_id or ""), None)
 
     def _worker_capacity_limit(self, worker: Worker, backend: BackendConfig) -> int:
-        if str(getattr(backend, "type", "") or "").strip().lower() == "local_llm":
+        if str(getattr(backend, "type", "") or "").strip().lower() in {"browser", "local_llm"}:
             return 1
         return 2**31 - 1
 
