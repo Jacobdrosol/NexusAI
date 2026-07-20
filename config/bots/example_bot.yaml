@@ -9,8 +9,8 @@ enabled: false
 # online and has capacity.  Multiple backends = automatic failover.
 backends:
   - type: local_llm
-    worker_id: worker-main-4070
-    model: llama3-8b-instruct-q4
+    worker_id: example-ollama-worker
+    model: example-model
     provider: ollama
     gpu_id: GPU-0
     params:

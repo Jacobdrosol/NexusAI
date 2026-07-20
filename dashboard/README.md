@@ -84,21 +84,21 @@ Template expressions use `{{payload.some.nested.field}}` and `json:payload.field
 
 ### `connections_service.py` — External Connection Helpers
 
-Provides auth secret handling, OpenAPI schema parsing, and connectivity tests for `http` and `database` connections. No Flask routes — consumed by `routes/connections.py` and `routes/bots.py`.
+Provides auth secret handling, OpenAPI schema parsing, and database connectivity tests. HTTP connection execution is delegated to the shared runtime used by both the dashboard and scheduler. No Flask routes — consumed by `routes/connections.py` and `routes/bots.py`.
 
 **Secret handling:**
-- Secret fields: `api_key`, `bearer_token`, `password`.
-- `normalize_auth_payload()` — encrypts incoming secrets using Fernet (key derived from SHA-256 of `NEXUSAI_SECRET_KEY`), prefixing stored values with `enc:`.
-- `resolve_auth_payload()` — decrypts stored values.
-- `mask_auth_payload()` — replaces secret values with `[REDACTED]` for display.
+- Secret auth fields: `api_key`, `bearer_token`, `password`; connection config also protects DSNs, connection strings, common token fields, and configured HTTP headers.
+- `normalize_auth_payload()` and `normalize_connection_config()` encrypt incoming secrets using Fernet (key derived from SHA-256 of `NEXUSAI_SECRET_KEY`), prefixing stored values with `enc:`.
+- `resolve_auth_payload()` and `resolve_connection_config()` decrypt stored values only for internal connection execution.
+- `mask_auth_payload()` and `mask_connection_config()` replace credentials with `[REDACTED]` for display, API responses, exports, and worker task context.
 
 **OpenAPI parsing:**
 - `parse_openapi_actions(schema_text)` — parses JSON or YAML OpenAPI schema and returns a list of `{operation_id, method, path}` dicts for all HTTP operations.
 
 **HTTP connection test (`test_http_connection`):**
-- Uses `urllib.request` (no extra library).
+- Delegates to `shared.connection_runtime` so dashboard tests and scheduled worker calls use the same implementation.
 - Supports auth types: `api_key` (header or query), `bearer` (Authorization header), `basic` (Base64).
-- Supports custom headers, query params, JSON body, SSL verification toggle.
+- Supports custom headers, query params, JSON body, SSL verification toggle, and redacts configured or credential-like query parameters from returned URLs.
 
 **Database connection test (`test_database_connection`):**
 - Uses SQLAlchemy `create_engine` + `text()`.
@@ -328,5 +328,4 @@ The database (`data/nexusai.db`) is created automatically on first start. Naviga
 - **`deploy_manager.py` reads from `data/active_color.txt`:** This file must be written by the deploy script itself; there is no provision to create or validate it from within the dashboard.
 - **`settings.py` is very large (1192 lines):** The tool install/check logic (Windows vs Linux platform detection, winget, apt, rustup, dotnet-install) would benefit from extraction into a dedicated `tool_installer.py` module.
 - **Inactivity timeout ignores `session_timeout_minutes` type safety:** `int(timeout_raw)` can raise `ValueError` if the setting is corrupt; the `except Exception` silently falls back to 60 minutes.
-- **`connections_service.py` uses `urllib.request` for HTTP tests** while the rest of the codebase uses `requests`. Inconsistent.
 - **`cp_client.py` does not implement retries** — transient CP failures surface as dashboard errors immediately.

@@ -219,6 +219,29 @@
   </section>
 
   <section class="panel">
+    <h2 class="panel-title">Latest Operational QC</h2>
+    {% if operational_quality_report %}
+    <div class="mini-note" style="margin-bottom:0.75rem;">
+      Schedule run:
+      <span class="badge badge-{% if operational_quality_report.run_status == 'completed' %}ready{% elif operational_quality_report.run_status == 'failed' %}failed{% else %}warning{% endif %}">{{ operational_quality_report.run_status }}</span>
+      {% if operational_quality_report.finished_at %}{{ operational_quality_report.finished_at }}{% endif %}
+    </div>
+    {% if operational_quality_report.acceptance_result %}
+    <div class="mini-note" style="margin-bottom:0.5rem;"><strong>Acceptance:</strong> {{ operational_quality_report.acceptance_result }}</div>
+    {% endif %}
+    {% if operational_quality_report.finding_count is not none %}
+    <div class="mini-note" style="margin-bottom:0.5rem;"><strong>Reported findings:</strong> {{ operational_quality_report.finding_count }}</div>
+    {% endif %}
+    {% if operational_quality_report.recommended_next_step %}
+    <div class="mini-note"><strong>Next safe action:</strong> {{ operational_quality_report.recommended_next_step }}</div>
+    {% endif %}
+    <div style="margin-top:0.75rem;"><a class="quick-link" href="{{ url_for('schedules.schedules_page') }}">Review schedules</a></div>
+    {% else %}
+    <div class="empty">No completed operational QC report is available yet.</div>
+    {% endif %}
+  </section>
+
+  <section class="panel">
     <h2 class="panel-title">Fleet Readiness</h2>
     <table>
       <thead><tr><th>Area</th><th>Status</th><th>Detail</th></tr></thead>

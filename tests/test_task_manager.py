@@ -175,6 +175,56 @@ async def test_task_manager_preserves_strict_browser_payload_for_scheduler(tmp_p
 
 
 @pytest.mark.anyio
+async def test_task_manager_preserves_strict_documentation_payload_for_scheduler(tmp_path):
+    import asyncio
+
+    from control_plane.task_manager.task_manager import TaskManager
+
+    class StubRegistry:
+        def __init__(self):
+            self._bots = {
+                "docs-writer": Bot(
+                    id="docs-writer",
+                    name="Docs Writer",
+                    role="docs-hub-writer",
+                    backends=[
+                        BackendConfig(
+                            type="documentation",
+                            provider="documentation",
+                            model="documentation-v1",
+                            worker_id="docs-worker",
+                            api_key_ref="DOCS_TOKEN",
+                        )
+                    ],
+                    execution_policy={"repo_output_mode": "deny", "required_worker_tools": ["documentation-v1"]},
+                )
+            }
+
+        async def get(self, bot_id):
+            return self._bots[bot_id]
+
+    mock_scheduler = AsyncMock()
+    mock_scheduler.schedule.return_value = {"action": "create", "path": "docs/Automation_Workforce/report.md"}
+    tm = TaskManager(mock_scheduler, db_path=str(tmp_path / "documentation-payload.db"), bot_registry=StubRegistry())
+    original_payload = {
+        "action": "create",
+        "path": "docs/Automation_Workforce/report.md",
+        "content": "# Report",
+    }
+    task = await tm.create_task(bot_id="docs-writer", payload=original_payload)
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.05)
+
+    assert updated.status == "completed"
+    scheduled_task = mock_scheduler.schedule.await_args[0][0]
+    assert scheduled_task.payload == original_payload
+
+
+@pytest.mark.anyio
 async def test_task_manager_fails_deny_policy_bot_that_emits_repo_file(tmp_path):
     import asyncio
 
@@ -724,6 +774,108 @@ async def test_task_manager_respects_max_concurrency(tmp_path, monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_task_manager_respects_per_orchestration_concurrency_limit(tmp_path, monkeypatch):
+    import asyncio
+
+    from control_plane.task_manager.task_manager import TaskManager
+
+    active_by_orchestration = {"course-pipeline": 0, "support-pipeline": 0}
+    peak_by_orchestration = {"course-pipeline": 0, "support-pipeline": 0}
+
+    class StubScheduler:
+        async def schedule(self, task):
+            orchestration_id = task.metadata.orchestration_id
+            active_by_orchestration[orchestration_id] += 1
+            peak_by_orchestration[orchestration_id] = max(
+                peak_by_orchestration[orchestration_id],
+                active_by_orchestration[orchestration_id],
+            )
+            await asyncio.sleep(0.05)
+            active_by_orchestration[orchestration_id] -= 1
+            return {"task": task.id}
+
+    monkeypatch.setenv("NEXUSAI_TASK_MAX_CONCURRENCY", "4")
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "orchestration-queue.db"))
+    for idx in range(4):
+        await tm.create_task(
+            bot_id="course-writer",
+            payload={"i": idx},
+            metadata=TaskMetadata(
+                orchestration_id="course-pipeline",
+                orchestration_concurrency_limit=1,
+            ),
+        )
+    for idx in range(3):
+        await tm.create_task(
+            bot_id="support-writer",
+            payload={"i": idx},
+            metadata=TaskMetadata(
+                orchestration_id="support-pipeline",
+                orchestration_concurrency_limit=2,
+            ),
+        )
+
+    for _ in range(120):
+        tasks = await tm.list_tasks()
+        if len(tasks) == 7 and all(task.status == "completed" for task in tasks):
+            break
+        await asyncio.sleep(0.05)
+
+    tasks = await tm.list_tasks()
+    assert len(tasks) == 7
+    assert all(task.status == "completed" for task in tasks)
+    assert peak_by_orchestration["course-pipeline"] <= 1
+    assert peak_by_orchestration["support-pipeline"] <= 2
+    assert peak_by_orchestration["support-pipeline"] == 2
+
+
+@pytest.mark.anyio
+async def test_task_manager_snapshots_pipeline_launch_concurrency_for_children(tmp_path):
+    from control_plane.task_manager.task_manager import TaskManager
+
+    class StubRegistry:
+        async def get(self, bot_id):
+            assert bot_id == "course-entry"
+            return Bot(
+                id="course-entry",
+                name="Course Entry",
+                role="orchestrator",
+                backends=[],
+                routing_rules={
+                    "launch_profile": {
+                        "is_pipeline": True,
+                        "pipeline_name": "Course Revision",
+                        "concurrency_limit": 2,
+                    }
+                },
+            )
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {"task": task.id}
+
+    tm = TaskManager(
+        StubScheduler(),
+        db_path=str(tmp_path / "pipeline-metadata.db"),
+        bot_registry=StubRegistry(),
+    )
+    root = await tm.create_task(bot_id="course-entry", payload={"instruction": "run"})
+    metadata = root.metadata
+    assert metadata.pipeline_entry_bot_id == "course-entry"
+    assert metadata.pipeline_name == "Course Revision"
+    assert metadata.orchestration_id
+    assert metadata.orchestration_concurrency_limit == 2
+
+    child_metadata = tm._trigger_child_metadata(
+        metadata,
+        parent_task_id=root.id,
+        trigger_rule_id="entry-to-qc",
+    )
+    assert child_metadata.orchestration_id == metadata.orchestration_id
+    assert child_metadata.orchestration_concurrency_limit == 2
+
+
+@pytest.mark.anyio
 async def test_task_manager_respects_provider_concurrency_limits(tmp_path, monkeypatch):
     import asyncio
 
@@ -794,6 +946,138 @@ async def test_task_manager_respects_provider_concurrency_limits(tmp_path, monke
     assert all(task.status == "completed" for task in tasks)
     assert peak_by_provider["openai"] <= 1
     assert peak_by_provider["ollama_cloud"] <= 2
+
+
+@pytest.mark.anyio
+async def test_task_manager_queues_browser_tasks_for_the_same_worker(tmp_path, monkeypatch):
+    import asyncio
+
+    from control_plane.task_manager.task_manager import TaskManager
+
+    active_by_worker = {"browser-a": 0, "browser-b": 0}
+    peak_by_worker = {"browser-a": 0, "browser-b": 0}
+
+    class StubRegistry:
+        def __init__(self):
+            self._bots = {
+                "browser-a-one": Bot(
+                    id="browser-a-one",
+                    name="Browser A One",
+                    role="inspector",
+                    backends=[{"type": "browser", "provider": "browser", "model": "browser-ui", "worker_id": "browser-a"}],
+                ),
+                "browser-a-two": Bot(
+                    id="browser-a-two",
+                    name="Browser A Two",
+                    role="inspector",
+                    backends=[{"type": "browser", "provider": "browser", "model": "browser-ui", "worker_id": "browser-a"}],
+                ),
+                "browser-b": Bot(
+                    id="browser-b",
+                    name="Browser B",
+                    role="inspector",
+                    backends=[{"type": "browser", "provider": "browser", "model": "browser-ui", "worker_id": "browser-b"}],
+                ),
+            }
+
+        async def get(self, bot_id):
+            return self._bots[bot_id]
+
+    class StubScheduler:
+        async def schedule(self, task):
+            worker_id = "browser-b" if task.bot_id == "browser-b" else "browser-a"
+            active_by_worker[worker_id] += 1
+            peak_by_worker[worker_id] = max(peak_by_worker[worker_id], active_by_worker[worker_id])
+            await asyncio.sleep(0.05)
+            active_by_worker[worker_id] -= 1
+            return {"task": task.id, "worker_id": worker_id}
+
+    monkeypatch.setenv("NEXUSAI_TASK_MAX_CONCURRENCY", "3")
+    tm = TaskManager(
+        StubScheduler(),
+        db_path=str(tmp_path / "browser-worker-queue.db"),
+        bot_registry=StubRegistry(),
+    )
+    for bot_id in ("browser-a-one", "browser-a-two", "browser-b"):
+        await tm.create_task(bot_id=bot_id, payload={"instruction": "inspect"})
+
+    for _ in range(80):
+        tasks = await tm.list_tasks()
+        if len(tasks) == 3 and all(task.status == "completed" for task in tasks):
+            break
+        await asyncio.sleep(0.05)
+
+    tasks = await tm.list_tasks()
+    assert len(tasks) == 3
+    assert all(task.status == "completed" for task in tasks)
+    assert peak_by_worker["browser-a"] == 1
+    assert peak_by_worker["browser-b"] == 1
+
+
+@pytest.mark.anyio
+async def test_task_manager_queues_documentation_tasks_for_the_same_worker(tmp_path, monkeypatch):
+    import asyncio
+
+    from control_plane.task_manager.task_manager import TaskManager
+
+    active_by_worker = {"docs-a": 0, "docs-b": 0}
+    peak_by_worker = {"docs-a": 0, "docs-b": 0}
+
+    class StubRegistry:
+        def __init__(self):
+            self._bots = {
+                "docs-a-one": Bot(
+                    id="docs-a-one",
+                    name="Docs A One",
+                    role="docs-hub-writer",
+                    backends=[{"type": "documentation", "provider": "documentation", "model": "documentation-v1", "worker_id": "docs-a"}],
+                ),
+                "docs-a-two": Bot(
+                    id="docs-a-two",
+                    name="Docs A Two",
+                    role="docs-hub-writer",
+                    backends=[{"type": "documentation", "provider": "documentation", "model": "documentation-v1", "worker_id": "docs-a"}],
+                ),
+                "docs-b": Bot(
+                    id="docs-b",
+                    name="Docs B",
+                    role="docs-hub-writer",
+                    backends=[{"type": "documentation", "provider": "documentation", "model": "documentation-v1", "worker_id": "docs-b"}],
+                ),
+            }
+
+        async def get(self, bot_id):
+            return self._bots[bot_id]
+
+    class StubScheduler:
+        async def schedule(self, task):
+            worker_id = "docs-b" if task.bot_id == "docs-b" else "docs-a"
+            active_by_worker[worker_id] += 1
+            peak_by_worker[worker_id] = max(peak_by_worker[worker_id], active_by_worker[worker_id])
+            await asyncio.sleep(0.05)
+            active_by_worker[worker_id] -= 1
+            return {"task": task.id, "worker_id": worker_id}
+
+    monkeypatch.setenv("NEXUSAI_TASK_MAX_CONCURRENCY", "3")
+    tm = TaskManager(
+        StubScheduler(),
+        db_path=str(tmp_path / "documentation-worker-queue.db"),
+        bot_registry=StubRegistry(),
+    )
+    for bot_id in ("docs-a-one", "docs-a-two", "docs-b"):
+        await tm.create_task(bot_id=bot_id, payload={"action": "create"})
+
+    for _ in range(80):
+        tasks = await tm.list_tasks()
+        if len(tasks) == 3 and all(task.status == "completed" for task in tasks):
+            break
+        await asyncio.sleep(0.05)
+
+    tasks = await tm.list_tasks()
+    assert len(tasks) == 3
+    assert all(task.status == "completed" for task in tasks)
+    assert peak_by_worker["docs-a"] == 1
+    assert peak_by_worker["docs-b"] == 1
 
 
 @pytest.mark.anyio
@@ -1148,6 +1432,126 @@ async def test_create_task_rejects_payloads_that_violate_input_contract(tmp_path
             bot_id="outline-bot",
             payload={"course_brief": {"topic": "AP World History"}},
         )
+
+
+@pytest.mark.anyio
+async def test_create_task_enforces_and_inherits_bound_bot_project_scope(tmp_path):
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {"project_id": task.metadata.project_id if task.metadata else None}
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "project-bound-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="globeiq-reviewer",
+            name="GlobeIQ Reviewer",
+            role="quality_reviewer",
+            project_id="globeiq",
+            backends=[],
+        )
+    )
+    tm = TaskManager(
+        StubScheduler(),
+        db_path=str(tmp_path / "project-bound-tasks.db"),
+        bot_registry=bot_registry,
+    )
+
+    task = await tm.create_task(bot_id="globeiq-reviewer", payload={"instruction": "Review lesson"})
+    assert task.metadata is not None
+    assert task.metadata.project_id == "globeiq"
+
+    with pytest.raises(ValueError, match="does not match bot 'globeiq-reviewer' project 'globeiq'"):
+        await tm.create_task(
+            bot_id="globeiq-reviewer",
+            payload={"instruction": "Review lesson"},
+            metadata=TaskMetadata(project_id="another-project"),
+        )
+
+    with pytest.raises(ValueError, match="Task payload project 'another-project'"):
+        await tm.create_task(
+            bot_id="globeiq-reviewer",
+            payload={"instruction": "Review lesson", "project_id": "another-project"},
+        )
+
+
+@pytest.mark.anyio
+async def test_create_task_refuses_an_unavailable_bot_when_registry_is_configured(tmp_path):
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {"task_id": task.id}
+
+    tm = TaskManager(
+        StubScheduler(),
+        db_path=str(tmp_path / "unavailable-bot-tasks.db"),
+        bot_registry=BotRegistry(db_path=str(tmp_path / "unavailable-bot-registry.db")),
+    )
+
+    with pytest.raises(ValueError, match="refusing task creation until its scope can be verified"):
+        await tm.create_task(bot_id="missing-bot", payload={"instruction": "must not queue"})
+
+    assert await tm.list_tasks() == []
+
+
+@pytest.mark.anyio
+async def test_trigger_keeps_project_scope_when_optional_metadata_is_not_inherited(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {"bot_id": task.bot_id}
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "trigger-project-scope-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="globeiq-source",
+            name="GlobeIQ Source",
+            role="assistant",
+            project_id="globeiq",
+            backends=[],
+            workflow={
+                "triggers": [
+                    {
+                        "id": "handoff-without-optional-context",
+                        "event": "task_completed",
+                        "target_bot_id": "shared-worker",
+                        "condition": "has_result",
+                        "inherit_metadata": False,
+                    }
+                ]
+            },
+        )
+    )
+    await bot_registry.register(Bot(id="shared-worker", name="Shared Worker", role="assistant", backends=[]))
+    tm = TaskManager(
+        StubScheduler(),
+        db_path=str(tmp_path / "trigger-project-scope-tasks.db"),
+        bot_registry=bot_registry,
+    )
+
+    root = await tm.create_task(
+        bot_id="globeiq-source",
+        payload={"instruction": "Review the GlobeIQ course"},
+    )
+    for _ in range(40):
+        tasks = await tm.list_tasks()
+        if len(tasks) == 2 and all(task.status == "completed" for task in tasks):
+            break
+        await asyncio.sleep(0.05)
+
+    tasks = await tm.list_tasks()
+    child = next(task for task in tasks if task.id != root.id)
+    assert child.metadata is not None
+    assert child.metadata.project_id == "globeiq"
+    assert child.metadata.parent_task_id == root.id
 
 
 @pytest.mark.anyio
@@ -2685,6 +3089,30 @@ async def test_running_task_watchdog_respects_progress_heartbeat(tmp_path, monke
 
 
 @pytest.mark.anyio
+async def test_task_manager_watchdog_does_not_retain_unmanaged_manager(tmp_path):
+    import asyncio
+
+    from control_plane.task_manager.task_manager import TaskManager
+
+    class StubScheduler:
+        async def schedule(self, _task):
+            return {"ok": True}
+
+    manager = TaskManager(StubScheduler(), db_path=str(tmp_path / "watchdog-lifecycle.db"))
+    try:
+        await manager._ensure_db()
+        watchdog = manager._watchdog_task
+        assert watchdog is not None
+        await asyncio.sleep(0)
+
+        frame = watchdog.get_coro().cr_frame
+        assert frame is not None
+        assert all(value is not manager for value in frame.f_locals.values())
+    finally:
+        await manager.close()
+
+
+@pytest.mark.anyio
 async def test_trigger_can_resolve_target_bot_from_result_field(tmp_path):
     import asyncio
 
@@ -3545,6 +3973,54 @@ async def test_course_pipeline_cardinality_matches_expected_branch_counts(tmp_pa
         assert task.payload["join_expected_count"] == 4
         assert task.payload["join_count"] == 4
 
+
+@pytest.mark.anyio
+async def test_task_creation_cannot_overwrite_a_completed_triggered_task(tmp_path):
+    import asyncio
+
+    from control_plane.task_manager.task_manager import TaskManager
+
+    started = asyncio.Event()
+    initial_upsert_started = asyncio.Event()
+    allow_initial_upsert = asyncio.Event()
+
+    class StubScheduler:
+        async def schedule(self, task):
+            started.set()
+            return {"ok": True}
+
+    manager = TaskManager(StubScheduler(), db_path=str(tmp_path / "creation-race.db"))
+    original_upsert = manager._upsert_bot_run
+
+    async def delayed_upsert(task):
+        if task.bot_id == "race-bot" and task.status == "queued" and not initial_upsert_started.is_set():
+            initial_upsert_started.set()
+            await allow_initial_upsert.wait()
+        await original_upsert(task)
+
+    manager._upsert_bot_run = delayed_upsert
+    try:
+        create_task = asyncio.create_task(manager.create_task(bot_id="race-bot", payload={"instruction": "run"}))
+        await initial_upsert_started.wait()
+
+        await manager._schedule_ready_tasks()
+        assert not started.is_set()
+
+        allow_initial_upsert.set()
+        created = await create_task
+        for _ in range(50):
+            task = await manager.get_task(created.id)
+            if task.status == "completed":
+                break
+            await asyncio.sleep(0.02)
+
+        task = await manager.get_task(created.id)
+        assert task.status == "completed"
+        assert started.is_set()
+    finally:
+        await manager.close()
+
+
 @pytest.mark.anyio
 async def test_trigger_can_fan_out_from_bare_result_field(tmp_path):
     import asyncio
@@ -4156,6 +4632,102 @@ async def test_history_retention_previews_and_purges_only_unreferenced_terminal_
     assert purgeable.id not in manager._tasks
     assert protected.id in manager._tasks
     await manager.close()
+
+
+@pytest.mark.anyio
+async def test_restart_keeps_only_active_task_context_and_lazily_reads_terminal_history(tmp_path):
+    from control_plane.task_manager.task_manager import TaskManager
+
+    class StubScheduler:
+        pass
+
+    db_path = str(tmp_path / "lazy-history.db")
+    manager = TaskManager(StubScheduler(), db_path=db_path)
+    await manager._ensure_db()
+    timestamp = "2026-07-19T00:00:00+00:00"
+    dependency = Task(
+        id="completed-dependency",
+        bot_id="history-bot",
+        payload={"body": "dependency"},
+        metadata=TaskMetadata(),
+        status="completed",
+        result={"outcome": "pass"},
+        created_at=timestamp,
+        updated_at=timestamp,
+    )
+    unrelated_terminal = Task(
+        id="unrelated-terminal",
+        bot_id="history-bot",
+        payload={"body": "archive-me"},
+        metadata=TaskMetadata(),
+        status="completed",
+        result={"report": "historical result"},
+        created_at=timestamp,
+        updated_at=timestamp,
+    )
+    active = Task(
+        id="active-blocked",
+        bot_id="history-bot",
+        payload={"body": "wait-for-dependency"},
+        metadata=TaskMetadata(),
+        depends_on=[dependency.id],
+        status="blocked",
+        created_at=timestamp,
+        updated_at=timestamp,
+    )
+    for task in (dependency, unrelated_terminal, active):
+        manager._tasks[task.id] = task
+        await manager._persist_task(task)
+        await manager._upsert_bot_run(task)
+        await manager._persist_dependencies(task)
+    await manager.close()
+
+    restarted = TaskManager(StubScheduler(), db_path=db_path)
+    await restarted._ensure_db()
+
+    assert active.id in restarted._tasks
+    assert dependency.id in restarted._tasks
+    assert unrelated_terminal.id not in restarted._tasks
+
+    loaded = await restarted.get_task(unrelated_terminal.id)
+    assert loaded.result == {"report": "historical result"}
+    assert unrelated_terminal.id not in restarted._tasks
+
+    completed = await restarted.list_tasks(statuses=["completed"])
+    assert {task.id for task in completed} == {dependency.id, unrelated_terminal.id}
+    assert await restarted.count_tasks_by_status() == {"blocked": 1, "completed": 2}
+
+
+@pytest.mark.anyio
+async def test_completed_standalone_task_evicts_from_runtime_cache(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {"outcome": "complete"}
+
+    registry = BotRegistry(db_path=str(tmp_path / "standalone-bots.db"))
+    await registry.register(Bot(id="standalone-bot", name="Standalone", role="reader", backends=[]))
+    manager = TaskManager(
+        StubScheduler(),
+        db_path=str(tmp_path / "standalone-tasks.db"),
+        bot_registry=registry,
+    )
+    task = await manager.create_task(bot_id="standalone-bot", payload={"body": "complete"})
+
+    for _ in range(40):
+        completed = await manager.get_task(task.id)
+        if completed.status == "completed":
+            break
+        await asyncio.sleep(0.1)
+
+    assert completed.status == "completed"
+    assert task.id not in manager._tasks
+    assert (await manager.get_task(task.id)).result == {"outcome": "complete"}
 
 
 @pytest.mark.anyio
@@ -4811,6 +5383,7 @@ async def test_output_contract_error_avoids_false_truncation_hint_for_closed_jso
     assert updated.error is not None
     assert "non-empty fields" in updated.error.message
     assert "likely truncated model output" not in updated.error.message
+    assert updated.error.code == "output_contract_invalid"
 
 
 @pytest.mark.anyio
@@ -4867,6 +5440,7 @@ async def test_output_contract_disabled_fallback_mode_does_not_mask_parse_failur
     assert updated.status == "failed"
     assert updated.error is not None
     assert "valid JSON object or array" in updated.error.message
+    assert updated.error.code == "output_contract_invalid"
 
 
 @pytest.mark.anyio

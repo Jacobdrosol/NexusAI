@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from typing import Dict, Iterable, List, Sequence, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from shared.models import Bot, BotExecutionPolicy
 
 
-_AUTONOMOUSLY_RESTRICTED_BACKEND_TYPES = frozenset({"browser", "cli"})
+_AUTONOMOUSLY_RESTRICTED_BACKEND_TYPES = frozenset({"browser", "cli", "documentation"})
+_SUPERVISION_ACTION_TYPES = frozenset({"pause_schedule", "hold_bot", "configuration_review"})
 
 
 def bot_execution_policy(bot: Bot) -> BotExecutionPolicy:
@@ -47,6 +48,45 @@ def bot_allows_run_result_ingest(bot: Bot) -> bool:
 
 def bot_can_apply_db_actions(bot: Bot) -> bool:
     return bool(bot_execution_policy(bot).can_apply_db_actions)
+
+
+def supervision_manager_config(bot: Bot) -> Optional[Dict[str, Any]]:
+    """Return a normalized, bounded manager portfolio or ``None`` for normal bots.
+
+    The configuration lives in routing_rules so public deployments can define their
+    own portfolios without making the shared bot schema host-specific.  The returned
+    value deliberately contains only fields used by the control plane.
+    """
+    routing = getattr(bot, "routing_rules", None)
+    raw = routing.get("supervision_manager") if isinstance(routing, dict) else None
+    if not isinstance(raw, dict) or raw.get("enabled") is not True:
+        return None
+
+    portfolio = raw.get("portfolio") if isinstance(raw.get("portfolio"), dict) else {}
+    action_policy = raw.get("action_policy") if isinstance(raw.get("action_policy"), dict) else {}
+
+    def _ids(value: Any) -> List[str]:
+        if not isinstance(value, list):
+            return []
+        result: List[str] = []
+        seen: Set[str] = set()
+        for item in value:
+            normalized = str(item or "").strip()
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                result.append(normalized)
+        return result
+
+    raw_actions = action_policy.get("allow_actions")
+    allowed_actions = _ids(raw_actions) if raw_actions is not None else list(_SUPERVISION_ACTION_TYPES)
+    return {
+        "project_id": str(portfolio.get("project_id") or bot.project_id or "").strip() or None,
+        "bot_ids": _ids(portfolio.get("bot_ids")),
+        "schedule_ids": _ids(portfolio.get("schedule_ids")),
+        "allowed_actions": [
+            action for action in allowed_actions if action in _SUPERVISION_ACTION_TYPES
+        ],
+    }
 
 
 def bot_autonomous_dispatch_blockers(
@@ -149,6 +189,54 @@ def validate_reference_graph(bot: Bot) -> List[str]:
 
 def validate_bot_configuration(bot: Bot) -> List[str]:
     errors = validate_reference_graph(bot)
+    execution_policy = bot_execution_policy(bot)
+    approval_required = {
+        str(action or "").strip()
+        for action in execution_policy.browser_action_owner_approval_required
+        if str(action or "").strip()
+    }
+    authorized_browser_actions = {
+        str(action or "").strip()
+        for action in execution_policy.browser_action_allowlist
+        if str(action or "").strip()
+    }
+    unrecognized_approval_actions = sorted(approval_required - authorized_browser_actions)
+    if unrecognized_approval_actions:
+        errors.append(
+            f"Bot '{bot.id}' requires owner approval for browser actions not present in its allowlist: "
+            + ", ".join(unrecognized_approval_actions)
+        )
+    connection_approval_required = {
+        str(action or "").strip()
+        for action in execution_policy.connection_action_owner_approval_required
+        if str(action or "").strip()
+    }
+    authorized_connection_actions = {
+        str(action or "").strip()
+        for action in execution_policy.connection_action_allowlist
+        if str(action or "").strip()
+    }
+    unrecognized_connection_approval_actions = sorted(
+        connection_approval_required - authorized_connection_actions
+    )
+    if unrecognized_connection_approval_actions:
+        errors.append(
+            f"Bot '{bot.id}' requires owner approval for connection actions not present in its allowlist: "
+            + ", ".join(unrecognized_connection_approval_actions)
+        )
+    authorized_documentation_actions = {
+        str(action or "").strip()
+        for action in execution_policy.documentation_action_allowlist
+        if str(action or "").strip()
+    }
+    unsupported_documentation_actions = sorted(
+        authorized_documentation_actions - {"documentation.create", "documentation.save"}
+    )
+    if unsupported_documentation_actions:
+        errors.append(
+            f"Bot '{bot.id}' has unsupported documentation actions: "
+            + ", ".join(unsupported_documentation_actions)
+        )
     if bot_is_project_manager(bot) and not bot_has_explicit_workflow(bot):
         errors.append(f"Bot '{bot.id}' is marked as a project manager but has no explicit workflow triggers.")
     routing = getattr(bot, "routing_rules", None)
@@ -166,6 +254,107 @@ def validate_bot_configuration(bot: Bot) -> List[str]:
             errors.append(
                 f"Bot '{bot.id}' external_trigger.auth_token_ref is required when external triggering is enabled."
             )
+    specialist = routing.get("specialist") if isinstance(routing, dict) else None
+    if isinstance(specialist, dict):
+        specialist_kind = str(specialist.get("kind") or "").strip()
+        specialist_risk = str(specialist.get("risk_level") or "").strip()
+        context_access = getattr(bot, "context_access", None)
+        if isinstance(context_access, dict):
+            self_serve = context_access.get("can_self_serve") or []
+        else:
+            self_serve = getattr(context_access, "can_self_serve", None) or []
+        self_serve_sources = {
+            str(source or "").strip().lower()
+            for source in self_serve
+            if str(source or "").strip()
+        }
+
+        if execution_policy.workspace_context_injection and "repo" not in self_serve_sources:
+            errors.append(
+                f"Specialist bot '{bot.id}' enables workspace context but does not declare repo self-service access."
+            )
+        if execution_policy.repo_output_mode == "allow":
+            if specialist_kind != "code_implementer" or specialist_risk != "guarded_write":
+                errors.append(
+                    f"Specialist bot '{bot.id}' may grant repository writes only to a guarded_write code_implementer."
+                )
+            if not execution_policy.workspace_context_injection or "repo" not in self_serve_sources:
+                errors.append(
+                    f"Writable specialist bot '{bot.id}' requires injected workspace context and repo self-service access."
+                )
+            if specialist.get("repo_write_granted") is not True or specialist.get("operator_review_required") is not True:
+                errors.append(
+                    f"Writable specialist bot '{bot.id}' requires an explicit repository-write grant and operator review marker."
+                )
+
+    manager = routing.get("supervision_manager") if isinstance(routing, dict) else None
+    if manager is not None:
+        if not isinstance(manager, dict):
+            errors.append(f"Bot '{bot.id}' supervision_manager must be an object.")
+        elif manager.get("enabled") is not True:
+            errors.append(f"Bot '{bot.id}' supervision_manager.enabled must be true when the manager profile is present.")
+        else:
+            config = supervision_manager_config(bot)
+            portfolio = manager.get("portfolio")
+            action_policy = manager.get("action_policy")
+            profile = routing.get("worker_profile") if isinstance(routing, dict) else None
+            profile = profile if isinstance(profile, dict) else {}
+            task_scope = str(profile.get("task_scope") or "").strip().lower()
+            if not isinstance(portfolio, dict):
+                errors.append(f"Manager bot '{bot.id}' requires a supervision_manager.portfolio object.")
+            elif not config or not (config["bot_ids"] or config["schedule_ids"]):
+                errors.append(
+                    f"Manager bot '{bot.id}' requires at least one explicit portfolio bot_ids or schedule_ids entry."
+                )
+            if not isinstance(action_policy, dict):
+                errors.append(f"Manager bot '{bot.id}' requires a supervision_manager.action_policy object.")
+            else:
+                raw_actions = action_policy.get("allow_actions")
+                if not isinstance(raw_actions, list) or not raw_actions:
+                    errors.append(
+                        f"Manager bot '{bot.id}' requires a non-empty action_policy.allow_actions list."
+                    )
+                else:
+                    unsupported = sorted(
+                        {
+                            str(action or "").strip()
+                            for action in raw_actions
+                            if str(action or "").strip() not in _SUPERVISION_ACTION_TYPES
+                        }
+                    )
+                    if unsupported:
+                        errors.append(
+                            f"Manager bot '{bot.id}' uses unsupported supervision actions: "
+                            + ", ".join(unsupported)
+                        )
+            if bool(profile.get("can_edit")) or not task_scope.startswith("read-only-manager-review"):
+                errors.append(
+                    f"Manager bot '{bot.id}' requires a non-editing worker_profile with a read-only-manager-review task scope."
+                )
+            if execution_policy.repo_output_mode != "deny" or execution_policy.can_apply_db_actions:
+                errors.append(
+                    f"Manager bot '{bot.id}' must deny repository output and database actions."
+                )
+            output_contract = routing.get("output_contract") if isinstance(routing, dict) else None
+            if not isinstance(output_contract, dict) or str(output_contract.get("format") or "").strip().lower() != "json_object":
+                errors.append(
+                    f"Manager bot '{bot.id}' requires an output_contract with format json_object."
+                )
+            else:
+                required_fields = {
+                    str(field or "").strip()
+                    for field in output_contract.get("required_fields") or []
+                    if str(field or "").strip()
+                }
+                missing_fields = sorted(
+                    {"executive_summary", "overall_status", "portfolio", "action_proposals"}
+                    - required_fields
+                )
+                if missing_fields:
+                    errors.append(
+                        f"Manager bot '{bot.id}' output_contract.required_fields is missing: "
+                        + ", ".join(missing_fields)
+                    )
     return errors
 
 

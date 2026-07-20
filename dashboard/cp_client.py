@@ -167,6 +167,9 @@ class CPClient:
     def get_worker(self, worker_id: str) -> Optional[Dict]:
         return self._get(f"/v1/workers/{worker_id}")
 
+    def get_worker_dependencies(self, worker_id: str) -> Optional[Dict[str, Any]]:
+        return self._get(f"/v1/workers/{worker_id}/dependencies")
+
     def register_worker(self, worker: Dict) -> Optional[Dict]:
         return self._post("/v1/workers", worker)
 
@@ -208,6 +211,9 @@ class CPClient:
     def get_bot(self, bot_id: str) -> Optional[Dict]:
         return self._get(f"/v1/bots/{bot_id}")
 
+    def get_bot_dependencies(self, bot_id: str) -> Optional[Dict[str, Any]]:
+        return self._get(f"/v1/bots/{bot_id}/dependencies")
+
     def get_bot_readiness(self, bot_id: str) -> Optional[Dict[str, Any]]:
         return self._get(f"/v1/bots/{bot_id}/readiness")
 
@@ -225,6 +231,10 @@ class CPClient:
 
     def preview_bot_blueprint(self, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return self._post("/v1/bot-blueprints/preview", body)
+
+    def preflight_bot_blueprint(self, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Validate a generated specialist config without registering it."""
+        return self.preflight_bot(body)
 
     def create_bot_blueprint(self, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return self._post("/v1/bot-blueprints/create", body)
@@ -831,6 +841,10 @@ class CPClient:
             params.append(f"target_bot_id={requests.utils.quote(str(target_bot_id), safe='')}")
         return self._get(f"/v1/schedules?{'&'.join(params)}")
 
+    def list_schedule_queue_sources(self) -> Optional[Dict[str, Any]]:
+        """Return non-content metadata for read-only schedule work queues."""
+        return self._get("/v1/schedules/queue-sources")
+
     def create_schedule(self, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return self._post("/v1/schedules", body)
 
@@ -843,8 +857,27 @@ class CPClient:
     def trigger_schedule(self, schedule_id: str) -> Optional[Dict[str, Any]]:
         return self._post(f"/v1/schedules/{schedule_id}/trigger", {})
 
+    def preview_schedule(self, schedule_id: str) -> Optional[Dict[str, Any]]:
+        return self._post(f"/v1/schedules/{schedule_id}/preview", {})
+
     def list_schedule_runs(self, schedule_id: str, limit: int = 50) -> Optional[Dict[str, Any]]:
         return self._get(f"/v1/schedules/{schedule_id}/runs?limit={max(1, int(limit))}")
+
+    # Supervisory operations
+    def get_supervision_overview(self) -> Optional[Dict[str, Any]]:
+        return self._get("/v1/supervision/overview")
+
+    def list_supervision_reports(self, limit: int = 50) -> Optional[Dict[str, Any]]:
+        return self._get(f"/v1/supervision/reports?limit={max(1, min(int(limit), 200))}")
+
+    def approve_supervision_action(self, action_id: str, body: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+        return self._post(f"/v1/supervision/actions/{action_id}/approve", body or {})
+
+    def reject_supervision_action(self, action_id: str, body: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+        return self._post(f"/v1/supervision/actions/{action_id}/reject", body or {})
+
+    def release_supervision_hold(self, bot_id: str, body: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+        return self._post(f"/v1/supervision/holds/{bot_id}/release", body or {})
 
     def mark_pm_run_failed(self, conversation_id: str, orchestration_id: str) -> Optional[Dict[str, Any]]:
         return self._post(

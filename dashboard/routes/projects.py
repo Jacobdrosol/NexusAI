@@ -12,8 +12,10 @@ from flask_login import login_required
 
 from dashboard.connections_service import (
     inspect_database_schema,
+    normalize_connection_config,
     normalize_database_dsn,
     render_database_schema_document,
+    resolve_connection_config,
     test_database_connection,
     _mask_dsn_password,
 )
@@ -50,7 +52,7 @@ def _parse_json(raw: str, default: Any) -> Any:
 
 
 def _project_connection_to_dict(row: Connection) -> dict[str, Any]:
-    config = _parse_json(row.config_json or "{}", {})
+    config = resolve_connection_config(_parse_json(row.config_json or "{}", {}))
     schema_text = row.schema_text or ""
     schema_snapshot = _parse_json(schema_text, {}) if schema_text else {}
     schema_totals = schema_snapshot.get("totals") if isinstance(schema_snapshot, dict) else {}
@@ -196,6 +198,107 @@ def _git_working_tree_status() -> dict[str, Any]:
     }
 
 
+def _attach_project_autonomy_coverage(
+    projects: list[dict[str, Any]],
+    bots: Any,
+    schedules_response: Any,
+    readiness_response: Any = None,
+) -> list[dict[str, Any]]:
+    """Add read-only bot and schedule coverage to project rows for the overview."""
+    bot_rows = [row for row in bots if isinstance(row, dict)] if isinstance(bots, list) else None
+    schedule_rows = (
+        [row for row in schedules_response.get("schedules", []) if isinstance(row, dict)]
+        if isinstance(schedules_response, dict) and isinstance(schedules_response.get("schedules"), list)
+        else None
+    )
+    coverage_available = bot_rows is not None and schedule_rows is not None
+    readiness_rows = (
+        [row for row in readiness_response.get("readiness", []) if isinstance(row, dict)]
+        if isinstance(readiness_response, dict) and isinstance(readiness_response.get("readiness"), list)
+        else None
+    )
+    readiness_by_bot_id = {
+        str(row.get("bot_id") or "").strip(): row
+        for row in readiness_rows or []
+        if str(row.get("bot_id") or "").strip()
+    }
+    enriched: list[dict[str, Any]] = []
+
+    for project in projects:
+        row = dict(project) if isinstance(project, dict) else {}
+        project_id = str(row.get("id") or "").strip()
+        registered_bot_ids = {
+            str(bot_id).strip()
+            for bot_id in (row.get("bot_ids") or [])
+            if str(bot_id).strip()
+        }
+        configured_bots = (
+            [bot for bot in bot_rows or [] if str(bot.get("project_id") or "").strip() == project_id]
+            if coverage_available
+            else []
+        )
+        enabled_configured_bots = [bot for bot in configured_bots if bool(bot.get("enabled", True))]
+        active_schedules = (
+            [
+                schedule
+                for schedule in schedule_rows or []
+                if str(schedule.get("project_id") or "").strip() == project_id
+                and str(schedule.get("status") or "").strip().lower() == "active"
+            ]
+            if coverage_available
+            else []
+        )
+        completed_schedule_count = sum(
+            1
+            for schedule in active_schedules
+            if str(schedule.get("last_run_status") or "").strip().lower() == "completed"
+        )
+        attention_schedule_count = sum(
+            1
+            for schedule in active_schedules
+            if (last_run_status := str(schedule.get("last_run_status") or "").strip().lower())
+            and last_run_status != "completed"
+        )
+        awaiting_first_run_count = sum(
+            1
+            for schedule in active_schedules
+            if not str(schedule.get("last_run_status") or "").strip()
+        )
+        scheduled_bot_ids = {
+            str(schedule.get("target_bot_id") or "").strip()
+            for schedule in active_schedules
+            if str(schedule.get("target_bot_id") or "").strip()
+        }
+        ready_enabled_bot_ids = {
+            str(bot.get("id") or "").strip()
+            for bot in enabled_configured_bots
+            if bool((readiness_by_bot_id.get(str(bot.get("id") or "").strip()) or {}).get("ready"))
+        }
+        blocked_enabled_bot_count = sum(
+            1
+            for bot in enabled_configured_bots
+            if str(bot.get("id") or "").strip() in readiness_by_bot_id
+            and not bool((readiness_by_bot_id.get(str(bot.get("id") or "").strip()) or {}).get("ready"))
+        )
+        row["autonomy_coverage"] = {
+            "available": coverage_available,
+            "readiness_available": readiness_rows is not None,
+            "registered_bot_count": len(registered_bot_ids),
+            "configured_bot_count": len(configured_bots),
+            "enabled_configured_bot_count": len(enabled_configured_bots),
+            "active_schedule_count": len(active_schedules),
+            "scheduled_bot_count": len(scheduled_bot_ids),
+            "completed_schedule_count": completed_schedule_count,
+            "attention_schedule_count": attention_schedule_count,
+            "awaiting_first_run_count": awaiting_first_run_count,
+            "ready_enabled_bot_count": len(ready_enabled_bot_ids),
+            "ready_unscheduled_bot_count": len(ready_enabled_bot_ids - scheduled_bot_ids),
+            "blocked_enabled_bot_count": blocked_enabled_bot_count,
+        }
+        enriched.append(row)
+    return enriched
+
+
 @bp.get("/projects")
 @login_required
 def projects_page() -> str:
@@ -205,6 +308,13 @@ def projects_page() -> str:
     if projects is None:
         projects = []
         error = cp.unavailable_reason()
+    else:
+        projects = _attach_project_autonomy_coverage(
+            [project for project in projects if isinstance(project, dict)],
+            cp.list_bots() if hasattr(cp, "list_bots") else None,
+            cp.list_schedules() if hasattr(cp, "list_schedules") else None,
+            cp.list_bot_readiness() if hasattr(cp, "list_bot_readiness") else None,
+        )
     return render_template("projects.html", projects=projects, error=error)
 
 
@@ -237,7 +347,12 @@ def project_detail_page(project_id: str):
     vault_items = cp.list_vault_items(project_id=project_id, limit=100, include_content=False) or []
 
     project_bot_ids = set(project.get("bot_ids") or [])
-    project_bots = [b for b in bots if str(b.get("id")) in project_bot_ids] if project_bot_ids else []
+    project_bots = [
+        bot
+        for bot in bots
+        if str(bot.get("id") or "") in project_bot_ids
+        or str(bot.get("project_id") or "") == str(project_id)
+    ]
     project_reports: list[dict[str, Any]] = []
     for bot in project_bots:
         bot_id = str(bot.get("id") or "")
@@ -912,7 +1027,9 @@ def api_create_project_connection(project_id: str):
             name=name,
             kind="database",
             description=str(body.get("description") or ""),
-            config_json=json.dumps({"dsn": normalized_dsn, "readonly": bool(body.get("readonly", True))}),
+            config_json=json.dumps(
+                normalize_connection_config({"dsn": normalized_dsn, "readonly": bool(body.get("readonly", True))})
+            ),
             auth_json="{}",
             schema_text="",
             enabled=bool(body.get("enabled", True)),
@@ -985,7 +1102,7 @@ def api_test_project_connection(project_id: str, connection_id: int):
         row = db.get(Connection, connection_id)
         if row is None or row.kind != "database":
             return jsonify({"error": "not found"}), 404
-        config = _parse_json(row.config_json or "{}", {})
+        config = resolve_connection_config(_parse_json(row.config_json or "{}", {}))
         try:
             result = test_database_connection(config=config if isinstance(config, dict) else {}, payload=body)
         except Exception as exc:
@@ -1019,7 +1136,7 @@ def api_ingest_project_connection_schema(project_id: str, connection_id: int):
         row = db.get(Connection, connection_id)
         if row is None or row.kind != "database":
             return jsonify({"error": "not found"}), 404
-        config = _parse_json(row.config_json or "{}", {})
+        config = resolve_connection_config(_parse_json(row.config_json or "{}", {}))
         try:
             snapshot = inspect_database_schema(config=config if isinstance(config, dict) else {})
         except Exception as exc:

@@ -38,6 +38,27 @@ def _schedule_payload() -> dict:
     }
 
 
+def test_schedule_payload_validation_normalizes_without_persisting() -> None:
+    payload = _schedule_payload()
+    payload.update(
+        {
+            "status": "paused",
+            "project_id": "globeiq",
+            "task_payload": {"scope": "read_only"},
+            "metadata": {"mutation_safe": True},
+        }
+    )
+
+    normalized = AgentScheduleEngine.validate_schedule_payload(payload)
+
+    assert normalized["status"] == "paused"
+    assert normalized["project_id"] == "globeiq"
+    assert normalized["task_payload"] == {"scope": "read_only"}
+    assert normalized["metadata"]["mutation_safe"] is True
+    assert normalized["metadata"]["task_payload"] == {"scope": "read_only"}
+    assert normalized["next_run_at"]
+
+
 @pytest.mark.anyio
 async def test_schedule_run_stays_running_until_linked_task_completes(tmp_path):
     task_manager = _FakeTaskManager()
@@ -73,6 +94,25 @@ async def test_schedule_run_stays_running_until_linked_task_completes(tmp_path):
     assert completed_run["status"] == "completed"
     assert completed_run["finished_at"] is not None
     assert (await engine.get_schedule(schedule["id"]))["last_run_status"] == "completed"
+
+
+@pytest.mark.anyio
+async def test_schedule_run_records_pipeline_orchestration_from_created_task(tmp_path):
+    task_manager = _FakeTaskManager()
+    task_manager.task.metadata = SimpleNamespace(orchestration_id="scheduled-course-pipeline")
+    engine = AgentScheduleEngine(
+        assignment_service=object(),
+        task_manager=task_manager,
+        db_path=str(tmp_path / "pipeline-schedules.db"),
+    )
+    schedule = await engine.create_schedule(_schedule_payload())
+
+    await engine.trigger_schedule(schedule["id"])
+
+    run = (await engine.list_runs(schedule["id"]))[0]
+    assert run["status"] == "running"
+    assert run["task_id"] == task_manager.task.id
+    assert run["orchestration_id"] == "scheduled-course-pipeline"
 
 
 @pytest.mark.anyio
@@ -173,6 +213,35 @@ async def test_schedule_dispatch_materializes_bounded_system_payload(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_schedule_preview_materializes_payload_without_creating_a_task_or_run(tmp_path):
+    task_manager = _FakeTaskManager()
+
+    async def materialize(schedule):
+        assert schedule["id"]
+        return {"revision_items": "sanitized CSV snapshot"}
+
+    engine = AgentScheduleEngine(
+        assignment_service=object(),
+        task_manager=task_manager,
+        db_path=str(tmp_path / "schedules.db"),
+        payload_materializer=materialize,
+    )
+    schedule = await engine.create_schedule(
+        {**_schedule_payload(), "task_payload": {"artifact": "draft only"}}
+    )
+
+    preview = await engine.preview_schedule_payload(schedule["id"])
+
+    assert preview["schedule"]["id"] == schedule["id"]
+    assert preview["task_payload"] == {
+        "artifact": "draft only",
+        "revision_items": "sanitized CSV snapshot",
+    }
+    assert task_manager.create_calls == []
+    assert await engine.list_runs(schedule["id"]) == []
+
+
+@pytest.mark.anyio
 async def test_schedule_retries_only_a_failed_pre_dispatch_attempt(tmp_path, monkeypatch):
     import control_plane.agent_scheduler.engine as scheduler_module
 
@@ -217,7 +286,7 @@ async def test_schedule_retries_only_a_failed_pre_dispatch_attempt(tmp_path, mon
 
 
 @pytest.mark.anyio
-async def test_schedule_retry_schema_migrates_existing_run_history(tmp_path):
+async def test_schedule_run_schema_migrates_existing_run_history(tmp_path):
     db_path = tmp_path / "schedules.db"
     with sqlite3.connect(db_path) as db:
         db.execute(
@@ -241,6 +310,7 @@ async def test_schedule_retry_schema_migrates_existing_run_history(tmp_path):
     with sqlite3.connect(db_path) as db:
         columns = {row[1] for row in db.execute("PRAGMA table_info(agent_schedule_runs)")}
     assert "retry_not_before" in columns
+    assert "manual" in columns
 
 
 @pytest.mark.anyio
@@ -259,6 +329,79 @@ async def test_schedule_retry_policy_is_bounded_for_creates_and_updates(tmp_path
     schedule = await engine.create_schedule(_schedule_payload())
     with pytest.raises(ValueError, match="retry_backoff_seconds"):
         await engine.update_schedule(schedule["id"], {"retry_backoff_seconds": 3601})
+
+
+@pytest.mark.anyio
+async def test_schedule_forbids_overlapping_runs_by_default(tmp_path, monkeypatch):
+    import control_plane.agent_scheduler.engine as scheduler_module
+
+    started_at = datetime(2026, 7, 19, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(scheduler_module, "_now", lambda: started_at)
+    task_manager = _FakeTaskManager()
+    engine = AgentScheduleEngine(
+        assignment_service=object(),
+        task_manager=task_manager,
+        db_path=str(tmp_path / "schedules.db"),
+    )
+    schedule = await engine.create_schedule(_schedule_payload())
+
+    first_run = await engine.trigger_schedule(schedule["id"])
+    monkeypatch.setattr(scheduler_module, "_now", lambda: started_at + timedelta(seconds=1))
+    skipped_run = await engine.trigger_schedule(schedule["id"])
+
+    assert schedule["overlap_policy"] == "forbid"
+    assert first_run["status"] == "queued"
+    assert skipped_run["status"] == "skipped"
+    assert skipped_run["finished_at"] == "2026-07-19T12:00:01+00:00"
+    assert skipped_run["error"] == {
+        "reason": "overlap_prevented",
+        "message": "Skipped because a previous run for this schedule is still active.",
+        "active_run_id": first_run["id"],
+    }
+    assert len(task_manager.create_calls) == 1
+    assert (await engine.get_schedule(schedule["id"]))["last_run_status"] == "skipped"
+
+
+@pytest.mark.anyio
+async def test_schedule_can_explicitly_allow_overlapping_runs(tmp_path, monkeypatch):
+    import control_plane.agent_scheduler.engine as scheduler_module
+
+    started_at = datetime(2026, 7, 19, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(scheduler_module, "_now", lambda: started_at)
+    task_manager = _FakeTaskManager()
+    engine = AgentScheduleEngine(
+        assignment_service=object(),
+        task_manager=task_manager,
+        db_path=str(tmp_path / "schedules.db"),
+    )
+    schedule = await engine.create_schedule({**_schedule_payload(), "overlap_policy": "allow"})
+
+    await engine.trigger_schedule(schedule["id"])
+    monkeypatch.setattr(scheduler_module, "_now", lambda: started_at + timedelta(seconds=1))
+    second_run = await engine.trigger_schedule(schedule["id"])
+
+    assert (await engine.get_schedule(schedule["id"]))["overlap_policy"] == "allow"
+    assert second_run["status"] == "queued"
+    assert len(task_manager.create_calls) == 2
+
+
+@pytest.mark.anyio
+async def test_schedule_rejects_invalid_overlap_policy(tmp_path):
+    engine = AgentScheduleEngine(
+        assignment_service=object(),
+        task_manager=_FakeTaskManager(),
+        db_path=str(tmp_path / "schedules.db"),
+    )
+
+    with pytest.raises(ValueError, match="overlap_policy"):
+        await engine.create_schedule({**_schedule_payload(), "overlap_policy": "queue"})
+
+    schedule = await engine.create_schedule(_schedule_payload())
+    updated = await engine.update_schedule(schedule["id"], {"overlap_policy": "allow"})
+    assert updated is not None
+    assert updated["overlap_policy"] == "allow"
+    with pytest.raises(ValueError, match="overlap_policy"):
+        await engine.update_schedule(schedule["id"], {"overlap_policy": "queue"})
 
 
 @pytest.mark.anyio
@@ -307,7 +450,82 @@ async def test_schedule_tick_uses_cron_window_and_dispatches_it_once(tmp_path, m
     runs = await first_engine.list_runs(schedule["id"])
     assert len(runs) == 1
     assert runs[0]["scheduled_for"] == expected_window
+    assert runs[0]["manual"] is False
     assert len(task_manager.create_calls) == 1
+
+
+@pytest.mark.anyio
+async def test_schedule_run_persists_manual_origin(tmp_path):
+    task_manager = _FakeTaskManager()
+    engine = AgentScheduleEngine(
+        assignment_service=object(),
+        task_manager=task_manager,
+        db_path=str(tmp_path / "schedules.db"),
+    )
+    schedule = await engine.create_schedule({**_schedule_payload(), "overlap_policy": "allow"})
+
+    manual_run = await engine.trigger_schedule(schedule["id"])
+    scheduled_for = (datetime.fromisoformat(manual_run["scheduled_for"]) + timedelta(seconds=1)).isoformat()
+    scheduled_run, scheduled_created = await engine._create_run(
+        schedule,
+        scheduled_for=scheduled_for,
+        manual=False,
+    )
+
+    assert manual_run["manual"] is True
+    assert scheduled_created is True
+    assert scheduled_run["manual"] is False
+    persisted_by_id = {
+        run["id"]: run
+        for run in await engine.list_runs(schedule["id"])
+    }
+    assert persisted_by_id[manual_run["id"]]["manual"] is True
+    assert persisted_by_id[scheduled_run["id"]]["manual"] is False
+
+
+@pytest.mark.anyio
+async def test_schedule_tick_prunes_only_excess_terminal_history(tmp_path, monkeypatch):
+    import control_plane.agent_scheduler.engine as scheduler_module
+
+    started_at = datetime(2026, 7, 19, 12, 0, tzinfo=timezone.utc)
+    current_time = started_at
+    monkeypatch.setattr(scheduler_module, "_now", lambda: current_time)
+    engine = AgentScheduleEngine(
+        assignment_service=object(),
+        task_manager=_FakeTaskManager(),
+        db_path=str(tmp_path / "schedules.db"),
+        terminal_run_retention_per_schedule=2,
+        terminal_run_prune_batch_size=10,
+    )
+    schedule = await engine.create_schedule({**_schedule_payload(), "overlap_policy": "allow"})
+
+    terminal_run_ids = []
+    for offset in range(4):
+        current_time = started_at + timedelta(minutes=offset + 1)
+        run, created = await engine._create_run(
+            schedule,
+            scheduled_for=(started_at + timedelta(minutes=offset + 1)).isoformat(),
+            manual=False,
+        )
+        assert created is True
+        terminal_run_ids.append(run["id"])
+        await engine._set_run_status(run["id"], "completed", finished_at=current_time.isoformat())
+
+    current_time = started_at + timedelta(minutes=6)
+    active_run, created = await engine._create_run(
+        schedule,
+        scheduled_for=current_time.isoformat(),
+        manual=False,
+    )
+    assert created is True
+    assert active_run["status"] == "queued"
+
+    await engine.tick_once()
+
+    persisted = await engine.list_runs(schedule["id"], limit=20)
+    persisted_by_id = {run["id"]: run for run in persisted}
+    assert set(persisted_by_id) == set(terminal_run_ids[-2:]) | {active_run["id"]}
+    assert persisted_by_id[active_run["id"]]["status"] == "queued"
 
 
 @pytest.mark.anyio
@@ -339,3 +557,27 @@ async def test_schedule_listing_filters_status_and_rejects_invalid_status(tmp_pa
         await engine.update_schedule(paused["id"], {"assignment_pm_bot_id": "pm-bot", "conversation_id": "thread-1"})
     with pytest.raises(ValueError, match="exactly one dispatch target"):
         await engine.update_schedule(paused["id"], {"target_bot_id": ""})
+
+
+@pytest.mark.anyio
+async def test_scheduler_rejects_equivalent_schedule_creates_and_updates(tmp_path):
+    engine = AgentScheduleEngine(
+        assignment_service=object(),
+        task_manager=_FakeTaskManager(),
+        db_path=str(tmp_path / "schedules.db"),
+    )
+    first = await engine.create_schedule({**_schedule_payload(), "project_id": "globeiq"})
+
+    with pytest.raises(ValueError, match="schedule_duplicate_exists"):
+        await engine.create_schedule(
+            {**_schedule_payload(), "name": "Renamed duplicate", "status": "active", "project_id": "globeiq"}
+        )
+
+    second = await engine.create_schedule(
+        {**_schedule_payload(), "name": "Different cadence", "cron_expression": "30 * * * *", "project_id": "globeiq"}
+    )
+    duplicate = await engine.find_equivalent_schedule({**_schedule_payload(), "project_id": "globeiq"})
+    assert duplicate == {"schedule_id": first["id"], "status": "paused"}
+
+    with pytest.raises(ValueError, match="schedule_duplicate_exists"):
+        await engine.update_schedule(second["id"], {"cron_expression": "0 * * * *"})

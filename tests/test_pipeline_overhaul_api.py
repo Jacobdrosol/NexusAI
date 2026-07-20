@@ -717,6 +717,11 @@ async def test_platform_ai_bot_tuner_requires_target_bot(cp_client):
 
 @pytest.mark.anyio
 async def test_platform_ai_session_patch_project_and_target_context(cp_client):
+    project = await cp_client.post(
+        "/v1/projects",
+        json={"id": "proj-a", "name": "Project A", "mode": "isolated"},
+    )
+    assert project.status_code == 200
     create_resp = await cp_client.post(
         "/v1/platform-ai/sessions",
         json={"mode": "bot_creator", "bot_name_seed": "Patch Bot", "operator_id": "owner@example.com", "start_running": False},
@@ -741,6 +746,43 @@ async def test_platform_ai_session_patch_project_and_target_context(cp_client):
     assert str(metadata.get("target_bot_id") or "") == "bot-a"
     assert str(metadata.get("pipeline_bot_id") or "") == "pm-orchestrator"
     assert str(metadata.get("pipeline_name") or "") == "PM Orchestrator Flow"
+
+
+@pytest.mark.anyio
+async def test_platform_ai_sessions_require_enabled_known_project_bindings(cp_client):
+    missing = await cp_client.post(
+        "/v1/platform-ai/sessions",
+        json={"mode": "bot_creator", "bot_name_seed": "Missing Project", "project_id": "missing-project"},
+    )
+    assert missing.status_code == 409
+    assert missing.json()["detail"]["reason_code"] == "platform_ai_project_not_found"
+
+    created_project = await cp_client.post(
+        "/v1/projects",
+        json={"id": "project-enabled", "name": "Project Enabled", "mode": "isolated"},
+    )
+    assert created_project.status_code == 200
+    created = await cp_client.post(
+        "/v1/platform-ai/sessions",
+        json={
+            "mode": "bot_creator",
+            "bot_name_seed": "Known Project",
+            "metadata": {"project_id": "project-enabled"},
+        },
+    )
+    assert created.status_code == 200
+
+    disabled_project = await cp_client.put(
+        "/v1/projects/project-enabled",
+        json={"id": "project-enabled", "name": "Project Enabled", "mode": "isolated", "enabled": False},
+    )
+    assert disabled_project.status_code == 200
+    patched = await cp_client.patch(
+        f"/v1/platform-ai/sessions/{created.json()['id']}",
+        json={"target_bot_id": "project-bot"},
+    )
+    assert patched.status_code == 409
+    assert patched.json()["detail"]["reason_code"] == "platform_ai_project_disabled"
 
 
 @pytest.mark.anyio
@@ -779,11 +821,23 @@ async def test_agent_scheduler_create_and_manual_trigger(cp_client):
             "prompt": "Process queued issues",
             "target_bot_id": bot_id,
             "status": "active",
+            "overlap_policy": "forbid",
             "metadata": {"mutation_safe": True},
         },
     )
     assert create_schedule_resp.status_code == 200
-    schedule_id = create_schedule_resp.json()["schedule"]["id"]
+    created_schedule = create_schedule_resp.json()["schedule"]
+    assert created_schedule["overlap_policy"] == "forbid"
+    schedule_id = created_schedule["id"]
+
+    preview_resp = await cp_client.post(f"/v1/schedules/{schedule_id}/preview")
+    assert preview_resp.status_code == 200
+    assert preview_resp.json()["schedule"]["id"] == schedule_id
+    assert preview_resp.json()["task_payload"] == {}
+
+    preview_runs_resp = await cp_client.get(f"/v1/schedules/{schedule_id}/runs")
+    assert preview_runs_resp.status_code == 200
+    assert preview_runs_resp.json()["runs"] == []
 
     list_schedules_resp = await cp_client.get("/v1/schedules?status=active")
     assert list_schedules_resp.status_code == 200

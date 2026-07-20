@@ -3,7 +3,7 @@
 The `agent_scheduler` module provides time-based (cron) scheduling for autonomous agent execution. It allows platform operators to define recurring schedules that automatically trigger orchestration runs on a bot at specified intervals.
 
 > **Status: Operational for a single control-plane instance**
-> The scheduler persists definitions and run history, dispatches through the normal task manager, and is managed through the API and dashboard. Retry policy, distributed coordination, and retention still need hardening before multi-instance or high-volume use.
+> The scheduler persists definitions and bounded terminal-run history, dispatches through the normal task manager, and is managed through the API and dashboard. Retry policy and distributed coordination still need hardening before multi-instance or high-volume use.
 
 ---
 
@@ -13,6 +13,7 @@ The `agent_scheduler` module provides time-based (cron) scheduling for autonomou
 - Automatically dispatch orchestration runs when a schedule fires
 - Prevent duplicate dispatches using a per-window dedup key
 - Track run history per schedule
+- Retain a bounded terminal-run history without deleting queued or running work
 
 ---
 
@@ -74,6 +75,8 @@ Table: `agent_schedule_runs`
 | `error` | TEXT | Error message if failed |
 | `created_at` | TEXT | ISO 8601 |
 
+Terminal records are retained per schedule rather than indefinitely. The default is the newest 500 terminal runs per schedule; queued and running records are never pruned. The scheduler removes excess terminal rows in bounded batches during its normal tick. Set `NEXUSAI_SCHEDULE_TERMINAL_RUN_RETENTION_PER_SCHEDULE` to a value between `1` and `10000` when a different retained history depth is required.
+
 ---
 
 ## Usage
@@ -115,7 +118,6 @@ Retries are intentionally conservative: NexusAI retries only a failure that occu
 |---|----------|-------|
 | 1 | High | Scheduler replicas must share the same schedule database; independently configured databases cannot coordinate cron-window ownership |
 | 2 | Medium | SQLite write contention should be monitored before running high-volume multi-instance scheduling |
-| 3 | Low | No pruning of old run records; the table grows unbounded |
 
 ---
 

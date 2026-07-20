@@ -294,6 +294,35 @@ async def test_scheduler_pinned_local_backend_rejects_second_inflight_task():
 
 
 @pytest.mark.anyio
+async def test_scheduler_browser_backend_rejects_second_inflight_task():
+    from control_plane.scheduler.scheduler import BackendError, Scheduler
+
+    worker = Worker(
+        id="browser-worker",
+        name="Browser Worker",
+        host="browser.example",
+        port=8001,
+        capabilities=[Capability(type="tool", provider="browser", models=["browser-ui"])],
+        status="online",
+        enabled=True,
+        metrics=WorkerMetrics(queue_depth=0),
+    )
+    worker_registry = AsyncMock()
+    worker_registry.get.return_value = worker
+    scheduler = Scheduler(bot_registry=AsyncMock(), worker_registry=worker_registry)
+    scheduler._inflight_by_worker[worker.id] = 1
+    backend = BackendConfig(
+        type="browser",
+        provider="browser",
+        model="browser-ui",
+        worker_id=worker.id,
+    )
+
+    with pytest.raises(BackendError, match="has no remaining task capacity"):
+        await scheduler._resolve_browser_worker(backend)
+
+
+@pytest.mark.anyio
 async def test_scheduler_rejects_worker_missing_declared_bot_tools():
     from control_plane.scheduler.scheduler import BackendError, Scheduler
 
@@ -769,6 +798,129 @@ async def test_scheduler_rejects_browser_backend_without_a_pinned_attested_worke
 
 
 @pytest.mark.anyio
+async def test_scheduler_dispatches_only_allowlisted_documentation_writes(monkeypatch):
+    from control_plane.scheduler.scheduler import Scheduler
+
+    worker = Worker(
+        id="docs-writer-01",
+        name="Docs Writer",
+        host="docs-writer.local",
+        port=8010,
+        capabilities=[Capability(type="tool", provider="documentation", models=["documentation-v1"])],
+        status="online",
+        enabled=True,
+    )
+    backend = BackendConfig(
+        type="documentation",
+        provider="documentation",
+        model="documentation-v1",
+        worker_id=worker.id,
+        api_key_ref="DOCUMENTATION_WORKER_TOKEN",
+    )
+    bot = Bot(
+        id="docs-hub-writer",
+        name="Docs Hub Writer",
+        role="docs-hub-writer",
+        execution_policy={
+            "required_worker_tools": ["documentation-v1"],
+            "documentation_action_allowlist": ["documentation.create"],
+        },
+        backends=[backend],
+    )
+    task = Task(
+        id="task-docs-write",
+        bot_id=bot.id,
+        payload={},
+        created_at="now",
+        updated_at="now",
+    )
+    monkeypatch.setenv("DOCUMENTATION_WORKER_TOKEN", "worker-token")
+    fake_response = MagicMock()
+    fake_response.raise_for_status.return_value = None
+    fake_response.json.return_value = {
+        "action": "create",
+        "path": "docs/Automation_Workforce/Docs_Dana/activity.md",
+        "content_hash": "a" * 64,
+        "bytes_written": 8,
+    }
+    mock_client = AsyncMock()
+    mock_client.__aenter__.return_value = mock_client
+    mock_client.__aexit__.return_value = False
+    mock_client.post.return_value = fake_response
+    worker_registry = AsyncMock()
+    worker_registry.get.return_value = worker
+    bot_registry = AsyncMock()
+    bot_registry.get.return_value = bot
+    scheduler = Scheduler(bot_registry=bot_registry, worker_registry=worker_registry)
+
+    with patch("control_plane.scheduler.scheduler.httpx.AsyncClient", return_value=mock_client):
+        result = await scheduler._dispatch_backend(
+            backend,
+            {
+                "action": "create",
+                "path": "docs/Automation_Workforce/Docs_Dana/activity.md",
+                "content": "# Report",
+            },
+            task=task,
+        )
+
+    assert result["action"] == "create"
+    assert mock_client.post.await_args.args[0] == "http://docs-writer.local:8010/documentation/write"
+    assert mock_client.post.await_args.kwargs["json"] == {
+        "action": "create",
+        "path": "docs/Automation_Workforce/Docs_Dana/activity.md",
+        "content": "# Report",
+    }
+
+
+@pytest.mark.anyio
+async def test_scheduler_rejects_documentation_action_not_in_bot_policy():
+    from control_plane.scheduler.scheduler import BackendError, Scheduler
+
+    worker = Worker(
+        id="docs-writer-01",
+        name="Docs Writer",
+        host="docs-writer.local",
+        port=8010,
+        capabilities=[Capability(type="tool", provider="documentation", models=["documentation-v1"])],
+        status="online",
+        enabled=True,
+    )
+    backend = BackendConfig(
+        type="documentation",
+        provider="documentation",
+        model="documentation-v1",
+        worker_id=worker.id,
+        api_key_ref="DOCUMENTATION_WORKER_TOKEN",
+    )
+    bot = Bot(
+        id="docs-hub-writer",
+        name="Docs Hub Writer",
+        role="docs-hub-writer",
+        execution_policy={"documentation_action_allowlist": ["documentation.create"]},
+        backends=[backend],
+    )
+    task = Task(id="task-docs-save", bot_id=bot.id, payload={}, created_at="now", updated_at="now")
+    worker_registry = AsyncMock()
+    worker_registry.get.return_value = worker
+    bot_registry = AsyncMock()
+    bot_registry.get.return_value = bot
+    scheduler = Scheduler(bot_registry=bot_registry, worker_registry=worker_registry)
+
+    with pytest.raises(BackendError, match="not authorized for documentation.save"):
+        await scheduler._dispatch_backend(
+            backend,
+            {
+                "action": "save",
+                "path": "docs/Automation_Workforce/Docs_Dana/activity.md",
+                "content": "# Report",
+                "expectedContentHash": "a" * 64,
+            },
+            task=task,
+        )
+
+
+@pytest.mark.anyio
 async def test_scheduler_dispatches_only_authorized_draft_test_builder_actions(monkeypatch):
     from control_plane.scheduler.scheduler import Scheduler
 
@@ -989,6 +1141,268 @@ async def test_scheduler_rejects_question_bank_create_before_worker_dispatch(mon
                 "expected": {},
                 "changes": {},
             },
+        )
+
+
+@pytest.mark.anyio
+async def test_scheduler_dispatches_only_authorized_single_question_creation(monkeypatch):
+    from control_plane.scheduler.scheduler import Scheduler
+
+    worker = Worker(
+        id="browser-worker",
+        name="Browser Worker",
+        host="browser.local",
+        port=8010,
+        capabilities=[Capability(type="tool", provider="browser", models=["browser-ui"])],
+        status="online",
+        enabled=True,
+    )
+    backend = BackendConfig(
+        type="browser",
+        provider="browser",
+        model="browser-ui",
+        worker_id=worker.id,
+        api_key_ref="BROWSER_WORKER_TOKEN",
+    )
+    bot = Bot(
+        id="question-adder",
+        name="Question Adder",
+        role="question-bank-shortage-adder",
+        execution_policy={
+            "required_worker_tools": ["browser-ui"],
+            "browser_action_allowlist": ["question_bank.create_one"],
+        },
+        backends=[backend],
+    )
+    task = Task(
+        id="task-question-create",
+        bot_id=bot.id,
+        payload={},
+        created_at="now",
+        updated_at="now",
+    )
+    monkeypatch.setenv("BROWSER_WORKER_TOKEN", "worker-token")
+    fake_response = MagicMock()
+    fake_response.raise_for_status.return_value = None
+    fake_response.json.return_value = {"status": "Question Bank question created and verified"}
+    mock_client = AsyncMock()
+    mock_client.__aenter__.return_value = mock_client
+    mock_client.__aexit__.return_value = False
+    mock_client.post.return_value = fake_response
+    worker_registry = AsyncMock()
+    worker_registry.get.return_value = worker
+    bot_registry = AsyncMock()
+    bot_registry.get.return_value = bot
+    scheduler = Scheduler(bot_registry=bot_registry, worker_registry=worker_registry)
+    review_task_id = "review-42-shortage"
+
+    with patch("control_plane.scheduler.scheduler.httpx.AsyncClient", return_value=mock_client):
+        result = await scheduler._dispatch_backend(
+            backend,
+            {
+                "browser_action": "question_bank",
+                "action": "create_one",
+                "confirmation": f"approved:question-bank:create_one:42:{review_task_id}",
+                "bank_id": 42,
+                "candidate": {
+                    "prompt": "A shopper has two apples and receives one more. How many apples are there?",
+                    "question_type": "MCQ",
+                    "difficulty": "easy",
+                    "category": "Counting",
+                    "is_active": True,
+                    "options": ["2", "3", "4"],
+                    "correct_option_index": 1,
+                },
+                "review_evidence": {
+                    "reviewer_bot_id": "globeiq-question-bank-review-01-bot",
+                    "review_task_id": review_task_id,
+                    "approved_create": True,
+                    "semantic_duplicate_risk": "materially_distinct_context",
+                    "reviewed_question_ids": [7, 8, 9],
+                    "existing_question_count": 3,
+                    "minimum_required_count": 4,
+                    "shortage_detected": True,
+                    "rationale": "The reviewer inspected every existing question and found a verified shortage.",
+                },
+            },
+            task=task,
+        )
+
+    assert result["status"] == "Question Bank question created and verified"
+    assert mock_client.post.await_args.args[0] == "http://browser.local:8010/browser/question-bank-create"
+    assert mock_client.post.await_args.kwargs["json"]["action"] == "create_one"
+    assert "browser_action" not in mock_client.post.await_args.kwargs["json"]
+
+
+@pytest.mark.anyio
+async def test_scheduler_rejects_question_bank_creation_without_create_allowlist(monkeypatch):
+    from control_plane.scheduler.scheduler import BackendError, Scheduler
+
+    worker = Worker(
+        id="browser-worker",
+        name="Browser Worker",
+        host="browser.local",
+        port=8010,
+        capabilities=[Capability(type="tool", provider="browser", models=["browser-ui"])],
+        status="online",
+        enabled=True,
+    )
+    backend = BackendConfig(
+        type="browser",
+        provider="browser",
+        model="browser-ui",
+        worker_id=worker.id,
+        api_key_ref="BROWSER_WORKER_TOKEN",
+    )
+    bot_registry = AsyncMock()
+    bot_registry.get.return_value = Bot(
+        id="question-patcher",
+        name="Question Patcher",
+        role="question-patcher",
+        execution_policy={"browser_action_allowlist": ["question_bank.patch_existing"]},
+        backends=[backend],
+    )
+    worker_registry = AsyncMock()
+    worker_registry.get.return_value = worker
+    scheduler = Scheduler(bot_registry=bot_registry, worker_registry=worker_registry)
+    task = Task(id="task-question-create", bot_id="question-patcher", payload={}, created_at="now", updated_at="now")
+
+    with pytest.raises(BackendError, match="not authorized for question_bank.create_one"):
+        await scheduler._dispatch_backend(
+            backend,
+            {
+                "browser_action": "question_bank",
+                "action": "create_one",
+                "confirmation": "approved:question-bank:create_one:42:review-42-shortage",
+                "bank_id": 42,
+                "candidate": {},
+                "review_evidence": {},
+            },
+            task=task,
+        )
+
+
+@pytest.mark.anyio
+async def test_scheduler_dispatches_only_authorized_question_bank_evidence_export(monkeypatch):
+    from control_plane.scheduler.scheduler import Scheduler
+
+    worker = Worker(
+        id="browser-worker",
+        name="Browser Worker",
+        host="browser.local",
+        port=8010,
+        capabilities=[Capability(type="tool", provider="browser", models=["browser-ui"])],
+        status="online",
+        enabled=True,
+    )
+    backend = BackendConfig(
+        type="browser",
+        provider="browser",
+        model="browser-ui",
+        worker_id=worker.id,
+        api_key_ref="BROWSER_WORKER_TOKEN",
+    )
+    bot = Bot(
+        id="question-evidence-exporter",
+        name="Question Evidence Exporter",
+        role="question-bank-evidence-exporter",
+        execution_policy={
+            "required_worker_tools": ["browser-ui"],
+            "browser_action_allowlist": ["question_bank.export_evidence"],
+        },
+        backends=[backend],
+    )
+    task = Task(
+        id="task-question-evidence",
+        bot_id=bot.id,
+        payload={},
+        created_at="now",
+        updated_at="now",
+    )
+    monkeypatch.setenv("BROWSER_WORKER_TOKEN", "worker-token")
+    fake_response = MagicMock()
+    fake_response.raise_for_status.return_value = None
+    fake_response.json.return_value = {"status": "Question Bank evidence exported from the UI"}
+    mock_client = AsyncMock()
+    mock_client.__aenter__.return_value = mock_client
+    mock_client.__aexit__.return_value = False
+    mock_client.post.return_value = fake_response
+    worker_registry = AsyncMock()
+    worker_registry.get.return_value = worker
+    bot_registry = AsyncMock()
+    bot_registry.get.return_value = bot
+    scheduler = Scheduler(bot_registry=bot_registry, worker_registry=worker_registry)
+
+    with patch("control_plane.scheduler.scheduler.httpx.AsyncClient", return_value=mock_client):
+        result = await scheduler._dispatch_backend(
+            backend,
+            {
+                "browser_action": "question_bank",
+                "action": "export_evidence",
+                "bank_id": 42,
+                "approvedReadOnlyActions": ["export json"],
+            },
+            task=task,
+        )
+
+    assert result["status"] == "Question Bank evidence exported from the UI"
+    assert mock_client.post.await_args.args[0] == "http://browser.local:8010/browser/question-bank-export"
+    assert mock_client.post.await_args.kwargs["json"] == {
+        "action": "export_evidence",
+        "bank_id": 42,
+        "approvedReadOnlyActions": ["export json"],
+    }
+
+
+@pytest.mark.anyio
+async def test_scheduler_rejects_question_bank_evidence_export_without_allowlist(monkeypatch):
+    from control_plane.scheduler.scheduler import BackendError, Scheduler
+
+    worker = Worker(
+        id="browser-worker",
+        name="Browser Worker",
+        host="browser.local",
+        port=8010,
+        capabilities=[Capability(type="tool", provider="browser", models=["browser-ui"])],
+        status="online",
+        enabled=True,
+    )
+    backend = BackendConfig(
+        type="browser",
+        provider="browser",
+        model="browser-ui",
+        worker_id=worker.id,
+        api_key_ref="BROWSER_WORKER_TOKEN",
+    )
+    bot_registry = AsyncMock()
+    bot_registry.get.return_value = Bot(
+        id="question-patcher",
+        name="Question Patcher",
+        role="question-patcher",
+        execution_policy={"browser_action_allowlist": ["question_bank.patch_existing"]},
+        backends=[backend],
+    )
+    worker_registry = AsyncMock()
+    worker_registry.get.return_value = worker
+    scheduler = Scheduler(bot_registry=bot_registry, worker_registry=worker_registry)
+    task = Task(
+        id="task-question-evidence",
+        bot_id="question-patcher",
+        payload={},
+        created_at="now",
+        updated_at="now",
+    )
+
+    with pytest.raises(BackendError, match="not authorized for question_bank.export_evidence"):
+        await scheduler._dispatch_backend(
+            backend,
+            {
+                "browser_action": "question_bank",
+                "action": "export_evidence",
+                "bank_id": 42,
+                "approvedReadOnlyActions": ["export json"],
+            },
+            task=task,
         )
 
 
@@ -1908,8 +2322,8 @@ async def test_scheduler_fetches_dynamic_connection_context_from_payload_items(m
         }
 
     monkeypatch.setattr("dashboard.db.get_db", lambda: FakeSession())
-    monkeypatch.setattr("dashboard.connections_service.resolve_auth_payload", lambda payload: {"type": "api_key", "name": "X-GLOBEIQ-BLOCKS-KEY", "api_key": "live-key"})
-    monkeypatch.setattr("dashboard.connections_service.test_http_connection", fake_http_connection_test)
+    monkeypatch.setattr("shared.connection_secrets.resolve_auth_payload", lambda payload: {"type": "api_key", "name": "X-GLOBEIQ-BLOCKS-KEY", "api_key": "live-key"})
+    monkeypatch.setattr("shared.connection_runtime.test_http_connection", fake_http_connection_test)
 
     bot_registry = AsyncMock()
     bot_registry.get.return_value = Bot(
@@ -2415,9 +2829,9 @@ async def test_scheduler_custom_http_connection_backend_executes_actions(monkeyp
             return None
 
     monkeypatch.setattr("dashboard.db.get_db", lambda: FakeSession())
-    monkeypatch.setattr("dashboard.connections_service.resolve_auth_payload", lambda payload: {"type": "api_key", "api_key": "live-key"})
+    monkeypatch.setattr("shared.connection_secrets.resolve_auth_payload", lambda payload: {"type": "api_key", "api_key": "live-key"})
     monkeypatch.setattr(
-        "dashboard.connections_service.test_http_connection",
+        "shared.connection_runtime.test_http_connection",
         lambda **kwargs: {
             "ok": True,
             "status": 201,
@@ -2516,9 +2930,9 @@ async def test_scheduler_custom_http_connection_404_import_includes_endpoint_hin
             return None
 
     monkeypatch.setattr("dashboard.db.get_db", lambda: FakeSession())
-    monkeypatch.setattr("dashboard.connections_service.resolve_auth_payload", lambda payload: {"type": "api_key", "api_key": "live-key"})
+    monkeypatch.setattr("shared.connection_secrets.resolve_auth_payload", lambda payload: {"type": "api_key", "api_key": "live-key"})
     monkeypatch.setattr(
-        "dashboard.connections_service.test_http_connection",
+        "shared.connection_runtime.test_http_connection",
         lambda **kwargs: {
             "ok": False,
             "status": 404,
@@ -2871,6 +3285,47 @@ def test_prepare_payload_for_scheduled_browser_backend_removes_only_scheduler_en
         bot_id=bot.id,
         payload=payload,
         metadata=TaskMetadata(source="agent_schedule"),
+        created_at="2026-07-19T00:00:00+00:00",
+        updated_at="2026-07-19T00:00:00+00:00",
+    )
+
+    prepared = _prepare_payload_for_backend(bot, bot.backends[0], payload, task=task)
+
+    assert prepared == {"path": "/admin/dashboard", "text_limit": 200, "element_limit": 5}
+
+
+def test_prepare_payload_for_retried_scheduled_browser_backend_removes_scheduler_envelope():
+    from control_plane.scheduler.scheduler import _prepare_payload_for_backend
+
+    bot = Bot(
+        id="browser-inspector",
+        name="Browser Inspector",
+        role="browser-inspector",
+        backends=[
+            BackendConfig(
+                type="browser",
+                provider="browser",
+                model="browser-ui",
+                worker_id="browser-worker",
+                api_key_ref="BROWSER_TOKEN",
+            )
+        ],
+    )
+    payload = {
+        "path": "/admin/dashboard",
+        "text_limit": 200,
+        "element_limit": 5,
+        "instruction": "Inspect without mutation.",
+        "source": "agent_schedule",
+        "schedule_id": "schedule-1",
+        "project_id": None,
+        "node_overrides": {},
+    }
+    task = Task(
+        id="retried-scheduled-browser-task",
+        bot_id=bot.id,
+        payload=payload,
+        metadata=TaskMetadata(source="auto_retry", retry_attempt=1),
         created_at="2026-07-19T00:00:00+00:00",
         updated_at="2026-07-19T00:00:00+00:00",
     )

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -18,6 +18,7 @@ from control_plane.schedule_safety import (
     require_schedule_autonomy_safety,
     require_schedule_runtime_readiness,
 )
+from control_plane.schedule_payload_sources import SystemPayloadSourceError, list_csv_work_items_sources
 
 
 router = APIRouter(prefix="/v1/schedules", tags=["schedules"])
@@ -40,6 +41,7 @@ async def _require_schedule_target_ready(
             worker_probe_store=request.app.state.worker_probe_store,
             key_vault=request.app.state.key_vault,
             model_registry=request.app.state.model_registry,
+            supervision_store=getattr(request.app.state, "supervision_store", None),
         )
     except ScheduleAutonomySafetyError as exc:
         raise HTTPException(status_code=409, detail=exc.as_detail()) from exc
@@ -83,6 +85,7 @@ class CreateScheduleRequest(BaseModel):
         ge=_MIN_SCHEDULE_RETRY_BACKOFF_SECONDS,
         le=_MAX_SCHEDULE_RETRY_BACKOFF_SECONDS,
     )
+    overlap_policy: Literal["forbid", "allow"] = "forbid"
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -104,6 +107,7 @@ class UpdateScheduleRequest(BaseModel):
         ge=_MIN_SCHEDULE_RETRY_BACKOFF_SECONDS,
         le=_MAX_SCHEDULE_RETRY_BACKOFF_SECONDS,
     )
+    overlap_policy: Optional[Literal["forbid", "allow"]] = None
     metadata: Optional[Dict[str, Any]] = None
 
 
@@ -126,6 +130,15 @@ async def list_schedules(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.get("/queue-sources")
+async def list_schedule_queue_sources() -> Dict[str, Any]:
+    """Return non-content metadata for bounded CSV work queues available to schedules."""
+    try:
+        return {"sources": list_csv_work_items_sources()}
+    except SystemPayloadSourceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.post("")
 async def create_schedule(request: Request, body: CreateScheduleRequest) -> Dict[str, Any]:
     engine = request.app.state.agent_schedule_engine
@@ -138,8 +151,11 @@ async def create_schedule(request: Request, body: CreateScheduleRequest) -> Dict
         return {"schedule": schedule}
     except HTTPException:
         raise
+    except ValueError as exc:
+        status_code = 409 if str(exc) == "schedule_duplicate_exists" else 400
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.patch("/{schedule_id}")
@@ -160,8 +176,11 @@ async def update_schedule(schedule_id: str, request: Request, body: UpdateSchedu
         return {"schedule": schedule}
     except HTTPException:
         raise
+    except ValueError as exc:
+        status_code = 409 if str(exc) == "schedule_duplicate_exists" else 400
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/{schedule_id}")
@@ -185,10 +204,31 @@ async def trigger_schedule(schedule_id: str, request: Request) -> Dict[str, Any]
         run = await engine.trigger_schedule(schedule_id)
         await record_audit_event(request, action="schedules.trigger", resource=f"schedule:{schedule_id}")
         return {"run": run}
+    except HTTPException:
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/{schedule_id}/preview")
+async def preview_schedule(schedule_id: str, request: Request) -> Dict[str, Any]:
+    engine = request.app.state.agent_schedule_engine
+    try:
+        schedule = await engine.get_schedule(schedule_id)
+        if schedule is None:
+            raise HTTPException(status_code=404, detail="schedule not found")
+        await _require_schedule_autonomy_safety(request, schedule, only_when_active=False)
+        preview = await engine.preview_schedule_payload(schedule_id)
+        await record_audit_event(request, action="schedules.preview", resource=f"schedule:{schedule_id}")
+        return preview
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/{schedule_id}/runs")

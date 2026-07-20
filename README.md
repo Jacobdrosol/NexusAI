@@ -2,7 +2,7 @@
 
 **NexusAI** is a modular, distributed LLM Control Plane that orchestrates multiple machines, GPUs, cloud APIs, and CLI-based models via specialized **bots** (logical agents) and **workers** (compute backends).
 
-> **⚠️ Platform AI is in active development:** As of April 2026, the in-platform autonomous AI copilot (`control_plane/platform_ai/`) is under active testing and **not yet functioning reliably**. The feature provides automated pipeline quality evaluation and bot prompt tuning. See `control_plane/platform_ai/README.md` for status and known issues.
+> **⚠️ Platform AI is in active development:** The in-platform copilot supports typed specialist proposals, preflight validation, and operator approval. Autonomous pipeline tuning and privileged execution remain opt-in and require deployment-specific validation before production use. See `control_plane/platform_ai/README.md` for scope and known limitations.
 
 ---
 
@@ -52,7 +52,7 @@
 | `control_plane/github/` | [control_plane/github/README.md](control_plane/github/README.md) |
 | `control_plane/platform_ai/` ⚠️ | [control_plane/platform_ai/README.md](control_plane/platform_ai/README.md) — **In testing, not yet stable** |
 | `control_plane/orchestration/` | [control_plane/orchestration/README.md](control_plane/orchestration/README.md) — run lineage, splice, assignment service |
-| `control_plane/agent_scheduler/` ⚠️ | [control_plane/agent_scheduler/README.md](control_plane/agent_scheduler/README.md) — cron-based agent dispatch, **incomplete** |
+| `control_plane/agent_scheduler/` | [control_plane/agent_scheduler/README.md](control_plane/agent_scheduler/README.md) — bounded cron-based dispatch for a single control-plane instance |
 | `control_plane/connections/` | [control_plane/connections/README.md](control_plane/connections/README.md) — connection resolver |
 | `shared/` | [shared/README.md](shared/README.md) |
 | `dashboard/` | [dashboard/README.md](dashboard/README.md) |
@@ -162,6 +162,7 @@ Dashboard and workflow:
 - Improved dashboard link contrast for worker and bot names on dark tables/cards.
 - Worker detail pages with live load, queue, and GPU graphs.
 - Bot detail editor with backend chain management, workflow triggers, saved input contracts, saved launch profiles, test runs, run history, and task board.
+- Typed specialist blueprints for bounded roles such as content work, quality review, research, monitoring, operations reporting, and code review or implementation; each specialist is preflighted before activation.
 - Bot export from the bot detail page and bot import from the bots index page, including bot configuration and bot-scoped connections, with overwrite confirmation on ID conflicts.
 - Bot-scoped external Connections workspace for HTTP/OpenAPI and database integration setup.
 - Attached connection schemas are injected into model-backed bot runs as authoring context, so bots can follow shared API and JSON structure definitions without exposing auth secrets in prompts.
@@ -511,23 +512,27 @@ logging:
   file_path: data/nexus.log
 ```
 
-### Worker YAML (`config/workers/<name>.yaml`)
+### Worker YAML (private configuration)
+
+Keep real worker files outside the public checkout. The files under `config/workers/` are generic examples only.
 
 ```yaml
-id: worker-main-4070
-name: Main 4070 Box
-host: 192.168.1.10
+id: example-ollama-worker
+name: Example Ollama Worker
+host: worker.example.internal
 port: 8001
 capabilities:
   - type: llm
     provider: ollama
     models:
-      - llama3-8b-instruct-q4
+      - example-model
     gpus:
       - GPU-0
 ```
 
-### Bot YAML (`config/bots/<name>.yaml`)
+### Bot YAML (private configuration)
+
+Keep real bot files outside the public checkout. The files under `config/bots/` are generic examples only.
 
 ```yaml
 id: bot-coder-14b
@@ -537,8 +542,8 @@ priority: 10
 enabled: true
 backends:
   - type: local_llm
-    worker_id: worker-main-4070
-    model: llama3-8b-instruct-q4
+    worker_id: example-ollama-worker
+    model: example-model
     provider: ollama
     gpu_id: GPU-0
     params:
@@ -727,7 +732,7 @@ curl http://localhost:8001/capabilities
 # Run inference
 curl -X POST http://localhost:8001/infer \
   -H "Content-Type: application/json" \
-  -d '{"model": "llama3-8b-instruct-q4", "provider": "ollama", "messages": [{"role": "user", "content": "Hi"}]}'
+  -d '{"model": "example-model", "provider": "ollama", "messages": [{"role": "user", "content": "Hi"}]}'
 
 # Prometheus-compatible metrics
 curl http://localhost:8001/metrics
@@ -737,12 +742,12 @@ curl http://localhost:8001/metrics
 
 ## How to Add a New Worker Machine
 
-1. Create a YAML file in `config/workers/`, e.g. `config/workers/gpu-box-2.yaml`:
+1. Create a YAML file outside the public checkout, e.g. `~/nexusai-private-configs/workers/gpu-box-2.yaml`:
 
 ```yaml
 id: worker-gpu-box-2
 name: GPU Box 2
-host: 192.168.1.20
+host: worker.example.internal
 port: 8001
 capabilities:
   - type: llm
@@ -757,7 +762,7 @@ capabilities:
 2. On the new machine, run the worker agent:
 
 ```bash
-WORKER_CONFIG_PATH=config/workers/gpu-box-2.yaml \
+WORKER_CONFIG_PATH=~/nexusai-private-configs/workers/gpu-box-2.yaml \
 CONTROL_PLANE_URL=http://<control-plane-ip>:8000 \
 uvicorn worker_agent.main:app --host 0.0.0.0 --port 8001
 ```
@@ -768,7 +773,7 @@ The worker will self-register and begin sending heartbeats.
 
 ## How to Define a New Bot
 
-1. Create a YAML file in `config/bots/`, e.g. `config/bots/summarizer.yaml`:
+1. Create a YAML file outside the public checkout, e.g. `~/nexusai-private-configs/bots/summarizer.yaml`:
 
 ```yaml
 id: bot-summarizer
@@ -815,7 +820,7 @@ workflow:
 ```yaml
 id: worker-orchestrator
 name: Agent Orchestrator
-host: 192.168.1.30
+host: orchestrator.example.internal
 port: 8090
 capabilities:
   - type: llm
@@ -825,7 +830,7 @@ capabilities:
 ```
 
 3. Create a bot with `type: remote_llm` pointing to this worker.
-4. NexusAI will POST inference requests to `http://192.168.1.30:8090/infer`.
+4. NexusAI will POST inference requests to the worker's configured `/infer` endpoint.
 
 ---
 

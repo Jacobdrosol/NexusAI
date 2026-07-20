@@ -1,6 +1,8 @@
 import pytest
+from unittest.mock import AsyncMock, Mock
 
-from shared.models import CatalogModel
+from control_plane.bot_readiness import assess_bot_instance_readiness
+from shared.models import BackendConfig, Bot, CatalogModel
 
 
 @pytest.mark.anyio
@@ -34,6 +36,77 @@ async def test_bot_readiness_reports_ready_worker_backend(cp_client):
     assert response.json()["enabled"] is True
     assert response.json()["state"] == "ready"
     assert response.json()["summary"]["failed"] == 0
+
+
+@pytest.mark.anyio
+async def test_bot_readiness_supports_documentation_tool_backend(cp_app, cp_client):
+    await cp_app.state.model_registry.register(
+        CatalogModel(id="unrelated-model", name="unrelated-model", provider="ollama_cloud")
+    )
+    await cp_client.post(
+        "/v1/workers",
+        json={
+            "id": "docs-worker",
+            "name": "Docs Worker",
+            "host": "docs-worker",
+            "port": 8001,
+            "capabilities": [
+                {"type": "tool", "provider": "documentation", "models": ["documentation-v1"]}
+            ],
+        },
+    )
+
+    created = await cp_client.post(
+        "/v1/bots",
+        json={
+            "id": "docs-writer",
+            "name": "Docs Writer",
+            "role": "docs-hub-writer",
+            "backends": [
+                {
+                    "type": "documentation",
+                    "worker_id": "docs-worker",
+                    "provider": "documentation",
+                    "model": "documentation-v1",
+                    "api_key_ref": "DOCS_WORKER_TOKEN",
+                }
+            ],
+            "execution_policy": {
+                "required_worker_tools": ["documentation-v1"],
+                "documentation_action_allowlist": ["documentation.create", "documentation.save"],
+            },
+        },
+    )
+
+    assert created.status_code == 200
+    readiness = await cp_client.get("/v1/bots/docs-writer/readiness")
+    assert readiness.status_code == 200
+    assert readiness.json()["ready"] is True
+
+
+@pytest.mark.anyio
+async def test_bot_project_binding_requires_an_enabled_project(cp_client):
+    payload = {
+        "id": "project-bound-bot",
+        "name": "Project Bound Bot",
+        "role": "reviewer",
+        "project_id": "globeiq",
+        "backends": [],
+    }
+
+    missing = await cp_client.post("/v1/bots", json=payload)
+    assert missing.status_code == 409
+    assert missing.json()["detail"]["reason_code"] == "bot_project_not_found"
+
+    project = await cp_client.post(
+        "/v1/projects",
+        json={"id": "globeiq", "name": "GlobeIQ", "mode": "isolated"},
+    )
+    assert project.status_code == 200
+
+    created = await cp_client.post("/v1/bots", json=payload)
+    assert created.status_code == 200
+    assert created.json()["project_id"] == "globeiq"
 
 
 @pytest.mark.anyio
@@ -78,6 +151,41 @@ async def test_bot_activation_blocks_backend_missing_from_nonempty_model_catalog
         == "Model 'missing-model' (provider 'ollama_cloud') is not present/enabled in the model catalog."
         for check in checks
     )
+
+
+@pytest.mark.anyio
+async def test_bot_readiness_allows_http_connection_without_catalog_model():
+    model_registry = AsyncMock()
+    model_registry.has_any.return_value = True
+    model_registry.exists.return_value = False
+    connection_resolver = Mock()
+    connection_resolver.list_bot_connections.return_value = [
+        {"id": 1, "name": "Catalog API", "kind": "http", "enabled": True}
+    ]
+    bot = Bot(
+        id="catalog-intake",
+        name="Catalog Intake",
+        role="reviewer",
+        backends=[
+            BackendConfig(
+                type="custom",
+                provider="http_connection",
+                model="declared-catalog-api",
+            )
+        ],
+    )
+
+    readiness = await assess_bot_instance_readiness(
+        bot,
+        worker_registry=AsyncMock(),
+        connection_resolver=connection_resolver,
+        model_registry=model_registry,
+    )
+
+    assert readiness["ready"] is True
+    assert readiness["summary"]["failed"] == 0
+    model_registry.has_any.assert_not_awaited()
+    model_registry.exists.assert_not_awaited()
 
 
 @pytest.mark.anyio

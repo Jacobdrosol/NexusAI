@@ -17,6 +17,27 @@ class _FakeClient:
         return self.responses.pop(0)
 
 
+def test_runtime_limit_environment_overrides_are_declared_for_registration(monkeypatch):
+    monkeypatch.setenv("NEXUSAI_WORKER_RUNTIME_CPUS", "1.5")
+    monkeypatch.setenv("NEXUSAI_WORKER_RUNTIME_MEMORY_LIMIT", "1536m")
+    monkeypatch.setenv("NEXUSAI_WORKER_RUNTIME_MEMORY_RESERVATION", "256m")
+    monkeypatch.setenv("NEXUSAI_WORKER_RUNTIME_PIDS_LIMIT", "384")
+
+    worker_config = main._with_runtime_limits_from_environment(
+        {
+            "id": "worker-1",
+            "runtime_limits": {"cpus": 1.0, "memory_limit": "1g", "pids_limit": 256},
+        }
+    )
+
+    assert worker_config["runtime_limits"] == {
+        "cpus": 1.5,
+        "memory_limit": "1536m",
+        "memory_reservation": "256m",
+        "pids_limit": 384,
+    }
+
+
 @pytest.mark.anyio
 async def test_register_with_control_plane_posts_the_declared_worker_config(monkeypatch):
     monkeypatch.setattr(main, "CONTROL_PLANE_URL", "http://control-plane")

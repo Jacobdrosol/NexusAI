@@ -74,7 +74,7 @@
     </div>
 
     <div>
-      <h3 class="subsection-title">Capabilities</h3>
+      <h3 class="subsection-title">Declared Capabilities</h3>
       <div class="capability-groups">
         {% for c in worker.capabilities %}
         <div class="capability-group">
@@ -94,6 +94,103 @@
       </div>
     </div>
   </div>
+</section>
+
+<section class="panel" style="margin-bottom:1rem;">
+  <div class="panel-heading-row">
+    <div>
+      <h2 class="panel-title">Runtime Tool Evidence</h2>
+      <p class="panel-subtitle">Most recent non-mutating probe.</p>
+    </div>
+    {% if worker_probe %}
+    <span class="badge badge-{{ worker_probe.status }}">{{ worker_probe.status }}</span>
+    {% endif %}
+  </div>
+  {% set evidence = worker_probe.runtime_evidence if worker_probe and worker_probe.runtime_evidence else {} %}
+  {% if evidence %}
+  {% set browser = evidence.browser or {} %}
+  <div class="split-grid" style="grid-template-columns:1fr 1fr;">
+    <div>
+      <div><strong>Browser Runtime:</strong>
+        {% if browser.configured and browser.ready %}
+        {{ browser.name or 'browser' }} ready
+        {% elif browser.configured %}
+        unavailable{% if browser.reason %}: {{ browser.reason }}{% endif %}
+        {% else %}
+        not configured
+        {% endif %}
+      </div>
+      <div><strong>CLI Installed:</strong> {{ evidence.installed_cli_tools | join(', ') if evidence.installed_cli_tools else 'none' }}</div>
+      <div><strong>CLI Enabled:</strong> {{ evidence.enabled_cli_tools | join(', ') if evidence.enabled_cli_tools else 'none' }}</div>
+      <div><strong>CLI Authentication:</strong>
+        {% if evidence.unauthenticated_cli_tools %}
+        required for {{ evidence.unauthenticated_cli_tools | join(', ') }}
+        {% elif evidence.auth_required_cli_tools %}
+        no current blocker for {{ evidence.auth_required_cli_tools | join(', ') }}
+        {% else %}
+        not required
+        {% endif %}
+      </div>
+      {% if evidence.unavailable_cli_tools %}
+      <div><strong>Unavailable CLI:</strong> {{ evidence.unavailable_cli_tools | join(', ') }}</div>
+      {% endif %}
+    </div>
+    <div>
+      <div><strong>Provider Credentials:</strong></div>
+      <ul style="margin-top:0.35rem;padding-left:1.2rem;">
+        {% for provider in evidence.provider_status %}
+        <li><code>{{ provider.provider }}</code> {{ 'configured' if provider.configured else 'not configured' }}</li>
+        {% else %}
+        <li class="empty">No provider credential evidence</li>
+        {% endfor %}
+      </ul>
+      <div class="mini-note" style="margin-top:0.5rem;">Use Verify Model to run the bounded LLM response check.</div>
+    </div>
+  </div>
+  {% else %}
+  <div class="state-empty">No runtime evidence has been recorded for this worker.</div>
+  {% endif %}
+</section>
+
+<section class="panel worker-dependencies-panel">
+  <div class="panel-heading-row">
+    <div>
+      <h2 class="panel-title">Lifecycle Dependencies</h2>
+      <p class="panel-subtitle">Bot routes must be updated before this worker can be disabled or removed.</p>
+    </div>
+    {% if worker_dependencies %}
+    <div class="worker-dependency-status">
+      <span class="badge badge-{{ 'ready' if worker_dependencies.can_disable else 'degraded' }}">{{ 'disable ready' if worker_dependencies.can_disable else 'disable blocked' }}</span>
+      <span class="badge badge-{{ 'ready' if worker_dependencies.can_delete else 'degraded' }}">{{ 'delete ready' if worker_dependencies.can_delete else 'delete blocked' }}</span>
+    </div>
+    {% endif %}
+  </div>
+  {% if worker_dependencies and worker_dependencies.dependent_bots %}
+  <table>
+    <thead><tr><th>Dependent Bot</th><th>Project</th><th>State</th></tr></thead>
+    <tbody>
+      {% for bot in worker_dependencies.dependent_bots %}
+      <tr>
+        <td><a href="{{ url_for('bots.bot_detail_page', bot_id=bot.id) }}">{{ bot.name or bot.id }}</a><div class="metrics">{{ bot.id }}</div></td>
+        <td>{{ bot.project_id or 'Global' }}</td>
+        <td><span class="badge badge-{{ 'enabled' if bot.enabled else 'disabled' }}">{{ 'enabled' if bot.enabled else 'disabled' }}</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="state-empty">No direct bot backend references this worker.</div>
+  {% endif %}
+  {% if worker_dependencies and worker_dependencies.active_schedules %}
+  <div class="worker-dependent-schedules">
+    <h3 class="subsection-title">Active Schedules</h3>
+    <ul class="dependency-list">
+      {% for schedule in worker_dependencies.active_schedules %}
+      <li>{{ schedule.name or schedule.id }} <span class="metrics">{{ schedule.project_id or 'Global' }}</span></li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
 </section>
 
 <section class="panel worker-metrics-panel">
@@ -289,7 +386,8 @@ async function toggleWorker(id, enable) {
     headers: {'Content-Type':'application/json','X-CSRFToken': getCsrf()},
     body: JSON.stringify(worker)
   });
-  if (res.ok) location.reload(); else alert('Update failed');
+  const payload = await res.json().catch(() => ({}));
+  if (res.ok) location.reload(); else alert(payload.error || 'Update failed');
 }
 
 async function deleteWorker(id) {
@@ -298,8 +396,9 @@ async function deleteWorker(id) {
     method: 'DELETE',
     headers: {'X-CSRFToken': getCsrf()}
   });
+  const payload = await res.json().catch(() => ({}));
   if (res.ok) window.location = '/workers';
-  else alert('Delete failed');
+  else alert(payload.error || 'Delete failed');
 }
 
 const workerId = {{ worker.id|tojson }};

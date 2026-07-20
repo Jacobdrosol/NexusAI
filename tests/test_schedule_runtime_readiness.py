@@ -4,6 +4,7 @@ import pytest
 
 from control_plane.schedule_safety import (
     ScheduleAutonomySafetyError,
+    require_schedule_autonomy_safety,
     require_schedule_runtime_readiness,
 )
 from shared.models import BackendConfig, Bot
@@ -95,3 +96,135 @@ async def test_schedule_runtime_readiness_blocks_model_missing_from_catalog():
     assert exc_info.value.blockers == [
         "Model 'missing-model' (provider 'ollama_cloud') is not present/enabled in the model catalog."
     ]
+
+
+def _project_bound_schedule_bot() -> Bot:
+    return Bot(
+        id="project-bound-reviewer",
+        name="Project Bound Reviewer",
+        role="quality_reviewer",
+        enabled=True,
+        backends=[],
+        routing_rules={
+            "specialist": {
+                "kind": "quality_reviewer",
+                "risk_level": "read_only",
+                "project_id": "globeiq",
+            }
+        },
+    )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("project_id", "reason_code"),
+    [
+        (None, "schedule_project_scope_required"),
+        ("another-project", "schedule_project_scope_mismatch"),
+    ],
+)
+async def test_autonomous_schedule_rejects_missing_or_mismatched_specialist_project_scope(
+    project_id,
+    reason_code,
+):
+    bot = _project_bound_schedule_bot()
+    schedule = {
+        "target_bot_id": bot.id,
+        "project_id": project_id,
+        "metadata": {"mutation_safe": True},
+    }
+
+    with pytest.raises(ScheduleAutonomySafetyError) as exc_info:
+        await require_schedule_autonomy_safety(
+            schedule,
+            bot_registry=_BotRegistry(bot),
+            only_when_active=False,
+        )
+
+    assert exc_info.value.reason_code == reason_code
+
+
+@pytest.mark.anyio
+async def test_autonomous_schedule_allows_matching_specialist_project_scope():
+    bot = _project_bound_schedule_bot()
+
+    await require_schedule_autonomy_safety(
+        {
+            "target_bot_id": bot.id,
+            "project_id": "globeiq",
+            "metadata": {"mutation_safe": True},
+        },
+        bot_registry=_BotRegistry(bot),
+        only_when_active=False,
+    )
+
+
+@pytest.mark.anyio
+async def test_autonomous_schedule_allows_attested_docs_hub_write():
+    backend = BackendConfig(
+        type="documentation",
+        provider="documentation",
+        model="documentation-v1",
+        worker_id="docs-writer-01",
+        api_key_ref="DOCUMENTATION_WORKER_TOKEN",
+    )
+    bot = Bot(
+        id="docs-hub-writer",
+        name="Docs Hub Writer",
+        role="docs-hub-writer",
+        project_id="globeiq",
+        enabled=True,
+        backends=[backend],
+        execution_policy={
+            "repo_output_mode": "deny",
+            "can_apply_db_actions": False,
+            "documentation_action_allowlist": ["documentation.create"],
+        },
+        routing_rules={
+            "worker_profile": {
+                "role": "docs-hub-writer",
+                "task_scope": "allowlisted-documentation-write",
+                "can_edit": False,
+            }
+        },
+    )
+
+    await require_schedule_autonomy_safety(
+        {
+            "target_bot_id": bot.id,
+            "project_id": "globeiq",
+            "task_payload": {
+                "action": "create",
+                "path": "docs/Automation_Workforce/Docs_Dana/activity.md",
+                "content": "# Activity",
+            },
+            "metadata": {"mutation_safe": True, "connection_operation": "documentation_write"},
+        },
+        bot_registry=_BotRegistry(bot),
+        only_when_active=False,
+    )
+
+
+@pytest.mark.anyio
+async def test_autonomous_schedule_enforces_explicit_bot_project_scope():
+    bot = Bot(
+        id="project-bound-monitor",
+        name="Project Bound Monitor",
+        role="monitor",
+        project_id="globeiq",
+        enabled=True,
+        backends=[],
+    )
+
+    with pytest.raises(ScheduleAutonomySafetyError) as exc_info:
+        await require_schedule_autonomy_safety(
+            {
+                "target_bot_id": bot.id,
+                "project_id": "another-project",
+                "metadata": {"mutation_safe": True},
+            },
+            bot_registry=_BotRegistry(bot),
+            only_when_active=False,
+        )
+
+    assert exc_info.value.reason_code == "schedule_project_scope_mismatch"

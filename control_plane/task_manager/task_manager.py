@@ -1,6 +1,5 @@
 import asyncio
 import copy
-import heapq
 import json
 import logging
 import os
@@ -9,6 +8,7 @@ import re
 import shutil
 import time
 import uuid
+import weakref
 from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -96,6 +96,11 @@ CREATE TABLE IF NOT EXISTS {_ORCHESTRATION_CANCELLATIONS_TABLE} (
     reason TEXT NOT NULL,
     cancelled_at TEXT NOT NULL
 )
+"""
+
+_CREATE_TASK_INDEXES = f"""
+CREATE INDEX IF NOT EXISTS idx_cp_tasks_status_updated_at
+ON {_TASKS_TABLE} (status, updated_at DESC)
 """
 
 
@@ -605,7 +610,17 @@ def _is_output_contract_error_message(message: str) -> bool:
     text = str(message or "").strip().lower()
     if not text:
         return False
-    return "output contract" in text
+    return any(
+        marker in text
+        for marker in (
+            "output contract",
+            "valid json object or array",
+            "requires structured json output",
+            "requires a json object",
+            "requires a json array",
+            "required fields can only be validated",
+        )
+    )
 
 
 def _extract_result_usage(result: Any) -> dict[str, Any]:
@@ -3310,6 +3325,7 @@ class TaskManager:
         bot_registry: Optional[Any] = None,
         orchestration_workspace_store: Optional[Any] = None,
         connection_resolver: Optional[Any] = None,
+        supervision_store: Optional[Any] = None,
     ) -> None:
         if orchestration_workspace_store is None:
             from control_plane.orchestration_workspace_store import OrchestrationWorkspaceStore
@@ -3321,10 +3337,12 @@ class TaskManager:
         self._scheduler = scheduler
         self._bot_registry = bot_registry
         self._connection_resolver = connection_resolver
+        self._supervision_store = supervision_store
         self._project_registry = getattr(scheduler, "project_registry", None)
         self._orchestration_workspace_store = orchestration_workspace_store
         self._db_ready = False
         self._running_task_ids: set[str] = set()
+        self._pending_task_creations: Set[str] = set()
         self._runner_tasks: Dict[str, asyncio.Task[Any]] = {}
         self._retry_tasks: Set[asyncio.Task[Any]] = set()
         self._watchdog_task: Optional[asyncio.Task[Any]] = None
@@ -3363,6 +3381,7 @@ class TaskManager:
             self._runner_tasks.clear()
             self._retry_tasks.clear()
             self._running_task_ids.clear()
+            self._pending_task_creations.clear()
             self._watchdog_state.clear()
             self._trigger_dispatch_pending.clear()
             self._cancelled_orchestrations.clear()
@@ -3421,6 +3440,176 @@ class TaskManager:
             limits[key] = parsed
         return limits
 
+    @staticmethod
+    def _task_from_db_row(
+        row: aiosqlite.Row,
+        dependency_map: Optional[Dict[str, List[str]]] = None,
+    ) -> Task:
+        depends_on: List[str] = []
+        if row["depends_on"]:
+            depends_on = json.loads(row["depends_on"])
+        elif dependency_map is not None:
+            depends_on = list(dependency_map.get(str(row["id"]), []))
+        return Task(
+            id=row["id"],
+            bot_id=row["bot_id"],
+            payload=json.loads(row["payload"]) if row["payload"] else {},
+            metadata=(
+                TaskMetadata(**json.loads(row["metadata"]))
+                if row["metadata"]
+                else None
+            ),
+            depends_on=depends_on,
+            status=row["status"],
+            result=json.loads(row["result"]) if row["result"] else None,
+            error=(
+                TaskError(**json.loads(row["error"]))
+                if row["error"]
+                else None
+            ),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+    async def _load_task_from_db(self, task_id: str) -> Optional[Task]:
+        async with open_sqlite(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                f"SELECT * FROM {_TASKS_TABLE} WHERE id = ? LIMIT 1",
+                (task_id,),
+            ) as cursor:
+                row = await cursor.fetchone()
+            if row is None:
+                return None
+            dependency_map: Dict[str, List[str]] = {}
+            async with db.execute(
+                f"SELECT depends_on_task_id FROM {_TASK_DEPENDENCIES_TABLE} WHERE task_id = ?",
+                (task_id,),
+            ) as cursor:
+                dependency_map[task_id] = [
+                    str(dependency_row[0])
+                    for dependency_row in await cursor.fetchall()
+                ]
+        return self._task_from_db_row(row, dependency_map)
+
+    @staticmethod
+    def _orchestration_concurrency_limit(metadata: Optional[TaskMetadata]) -> Optional[int]:
+        if metadata is None:
+            return None
+        try:
+            limit = int(metadata.orchestration_concurrency_limit or 0)
+        except (TypeError, ValueError):
+            return None
+        return limit if 1 <= limit <= 64 else None
+
+    @staticmethod
+    def _pipeline_launch_profile(bot: Any) -> dict[str, Any]:
+        routing_rules = getattr(bot, "routing_rules", None)
+        if not isinstance(routing_rules, dict):
+            return {}
+        profile = routing_rules.get("launch_profile")
+        return dict(profile) if isinstance(profile, dict) else {}
+
+    async def _apply_root_pipeline_metadata(
+        self,
+        bot_id: str,
+        metadata: TaskMetadata,
+    ) -> TaskMetadata:
+        """Snapshot a pipeline launch cap onto a root task before it can fan out."""
+        if self._bot_registry is None:
+            return metadata
+        if str(metadata.source or "").strip().lower() == "bot_trigger" or metadata.parent_task_id:
+            return metadata
+        try:
+            bot = await self._bot_registry.get(bot_id)
+        except Exception as exc:
+            raise ValueError(
+                f"Task bot '{bot_id}' is unavailable; refusing task creation until its scope can be verified."
+            ) from exc
+
+        profile = self._pipeline_launch_profile(bot)
+        capabilities = getattr(bot, "assignment_capabilities", None)
+        capability_pipeline_entry = (
+            bool(capabilities.get("is_pipeline_entry") or capabilities.get("pipeline"))
+            if isinstance(capabilities, dict)
+            else bool(
+                getattr(capabilities, "is_pipeline_entry", False)
+                or getattr(capabilities, "pipeline", False)
+            )
+        )
+        is_pipeline = bool(
+            profile.get("is_pipeline")
+            or capability_pipeline_entry
+        )
+        if not is_pipeline:
+            return metadata
+
+        updates: dict[str, Any] = {}
+        if not str(metadata.orchestration_id or "").strip():
+            updates["orchestration_id"] = str(uuid.uuid4())
+        if not str(metadata.pipeline_entry_bot_id or "").strip():
+            updates["pipeline_entry_bot_id"] = bot_id
+        if not str(metadata.pipeline_name or "").strip():
+            updates["pipeline_name"] = str(
+                profile.get("pipeline_name") or profile.get("label") or getattr(bot, "name", None) or bot_id
+            ).strip()
+        if self._orchestration_concurrency_limit(metadata) is None:
+            raw_limit = profile.get("concurrency_limit")
+            try:
+                configured_limit = int(raw_limit) if raw_limit not in (None, "") else 0
+            except (TypeError, ValueError):
+                configured_limit = 0
+            if 1 <= configured_limit <= 64:
+                updates["orchestration_concurrency_limit"] = configured_limit
+        return metadata.model_copy(update=updates) if updates else metadata
+
+    @staticmethod
+    def _bound_bot_project_id(bot: Any) -> str:
+        project_id = str(getattr(bot, "project_id", "") or "").strip()
+        if project_id:
+            return project_id
+        routing_rules = getattr(bot, "routing_rules", None)
+        specialist = routing_rules.get("specialist") if isinstance(routing_rules, dict) else None
+        if not isinstance(specialist, dict):
+            return ""
+        return str(specialist.get("project_id") or "").strip()
+
+    async def _apply_bot_project_scope(
+        self,
+        bot_id: str,
+        payload: Any,
+        metadata: TaskMetadata,
+    ) -> TaskMetadata:
+        """Bind direct task creation to a specialist bot's declared project."""
+        if self._bot_registry is None:
+            return metadata
+        try:
+            bot = await self._bot_registry.get(bot_id)
+        except Exception:
+            return metadata
+
+        bound_project_id = self._bound_bot_project_id(bot)
+        if not bound_project_id:
+            return metadata
+
+        metadata_project_id = str(metadata.project_id or "").strip()
+        payload_project_id = (
+            str(payload.get("project_id") or "").strip()
+            if isinstance(payload, dict)
+            else ""
+        )
+        if metadata_project_id and metadata_project_id != bound_project_id:
+            raise ValueError(
+                f"Task project '{metadata_project_id}' does not match bot '{bot_id}' project '{bound_project_id}'."
+            )
+        if payload_project_id and payload_project_id != bound_project_id:
+            raise ValueError(
+                f"Task payload project '{payload_project_id}' does not match bot '{bot_id}' project '{bound_project_id}'."
+            )
+        if metadata_project_id:
+            return metadata
+        return metadata.model_copy(update={"project_id": bound_project_id})
+
     async def _bot_provider_keys_for_tasks(self, tasks: list[Task]) -> dict[str, str]:
         if not tasks or self._bot_registry is None:
             return {}
@@ -3438,6 +3627,48 @@ class TaskManager:
                 provider = str(getattr(backends[0], "provider", "") or "").strip().lower()
             providers_by_bot[bot_id] = provider
         return {task.id: providers_by_bot.get(str(task.bot_id or "").strip(), "") for task in tasks}
+
+    async def _browser_worker_keys_for_tasks(self, tasks: list[Task]) -> dict[str, str]:
+        """Return a pinned browser worker only when a bot has one unambiguous target."""
+        if not tasks or self._bot_registry is None:
+            return {}
+        bot_ids = {str(task.bot_id or "").strip() for task in tasks if str(task.bot_id or "").strip()}
+        workers_by_bot: dict[str, str] = {}
+        for bot_id in bot_ids:
+            try:
+                bot = await self._bot_registry.get(bot_id)
+            except Exception:
+                workers_by_bot[bot_id] = ""
+                continue
+            worker_ids = {
+                str(getattr(backend, "worker_id", "") or "").strip()
+                for backend in list(getattr(bot, "backends", []) or [])
+                if str(getattr(backend, "type", "") or "").strip().lower() == "browser"
+                and str(getattr(backend, "worker_id", "") or "").strip()
+            }
+            workers_by_bot[bot_id] = next(iter(worker_ids)) if len(worker_ids) == 1 else ""
+        return {task.id: workers_by_bot.get(str(task.bot_id or "").strip(), "") for task in tasks}
+
+    async def _documentation_worker_keys_for_tasks(self, tasks: list[Task]) -> dict[str, str]:
+        """Return a pinned Docs Hub worker only when a bot has one unambiguous target."""
+        if not tasks or self._bot_registry is None:
+            return {}
+        bot_ids = {str(task.bot_id or "").strip() for task in tasks if str(task.bot_id or "").strip()}
+        workers_by_bot: dict[str, str] = {}
+        for bot_id in bot_ids:
+            try:
+                bot = await self._bot_registry.get(bot_id)
+            except Exception:
+                workers_by_bot[bot_id] = ""
+                continue
+            worker_ids = {
+                str(getattr(backend, "worker_id", "") or "").strip()
+                for backend in list(getattr(bot, "backends", []) or [])
+                if str(getattr(backend, "type", "") or "").strip().lower() == "documentation"
+                and str(getattr(backend, "worker_id", "") or "").strip()
+            }
+            workers_by_bot[bot_id] = next(iter(worker_ids)) if len(worker_ids) == 1 else ""
+        return {task.id: workers_by_bot.get(str(task.bot_id or "").strip(), "") for task in tasks}
 
     async def _ensure_db(self) -> None:
         """Lazily initialise the SQLite tasks table and load existing rows."""
@@ -3457,6 +3688,7 @@ class TaskManager:
                 await db.execute(_CREATE_BOT_RUN_ARTIFACTS)
                 await db.execute(_CREATE_ORCHESTRATION_CANCELLATIONS)
                 await self._migrate_tasks_table(db)
+                await db.execute(_CREATE_TASK_INDEXES)
                 await db.commit()
                 async with db.execute(
                     f"SELECT orchestration_id, reason, cancelled_at FROM {_ORCHESTRATION_CANCELLATIONS_TABLE}"
@@ -3478,35 +3710,60 @@ class TaskManager:
                     for dep_row in dep_rows:
                         dep_map.setdefault(dep_row["task_id"], []).append(dep_row["depends_on_task_id"])
 
-                async with db.execute(f"SELECT * FROM {_TASKS_TABLE}") as cursor:
+                terminal_statuses = tuple(sorted(self._TERMINAL_TASK_STATUSES))
+                placeholders = ", ".join("?" for _ in terminal_statuses)
+                async with db.execute(
+                    f"SELECT * FROM {_TASKS_TABLE} WHERE status NOT IN ({placeholders})",
+                    terminal_statuses,
+                ) as cursor:
                     rows = await cursor.fetchall()
                     for row in rows:
-                        depends_on = []
-                        if row["depends_on"]:
-                            depends_on = json.loads(row["depends_on"])
-                        elif row["id"] in dep_map:
-                            depends_on = dep_map[row["id"]]
-                        task = Task(
-                            id=row["id"],
-                            bot_id=row["bot_id"],
-                            payload=json.loads(row["payload"]) if row["payload"] else {},
-                            metadata=(
-                                TaskMetadata(**json.loads(row["metadata"]))
-                                if row["metadata"]
-                                else None
-                            ),
-                            depends_on=depends_on,
-                            status=row["status"],
-                            result=json.loads(row["result"]) if row["result"] else None,
-                            error=(
-                                TaskError(**json.loads(row["error"]))
-                                if row["error"]
-                                else None
-                            ),
-                            created_at=row["created_at"],
-                            updated_at=row["updated_at"],
-                        )
+                        task = self._task_from_db_row(row, dep_map)
                         self._tasks[task.id] = task
+
+                # A live orchestration can need earlier terminal outputs for join
+                # gates and final QC. Keep only those related rows, never all history.
+                active_orchestration_ids = sorted(
+                    {
+                        str(task.metadata.orchestration_id or "").strip()
+                        for task in self._tasks.values()
+                        if task.metadata and str(task.metadata.orchestration_id or "").strip()
+                    }
+                )
+
+                # Active tasks must retain their completed prerequisites so blocked
+                # work can still evaluate dependencies after a process restart.
+                dependency_ids = sorted(
+                    {
+                        dependency_id
+                        for task in self._tasks.values()
+                        for dependency_id in task.depends_on
+                        if dependency_id not in self._tasks
+                    }
+                )
+                if dependency_ids:
+                    dependency_placeholders = ", ".join("?" for _ in dependency_ids)
+                    async with db.execute(
+                        f"SELECT * FROM {_TASKS_TABLE} WHERE id IN ({dependency_placeholders})",
+                        tuple(dependency_ids),
+                    ) as cursor:
+                        for row in await cursor.fetchall():
+                            task = self._task_from_db_row(row, dep_map)
+                            self._tasks[task.id] = task
+
+                for orchestration_id in active_orchestration_ids:
+                    async with db.execute(
+                        f"""
+                        SELECT * FROM {_TASKS_TABLE}
+                        WHERE metadata IS NOT NULL
+                          AND json_valid(metadata)
+                          AND json_extract(metadata, '$.orchestration_id') = ?
+                        """,
+                        (orchestration_id,),
+                    ) as cursor:
+                        for row in await cursor.fetchall():
+                            task = self._task_from_db_row(row, dep_map)
+                            self._tasks[task.id] = task
 
                 # Recover orphaned tasks that were left in "running" state from a previous session.
                 # Their asyncio runner no longer exists so they would block the queue forever.
@@ -3560,21 +3817,33 @@ class TaskManager:
         async with self._lock:
             if self._watchdog_task is not None and not self._watchdog_task.done():
                 return
-            self._watchdog_task = asyncio.create_task(self._running_task_watchdog())
+            self._watchdog_task = asyncio.create_task(self._running_task_watchdog(weakref.ref(self)))
 
-    async def _running_task_watchdog(self) -> None:
+    @staticmethod
+    async def _running_task_watchdog(manager_ref: weakref.ReferenceType["TaskManager"]) -> None:
+        """Poll watchdog state without retaining an otherwise-unmanaged manager."""
         try:
-            while not self._is_closing:
+            while True:
+                manager = manager_ref()
+                if manager is None or manager._is_closing:
+                    return
                 poll_seconds = max(0.1, _settings_float("running_task_watchdog_poll_seconds", 30.0))
+                manager = None
                 await asyncio.sleep(poll_seconds)
-                if self._is_closing or not _settings_bool("running_task_watchdog_enabled", True):
+                manager = manager_ref()
+                if manager is None or manager._is_closing:
+                    return
+                if not _settings_bool("running_task_watchdog_enabled", True):
+                    manager = None
                     continue
                 try:
-                    await self._check_running_tasks_for_stall()
+                    await manager._check_running_tasks_for_stall()
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
                     logger.warning("Running task watchdog check failed: %s", exc)
+                finally:
+                    manager = None
         except asyncio.CancelledError:
             raise
 
@@ -3757,6 +4026,30 @@ class TaskManager:
             self._tasks[task_id] = updated_task
         await self._persist_task(updated_task)
         await self._upsert_bot_run(updated_task)
+
+    async def _evict_standalone_terminal_task(self, task: Task) -> None:
+        """Release completed standalone work while retaining all workflow context."""
+        if task.status not in self._TERMINAL_TASK_STATUSES:
+            return
+        metadata = task.metadata or TaskMetadata()
+        if metadata.parent_task_id or metadata.trigger_rule_id or self._bot_registry is None:
+            return
+        try:
+            bot = await self._bot_registry.get(task.bot_id)
+        except Exception:
+            return
+        workflow = self._bot_workflow(bot)
+        if any(bool(getattr(trigger, "enabled", False)) for trigger in (getattr(workflow, "triggers", None) or [])):
+            return
+        async with self._lock:
+            current_task = self._tasks.get(task.id)
+            has_active_dependent = any(
+                candidate.status not in self._TERMINAL_TASK_STATUSES
+                and task.id in candidate.depends_on
+                for candidate in self._tasks.values()
+            )
+            if current_task is not None and current_task.status in self._TERMINAL_TASK_STATUSES and not has_active_dependent:
+                self._tasks.pop(task.id, None)
 
     async def _upsert_bot_run(self, task: Task) -> None:
         metadata = task.metadata.model_dump() if task.metadata else None
@@ -4031,13 +4324,19 @@ class TaskManager:
         depends_on: Optional[List[str]] = None,
     ) -> Task:
         await self._ensure_db()
+        metadata = await self._apply_root_pipeline_metadata(bot_id, metadata or TaskMetadata())
+        metadata = await self._apply_bot_project_scope(bot_id, payload, metadata)
         await self._validate_task_payload(bot_id, payload, metadata=metadata)
         dependencies = depends_on or []
+        for dependency_id in dependencies:
+            dependency = await self._load_task_from_db(dependency_id)
+            if dependency is None:
+                raise TaskNotFoundError(f"Dependency task not found: {dependency_id}")
+            async with self._lock:
+                self._tasks.setdefault(dependency.id, dependency)
         task_id = str(uuid.uuid4())
-        if metadata is not None and not metadata.workflow_root_task_id:
+        if not metadata.workflow_root_task_id:
             metadata = metadata.model_copy(update={"workflow_root_task_id": task_id})
-        elif metadata is None:
-            metadata = TaskMetadata(workflow_root_task_id=task_id)
         orchestration_id = str(metadata.orchestration_id or "").strip()
         async with self._lock:
             cancellation = self._cancelled_orchestrations.get(orchestration_id) if orchestration_id else None
@@ -4063,9 +4362,18 @@ class TaskManager:
         )
         async with self._lock:
             self._tasks[task_id] = task
-        await self._persist_task(task)
-        await self._persist_dependencies(task)
-        await self._upsert_bot_run(task)
+            self._pending_task_creations.add(task_id)
+        try:
+            await self._persist_task(task)
+            await self._persist_dependencies(task)
+            await self._upsert_bot_run(task)
+        except Exception:
+            async with self._lock:
+                self._pending_task_creations.discard(task_id)
+                self._tasks.pop(task_id, None)
+            raise
+        async with self._lock:
+            self._pending_task_creations.discard(task_id)
         if task.status == "queued":
             await self._schedule_ready_tasks()
         return task
@@ -4073,9 +4381,13 @@ class TaskManager:
     async def get_task(self, task_id: str) -> Task:
         await self._ensure_db()
         async with self._lock:
-            if task_id not in self._tasks:
-                raise TaskNotFoundError(f"Task not found: {task_id}")
-            return self._tasks[task_id]
+            cached_task = self._tasks.get(task_id)
+        if cached_task is not None:
+            return cached_task
+        task = await self._load_task_from_db(task_id)
+        if task is None:
+            raise TaskNotFoundError(f"Task not found: {task_id}")
+        return task
 
     async def retry_task(self, task_id: str, payload_override: Any = None) -> Task:
         await self._ensure_db()
@@ -4100,10 +4412,10 @@ class TaskManager:
             return retried_task
 
         now = datetime.now(timezone.utc).isoformat()
+        updated_original: Optional[Task] = None
         async with self._lock:
             existing = self._tasks.get(task_id)
-            if existing is None:
-                return retried_task
+            existing = existing or original
             existing_metadata = existing.metadata or TaskMetadata()
             updated_metadata = existing_metadata.model_copy(
                 update={"retried_by_task_id": retried_task.id}
@@ -4125,6 +4437,16 @@ class TaskManager:
                 }
             )
             updated_original = self._tasks[task_id]
+            if original.status in self._TERMINAL_TASK_STATUSES:
+                retained_for_active_dependency = any(
+                    task.status not in self._TERMINAL_TASK_STATUSES
+                    and task_id in task.depends_on
+                    for task in self._tasks.values()
+                )
+                if not retained_for_active_dependency:
+                    self._tasks.pop(task_id, None)
+        if updated_original is None:
+            return retried_task
         await self._persist_task(updated_original)
         await self._upsert_bot_run(updated_original)
         await self._record_artifacts_for_task(updated_original)
@@ -4225,42 +4547,77 @@ class TaskManager:
         limit: Optional[int] = None,
     ) -> List[Task]:
         await self._ensure_db()
+        clauses: List[str] = []
+        params: List[Any] = []
+        if orchestration_id:
+            clauses.extend([
+                "metadata IS NOT NULL",
+                "json_valid(metadata)",
+                "json_extract(metadata, '$.orchestration_id') = ?",
+            ])
+            params.append(str(orchestration_id))
+        if statuses:
+            wanted = sorted(
+                {str(status).strip().lower() for status in statuses if str(status).strip()}
+            )
+            if wanted:
+                clauses.append(f"lower(status) IN ({', '.join('?' for _ in wanted)})")
+                params.extend(wanted)
+        if bot_id:
+            clauses.append("bot_id = ?")
+            params.append(str(bot_id))
+        query = f"SELECT * FROM {_TASKS_TABLE}"
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY updated_at DESC, created_at DESC"
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(max(1, int(limit)))
+        async with open_sqlite(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(query, tuple(params)) as cursor:
+                rows = await cursor.fetchall()
+        missing_dependency_task_ids = [
+            str(row["id"])
+            for row in rows
+            if not row["depends_on"]
+        ]
+        dependency_map: Dict[str, List[str]] = {}
+        if missing_dependency_task_ids:
+            dependency_placeholders = ", ".join("?" for _ in missing_dependency_task_ids)
+            async with open_sqlite(self._db_path) as db:
+                async with db.execute(
+                    f"""
+                    SELECT task_id, depends_on_task_id
+                    FROM {_TASK_DEPENDENCIES_TABLE}
+                    WHERE task_id IN ({dependency_placeholders})
+                    """,
+                    tuple(missing_dependency_task_ids),
+                ) as cursor:
+                    for dependency_row in await cursor.fetchall():
+                        dependency_map.setdefault(str(dependency_row[0]), []).append(
+                            str(dependency_row[1])
+                        )
+        tasks = [self._task_from_db_row(row, dependency_map) for row in rows]
         async with self._lock:
-            tasks = list(self._tasks.values())
             pending_dispatch = set(self._trigger_dispatch_pending)
         if pending_dispatch:
-            visible_tasks: List[Task] = []
-            for task in tasks:
-                if task.id in pending_dispatch and task.status == "completed":
-                    visible_tasks.append(task.model_copy(update={"status": "running"}))
-                    continue
-                visible_tasks.append(task)
-            tasks = visible_tasks
-        if orchestration_id:
             tasks = [
-                t
-                for t in tasks
-                if t.metadata and t.metadata.orchestration_id == orchestration_id
+                task.model_copy(update={"status": "running"})
+                if task.id in pending_dispatch and task.status == "completed"
+                else task
+                for task in tasks
             ]
-        if statuses:
-            wanted = {str(status).strip().lower() for status in statuses if str(status).strip()}
-            tasks = [t for t in tasks if t.status.lower() in wanted]
-        if bot_id:
-            tasks = [t for t in tasks if str(t.bot_id) == str(bot_id)]
-        safe_limit: Optional[int] = None
-        if limit is not None:
-            safe_limit = max(1, int(limit))
-        if safe_limit is not None and len(tasks) > safe_limit:
-            tasks = heapq.nlargest(
-                safe_limit,
-                tasks,
-                key=lambda task: (task.updated_at or "", task.created_at or ""),
-            )
-        else:
-            tasks.sort(key=lambda task: (task.updated_at or "", task.created_at or ""), reverse=True)
-            if safe_limit is not None:
-                tasks = tasks[:safe_limit]
         return tasks
+
+    async def count_tasks_by_status(self) -> Dict[str, int]:
+        await self._ensure_db()
+        async with open_sqlite(self._db_path) as db:
+            async with db.execute(
+                f"SELECT status, COUNT(*) FROM {_TASKS_TABLE} GROUP BY status"
+            ) as cursor:
+                rows = await cursor.fetchall()
+        return {str(row[0]): int(row[1] or 0) for row in rows}
 
     async def list_bot_runs(self, bot_id: str, limit: int = 50) -> List[BotRun]:
         await self._ensure_db()
@@ -4881,6 +5238,8 @@ class TaskManager:
                     self._trigger_dispatch_pending.discard(task_id)
         if status == "failed":
             await self._cleanup_failed_orchestration_workspace(updated_task)
+        if status in self._TERMINAL_TASK_STATUSES:
+            await self._evict_standalone_terminal_task(updated_task)
 
     async def _retry_stuck_task(
         self,
@@ -5206,6 +5565,17 @@ class TaskManager:
                     bot = await self._bot_registry.get(task.bot_id)
                 except Exception:
                     bot = None
+            if self._supervision_store is not None:
+                hold = await self._supervision_store.get_hold(task.bot_id)
+                if hold is not None:
+                    raise _TaskPolicyViolation(
+                        f"Bot '{task.bot_id}' is on an active supervision hold.",
+                        code="supervision_blocked",
+                        details={
+                            "reason_code": "supervision_blocked",
+                            "hold_reason": str(hold.get("reason") or "")[:2_000],
+                        },
+                    )
             original_payload = copy.deepcopy(task.payload)
             payload = original_payload if isinstance(original_payload, dict) else {}
             runtime_payload = copy.deepcopy(payload)
@@ -5260,14 +5630,26 @@ class TaskManager:
                             raise _TaskExecutionFailure(
                                 f"project-scoped connection binding '{connection_id}' is unavailable for project '{project_id}'"
                             )
+                        try:
+                            from shared.connection_secrets import mask_auth_payload, mask_connection_config
+
+                            safe_config = mask_connection_config(
+                                resolved.get("config") if isinstance(resolved.get("config"), dict) else {}
+                            )
+                            safe_auth = mask_auth_payload(
+                                resolved.get("auth") if isinstance(resolved.get("auth"), dict) else {}
+                            )
+                        except Exception:
+                            safe_config = {}
+                            safe_auth = {}
                         scoped_connections.append(
                             {
                                 "slot": slot,
                                 "connection_id": resolved.get("id"),
                                 "name": resolved.get("name"),
                                 "kind": resolved.get("kind"),
-                                "config": resolved.get("config"),
-                                "auth": resolved.get("auth"),
+                                "config": safe_config,
+                                "auth": safe_auth,
                                 "schema_text": resolved.get("schema_text"),
                             }
                         )
@@ -5288,13 +5670,15 @@ class TaskManager:
                 bot is not None
                 and getattr(bot, "backends", None)
                 and all(
-                    str(getattr(backend, "type", "") or "").strip().lower() in {"browser", "custom"}
+                    str(getattr(backend, "type", "") or "").strip().lower()
+                    in {"browser", "documentation", "custom"}
                     for backend in bot.backends
                 )
             )
             if bot is not None and not bot_allows_repo_output_for_task and isinstance(task_for_execution.payload, dict):
-                # Browser and custom backends own strict payload contracts. Do not add
-                # LLM-specific routing metadata that their workers must reject.
+                # Browser, documentation, and custom backends own strict payload
+                # contracts. Do not add LLM-specific routing metadata that their
+                # workers must reject.
                 if not structured_payload_backend and "role_hint" not in runtime_payload and bot.role:
                     runtime_payload = dict(runtime_payload)
                     runtime_payload["role_hint"] = str(bot.role).strip().lower()
@@ -5436,6 +5820,17 @@ class TaskManager:
                     raise
                 except Exception:
                     pass
+            if bot is not None and self._supervision_store is not None:
+                try:
+                    await self._supervision_store.record_manager_result(
+                        bot=bot,
+                        task_id=task.id,
+                        result=result,
+                    )
+                except Exception as exc:
+                    # A reporting persistence problem must not turn completed work
+                    # into a failed task or trigger an unsafe retry.
+                    logger.error("Task %s completed but manager report capture failed: %s", task_id, exc)
             await self.update_status(task_id, "completed", result=result)
         except asyncio.CancelledError:
             logger.info("Task %s cancelled", task_id)
@@ -5456,7 +5851,12 @@ class TaskManager:
                     f"{error_message} (likely truncated model output at token limit; "
                     "increase max_tokens/num_predict or reduce expected output size)"
                 )
-            task_error = TaskError(message=error_message)
+            error_code = "output_contract_invalid" if _is_output_contract_error_message(error_message) else None
+            task_error = TaskError(
+                message=error_message,
+                code=error_code,
+                details={"reason_code": error_code} if error_code else None,
+            )
             if await self._requeue_for_retry(task, task_error):
                 logger.info("Task %s queued for automatic retry", task_id)
             else:
@@ -5560,7 +5960,11 @@ class TaskManager:
                 (
                     task
                     for task in self._tasks.values()
-                    if task.status == "queued" and task.id not in self._running_task_ids
+                    if (
+                        task.status == "queued"
+                        and task.id not in self._running_task_ids
+                        and task.id not in self._pending_task_creations
+                    )
                 ),
                 key=lambda item: (item.created_at or "", item.updated_at or ""),
             )
@@ -5570,6 +5974,56 @@ class TaskManager:
                 if task_id in self._tasks
             ]
         provider_limits = self._provider_concurrency_limits()
+        browser_worker_keys = await self._browser_worker_keys_for_tasks([*queued, *running_snapshot])
+        documentation_worker_keys = await self._documentation_worker_keys_for_tasks([*queued, *running_snapshot])
+        browser_worker_counts: dict[str, int] = {}
+        documentation_worker_counts: dict[str, int] = {}
+        for task in running_snapshot:
+            worker_id = browser_worker_keys.get(task.id, "")
+            if worker_id:
+                browser_worker_counts[worker_id] = browser_worker_counts.get(worker_id, 0) + 1
+            documentation_worker_id = documentation_worker_keys.get(task.id, "")
+            if documentation_worker_id:
+                documentation_worker_counts[documentation_worker_id] = (
+                    documentation_worker_counts.get(documentation_worker_id, 0) + 1
+                )
+        orchestration_counts: dict[str, int] = {}
+        for task in running_snapshot:
+            metadata = task.metadata or TaskMetadata()
+            orchestration_id = str(metadata.orchestration_id or "").strip()
+            if orchestration_id and self._orchestration_concurrency_limit(metadata) is not None:
+                orchestration_counts[orchestration_id] = orchestration_counts.get(orchestration_id, 0) + 1
+
+        def _has_orchestration_capacity(task: Task) -> bool:
+            metadata = task.metadata or TaskMetadata()
+            orchestration_id = str(metadata.orchestration_id or "").strip()
+            limit = self._orchestration_concurrency_limit(metadata)
+            return not orchestration_id or limit is None or orchestration_counts.get(orchestration_id, 0) < limit
+
+        def _reserve_orchestration_slot(task: Task) -> None:
+            metadata = task.metadata or TaskMetadata()
+            orchestration_id = str(metadata.orchestration_id or "").strip()
+            if orchestration_id and self._orchestration_concurrency_limit(metadata) is not None:
+                orchestration_counts[orchestration_id] = orchestration_counts.get(orchestration_id, 0) + 1
+
+        def _has_browser_worker_capacity(task: Task) -> bool:
+            worker_id = browser_worker_keys.get(task.id, "")
+            return not worker_id or browser_worker_counts.get(worker_id, 0) < 1
+
+        def _reserve_browser_worker_slot(task: Task) -> None:
+            worker_id = browser_worker_keys.get(task.id, "")
+            if worker_id:
+                browser_worker_counts[worker_id] = browser_worker_counts.get(worker_id, 0) + 1
+
+        def _has_documentation_worker_capacity(task: Task) -> bool:
+            worker_id = documentation_worker_keys.get(task.id, "")
+            return not worker_id or documentation_worker_counts.get(worker_id, 0) < 1
+
+        def _reserve_documentation_worker_slot(task: Task) -> None:
+            worker_id = documentation_worker_keys.get(task.id, "")
+            if worker_id:
+                documentation_worker_counts[worker_id] = documentation_worker_counts.get(worker_id, 0) + 1
+
         if provider_limits:
             provider_keys = await self._bot_provider_keys_for_tasks([*queued, *running_snapshot])
             provider_counts: dict[str, int] = {}
@@ -5582,15 +6036,37 @@ class TaskManager:
             for task in queued:
                 if len(selected) >= available_slots:
                     break
+                if not _has_orchestration_capacity(task):
+                    continue
+                if not _has_browser_worker_capacity(task):
+                    continue
+                if not _has_documentation_worker_capacity(task):
+                    continue
                 provider_key = provider_keys.get(task.id, "")
                 limit = provider_limits.get(provider_key)
                 if limit is not None and provider_counts.get(provider_key, 0) >= limit:
                     continue
                 selected.append(task)
+                _reserve_orchestration_slot(task)
+                _reserve_browser_worker_slot(task)
+                _reserve_documentation_worker_slot(task)
                 if provider_key:
                     provider_counts[provider_key] = provider_counts.get(provider_key, 0) + 1
         else:
-            selected = queued[:available_slots]
+            selected = []
+            for task in queued:
+                if len(selected) >= available_slots:
+                    break
+                if not _has_orchestration_capacity(task):
+                    continue
+                if not _has_browser_worker_capacity(task):
+                    continue
+                if not _has_documentation_worker_capacity(task):
+                    continue
+                selected.append(task)
+                _reserve_orchestration_slot(task)
+                _reserve_browser_worker_slot(task)
+                _reserve_documentation_worker_slot(task)
 
         async with self._lock:
             still_selected: list[Task] = []
@@ -7226,13 +7702,19 @@ class TaskManager:
         ]
         return TaskMetadata(
             user_id=metadata.user_id if inherit_metadata else None,
-            project_id=metadata.project_id if inherit_metadata else None,
+            # Project scope is an isolation boundary, not optional trigger context.
+            # A workflow may intentionally omit user/conversation metadata, but it
+            # must never shed the project that authorized the parent task.
+            project_id=metadata.project_id,
             source="bot_trigger",
             priority=metadata.priority if inherit_metadata else None,
             conversation_id=metadata.conversation_id if inherit_metadata else None,
             orchestration_id=metadata.orchestration_id if inherit_metadata else None,
             pipeline_name=metadata.pipeline_name if inherit_metadata else None,
             pipeline_entry_bot_id=metadata.pipeline_entry_bot_id if inherit_metadata else None,
+            orchestration_concurrency_limit=(
+                metadata.orchestration_concurrency_limit if inherit_metadata else None
+            ),
             parent_task_id=parent_task_id,
             trigger_rule_id=trigger_rule_id,
             trigger_depth=int(metadata.trigger_depth or 0) + 1,

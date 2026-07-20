@@ -22,6 +22,21 @@ def test_worker_model_supports_attested_browser_capability():
     assert capability.provider == "browser"
 
 
+def test_worker_model_supports_attested_documentation_capability():
+    from shared.models import BackendConfig, Capability
+
+    capability = Capability(type="tool", provider="documentation", models=["documentation-v1"])
+    backend = BackendConfig(
+        type="documentation",
+        provider="documentation",
+        model="documentation-v1",
+        worker_id="docs-writer-01",
+    )
+
+    assert capability.provider == "documentation"
+    assert backend.type == "documentation"
+
+
 def test_worker_model_supports_declared_runtime_limits():
     from shared.models import Worker
 
@@ -45,6 +60,13 @@ def test_bot_model_valid():
     assert b.id == "bot1"
     assert b.enabled is True
     assert b.backends == []
+
+
+def test_bot_model_supports_explicit_project_binding():
+    from shared.models import Bot
+
+    bot = Bot(id="globeiq-reviewer", name="GlobeIQ Reviewer", role="reviewer", project_id="globeiq", backends=[])
+    assert bot.project_id == "globeiq"
 
 
 def test_bot_model_with_backend():

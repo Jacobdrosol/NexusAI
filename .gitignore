@@ -42,8 +42,13 @@ tmp_pm_probe*/
 # Personal bot configurations — import via UI, never commit
 *.bot.json
 *.bot.yaml
-# Exclude bot packs in config/bots/ except the committed examples
+# Exclude user-specific bot and worker configuration packs. The committed examples
+# are intentionally generic and are the only public configs in these directories.
 config/bots/*.json
+config/bots/*.yaml
 !config/bots/example_bot.yaml
 !config/bots/assistant_bot.yaml
 !config/bots/README.md
+config/workers/*.yaml
+!config/workers/example_worker.yaml
+!config/workers/local_worker.yaml

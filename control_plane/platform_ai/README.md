@@ -3,7 +3,7 @@
 The Platform AI module is an in-platform autonomous AI copilot and pipeline tuner. It provides a session-based interface where an operator can ask the AI to monitor, diagnose, and iteratively improve a running PM workflow — adjusting bot prompts, evaluating output quality, and relaunching orchestrations in a bounded feedback loop.
 
 > **⚠️ Status: Active Development / Testing**
-> Platform AI is currently under active testing and **not yet functioning reliably in production**. The autonomous tuner loop has gone through multiple fix iterations and still has known failure modes (see below). Do not depend on it for production pipeline repair.
+> Platform AI supports typed specialist proposals, readiness preflight, individual operator approval, and bounded session tuning. Autonomous pipeline tuning and privileged runner actions remain opt-in and must be validated for the target deployment; do not rely on them for unattended production repairs without that validation.
 
 ---
 
@@ -255,7 +255,7 @@ The runtime holds references to the shared task manager, bot registry, assignmen
 | # | Severity | Issue | Location |
 |---|----------|-------|----------|
 | 1 | 🟡 Low | Session-loop duplication is guarded in-process with an async lock; cross-process duplicate loops are still possible if multiple control-plane workers share the same DB without distributed locking | `runtime.py` |
-| 2 | 🔴 High | Stalled detection incomplete: if refinement changes don't alter eval signature, loop terminates prematurely | `runtime.py` ~lines 381-394 |
+| 2 | 🟡 Low | In-memory no-progress timing markers reset after a control-plane restart; persisted session/action history remains available, but an active session must be resumed deliberately | `runtime.py` session loop |
 | 3 | 🟡 Low | Pipeline session claiming is serialized per process; cross-process duplicate claims remain possible without a database-level unique constraint | `api/platform_ai.py` |
 | 4 | 🟠 Medium | `control` actions are partially implemented; repo-edit/deploy now execute runners, but autonomous code planning still depends on operator directives or custom runner scripts | `api/platform_ai.py` + `runtime.py` |
 | 5 | 🟠 Medium | No wait/backoff between tuner iterations: launches immediately after refinement | `runtime.py` `_run_autonomous_pipeline_tuner` |

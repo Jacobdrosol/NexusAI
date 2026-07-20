@@ -7,14 +7,16 @@ import sys
 from contextlib import suppress
 
 from control_plane.api.platform_ai import _apply_cli_backend_profile
+from control_plane.agent_scheduler.engine import AgentScheduleEngine
 from control_plane.platform_ai.runtime import PlatformAISessionRuntime
 from control_plane.platform_ai.session_store import PlatformAISessionStore
 from control_plane.registry.bot_registry import BotRegistry
+from control_plane.registry.project_registry import ProjectRegistry
 from control_plane.registry.worker_registry import WorkerRegistry
 from control_plane.connections.resolver import ConnectionResolver
 from control_plane.worker_probe_store import WorkerProbeStore
 from shared.exceptions import BotNotFoundError
-from shared.models import Bot, Worker
+from shared.models import Bot, Project, Worker
 
 
 def test_platform_ai_cli_backend_uses_approved_ollama_profile():
@@ -270,6 +272,112 @@ async def test_process_operator_message_invokes_platform_brain_backend(tmp_path)
         str((event.get("payload") or {}).get("action") or "") == "platform_brain_invoked"
         for event in events
     )
+
+
+@pytest.mark.anyio
+async def test_platform_brain_specialist_catalog_exposes_only_ready_nonsecret_worker_metadata(tmp_path):
+    store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+    workers = WorkerRegistry(db_path=str(tmp_path / "workers.db"))
+    probes = WorkerProbeStore(db_path=str(tmp_path / "probes.db"))
+    projects = ProjectRegistry(db_path=str(tmp_path / "projects.db"))
+    await projects.register(
+        Project(id="globeiq", name="Private GlobeIQ Project", mode="isolated", enabled=True)
+    )
+    await projects.register(
+        Project(id="disabled-project", name="Disabled Private Project", mode="isolated", enabled=False)
+    )
+    await workers.register(
+        Worker.model_validate(
+            {
+                "id": "ready-catalog-worker",
+                "name": "Private Worker Name",
+                "host": "10.24.8.19",
+                "port": 9911,
+                "status": "online",
+                "enabled": True,
+                "request_token_env": "PRIVATE_REQUEST_TOKEN",
+                "capabilities": [
+                    {"type": "llm", "provider": "ollama_cloud", "models": ["glm-5.2:cloud"]}
+                ],
+            }
+        )
+    )
+    await workers.register(
+        Worker.model_validate(
+            {
+                "id": "unready-catalog-worker",
+                "name": "Unready Worker",
+                "host": "10.24.8.20",
+                "port": 9912,
+                "status": "online",
+                "enabled": True,
+                "capabilities": [
+                    {"type": "llm", "provider": "ollama_cloud", "models": ["qwen3.5:cloud"]}
+                ],
+            }
+        )
+    )
+    await probes.record(
+        {
+            "worker_id": "ready-catalog-worker",
+            "probe_status": "ready",
+            "capability_attestation": {
+                "enabled_cli_tools": ["claude"],
+                "browser": {"configured": True, "ready": True, "reason": ""},
+                "provider_credentials": {"ollama_cloud": "do-not-disclose"},
+            },
+        }
+    )
+    await probes.record({"worker_id": "unready-catalog-worker", "probe_status": "unreachable"})
+
+    class FakeScheduler:
+        def __init__(self) -> None:
+            self.payload = None
+
+        async def _dispatch_backend(self, backend, payload, task=None):  # noqa: ANN001
+            _ = (backend, task)
+            self.payload = payload
+            return {"output": "{\"assistant_reply\":\"Catalog received.\",\"actions\":[]}"}
+
+    scheduler = FakeScheduler()
+    runtime = PlatformAISessionRuntime(
+        store,
+        scheduler=scheduler,
+        worker_registry=workers,
+        worker_probe_store=probes,
+        project_registry=projects,
+    )
+    session = await store.create_session(
+        mode="bot_creator",
+        status="running",
+        metadata={
+            "backend": {
+                "provider": "ollama_cloud",
+                "model": "glm-5.2:cloud",
+                "backend_type": "remote_llm",
+                "worker_id": "ready-catalog-worker",
+            }
+        },
+    )
+    await store.append_message(session["id"], role="operator", content="Create a researcher.", metadata={})
+    await runtime._process_operator_messages(session["id"])
+
+    assert isinstance(scheduler.payload, list)
+    system_prompt = str(scheduler.payload[0]["content"])
+    assert "Non-secret execution catalog" in system_prompt
+    assert "ready-catalog-worker" in system_prompt
+    assert "glm-5.2:cloud" in system_prompt
+    assert "claude" in system_prompt
+    assert "globeiq" in system_prompt
+    assert "unready-catalog-worker" not in system_prompt
+    assert "disabled-project" not in system_prompt
+    assert "10.24.8.19" not in system_prompt
+    assert "9911" not in system_prompt
+    assert "Private Worker Name" not in system_prompt
+    assert "Private GlobeIQ Project" not in system_prompt
+    assert "Disabled Private Project" not in system_prompt
+    assert "PRIVATE_REQUEST_TOKEN" not in system_prompt
+    assert "do-not-disclose" not in system_prompt
 
 
 @pytest.mark.anyio
@@ -1563,6 +1671,54 @@ async def test_operator_approval_applies_proposed_bot_without_auto_activation(tm
 
 
 @pytest.mark.anyio
+async def test_operator_approval_rejects_bot_configuration_changed_after_preflight(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_CONFIGURATION_MUTATIONS_ENABLED", "true")
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_OWNER_ALLOWLIST", "operator")
+    store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+    bot_registry = BotRegistry(db_path=str(tmp_path / "bots.db"))
+    runtime = PlatformAISessionRuntime(
+        store,
+        bot_registry=bot_registry,
+        worker_registry=WorkerRegistry(db_path=str(tmp_path / "workers.db")),
+        connection_resolver=ConnectionResolver(db_path=str(tmp_path / "connections.db")),
+    )
+    session = await store.create_session(mode="bot_creator", status="running", operator_id="operator")
+    result = await runtime._apply_operator_directives(
+        session["id"],
+        session=session,
+        content=json.dumps(
+            {
+                "platform_ai_action": "upsert_bot",
+                "bot": {
+                    "id": "tampered-proposal-bot",
+                    "name": "Original Proposal",
+                    "role": "assistant",
+                    "backends": [{"type": "cloud_api", "provider": "openai", "model": "gpt-4o-mini"}],
+                },
+            }
+        ),
+    )
+    proposal_id = str((((result.get("actions") or [])[0].get("result") or {}).get("proposal_id") or ""))
+
+    preflight = await runtime.preflight_patch_proposal(session["id"], proposal_id, operator_id="operator")
+    assert preflight.get("status") == "ready"
+    assert str((preflight.get("preflight") or {}).get("configuration_hash") or "")
+
+    proposal = await store.get_patch_proposal(proposal_id)
+    assert proposal is not None
+    tampered_after_state = json.loads(json.dumps(proposal["after_state"]))
+    tampered_after_state["bot"]["name"] = "Tampered Proposal"
+    await store.update_patch_proposal_after_state(proposal_id, tampered_after_state)
+
+    approval = await runtime.approve_patch_proposal(session["id"], proposal_id, operator_id="operator")
+
+    assert approval.get("status") == "blocked"
+    assert approval.get("detail") == "proposal_preflight_mismatch"
+    with pytest.raises(BotNotFoundError):
+        await bot_registry.get("tampered-proposal-bot")
+
+
+@pytest.mark.anyio
 async def test_operator_approval_requires_matching_allowlisted_session_owner(tmp_path, monkeypatch):
     monkeypatch.setenv("NEXUS_PLATFORM_AI_CONFIGURATION_MUTATIONS_ENABLED", "true")
     monkeypatch.setenv("NEXUS_PLATFORM_AI_OWNER_ALLOWLIST", "owner@example.com")
@@ -1830,6 +1986,301 @@ async def test_configuration_proposal_rejects_cli_backend(tmp_path, monkeypatch)
     detail = str((actions[0].get("result") or {}).get("detail") or "")
     assert detail == "proposal_backend_type_not_approvable:cli"
     assert await store.list_patch_proposals(session["id"]) == []
+
+
+@pytest.mark.anyio
+async def test_specialist_proposal_uses_approved_claude_ollama_profile_and_stays_disabled(tmp_path, monkeypatch):
+    monkeypatch.delenv("NEXUS_PLATFORM_AI_CONFIGURATION_MUTATIONS_ENABLED", raising=False)
+    store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+    bot_registry = BotRegistry(db_path=str(tmp_path / "bots.db"))
+    runtime = PlatformAISessionRuntime(store, bot_registry=bot_registry)
+    session = await store.create_session(mode="bot_creator", status="running")
+    directive = {
+        "platform_ai_action": "propose_specialist_bot",
+        "specialist": {
+            "kind": "code_reviewer",
+            "name": "Claude via Ollama Reviewer",
+            "activate": True,
+            "allow_repo_writes": True,
+            "backends": [
+                {
+                    "type": "cli",
+                    "worker_id": "coding-worker",
+                    "provider": "cli",
+                    "model": "claude",
+                }
+            ],
+            "cli_command_profile": "claude_ollama_json",
+            "cli_runtime_model": "glm-5.2:cloud",
+        },
+    }
+
+    result = await runtime._apply_operator_directives(
+        session["id"],
+        session=session,
+        content=json.dumps(directive),
+    )
+
+    actions = result.get("actions") if isinstance(result.get("actions"), list) else []
+    assert len(actions) == 1
+    proposal_id = str((actions[0].get("result") or {}).get("proposal_id") or "")
+    assert proposal_id
+    proposal = await store.get_patch_proposal(proposal_id)
+    assert proposal is not None
+    after_state = proposal.get("after_state") if isinstance(proposal.get("after_state"), dict) else {}
+    bot = after_state.get("bot") if isinstance(after_state.get("bot"), dict) else {}
+    specialist_request = after_state.get("specialist_request") if isinstance(after_state.get("specialist_request"), dict) else {}
+    assert bot["enabled"] is False
+    assert bot["execution_policy"]["repo_output_mode"] == "deny"
+    assert bot["backends"][0]["command"] == "claude -p --model glm-5.2:cloud --output-format json"
+    assert specialist_request["activate"] is False
+    assert specialist_request["allow_repo_writes"] is False
+    preflight = await runtime.preflight_patch_proposal(session["id"], proposal_id)
+    assert preflight["preflight"]["safety_error"] is None
+    with pytest.raises(BotNotFoundError):
+        await bot_registry.get("claude-via-ollama-reviewer")
+
+
+@pytest.mark.anyio
+async def test_specialist_proposal_is_limited_to_bot_creator_sessions(tmp_path):
+    store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+    bot_registry = BotRegistry(db_path=str(tmp_path / "bots.db"))
+    runtime = PlatformAISessionRuntime(store, bot_registry=bot_registry)
+    session = await store.create_session(
+        mode="bot_tuner",
+        status="running",
+        metadata={"target_bot_id": "existing-bot"},
+    )
+    directive = {
+        "platform_ai_action": "propose_specialist_bot",
+        "specialist": {
+            "kind": "researcher",
+            "name": "Out Of Scope Researcher",
+            "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "glm-5.2:cloud"}],
+        },
+    }
+
+    result = await runtime._apply_operator_directives(
+        session["id"],
+        session=session,
+        content=json.dumps(directive),
+    )
+
+    actions = result.get("actions") if isinstance(result.get("actions"), list) else []
+    assert len(actions) == 1
+    assert (actions[0].get("result") or {}).get("detail") == "specialist_proposal_requires_bot_creator_mode"
+    assert await store.list_patch_proposals(session["id"]) == []
+
+
+@pytest.mark.anyio
+async def test_specialist_proposal_is_bound_to_its_creator_session_project(tmp_path):
+    store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+    bot_registry = BotRegistry(db_path=str(tmp_path / "bots.db"))
+    runtime = PlatformAISessionRuntime(store, bot_registry=bot_registry)
+    session = await store.create_session(
+        mode="bot_creator",
+        status="running",
+        metadata={"project_id": "globeiq"},
+    )
+    directive = {
+        "platform_ai_action": "propose_specialist_bot",
+        "specialist": {
+            "kind": "researcher",
+            "name": "Project Bound Researcher",
+            "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "glm-5.2:cloud"}],
+        },
+    }
+
+    result = await runtime._apply_operator_directives(
+        session["id"],
+        session=session,
+        content=json.dumps(directive),
+    )
+
+    actions = result.get("actions") if isinstance(result.get("actions"), list) else []
+    proposal_id = str((actions[0].get("result") or {}).get("proposal_id") or "")
+    assert proposal_id
+    proposal = await store.get_patch_proposal(proposal_id)
+    assert proposal is not None
+    after_state = proposal.get("after_state") if isinstance(proposal.get("after_state"), dict) else {}
+    specialist_request = after_state.get("specialist_request") if isinstance(after_state.get("specialist_request"), dict) else {}
+    bot = after_state.get("bot") if isinstance(after_state.get("bot"), dict) else {}
+
+    assert specialist_request["project_id"] == "globeiq"
+    assert bot["routing_rules"]["specialist"]["project_id"] == "globeiq"
+
+
+@pytest.mark.anyio
+async def test_specialist_proposal_rejects_project_scope_mismatch(tmp_path):
+    store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+    bot_registry = BotRegistry(db_path=str(tmp_path / "bots.db"))
+    runtime = PlatformAISessionRuntime(store, bot_registry=bot_registry)
+    session = await store.create_session(
+        mode="bot_creator",
+        status="running",
+        metadata={"project_id": "globeiq"},
+    )
+    directive = {
+        "platform_ai_action": "propose_specialist_bot",
+        "specialist": {
+            "kind": "researcher",
+            "name": "Cross Project Researcher",
+            "project_id": "another-project",
+            "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "glm-5.2:cloud"}],
+        },
+    }
+
+    result = await runtime._apply_operator_directives(
+        session["id"],
+        session=session,
+        content=json.dumps(directive),
+    )
+
+    actions = result.get("actions") if isinstance(result.get("actions"), list) else []
+    assert (actions[0].get("result") or {}).get("detail") == "specialist_project_scope_mismatch"
+    assert await store.list_patch_proposals(session["id"]) == []
+
+
+@pytest.mark.anyio
+async def test_specialist_proposal_rejects_unknown_project_binding(tmp_path):
+    store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+    bot_registry = BotRegistry(db_path=str(tmp_path / "bots.db"))
+    project_registry = ProjectRegistry(db_path=str(tmp_path / "projects.db"))
+    runtime = PlatformAISessionRuntime(
+        store,
+        bot_registry=bot_registry,
+        project_registry=project_registry,
+    )
+    session = await store.create_session(
+        mode="bot_creator",
+        status="running",
+        metadata={"project_id": "missing-project"},
+    )
+    directive = {
+        "platform_ai_action": "propose_specialist_bot",
+        "specialist": {
+            "kind": "researcher",
+            "name": "Unknown Project Researcher",
+            "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "glm-5.2:cloud"}],
+        },
+    }
+
+    result = await runtime._apply_operator_directives(
+        session["id"],
+        session=session,
+        content=json.dumps(directive),
+    )
+
+    actions = result.get("actions") if isinstance(result.get("actions"), list) else []
+    assert (actions[0].get("result") or {}).get("detail") == "project_not_found"
+    assert await store.list_patch_proposals(session["id"]) == []
+
+
+@pytest.mark.anyio
+async def test_schedule_proposal_is_paused_project_bound_and_owner_approved(tmp_path, monkeypatch):
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_CONFIGURATION_MUTATIONS_ENABLED", "true")
+    monkeypatch.setenv("NEXUS_PLATFORM_AI_OWNER_ALLOWLIST", "operator")
+    store = PlatformAISessionStore(db_path=str(tmp_path / "platform_ai.db"))
+    bot_registry = BotRegistry(db_path=str(tmp_path / "bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="project-monitor",
+            name="Project Monitor",
+            role="monitor",
+            enabled=False,
+            backends=[{"type": "cloud_api", "provider": "ollama_cloud", "model": "glm-5.2:cloud"}],
+            routing_rules={
+                "specialist": {"project_id": "globeiq", "kind": "monitoring", "risk_level": "read_only"},
+                "worker_profile": {"role": "monitor", "task_scope": "read-only-monitoring", "can_edit": False},
+            },
+        )
+    )
+    schedule_engine = AgentScheduleEngine(
+        assignment_service=object(),
+        task_manager=object(),
+        db_path=str(tmp_path / "schedules.db"),
+    )
+    runtime = PlatformAISessionRuntime(
+        store,
+        bot_registry=bot_registry,
+        agent_schedule_engine=schedule_engine,
+    )
+    session = await store.create_session(
+        mode="bot_creator",
+        status="running",
+        operator_id="operator",
+        metadata={"project_id": "globeiq"},
+    )
+    schedule_directive = {
+        "platform_ai_action": "propose_schedule",
+        "schedule": {
+            "name": "Nightly project monitor",
+            "cron_expression": "0 2 * * *",
+            "timezone": "America/Chicago",
+            "prompt": "Prepare a read-only operations summary.",
+            "target_bot_id": "project-monitor",
+            "status": "paused",
+        },
+    }
+
+    result = await runtime._apply_operator_directives(
+        session["id"],
+        session=session,
+        content=json.dumps(schedule_directive),
+    )
+
+    proposal_id = str((((result.get("actions") or [])[0].get("result") or {}).get("proposal_id") or ""))
+    assert proposal_id
+    duplicate_pending = await runtime._apply_operator_directives(
+        session["id"],
+        session=session,
+        content=json.dumps(schedule_directive),
+    )
+    duplicate_pending_id = str(
+        ((((duplicate_pending.get("actions") or [])[0].get("result") or {}).get("proposal_id") or ""))
+    )
+    assert duplicate_pending_id
+    proposal = await store.get_patch_proposal(proposal_id)
+    assert proposal is not None
+    after_state = proposal.get("after_state") if isinstance(proposal.get("after_state"), dict) else {}
+    schedule_payload = after_state.get("schedule") if isinstance(after_state.get("schedule"), dict) else {}
+    assert schedule_payload["status"] == "paused"
+    assert schedule_payload["project_id"] == "globeiq"
+    assert schedule_payload["metadata"]["mutation_safe"] is True
+
+    preflight = await runtime.preflight_patch_proposal(session["id"], proposal_id, operator_id="operator")
+    assert preflight["status"] == "ready"
+    assert preflight["preflight"]["runtime_readiness"]["deferred"] is True
+    duplicate_preflight = await runtime.preflight_patch_proposal(
+        session["id"],
+        duplicate_pending_id,
+        operator_id="operator",
+    )
+    assert duplicate_preflight["status"] == "ready"
+
+    approval = await runtime.approve_patch_proposal(session["id"], proposal_id, operator_id="operator")
+    assert approval["status"] == "applied"
+    created = await schedule_engine.get_schedule(str(approval["schedule"]["id"]))
+    assert created is not None
+    assert created["status"] == "paused"
+    assert created["target_bot_id"] == "project-monitor"
+    assert created["project_id"] == "globeiq"
+
+    duplicate_approval = await runtime.approve_patch_proposal(
+        session["id"],
+        duplicate_pending_id,
+        operator_id="operator",
+    )
+    assert duplicate_approval["status"] == "blocked"
+    assert duplicate_approval["detail"] == "schedule_duplicate_exists"
+
+    duplicate_after_creation = await runtime._apply_operator_directives(
+        session["id"],
+        session=session,
+        content=json.dumps(schedule_directive),
+    )
+    duplicate_result = (duplicate_after_creation.get("actions") or [])[0].get("result") or {}
+    assert duplicate_result["detail"] == "schedule_duplicate_exists"
 
 
 @pytest.mark.anyio

@@ -48,6 +48,13 @@ def test_bootstrap_can_recover_without_rebuilding_images():
     assert "--profile blue up -d dashboard_gateway dashboard_blue" in bootstrap
 
 
+def test_deploy_runner_retains_builder_cache_by_default_with_opt_in_prune():
+    deploy = (ROOT / "scripts" / "deploy-bluegreen.sh").read_text(encoding="utf-8")
+
+    assert 'PRUNE_BUILD_CACHE="${NEXUSAI_DEPLOY_PRUNE_BUILD_CACHE:-0}"' in deploy
+    assert "docker builder prune -af || true" in deploy
+
+
 def test_systemd_recovery_unit_uses_shell_and_skips_boot_rebuilds():
     unit = (ROOT / "deploy" / "systemd" / "nexusai.service").read_text(encoding="utf-8")
 

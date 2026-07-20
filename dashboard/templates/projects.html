@@ -12,7 +12,7 @@
 <table>
   <thead>
     <tr>
-      <th>ID</th><th>Name</th><th>Mode</th><th>Enabled</th><th>Bridges</th><th>Bots</th>
+      <th>ID</th><th>Name</th><th>Mode</th><th>Enabled</th><th>Bridges</th><th>Configured Bots</th><th>Autonomy</th>
     </tr>
   </thead>
   <tbody>
@@ -23,10 +23,42 @@
       <td>{{ p.mode }}</td>
       <td><span class="badge badge-{{ 'enabled' if p.enabled else 'disabled' }}">{{ 'enabled' if p.enabled else 'disabled' }}</span></td>
       <td>{{ p.bridge_project_ids | length }}</td>
-      <td>{{ p.bot_ids | length }}</td>
+      <td>
+        {% if p.autonomy_coverage.available %}
+        <div>{{ p.autonomy_coverage.enabled_configured_bot_count }} enabled</div>
+        <div class="mini-note">{{ p.autonomy_coverage.configured_bot_count }} configured{% if p.autonomy_coverage.registered_bot_count %} / {{ p.autonomy_coverage.registered_bot_count }} legacy{% endif %}</div>
+        {% else %}
+        <span class="empty">Unavailable</span>
+        {% endif %}
+      </td>
+      <td>
+        {% if not p.autonomy_coverage.available %}
+        <span class="empty">Unavailable</span>
+        {% elif p.autonomy_coverage.active_schedule_count %}
+        <span class="badge badge-enabled">active</span>
+        <div class="mini-note">{{ p.autonomy_coverage.active_schedule_count }} active schedule{{ '' if p.autonomy_coverage.active_schedule_count == 1 else 's' }} / {{ p.autonomy_coverage.scheduled_bot_count }} bot{{ '' if p.autonomy_coverage.scheduled_bot_count == 1 else 's' }}</div>
+        {% if p.autonomy_coverage.attention_schedule_count %}
+        <div class="mini-note"><span class="badge badge-degraded">attention</span> {{ p.autonomy_coverage.attention_schedule_count }} latest run{{ '' if p.autonomy_coverage.attention_schedule_count == 1 else 's' }} needs attention</div>
+        {% elif p.autonomy_coverage.awaiting_first_run_count %}
+        <div class="mini-note">{{ p.autonomy_coverage.awaiting_first_run_count }} awaiting first run</div>
+        {% else %}
+        <div class="mini-note">{{ p.autonomy_coverage.completed_schedule_count }} latest run{{ '' if p.autonomy_coverage.completed_schedule_count == 1 else 's' }} complete</div>
+        {% endif %}
+        {% if p.autonomy_coverage.readiness_available and p.autonomy_coverage.ready_unscheduled_bot_count %}
+        <div class="mini-note">{{ p.autonomy_coverage.ready_unscheduled_bot_count }} ready but unscheduled</div>
+        {% elif p.autonomy_coverage.readiness_available and p.autonomy_coverage.blocked_enabled_bot_count %}
+        <div class="mini-note">{{ p.autonomy_coverage.blocked_enabled_bot_count }} enabled but blocked</div>
+        {% endif %}
+        {% elif p.autonomy_coverage.enabled_configured_bot_count %}
+        <span class="badge badge-disabled">configured only</span>
+        <div class="mini-note">No active schedules{% if p.autonomy_coverage.readiness_available %} / {{ p.autonomy_coverage.ready_unscheduled_bot_count }} ready but unscheduled{% endif %}</div>
+        {% else %}
+        <span class="empty">No bot coverage</span>
+        {% endif %}
+      </td>
     </tr>
     {% else %}
-    <tr><td colspan="6" style="text-align:center;color:#7b879a;">No projects configured</td></tr>
+    <tr><td colspan="7" style="text-align:center;color:#7b879a;">No projects configured</td></tr>
     {% endfor %}
   </tbody>
 </table>

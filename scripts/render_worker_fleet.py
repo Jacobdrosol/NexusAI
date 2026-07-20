@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import re
@@ -43,7 +44,7 @@ _DEFAULT_RESOURCE_LIMITS = {
     "memory": "1g",
     "pids_limit": 256,
 }
-_MEMORY_LIMIT = re.compile(r"^[1-9][0-9]*(?:b|k|kb|kib|m|mb|mib|g|gb|gib)?$", re.IGNORECASE)
+_MEMORY_LIMIT = re.compile(r"^([1-9][0-9]*)(b|k|kb|kib|m|mb|mib|g|gb|gib)?$", re.IGNORECASE)
 _COMPOSE_PROJECT_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 
@@ -83,7 +84,79 @@ def _load_profile(path: Path) -> dict[str, Any]:
         raise ValueError("Worker fleet profile must be a YAML object.")
     if not isinstance(data.get("workers"), list):
         raise ValueError("Worker fleet profile must contain a workers list.")
+    fleet = data.get("fleet") if isinstance(data.get("fleet"), dict) else {}
+    data["workers"] = _expand_worker_replicas(data["workers"], fleet)
     return data
+
+
+def _render_replica_text(value: Any, *, index: int, count: int, field: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return text
+    if "{index" in text:
+        try:
+            return text.format(index=index, count=count)
+        except (KeyError, ValueError) as exc:
+            raise ValueError(f"Invalid replica template for {field}: {text!r}") from exc
+    if count == 1:
+        return text
+    if field == "name":
+        return f"{text} {index:02d}"
+    return f"{text}-{index:02d}"
+
+
+def _expand_worker_replicas(raw_workers: list[Any], fleet: dict[str, Any]) -> list[dict[str, Any]]:
+    try:
+        max_workers = int(fleet.get("max_workers") or 64)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("fleet.max_workers must be an integer between 1 and 256.") from exc
+    if not 1 <= max_workers <= 256:
+        raise ValueError("fleet.max_workers must be between 1 and 256.")
+
+    expanded: list[dict[str, Any]] = []
+    for raw_worker in raw_workers:
+        if not isinstance(raw_worker, dict):
+            raise ValueError("Worker fleet entries must be mappings.")
+        try:
+            replicas = int(raw_worker.get("replicas") or 1)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Worker {raw_worker.get('id') or raw_worker.get('name')} replicas must be an integer."
+            ) from exc
+        if not 1 <= replicas <= max_workers:
+            raise ValueError(
+                f"Worker {raw_worker.get('id') or raw_worker.get('name')} replicas must be between 1 and {max_workers}."
+            )
+
+        for index in range(1, replicas + 1):
+            worker = copy.deepcopy(raw_worker)
+            worker.pop("replicas", None)
+            for field in ("id", "name", "service"):
+                worker[field] = _render_replica_text(
+                    worker.get(field),
+                    index=index,
+                    count=replicas,
+                    field=field,
+                )
+            bot = worker.get("bot")
+            if isinstance(bot, dict) and bot.get("id"):
+                bot["id"] = _render_replica_text(
+                    bot.get("id"),
+                    index=index,
+                    count=replicas,
+                    field="bot.id",
+                )
+            expanded.append(worker)
+
+    if len(expanded) > max_workers:
+        raise ValueError(
+            f"Worker fleet expands to {len(expanded)} workers, exceeding fleet.max_workers={max_workers}."
+        )
+
+    worker_ids = [str(worker.get("id") or "").strip() for worker in expanded]
+    if not all(worker_ids) or len(worker_ids) != len(set(worker_ids)):
+        raise ValueError("Expanded worker IDs must be present and unique.")
+    return expanded
 
 
 def _compose_project_name(fleet: dict[str, Any]) -> str:
@@ -158,6 +231,92 @@ def _resource_limit_values(value: Any, *, label: str) -> dict[str, Any]:
     return dict(value)
 
 
+def _memory_limit_bytes(value: Any, *, label: str) -> int:
+    memory = str(value or "").strip()
+    match = _MEMORY_LIMIT.fullmatch(memory)
+    if not match:
+        raise ValueError(f"{label} must be a positive Docker memory value")
+
+    units = {
+        "": 1,
+        "b": 1,
+        "k": 1_000,
+        "kb": 1_000,
+        "kib": 1_024,
+        "m": 1_000_000,
+        "mb": 1_000_000,
+        "mib": 1_048_576,
+        "g": 1_000_000_000,
+        "gb": 1_000_000_000,
+        "gib": 1_073_741_824,
+    }
+    return int(match.group(1)) * units[match.group(2).lower() if match.group(2) else ""]
+
+
+def _validated_resource_budget(fleet: dict[str, Any]) -> dict[str, Any] | None:
+    raw_budget = fleet.get("resource_budget")
+    if raw_budget is None:
+        return None
+    if not isinstance(raw_budget, dict):
+        raise ValueError("fleet.resource_budget must be a mapping.")
+
+    allowed = {"cpus", "memory"}
+    unknown = sorted(set(raw_budget) - allowed)
+    if unknown:
+        raise ValueError(f"fleet.resource_budget has unsupported fields: {', '.join(unknown)}")
+    if "cpus" not in raw_budget or "memory" not in raw_budget:
+        raise ValueError("fleet.resource_budget requires both cpus and memory.")
+
+    try:
+        cpus = float(str(raw_budget["cpus"]).strip())
+    except (TypeError, ValueError) as exc:
+        raise ValueError("fleet.resource_budget.cpus must be a positive number") from exc
+    if not 0 < cpus <= 128:
+        raise ValueError("fleet.resource_budget.cpus must be greater than zero and at most 128")
+
+    memory = str(raw_budget["memory"]).strip()
+    return {
+        "cpus": cpus,
+        "memory": memory,
+        "memory_bytes": _memory_limit_bytes(memory, label="fleet.resource_budget.memory"),
+    }
+
+
+def _validate_enabled_worker_resource_budget(workers: list[dict[str, Any]], fleet: dict[str, Any]) -> None:
+    budget = _validated_resource_budget(fleet)
+    if budget is None:
+        return
+
+    enabled_workers = [worker for worker in workers if bool(worker.get("enabled", True))]
+    total_cpus = sum(float(_validated_resource_limits(worker, fleet)["cpus"]) for worker in enabled_workers)
+    total_memory_bytes = sum(
+        _memory_limit_bytes(_validated_resource_limits(worker, fleet)["mem_limit"], label="worker resource limit memory")
+        for worker in enabled_workers
+    )
+
+    if total_cpus > budget["cpus"]:
+        raise ValueError(
+            "Enabled workers exceed fleet.resource_budget.cpus "
+            f"({total_cpus:g} > {budget['cpus']:g})."
+        )
+    if total_memory_bytes > budget["memory_bytes"]:
+        raise ValueError(
+            "Enabled workers exceed fleet.resource_budget.memory "
+            f"({total_memory_bytes} bytes > {budget['memory']})."
+        )
+
+
+def _disabled_worker_compose_profile(fleet: dict[str, Any]) -> str:
+    value = str(fleet.get("disabled_worker_compose_profile", "staged") or "").strip()
+    if not value:
+        return ""
+    if not _COMPOSE_PROJECT_NAME.fullmatch(value):
+        raise ValueError(
+            "fleet.disabled_worker_compose_profile must contain only lowercase letters, digits, hyphens, or underscores"
+        )
+    return value
+
+
 def _validated_resource_limits(worker: dict[str, Any], fleet: dict[str, Any]) -> dict[str, Any]:
     worker_id = str(worker.get("id") or worker.get("name") or "worker").strip()
     limits = dict(_DEFAULT_RESOURCE_LIMITS)
@@ -178,8 +337,7 @@ def _validated_resource_limits(worker: dict[str, Any], fleet: dict[str, Any]) ->
         raise ValueError(f"Worker {worker_id} resource limit cpus must be greater than zero and at most 128")
 
     memory = str(limits.get("memory") or "").strip()
-    if not _MEMORY_LIMIT.fullmatch(memory):
-        raise ValueError(f"Worker {worker_id} resource limit memory must be a positive Docker memory value")
+    _memory_limit_bytes(memory, label=f"Worker {worker_id} resource limit memory")
 
     compose_limits: dict[str, Any] = {
         "cpus": cpus,
@@ -188,10 +346,10 @@ def _validated_resource_limits(worker: dict[str, Any], fleet: dict[str, Any]) ->
     memory_reservation = limits.get("memory_reservation")
     if memory_reservation is not None:
         normalized_reservation = str(memory_reservation).strip()
-        if not _MEMORY_LIMIT.fullmatch(normalized_reservation):
-            raise ValueError(
-                f"Worker {worker_id} resource limit memory_reservation must be a positive Docker memory value"
-            )
+        _memory_limit_bytes(
+            normalized_reservation,
+            label=f"Worker {worker_id} resource limit memory_reservation",
+        )
         compose_limits["mem_reservation"] = normalized_reservation
 
     pids_limit = limits.get("pids_limit")
@@ -742,6 +900,8 @@ def render(profile_path: Path, output_dir: Path, env: dict[str, str], *, allow_m
     workers = [item for item in profile["workers"] if isinstance(item, dict)]
     if not workers:
         raise ValueError("Worker fleet profile has no worker entries.")
+    _validate_enabled_worker_resource_budget(workers, fleet)
+    disabled_worker_profile = _disabled_worker_compose_profile(fleet)
 
     token_env = str(fleet.get("control_plane_token_env") or "CONTROL_PLANE_API_TOKEN")
     control_plane_token = str(env.get(token_env, "")).strip()
@@ -862,6 +1022,8 @@ def render(profile_path: Path, output_dir: Path, env: dict[str, str], *, allow_m
             if build_key not in emitted_builds:
                 service_config["build"] = build
                 emitted_builds.add(build_key)
+        if not bool(worker.get("enabled", True)) and disabled_worker_profile:
+            service_config["profiles"] = [disabled_worker_profile]
         compose["services"][service] = service_config
         rendered_workers.append(
             {

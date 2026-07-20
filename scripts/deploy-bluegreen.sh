@@ -4,6 +4,12 @@ set -eu
 echo "[deploy] starting blue/green deploy runner"
 COMPOSE_PROJECT_NAME="${NEXUSAI_COMPOSE_PROJECT_NAME:-nexusai}"
 export COMPOSE_PROJECT_NAME
+RUNTIME_DATA_DIR="${NEXUSAI_RUNTIME_DATA_DIR:-}"
+if [ -z "$RUNTIME_DATA_DIR" ] && [ -f .env ]; then
+  RUNTIME_DATA_DIR="$(sed -n 's/^NEXUSAI_RUNTIME_DATA_DIR=//p' .env | tail -n 1 | tr -d '\r')"
+fi
+RUNTIME_DATA_DIR="${RUNTIME_DATA_DIR:-data}"
+export NEXUSAI_RUNTIME_DATA_DIR="$RUNTIME_DATA_DIR"
 COMPOSE_ARGS="-p $COMPOSE_PROJECT_NAME -f docker-compose.bluegreen.yml"
 CORE_COMPOSE_ARGS="-p $COMPOSE_PROJECT_NAME -f docker-compose.yml"
 STOP_PREVIOUS_COLOR="${NEXUSAI_STOP_PREVIOUS_COLOR:-1}"
@@ -12,6 +18,9 @@ POST_SWITCH_MONITOR_INTERVAL_SECONDS="${NEXUSAI_POST_SWITCH_MONITOR_INTERVAL_SEC
 POST_SWITCH_STARTING_GRACE_SECONDS="${NEXUSAI_POST_SWITCH_STARTING_GRACE_SECONDS:-75}"
 PRUNE_CONTAINERS="${NEXUSAI_DEPLOY_PRUNE_CONTAINERS:-1}"
 PRUNE_DANGLING_IMAGES="${NEXUSAI_DEPLOY_PRUNE_DANGLING_IMAGES:-1}"
+# Preserve build layers between normal blue/green deployments. Set this to 1
+# explicitly during maintenance when reclaiming disk space is more important.
+PRUNE_BUILD_CACHE="${NEXUSAI_DEPLOY_PRUNE_BUILD_CACHE:-0}"
 FIX_RUNTIME_PERMISSIONS="${NEXUSAI_DEPLOY_FIX_RUNTIME_PERMISSIONS:-1}"
 RUNTIME_OWNER_UID="${NEXUSAI_DEPLOY_RUNTIME_OWNER_UID:-1000}"
 RUNTIME_OWNER_GID="${NEXUSAI_DEPLOY_RUNTIME_OWNER_GID:-1000}"
@@ -48,7 +57,7 @@ if [ ! -f "docker-compose.bluegreen.yml" ]; then
 fi
 
 SWITCH_CMD="${NEXUSAI_BLUEGREEN_SWITCH_CMD:-./scripts/switch-dashboard-color.sh}"
-CURRENT_COLOR_FILE="data/active_color.txt"
+CURRENT_COLOR_FILE="$RUNTIME_DATA_DIR/active_color.txt"
 CURRENT_COLOR="blue"
 SWITCHED=0
 
@@ -67,9 +76,9 @@ else
 fi
 
 ensure_runtime_nginx_conf() {
-  mkdir -p data/nginx
-  if [ ! -f data/nginx/default.conf ]; then
-    cp "deploy/nginx/default.$CURRENT_COLOR.conf" data/nginx/default.conf
+  mkdir -p "$RUNTIME_DATA_DIR/nginx"
+  if [ ! -f "$RUNTIME_DATA_DIR/nginx/default.conf" ]; then
+    cp "deploy/nginx/default.$CURRENT_COLOR.conf" "$RUNTIME_DATA_DIR/nginx/default.conf"
   fi
 }
 
@@ -321,6 +330,13 @@ cleanup_stale_runtime_artifacts() {
   else
     echo "[deploy] skipping dangling image prune (NEXUSAI_DEPLOY_PRUNE_DANGLING_IMAGES=$PRUNE_DANGLING_IMAGES)"
   fi
+
+  if [ "$PRUNE_BUILD_CACHE" = "1" ]; then
+    echo "[deploy] pruning inactive builder cache"
+    docker builder prune -af || true
+  else
+    echo "[deploy] skipping builder cache prune (NEXUSAI_DEPLOY_PRUNE_BUILD_CACHE=$PRUNE_BUILD_CACHE)"
+  fi
 }
 
 fix_runtime_file_permissions() {
@@ -331,7 +347,7 @@ fix_runtime_file_permissions() {
 
   if command -v chown >/dev/null 2>&1; then
     echo "[deploy] fixing runtime file ownership to ${RUNTIME_OWNER_UID}:${RUNTIME_OWNER_GID}"
-    chown -R "${RUNTIME_OWNER_UID}:${RUNTIME_OWNER_GID}" data/nginx "$CURRENT_COLOR_FILE" || true
+    chown -R "${RUNTIME_OWNER_UID}:${RUNTIME_OWNER_GID}" "$RUNTIME_DATA_DIR/nginx" "$CURRENT_COLOR_FILE" || true
     if [ "$FIX_REPO_OWNERSHIP" = "1" ]; then
       echo "[deploy] fixing repository ownership to ${RUNTIME_OWNER_UID}:${RUNTIME_OWNER_GID}"
       chown -R "${RUNTIME_OWNER_UID}:${RUNTIME_OWNER_GID}" . || true
@@ -348,7 +364,7 @@ git -c "safe.directory=$REPO_ROOT" checkout main
 git -c "safe.directory=$REPO_ROOT" pull --ff-only origin main
 
 if [ "$CORE_RECREATE" = "1" ] && [ -f "docker-compose.yml" ]; then
-  echo "[deploy] recreating core runtime services against persistent ./data state"
+  echo "[deploy] recreating core runtime services against persistent $RUNTIME_DATA_DIR state"
   echo "[deploy] compose project: $COMPOSE_PROJECT_NAME"
   echo "[deploy] core services: $CORE_SERVICES"
   docker compose $CORE_COMPOSE_ARGS up -d --build --force-recreate $CORE_SERVICES

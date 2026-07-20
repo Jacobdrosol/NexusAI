@@ -1028,10 +1028,29 @@ function renderEvents(events) {
 
 function proposalSummary(proposal) {
   const after = proposal && typeof proposal.after_state === 'object' ? proposal.after_state : {};
+  const proposalKind = String(after.proposal_kind || '').trim();
+  const schedule = after && typeof after.schedule === 'object' ? after.schedule : {};
+  if (proposalKind === 'schedule_configuration') {
+    const targetBotId = String(schedule.target_bot_id || '').trim();
+    const name = String(schedule.name || '').trim();
+    const cron = String(schedule.cron_expression || '').trim();
+    const timezone = String(schedule.timezone || '').trim();
+    return {
+      botId: targetBotId,
+      label: name || targetBotId || String(proposal.target_config || 'schedule'),
+      detail: ['paused schedule', cron, timezone, schedule.project_id ? `project: ${String(schedule.project_id)}` : '']
+        .filter(Boolean)
+        .join(' · '),
+      specialistKind: '',
+      scheduleProposal: true,
+    };
+  }
   const bot = after && typeof after.bot === 'object' ? after.bot : {};
   const botId = String(bot.id || '').trim();
   const name = String(bot.name || '').trim();
   const role = String(bot.role || '').trim();
+  const specialistRequest = after && typeof after.specialist_request === 'object' ? after.specialist_request : {};
+  const specialistKind = String(specialistRequest.kind || '').trim();
   const backends = Array.isArray(bot.backends) ? bot.backends : [];
   const backendSummary = backends.map((backend) => {
     const type = String(backend?.type || '').trim();
@@ -1042,7 +1061,9 @@ function proposalSummary(proposal) {
   return {
     botId: botId,
     label: name || botId || String(proposal.target_config || 'configuration'),
-    detail: [role, backendSummary].filter(Boolean).join(' · '),
+    detail: [specialistKind ? `catalog specialist: ${specialistKind}` : '', role, backendSummary].filter(Boolean).join(' · '),
+    specialistKind: specialistKind,
+    scheduleProposal: false,
   };
 }
 
@@ -1102,6 +1123,8 @@ function renderProposals(proposals) {
         <span class="badge badge-${htmlEscape(status)}">${htmlEscape(status)}</span>
       </div>
       ${summary.detail ? `<div class="mini-note" style="margin-top:0.2rem;">${htmlEscape(summary.detail)}</div>` : ''}
+      ${summary.specialistKind ? '<div class="mini-note" style="margin-top:0.25rem;">Catalog-derived configuration. It remains disabled until preflight and operator approval; repository writes are denied.</div>' : ''}
+      ${summary.scheduleProposal ? '<div class="mini-note" style="margin-top:0.25rem;">Approval can only create this schedule in a paused state. Activation and dispatch remain separate operator-controlled actions.</div>' : ''}
       ${rationale ? `<div class="mini-note" style="margin-top:0.35rem;white-space:pre-wrap;">${htmlEscape(rationale)}</div>` : ''}
       ${directOperatorEdit ? '<div class="mini-note" style="margin-top:0.25rem;">Approval records review only. The live bot remains unchanged until an operator updates it in the Bot editor.</div>' : ''}
       ${suggestedAutotuneBlock ? `<details style="margin-top:0.45rem;"><summary class="mini-note">Suggested prompt refinement</summary><pre style="margin:0.4rem 0 0;max-height:16rem;overflow:auto;white-space:pre-wrap;">${htmlEscape(suggestedAutotuneBlock)}</pre></details>` : ''}
@@ -1124,6 +1147,9 @@ async function refreshProposals() {
 async function preflightProposal(proposalId) {
   const safeId = String(proposalId || '').trim();
   if (!SESSION_ID || !safeId) return;
+  const proposal = LAST_PROPOSALS.find((item) => String(item?.id || '').trim() === safeId) || {};
+  const after = proposal && typeof proposal.after_state === 'object' ? proposal.after_state : {};
+  const isScheduleProposal = String(after.proposal_kind || '').trim() === 'schedule_configuration';
   setStatus('proposal-review-status', 'Validating proposal policy and runtime readiness...', false);
   try {
     const res = await fetch('/api/platform-ai/sessions/' + encodeURIComponent(SESSION_ID) + '/proposals/' + encodeURIComponent(safeId) + '/preflight', {
@@ -1135,7 +1161,13 @@ async function preflightProposal(proposalId) {
     if (!res.ok) throw new Error(data.error || 'Failed to preflight proposal');
     const result = data && typeof data.result === 'object' ? data.result : {};
     const preflight = result && typeof result.preflight === 'object' ? result.preflight : {};
-    setStatus('proposal-review-status', preflight.ready_for_operator_review ? 'Preflight passed. The proposal remains disabled until separately approved.' : 'Preflight found policy or runtime readiness blockers.', !preflight.ready_for_operator_review);
+    const readyMessage = isScheduleProposal
+      ? 'Preflight passed. Approval can create only a paused schedule; activation remains separate.'
+      : 'Preflight passed. The proposal remains disabled until separately approved.';
+    const blockedMessage = isScheduleProposal
+      ? 'Preflight found schedule schema, scope, or autonomy-safety blockers.'
+      : 'Preflight found policy or runtime readiness blockers.';
+    setStatus('proposal-review-status', preflight.ready_for_operator_review ? readyMessage : blockedMessage, !preflight.ready_for_operator_review);
     await refreshProposals();
     await refreshEvents(true);
   } catch (error) {

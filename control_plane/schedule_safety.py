@@ -4,7 +4,11 @@ from __future__ import annotations
 from typing import Any, Dict, Iterable
 
 from control_plane.bot_readiness import assess_bot_readiness
-from control_plane.schedule_payload_sources import SystemPayloadSourceError, validate_system_payload_source
+from control_plane.schedule_payload_sources import (
+    SystemPayloadSourceError,
+    system_payload_source_configs,
+    validate_system_payload_source,
+)
 from shared.bot_policy import bot_autonomous_dispatch_blockers
 
 
@@ -61,6 +65,40 @@ def _is_attested_read_only_browser_inspection(bot: Any, schedule: Dict[str, Any]
     )
 
 
+def _is_attested_allowlisted_documentation_write(bot: Any, schedule: Dict[str, Any]) -> bool:
+    """Allow a schedule to create or compare-and-save one bounded Docs Hub record."""
+
+    metadata = schedule.get("metadata") if isinstance(schedule.get("metadata"), dict) else {}
+    if str(metadata.get("connection_operation") or "").strip().lower() != "documentation_write":
+        return False
+    payload = _schedule_task_payload(schedule)
+    action = str(payload.get("action") or "").strip().lower()
+    path = str(payload.get("path") or "").strip()
+    content = payload.get("content")
+    if action not in {"create", "save"} or not path or not isinstance(content, str):
+        return False
+    routing_rules = getattr(bot, "routing_rules", None)
+    profile = routing_rules.get("worker_profile") if isinstance(routing_rules, dict) else None
+    profile = profile if isinstance(profile, dict) else {}
+    execution_policy = getattr(bot, "execution_policy", None)
+    if hasattr(execution_policy, "model_dump"):
+        execution_policy = execution_policy.model_dump()
+    execution_policy = execution_policy if isinstance(execution_policy, dict) else {}
+    allowed_actions = {
+        str(item or "").strip()
+        for item in execution_policy.get("documentation_action_allowlist") or []
+        if str(item or "").strip()
+    }
+    return (
+        str(profile.get("role") or "").strip().lower() == "docs-hub-writer"
+        and str(profile.get("task_scope") or "").strip().lower() == "allowlisted-documentation-write"
+        and profile.get("can_edit") is False
+        and str(execution_policy.get("repo_output_mode") or "").strip().lower() == "deny"
+        and execution_policy.get("can_apply_db_actions") is False
+        and f"documentation.{action}" in allowed_actions
+    )
+
+
 def _payload_field_value(payload: Dict[str, Any], field_path: str) -> Any:
     value: Any = payload
     for segment in (part.strip() for part in str(field_path or "").split(".") if part.strip()):
@@ -93,6 +131,22 @@ def _require_schedule_input_contract(schedule: Dict[str, Any], bot: Any) -> None
             "node_overrides": schedule.get("node_overrides") if isinstance(schedule.get("node_overrides"), dict) else {},
         }
     )
+    source_configs = system_payload_source_configs(schedule)
+    for source_config in source_configs:
+        target_field = str(source_config.get("target_field") or "").strip()
+        if target_field:
+            # System payload sources are materialized immediately before task creation.
+            # Treat their declared destination as present while validating the schedule.
+            task_payload[target_field] = "__materialized_schedule_value__"
+        payload_field_map = source_config.get("payload_field_map")
+        if isinstance(payload_field_map, dict):
+            task_payload.update(
+                {
+                    str(field): "__materialized_schedule_value__"
+                    for field in payload_field_map
+                    if str(field).strip()
+                }
+            )
     required_fields = [str(field).strip() for field in contract.get("required_fields") or [] if str(field).strip()]
     non_empty_fields = [str(field).strip() for field in contract.get("non_empty_fields") or [] if str(field).strip()]
     missing = [field for field in required_fields if _payload_field_value(task_payload, field) is _MISSING]
@@ -111,6 +165,36 @@ def _require_schedule_input_contract(schedule: Dict[str, Any], bot: Any) -> None
             "schedule_payload_contract_incomplete",
             f"Schedule target '{bot.id}' cannot run until its task payload is complete: " + "; ".join(detail) + ".",
             blockers=detail,
+        )
+
+
+def _bound_bot_project_id(bot: Any) -> str:
+    """Resolve a bot's explicit project binding, including legacy specialist configs."""
+    project_id = str(getattr(bot, "project_id", "") or "").strip()
+    if project_id:
+        return project_id
+    routing_rules = getattr(bot, "routing_rules", None)
+    specialist = routing_rules.get("specialist") if isinstance(routing_rules, dict) else None
+    if not isinstance(specialist, dict):
+        return ""
+    return str(specialist.get("project_id") or "").strip()
+
+
+def _require_bot_project_scope(schedule: Dict[str, Any], bot: Any) -> None:
+    """Keep autonomous schedule dispatch inside a bot's explicit project boundary."""
+    bot_project_id = _bound_bot_project_id(bot)
+    if not bot_project_id:
+        return
+    schedule_project_id = str(schedule.get("project_id") or "").strip()
+    if not schedule_project_id:
+        raise ScheduleAutonomySafetyError(
+            "schedule_project_scope_required",
+            f"Schedule target '{bot.id}' is bound to project '{bot_project_id}' and requires a matching schedule project_id.",
+        )
+    if schedule_project_id != bot_project_id:
+        raise ScheduleAutonomySafetyError(
+            "schedule_project_scope_mismatch",
+            f"Schedule project '{schedule_project_id}' does not match target '{bot.id}' project '{bot_project_id}'.",
         )
 
 
@@ -148,9 +232,13 @@ async def require_schedule_autonomy_safety(
             f"Schedule target '{bot_id}' cannot be inspected for autonomous safety.",
         ) from exc
 
-    allowed_restricted_backends = (
-        {"browser"} if _is_attested_read_only_browser_inspection(bot, schedule) else set()
-    )
+    _require_bot_project_scope(schedule, bot)
+
+    allowed_restricted_backends = set()
+    if _is_attested_read_only_browser_inspection(bot, schedule):
+        allowed_restricted_backends.add("browser")
+    if _is_attested_allowlisted_documentation_write(bot, schedule):
+        allowed_restricted_backends.add("documentation")
     blockers = bot_autonomous_dispatch_blockers(
         bot,
         allowed_restricted_backend_types=allowed_restricted_backends,
@@ -180,6 +268,7 @@ async def require_schedule_runtime_readiness(
     worker_probe_store: Any = None,
     key_vault: Any = None,
     model_registry: Any = None,
+    supervision_store: Any = None,
 ) -> None:
     """Verify a schedule target is dispatchable immediately before execution."""
     bot_id = str(
@@ -187,6 +276,20 @@ async def require_schedule_runtime_readiness(
     ).strip()
     if not bot_id:
         return
+    if supervision_store is not None:
+        try:
+            hold = await supervision_store.get_hold(bot_id)
+        except Exception as exc:
+            raise ScheduleAutonomySafetyError(
+                "schedule_supervision_state_unavailable",
+                f"Schedule target '{bot_id}' cannot be checked for an active supervision hold.",
+            ) from exc
+        if hold is not None:
+            raise ScheduleAutonomySafetyError(
+                "schedule_target_supervision_blocked",
+                f"Schedule target '{bot_id}' is on an active supervision hold.",
+                blockers=[str(hold.get("reason") or "supervision hold")[:2_000]],
+            )
     try:
         readiness = await assess_bot_readiness(
             bot_id,

@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% set active_page = "supervision" %}
+{% block title %}Supervision{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Supervision</h1>
+    <p class="mini-note">Executive operational status and approval-gated manager decisions.</p>
+  </div>
+  <button class="btn" type="button" onclick="window.location.reload()">Refresh</button>
+</div>
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+{% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
+
+<section class="cards" aria-label="Fleet summary">
+  <div class="card"><span>Enabled workers</span><strong>{{ fleet.workers.enabled or 0 }}</strong><small>{{ fleet.workers.online or 0 }} online</small></div>
+  <div class="card"><span>Enabled bots</span><strong>{{ fleet.bots.enabled or 0 }}</strong><small>{{ fleet.bots.enabled_with_runtime_attention or 0 }} needing runtime attention</small></div>
+  <div class="card"><span>Active schedules</span><strong>{{ fleet.schedules.active or 0 }}</strong><small>{{ fleet.schedules.failed_active_last_run_count or 0 }} latest failures</small></div>
+  <div class="card"><span>Open decisions</span><strong>{{ actions|length }}</strong><small>{{ holds|length }} enforced holds</small></div>
+</section>
+
+<section class="panel">
+  <div class="panel-header"><h2>Pending Decisions</h2></div>
+  <table>
+    <thead><tr><th>Manager</th><th>Action</th><th>Target</th><th>Rationale</th><th>Decision</th></tr></thead>
+    <tbody>
+      {% for action in actions %}
+      <tr>
+        <td><code>{{ action.manager_bot_id }}</code></td>
+        <td><span class="badge badge-{{ action.action_type }}">{{ action.action_type|replace('_', ' ') }}</span></td>
+        <td><code>{{ action.target_id }}</code></td>
+        <td>{{ action.rationale }}</td>
+        <td class="actions">
+          <button class="btn btn-sm btn-primary" type="button" onclick="decideAction({{ action.id|tojson }}, 'approve')">Approve</button>
+          <button class="btn btn-sm" type="button" onclick="decideAction({{ action.id|tojson }}, 'reject')">Reject</button>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5" class="empty">No manager decisions are waiting.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="panel">
+  <div class="panel-header"><h2>Active Holds</h2></div>
+  <table>
+    <thead><tr><th>Bot</th><th>Reason</th><th>Applied</th><th>Action</th></tr></thead>
+    <tbody>
+      {% for hold in holds %}
+      <tr>
+        <td><code>{{ hold.bot_id }}</code></td>
+        <td>{{ hold.reason }}</td>
+        <td>{{ (hold.updated_at[:19] if hold.updated_at else '—')|replace('T', ' ') }}</td>
+        <td><button class="btn btn-sm" type="button" onclick="releaseHold({{ hold.bot_id|tojson }})">Release hold</button></td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4" class="empty">No bots are on an operational hold.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="panel">
+  <div class="panel-header"><h2>Executive Reports</h2></div>
+  {% for item in reports %}
+  <article class="supervision-report">
+    <div class="supervision-report-header">
+      <div><strong>{{ item.manager_bot_id }}</strong><span class="mini-note">{{ (item.created_at[:19] if item.created_at else '—')|replace('T', ' ') }}</span></div>
+      <span class="badge badge-{{ item.overall_status }}">{{ item.overall_status }}</span>
+    </div>
+    <p>{{ item.report.executive_summary }}</p>
+    {% if item.report.decisions_needed %}
+    <div><strong>Decisions needed</strong><ul>{% for decision in item.report.decisions_needed %}<li>{{ decision }}</li>{% endfor %}</ul></div>
+    {% endif %}
+  </article>
+  {% else %}
+  <p class="empty">No completed manager reports yet.</p>
+  {% endfor %}
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+function supervisionCsrf() {
+  const token = document.querySelector('input[name=csrf_token]');
+  return token ? token.value : '';
+}
+async function supervisionPost(path) {
+  const response = await fetch(path, {method: 'POST', headers: {'Content-Type': 'application/json', 'X-CSRFToken': supervisionCsrf()}, body: JSON.stringify({})});
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.error || 'The operation could not be completed.');
+  return payload;
+}
+async function decideAction(actionId, decision) {
+  try { await supervisionPost(`/api/supervision/actions/${encodeURIComponent(actionId)}/${decision}`); window.location.reload(); }
+  catch (error) { window.alert(error.message); }
+}
+async function releaseHold(botId) {
+  try { await supervisionPost(`/api/supervision/holds/${encodeURIComponent(botId)}/release`); window.location.reload(); }
+  catch (error) { window.alert(error.message); }
+}
+</script>
+{% endblock %}

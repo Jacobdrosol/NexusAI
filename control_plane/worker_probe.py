@@ -32,6 +32,15 @@ def _probe_timeout_seconds() -> float:
     return min(max(configured, 0.5), 20.0)
 
 
+def autonomous_worker_probe_max_age_seconds() -> float:
+    """Return the bounded freshness window required for scheduled worker dispatch."""
+    try:
+        value = float(os.environ.get("NEXUSAI_AUTONOMOUS_WORKER_PROBE_MAX_AGE_SECONDS", "300"))
+    except (TypeError, ValueError):
+        value = 300.0
+    return min(max(value, 30.0), 3600.0)
+
+
 def worker_base_url(worker: Worker) -> str:
     """Return the worker's HTTP base URL after rejecting URL-shaped host values."""
     host = str(worker.host or "").strip()

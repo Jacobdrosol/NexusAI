@@ -12,7 +12,12 @@ from typing import Any
 from flask import Blueprint, flash, jsonify, render_template, request, send_file
 from flask_login import login_required
 
-from dashboard.connections_service import normalize_auth_payload, resolve_auth_payload
+from dashboard.connections_service import (
+    mask_auth_payload,
+    mask_connection_config,
+    normalize_auth_payload,
+    normalize_connection_config,
+)
 from dashboard.db import get_db
 from dashboard.models import Bot, BotConnection, Connection, ProjectConnection, Task
 
@@ -108,7 +113,7 @@ def _cp_error_payload(cp, fallback: str) -> tuple[dict[str, Any], int]:
         status = 502
 
     payload: dict[str, Any] = {"error": message}
-    for key in ("reason_code", "readiness", "validation_errors"):
+    for key in ("reason_code", "readiness", "validation_errors", "dependencies"):
         if key in detail:
             payload[key] = detail[key]
     return payload, status
@@ -127,13 +132,17 @@ def _bot_connections_payload(db, bot_ref: str) -> list[dict[str, Any]]:
                 "name": row.name,
                 "kind": row.kind,
                 "description": row.description or "",
-                "config": _parse_json(row.config_json or "{}", {}),
-                "auth": resolve_auth_payload(_parse_json(row.auth_json or "{}", {})),
+                "config": mask_connection_config(_parse_json(row.config_json or "{}", {})),
+                "auth": mask_auth_payload(_parse_json(row.auth_json or "{}", {})),
                 "schema_text": row.schema_text or "",
                 "enabled": bool(row.enabled),
             }
         )
     return payloads
+
+
+def _connection_identity(name: Any, kind: Any) -> tuple[str, str]:
+    return (str(name or "").strip().lower(), str(kind or "http").strip().lower())
 
 
 def _cleanup_orphaned_connection(db, connection_id: int) -> None:
@@ -149,6 +158,14 @@ def _cleanup_orphaned_connection(db, connection_id: int) -> None:
 def _replace_bot_connections(db, bot_ref: str, connection_payloads: list[dict[str, Any]]) -> None:
     existing_links = db.query(BotConnection).filter(BotConnection.bot_ref == str(bot_ref)).all()
     existing_ids = [link.connection_id for link in existing_links]
+    existing_rows = db.query(Connection).filter(Connection.id.in_(existing_ids)).all() if existing_ids else []
+    existing_by_identity = {
+        _connection_identity(row.name, row.kind): (
+            _parse_json(row.config_json or "{}", {}),
+            _parse_json(row.auth_json or "{}", {}),
+        )
+        for row in existing_rows
+    }
     db.query(BotConnection).filter(BotConnection.bot_ref == str(bot_ref)).delete()
     db.flush()
     for connection_id in existing_ids:
@@ -158,13 +175,26 @@ def _replace_bot_connections(db, bot_ref: str, connection_payloads: list[dict[st
     for payload in connection_payloads:
         if not isinstance(payload, dict):
             continue
+        name = str(payload.get("name") or "").strip() or "Imported Connection"
+        kind = str(payload.get("kind") or "http").strip().lower() or "http"
+        existing_config, existing_auth = existing_by_identity.get(
+            _connection_identity(name, kind), ({}, {})
+        )
         row = Connection(
-            name=str(payload.get("name") or "").strip() or "Imported Connection",
-            kind=str(payload.get("kind") or "http").strip().lower() or "http",
+            name=name,
+            kind=kind,
             description=str(payload.get("description") or ""),
-            config_json=json.dumps(payload.get("config") if isinstance(payload.get("config"), dict) else {}),
+            config_json=json.dumps(
+                normalize_connection_config(
+                    payload.get("config") if isinstance(payload.get("config"), dict) else {},
+                    existing=existing_config if isinstance(existing_config, dict) else {},
+                )
+            ),
             auth_json=json.dumps(
-                normalize_auth_payload(payload.get("auth") if isinstance(payload.get("auth"), dict) else {})
+                normalize_auth_payload(
+                    payload.get("auth") if isinstance(payload.get("auth"), dict) else {},
+                    existing=existing_auth if isinstance(existing_auth, dict) else {},
+                )
             ),
             schema_text=str(payload.get("schema_text") or ""),
             enabled=bool(payload.get("enabled", True)),
@@ -220,17 +250,81 @@ def _bot_readiness_view(readiness: Any) -> dict[str, Any] | None:
     return {"ready": ready, "state": state, "detail": detail, "failed": len(failures)}
 
 
-def _with_bot_readiness(bots: list[dict[str, Any]], payload: Any) -> list[dict[str, Any]]:
-    raw_readiness = payload.get("readiness") if isinstance(payload, dict) else []
+def _bot_dependency_view(payload: Any) -> dict[str, Any] | None:
+    if not isinstance(payload, dict):
+        return None
+    schedules = [item for item in payload.get("schedule_references") or [] if isinstance(item, dict)]
+    workflows = [item for item in payload.get("workflow_references") or [] if isinstance(item, dict)]
+    return {
+        "schedule_references": schedules,
+        "workflow_references": workflows,
+        "can_disable": bool(payload.get("can_disable", not schedules and not workflows)),
+        "can_delete": bool(payload.get("can_delete", not schedules and not workflows)),
+    }
+
+
+def _bot_schedule_mode(schedule_payload: Any) -> dict[str, dict[str, Any]]:
+    schedules = schedule_payload.get("schedules") if isinstance(schedule_payload, dict) else []
+    schedule_refs: dict[str, list[dict[str, Any]]] = {}
+    for schedule in schedules if isinstance(schedules, list) else []:
+        if not isinstance(schedule, dict):
+            continue
+        for field in ("target_bot_id", "assignment_pm_bot_id"):
+            bot_id = str(schedule.get(field) or "").strip()
+            if bot_id:
+                schedule_refs.setdefault(bot_id, []).append(schedule)
+
+    modes: dict[str, dict[str, Any]] = {}
+    for bot_id, references in schedule_refs.items():
+        active_count = sum(
+            1 for schedule in references if str(schedule.get("status") or "").strip().lower() == "active"
+        )
+        paused_count = sum(
+            1 for schedule in references if str(schedule.get("status") or "").strip().lower() == "paused"
+        )
+        if active_count:
+            modes[bot_id] = {
+                "state": "scheduled",
+                "detail": f"{active_count} active recurring schedule(s).",
+            }
+        elif paused_count:
+            modes[bot_id] = {
+                "state": "paused",
+                "detail": f"{paused_count} paused schedule(s); no recurring dispatch is active.",
+            }
+    return modes
+
+
+def _with_bot_operating_mode(
+    bots: list[dict[str, Any]],
+    readiness_payload: Any,
+    schedule_payload: Any,
+) -> list[dict[str, Any]]:
+    raw_readiness = readiness_payload.get("readiness") if isinstance(readiness_payload, dict) else []
     readiness_by_id = {
         str(item.get("bot_id") or "").strip(): item
         for item in raw_readiness
         if isinstance(item, dict) and str(item.get("bot_id") or "").strip()
     }
+    schedule_mode_by_bot_id = _bot_schedule_mode(schedule_payload)
     enriched: list[dict[str, Any]] = []
     for bot in bots:
         row = dict(bot)
-        row["readiness"] = _bot_readiness_view(readiness_by_id.get(str(row.get("id") or "").strip()))
+        bot_id = str(row.get("id") or "").strip()
+        row["readiness"] = _bot_readiness_view(readiness_by_id.get(bot_id))
+        if not bool(row.get("enabled")):
+            row["operating_mode"] = {
+                "state": "disabled",
+                "detail": "This bot is disabled and cannot receive dispatch.",
+            }
+        else:
+            row["operating_mode"] = schedule_mode_by_bot_id.get(
+                bot_id,
+                {
+                    "state": "manual",
+                    "detail": "No recurring schedule is active; this bot runs only through an explicit task or workflow trigger.",
+                },
+            )
         enriched.append(row)
     return enriched
 
@@ -246,9 +340,11 @@ def bots_page() -> str:
     if cp_data is not None:
         readiness_getter = getattr(cp, "list_bot_readiness", None)
         readiness_payload = readiness_getter() if callable(readiness_getter) else None
+        schedule_getter = getattr(cp, "list_schedules", None)
+        schedule_payload = schedule_getter(limit=200) if callable(schedule_getter) else None
         return render_template(
             "bots.html",
-            bots=_with_bot_readiness(cp_data, readiness_payload),
+            bots=_with_bot_operating_mode(cp_data, readiness_payload, schedule_payload),
             workers=_cp_catalog_items(cp, "list_workers"),
             models=_cp_catalog_items(cp, "list_models"),
             api_keys=_cp_catalog_items(cp, "list_keys"),
@@ -283,6 +379,8 @@ def bot_detail_page(bot_id: str):
     cp_bot = cp.get_bot(bot_id)
     readiness_getter = getattr(cp, "get_bot_readiness", None)
     cp_readiness = readiness_getter(bot_id) if callable(readiness_getter) else None
+    dependency_getter = getattr(cp, "get_bot_dependencies", None)
+    cp_dependencies = _bot_dependency_view(dependency_getter(bot_id) if callable(dependency_getter) else None)
     cp_tasks = _cp_list_tasks_safe(cp, bot_id=bot_id, limit=300, include_content=False)
     cp_runs = cp.list_bot_runs(bot_id) or []
     cp_artifacts = cp.list_bot_artifacts(bot_id, limit=300, include_content=False) or []
@@ -302,6 +400,7 @@ def bot_detail_page(bot_id: str):
             models=cp_models,
             api_keys=cp_keys,
             readiness=cp_readiness,
+            bot_dependencies=cp_dependencies,
             error=None,
         )
 
@@ -309,10 +408,10 @@ def bot_detail_page(bot_id: str):
     try:
         # Fallback local bot IDs are integer PKs.
         if not str(bot_id).isdigit():
-            return render_template("bot_detail.html", bot=None, tasks=[], error="Bot not found")
+            return render_template("bot_detail.html", bot=None, tasks=[], bot_dependencies=None, error="Bot not found")
         bot = db.get(Bot, int(bot_id))
         if not bot:
-            return render_template("bot_detail.html", bot=None, tasks=[], error="Bot not found")
+            return render_template("bot_detail.html", bot=None, tasks=[], bot_dependencies=None, error="Bot not found")
         local_tasks = db.query(Task).filter_by(bot_id=bot.id).all()
         tasks = []
         for t in local_tasks:
@@ -338,6 +437,7 @@ def bot_detail_page(bot_id: str):
             models=[],
             api_keys=[],
             readiness=None,
+            bot_dependencies=None,
             error=None,
         )
     finally:
@@ -450,6 +550,25 @@ def api_preview_bot_blueprint():
     return jsonify(data)
 
 
+@bp.post("/api/bot-blueprints/preflight")
+@login_required
+def api_preflight_bot_blueprint():
+    """Build and validate a specialist before it can be enabled or registered."""
+    from dashboard.cp_client import get_cp_client
+
+    cp = get_cp_client()
+    preview = cp.preview_bot_blueprint(request.get_json(silent=True) or {})
+    if preview is None or not isinstance(preview.get("bot"), dict):
+        error, status = _cp_error_payload(cp, "failed to generate specialist configuration")
+        return jsonify(error), status
+
+    preflight = cp.preflight_bot_blueprint(preview["bot"])
+    if preflight is None:
+        error, status = _cp_error_payload(cp, "specialist preflight failed")
+        return jsonify(error), status
+    return jsonify({"bot": preview["bot"], "preflight": preflight})
+
+
 @bp.post("/api/bot-blueprints/create")
 @login_required
 def api_create_bot_blueprint():
@@ -546,6 +665,7 @@ def api_import_bot():
         "id": bot_id,
         "name": bot_name,
         "role": bot_payload.get("role", "") or "assistant",
+        "project_id": bot_payload.get("project_id"),
         "priority": int(bot_payload.get("priority", 0) or 0),
         "enabled": bool(bot_payload.get("enabled", True)),
         "system_prompt": bot_payload.get("system_prompt"),
@@ -665,7 +785,8 @@ def api_delete_bot(bot_id: str):
     if cp_bot is not None:
         ok = cp.delete_bot(bot_id)
         if not ok:
-            return jsonify({"error": "delete failed"}), 502
+            error, status = _cp_error_payload(cp, "bot deletion failed")
+            return jsonify(error), status
         return "", 204
 
     db = get_db()
@@ -751,6 +872,9 @@ def api_launch_bot(bot_id: str):
         metadata["orchestration_id"] = orchestration_id
         metadata["pipeline_name"] = str(launch_profile.get("pipeline_name") or launch_profile.get("label") or bot.get("name") or bot_id).strip()
         metadata["pipeline_entry_bot_id"] = str(bot_id)
+        concurrency_limit = launch_profile.get("concurrency_limit")
+        if concurrency_limit is not None:
+            metadata["orchestration_concurrency_limit"] = concurrency_limit
     task = cp.create_task_full(
         bot_id=bot_id,
         payload=payload,

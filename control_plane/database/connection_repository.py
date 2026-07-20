@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 import aiosqlite
 
 from control_plane.sqlite_helpers import open_sqlite
+from shared.connection_secrets import decrypt_secret, encrypt_secret, normalize_connection_config, resolve_connection_config
 
 _DEFAULT_DB_PATH = str(Path(__file__).parent.parent.parent / "data" / "nexusai.db")
 
@@ -79,10 +80,38 @@ class ConnectionRepository:
                 db.row_factory = aiosqlite.Row
                 async with db.execute("SELECT * FROM database_connections") as cursor:
                     rows = await cursor.fetchall()
+                    migrations: list[tuple[str | None, str, str]] = []
                     for row in rows:
                         data = dict(row)
-                        data["config_json"] = json.loads(data.get("config_json") or "{}")
+                        raw_config = json.loads(data.get("config_json") or "{}")
+                        normalized_config = normalize_connection_config(
+                            raw_config if isinstance(raw_config, dict) else {}
+                        )
+                        raw_connection_string = data.get("connection_string")
+                        normalized_connection_string = (
+                            encrypt_secret(raw_connection_string) if raw_connection_string else None
+                        )
+                        if (
+                            normalized_config != raw_config
+                            or normalized_connection_string != raw_connection_string
+                        ):
+                            migrations.append(
+                                (
+                                    normalized_connection_string,
+                                    json.dumps(normalized_config),
+                                    str(data.get("id") or ""),
+                                )
+                            )
+                        data["config_json"] = normalized_config
+                        data["connection_string"] = normalized_connection_string
                         self._connections[data["id"]] = data
+                    for connection_string, config_json, connection_id in migrations:
+                        await db.execute(
+                            "UPDATE database_connections SET connection_string = ?, config_json = ? WHERE id = ?",
+                            (connection_string, config_json, connection_id),
+                        )
+                    if migrations:
+                        await db.commit()
             self._db_ready = True
 
     async def _ensure_connection_columns(self, db: aiosqlite.Connection) -> None:
@@ -132,8 +161,8 @@ class ConnectionRepository:
             "name": name.strip(),
             "kind": kind,
             "description": description,
-            "connection_string": connection_string,
-            "config_json": config or {},
+            "connection_string": encrypt_secret(connection_string) if connection_string else None,
+            "config_json": normalize_connection_config(config or {}),
             "credentials_ref": credentials_ref,
             "schema_snapshot": None,
             "enabled": 1,
@@ -201,7 +230,10 @@ class ConnectionRepository:
             if description is not None:
                 updates["description"] = description
             if config is not None:
-                updates["config_json"] = config
+                updates["config_json"] = normalize_connection_config(
+                    config,
+                    existing=existing.get("config_json") if isinstance(existing.get("config_json"), dict) else {},
+                )
             if credentials_ref is not None:
                 updates["credentials_ref"] = credentials_ref
             if enabled is not None:
@@ -248,10 +280,13 @@ class ConnectionRepository:
 
         try:
             kind = connection.get("kind", "").lower()
-            config = connection.get("config_json", {})
+            config = resolve_connection_config(
+                connection.get("config_json", {}) if isinstance(connection.get("config_json"), dict) else {}
+            )
+            connection_string = decrypt_secret(connection.get("connection_string"))
 
             if kind == "sqlite":
-                db_path = config.get("database", connection.get("connection_string"))
+                db_path = config.get("database", connection_string)
                 if db_path:
                     async with aiosqlite.connect(db_path) as db:
                         await db.execute("SELECT 1")

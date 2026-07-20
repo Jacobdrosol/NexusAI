@@ -27,8 +27,8 @@ services:
     environment:
       NEXUSAI_READONLY_CSV_ROOT: ${NEXUSAI_READONLY_CSV_ROOT:-/app/data/read-only-csv}
     volumes:
-      - ./data:/app/data
-      - ./data/read-only-csv:/app/data/read-only-csv:ro
+      - ${NEXUSAI_RUNTIME_DATA_DIR:-./data}:/app/data
+      - ${NEXUSAI_RUNTIME_DATA_DIR:-./data}/read-only-csv:/app/data/read-only-csv:ro
     networks:
       - nexus-net
     healthcheck:
@@ -54,8 +54,12 @@ services:
     env_file: .env
     environment:
       CONTROL_PLANE_URL: ${WORKER_CONTROL_PLANE_URL:-http://control_plane:8000}
+      NEXUSAI_WORKER_RUNTIME_CPUS: ${NEXUSAI_CORE_WORKER_CPUS:-1.0}
+      NEXUSAI_WORKER_RUNTIME_MEMORY_LIMIT: ${NEXUSAI_CORE_WORKER_MEM_LIMIT:-1g}
+      NEXUSAI_WORKER_RUNTIME_MEMORY_RESERVATION: ${NEXUSAI_CORE_WORKER_MEM_RESERVATION:-}
+      NEXUSAI_WORKER_RUNTIME_PIDS_LIMIT: ${NEXUSAI_CORE_WORKER_PIDS_LIMIT:-256}
     volumes:
-      - ./data:/app/data
+      - ${NEXUSAI_RUNTIME_DATA_DIR:-./data}:/app/data
     networks:
       - nexus-net
     depends_on:
@@ -85,7 +89,7 @@ services:
     environment:
       CONTROL_PLANE_URL: ${CONTROL_PLANE_URL:-http://control_plane:8000}
     volumes:
-      - ./data:/app/data
+      - ${NEXUSAI_RUNTIME_DATA_DIR:-./data}:/app/data
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - nexus-net

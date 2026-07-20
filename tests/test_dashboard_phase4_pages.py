@@ -36,6 +36,55 @@ def test_projects_page_loads_when_logged_in(dashboard_client):
     assert b"Projects" in resp.data
 
 
+def test_projects_page_shows_configured_bot_and_schedule_coverage(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_projects(self):
+            return [{"id": "globeiq", "name": "GlobeIQ", "mode": "isolated", "enabled": True, "bot_ids": []}]
+
+        def list_bots(self):
+            return [
+                {"id": "writer", "project_id": "globeiq", "enabled": True},
+                {"id": "reviewer", "project_id": "globeiq", "enabled": False},
+                {"id": "researcher", "project_id": "globeiq", "enabled": True},
+                {"id": "other", "project_id": "other-project", "enabled": True},
+            ]
+
+        def list_schedules(self):
+            return {
+                "schedules": [
+                    {
+                        "project_id": "globeiq",
+                        "target_bot_id": "writer",
+                        "status": "active",
+                        "last_run_status": "completed",
+                    },
+                    {"project_id": "globeiq", "target_bot_id": "reviewer", "status": "paused"},
+                ]
+            }
+
+        def list_bot_readiness(self):
+            return {
+                "readiness": [
+                    {"bot_id": "writer", "ready": True},
+                    {"bot_id": "researcher", "ready": True},
+                    {"bot_id": "other", "ready": True},
+                ]
+            }
+
+    with patch("dashboard.routes.projects.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/projects")
+
+    assert resp.status_code == 200
+    assert b"Configured Bots" in resp.data
+    assert b"2 enabled" in resp.data
+    assert b"3 configured" in resp.data
+    assert b"1 active schedule" in resp.data
+    assert b"1 latest run complete" in resp.data
+    assert b"1 ready but unscheduled" in resp.data
+
+
 def test_schedule_bot_readiness_api_proxies_non_secret_readiness(dashboard_client):
     _login_admin(dashboard_client)
 
@@ -84,6 +133,17 @@ def test_project_detail_page_renders_with_partial_github_status(dashboard_client
             return [{"id": "globeiq", "name": "GlobeIQ", "mode": "isolated", "enabled": True, "bridge_project_ids": [], "bot_ids": []}]
 
         def list_bots(self):
+            return [
+                {
+                    "id": "globeiq-reviewer",
+                    "name": "GlobeIQ Reviewer",
+                    "role": "reviewer",
+                    "project_id": "globeiq",
+                }
+            ]
+
+        def list_bot_artifacts(self, bot_id, limit=20):
+            assert bot_id == "globeiq-reviewer"
             return []
 
         def list_tasks(self):
@@ -102,6 +162,7 @@ def test_project_detail_page_renders_with_partial_github_status(dashboard_client
         resp = dashboard_client.get("/projects/globeiq")
 
     assert resp.status_code == 200
+    assert b"GlobeIQ Reviewer" in resp.data
     assert b"Project Data Vault" in resp.data
     assert b"Chat Workspace Tools" in resp.data
     assert b"Repository Workspace" in resp.data
@@ -276,6 +337,9 @@ def test_chat_page_loads_when_logged_in(dashboard_client):
     _login_admin(dashboard_client)
     resp = dashboard_client.get("/chat")
     assert resp.status_code == 200
+    assert b'class="app-shell"' in resp.data
+    assert b'class="app-sidebar"' in resp.data
+    assert b'class="app-main"' in resp.data
     assert b"Chat" in resp.data
     assert b"New Conversation" in resp.data
     assert b"chat-project-filter" in resp.data
@@ -738,6 +802,7 @@ def test_bot_launch_api_marks_pipeline_runs(dashboard_client):
                         "payload": {"topic": "AP World History"},
                         "is_pipeline": True,
                         "pipeline_name": "Course Generation Pipeline",
+                        "concurrency_limit": 2,
                     }
                 },
             }
@@ -753,6 +818,7 @@ def test_bot_launch_api_marks_pipeline_runs(dashboard_client):
     assert body["metadata"]["source"] == "saved_launch_pipeline"
     assert body["metadata"]["pipeline_name"] == "Course Generation Pipeline"
     assert body["metadata"]["pipeline_entry_bot_id"] == "course-intake"
+    assert body["metadata"]["orchestration_concurrency_limit"] == 2
     assert body["pipeline_id"]
 
 
@@ -1985,6 +2051,40 @@ def test_worker_probe_view_exposes_nonsecret_cli_authentication_blockers():
     assert view["detail"] == "CLI authentication required: codex, claude"
 
 
+def test_worker_probe_view_exposes_attested_runtime_tool_evidence():
+    from dashboard.routes.workers import _worker_probe_view
+
+    view = _worker_probe_view(
+        {
+            "probe_status": "ready",
+            "checked_at": "2026-07-18T18:37:38+00:00",
+            "checks": [],
+            "capability_attestation": {
+                "provider_credentials": {"ollama_cloud": True, "other": False},
+                "installed_cli_tools": ["claude", "git"],
+                "enabled_cli_tools": ["claude"],
+                "auth_required_cli_tools": ["claude"],
+                "browser": {"configured": True, "ready": True, "browser": "chromium"},
+            },
+        }
+    )
+
+    assert view is not None
+    evidence = view["runtime_evidence"]
+    assert evidence["provider_status"] == [
+        {"provider": "ollama_cloud", "configured": True},
+        {"provider": "other", "configured": False},
+    ]
+    assert evidence["installed_cli_tools"] == ["claude", "git"]
+    assert evidence["enabled_cli_tools"] == ["claude"]
+    assert evidence["browser"] == {
+        "configured": True,
+        "ready": True,
+        "name": "chromium",
+        "reason": "",
+    }
+
+
 def test_worker_probe_view_marks_unavailable_browser_session_degraded():
     from dashboard.routes.workers import _worker_probe_view
 
@@ -2294,6 +2394,46 @@ def test_bots_page_supports_multi_file_import(dashboard_client):
     assert b'multiple' in resp.data
 
 
+def test_bots_page_identifies_scheduled_and_manual_dispatch_modes(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_bots(self):
+            return [
+                {"id": "scheduled-bot", "name": "Scheduled Bot", "role": "monitor", "enabled": True, "backends": []},
+                {"id": "manual-bot", "name": "Manual Bot", "role": "researcher", "enabled": True, "backends": []},
+                {"id": "paused-bot", "name": "Paused Bot", "role": "reviewer", "enabled": True, "backends": []},
+                {"id": "disabled-bot", "name": "Disabled Bot", "role": "writer", "enabled": False, "backends": []},
+            ]
+
+        def list_bot_readiness(self):
+            return {
+                "readiness": [
+                    {"bot_id": "scheduled-bot", "ready": True, "checks": []},
+                    {"bot_id": "manual-bot", "ready": True, "checks": []},
+                    {"bot_id": "paused-bot", "ready": True, "checks": []},
+                ]
+            }
+
+        def list_schedules(self, **kwargs):
+            return {
+                "schedules": [
+                    {"id": "schedule-1", "status": "active", "target_bot_id": "scheduled-bot"},
+                    {"id": "schedule-2", "status": "paused", "assignment_pm_bot_id": "paused-bot"},
+                ]
+            }
+
+    with patch("dashboard.cp_client.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/bots")
+
+    assert resp.status_code == 200
+    assert b"Dispatch mode" in resp.data
+    assert b"scheduled" in resp.data
+    assert b"manual" in resp.data
+    assert b"paused" in resp.data
+    assert b"disabled" in resp.data
+
+
 def test_worker_live_endpoint_returns_payload(dashboard_client):
     _login_admin(dashboard_client)
     from dashboard.db import get_db
@@ -2436,6 +2576,13 @@ def test_bots_page_and_proxy_support_specialist_creation(dashboard_client):
         def preview_bot_blueprint(self, body):
             return {"bot": {"id": "researcher", "name": body["name"]}}
 
+        def preflight_bot_blueprint(self, body):
+            return {
+                "bot_id": body["id"],
+                "ready_to_enable": True,
+                "readiness": {"ready": True, "checks": []},
+            }
+
         def create_bot_blueprint(self, body):
             return {"bot": {"id": "researcher", "name": body["name"]}}
 
@@ -2445,6 +2592,10 @@ def test_bots_page_and_proxy_support_specialist_creation(dashboard_client):
         catalog = dashboard_client.get("/api/bot-blueprints")
         preview = dashboard_client.post(
             "/api/bot-blueprints/preview",
+            json={"name": "Researcher"},
+        )
+        preflight = dashboard_client.post(
+            "/api/bot-blueprints/preflight",
             json={"name": "Researcher"},
         )
         created = dashboard_client.post(
@@ -2457,6 +2608,7 @@ def test_bots_page_and_proxy_support_specialist_creation(dashboard_client):
     assert b"specialist-model-options" in page.data
     assert catalog.get_json()["blueprints"][0]["kind"] == "researcher"
     assert preview.get_json()["bot"]["id"] == "researcher"
+    assert preflight.get_json()["preflight"]["ready_to_enable"] is True
     assert created.status_code == 201
 
 
@@ -2520,6 +2672,19 @@ def test_schedules_page_and_proxy_support_operational_schedule_management(dashbo
         def list_projects(self):
             return []
 
+        def list_schedule_queue_sources(self):
+            return {
+                "sources": [
+                    {
+                        "relative_path": "queues/draft-work.csv",
+                        "headers": ["lesson_id", "instruction"],
+                        "row_count": 1,
+                        "available": True,
+                        "issue": None,
+                    }
+                ]
+            }
+
         def create_schedule(self, body):
             return {"schedule": {"id": "schedule-2", **body}}
 
@@ -2529,6 +2694,9 @@ def test_schedules_page_and_proxy_support_operational_schedule_management(dashbo
         def trigger_schedule(self, schedule_id):
             return {"run": {"id": "run-1", "schedule_id": schedule_id}}
 
+        def preview_schedule(self, schedule_id):
+            return {"schedule": {"id": schedule_id}, "task_payload": {"revision_items": "preview"}}
+
         def list_schedule_runs(self, schedule_id, limit=50):
             return {"schedule_id": schedule_id, "runs": []}
 
@@ -2536,26 +2704,36 @@ def test_schedules_page_and_proxy_support_operational_schedule_management(dashbo
     with patch("dashboard.routes.schedules.get_cp_client", return_value=fake_cp):
         page = dashboard_client.get("/schedules")
         listed = dashboard_client.get("/api/schedules")
+        queue_sources = dashboard_client.get("/api/schedules/queue-sources")
         created = dashboard_client.post(
             "/api/schedules",
             json={"name": "Daily Review", "target_bot_id": "reviewer", "cron_expression": "0 8 * * *", "prompt": "Review"},
         )
         toggled = dashboard_client.patch("/api/schedules/schedule-1", json={"status": "active"})
         triggered = dashboard_client.post("/api/schedules/schedule-1/trigger")
+        preview = dashboard_client.post("/api/schedules/schedule-1/preview")
         runs = dashboard_client.get("/api/schedules/schedule-1/runs")
 
     assert page.status_code == 200
     assert b"Create Schedule" in page.data
     assert b"Control-plane fleet health summary" in page.data
+    assert b"Aggregate operational quality snapshot" in page.data
+    assert b"csv_work_items_v1" in page.data
+    assert b"schedule-csv-source" in page.data
+    assert b"schedule-csv-payload-map" in page.data
     assert b"Daily Review" in page.data
+    assert b"Origin" in page.data
     assert b"Retry After" in page.data
     assert b"retry_not_before" in page.data
+    assert b"run.manual === true" in page.data
     assert b"schedule-retry-max" in page.data
     assert b"schedule-retry-backoff" in page.data
     assert listed.get_json()["schedules"][0]["id"] == "schedule-1"
+    assert queue_sources.get_json()["sources"][0]["relative_path"] == "queues/draft-work.csv"
     assert created.status_code == 201
     assert toggled.get_json()["schedule"]["status"] == "active"
     assert triggered.get_json()["run"]["schedule_id"] == "schedule-1"
+    assert preview.get_json()["task_payload"]["revision_items"] == "preview"
     assert runs.get_json()["runs"] == []
 
 
@@ -2766,6 +2944,85 @@ def test_overview_shows_latest_bounded_fleet_health_report(dashboard_client):
     assert b"Failure signals:" in resp.data
     assert b"authentication: 2" in resp.data
     assert b"secret: 99" not in resp.data
+
+
+def test_overview_shows_bounded_operational_qc_report(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def health(self):
+            return True
+
+        def list_workers(self):
+            return []
+
+        def list_worker_probes(self):
+            return {"probes": []}
+
+        def list_bots(self):
+            return []
+
+        def list_projects(self):
+            return []
+
+        def list_tasks(self, **kwargs):
+            return []
+
+        def list_schedules(self, **kwargs):
+            return {
+                "schedules": [
+                    {
+                        "id": "operational-qc",
+                        "status": "active",
+                        "last_run_status": "completed",
+                        "metadata": {
+                            "system_payload_source": {
+                                "type": "control_plane_operational_quality_v1"
+                            }
+                        },
+                    }
+                ]
+            }
+
+        def list_schedule_runs(self, schedule_id, limit=50):
+            assert schedule_id == "operational-qc"
+            assert limit == 1
+            return {
+                "runs": [
+                    {
+                        "status": "completed",
+                        "finished_at": "2026-07-19T11:17:15+00:00",
+                        "task_id": "qc-task",
+                    }
+                ]
+            }
+
+        def get_task(self, task_id):
+            assert task_id == "qc-task"
+            return {
+                "id": task_id,
+                "result": {
+                    "status": "pass",
+                    "acceptance_result": "pass",
+                    "findings": ["No concrete operational risks."],
+                    "evidence": ["aggregate-only"],
+                    "recommended_next_step": "Continue routine monitoring.",
+                    "handoff_notes": "This must not be rendered.",
+                },
+            }
+
+        def probe_paths(self, paths):
+            return [{"path": path, "ok": True, "status_code": 200, "detail": "ok"} for path in paths]
+
+    with patch("dashboard.cp_client.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/")
+
+    assert resp.status_code == 200
+    assert b"Latest Operational QC" in resp.data
+    assert b"Acceptance:</strong> pass" in resp.data
+    assert b"Reported findings:</strong> 1" in resp.data
+    assert b"Continue routine monitoring." in resp.data
+    assert b"This must not be rendered." not in resp.data
 
 
 def test_overview_page_shows_saved_launch_profiles(dashboard_client):

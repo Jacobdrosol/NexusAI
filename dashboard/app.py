@@ -23,6 +23,8 @@ _FLEET_FAILURE_CATEGORIES = frozenset(
 _FLEET_RUNTIME_REASON_CODES = frozenset(
     {"runtime_probe_not_ready", "browser_session_unavailable", "cli_authentication_required"}
 )
+_FLEET_HEALTH_SUMMARY_SOURCE = "control_plane_fleet_summary_v1"
+_OPERATIONAL_QUALITY_SNAPSHOT_SOURCE = "control_plane_operational_quality_v1"
 
 
 def _fleet_health_failure_categories(task: object) -> dict[str, int]:
@@ -144,6 +146,7 @@ def create_app() -> Flask:
     from dashboard.routes.platform_ai import bp as platform_ai_bp
     from dashboard.routes.projects import bp as projects_bp
     from dashboard.routes.schedules import bp as schedules_bp
+    from dashboard.routes.supervision import bp as supervision_bp
     from dashboard.routes.tasks import bp as tasks_bp
     from dashboard.routes.users import bp as users_bp
     from dashboard.routes.vault import bp as vault_bp
@@ -158,6 +161,7 @@ def create_app() -> Flask:
     app.register_blueprint(projects_bp)
     app.register_blueprint(pipelines_bp)
     app.register_blueprint(schedules_bp)
+    app.register_blueprint(supervision_bp)
     app.register_blueprint(platform_ai_bp)
     app.register_blueprint(chat_bp)
     app.register_blueprint(connections_bp)
@@ -214,6 +218,7 @@ def create_app() -> Flask:
         active_schedules = 0
         failed_schedule_runs = 0
         fleet_health_report = None
+        operational_quality_report = None
 
         if cp_available:
             workers = cp_workers or []
@@ -265,7 +270,7 @@ def create_app() -> Flask:
                     if isinstance(schedule.get("metadata"), dict)
                     and isinstance(schedule["metadata"].get("system_payload_source"), dict)
                     and str(schedule["metadata"]["system_payload_source"].get("type") or "")
-                    == "control_plane_fleet_summary_v1"
+                    == _FLEET_HEALTH_SUMMARY_SOURCE
                 ]
                 latest_fleet_health_schedule = max(
                     fleet_health_schedules,
@@ -305,6 +310,56 @@ def create_app() -> Flask:
                                 failure_categories = _fleet_health_failure_categories(task)
                                 if failure_categories:
                                     fleet_health_report["failed_by_category"] = failure_categories
+
+                operational_quality_schedules = [
+                    schedule
+                    for schedule in schedules
+                    if isinstance(schedule.get("metadata"), dict)
+                    and isinstance(schedule["metadata"].get("system_payload_source"), dict)
+                    and str(schedule["metadata"]["system_payload_source"].get("type") or "")
+                    == _OPERATIONAL_QUALITY_SNAPSHOT_SOURCE
+                ]
+                latest_operational_quality_schedule = max(
+                    operational_quality_schedules,
+                    key=lambda schedule: str(schedule.get("updated_at") or schedule.get("created_at") or ""),
+                    default=None,
+                )
+                if latest_operational_quality_schedule is not None:
+                    run_getter = getattr(cp, "list_schedule_runs", None)
+                    if callable(run_getter):
+                        run_payload = run_getter(
+                            str(latest_operational_quality_schedule.get("id") or ""),
+                            limit=1,
+                        )
+                        runs = run_payload.get("runs") if isinstance(run_payload, dict) else None
+                        latest_run = runs[0] if isinstance(runs, list) and runs else None
+                        if isinstance(latest_run, dict):
+                            operational_quality_report = {
+                                "run_status": str(latest_run.get("status") or "unknown"),
+                                "finished_at": str(latest_run.get("finished_at") or ""),
+                                "schedule_id": str(latest_operational_quality_schedule.get("id") or ""),
+                            }
+                            task_id = str(latest_run.get("task_id") or "").strip()
+                            task_getter = getattr(cp, "get_task", None)
+                            if task_id and callable(task_getter):
+                                task_payload = task_getter(task_id)
+                                task = task_payload.get("task") if isinstance(task_payload, dict) else None
+                                task = task if isinstance(task, dict) else task_payload
+                                result = task.get("result") if isinstance(task, dict) else None
+                                if isinstance(result, dict):
+                                    findings = result.get("findings")
+                                    operational_quality_report.update(
+                                        {
+                                            "status": str(result.get("status") or "unknown")[:64],
+                                            "acceptance_result": str(
+                                                result.get("acceptance_result") or ""
+                                            )[:256],
+                                            "recommended_next_step": str(
+                                                result.get("recommended_next_step") or ""
+                                            )[:500],
+                                            "finding_count": len(findings) if isinstance(findings, list) else None,
+                                        }
+                                    )
 
             total_workers = len(workers)
             online_workers = sum(1 for w in workers if w.get("status") == "online")
@@ -721,6 +776,7 @@ def create_app() -> Flask:
             failed_schedule_runs=failed_schedule_runs,
             schedules_unavailable=schedules_unavailable,
             fleet_health_report=fleet_health_report,
+            operational_quality_report=operational_quality_report,
             recent_activity=recent_activity,
             launchable_bots=overview_launch_bots,
             system_alerts=system_alerts,

@@ -124,6 +124,36 @@ def test_list_worker_probes_hits_fleet_probe_endpoint():
     assert called_url.endswith("/v1/workers/probes")
 
 
+def test_get_worker_dependencies_hits_expected_endpoint():
+    cp = CPClient(base_url="http://example.invalid", timeout=0.1)
+
+    ok_resp = Mock()
+    ok_resp.raise_for_status.return_value = None
+    ok_resp.text = '{"dependent_bots":[]}'
+    ok_resp.json.return_value = {"dependent_bots": []}
+
+    with patch("dashboard.cp_client.requests.get", return_value=ok_resp) as get_mock:
+        cp.get_worker_dependencies("worker-1")
+
+    called_url = str(get_mock.call_args.args[0])
+    assert called_url.endswith("/v1/workers/worker-1/dependencies")
+
+
+def test_get_bot_dependencies_hits_expected_endpoint():
+    cp = CPClient(base_url="http://example.invalid", timeout=0.1)
+
+    ok_resp = Mock()
+    ok_resp.raise_for_status.return_value = None
+    ok_resp.text = '{"schedule_references":[]}'
+    ok_resp.json.return_value = {"schedule_references": []}
+
+    with patch("dashboard.cp_client.requests.get", return_value=ok_resp) as get_mock:
+        cp.get_bot_dependencies("bot-1")
+
+    called_url = str(get_mock.call_args.args[0])
+    assert called_url.endswith("/v1/bots/bot-1/dependencies")
+
+
 def test_list_bot_readiness_hits_fleet_readiness_endpoint():
     cp = CPClient(base_url="http://example.invalid", timeout=0.1)
 

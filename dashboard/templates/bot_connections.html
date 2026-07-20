@@ -169,8 +169,9 @@ function resetConnectionForm() {
   form.kind.value = 'http';
   form.auth_type.value = 'none';
     form.auth_name.value = 'X-API-Key';
-    form.timeout_seconds.value = '15';
-    form.verify_ssl.checked = true;
+  form.timeout_seconds.value = '15';
+  form.verify_ssl.checked = true;
+  form.dsn.placeholder = 'postgresql+psycopg2://user:pass@host:5432/db';
     document.getElementById('connection-form-title').textContent = 'Create Connection';
   document.getElementById('connection-submit-btn').textContent = 'Create and Attach';
   document.getElementById('cancel-edit-btn').style.display = 'none';
@@ -204,7 +205,11 @@ function editConnection(connectionId) {
     toggleKindFields('http');
     toggleAuthFields(form.auth_type.value);
   } else {
-    form.dsn.value = connection.config?.dsn || '';
+    const storedDsn = connection.config?.dsn === '[REDACTED]';
+    form.dsn.value = storedDsn ? '' : (connection.config?.dsn || '');
+    form.dsn.placeholder = storedDsn
+      ? 'Stored connection string; enter a replacement to change it'
+      : 'postgresql+psycopg2://user:pass@host:5432/db';
     form.readonly.checked = !!connection.config?.readonly;
     toggleKindFields('database');
   }

@@ -210,7 +210,7 @@ async def test_scheduler_ollama_cloud_maps_max_tokens_to_num_predict():
         model="qwen3.5:cloud",
         provider="ollama_cloud",
         api_key_ref="OLLAMA_API_KEY",
-        params={"max_tokens": 768, "temperature": 0.3},
+        params={"max_tokens": 768, "temperature": 0.3, "response_format": "json"},
     )
     payload = [{"role": "user", "content": "hello"}]
 
@@ -234,7 +234,9 @@ async def test_scheduler_ollama_cloud_maps_max_tokens_to_num_predict():
     assert kwargs["json"]["think"] is False
     assert kwargs["json"]["options"]["num_predict"] == 768
     assert "max_tokens" not in kwargs["json"]["options"]
+    assert "response_format" not in kwargs["json"]["options"]
     assert kwargs["json"]["options"]["temperature"] == 0.3
+    assert kwargs["json"]["format"] == "json"
 
 
 def test_scheduler_ollama_cloud_model_variants_include_cloud_alias():

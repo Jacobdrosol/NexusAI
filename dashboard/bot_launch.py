@@ -103,6 +103,13 @@ def normalize_launch_profile(bot: dict[str, Any]) -> dict[str, Any] | None:
         priority = int(priority_raw) if priority_raw not in (None, "") else None
     except (TypeError, ValueError):
         priority = None
+    concurrency_raw = profile.get("concurrency_limit")
+    try:
+        concurrency_limit = int(concurrency_raw) if concurrency_raw not in (None, "") else None
+    except (TypeError, ValueError):
+        concurrency_limit = None
+    if concurrency_limit is not None and not 1 <= concurrency_limit <= 64:
+        concurrency_limit = None
 
     return {
         "enabled": bool(profile.get("enabled", True)),
@@ -115,6 +122,7 @@ def normalize_launch_profile(bot: dict[str, Any]) -> dict[str, Any] | None:
         "show_on_tasks": bool(profile.get("show_on_tasks", True)),
         "is_pipeline": bool(profile.get("is_pipeline", False)),
         "pipeline_name": str(profile.get("pipeline_name") or label).strip() or label,
+        "concurrency_limit": concurrency_limit,
     }
 
 

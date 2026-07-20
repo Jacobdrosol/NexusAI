@@ -338,6 +338,64 @@ async def test_worker_heartbeat(cp_client):
     assert resp.status_code == 200
 
 
+def test_worker_probe_refresh_becomes_due_before_schedule_freshness_expires(monkeypatch):
+    from control_plane.api.workers import _worker_probe_refresh_due
+
+    monkeypatch.setenv("NEXUSAI_AUTONOMOUS_WORKER_PROBE_MAX_AGE_SECONDS", "300")
+    now = datetime(2026, 7, 19, 12, 0, tzinfo=timezone.utc)
+
+    assert _worker_probe_refresh_due(
+        {"probe_status": "ready", "checked_at": (now - timedelta(seconds=224)).isoformat()},
+        now=now,
+    ) is False
+    assert _worker_probe_refresh_due(
+        {"probe_status": "ready", "checked_at": (now - timedelta(seconds=225)).isoformat()},
+        now=now,
+    ) is True
+    assert _worker_probe_refresh_due(
+        {"probe_status": "degraded", "checked_at": (now - timedelta(seconds=30)).isoformat()},
+        now=now,
+    ) is True
+    assert _worker_probe_refresh_due(None, now=now) is True
+
+
+@pytest.mark.anyio
+async def test_worker_heartbeat_queues_due_probe_refresh(cp_client, cp_app, monkeypatch):
+    from control_plane.api import workers as workers_api
+
+    worker = {
+        "id": "refresh-on-heartbeat-worker",
+        "name": "Refresh On Heartbeat Worker",
+        "host": "worker.test",
+        "port": 8001,
+        "status": "offline",
+        "capabilities": [],
+        "metrics": {},
+        "enabled": True,
+    }
+    await cp_client.post("/v1/workers", json=worker)
+    await cp_app.state.worker_probe_store.record(
+        {
+            "worker_id": worker["id"],
+            "probe_status": "ready",
+            "checked_at": (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat(),
+            "dispatch_eligible": True,
+            "checks": [],
+        }
+    )
+    queued: list[str] = []
+    monkeypatch.setattr(
+        workers_api,
+        "_queue_worker_probe_refresh",
+        lambda _request, queued_worker_id: queued.append(queued_worker_id),
+    )
+
+    response = await cp_client.post(f"/v1/workers/{worker['id']}/heartbeat", json={})
+
+    assert response.status_code == 200
+    assert queued == [worker["id"]]
+
+
 @pytest.mark.anyio
 async def test_worker_probe_returns_non_mutating_runtime_result(cp_client, monkeypatch):
     worker = {
@@ -417,6 +475,114 @@ async def test_update_worker(cp_client):
     resp = await cp_client.put("/v1/workers/w1", json=update)
     assert resp.status_code == 200
     assert resp.json()["enabled"] is False
+
+
+@pytest.mark.anyio
+async def test_worker_lifecycle_rejects_disabling_or_deleting_dependent_worker(cp_app, cp_client):
+    worker = {
+        "id": "dependent-worker",
+        "name": "Dependent Worker",
+        "host": "worker.internal",
+        "port": 8010,
+        "status": "online",
+        "capabilities": [],
+        "metrics": {},
+        "enabled": True,
+    }
+    assert (await cp_client.post("/v1/workers", json=worker)).status_code == 200
+    bot_payload = {
+        "id": "dependent-bot",
+        "name": "Dependent Bot",
+        "role": "assistant",
+        "enabled": False,
+        "backends": [
+            {"type": "remote_llm", "provider": "ollama_cloud", "model": "qwen3.5:cloud", "worker_id": "dependent-worker"}
+        ],
+    }
+    assert (await cp_client.post("/v1/bots", json=bot_payload)).status_code == 200
+    bot = await cp_app.state.bot_registry.get("dependent-bot")
+    await cp_app.state.bot_registry.update("dependent-bot", bot.model_copy(update={"enabled": True}))
+
+    dependencies = await cp_client.get("/v1/workers/dependent-worker/dependencies")
+    assert dependencies.status_code == 200
+    assert dependencies.json()["enabled_bot_ids"] == ["dependent-bot"]
+    assert dependencies.json()["can_disable"] is False
+    assert dependencies.json()["can_delete"] is False
+
+    worker["enabled"] = False
+    disable = await cp_client.put("/v1/workers/dependent-worker", json=worker)
+    assert disable.status_code == 409
+    assert disable.json()["detail"]["reason_code"] == "worker_disable_blocked"
+
+    delete = await cp_client.delete("/v1/workers/dependent-worker")
+    assert delete.status_code == 409
+    assert delete.json()["detail"]["reason_code"] == "worker_delete_blocked"
+
+
+@pytest.mark.anyio
+async def test_worker_update_rejects_worker_id_change(cp_client):
+    worker = {"id": "fixed-worker", "name": "Fixed Worker", "host": "worker.internal", "port": 8010, "capabilities": []}
+    assert (await cp_client.post("/v1/workers", json=worker)).status_code == 200
+    worker["id"] = "different-worker"
+
+    response = await cp_client.put("/v1/workers/fixed-worker", json=worker)
+    assert response.status_code == 409
+    assert response.json()["detail"]["reason_code"] == "worker_id_immutable"
+
+
+@pytest.mark.anyio
+async def test_bot_lifecycle_rejects_disabling_or_deleting_referenced_bot(cp_app, cp_client):
+    target = {"id": "target-bot", "name": "Target Bot", "role": "assistant", "enabled": True, "backends": []}
+    upstream = {
+        "id": "upstream-bot",
+        "name": "Upstream Bot",
+        "role": "assistant",
+        "enabled": True,
+        "backends": [],
+        "workflow": {
+            "triggers": [
+                {
+                    "id": "handoff",
+                    "event": "task_completed",
+                    "target_bot_id": "target-bot",
+                    "enabled": True,
+                }
+            ]
+        },
+    }
+    assert (await cp_client.post("/v1/bots", json=target)).status_code == 200
+    assert (await cp_client.post("/v1/bots", json=upstream)).status_code == 200
+    await cp_app.state.agent_schedule_engine.create_schedule(
+        {
+            "name": "Target schedule",
+            "cron_expression": "*/5 * * * *",
+            "timezone": "UTC",
+            "prompt": "Read-only status check.",
+            "status": "active",
+            "target_bot_id": "target-bot",
+        }
+    )
+
+    dependencies = await cp_client.get("/v1/bots/target-bot/dependencies")
+    assert dependencies.status_code == 200
+    payload = dependencies.json()
+    assert payload["can_disable"] is False
+    assert payload["can_delete"] is False
+    assert payload["schedule_references"][0]["relation"] == "target_bot"
+    assert payload["workflow_references"][0]["relation"] == "workflow_trigger"
+
+    target["enabled"] = False
+    update = await cp_client.put("/v1/bots/target-bot", json=target)
+    assert update.status_code == 409
+    assert update.json()["detail"]["reason_code"] == "bot_disable_blocked"
+
+    disable = await cp_client.post("/v1/bots/target-bot/disable")
+    assert disable.status_code == 409
+    assert disable.json()["detail"]["reason_code"] == "bot_disable_blocked"
+
+    delete = await cp_client.delete("/v1/bots/target-bot")
+    assert delete.status_code == 409
+    assert delete.json()["detail"]["reason_code"] == "bot_delete_blocked"
 
 
 @pytest.mark.anyio

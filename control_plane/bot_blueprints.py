@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from shared.models import (
     BackendConfig,
@@ -27,11 +27,68 @@ SpecialistKind = Literal[
     "quality_reviewer",
     "customer_service_triage",
     "marketing_analyst",
+    "operations_manager",
     "website_monitor",
     "code_reviewer",
     "code_implementer",
     "deployment_reviewer",
 ]
+
+
+_DIRECT_CREDENTIAL_PREFIXES = (
+    "sk-",
+    "sk_",
+    "ghp_",
+    "github_pat_",
+    "xoxb-",
+    "xoxp-",
+    "akia",
+    "aiza",
+    "hf_",
+)
+_RAW_CREDENTIAL_FIELDS = frozenset(
+    {
+        "api_key",
+        "api_token",
+        "access_token",
+        "secret",
+        "password",
+        "private_key",
+    }
+)
+_PORTFOLIO_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$")
+_MANAGER_ACTIONS = ["pause_schedule", "hold_bot", "configuration_review"]
+
+
+def is_safe_credential_reference(value: object) -> bool:
+    """Return whether ``value`` is an opaque credential reference, never a secret."""
+    if not isinstance(value, str):
+        return False
+    reference = value.strip()
+    if not reference or reference != value or len(reference) > 128:
+        return False
+    normalized = reference.lower()
+    return not (
+        normalized.startswith(_DIRECT_CREDENTIAL_PREFIXES)
+        or "=" in reference
+        or any(character.isspace() for character in reference)
+    )
+
+
+def _normalize_portfolio_ids(values: list[str], *, field_name: str) -> list[str]:
+    """Validate bounded control-plane identifiers without resolving them yet."""
+    normalized_values: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        identifier = str(value or "").strip()
+        if not identifier:
+            continue
+        if not _PORTFOLIO_ID_PATTERN.fullmatch(identifier):
+            raise ValueError(f"{field_name} entries must be control-plane identifiers.")
+        if identifier not in seen:
+            seen.add(identifier)
+            normalized_values.append(identifier)
+    return normalized_values
 
 
 class SpecialistBlueprintRequest(BaseModel):
@@ -40,6 +97,8 @@ class SpecialistBlueprintRequest(BaseModel):
     Credentials are intentionally referenced by name through ``BackendConfig`` and
     never accepted as raw secret values.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     kind: SpecialistKind
     name: str = Field(min_length=1, max_length=120)
@@ -51,6 +110,57 @@ class SpecialistBlueprintRequest(BaseModel):
     allow_repo_writes: bool = False
     cli_command_profile: Literal["claude_ollama_json"] | None = None
     cli_runtime_model: str | None = Field(default=None, max_length=128)
+    portfolio_bot_ids: list[str] = Field(default_factory=list, max_length=100)
+    portfolio_schedule_ids: list[str] = Field(default_factory=list, max_length=100)
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_raw_credential_material(cls, value: object) -> object:
+        """Keep secret values out of public, exportable bot configuration."""
+        if not isinstance(value, dict):
+            return value
+        unexpected_top_level = _RAW_CREDENTIAL_FIELDS.intersection(value)
+        if unexpected_top_level:
+            raise ValueError("Raw credential fields are not accepted; use api_key_ref.")
+
+        backends = value.get("backends")
+        if not isinstance(backends, list):
+            return value
+        for backend in backends:
+            if not isinstance(backend, dict):
+                continue
+            unexpected_backend_fields = _RAW_CREDENTIAL_FIELDS.intersection(backend)
+            if unexpected_backend_fields:
+                raise ValueError("Raw backend credential fields are not accepted; use api_key_ref.")
+            credential_reference = backend.get("api_key_ref")
+            if credential_reference is not None and not is_safe_credential_reference(credential_reference):
+                raise ValueError("api_key_ref must be a named vault or environment reference, not a secret value.")
+        return value
+
+    @model_validator(mode="after")
+    def validate_credential_references(self) -> "SpecialistBlueprintRequest":
+        """Apply the same secret guard to programmatic ``BackendConfig`` inputs."""
+        for backend in self.backends:
+            credential_reference = backend.api_key_ref
+            if credential_reference is not None and not is_safe_credential_reference(credential_reference):
+                raise ValueError("api_key_ref must be a named vault or environment reference, not a secret value.")
+        self.portfolio_bot_ids = _normalize_portfolio_ids(
+            self.portfolio_bot_ids,
+            field_name="portfolio_bot_ids",
+        )
+        self.portfolio_schedule_ids = _normalize_portfolio_ids(
+            self.portfolio_schedule_ids,
+            field_name="portfolio_schedule_ids",
+        )
+        if self.kind == "operations_manager":
+            if not (self.portfolio_bot_ids or self.portfolio_schedule_ids):
+                raise ValueError(
+                    "operations_manager requires at least one portfolio_bot_ids or portfolio_schedule_ids entry."
+                )
+            manager_bot_id = _normalize_bot_id(self.bot_id or self.name)
+            if manager_bot_id in self.portfolio_bot_ids:
+                raise ValueError("operations_manager cannot include itself in portfolio_bot_ids.")
+        return self
 
 
 _BLUEPRINTS: dict[str, dict[str, Any]] = {
@@ -198,6 +308,29 @@ _BLUEPRINTS: dict[str, dict[str, Any]] = {
             "Do not launch, pause, or modify a campaign.",
         ],
     },
+    "operations_manager": {
+        "label": "Operations Manager",
+        "role": "operations_manager",
+        "description": "Supervises an explicit worker and schedule portfolio and produces approval-gated executive decisions.",
+        "risk_level": "read_only",
+        "outputs": [
+            "executive_summary",
+            "overall_status",
+            "accomplishments",
+            "risks",
+            "decisions_needed",
+            "portfolio",
+            "action_proposals",
+        ],
+        "receives": ["instruction", "portfolio_snapshot"],
+        "self_serve": [],
+        "rules": [
+            "Analyze only the supplied declared-portfolio snapshot and instruction.",
+            "You may propose pause_schedule, hold_bot, or configuration_review actions for declared targets only; proposals never execute by themselves.",
+            "Do not enable workers, dispatch tasks, modify configurations, restart services, deploy changes, or access other portfolios.",
+            "Separate verified operating evidence from assumptions and identify each decision that needs an operator.",
+        ],
+    },
     "website_monitor": {
         "label": "Website Monitor",
         "role": "website_monitor",
@@ -280,6 +413,11 @@ def build_specialist_bot(request: SpecialistBlueprintRequest) -> Bot:
     output_fields = list(spec["outputs"])
     input_fields = ["instruction"]
     backends = _prepare_specialist_backends(request)
+    non_empty_output_fields = (
+        ["status", output_fields[1]]
+        if output_fields[0] == "status"
+        else output_fields[:2]
+    )
 
     system_prompt = _system_prompt(
         label=str(spec["label"]),
@@ -309,7 +447,7 @@ def build_specialist_bot(request: SpecialistBlueprintRequest) -> Bot:
             "enabled": True,
             "format": "json_object",
             "required_fields": output_fields,
-            "non_empty_fields": ["status", output_fields[1]],
+            "non_empty_fields": non_empty_output_fields,
             "allow_blocked_status": True,
             "max_retries": 1,
         },
@@ -319,11 +457,29 @@ def build_specialist_bot(request: SpecialistBlueprintRequest) -> Bot:
             "enabled": False,
             "project_id": request.project_id,
         }
+    if request.kind == "operations_manager":
+        routing_rules["worker_profile"] = {
+            "role": "operations-manager",
+            "task_scope": "read-only-manager-review",
+            "can_edit": False,
+        }
+        routing_rules["supervision_manager"] = {
+            "enabled": True,
+            "portfolio": {
+                "project_id": str(request.project_id or "").strip() or None,
+                "bot_ids": list(request.portfolio_bot_ids),
+                "schedule_ids": list(request.portfolio_schedule_ids),
+            },
+            "action_policy": {
+                "allow_actions": list(_MANAGER_ACTIONS),
+            },
+        }
 
     return Bot(
         id=bot_id,
         name=str(request.name).strip(),
         role=str(spec["role"]),
+        project_id=str(request.project_id or "").strip() or None,
         system_prompt=system_prompt,
         priority=0,
         enabled=bool(request.activate),

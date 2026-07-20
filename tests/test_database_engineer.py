@@ -234,6 +234,21 @@ class TestConnectionRepository:
     """Tests for ConnectionRepository."""
 
     @pytest.mark.asyncio
+    async def test_connection_secrets_are_encrypted_before_persistence(
+        self, connection_repository: ConnectionRepository
+    ) -> None:
+        connection = await connection_repository.create(
+            name="Protected DB",
+            kind="postgresql",
+            connection_string="postgresql://agent:private-password@example.test/nexusai",
+            config={"dsn": "postgresql://agent:private-password@example.test/nexusai"},
+        )
+
+        assert connection["connection_string"].startswith("enc:")
+        assert connection["config_json"]["dsn"].startswith("enc:")
+        assert "private-password" not in str(connection)
+
+    @pytest.mark.asyncio
     async def test_create_connection(self, connection_repository: ConnectionRepository) -> None:
         """Test creating a new connection."""
         connection = await connection_repository.create(

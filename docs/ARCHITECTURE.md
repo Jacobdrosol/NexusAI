@@ -150,7 +150,7 @@ All services share **`data/nexusai.db`** (SQLite). Tables are created lazily on 
 
 ### Specialist Blueprints
 
-`/v1/bot-blueprints` provides typed starting configurations for bounded worker roles such as researchers, content planners and writers, reviewers, support triage, marketing analysis, website incident review, and code review or implementation.
+`/v1/bot-blueprints` provides typed starting configurations for bounded worker roles such as researchers, content planners and writers, reviewers, support triage, marketing analysis, operations reporting, website incident review, and code review or implementation. The operations-manager role consolidates supplied worker reports and platform-health evidence into an operator decision brief; it cannot enable workers, dispatch tasks, change configuration, restart services, or deploy.
 
 - `GET /v1/bot-blueprints` lists the public specialist catalog.
 - `POST /v1/bot-blueprints/preview` composes a complete bot configuration without storing it.

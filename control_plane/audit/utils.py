@@ -6,7 +6,7 @@ from fastapi import Request
 def _actor_from_request(request: Request) -> Optional[str]:
     auth = (request.headers.get("Authorization", "") or "").strip()
     if auth:
-        return auth[:64]
+        return "bearer_api_key"
     api_key = (request.headers.get("X-Nexus-API-Key", "") or "").strip()
     if api_key:
         return "api_key"
@@ -31,4 +31,3 @@ async def record_audit_event(
         actor=_actor_from_request(request),
         details=details,
     )
-

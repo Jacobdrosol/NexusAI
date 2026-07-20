@@ -15,9 +15,16 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from control_plane.bot_readiness import assess_bot_instance_readiness
+from control_plane.bot_blueprints import (
+    SpecialistBlueprintRequest,
+    build_specialist_bot,
+    is_safe_credential_reference,
+    list_specialist_blueprints,
+)
 from control_plane.platform_ai.session_store import PlatformAISessionStore
+from control_plane.schedule_safety import ScheduleAutonomySafetyError, require_schedule_autonomy_safety
 from shared.bot_policy import validate_bot_configuration
-from shared.exceptions import BotNotFoundError
+from shared.exceptions import BotNotFoundError, ProjectNotFoundError
 from shared.models import BackendConfig, BackendParams, Bot, CatalogModel, TaskMetadata
 
 
@@ -31,8 +38,12 @@ _SESSION_STATUSES = {"ready", "running", "stopped"}
 _CONFIGURATION_MUTATION_ACTIONS = {"upsert_bot", "upsert_bots", "delete_bot", "remove_bot", "configure_pipeline_entry"}
 _AUTONOMOUS_PIPELINE_ACTIONS = {"set_pipeline_target", "launch_pipeline"}
 _APPROVABLE_PROPOSAL_BACKEND_TYPES = {"local_llm", "remote_llm", "cloud_api"}
-_DIRECT_CREDENTIAL_PREFIXES = ("sk-", "ghp_", "github_pat_", "xoxb-", "xoxp-", "akia", "aiza")
 _PROPOSAL_PREFLIGHT_TTL_SECONDS = 300
+_EXECUTION_CATALOG_MAX_WORKERS = 40
+_EXECUTION_CATALOG_MAX_PROJECTS = 80
+_EXECUTION_CATALOG_MAX_MODELS_PER_PROVIDER = 12
+_EXECUTION_CATALOG_MAX_CLI_TOOLS = 12
+_EXECUTION_CATALOG_VALUE_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
 
 
 @dataclass(frozen=True)
@@ -626,11 +637,13 @@ class PlatformAISessionRuntime:
         task_manager: Any = None,
         bot_registry: Any = None,
         scheduler: Any = None,
+        agent_schedule_engine: Any = None,
         worker_registry: Any = None,
         connection_resolver: Any = None,
         worker_probe_store: Any = None,
         key_vault: Any = None,
         model_registry: Any = None,
+        project_registry: Any = None,
     ) -> None:
         self._store = store
         self._assignment_service = assignment_service
@@ -638,11 +651,13 @@ class PlatformAISessionRuntime:
         self._task_manager = task_manager
         self._bot_registry = bot_registry
         self._scheduler = scheduler
+        self._agent_schedule_engine = agent_schedule_engine
         self._worker_registry = worker_registry
         self._connection_resolver = connection_resolver
         self._worker_probe_store = worker_probe_store
         self._key_vault = key_vault
         self._model_registry = model_registry
+        self._project_registry = project_registry
         self._session_tasks: Dict[str, asyncio.Task[None]] = {}
         self._deploy_tasks: Dict[str, asyncio.Task[None]] = {}
         self._repo_edit_tasks: Dict[str, asyncio.Task[None]] = {}
@@ -653,6 +668,53 @@ class PlatformAISessionRuntime:
         self._bot_name_cache: Dict[str, str] = {}
         self._session_wake_events: Dict[str, asyncio.Event] = {}
         self._session_task_lock = asyncio.Lock()
+
+    async def _project_binding_error(self, project_id: str) -> Optional[str]:
+        """Return a stable denial code when a persisted project binding is unusable."""
+        safe_project_id = str(project_id or "").strip()
+        if not safe_project_id or self._project_registry is None:
+            return None
+        try:
+            project = await self._project_registry.get(safe_project_id)
+        except ProjectNotFoundError:
+            return "project_not_found"
+        except Exception:
+            return "project_lookup_unavailable"
+        if not bool(getattr(project, "enabled", False)):
+            return "project_disabled"
+        return None
+
+    async def _find_duplicate_schedule_configuration(
+        self,
+        schedule_payload: Dict[str, Any],
+    ) -> tuple[Optional[Dict[str, str]], Optional[str]]:
+        """Find an equivalent active or paused schedule without exposing its content."""
+        if self._agent_schedule_engine is None:
+            return None, "schedule_engine_unavailable"
+        try:
+            duplicate = await self._agent_schedule_engine.find_equivalent_schedule(schedule_payload)
+        except Exception:
+            return None, "schedule_duplicate_check_unavailable"
+        return duplicate, None
+
+    async def _resolve_bot_project_binding(
+        self,
+        *,
+        session: Dict[str, Any],
+        bot: Bot,
+    ) -> tuple[Optional[Bot], Optional[str]]:
+        metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
+        session_project_id = str(metadata.get("project_id") or "").strip()
+        bot_project_id = str(bot.project_id or "").strip()
+        if session_project_id and bot_project_id and session_project_id != bot_project_id:
+            return None, "bot_project_scope_mismatch"
+        project_id = session_project_id or bot_project_id
+        project_error = await self._project_binding_error(project_id)
+        if project_error:
+            return None, project_error
+        if project_id and bot_project_id != project_id:
+            bot = bot.model_copy(update={"project_id": project_id})
+        return bot, None
 
     async def ensure_session_loop(self, session_id: str) -> None:
         sid = str(session_id or "").strip()
@@ -704,6 +766,21 @@ class PlatformAISessionRuntime:
 
     def _compute_state_hash(self, data: Dict[str, Any]) -> str:
         return hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False).encode()).hexdigest()[:16]
+
+    def _bot_configuration_proposal_hash(self, after_state: Dict[str, Any]) -> str:
+        """Hash every proposal field that can change bot approval semantics."""
+        bot_payload = after_state.get("bot") if isinstance(after_state.get("bot"), dict) else {}
+        specialist_request = (
+            after_state.get("specialist_request")
+            if isinstance(after_state.get("specialist_request"), dict)
+            else None
+        )
+        return self._compute_state_hash(
+            {
+                "bot": bot_payload,
+                "specialist_request": specialist_request,
+            }
+        )
 
     async def _synthesize_session_brief(
         self,
@@ -788,7 +865,131 @@ class PlatformAISessionRuntime:
         except Exception:
             return None
 
-    def _build_platform_brain_messages(
+    @staticmethod
+    def _safe_execution_catalog_values(values: Any, *, limit: int) -> List[str]:
+        """Return bounded execution metadata suitable for a cloud reasoning prompt."""
+        if not isinstance(values, list):
+            return []
+        result: List[str] = []
+        for value in values:
+            item = str(value or "").strip()
+            if not _EXECUTION_CATALOG_VALUE_PATTERN.fullmatch(item) or item in result:
+                continue
+            result.append(item)
+            if len(result) >= limit:
+                break
+        return result
+
+    async def _platform_execution_catalog(self) -> Dict[str, Any]:
+        """Build a non-secret inventory of currently viable execution nodes.
+
+        The platform brain needs concrete worker/model choices to propose a usable
+        specialist, but it must never receive network coordinates, key references,
+        metrics, or raw probe payloads.
+        """
+        catalog: Dict[str, Any] = {
+            "schema_version": "nexusai.execution-catalog.v1",
+            "workers": [],
+            "projects": [],
+            "selection_rules": [
+                "Use only worker_id values listed here.",
+                "Use only enabled project_id values listed here when proposing project-scoped work.",
+                "A catalog entry is not permission to activate a bot or access credentials.",
+                "Every proposed configuration remains disabled until preflight and operator approval.",
+            ],
+        }
+        if self._project_registry is None:
+            catalog["project_availability"] = "project_registry_unavailable"
+        else:
+            try:
+                projects = await self._project_registry.list()
+            except Exception:
+                catalog["project_availability"] = "project_registry_unavailable"
+            else:
+                catalog_projects: List[Dict[str, str]] = []
+                for project in sorted(projects, key=lambda item: str(getattr(item, "id", "") or "")):
+                    project_id = str(getattr(project, "id", "") or "").strip()
+                    if not project_id or not bool(getattr(project, "enabled", False)):
+                        continue
+                    if not _EXECUTION_CATALOG_VALUE_PATTERN.fullmatch(project_id):
+                        continue
+                    mode = str(getattr(project, "mode", "") or "").strip().lower()
+                    catalog_projects.append(
+                        {
+                            "project_id": project_id,
+                            "mode": mode if mode in {"isolated", "bridged"} else "isolated",
+                        }
+                    )
+                    if len(catalog_projects) >= _EXECUTION_CATALOG_MAX_PROJECTS:
+                        break
+                catalog["projects"] = catalog_projects
+                catalog["project_availability"] = "enabled_projects_only"
+        if self._worker_registry is None:
+            catalog["availability"] = "worker_registry_unavailable"
+            return catalog
+
+        try:
+            workers = await self._worker_registry.list()
+        except Exception:
+            catalog["availability"] = "worker_registry_unavailable"
+            return catalog
+
+        probes: Dict[str, Dict[str, Any]] = {}
+        probe_store = self._worker_probe_store
+        if probe_store is not None and hasattr(probe_store, "list_for_workers"):
+            try:
+                worker_ids = [str(getattr(worker, "id", "") or "").strip() for worker in workers]
+                stored = await probe_store.list_for_workers(worker_ids)
+                probes = stored if isinstance(stored, dict) else {}
+            except Exception:
+                probes = {}
+
+        catalog_workers: List[Dict[str, Any]] = []
+        for worker in sorted(workers, key=lambda item: str(getattr(item, "id", "") or "")):
+            worker_id = str(getattr(worker, "id", "") or "").strip()
+            if not worker_id or not bool(getattr(worker, "enabled", False)):
+                continue
+            if str(getattr(worker, "status", "") or "").strip().lower() != "online":
+                continue
+            probe = probes.get(worker_id)
+            if probe_store is not None and (
+                not isinstance(probe, dict) or str(probe.get("probe_status") or "").strip().lower() != "ready"
+            ):
+                continue
+
+            llm_backends: List[Dict[str, Any]] = []
+            for capability in list(getattr(worker, "capabilities", None) or []):
+                if str(getattr(capability, "type", "") or "").strip().lower() != "llm":
+                    continue
+                provider = str(getattr(capability, "provider", "") or "").strip().lower()
+                models = self._safe_execution_catalog_values(
+                    getattr(capability, "models", None),
+                    limit=_EXECUTION_CATALOG_MAX_MODELS_PER_PROVIDER,
+                )
+                if provider and models:
+                    llm_backends.append({"provider": provider, "models": models})
+
+            attestation = probe.get("capability_attestation") if isinstance(probe, dict) else {}
+            attestation = attestation if isinstance(attestation, dict) else {}
+            enabled_cli_tools = self._safe_execution_catalog_values(
+                attestation.get("enabled_cli_tools"),
+                limit=_EXECUTION_CATALOG_MAX_CLI_TOOLS,
+            )
+            browser = attestation.get("browser") if isinstance(attestation.get("browser"), dict) else {}
+            entry: Dict[str, Any] = {"worker_id": worker_id, "llm_backends": llm_backends}
+            if enabled_cli_tools:
+                entry["enabled_cli_tools"] = enabled_cli_tools
+            if browser.get("ready") is True:
+                entry["browser_ready"] = True
+            catalog_workers.append(entry)
+            if len(catalog_workers) >= _EXECUTION_CATALOG_MAX_WORKERS:
+                break
+
+        catalog["workers"] = catalog_workers
+        catalog["availability"] = "ready_workers_only"
+        return catalog
+
+    async def _build_platform_brain_messages(
         self,
         *,
         session: Dict[str, Any],
@@ -824,16 +1025,31 @@ class PlatformAISessionRuntime:
             if not _configuration_mutations_enabled() or not _autonomous_pipeline_runs_enabled()
             else "Configuration changes and autonomous pipeline launches are enabled for this deployment."
         )
+        specialist_kinds = ", ".join(item["kind"] for item in list_specialist_blueprints())
+        execution_catalog = await self._platform_execution_catalog()
         system_prompt = (
             "You are Platform AI, an autonomous operator for NexusAI sessions. "
             "Session mode decides scope: bot_tuner edits only target_bot_id, pipeline_tuner edits only pipeline graph bots. "
             "Keep responses concise and actionable. "
             "If a concrete tool action is needed, return JSON with actions using `platform_ai_action` values. "
-            "Allowed actions include upsert_bot, upsert_bots, delete_bot, set_pipeline_target, launch_pipeline, "
+            "For a new specialist, prefer propose_specialist_bot with a typed specialist request; do not use "
+            "upsert_bot to invent a specialist configuration. Specialist proposals remain disabled and cannot "
+            "grant repository writes. Its specialist object requires kind, name, and backends; valid kinds are: "
+            f"{specialist_kinds}. In bot_creator mode, propose_schedule may only draft a paused, project-bound "
+            "direct-bot schedule; it cannot activate a schedule or dispatch a pipeline. Allowed actions include "
+            "propose_specialist_bot, propose_schedule, upsert_bot, upsert_bots, "
+            "delete_bot, set_pipeline_target, launch_pipeline, "
             "project_code_edit, repo_edit, external_repo_edit, deploy. "
             "Never produce actions outside scope. "
             f"{runtime_policy}"
         )
+        if mode in {"bot_creator", "pipeline_creator"}:
+            system_prompt += (
+                "\n\nNon-secret execution catalog for specialist proposals:\n"
+                f"{json.dumps(execution_catalog, ensure_ascii=False, separators=(',', ':'))}\n"
+                "Choose only catalog worker_id and provider/model pairs. If no viable entry fits the request, "
+                "ask for a worker/tooling decision instead of inventing a backend."
+            )
         user_prompt = (
             f"Session scope:\n{json.dumps(session_scope, ensure_ascii=False)}\n\n"
             f"Conversation excerpt:\n{transcript}\n\n"
@@ -1015,7 +1231,7 @@ class PlatformAISessionRuntime:
         backend = self._platform_backend_from_session(session)
         if backend is None:
             return {"ok": False, "skipped": "session_backend_unconfigured"}
-        messages = self._build_platform_brain_messages(
+        messages = await self._build_platform_brain_messages(
             session=session,
             operator_message=operator_message,
             recent_messages=recent_messages,
@@ -1754,23 +1970,40 @@ class PlatformAISessionRuntime:
         return bool(bot_id and role and isinstance(backends, list))
 
     @staticmethod
-    def _proposal_bot_safety_error(bot: Bot) -> Optional[str]:
+    def _proposal_bot_safety_error(
+        bot: Bot,
+        *,
+        specialist_request: Optional[Dict[str, Any]] = None,
+    ) -> Optional[str]:
         """Keep approval-time bot changes bounded to declarative model backends.
 
         CLI, browser, and custom backends can carry host tooling or arbitrary commands.
-        Those require a direct operator configuration path, not an AI-generated proposal.
+        A CLI backend is permitted only when a separately validated specialist
+        request recreates this exact bot through the approved Claude-via-Ollama
+        profile. Generic model-generated CLI commands remain disallowed.
         """
+        canonical_specialist: Optional[Bot] = None
+        if specialist_request is not None:
+            try:
+                request = SpecialistBlueprintRequest.model_validate(specialist_request)
+                request = request.model_copy(update={"activate": False, "allow_repo_writes": False})
+                canonical_specialist = build_specialist_bot(request)
+            except Exception:
+                return "proposal_specialist_request_invalid"
+            if bot.model_dump(mode="json", exclude_none=True) != canonical_specialist.model_dump(
+                mode="json", exclude_none=True
+            ):
+                return "proposal_specialist_bot_mismatch"
         for backend in list(getattr(bot, "backends", None) or []):
             backend_type = str(getattr(backend, "type", "") or "").strip().lower()
             if backend_type not in _APPROVABLE_PROPOSAL_BACKEND_TYPES:
+                if backend_type == "cli" and canonical_specialist is not None:
+                    continue
                 return f"proposal_backend_type_not_approvable:{backend_type or 'missing'}"
             if str(getattr(backend, "command", "") or "").strip():
                 return "proposal_backend_command_not_allowed"
             credential_ref = str(getattr(backend, "api_key_ref", "") or "").strip()
-            normalized_ref = credential_ref.lower()
-            if normalized_ref.startswith(_DIRECT_CREDENTIAL_PREFIXES) or "=" in credential_ref or any(
-                char.isspace() for char in credential_ref
-            ):
+            if credential_ref and not is_safe_credential_reference(credential_ref):
                 return "proposal_direct_credential_not_allowed"
         return None
 
@@ -1781,6 +2014,7 @@ class PlatformAISessionRuntime:
         session: Dict[str, Any],
         payload: Dict[str, Any],
         rationale: str = "",
+        specialist_request: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Persist a bounded bot configuration for individual operator approval."""
         if self._bot_registry is None:
@@ -1789,7 +2023,16 @@ class PlatformAISessionRuntime:
             proposed_bot = Bot.model_validate(payload)
         except Exception as exc:
             return {"ok": False, "detail": f"invalid_bot_payload:{exc}"}
-        safety_error = self._proposal_bot_safety_error(proposed_bot)
+        proposed_bot, project_error = await self._resolve_bot_project_binding(
+            session=session,
+            bot=proposed_bot,
+        )
+        if project_error or proposed_bot is None:
+            return {"ok": False, "detail": project_error or "project_binding_invalid"}
+        safety_error = self._proposal_bot_safety_error(
+            proposed_bot,
+            specialist_request=specialist_request,
+        )
         if safety_error:
             return {"ok": False, "detail": safety_error}
 
@@ -1832,6 +2075,7 @@ class PlatformAISessionRuntime:
                 "proposal_kind": "bot_configuration",
                 "action": "upsert_bot",
                 "bot": proposed_bot.model_dump(mode="json", exclude_none=True),
+                "specialist_request": specialist_request,
             },
             rationale=str(rationale or "").strip() or "Platform AI proposed a bounded bot configuration.",
             expected_effect="Create or update a disabled bot after individual operator approval.",
@@ -1864,6 +2108,195 @@ class PlatformAISessionRuntime:
             "proposal_only": True,
             "proposal_id": proposal["id"],
             "bot_id": safe_id,
+        }
+
+    async def _create_specialist_bot_configuration_proposal(
+        self,
+        *,
+        session_id: str,
+        session: Dict[str, Any],
+        payload: Dict[str, Any],
+        rationale: str = "",
+    ) -> Dict[str, Any]:
+        """Build a proposal from the specialist catalog, never model-supplied commands.
+
+        Platform AI may choose a specialist and its declarative backend references,
+        but it cannot activate the bot or grant repository writes. The catalog builds
+        the complete prompt, contracts, execution policy, and approved CLI profile.
+        """
+        try:
+            request = SpecialistBlueprintRequest.model_validate(payload)
+        except Exception as exc:
+            return {"ok": False, "detail": f"invalid_specialist_request:{exc}"}
+
+        metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
+        session_project_id = str(metadata.get("project_id") or "").strip()
+        requested_project_id = str(request.project_id or "").strip()
+        if session_project_id and requested_project_id and requested_project_id != session_project_id:
+            await self._store.append_event(
+                session_id,
+                "action_trace",
+                {
+                    "action": "specialist_project_scope_denied",
+                    "session_project_id": session_project_id,
+                    "requested_project_id": requested_project_id,
+                },
+            )
+            return {"ok": False, "detail": "specialist_project_scope_mismatch"}
+
+        project_error = await self._project_binding_error(session_project_id or requested_project_id)
+        if project_error:
+            return {"ok": False, "detail": project_error}
+
+        request = request.model_copy(
+            update={
+                "activate": False,
+                "allow_repo_writes": False,
+                "project_id": session_project_id or requested_project_id or None,
+            }
+        )
+        try:
+            proposed_bot = build_specialist_bot(request)
+        except Exception as exc:
+            return {"ok": False, "detail": f"invalid_specialist_request:{exc}"}
+        return await self._create_bot_configuration_proposal(
+            session_id=session_id,
+            session=session,
+            payload=proposed_bot.model_dump(mode="json", exclude_none=True),
+            rationale=rationale or f"Platform AI proposed the {request.kind} specialist from the approved catalog.",
+            specialist_request=request.model_dump(mode="json", exclude_none=True),
+        )
+
+    async def _create_schedule_configuration_proposal(
+        self,
+        *,
+        session_id: str,
+        session: Dict[str, Any],
+        payload: Dict[str, Any],
+        rationale: str = "",
+    ) -> Dict[str, Any]:
+        """Draft one paused, project-bound direct-bot schedule for operator approval."""
+        if self._agent_schedule_engine is None:
+            return {"ok": False, "detail": "schedule_engine_unavailable"}
+        if not isinstance(payload, dict):
+            return {"ok": False, "detail": "invalid_schedule_payload"}
+
+        metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
+        session_project_id = str(metadata.get("project_id") or "").strip()
+        requested_project_id = str(payload.get("project_id") or "").strip()
+        if not session_project_id:
+            return {"ok": False, "detail": "schedule_project_scope_required"}
+        if requested_project_id and requested_project_id != session_project_id:
+            return {"ok": False, "detail": "schedule_project_scope_mismatch"}
+        project_error = await self._project_binding_error(session_project_id)
+        if project_error:
+            return {"ok": False, "detail": project_error}
+        if str(payload.get("assignment_pm_bot_id") or "").strip() or str(payload.get("conversation_id") or "").strip():
+            return {"ok": False, "detail": "schedule_pipeline_not_allowed"}
+        requested_status = str(payload.get("status") or "").strip().lower()
+        if requested_status and requested_status != "paused":
+            return {"ok": False, "detail": "schedule_proposal_status_must_be_paused"}
+        if "node_overrides" in payload:
+            return {"ok": False, "detail": "schedule_node_overrides_not_allowed"}
+        raw_metadata = payload.get("metadata")
+        if raw_metadata is not None and not isinstance(raw_metadata, dict):
+            return {"ok": False, "detail": "invalid_schedule_metadata"}
+        raw_task_payload = payload.get("task_payload")
+        if raw_task_payload is not None and not isinstance(raw_task_payload, dict):
+            return {"ok": False, "detail": "invalid_schedule_task_payload"}
+
+        source_metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
+        proposed_metadata: Dict[str, Any] = {
+            "mutation_safe": True,
+            "overlap_policy": "forbid",
+            "platform_ai_proposal": True,
+        }
+        for key in ("connection_operation", "system_payload_source", "system_payload_sources"):
+            if key in source_metadata:
+                proposed_metadata[key] = copy.deepcopy(source_metadata[key])
+        schedule_payload = {
+            "name": str(payload.get("name") or "").strip()[:120],
+            "status": "paused",
+            "cron_expression": str(payload.get("cron_expression") or "").strip(),
+            "timezone": str(payload.get("timezone") or "UTC").strip() or "UTC",
+            "prompt": str(payload.get("prompt") or "").strip()[:4000],
+            "target_bot_id": str(payload.get("target_bot_id") or "").strip() or None,
+            "project_id": session_project_id,
+            "task_payload": copy.deepcopy(raw_task_payload) if isinstance(raw_task_payload, dict) else {},
+            "retry_max": 1,
+            "retry_backoff_seconds": 60,
+            "overlap_policy": "forbid",
+            "metadata": proposed_metadata,
+        }
+        try:
+            self._agent_schedule_engine.validate_schedule_payload(schedule_payload)
+        except Exception as exc:
+            return {"ok": False, "detail": f"invalid_schedule_payload:{exc}"}
+        duplicate, duplicate_error = await self._find_duplicate_schedule_configuration(schedule_payload)
+        if duplicate_error:
+            return {"ok": False, "detail": duplicate_error}
+        if duplicate is not None:
+            return {
+                "ok": False,
+                "detail": "schedule_duplicate_exists",
+                "proposal_only": True,
+                "existing_schedule_id": duplicate["schedule_id"],
+                "existing_schedule_status": duplicate["status"],
+            }
+
+        target_bot_id = str(schedule_payload.get("target_bot_id") or "").strip()
+        action_record = await self._create_action_record(
+            session_id,
+            action_type="schedule_configuration_proposal",
+            target_type="schedule",
+            target_id=target_bot_id,
+            rationale=str(rationale or "").strip() or "Platform AI proposed a paused recurring schedule.",
+            snapshot={"target_bot_id": target_bot_id, "proposed_schedule": schedule_payload},
+        )
+        proposal = await self._store.create_patch_proposal(
+            session_id,
+            action_id=action_record["id"],
+            target_config=f"schedule:{target_bot_id}:configuration",
+            before_state={"exists": False, "project_id": session_project_id},
+            after_state={
+                "proposal_kind": "schedule_configuration",
+                "action": "create_schedule",
+                "schedule": schedule_payload,
+            },
+            rationale=str(rationale or "").strip() or "Platform AI proposed a paused recurring schedule.",
+            expected_effect=(
+                "Create a paused schedule after individual operator approval; activation and dispatch remain separate "
+                "operator-controlled actions."
+            ),
+            validation_steps=[
+                "validate_schedule_schema",
+                "validate_project_scope",
+                "validate_autonomy_safety",
+                "preserve_paused_status",
+            ],
+            rollback_note="Delete the paused schedule through the direct operator controls after review.",
+        )
+        await self._store.update_action(
+            action_record["id"],
+            status="proposed",
+            state_delta_summary=f"Awaiting operator review for a paused schedule targeting {target_bot_id}.",
+        )
+        await self._store.append_event(
+            session_id,
+            "action_trace",
+            {
+                "action": "schedule_configuration_proposed",
+                "proposal_id": proposal["id"],
+                "target_bot_id": target_bot_id,
+                "project_id": session_project_id,
+            },
+        )
+        return {
+            "ok": False,
+            "detail": "schedule_configuration_proposal_required",
+            "proposal_only": True,
+            "proposal_id": proposal["id"],
+            "target_bot_id": target_bot_id,
         }
 
     def _mode_mutation_policy(self, *, mode: str, metadata: Dict[str, Any]) -> Dict[str, bool]:
@@ -1986,6 +2419,12 @@ class PlatformAISessionRuntime:
             bot = Bot.model_validate(payload)
         except Exception as exc:
             return {"ok": False, "detail": f"invalid_bot_payload:{exc}"}
+        bot, project_error = await self._resolve_bot_project_binding(
+            session=session,
+            bot=bot,
+        )
+        if project_error or bot is None:
+            return {"ok": False, "detail": project_error or "project_binding_invalid"}
         safe_id = str(bot.id or "").strip()
         if not safe_id:
             return {"ok": False, "detail": "bot_id_missing"}
@@ -2196,6 +2635,46 @@ class PlatformAISessionRuntime:
             action = str(directive.get("platform_ai_action") or directive.get("action") or "").strip().lower()
             if not action and self._looks_like_bot_payload(directive):
                 action = "upsert_bot"
+            if action == "propose_specialist_bot":
+                if mode != "bot_creator":
+                    result = {
+                        "ok": False,
+                        "detail": "specialist_proposal_requires_bot_creator_mode",
+                        "proposal_only": True,
+                    }
+                else:
+                    specialist_payload = (
+                        directive.get("specialist")
+                        if isinstance(directive.get("specialist"), dict)
+                        else directive.get("blueprint")
+                        if isinstance(directive.get("blueprint"), dict)
+                        else {}
+                    )
+                    result = await self._create_specialist_bot_configuration_proposal(
+                        session_id=session_id,
+                        session=session,
+                        payload=specialist_payload,
+                        rationale=str(directive.get("rationale") or directive.get("reason") or "").strip(),
+                    )
+                actions_taken.append({"action": "propose_specialist_bot", "result": result})
+                continue
+            if action == "propose_schedule":
+                if mode != "bot_creator":
+                    result = {
+                        "ok": False,
+                        "detail": "schedule_proposal_requires_bot_creator_mode",
+                        "proposal_only": True,
+                    }
+                else:
+                    schedule_payload = directive.get("schedule") if isinstance(directive.get("schedule"), dict) else {}
+                    result = await self._create_schedule_configuration_proposal(
+                        session_id=session_id,
+                        session=session,
+                        payload=schedule_payload,
+                        rationale=str(directive.get("rationale") or directive.get("reason") or "").strip(),
+                    )
+                actions_taken.append({"action": "propose_schedule", "result": result})
+                continue
             if action in _CONFIGURATION_MUTATION_ACTIONS:
                 if action == "upsert_bot":
                     bot_payload = directive.get("bot") if isinstance(directive.get("bot"), dict) else directive
@@ -4765,6 +5244,97 @@ class PlatformAISessionRuntime:
     async def list_patch_proposals(self, session_id: str, *, limit: int = 50) -> List[Dict[str, Any]]:
         return await self._store.list_patch_proposals(session_id, limit=limit)
 
+    async def _preflight_schedule_configuration_proposal(
+        self,
+        session_id: str,
+        proposal: Dict[str, Any],
+        after_state: Dict[str, Any],
+        *,
+        operator_id: Optional[str],
+    ) -> Dict[str, Any]:
+        preflight: Dict[str, Any] = {
+            "version": 1,
+            "checked_at": _now(),
+            "proposal_kind": "schedule_configuration",
+            "schema_valid": False,
+            "policy_errors": [],
+            "safety_error": None,
+            "runtime_readiness": {
+                "deferred": True,
+                "reason": "schedule remains paused; readiness is required again before activation or manual dispatch",
+            },
+            "ready_for_operator_review": False,
+            "manual_activation_required": True,
+            "valid_for_seconds": _PROPOSAL_PREFLIGHT_TTL_SECONDS,
+        }
+        schedule_payload = after_state.get("schedule") if isinstance(after_state.get("schedule"), dict) else {}
+        if not schedule_payload:
+            preflight["policy_errors"] = ["invalid_proposed_schedule"]
+            return await self._record_proposal_preflight(
+                session_id,
+                proposal,
+                after_state,
+                preflight,
+                operator_id=operator_id,
+            )
+
+        session = await self._store.get_session(session_id)
+        metadata = session.get("metadata") if isinstance((session or {}).get("metadata"), dict) else {}
+        session_project_id = str(metadata.get("project_id") or "").strip()
+        schedule_project_id = str(schedule_payload.get("project_id") or "").strip()
+        if not session_project_id or schedule_project_id != session_project_id:
+            preflight["policy_errors"] = ["schedule_project_scope_mismatch"]
+        project_error = await self._project_binding_error(session_project_id or schedule_project_id)
+        if project_error:
+            preflight["policy_errors"].append(project_error)
+        if str(schedule_payload.get("status") or "").strip().lower() != "paused":
+            preflight["policy_errors"].append("schedule_proposal_status_must_be_paused")
+        if self._agent_schedule_engine is None:
+            preflight["policy_errors"].append("schedule_engine_unavailable")
+        else:
+            try:
+                normalized_schedule = self._agent_schedule_engine.validate_schedule_payload(schedule_payload)
+                preflight["schema_valid"] = True
+                duplicate, duplicate_error = await self._find_duplicate_schedule_configuration(normalized_schedule)
+                if duplicate_error:
+                    preflight["policy_errors"].append(duplicate_error)
+                elif duplicate is not None:
+                    preflight["policy_errors"].append("schedule_duplicate_exists")
+                    preflight["existing_schedule_id"] = duplicate["schedule_id"]
+                    preflight["existing_schedule_status"] = duplicate["status"]
+            except Exception as exc:
+                preflight["policy_errors"].append(f"invalid_schedule_payload:{exc}")
+        preflight["target_bot_id"] = str(schedule_payload.get("target_bot_id") or "").strip()
+        preflight["configuration_hash"] = self._compute_state_hash(schedule_payload)
+
+        if not preflight["policy_errors"]:
+            if self._bot_registry is None:
+                preflight["policy_errors"].append("bot_registry_unavailable")
+            else:
+                try:
+                    await require_schedule_autonomy_safety(
+                        schedule_payload,
+                        bot_registry=self._bot_registry,
+                        only_when_active=False,
+                    )
+                except ScheduleAutonomySafetyError as exc:
+                    preflight["safety_error"] = f"{exc.reason_code}: {exc.message}"
+                except Exception:
+                    preflight["safety_error"] = "schedule_autonomy_safety_unavailable"
+
+        preflight["ready_for_operator_review"] = bool(
+            preflight["schema_valid"]
+            and not preflight["policy_errors"]
+            and not preflight["safety_error"]
+        )
+        return await self._record_proposal_preflight(
+            session_id,
+            proposal,
+            after_state,
+            preflight,
+            operator_id=operator_id,
+        )
+
     async def preflight_patch_proposal(
         self,
         session_id: str,
@@ -4772,10 +5342,11 @@ class PlatformAISessionRuntime:
         *,
         operator_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Read-only policy and runtime validation for one pending bot proposal.
+        """Read-only policy and runtime validation for one pending proposal.
 
-        This intentionally validates an enabled in-memory copy. Proposals are kept
-        disabled until a separate operator-controlled approval flow applies them.
+        Bot proposals validate an enabled in-memory copy while remaining disabled.
+        Schedule proposals remain paused until a separate operator-controlled
+        approval flow applies them.
         """
         proposal = await self._store.get_patch_proposal(proposal_id)
         if proposal is None:
@@ -4786,7 +5357,15 @@ class PlatformAISessionRuntime:
             return {"status": "error", "detail": "proposal_not_pending", "proposal": proposal}
 
         after_state = proposal.get("after_state") if isinstance(proposal.get("after_state"), dict) else {}
-        if str(after_state.get("proposal_kind") or "").strip() != "bot_configuration":
+        proposal_kind = str(after_state.get("proposal_kind") or "").strip()
+        if proposal_kind == "schedule_configuration":
+            return await self._preflight_schedule_configuration_proposal(
+                session_id,
+                proposal,
+                after_state,
+                operator_id=operator_id,
+            )
+        if proposal_kind != "bot_configuration":
             return {"status": "blocked", "detail": "proposal_preflight_not_supported", "proposal": proposal}
 
         preflight: Dict[str, Any] = {
@@ -4816,9 +5395,39 @@ class PlatformAISessionRuntime:
 
         preflight["schema_valid"] = True
         preflight["bot_id"] = str(bot.id or "")
+        preflight["configuration_hash"] = self._bot_configuration_proposal_hash(after_state)
+        session = await self._store.get_session(session_id)
+        if session is None:
+            preflight["policy_errors"] = ["session_not_found"]
+            return await self._record_proposal_preflight(
+                session_id,
+                proposal,
+                after_state,
+                preflight,
+                operator_id=operator_id,
+            )
+        bot, project_error = await self._resolve_bot_project_binding(session=session, bot=bot)
+        if project_error or bot is None:
+            preflight["policy_errors"] = [project_error or "project_binding_invalid"]
+            return await self._record_proposal_preflight(
+                session_id,
+                proposal,
+                after_state,
+                preflight,
+                operator_id=operator_id,
+            )
+        preflight["project_id"] = str(bot.project_id or "") or None
         policy_errors = validate_bot_configuration(bot)
         preflight["policy_errors"] = policy_errors
-        safety_error = self._proposal_bot_safety_error(bot)
+        specialist_request = (
+            after_state.get("specialist_request")
+            if isinstance(after_state.get("specialist_request"), dict)
+            else None
+        )
+        safety_error = self._proposal_bot_safety_error(
+            bot,
+            specialist_request=specialist_request,
+        )
         preflight["safety_error"] = safety_error or None
         if self._worker_registry is None or self._connection_resolver is None:
             preflight["policy_errors"] = [*policy_errors, "runtime_readiness_unavailable"]
@@ -4874,13 +5483,16 @@ class PlatformAISessionRuntime:
             str(proposal.get("id") or ""),
             updated_after_state,
         )
+        proposal_kind = str(preflight.get("proposal_kind") or "bot_configuration").strip() or "bot_configuration"
+        target_id = str(preflight.get("bot_id") or preflight.get("target_bot_id") or "").strip()
         await self._store.append_event(
             session_id,
             "action_trace",
             {
-                "action": "bot_configuration_proposal_preflight",
+                "action": f"{proposal_kind}_proposal_preflight",
                 "proposal_id": str(proposal.get("id") or ""),
                 "bot_id": str(preflight.get("bot_id") or ""),
+                "target_id": target_id or None,
                 "ready_for_operator_review": bool(preflight.get("ready_for_operator_review")),
                 "operator_id": str(operator_id or "").strip() or None,
             },
@@ -4939,6 +5551,83 @@ class PlatformAISessionRuntime:
                 "detail": "approved_direct_operator_edit_required",
                 "proposal": updated,
             }
+        if str(after_state.get("proposal_kind") or "").strip() == "schedule_configuration":
+            session = await self._store.get_session(session_id)
+            if session is None:
+                return {"status": "error", "detail": "session_not_found"}
+            authorization = await self._authorize_configuration_proposal_approval(
+                session,
+                requested_by=operator_id,
+            )
+            if not bool(authorization.get("ok")):
+                return {"status": "blocked", "detail": authorization.get("detail"), "proposal": proposal}
+            preflight = after_state.get("preflight") if isinstance(after_state.get("preflight"), dict) else {}
+            if not bool(preflight.get("ready_for_operator_review")):
+                return {"status": "blocked", "detail": "proposal_preflight_required", "proposal": proposal}
+            if not _proposal_preflight_is_fresh(preflight):
+                return {"status": "blocked", "detail": "proposal_preflight_stale", "proposal": proposal}
+            schedule_payload = after_state.get("schedule") if isinstance(after_state.get("schedule"), dict) else {}
+            if not schedule_payload:
+                return {"status": "blocked", "detail": "invalid_proposed_schedule", "proposal": proposal}
+            if str(preflight.get("configuration_hash") or "") != self._compute_state_hash(schedule_payload):
+                return {"status": "blocked", "detail": "proposal_preflight_mismatch", "proposal": proposal}
+            metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
+            session_project_id = str(metadata.get("project_id") or "").strip()
+            if not session_project_id or str(schedule_payload.get("project_id") or "").strip() != session_project_id:
+                return {"status": "blocked", "detail": "schedule_project_scope_mismatch", "proposal": proposal}
+            if str(schedule_payload.get("status") or "").strip().lower() != "paused":
+                return {"status": "blocked", "detail": "schedule_proposal_status_must_be_paused", "proposal": proposal}
+            if self._agent_schedule_engine is None:
+                return {"status": "blocked", "detail": "schedule_engine_unavailable", "proposal": proposal}
+            if self._bot_registry is None:
+                return {"status": "blocked", "detail": "bot_registry_unavailable", "proposal": proposal}
+            try:
+                normalized_schedule = self._agent_schedule_engine.validate_schedule_payload(schedule_payload)
+                await require_schedule_autonomy_safety(
+                    normalized_schedule,
+                    bot_registry=self._bot_registry,
+                    only_when_active=False,
+                )
+                duplicate, duplicate_error = await self._find_duplicate_schedule_configuration(normalized_schedule)
+                if duplicate_error:
+                    return {"status": "blocked", "detail": duplicate_error, "proposal": proposal}
+                if duplicate is not None:
+                    return {
+                        "status": "blocked",
+                        "detail": "schedule_duplicate_exists",
+                        "proposal": proposal,
+                        "existing_schedule_id": duplicate["schedule_id"],
+                        "existing_schedule_status": duplicate["status"],
+                    }
+                schedule = await self._agent_schedule_engine.create_schedule(normalized_schedule)
+            except ScheduleAutonomySafetyError as exc:
+                return {"status": "blocked", "detail": exc.reason_code, "proposal": proposal}
+            except Exception as exc:
+                return {"status": "blocked", "detail": f"schedule_creation_failed:{exc}", "proposal": proposal}
+
+            updated = await self._store.update_patch_proposal_status(proposal_id, "applied")
+            action_id = str(proposal.get("action_id") or "").strip()
+            if action_id:
+                await self._store.update_action(
+                    action_id,
+                    status="completed",
+                    output_snapshot_hash=self._compute_state_hash(schedule),
+                    state_delta_summary=f"Approved paused schedule {schedule.get('id')} created for {schedule.get('target_bot_id')}.",
+                )
+            await self._store.append_event(
+                session_id,
+                "action_trace",
+                {
+                    "action": "schedule_configuration_proposal_applied",
+                    "proposal_id": proposal_id,
+                    "schedule_id": schedule.get("id"),
+                    "target_bot_id": schedule.get("target_bot_id"),
+                    "project_id": schedule.get("project_id"),
+                    "operator_id": str(operator_id or "").strip() or None,
+                    "notes": str(notes or "").strip() or None,
+                },
+            )
+            return {"status": "applied", "proposal": updated, "schedule": schedule}
         if str(after_state.get("proposal_kind") or "").strip() == "bot_configuration":
             session = await self._store.get_session(session_id)
             if session is None:
@@ -4955,11 +5644,26 @@ class PlatformAISessionRuntime:
             if not _proposal_preflight_is_fresh(preflight):
                 return {"status": "blocked", "detail": "proposal_preflight_stale", "proposal": proposal}
             bot_payload = after_state.get("bot") if isinstance(after_state.get("bot"), dict) else {}
+            if str(preflight.get("configuration_hash") or "") != self._bot_configuration_proposal_hash(after_state):
+                return {"status": "blocked", "detail": "proposal_preflight_mismatch", "proposal": proposal}
             try:
                 bot = Bot.model_validate(bot_payload)
             except Exception as exc:
                 return {"status": "blocked", "detail": f"invalid_proposed_bot:{exc}", "proposal": proposal}
-            safety_error = self._proposal_bot_safety_error(bot)
+            specialist_request = (
+                after_state.get("specialist_request")
+                if isinstance(after_state.get("specialist_request"), dict)
+                else None
+            )
+            bot, project_error = await self._resolve_bot_project_binding(session=session, bot=bot)
+            if project_error or bot is None:
+                return {"status": "blocked", "detail": project_error or "project_binding_invalid", "proposal": proposal}
+            if str(preflight.get("project_id") or "") != str(bot.project_id or ""):
+                return {"status": "blocked", "detail": "proposal_preflight_project_scope_mismatch", "proposal": proposal}
+            safety_error = self._proposal_bot_safety_error(
+                bot,
+                specialist_request=specialist_request,
+            )
             if safety_error:
                 return {"status": "blocked", "detail": safety_error, "proposal": proposal}
             if self._bot_registry is None:

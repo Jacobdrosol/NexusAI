@@ -122,6 +122,42 @@ def test_render_worker_fleet_outputs_compose_worker_config_and_bot(tmp_path):
     ]
 
 
+def test_render_worker_fleet_expands_guarded_replica_templates(tmp_path):
+    renderer = _load_renderer()
+    profile = _profile(tmp_path / "workers.yaml")
+    profile_data = yaml.safe_load(profile.read_text(encoding="utf-8"))
+    profile_data["fleet"]["max_workers"] = 4
+    profile_data["workers"][0]["id"] = "content-repair"
+    profile_data["workers"][0]["name"] = "Content Worker"
+    profile_data["workers"][0]["service"] = "worker-content"
+    profile_data["workers"][0]["bot"]["id"] = "content-worker-bot"
+    profile_data["workers"][0]["replicas"] = 3
+    profile.write_text(yaml.safe_dump(profile_data, sort_keys=False), encoding="utf-8")
+
+    out = tmp_path / "runtime"
+    summary = renderer.render(
+        profile,
+        out,
+        {
+            "CONTROL_PLANE_API_TOKEN": "control-token",
+            "OLLAMA_API_KEY": "ollama-token",
+        },
+    )
+
+    assert [item["id"] for item in summary["workers"]] == [
+        "content-repair-01",
+        "content-repair-02",
+        "content-repair-03",
+    ]
+    compose = yaml.safe_load((out / "docker-compose.worker-node.generated.yml").read_text())
+    assert set(compose["services"]) == {
+        "worker-content-01",
+        "worker-content-02",
+        "worker-content-03",
+    }
+    assert json.loads((out / "bots" / "content-repair-01.bot.json").read_text())["id"] == "content-worker-bot-01"
+
+
 def test_render_worker_fleet_propagates_declared_worker_request_token(tmp_path):
     renderer = _load_renderer()
     profile = _profile(tmp_path / "workers.yaml")
@@ -451,6 +487,43 @@ def test_render_worker_fleet_merges_validated_resource_limits(tmp_path):
         "memory_reservation": "1g",
         "pids_limit": 384,
     }
+
+
+def test_render_worker_fleet_profiles_disabled_workers_and_excludes_them_from_budget(tmp_path):
+    renderer = _load_renderer()
+    profile = _profile(tmp_path / "workers.yaml")
+    profile_data = yaml.safe_load(profile.read_text(encoding="utf-8"))
+    profile_data["fleet"]["resource_budget"] = {"cpus": "0.25", "memory": "128m"}
+    profile_data["workers"][0]["enabled"] = False
+    profile_data["workers"][0]["bot"]["enabled"] = False
+    profile.write_text(yaml.safe_dump(profile_data, sort_keys=False), encoding="utf-8")
+
+    out = tmp_path / "runtime"
+    renderer.render(
+        profile,
+        out,
+        {"CONTROL_PLANE_API_TOKEN": "control-token", "OLLAMA_API_KEY": "ollama-token"},
+    )
+
+    compose = yaml.safe_load((out / "docker-compose.worker-node.generated.yml").read_text())
+    assert compose["services"]["worker-content"]["profiles"] == ["staged"]
+    worker_cfg = yaml.safe_load((out / "workers" / "content-repair-01.yaml").read_text())
+    assert worker_cfg["enabled"] is False
+
+
+def test_render_worker_fleet_rejects_enabled_workers_that_exceed_resource_budget(tmp_path):
+    renderer = _load_renderer()
+    profile = _profile(tmp_path / "workers.yaml")
+    profile_data = yaml.safe_load(profile.read_text(encoding="utf-8"))
+    profile_data["fleet"]["resource_budget"] = {"cpus": "0.5", "memory": "512m"}
+    profile.write_text(yaml.safe_dump(profile_data, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="resource_budget"):
+        renderer.render(
+            profile,
+            tmp_path / "runtime",
+            {"CONTROL_PLANE_API_TOKEN": "control-token", "OLLAMA_API_KEY": "ollama-token"},
+        )
 
 
 def test_render_worker_fleet_deduplicates_identical_image_builds(tmp_path):

@@ -14,8 +14,18 @@ import httpx
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 
+from control_plane.browser_action_approvals import browser_action_payload_digest
+from control_plane.connection_action_approvals import (
+    connection_action_key,
+    connection_action_payload_digest,
+)
 from control_plane.connections.resolver import ConnectionResolver
-from control_plane.worker_probe import WorkerProbeError, worker_base_url
+from control_plane.worker_probe import (
+    WorkerProbeError,
+    autonomous_worker_probe_max_age_seconds,
+    worker_base_url,
+)
+from shared import connection_runtime, connection_secrets
 from shared.bot_policy import bot_allows_repo_output, bot_execution_policy
 from shared.exceptions import BackendError, BotNotFoundError, NoViableBackendError
 from shared.worker_capabilities import required_worker_tools, worker_missing_tools
@@ -105,15 +115,15 @@ def _is_autonomous_schedule_task(task: "Task | None") -> bool:
     """Return whether a task originated from an agent schedule."""
     if task is None or task.metadata is None:
         return False
-    return str(getattr(task.metadata, "source", "") or "").strip().lower() == "agent_schedule"
-
-
-def _autonomous_probe_max_age_seconds() -> float:
-    try:
-        value = float(os.environ.get("NEXUSAI_AUTONOMOUS_WORKER_PROBE_MAX_AGE_SECONDS", "300"))
-    except (TypeError, ValueError):
-        value = 300.0
-    return min(max(value, 30.0), 3600.0)
+    source = str(getattr(task.metadata, "source", "") or "").strip().lower()
+    if source == "agent_schedule":
+        return True
+    # Task retries retain the original scheduler envelope in their persisted payload
+    # while changing metadata.source to auto_retry. Keep that envelope out of strict
+    # browser request schemas without broadening browser authorization.
+    if source != "auto_retry" or not isinstance(task.payload, dict):
+        return False
+    return str(task.payload.get("source") or "").strip().lower() == "agent_schedule"
 
 
 def _mark_test_payload(payload: Any) -> Any:
@@ -1380,11 +1390,6 @@ def _static_connection_context_prompt(rows: list[Any], config: dict[str, Any]) -
     if not target_rows:
         return ""
 
-    try:
-        from dashboard.connections_service import parse_openapi_actions
-    except Exception:
-        parse_openapi_actions = None  # type: ignore[assignment]
-
     parts: list[str] = [
         "Attached connection schemas:",
         "Use these attached connection definitions as authoritative for field names, nesting, and allowed JSON shapes.",
@@ -1410,6 +1415,8 @@ def _static_connection_context_prompt(rows: list[Any], config: dict[str, Any]) -
             except Exception:
                 connection_config = {}
         if isinstance(connection_config, dict):
+            connection_config = connection_secrets.mask_connection_config(connection_config)
+        if isinstance(connection_config, dict):
             if row_kind == "http":
                 base_url = str(connection_config.get("base_url") or "").strip()
                 if base_url:
@@ -1419,9 +1426,9 @@ def _static_connection_context_prompt(rows: list[Any], config: dict[str, Any]) -
                 section.append(f"Readonly: {'true' if readonly else 'false'}")
 
         schema_text = str(_connection_row_value(row, "schema_text", "") or "").strip()
-        if include_actions and parse_openapi_actions and row_kind == "http" and schema_text:
+        if include_actions and row_kind == "http" and schema_text:
             try:
-                actions = parse_openapi_actions(schema_text)
+                actions = connection_runtime.parse_openapi_actions(schema_text)
             except Exception:
                 actions = []
             if actions:
@@ -1469,11 +1476,6 @@ def _dynamic_connection_fetch_prompt(rows: list[Any], config: dict[str, Any], pa
     if connection is None:
         return ""
 
-    try:
-        from dashboard.connections_service import resolve_auth_payload, test_http_connection
-    except Exception:
-        return ""
-
     raw_config = _connection_row_value(connection, "config", None)
     if isinstance(raw_config, dict):
         connection_config = raw_config
@@ -1482,12 +1484,14 @@ def _dynamic_connection_fetch_prompt(rows: list[Any], config: dict[str, Any], pa
             connection_config = json.loads(str(_connection_row_value(connection, "config_json", "{}") or "{}"))
         except Exception:
             connection_config = {}
+    if isinstance(connection_config, dict):
+        connection_config = connection_secrets.resolve_connection_config(connection_config)
     raw_auth = _connection_row_value(connection, "auth", None)
     if isinstance(raw_auth, dict):
-        auth_payload = resolve_auth_payload(raw_auth)
+        auth_payload = connection_secrets.resolve_auth_payload(raw_auth)
     else:
         try:
-            auth_payload = resolve_auth_payload(json.loads(str(_connection_row_value(connection, "auth_json", "{}") or "{}")))
+            auth_payload = connection_secrets.resolve_auth_payload(json.loads(str(_connection_row_value(connection, "auth_json", "{}") or "{}")))
         except Exception:
             auth_payload = {}
     schema_text = str(_connection_row_value(connection, "schema_text", "") or "")
@@ -1528,7 +1532,7 @@ def _dynamic_connection_fetch_prompt(rows: list[Any], config: dict[str, Any], pa
 
     sections: list[str] = []
     for label, action in actions:
-        result = test_http_connection(
+        result = connection_runtime.test_http_connection(
             config=connection_config if isinstance(connection_config, dict) else {},
             auth=auth_payload if isinstance(auth_payload, dict) else {},
             schema_text=schema_text,
@@ -1779,7 +1783,7 @@ def _repo_output_policy_prompt_suffix(bot: Any, payload: Any = None) -> str:
 
 
 def _prepare_payload_for_backend(bot: Any, backend: BackendConfig, payload: Any, *, task: Task | None = None) -> Any:
-    if backend.type == "browser":
+    if backend.type in {"browser", "documentation"}:
         if _is_autonomous_schedule_task(task) and isinstance(payload, dict):
             schedule_envelope_fields = {"instruction", "source", "schedule_id", "project_id", "node_overrides"}
             return {key: value for key, value in payload.items() if key not in schedule_envelope_fields}
@@ -2019,6 +2023,8 @@ class Scheduler:
         project_registry: Any = None,
         connection_resolver: Any = None,
         worker_probe_store: Any = None,
+        browser_action_approval_store: Any = None,
+        connection_action_approval_store: Any = None,
     ) -> None:
         self.bot_registry = bot_registry
         self.worker_registry = worker_registry
@@ -2027,6 +2033,8 @@ class Scheduler:
         self.project_registry = project_registry
         self._connection_resolver = connection_resolver or ConnectionResolver()
         self._worker_probe_store = worker_probe_store
+        self._browser_action_approval_store = browser_action_approval_store
+        self._connection_action_approval_store = connection_action_approval_store
         self._inflight_by_worker: dict[str, int] = {}
         self._latency_ema_ms: dict[str, float] = {}
         self._latency_alpha = float(os.environ.get("NEXUSAI_WORKER_LATENCY_EMA_ALPHA", "0.30"))
@@ -2064,7 +2072,11 @@ class Scheduler:
         return self._execution_provenance_by_task.pop(str(task_id or ""), None)
 
     def _worker_capacity_limit(self, worker: Worker, backend: BackendConfig) -> int:
-        if str(getattr(backend, "type", "") or "").strip().lower() == "local_llm":
+        if str(getattr(backend, "type", "") or "").strip().lower() in {
+            "browser",
+            "documentation",
+            "local_llm",
+        }:
             return 1
         return 2**31 - 1
 
@@ -2586,6 +2598,7 @@ class Scheduler:
             )
         messages = _messages_for_ollama(messages)
         params_dict = backend.params.model_dump(exclude_none=True) if backend.params else {}
+        response_format = params_dict.pop("response_format", None)
         base_body: dict = {
             "messages": messages,
             "stream": False,
@@ -2593,6 +2606,8 @@ class Scheduler:
             "think": False,
             "options": _ollama_options(params_dict),
         }
+        if response_format == "json":
+            base_body["format"] = "json"
         if tools:
             base_body["tools"] = tools
 
@@ -2836,7 +2851,7 @@ class Scheduler:
         raise NoViableBackendError(_backend_failure_message(task.id, last_error, attempts)) from last_error
 
     async def _dispatch_backend(self, backend: BackendConfig, payload: Any, task: Task | None = None) -> Any:
-        if _is_non_mutating_test_task(task) and backend.type in {"cli", "browser", "custom"}:
+        if _is_non_mutating_test_task(task) and backend.type in {"cli", "browser", "documentation", "custom"}:
             raise BackendError(
                 "Test-mode tasks do not execute CLI, browser, or custom backends; configure an LLM backend for analysis."
             )
@@ -2881,6 +2896,11 @@ class Scheduler:
             await self._require_fresh_autonomous_worker_probe(worker, task)
             self._record_execution_provenance(task, backend, worker=worker)
             return await self._dispatch_browser_inspection(worker, backend, safe_payload, task=task)
+        elif backend.type == "documentation":
+            worker = await self._resolve_documentation_worker(backend, task=task)
+            await self._require_fresh_autonomous_worker_probe(worker, task)
+            self._record_execution_provenance(task, backend, worker=worker)
+            return await self._dispatch_documentation_write(worker, backend, safe_payload, task=task)
         elif backend.type == "custom":
             self._record_execution_provenance(task, backend)
             return await self._dispatch_custom_backend(backend, safe_payload, task=task)
@@ -2903,25 +2923,100 @@ class Scheduler:
             raise BackendError("http_connection backend requires a task context")
         if not isinstance(payload, dict):
             raise BackendError("http_connection backend requires a JSON object payload")
+        await self._authorize_http_connection_actions(payload, task)
         return await asyncio.to_thread(self._run_http_connection_backend_sync, payload, task.bot_id)
 
-    def _run_http_connection_backend_sync(self, payload: dict[str, Any], bot_id: str) -> dict[str, Any]:
-        from dashboard.connections_service import resolve_auth_payload, test_http_connection
+    @staticmethod
+    def _connection_actions_from_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
+        raw_actions = payload.get("connection_actions")
+        if isinstance(raw_actions, dict):
+            return [raw_actions]
+        if isinstance(raw_actions, list):
+            return [item for item in raw_actions if isinstance(item, dict)]
+        if isinstance(payload.get("connection_action"), dict):
+            return [payload["connection_action"]]
+        return []
 
+    async def _authorize_http_connection_actions(self, payload: dict[str, Any], task: Task) -> None:
+        """Fail closed for all state-changing OpenAPI actions before dispatch."""
+
+        actions = self._connection_actions_from_payload(payload)
+        if not actions:
+            raise BackendError("http_connection backend requires at least one connection action")
+        connection_ref = payload.get("connection") if isinstance(payload.get("connection"), dict) else {}
+        connection = self._connection_resolver.find_bot_connection(
+            str(task.bot_id),
+            requested_name=str(connection_ref.get("name") or payload.get("connection_name") or "").strip() or None,
+            requested_id=str(connection_ref.get("id") or payload.get("connection_id") or "").strip() or None,
+        )
+        if connection is None:
+            raise BackendError(
+                "Requested bot connection was not found or multiple connections are attached "
+                "without an explicit connection.id/name selector"
+            )
+        if str(connection.get("kind") or "").strip().lower() != "http":
+            raise BackendError("http_connection backend only supports HTTP connections")
+        try:
+            bot = await self.bot_registry.get(task.bot_id)
+        except Exception as exc:
+            raise BackendError(f"Bot {task.bot_id} was not found for connection-action authorization") from exc
+
+        policy = bot_execution_policy(bot)
+        required_approval_keys: list[str] = []
+        for action in actions:
+            declared = connection_runtime.resolve_declared_http_action(
+                str(connection.get("schema_text") or ""),
+                action,
+            )
+            if declared is None:
+                raise BackendError("The requested HTTP connection action is not declared in the attached schema")
+            method = str(declared.get("method") or "").upper()
+            if method not in {"POST", "PUT", "PATCH", "DELETE"}:
+                continue
+            action_key = connection_action_key(
+                connection.get("name"),
+                {"operation_id": declared.get("operation_id")},
+            )
+            if action_key not in policy.connection_action_allowlist:
+                raise BackendError(f"Bot {bot.id} is not authorized for connection mutation {action_key}")
+            if action.get("agent_approval") is not None and (
+                action_key not in policy.connection_action_owner_approval_required
+            ):
+                raise BackendError(
+                    f"{action_key} may only request a remote approval when owner approval is required"
+                )
+            if action_key in policy.connection_action_owner_approval_required:
+                required_approval_keys.append(action_key)
+
+        if not required_approval_keys:
+            return
+        if len(required_approval_keys) != 1:
+            raise BackendError("Only one owner-approved connection mutation is allowed per task")
+        approval_id = str(payload.get("owner_approval_id") or "").strip()
+        if not approval_id:
+            raise BackendError(f"{required_approval_keys[0]} requires a valid, unused owner approval")
+        if self._connection_action_approval_store is None:
+            raise BackendError("Connection action approval service is unavailable")
+        try:
+            connection_action_payload_digest(payload)
+            consumed = await self._connection_action_approval_store.consume(
+                approval_id=approval_id,
+                bot_id=bot.id,
+                action_key=required_approval_keys[0],
+                payload=payload,
+            )
+        except ValueError as exc:
+            raise BackendError("Connection action approval payload is invalid") from exc
+        if not consumed:
+            raise BackendError(f"{required_approval_keys[0]} requires a valid, unused owner approval")
+
+    def _run_http_connection_backend_sync(self, payload: dict[str, Any], bot_id: str) -> dict[str, Any]:
         connection_ref = payload.get("connection") if isinstance(payload.get("connection"), dict) else {}
         requested_name = str(connection_ref.get("name") or payload.get("connection_name") or "").strip()
         requested_id = str(connection_ref.get("id") or payload.get("connection_id") or "").strip()
         continue_on_error = bool(payload.get("continue_on_error", False))
 
-        raw_actions = payload.get("connection_actions")
-        if isinstance(raw_actions, dict):
-            actions = [raw_actions]
-        elif isinstance(raw_actions, list):
-            actions = [item for item in raw_actions if isinstance(item, dict)]
-        elif isinstance(payload.get("connection_action"), dict):
-            actions = [payload["connection_action"]]
-        else:
-            actions = []
+        actions = self._connection_actions_from_payload(payload)
         if not actions:
             raise BackendError("http_connection backend requires at least one connection action")
         connection = self._connection_resolver.find_bot_connection(
@@ -2938,7 +3033,8 @@ class Scheduler:
             raise BackendError("http_connection backend only supports HTTP connections")
 
         config = connection.get("config") if isinstance(connection.get("config"), dict) else {}
-        auth = resolve_auth_payload(connection.get("auth") if isinstance(connection.get("auth"), dict) else {})
+        config = connection_secrets.resolve_connection_config(config)
+        auth = connection_secrets.resolve_auth_payload(connection.get("auth") if isinstance(connection.get("auth"), dict) else {})
         schema_text = str(connection.get("schema_text") or "")
 
         action_results: list[dict[str, Any]] = []
@@ -2949,7 +3045,7 @@ class Scheduler:
 
         for index, action in enumerate(actions):
             op_id = str(action.get("operation_id") or action.get("path") or f"action_{index + 1}").strip()
-            result = test_http_connection(
+            result = connection_runtime.test_http_connection(
                 config=config if isinstance(config, dict) else {},
                 auth=auth if isinstance(auth, dict) else {},
                 schema_text=schema_text,
@@ -3403,6 +3499,7 @@ class Scheduler:
         )
         messages = _messages_for_ollama(messages)
         params_dict = backend.params.model_dump(exclude_none=True) if backend.params else {}
+        response_format = params_dict.pop("response_format", None)
         base_body: dict = {
             "messages": messages,
             "stream": False,
@@ -3410,6 +3507,8 @@ class Scheduler:
             "think": False,
             "options": _ollama_options(params_dict),
         }
+        if response_format == "json":
+            base_body["format"] = "json"
         base_url = os.environ.get("OLLAMA_CLOUD_BASE_URL", "https://ollama.com/api").rstrip("/")
 
         async def _do_chat(client: httpx.AsyncClient, model_name: str) -> Any:
@@ -3766,7 +3865,10 @@ class Scheduler:
         return os.environ.get(default_env_var, "").strip()
 
     async def _validate_model_if_catalog_present(self, backend: BackendConfig) -> None:
-        if backend.type == "browser":
+        if backend.type in {"browser", "documentation"} or (
+            backend.type == "custom"
+            and str(backend.provider or "").strip().lower() == "http_connection"
+        ):
             return
         if not self.model_registry:
             return
@@ -3833,7 +3935,7 @@ class Scheduler:
         if checked.tzinfo is None:
             checked = checked.replace(tzinfo=timezone.utc)
         age_seconds = (datetime.now(timezone.utc) - checked.astimezone(timezone.utc)).total_seconds()
-        if age_seconds < -30 or age_seconds > _autonomous_probe_max_age_seconds():
+        if age_seconds < -30 or age_seconds > autonomous_worker_probe_max_age_seconds():
             raise BackendError(
                 f"Autonomous schedule dispatch blocked: worker {worker.id} probe is stale."
             )
@@ -3880,7 +3982,7 @@ class Scheduler:
     def _worker_supports_backend(self, worker: Worker, backend: BackendConfig) -> bool:
         backend_provider = str(backend.provider or "").strip().lower()
         backend_model = str(backend.model or "").strip()
-        expected_capability_type = "tool" if backend.type == "browser" else "llm"
+        expected_capability_type = "tool" if backend.type in {"browser", "documentation"} else "llm"
         for cap in worker.capabilities:
             if str(cap.type).lower() != expected_capability_type:
                 continue
@@ -3914,6 +4016,149 @@ class Scheduler:
         await self._require_task_worker_tools(worker, task)
         return worker
 
+    async def _resolve_documentation_worker(
+        self, backend: BackendConfig, *, task: Task | None = None
+    ) -> Worker:
+        """Resolve one attested worker for a fixed Docs Hub write contract."""
+
+        if str(backend.provider or "").strip().lower() != "documentation" or str(
+            backend.model or ""
+        ).strip().lower() != "documentation-v1":
+            raise BackendError("Documentation backends must use provider=documentation and model=documentation-v1")
+        if not backend.worker_id:
+            raise BackendError("worker_id is required for documentation backends")
+        try:
+            worker = await self.worker_registry.get(backend.worker_id)
+        except Exception as exc:
+            raise BackendError(f"Worker not found: {backend.worker_id}") from exc
+        if not worker.enabled or worker.status != "online":
+            raise BackendError(f"Worker {worker.id} is not online and enabled")
+        if not self._worker_has_capacity(worker, backend):
+            raise BackendError(
+                f"Worker {worker.id} has no remaining task capacity for backend type {backend.type}"
+            )
+        if not self._worker_supports_backend(worker, backend):
+            raise BackendError(f"Worker {worker.id} does not advertise documentation/documentation-v1")
+        await self._require_task_worker_tools(worker, task)
+        return worker
+
+    async def _consume_required_browser_action_approval(
+        self,
+        *,
+        bot: Any,
+        action_key: str,
+        payload: dict[str, Any],
+    ) -> None:
+        """Consume a one-time owner approval when a bot marks an action as sensitive."""
+
+        policy = bot_execution_policy(bot)
+        required_actions = {
+            str(item or "").strip()
+            for item in policy.browser_action_owner_approval_required
+            if str(item or "").strip()
+        }
+        if action_key not in required_actions:
+            return
+        approval_id = str(payload.get("owner_approval_id") or "").strip()
+        if not approval_id:
+            raise BackendError(f"{action_key} requires a valid, unused owner approval")
+        if self._browser_action_approval_store is None:
+            raise BackendError("Browser action approval service is unavailable")
+        try:
+            # Calculate the digest here as well so malformed payloads fail before any worker request.
+            browser_action_payload_digest(payload)
+            consumed = await self._browser_action_approval_store.consume(
+                approval_id=approval_id,
+                bot_id=bot.id,
+                action_key=action_key,
+                payload=payload,
+            )
+        except ValueError as exc:
+            raise BackendError("Browser action approval payload is invalid") from exc
+        if not consumed:
+            raise BackendError(f"{action_key} requires a valid, unused owner approval")
+
+    @staticmethod
+    def _browser_action_request_body(
+        payload: dict[str, Any], allowed_fields: set[str]
+    ) -> dict[str, Any]:
+        """Keep control-plane approval material out of worker-bound payloads."""
+
+        return {
+            field: payload[field]
+            for field in allowed_fields - {"browser_action", "owner_approval_id"}
+            if field in payload
+        }
+
+    async def _dispatch_documentation_write(
+        self,
+        worker: Worker,
+        backend: BackendConfig,
+        payload: Any,
+        *,
+        task: Task | None,
+    ) -> dict[str, Any]:
+        """Dispatch one allowlisted Markdown create or compare-and-save operation."""
+
+        if task is None:
+            raise BackendError("Documentation writes require a persisted task")
+        if not isinstance(payload, dict):
+            raise BackendError("Documentation writes require a JSON object payload")
+        allowed_fields = {"action", "path", "content", "expectedContentHash"}
+        unexpected_fields = sorted(set(payload) - allowed_fields)
+        if unexpected_fields:
+            raise BackendError(
+                "Documentation write payload contains unsupported fields: " + ", ".join(unexpected_fields)
+            )
+        action = str(payload.get("action") or "").strip().lower()
+        if action not in {"create", "save"}:
+            raise BackendError("Documentation action must be create or save")
+        path = payload.get("path")
+        content = payload.get("content")
+        if not isinstance(path, str) or not path.strip() or not isinstance(content, str):
+            raise BackendError("Documentation writes require a non-empty path and text content")
+        has_expected_hash = "expectedContentHash" in payload
+        if action == "save" and not has_expected_hash:
+            raise BackendError("Documentation save requires expectedContentHash")
+        if action == "create" and has_expected_hash:
+            raise BackendError("Documentation create cannot include expectedContentHash")
+        try:
+            bot = await self.bot_registry.get(task.bot_id)
+        except Exception as exc:
+            raise BackendError(f"Bot {task.bot_id} was not found for documentation authorization") from exc
+        action_key = f"documentation.{action}"
+        if action_key not in bot_execution_policy(bot).documentation_action_allowlist:
+            raise BackendError(f"Bot {bot.id} is not authorized for {action_key}")
+        if not backend.api_key_ref:
+            raise BackendError("Documentation backends require api_key_ref for the worker request token")
+        token = await self._resolve_api_key(backend.api_key_ref, "")
+        if not token:
+            raise BackendError("Documentation worker request token is not configured")
+        try:
+            url = f"{worker_base_url(worker)}/documentation/write"
+        except WorkerProbeError as exc:
+            raise BackendError(f"Worker {worker.id} has an invalid address") from exc
+
+        body = {field: payload[field] for field in allowed_fields if field in payload}
+        self._inflight_by_worker[worker.id] = int(self._inflight_by_worker.get(worker.id, 0)) + 1
+        started = time.perf_counter()
+        async with httpx.AsyncClient(timeout=_worker_timeout()) as client:
+            try:
+                response = await client.post(url, json=body, headers={"X-Nexus-Worker-Token": token})
+                response.raise_for_status()
+                result = response.json()
+                if not isinstance(result, dict):
+                    raise BackendError("Documentation worker returned an invalid write response")
+                return result
+            finally:
+                elapsed_ms = (time.perf_counter() - started) * 1000.0
+                previous = float(self._latency_ema_ms.get(worker.id, self._default_latency_ms))
+                alpha = min(max(self._latency_alpha, 0.01), 1.0)
+                self._latency_ema_ms[worker.id] = (alpha * elapsed_ms) + ((1.0 - alpha) * previous)
+                self._inflight_by_worker[worker.id] = max(
+                    0, int(self._inflight_by_worker.get(worker.id, 1)) - 1
+                )
+
     async def _dispatch_browser_inspection(
         self,
         worker: Worker,
@@ -3928,6 +4173,15 @@ class Scheduler:
             if browser_action == "test_builder":
                 return await self._dispatch_browser_test_builder_action(worker, backend, payload, task=task)
             if browser_action == "question_bank":
+                question_bank_action = str(payload.get("action") or "").strip().lower()
+                if question_bank_action == "create_one":
+                    return await self._dispatch_browser_question_bank_create(
+                        worker, backend, payload, task=task
+                    )
+                if question_bank_action == "export_evidence":
+                    return await self._dispatch_browser_question_bank_evidence_export(
+                        worker, backend, payload, task=task
+                    )
                 return await self._dispatch_browser_question_bank_patch(worker, backend, payload, task=task)
             raise BackendError("Unsupported browser action")
         allowed_fields = {"path", "text_limit", "element_limit"}
@@ -4008,6 +4262,7 @@ class Scheduler:
             "action",
             "mode",
             "confirmation",
+            "owner_approval_id",
             "course_id",
             "lesson_id",
             "title",
@@ -4031,6 +4286,8 @@ class Scheduler:
             raise BackendError("Unsupported Test Builder action")
         if str(payload.get("mode") or "").strip().lower() != "draft":
             raise BackendError("Test Builder actions are limited to draft mode")
+        if not str(payload.get("confirmation") or "").strip():
+            raise BackendError("Test Builder actions require explicit confirmation")
         if task is None:
             raise BackendError("Test Builder actions require a persisted task")
         try:
@@ -4040,6 +4297,11 @@ class Scheduler:
         action_key = f"test_builder.{action}"
         if action_key not in bot_execution_policy(bot).browser_action_allowlist:
             raise BackendError(f"Bot {bot.id} is not authorized for {action_key}")
+        await self._consume_required_browser_action_approval(
+            bot=bot,
+            action_key=action_key,
+            payload=payload,
+        )
         if action == "build_from_banks" and payload.get("acknowledge_attempt_reset") is not True:
             raise BackendError("Building from banks requires explicit attempt-reset acknowledgement")
         if not backend.api_key_ref:
@@ -4052,7 +4314,7 @@ class Scheduler:
         except WorkerProbeError as exc:
             raise BackendError(f"Worker {worker.id} has an invalid address") from exc
 
-        body = {field: payload[field] for field in allowed_fields - {"browser_action"} if field in payload}
+        body = self._browser_action_request_body(payload, allowed_fields)
         self._inflight_by_worker[worker.id] = int(self._inflight_by_worker.get(worker.id, 0)) + 1
         started = time.perf_counter()
         async with httpx.AsyncClient(timeout=_worker_timeout()) as client:
@@ -4090,6 +4352,7 @@ class Scheduler:
             "browser_action",
             "action",
             "confirmation",
+            "owner_approval_id",
             "bank_id",
             "question_id",
             "expected",
@@ -4108,6 +4371,8 @@ class Scheduler:
             raise BackendError("Browser workers cannot publish")
         if action != "patch_existing":
             raise BackendError("Unsupported Question Bank action")
+        if not str(payload.get("confirmation") or "").strip():
+            raise BackendError("Question Bank patches require explicit confirmation")
         if (
             not isinstance(payload.get("expected"), dict)
             or not isinstance(payload.get("changes"), dict)
@@ -4123,6 +4388,11 @@ class Scheduler:
         action_key = f"question_bank.{action}"
         if action_key not in bot_execution_policy(bot).browser_action_allowlist:
             raise BackendError(f"Bot {bot.id} is not authorized for {action_key}")
+        await self._consume_required_browser_action_approval(
+            bot=bot,
+            action_key=action_key,
+            payload=payload,
+        )
         if not backend.api_key_ref:
             raise BackendError("Browser backends require api_key_ref for the worker request token")
         token = await self._resolve_api_key(backend.api_key_ref, "")
@@ -4130,6 +4400,162 @@ class Scheduler:
             raise BackendError("Browser worker request token is not configured")
         try:
             url = f"{worker_base_url(worker)}/browser/question-bank"
+        except WorkerProbeError as exc:
+            raise BackendError(f"Worker {worker.id} has an invalid address") from exc
+
+        body = self._browser_action_request_body(payload, allowed_fields)
+        self._inflight_by_worker[worker.id] = int(self._inflight_by_worker.get(worker.id, 0)) + 1
+        started = time.perf_counter()
+        async with httpx.AsyncClient(timeout=_worker_timeout()) as client:
+            try:
+                response = await client.post(
+                    url,
+                    json=body,
+                    headers={"X-Nexus-Worker-Token": token},
+                )
+                response.raise_for_status()
+                result = response.json()
+                if not isinstance(result, dict):
+                    raise BackendError("Browser worker returned an invalid Question Bank response")
+                return result
+            finally:
+                elapsed_ms = (time.perf_counter() - started) * 1000.0
+                previous = float(self._latency_ema_ms.get(worker.id, self._default_latency_ms))
+                alpha = min(max(self._latency_alpha, 0.01), 1.0)
+                self._latency_ema_ms[worker.id] = (alpha * elapsed_ms) + ((1.0 - alpha) * previous)
+                self._inflight_by_worker[worker.id] = max(
+                    0, int(self._inflight_by_worker.get(worker.id, 1)) - 1
+                )
+
+    async def _dispatch_browser_question_bank_create(
+        self,
+        worker: Worker,
+        backend: BackendConfig,
+        payload: dict[str, Any],
+        *,
+        task: Task | None,
+    ) -> dict[str, Any]:
+        """Dispatch one shortage-approved Question Bank creation through the fixed UI workflow."""
+
+        allowed_fields = {
+            "browser_action",
+            "action",
+            "confirmation",
+            "owner_approval_id",
+            "bank_id",
+            "candidate",
+            "review_evidence",
+        }
+        unexpected_fields = sorted(set(payload) - allowed_fields)
+        if unexpected_fields:
+            raise BackendError(
+                "Question Bank creation payload contains unsupported fields: "
+                + ", ".join(unexpected_fields)
+            )
+        if str(payload.get("browser_action") or "").strip() != "question_bank":
+            raise BackendError("Browser actions must declare browser_action=question_bank")
+        if str(payload.get("action") or "").strip().lower() != "create_one":
+            raise BackendError("Unsupported Question Bank creation action")
+        if not str(payload.get("confirmation") or "").strip():
+            raise BackendError("Question Bank creation requires explicit confirmation")
+        if not isinstance(payload.get("candidate"), dict) or not isinstance(
+            payload.get("review_evidence"), dict
+        ):
+            raise BackendError("Question Bank creation requires candidate and reviewer evidence objects")
+        if task is None:
+            raise BackendError("Question Bank creation requires a persisted task")
+        try:
+            bot = await self.bot_registry.get(task.bot_id)
+        except Exception as exc:
+            raise BackendError(
+                f"Bot {task.bot_id} was not found for Question Bank authorization"
+            ) from exc
+        action_key = "question_bank.create_one"
+        if action_key not in bot_execution_policy(bot).browser_action_allowlist:
+            raise BackendError(f"Bot {bot.id} is not authorized for {action_key}")
+        await self._consume_required_browser_action_approval(
+            bot=bot,
+            action_key=action_key,
+            payload=payload,
+        )
+        if not backend.api_key_ref:
+            raise BackendError("Browser backends require api_key_ref for the worker request token")
+        token = await self._resolve_api_key(backend.api_key_ref, "")
+        if not token:
+            raise BackendError("Browser worker request token is not configured")
+        try:
+            url = f"{worker_base_url(worker)}/browser/question-bank-create"
+        except WorkerProbeError as exc:
+            raise BackendError(f"Worker {worker.id} has an invalid address") from exc
+
+        body = self._browser_action_request_body(payload, allowed_fields)
+        self._inflight_by_worker[worker.id] = int(self._inflight_by_worker.get(worker.id, 0)) + 1
+        started = time.perf_counter()
+        async with httpx.AsyncClient(timeout=_worker_timeout()) as client:
+            try:
+                response = await client.post(
+                    url,
+                    json=body,
+                    headers={"X-Nexus-Worker-Token": token},
+                )
+                response.raise_for_status()
+                result = response.json()
+                if not isinstance(result, dict):
+                    raise BackendError("Browser worker returned an invalid Question Bank creation response")
+                return result
+            finally:
+                elapsed_ms = (time.perf_counter() - started) * 1000.0
+                previous = float(self._latency_ema_ms.get(worker.id, self._default_latency_ms))
+                alpha = min(max(self._latency_alpha, 0.01), 1.0)
+                self._latency_ema_ms[worker.id] = (alpha * elapsed_ms) + ((1.0 - alpha) * previous)
+                self._inflight_by_worker[worker.id] = max(
+                    0, int(self._inflight_by_worker.get(worker.id, 1)) - 1
+                )
+
+    async def _dispatch_browser_question_bank_evidence_export(
+        self,
+        worker: Worker,
+        backend: BackendConfig,
+        payload: dict[str, Any],
+        *,
+        task: Task | None,
+    ) -> dict[str, Any]:
+        """Dispatch one read-only complete Question Bank evidence export."""
+
+        allowed_fields = {
+            "browser_action",
+            "action",
+            "bank_id",
+            "approvedReadOnlyActions",
+        }
+        unexpected_fields = sorted(set(payload) - allowed_fields)
+        if unexpected_fields:
+            raise BackendError(
+                "Question Bank evidence export payload contains unsupported fields: "
+                + ", ".join(unexpected_fields)
+            )
+        if str(payload.get("browser_action") or "").strip() != "question_bank":
+            raise BackendError("Browser actions must declare browser_action=question_bank")
+        if str(payload.get("action") or "").strip().lower() != "export_evidence":
+            raise BackendError("Unsupported Question Bank evidence export action")
+        if task is None:
+            raise BackendError("Question Bank evidence export requires a persisted task")
+        try:
+            bot = await self.bot_registry.get(task.bot_id)
+        except Exception as exc:
+            raise BackendError(
+                f"Bot {task.bot_id} was not found for Question Bank authorization"
+            ) from exc
+        action_key = "question_bank.export_evidence"
+        if action_key not in bot_execution_policy(bot).browser_action_allowlist:
+            raise BackendError(f"Bot {bot.id} is not authorized for {action_key}")
+        if not backend.api_key_ref:
+            raise BackendError("Browser backends require api_key_ref for the worker request token")
+        token = await self._resolve_api_key(backend.api_key_ref, "")
+        if not token:
+            raise BackendError("Browser worker request token is not configured")
+        try:
+            url = f"{worker_base_url(worker)}/browser/question-bank-export"
         except WorkerProbeError as exc:
             raise BackendError(f"Worker {worker.id} has an invalid address") from exc
 
@@ -4146,7 +4572,7 @@ class Scheduler:
                 response.raise_for_status()
                 result = response.json()
                 if not isinstance(result, dict):
-                    raise BackendError("Browser worker returned an invalid Question Bank response")
+                    raise BackendError("Browser worker returned an invalid Question Bank evidence response")
                 return result
             finally:
                 elapsed_ms = (time.perf_counter() - started) * 1000.0

@@ -85,6 +85,48 @@
 </section>
 
 <section class="panel" style="margin-bottom:1rem;">
+  <div class="panel-heading-row">
+    <div>
+      <h2 class="panel-title">Lifecycle Dependencies</h2>
+      <p class="panel-subtitle">Schedules and workflow routes must be updated before this bot can be disabled or removed.</p>
+    </div>
+    {% if bot_dependencies %}
+    <div class="worker-dependency-status">
+      <span class="badge badge-{{ 'ready' if bot_dependencies.can_disable else 'degraded' }}">{{ 'disable ready' if bot_dependencies.can_disable else 'disable blocked' }}</span>
+      <span class="badge badge-{{ 'ready' if bot_dependencies.can_delete else 'degraded' }}">{{ 'delete ready' if bot_dependencies.can_delete else 'delete blocked' }}</span>
+    </div>
+    {% endif %}
+  </div>
+  {% if bot_dependencies and bot_dependencies.schedule_references %}
+  <table>
+    <thead><tr><th>Schedule</th><th>Relation</th><th>Project</th><th>State</th></tr></thead>
+    <tbody>
+      {% for schedule in bot_dependencies.schedule_references %}
+      <tr>
+        <td>{{ schedule.name or schedule.id }}<div class="metrics">{{ schedule.id }}</div></td>
+        <td>{{ schedule.relation | replace('_', ' ') }}</td>
+        <td>{{ schedule.project_id or 'Global' }}</td>
+        <td><span class="badge badge-{{ schedule.status or 'disabled' }}">{{ schedule.status or 'unknown' }}</span></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="state-empty">No schedule points to this bot.</div>
+  {% endif %}
+  {% if bot_dependencies and bot_dependencies.workflow_references %}
+  <div class="worker-dependent-schedules">
+    <h3 class="subsection-title">Workflow References</h3>
+    <ul class="dependency-list">
+      {% for reference in bot_dependencies.workflow_references %}
+      <li><a href="{{ url_for('bots.bot_detail_page', bot_id=reference.source_bot_id) }}">{{ reference.source_bot_name or reference.source_bot_id }}</a> uses this bot as {{ reference.relation | replace('_', ' ') }}{% if reference.trigger_enabled is not none %} (trigger {{ 'enabled' if reference.trigger_enabled else 'disabled' }}){% endif %}.</li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+</section>
+
+<section class="panel" style="margin-bottom:1rem;">
   <div class="page-header" style="margin-bottom:0.75rem;">
     <h2 class="panel-title">Dispatch Readiness</h2>
     {% if readiness %}
@@ -559,6 +601,11 @@
       <label>Pipeline Name (optional)</label>
       <input class="form-control" id="launch-profile-pipeline-name" placeholder="Course Pipeline Run">
     </div>
+  </div>
+  <div class="form-group">
+    <label>Max Concurrent Pipeline Tasks (optional)</label>
+    <input class="form-control" id="launch-profile-concurrency-limit" type="number" min="1" max="64" step="1" placeholder="Use the platform-wide limit">
+    <div class="mini-note">Caps this pipeline run only. Its downstream tasks still obey worker and provider limits.</div>
   </div>
   <div class="form-group">
     <label>Description</label>
@@ -1455,6 +1502,9 @@ function normalizedLaunchProfile() {
     show_on_tasks: profile.show_on_tasks !== false,
     is_pipeline: profile.is_pipeline === true,
     pipeline_name: String(profile.pipeline_name || profile.label || BOT.name || BOT.id || 'Pipeline').trim(),
+    concurrency_limit: Number.isInteger(Number(profile.concurrency_limit)) && Number(profile.concurrency_limit) >= 1 && Number(profile.concurrency_limit) <= 64
+      ? Number(profile.concurrency_limit)
+      : null,
   };
 }
 
@@ -1563,6 +1613,7 @@ function loadLaunchProfileEditor() {
   document.getElementById('launch-profile-show-tasks').checked = profile.show_on_tasks !== false;
   document.getElementById('launch-profile-is-pipeline').checked = pipelineChecked;
   document.getElementById('launch-profile-pipeline-name').value = capabilityPipelineName || profile.pipeline_name || profile.label || '';
+  document.getElementById('launch-profile-concurrency-limit').value = profile.concurrency_limit ?? '';
   document.getElementById('launch-profile-payload').value = JSON.stringify(profile.payload || {}, null, 2);
 }
 
@@ -1580,6 +1631,12 @@ function saveLaunchProfile() {
     return;
   }
   const priorityRaw = String(document.getElementById('launch-profile-priority')?.value || '').trim();
+  const concurrencyRaw = String(document.getElementById('launch-profile-concurrency-limit')?.value || '').trim();
+  const concurrencyLimit = concurrencyRaw ? Number.parseInt(concurrencyRaw, 10) : null;
+  if (concurrencyRaw && (!Number.isInteger(concurrencyLimit) || concurrencyLimit < 1 || concurrencyLimit > 64)) {
+    alert('Max concurrent pipeline tasks must be an integer from 1 to 64.');
+    return;
+  }
   BOT.launch_profile = {
     enabled: document.getElementById('launch-profile-enabled').checked,
     label: String(document.getElementById('launch-profile-label')?.value || '').trim() || BOT.name || BOT.id,
@@ -1590,6 +1647,7 @@ function saveLaunchProfile() {
     show_on_tasks: document.getElementById('launch-profile-show-tasks').checked,
     is_pipeline: document.getElementById('launch-profile-is-pipeline').checked,
     pipeline_name: String(document.getElementById('launch-profile-pipeline-name')?.value || '').trim() || String(document.getElementById('launch-profile-label')?.value || '').trim() || BOT.name || BOT.id,
+    concurrency_limit: concurrencyLimit,
     payload,
   };
   BOT.assignment_capabilities = BOT.assignment_capabilities && typeof BOT.assignment_capabilities === 'object'

@@ -230,7 +230,8 @@ def test_bot_export_includes_full_bot_config_and_connections(dashboard_client):
         assert bundle["bot"]["launch_profile"]["label"] == "Run Bot"
         assert len(bundle["connections"]) == 1
         assert bundle["connections"][0]["config"]["base_url"] == "https://api.example.com"
-        assert bundle["connections"][0]["auth"]["api_key"] == "secret-token"
+        assert bundle["connections"][0]["auth"]["api_key"] == "[REDACTED]"
+        assert b"secret-token" not in export_resp.data
 
 
 def test_bot_import_can_overwrite_existing_bot_config_and_connections(dashboard_client):
@@ -297,6 +298,7 @@ def test_bot_import_can_overwrite_existing_bot_config_and_connections(dashboard_
                 "id": "course-bot",
                 "name": "Imported Bot",
                 "role": "planner",
+                "project_id": "globeiq",
                 "priority": 7,
                 "enabled": True,
                 "system_prompt": "Imported prompt",
@@ -329,6 +331,7 @@ def test_bot_import_can_overwrite_existing_bot_config_and_connections(dashboard_
         body = import_resp.get_json()
         assert body["overwritten"] is True
         assert body["bot"]["name"] == "Imported Bot"
+        assert body["bot"]["project_id"] == "globeiq"
         assert body["bot"]["context_access"] == {"receives": ["instruction"], "can_self_serve": ["repo"]}
         assert fake_cp.deleted_bot_ids == []
         assert fake_cp.updated_bot_ids == ["course-bot"]
@@ -488,7 +491,7 @@ def test_http_connection_can_skip_tls_verification(monkeypatch):
         captured["url"] = req.full_url
         return FakeResponse()
 
-    monkeypatch.setattr("dashboard.connections_service.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("shared.connection_runtime.urllib.request.urlopen", fake_urlopen)
 
     result = run_http_connection_test(
         config={"base_url": "https://100.113.128.92:5001", "timeout_seconds": 15, "verify_ssl": False},
@@ -501,6 +504,40 @@ def test_http_connection_can_skip_tls_verification(monkeypatch):
     assert result["verify_ssl"] is False
     assert captured["url"] == "https://100.113.128.92:5001/api/agent/courses"
     assert captured["context"] is not None
+
+
+def test_dashboard_http_connection_redacts_query_auth_from_result_url(monkeypatch):
+    class FakeResponse:
+        status = 200
+
+        def read(self, _limit):
+            return b'{}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(
+        "shared.connection_runtime.urllib.request.urlopen",
+        lambda *_args, **_kwargs: FakeResponse(),
+    )
+
+    result = run_http_connection_test(
+        config={"base_url": "https://api.example.test"},
+        auth={
+            "type": "api_key",
+            "name": "access_token",
+            "in": "query",
+            "api_key": "private-token",
+        },
+        schema_text="",
+        payload={"method": "GET", "path": "/records"},
+    )
+
+    assert "private-token" not in result["url"]
+    assert "access_token=%5BREDACTED%5D" in result["url"]
 
 
 def test_http_connection_merges_action_headers(monkeypatch):
@@ -522,7 +559,7 @@ def test_http_connection_merges_action_headers(monkeypatch):
         captured["headers"] = dict(req.header_items())
         return FakeResponse()
 
-    monkeypatch.setattr("dashboard.connections_service.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("shared.connection_runtime.urllib.request.urlopen", fake_urlopen)
 
     result = run_http_connection_test(
         config={"base_url": "https://api.example.com"},
@@ -549,7 +586,7 @@ def test_http_connection_rejects_actions_not_declared_in_schema(monkeypatch):
         called = True
         raise AssertionError("Undeclared actions must not make an HTTP request")
 
-    monkeypatch.setattr("dashboard.connections_service.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("shared.connection_runtime.urllib.request.urlopen", fake_urlopen)
 
     result = run_http_connection_test(
         config={"base_url": "https://api.example.com"},

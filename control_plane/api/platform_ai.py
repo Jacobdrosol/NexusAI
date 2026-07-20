@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from shared.exceptions import ProjectNotFoundError
 from shared.models import CatalogModel, TaskMetadata
 
 
@@ -57,6 +58,60 @@ def _require_feature_flag(flag: str, *, action: str) -> None:
     if _env_enabled(flag):
         return
     raise HTTPException(status_code=403, detail=f"{action} is disabled ({flag} not enabled)")
+
+
+def _normalize_project_id(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _raise_project_binding_error(*, reason_code: str, project_id: str, message: str) -> None:
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "reason_code": reason_code,
+            "message": message,
+            "validation_errors": [
+                {
+                    "field_path": "project_id",
+                    "message": message,
+                    "invalid_value": project_id or None,
+                }
+            ],
+        },
+    )
+
+
+async def _require_known_enabled_project(request: Request, project_id: str) -> None:
+    """Keep Platform AI sessions and proposals inside a live project boundary."""
+    safe_project_id = _normalize_project_id(project_id)
+    if not safe_project_id:
+        return
+    try:
+        project = await request.app.state.project_registry.get(safe_project_id)
+    except ProjectNotFoundError:
+        _raise_project_binding_error(
+            reason_code="platform_ai_project_not_found",
+            project_id=safe_project_id,
+            message=f"Platform AI project '{safe_project_id}' does not exist.",
+        )
+    if not bool(project.enabled):
+        _raise_project_binding_error(
+            reason_code="platform_ai_project_disabled",
+            project_id=safe_project_id,
+            message=f"Platform AI project '{safe_project_id}' is disabled.",
+        )
+
+
+def _resolve_project_binding(*project_ids: str) -> str:
+    """Return one explicit project binding or reject conflicting scope inputs."""
+    values = {_normalize_project_id(value) for value in project_ids if _normalize_project_id(value)}
+    if len(values) > 1:
+        _raise_project_binding_error(
+            reason_code="platform_ai_project_scope_mismatch",
+            project_id=", ".join(sorted(values)),
+            message="Platform AI project inputs must resolve to one project boundary.",
+        )
+    return next(iter(values), "")
 
 
 @router.get("/capabilities")
@@ -1050,7 +1105,7 @@ async def create_session(request: Request, body: CreatePlatformAISessionRequest)
 
     pipeline_bot_id = str(body.pipeline_bot_id or "").strip()
     pipeline_name = str(body.pipeline_name or body.pipeline_name_seed or "").strip()
-    project_id = str(body.project_id or "").strip()
+    project_id = _normalize_project_id(body.project_id)
     target_bot_id = str(body.target_bot_id or "").strip()
     bot_name_seed = str(body.bot_name_seed or "").strip()
     pipeline_name_seed = str(body.pipeline_name_seed or "").strip()
@@ -1072,6 +1127,7 @@ async def create_session(request: Request, body: CreatePlatformAISessionRequest)
     _validate_backend_config(backend_cfg)
     await _ensure_backend_model_catalog_entry(request, backend_cfg)
     metadata = dict(body.metadata or {})
+    metadata_project_id = _normalize_project_id(metadata.get("project_id"))
     if str(metadata.get("pipeline_bot_id") or "").strip() and not pipeline_bot_id:
         pipeline_bot_id = str(metadata.get("pipeline_bot_id") or "").strip()
     if str(metadata.get("pipeline_name") or "").strip() and not pipeline_name:
@@ -1100,6 +1156,12 @@ async def create_session(request: Request, body: CreatePlatformAISessionRequest)
         run_id=body.run_id,
         orchestration_id=body.orchestration_id,
     )
+    project_id = _resolve_project_binding(
+        project_id,
+        metadata_project_id,
+        _normalize_project_id(seed_context.get("project_id")),
+    )
+    await _require_known_enabled_project(request, project_id)
     if pipeline_bot_id:
         metadata["pipeline_bot_id"] = pipeline_bot_id
     if pipeline_name:
@@ -1108,8 +1170,8 @@ async def create_session(request: Request, body: CreatePlatformAISessionRequest)
         metadata["pipeline_name_seed"] = pipeline_name_seed
     if project_id:
         metadata["project_id"] = project_id
-    elif str(seed_context.get("project_id") or "").strip():
-        metadata["project_id"] = str(seed_context.get("project_id") or "").strip()
+    else:
+        metadata.pop("project_id", None)
     if str(seed_context.get("conversation_id") or "").strip():
         metadata["conversation_id"] = str(seed_context.get("conversation_id") or "").strip()
     if target_bot_id:
@@ -1219,8 +1281,14 @@ async def patch_session(session_id: str, request: Request, body: UpdatePlatformA
         raise HTTPException(status_code=404, detail="session not found")
 
     metadata = dict(body.metadata or {})
+    metadata_project_id = _normalize_project_id(metadata.get("project_id"))
     if body.project_id is not None:
-        metadata["project_id"] = str(body.project_id or "").strip() or None
+        requested_project_id = _normalize_project_id(body.project_id)
+        if metadata_project_id and metadata_project_id != requested_project_id:
+            _resolve_project_binding(metadata_project_id, requested_project_id)
+        metadata["project_id"] = requested_project_id or None
+    elif "project_id" in metadata:
+        metadata["project_id"] = metadata_project_id or None
     if body.target_bot_id is not None:
         metadata["target_bot_id"] = str(body.target_bot_id or "").strip() or None
     if body.pipeline_bot_id is not None:
@@ -1241,6 +1309,7 @@ async def patch_session(session_id: str, request: Request, body: UpdatePlatformA
     existing_metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
     merged_metadata = dict(existing_metadata)
     merged_metadata.update(metadata)
+    await _require_known_enabled_project(request, _normalize_project_id(merged_metadata.get("project_id")))
     required_target_bot_id = str(merged_metadata.get("target_bot_id") or "").strip()
     required_pipeline_bot_id = str(merged_metadata.get("pipeline_bot_id") or "").strip()
     required_bot_name_seed = str(merged_metadata.get("bot_name_seed") or "").strip()

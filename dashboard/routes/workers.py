@@ -92,7 +92,71 @@ def _worker_probe_view(probe: Any) -> dict[str, Any] | None:
     if not detail:
         detail = "runtime and capability contract verified" if status == "ready" else "runtime probe requires attention"
     checked_at = str(probe.get("checked_at") or "").strip().replace("T", " ")[:19]
-    return {"status": status, "detail": detail, "checked_at": checked_at}
+    provider_credentials = attestation.get("provider_credentials")
+    provider_status: list[dict[str, Any]] = []
+    if isinstance(provider_credentials, dict):
+        for provider, configured in sorted(provider_credentials.items(), key=lambda item: str(item[0]).lower()):
+            provider_name = str(provider or "").strip().lower()
+            if provider_name:
+                provider_status.append({"provider": provider_name, "configured": configured is True})
+
+    def _attested_tools(key: str) -> list[str]:
+        values = attestation.get(key)
+        if not isinstance(values, list):
+            return []
+        return [str(value).strip() for value in values if str(value).strip()]
+
+    runtime_evidence = {
+        "provider_status": provider_status,
+        "configured_cli_tools": _attested_tools("configured_cli_tools"),
+        "installed_cli_tools": _attested_tools("installed_cli_tools"),
+        "enabled_cli_tools": _attested_tools("enabled_cli_tools"),
+        "unavailable_cli_tools": _attested_tools("unavailable_cli_tools"),
+        "auth_required_cli_tools": _attested_tools("auth_required_cli_tools"),
+        "unauthenticated_cli_tools": _attested_tools("unauthenticated_cli_tools"),
+        "browser": {
+            "configured": bool(browser.get("configured")),
+            "ready": bool(browser.get("ready")),
+            "name": str(browser.get("browser") or "").strip(),
+            "reason": str(browser.get("reason") or "").strip(),
+        },
+    }
+    return {
+        "status": status,
+        "detail": detail,
+        "checked_at": checked_at,
+        "runtime_evidence": runtime_evidence,
+    }
+
+
+def _worker_dependency_view(payload: Any) -> dict[str, Any] | None:
+    if not isinstance(payload, dict):
+        return None
+    dependent_bots = [item for item in payload.get("dependent_bots") or [] if isinstance(item, dict)]
+    active_schedules = [item for item in payload.get("active_schedules") or [] if isinstance(item, dict)]
+    return {
+        "dependent_bots": dependent_bots,
+        "active_schedules": active_schedules,
+        "can_disable": bool(payload.get("can_disable", not any(bool(item.get("enabled")) for item in dependent_bots))),
+        "can_delete": bool(payload.get("can_delete", not dependent_bots)),
+    }
+
+
+def _control_plane_error(cp, fallback: str) -> tuple[dict[str, str], int]:
+    error = cp.last_error()
+    status = int(error.get("status_code") or 502)
+    if status < 400 or status > 599:
+        status = 502
+    raw_detail = str(error.get("detail") or "").strip()
+    detail = raw_detail
+    try:
+        parsed = json.loads(raw_detail)
+        if isinstance(parsed, dict):
+            payload = parsed.get("detail") if isinstance(parsed.get("detail"), dict) else parsed
+            detail = str(payload.get("message") or payload.get("detail") or "").strip()
+    except (TypeError, ValueError):
+        pass
+    return {"error": detail or fallback}, status
 
 
 def _with_worker_probe_views(workers: list[dict[str, Any]], payload: Any) -> list[dict[str, Any]]:
@@ -149,6 +213,8 @@ def worker_detail_page(worker_id: str):
     worker = cp.get_worker(worker_id)
     probe_getter = getattr(cp, "get_worker_probe", None)
     worker_probe = _worker_probe_view(probe_getter(worker_id) if callable(probe_getter) else None)
+    dependency_getter = getattr(cp, "get_worker_dependencies", None)
+    worker_dependencies = _worker_dependency_view(dependency_getter(worker_id) if callable(dependency_getter) else None)
     running_tasks = _cp_list_tasks_safe(cp, statuses=["running"], limit=200, include_content=False) or []
     running_tasks = [t for t in running_tasks if t.get("status") == "running"]
     if worker is not None:
@@ -156,6 +222,7 @@ def worker_detail_page(worker_id: str):
             "worker_detail.html",
             worker=worker,
             worker_probe=worker_probe,
+            worker_dependencies=worker_dependencies,
             running_tasks=running_tasks,
             error=None,
         )
@@ -168,16 +235,18 @@ def worker_detail_page(worker_id: str):
                 "worker_detail.html",
                 worker=None,
                 worker_probe=None,
+                worker_dependencies=None,
                 running_tasks=[],
                 error="Worker not found",
             )
         local = db.get(Worker, int(worker_id))
         if not local:
-            return render_template("worker_detail.html", worker=None, running_tasks=[], error="Worker not found")
+            return render_template("worker_detail.html", worker=None, worker_probe=None, worker_dependencies=None, running_tasks=[], error="Worker not found")
         return render_template(
             "worker_detail.html",
             worker=_worker_to_dict(local),
             worker_probe=None,
+            worker_dependencies=None,
             running_tasks=[],
             error=None,
         )
@@ -287,7 +356,8 @@ def api_update_worker(worker_id: str):
         merged.update(data)
         updated = cp.update_worker(worker_id, merged)
         if updated is None:
-            return jsonify({"error": "control plane unavailable"}), 502
+            body, status = _control_plane_error(cp, "worker update failed")
+            return jsonify(body), status
         return jsonify(updated)
 
     db = get_db()
@@ -326,7 +396,8 @@ def api_delete_worker(worker_id: str):
     if cp_worker is not None:
         ok = cp.delete_worker(worker_id)
         if not ok:
-            return jsonify({"error": "delete failed"}), 502
+            body, status = _control_plane_error(cp, "worker deletion failed")
+            return jsonify(body), status
         return "", 204
 
     db = get_db()

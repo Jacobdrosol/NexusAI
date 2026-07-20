@@ -4,12 +4,23 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
 
+from shared.connection_secrets import mask_connection_config, mask_secret
+
 from control_plane.audit.utils import record_audit_event
 from control_plane.database.database_engineer import DatabaseEngineer
 from control_plane.database.schema_manager import ColumnDefinition, TableDefinition
 from control_plane.security.guards import enforce_body_size, enforce_rate_limit
 
 router = APIRouter(prefix="/v1/database", tags=["database"])
+
+
+def _public_connection_payload(connection: Dict[str, Any]) -> Dict[str, Any]:
+    """Return connection metadata without an embedded DSN or config secret."""
+    payload = dict(connection or {})
+    payload["connection_string"] = mask_secret(payload.get("connection_string"))
+    config = payload.get("config_json")
+    payload["config_json"] = mask_connection_config(config if isinstance(config, dict) else {})
+    return payload
 logger = logging.getLogger(__name__)
 
 _db_engineer: Optional[DatabaseEngineer] = None
@@ -310,7 +321,7 @@ async def list_connections(
     """List all database connections."""
     enforce_rate_limit("connection_list", 60)
     engineer = get_database_engineer()
-    return await engineer.list_connections(enabled_only=enabled_only)
+    return [_public_connection_payload(item) for item in await engineer.list_connections(enabled_only=enabled_only)]
 
 
 @router.post("/connections")
@@ -358,7 +369,7 @@ async def create_connection(
         details={"name": name, "kind": kind},
     )
 
-    return connection
+    return _public_connection_payload(connection)
 
 
 @router.get("/connections/{connection_id}")
@@ -371,7 +382,7 @@ async def get_connection(connection_id: str) -> Dict[str, Any]:
     if not connection:
         raise HTTPException(status_code=404, detail="Connection not found")
 
-    return connection
+    return _public_connection_payload(connection)
 
 
 @router.put("/connections/{connection_id}")
@@ -406,10 +417,22 @@ async def update_connection(
         action="connection_update",
         resource=f"connection:{connection_id}",
         status="success",
-        details={"updates": {k: v for k, v in locals().items() if k != "connection_id" and v is not None}},
+        details={
+            "changed_fields": [
+                field
+                for field, value in {
+                    "name": name,
+                    "description": description,
+                    "config": config,
+                    "credentials_ref": credentials_ref,
+                    "enabled": enabled,
+                }.items()
+                if value is not None
+            ]
+        },
     )
 
-    return connection
+    return _public_connection_payload(connection)
 
 
 @router.delete("/connections/{connection_id}")

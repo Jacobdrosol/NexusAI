@@ -21,11 +21,14 @@ async def cp_app(tmp_path):
     from control_plane.chat.pm_orchestrator import PMOrchestrator
     from control_plane.github.webhook_store import GitHubWebhookStore
     from control_plane.audit.audit_log import AuditLog
+    from control_plane.browser_action_approvals import BrowserActionApprovalStore
+    from control_plane.connection_action_approvals import ConnectionActionApprovalStore
     from control_plane.registry.model_registry import ModelRegistry
     from control_plane.registry.project_registry import ProjectRegistry
     from control_plane.scheduler.scheduler import Scheduler
     from control_plane.task_manager.task_manager import TaskManager
     from control_plane.worker_probe_store import WorkerProbeStore
+    from control_plane.supervision_store import SupervisionStore
     from control_plane.vault.mcp_broker import MCPBroker
     from control_plane.vault.vault_manager import VaultManager
     from control_plane.connections.resolver import ConnectionResolver
@@ -40,6 +43,8 @@ async def cp_app(tmp_path):
     from control_plane.api import (
         assignments,
         audit,
+        browser_action_approvals,
+        connection_action_approvals,
         bot_blueprints,
         bots,
         chat,
@@ -48,6 +53,7 @@ async def cp_app(tmp_path):
         platform_ai,
         projects,
         schedules,
+        supervision,
         tasks,
         vault,
         workers as workers_api,
@@ -56,6 +62,8 @@ async def cp_app(tmp_path):
     app = FastAPI(title="NexusAI Control Plane Test")
     install_observability(app)
     app.include_router(tasks.router)
+    app.include_router(browser_action_approvals.router)
+    app.include_router(connection_action_approvals.router)
     app.include_router(bot_blueprints.router)
     app.include_router(bots.router)
     app.include_router(workers_api.router)
@@ -66,6 +74,7 @@ async def cp_app(tmp_path):
     app.include_router(assignments.router)
     app.include_router(platform_ai.router)
     app.include_router(schedules.router)
+    app.include_router(supervision.router)
     app.include_router(vault.router)
     app.include_router(audit.router)
 
@@ -79,10 +88,17 @@ async def cp_app(tmp_path):
     mcp_broker = MCPBroker(vault_manager=vault_manager)
     github_webhook_store = GitHubWebhookStore(db_path=str(tmp_path / "github_webhooks.db"))
     audit_log = AuditLog(db_path=str(tmp_path / "audit.db"))
+    browser_action_approval_store = BrowserActionApprovalStore(
+        db_path=str(tmp_path / "browser_action_approvals.db")
+    )
+    connection_action_approval_store = ConnectionActionApprovalStore(
+        db_path=str(tmp_path / "connection_action_approvals.db")
+    )
     orchestration_workspace_store = OrchestrationWorkspaceStore()
     connection_resolver = ConnectionResolver(db_path=str(tmp_path / "dashboard.db"))
     worker_probe_store = WorkerProbeStore(db_path=str(tmp_path / "worker_probes.db"))
     repo_workspace_usage_store = RepoWorkspaceUsageStore(db_path=str(tmp_path / "repo_usage.db"))
+    supervision_store = SupervisionStore(db_path=str(tmp_path / "supervision.db"))
     scheduler = Scheduler(
         bot_registry,
         worker_registry,
@@ -91,12 +107,15 @@ async def cp_app(tmp_path):
         project_registry=project_registry,
         connection_resolver=connection_resolver,
         worker_probe_store=worker_probe_store,
+        browser_action_approval_store=browser_action_approval_store,
+        connection_action_approval_store=connection_action_approval_store,
     )
     task_manager = TaskManager(
         scheduler,
         db_path=str(tmp_path / "tasks.db"),
         orchestration_workspace_store=orchestration_workspace_store,
         connection_resolver=connection_resolver,
+        supervision_store=supervision_store,
     )
     pm_orchestrator = PMOrchestrator(
         bot_registry=bot_registry,
@@ -131,9 +150,12 @@ async def cp_app(tmp_path):
     app.state.mcp_broker = mcp_broker
     app.state.github_webhook_store = github_webhook_store
     app.state.audit_log = audit_log
+    app.state.browser_action_approval_store = browser_action_approval_store
+    app.state.connection_action_approval_store = connection_action_approval_store
     app.state.orchestration_workspace_store = orchestration_workspace_store
     app.state.repo_workspace_usage_store = repo_workspace_usage_store
     app.state.worker_probe_store = worker_probe_store
+    app.state.supervision_store = supervision_store
     app.state.scheduler = scheduler
     app.state.task_manager = task_manager
     app.state.pm_orchestrator = pm_orchestrator

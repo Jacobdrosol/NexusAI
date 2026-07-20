@@ -18,6 +18,7 @@ class Capability(BaseModel):
         "vertex",
         "cli",
         "browser",
+        "documentation",
         "custom",
     ]
     models: List[str]
@@ -72,11 +73,20 @@ class BackendParams(BaseModel):
     main_gpu: Optional[int] = None
     num_thread: Optional[int] = None
     repeat_penalty: Optional[float] = None
+    response_format: Optional[Literal["json"]] = None
 
 
 class BackendConfig(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-    type: Literal["local_llm", "remote_llm", "cloud_api", "cli", "browser", "custom"]
+    type: Literal[
+        "local_llm",
+        "remote_llm",
+        "cloud_api",
+        "cli",
+        "browser",
+        "documentation",
+        "custom",
+    ]
     worker_id: Optional[str] = None
     model: str
     provider: str
@@ -138,7 +148,13 @@ class BotExecutionPolicy(BaseModel):
     db_action_policy: Optional[DBActionPolicy] = None
     allow_run_result_ingest: bool = True
     browser_action_allowlist: List[str] = Field(default_factory=list)
+    browser_action_owner_approval_required: List[str] = Field(default_factory=list)
     browser_inspection_path_allowlist: List[str] = Field(default_factory=list)
+    documentation_action_allowlist: List[str] = Field(default_factory=list)
+    # HTTP connections may expose both read and write operations.  Mutations are
+    # disabled unless the exact connection operation is explicitly allowlisted.
+    connection_action_allowlist: List[str] = Field(default_factory=list)
+    connection_action_owner_approval_required: List[str] = Field(default_factory=list)
 
 
 class BotContextAccess(BaseModel):
@@ -198,6 +214,7 @@ class Bot(BaseModel):
     id: str
     name: str
     role: str
+    project_id: Optional[str] = None
     system_prompt: Optional[str] = None
     priority: int = 0
     enabled: bool = True
@@ -228,6 +245,9 @@ class TaskMetadata(BaseModel):
     workflow_root_task_id: Optional[str] = None
     pipeline_name: Optional[str] = None
     pipeline_entry_bot_id: Optional[str] = None
+    # Optional per-run ceiling inherited by every downstream task in a pipeline.
+    # The task manager applies this in addition to global and provider limits.
+    orchestration_concurrency_limit: Optional[int] = Field(default=None, ge=1, le=64)
     root_pm_bot_id: Optional[str] = None
     allowed_bot_ids: List[str] = Field(default_factory=list)
     workflow_graph_id: Optional[str] = None
