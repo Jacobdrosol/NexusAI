@@ -2588,6 +2588,7 @@ class Scheduler:
             )
         messages = _messages_for_ollama(messages)
         params_dict = backend.params.model_dump(exclude_none=True) if backend.params else {}
+        response_format = params_dict.pop("response_format", None)
         base_body: dict = {
             "messages": messages,
             "stream": False,
@@ -2595,6 +2596,8 @@ class Scheduler:
             "think": False,
             "options": _ollama_options(params_dict),
         }
+        if response_format == "json":
+            base_body["format"] = "json"
         if tools:
             base_body["tools"] = tools
 
@@ -3404,6 +3407,7 @@ class Scheduler:
         )
         messages = _messages_for_ollama(messages)
         params_dict = backend.params.model_dump(exclude_none=True) if backend.params else {}
+        response_format = params_dict.pop("response_format", None)
         base_body: dict = {
             "messages": messages,
             "stream": False,
@@ -3411,6 +3415,8 @@ class Scheduler:
             "think": False,
             "options": _ollama_options(params_dict),
         }
+        if response_format == "json":
+            base_body["format"] = "json"
         base_url = os.environ.get("OLLAMA_CLOUD_BASE_URL", "https://ollama.com/api").rstrip("/")
 
         async def _do_chat(client: httpx.AsyncClient, model_name: str) -> Any:
