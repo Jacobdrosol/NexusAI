@@ -99,6 +99,11 @@ def _require_schedule_input_contract(schedule: Dict[str, Any], bot: Any) -> None
     )
     source_config = system_payload_source_config(schedule)
     if isinstance(source_config, dict):
+        target_field = str(source_config.get("target_field") or "").strip()
+        if target_field:
+            # System payload sources are materialized immediately before task creation.
+            # Treat their declared destination as present while validating the schedule.
+            task_payload[target_field] = "__materialized_schedule_value__"
         payload_field_map = source_config.get("payload_field_map")
         if isinstance(payload_field_map, dict):
             task_payload.update(

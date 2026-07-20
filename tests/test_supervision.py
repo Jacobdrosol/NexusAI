@@ -12,6 +12,7 @@ from control_plane.schedule_payload_sources import (
     materialize_system_schedule_payload,
     validate_system_payload_source,
 )
+from control_plane.schedule_safety import require_schedule_autonomy_safety
 from control_plane.task_manager.task_manager import TaskManager
 from shared.models import BackendConfig, Bot
 
@@ -308,6 +309,57 @@ async def test_manager_schedule_payload_contains_only_declared_portfolio_metadat
     assert snapshot["bots"][0]["bot_id"] == specialist.id
     assert snapshot["schedules"][0]["schedule_id"] == "specialist-hourly"
     assert "private task text" not in payload["portfolio_snapshot"]
+
+
+@pytest.mark.anyio
+async def test_manager_schedule_accepts_a_system_materialized_required_payload_field():
+    manager = Bot(
+        id="portfolio-manager",
+        name="Portfolio Manager",
+        role="manager",
+        project_id="project-a",
+        enabled=True,
+        backends=[],
+        routing_rules={
+            "worker_profile": {
+                "can_edit": False,
+                "task_scope": "read-only-manager-review",
+            },
+            "input_contract": {
+                "enabled": True,
+                "format": "json_object",
+                "required_fields": ["instruction", "portfolio_snapshot"],
+                "non_empty_fields": ["instruction", "portfolio_snapshot"],
+            },
+            "supervision_manager": {
+                "enabled": True,
+                "portfolio": {"project_id": "project-a", "bot_ids": ["specialist"]},
+                "action_policy": {"allow_actions": ["hold_bot"]},
+            },
+        },
+    )
+
+    class _BotRegistry:
+        async def get(self, bot_id):
+            assert bot_id == manager.id
+            return manager
+
+    await require_schedule_autonomy_safety(
+        {
+            "target_bot_id": manager.id,
+            "project_id": "project-a",
+            "prompt": "Produce a read-only portfolio report.",
+            "metadata": {
+                "mutation_safe": True,
+                "system_payload_source": {
+                    "type": SUPERVISION_PORTFOLIO_SOURCE,
+                    "target_field": "portfolio_snapshot",
+                },
+            },
+        },
+        bot_registry=_BotRegistry(),
+        only_when_active=False,
+    )
 
 
 def test_supervision_dashboard_renders_executive_decisions(dashboard_client):
