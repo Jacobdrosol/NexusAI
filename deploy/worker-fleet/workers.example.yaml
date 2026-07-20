@@ -16,6 +16,12 @@ fleet:
   bot_priority: 10
   # Hard cap after replica expansion. Explicitly raise this only after host-capacity review.
   max_workers: 64
+  # Disabled workers render behind this non-default Compose profile and do not start from `docker compose up`.
+  disabled_worker_compose_profile: staged
+  # Only enabled workers count against this admission budget. Raise it only after measuring host headroom.
+  resource_budget:
+    cpus: "8.0"
+    memory: 16g
   backend_params:
     temperature: 0.2
     max_tokens: 1200
