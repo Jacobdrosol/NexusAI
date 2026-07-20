@@ -141,6 +141,10 @@ def test_operations_manager_blueprint_stays_read_only_and_requests_operator_deci
         "portfolio",
         "action_proposals",
     ]
+    assert bot.routing_rules["output_contract"]["non_empty_fields"] == [
+        "executive_summary",
+        "overall_status",
+    ]
     assert bot.routing_rules["worker_profile"] == {
         "role": "operations-manager",
         "task_scope": "read-only-manager-review",

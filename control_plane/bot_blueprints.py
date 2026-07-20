@@ -413,6 +413,11 @@ def build_specialist_bot(request: SpecialistBlueprintRequest) -> Bot:
     output_fields = list(spec["outputs"])
     input_fields = ["instruction"]
     backends = _prepare_specialist_backends(request)
+    non_empty_output_fields = (
+        ["status", output_fields[1]]
+        if output_fields[0] == "status"
+        else output_fields[:2]
+    )
 
     system_prompt = _system_prompt(
         label=str(spec["label"]),
@@ -442,7 +447,7 @@ def build_specialist_bot(request: SpecialistBlueprintRequest) -> Bot:
             "enabled": True,
             "format": "json_object",
             "required_fields": output_fields,
-            "non_empty_fields": ["status", output_fields[1]],
+            "non_empty_fields": non_empty_output_fields,
             "allow_blocked_status": True,
             "max_retries": 1,
         },
