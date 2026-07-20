@@ -14,6 +14,7 @@ async def infer(
         raise ValueError("OLLAMA_API_KEY is not configured")
 
     request_params = dict(params or {})
+    response_format = request_params.pop("response_format", None)
     body = {
         "model": model,
         "messages": messages,
@@ -23,6 +24,8 @@ async def infer(
         "think": request_params.pop("think", False),
         "options": request_params,
     }
+    if response_format == "json":
+        body["format"] = "json"
     async with httpx.AsyncClient(timeout=120.0) as client:
         response = await client.post(
             f"{base_url.rstrip('/')}/chat",

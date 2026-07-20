@@ -79,7 +79,7 @@ async def test_ollama_cloud_backend_infer():
         result = await ollama_cloud_backend.infer(
             model="glm-5.2:cloud",
             messages=[{"role": "user", "content": "hi"}],
-            params={},
+            params={"response_format": "json", "temperature": 0.1},
             api_key="test-key",
         )
 
@@ -87,6 +87,8 @@ async def test_ollama_cloud_backend_infer():
     assert result["usage"]["prompt_tokens"] == 9
     assert mock_client.post.call_args.kwargs["headers"]["Authorization"] == "Bearer test-key"
     assert mock_client.post.call_args.kwargs["json"]["think"] is False
+    assert mock_client.post.call_args.kwargs["json"]["format"] == "json"
+    assert mock_client.post.call_args.kwargs["json"]["options"] == {"temperature": 0.1}
 
 
 # ---------------------------------------------------------------------------

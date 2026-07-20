@@ -72,6 +72,7 @@ class BackendParams(BaseModel):
     main_gpu: Optional[int] = None
     num_thread: Optional[int] = None
     repeat_penalty: Optional[float] = None
+    response_format: Optional[Literal["json"]] = None
 
 
 class BackendConfig(BaseModel):
