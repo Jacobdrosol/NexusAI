@@ -39,6 +39,52 @@ async def test_bot_readiness_reports_ready_worker_backend(cp_client):
 
 
 @pytest.mark.anyio
+async def test_bot_readiness_supports_documentation_tool_backend(cp_app, cp_client):
+    await cp_app.state.model_registry.register(
+        CatalogModel(id="unrelated-model", name="unrelated-model", provider="ollama_cloud")
+    )
+    await cp_client.post(
+        "/v1/workers",
+        json={
+            "id": "docs-worker",
+            "name": "Docs Worker",
+            "host": "docs-worker",
+            "port": 8001,
+            "capabilities": [
+                {"type": "tool", "provider": "documentation", "models": ["documentation-v1"]}
+            ],
+        },
+    )
+
+    created = await cp_client.post(
+        "/v1/bots",
+        json={
+            "id": "docs-writer",
+            "name": "Docs Writer",
+            "role": "docs-hub-writer",
+            "backends": [
+                {
+                    "type": "documentation",
+                    "worker_id": "docs-worker",
+                    "provider": "documentation",
+                    "model": "documentation-v1",
+                    "api_key_ref": "DOCS_WORKER_TOKEN",
+                }
+            ],
+            "execution_policy": {
+                "required_worker_tools": ["documentation-v1"],
+                "documentation_action_allowlist": ["documentation.create", "documentation.save"],
+            },
+        },
+    )
+
+    assert created.status_code == 200
+    readiness = await cp_client.get("/v1/bots/docs-writer/readiness")
+    assert readiness.status_code == 200
+    assert readiness.json()["ready"] is True
+
+
+@pytest.mark.anyio
 async def test_bot_project_binding_requires_an_enabled_project(cp_client):
     payload = {
         "id": "project-bound-bot",

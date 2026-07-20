@@ -31,7 +31,7 @@ def _worker_supports_backend(worker: Worker, backend: BackendConfig) -> bool:
     expected_model = str(backend.model or "").strip()
     expected_capability_type = (
         "tool"
-        if str(backend.type or "").strip().lower() in {"browser", "cli"}
+        if str(backend.type or "").strip().lower() in {"browser", "cli", "documentation"}
         else "llm"
     )
     for capability in worker.capabilities or []:
@@ -73,7 +73,7 @@ async def _catalog_model_blocker(backend: BackendConfig, model_registry: Any) ->
     backend_type = str(backend.type or "").strip().lower()
     provider = str(backend.provider or "").strip().lower()
     if (
-        backend_type == "browser"
+        backend_type in {"browser", "documentation"}
         or (backend_type == "custom" and provider == "http_connection")
         or model_registry is None
     ):
@@ -148,7 +148,7 @@ async def assess_bot_instance_readiness(
             checks.append(_check(label, "failed", catalog_blocker, backend_index=index))
             continue
 
-        if backend_type in {"local_llm", "remote_llm", "cli", "browser"}:
+        if backend_type in {"local_llm", "remote_llm", "cli", "browser", "documentation"}:
             worker_id = str(backend.worker_id or "").strip()
             if not worker_id:
                 checks.append(_check(label, "failed", "Worker-backed backend is missing worker_id.", backend_index=index))
