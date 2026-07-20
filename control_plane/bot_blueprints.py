@@ -56,6 +56,8 @@ _RAW_CREDENTIAL_FIELDS = frozenset(
         "private_key",
     }
 )
+_PORTFOLIO_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$")
+_MANAGER_ACTIONS = ["pause_schedule", "hold_bot", "configuration_review"]
 
 
 def is_safe_credential_reference(value: object) -> bool:
@@ -71,6 +73,22 @@ def is_safe_credential_reference(value: object) -> bool:
         or "=" in reference
         or any(character.isspace() for character in reference)
     )
+
+
+def _normalize_portfolio_ids(values: list[str], *, field_name: str) -> list[str]:
+    """Validate bounded control-plane identifiers without resolving them yet."""
+    normalized_values: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        identifier = str(value or "").strip()
+        if not identifier:
+            continue
+        if not _PORTFOLIO_ID_PATTERN.fullmatch(identifier):
+            raise ValueError(f"{field_name} entries must be control-plane identifiers.")
+        if identifier not in seen:
+            seen.add(identifier)
+            normalized_values.append(identifier)
+    return normalized_values
 
 
 class SpecialistBlueprintRequest(BaseModel):
@@ -92,6 +110,8 @@ class SpecialistBlueprintRequest(BaseModel):
     allow_repo_writes: bool = False
     cli_command_profile: Literal["claude_ollama_json"] | None = None
     cli_runtime_model: str | None = Field(default=None, max_length=128)
+    portfolio_bot_ids: list[str] = Field(default_factory=list, max_length=100)
+    portfolio_schedule_ids: list[str] = Field(default_factory=list, max_length=100)
 
     @model_validator(mode="before")
     @classmethod
@@ -124,6 +144,22 @@ class SpecialistBlueprintRequest(BaseModel):
             credential_reference = backend.api_key_ref
             if credential_reference is not None and not is_safe_credential_reference(credential_reference):
                 raise ValueError("api_key_ref must be a named vault or environment reference, not a secret value.")
+        self.portfolio_bot_ids = _normalize_portfolio_ids(
+            self.portfolio_bot_ids,
+            field_name="portfolio_bot_ids",
+        )
+        self.portfolio_schedule_ids = _normalize_portfolio_ids(
+            self.portfolio_schedule_ids,
+            field_name="portfolio_schedule_ids",
+        )
+        if self.kind == "operations_manager":
+            if not (self.portfolio_bot_ids or self.portfolio_schedule_ids):
+                raise ValueError(
+                    "operations_manager requires at least one portfolio_bot_ids or portfolio_schedule_ids entry."
+                )
+            manager_bot_id = _normalize_bot_id(self.bot_id or self.name)
+            if manager_bot_id in self.portfolio_bot_ids:
+                raise ValueError("operations_manager cannot include itself in portfolio_bot_ids.")
         return self
 
 
@@ -275,15 +311,24 @@ _BLUEPRINTS: dict[str, dict[str, Any]] = {
     "operations_manager": {
         "label": "Operations Manager",
         "role": "operations_manager",
-        "description": "Aggregates bounded worker reports and platform health evidence into an operator decision brief.",
+        "description": "Supervises an explicit worker and schedule portfolio and produces approval-gated executive decisions.",
         "risk_level": "read_only",
-        "outputs": ["status", "operational_summary", "worker_reports", "risks", "decisions_needed", "handoff_notes"],
-        "receives": ["instruction", "monitoring_events", "subordinate_reports", "recent_changes", "operating_policies"],
-        "self_serve": ["vault"],
+        "outputs": [
+            "executive_summary",
+            "overall_status",
+            "accomplishments",
+            "risks",
+            "decisions_needed",
+            "portfolio",
+            "action_proposals",
+        ],
+        "receives": ["instruction", "portfolio_snapshot"],
+        "self_serve": [],
         "rules": [
-            "Analyze supplied reports and approved vault context only.",
-            "Do not enable workers, dispatch tasks, modify configurations, restart services, or deploy changes.",
-            "Separate verified operating evidence from assumptions and identify every decision that needs an operator.",
+            "Analyze only the supplied declared-portfolio snapshot and instruction.",
+            "You may propose pause_schedule, hold_bot, or configuration_review actions for declared targets only; proposals never execute by themselves.",
+            "Do not enable workers, dispatch tasks, modify configurations, restart services, deploy changes, or access other portfolios.",
+            "Separate verified operating evidence from assumptions and identify each decision that needs an operator.",
         ],
     },
     "website_monitor": {
@@ -406,6 +451,23 @@ def build_specialist_bot(request: SpecialistBlueprintRequest) -> Bot:
         routing_rules["launch_profile"] = {
             "enabled": False,
             "project_id": request.project_id,
+        }
+    if request.kind == "operations_manager":
+        routing_rules["worker_profile"] = {
+            "role": "operations-manager",
+            "task_scope": "read-only-manager-review",
+            "can_edit": False,
+        }
+        routing_rules["supervision_manager"] = {
+            "enabled": True,
+            "portfolio": {
+                "project_id": str(request.project_id or "").strip() or None,
+                "bot_ids": list(request.portfolio_bot_ids),
+                "schedule_ids": list(request.portfolio_schedule_ids),
+            },
+            "action_policy": {
+                "allow_actions": list(_MANAGER_ACTIONS),
+            },
         }
 
     return Bot(

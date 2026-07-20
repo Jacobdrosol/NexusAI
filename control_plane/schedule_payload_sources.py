@@ -11,10 +11,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict
 
+from shared.bot_policy import supervision_manager_config
+
 
 FLEET_HEALTH_SUMMARY_SOURCE = "control_plane_fleet_summary_v1"
 OPERATIONAL_QUALITY_SNAPSHOT_SOURCE = "control_plane_operational_quality_v1"
 CSV_WORK_ITEMS_SOURCE = "csv_work_items_v1"
+SUPERVISION_PORTFOLIO_SOURCE = "control_plane_supervision_portfolio_v1"
 _SYSTEM_PAYLOAD_SOURCE_KEY = "system_payload_source"
 _SAFE_FIELD_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
 _FLEET_HEALTH_RECENT_WINDOW_HOURS = 24
@@ -234,6 +237,7 @@ def system_payload_source_config(schedule: Dict[str, Any]) -> Dict[str, Any] | N
         FLEET_HEALTH_SUMMARY_SOURCE,
         OPERATIONAL_QUALITY_SNAPSHOT_SOURCE,
         CSV_WORK_ITEMS_SOURCE,
+        SUPERVISION_PORTFOLIO_SOURCE,
     }:
         raise SystemPayloadSourceError(f"unsupported system_payload_source type: {source_type or 'unset'}")
     if not _SAFE_FIELD_NAME.fullmatch(target_field):
@@ -265,6 +269,15 @@ def validate_system_payload_source(schedule: Dict[str, Any], bot: Any) -> None:
         raise SystemPayloadSourceError(
             "operational quality snapshots require a worker_profile with a read-only quality-review task scope"
         )
+    if source_config["type"] == SUPERVISION_PORTFOLIO_SOURCE:
+        if not task_scope.startswith("read-only-manager-review"):
+            raise SystemPayloadSourceError(
+                "supervision portfolio snapshots require a worker_profile with a read-only manager-review task scope"
+            )
+        if supervision_manager_config(bot) is None:
+            raise SystemPayloadSourceError(
+                "supervision portfolio snapshots require an enabled bounded supervision_manager configuration"
+            )
     if source_config["type"] == CSV_WORK_ITEMS_SOURCE and not task_scope.startswith(("read-only", "draft-only")):
         raise SystemPayloadSourceError(
             "csv_work_items_v1 requires a worker_profile with a read-only or draft-only task scope"
@@ -703,6 +716,94 @@ async def operational_quality_snapshot(
     }
 
 
+async def supervision_portfolio_snapshot(
+    *,
+    manager_bot: Any,
+    bot_registry: Any,
+    task_manager: Any,
+    schedule_engine: Any,
+    supervision_store: Any,
+) -> Dict[str, Any]:
+    """Return bounded, non-content evidence for one declared manager portfolio."""
+    config = supervision_manager_config(manager_bot)
+    if config is None:
+        raise SystemPayloadSourceError("manager bot has no enabled supervision_manager configuration")
+    bot_ids = list(config.get("bot_ids") or [])[:100]
+    schedule_ids = list(config.get("schedule_ids") or [])[:100]
+    tasks = await _await_if_needed(task_manager.list_tasks(limit=200))
+    latest_task_by_bot: Dict[str, Any] = {}
+    for task in tasks or []:
+        bot_id = str(getattr(task, "bot_id", "") or "").strip()
+        if bot_id not in bot_ids:
+            continue
+        previous = latest_task_by_bot.get(bot_id)
+        current_updated = _task_updated_at(task)
+        previous_updated = _task_updated_at(previous) if previous is not None else None
+        if previous is None or (current_updated is not None and (previous_updated is None or current_updated > previous_updated)):
+            latest_task_by_bot[bot_id] = task
+    known_bots = {
+        str(getattr(bot, "id", "") or "").strip(): bot
+        for bot in (await _await_if_needed(bot_registry.list()) or [])
+    }
+    schedules = await _await_if_needed(schedule_engine.list_schedules(limit=500))
+    schedule_by_id = {
+        str(schedule.get("id") or "").strip(): schedule
+        for schedule in schedules or []
+        if isinstance(schedule, dict)
+    }
+    holds_by_bot = {
+        str(hold.get("bot_id") or "").strip(): hold
+        for hold in (await _await_if_needed(supervision_store.list_holds(limit=200)) or [])
+        if isinstance(hold, dict)
+    }
+    portfolio_bots: list[Dict[str, Any]] = []
+    for bot_id in bot_ids:
+        bot = known_bots.get(bot_id)
+        task = latest_task_by_bot.get(bot_id)
+        hold = holds_by_bot.get(bot_id)
+        portfolio_bots.append(
+            {
+                "bot_id": bot_id,
+                "name": str(getattr(bot, "name", "") or "")[:160] or None,
+                "registered": bot is not None,
+                "enabled": bool(getattr(bot, "enabled", False)) if bot is not None else False,
+                "supervision_hold": {
+                    "active": hold is not None,
+                    "reason": str(hold.get("reason") or "")[:2_000] if hold else None,
+                },
+                "latest_task": (
+                    {
+                        "status": str(getattr(task, "status", "unknown") or "unknown").lower(),
+                        "updated_at": getattr(task, "updated_at", None),
+                    }
+                    if task is not None
+                    else None
+                ),
+            }
+        )
+    portfolio_schedules: list[Dict[str, Any]] = []
+    for schedule_id in schedule_ids:
+        schedule = schedule_by_id.get(schedule_id)
+        portfolio_schedules.append(
+            {
+                "schedule_id": schedule_id,
+                "name": str(schedule.get("name") or "")[:160] if schedule else None,
+                "registered": schedule is not None,
+                "status": str(schedule.get("status") or "unknown").lower() if schedule else "missing",
+                "last_run_status": str(schedule.get("last_run_status") or "").lower() if schedule else None,
+                "last_run_at": schedule.get("last_run_at") if schedule else None,
+            }
+        )
+    return {
+        "source": SUPERVISION_PORTFOLIO_SOURCE,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "scope": "declared manager portfolio metadata only; no task content, prompts, or raw errors",
+        "project_id": config.get("project_id"),
+        "bots": portfolio_bots,
+        "schedules": portfolio_schedules,
+    }
+
+
 async def materialize_system_schedule_payload(
     schedule: Dict[str, Any],
     *,
@@ -711,6 +812,7 @@ async def materialize_system_schedule_payload(
     bot_registry: Any,
     task_manager: Any,
     schedule_engine: Any,
+    supervision_store: Any = None,
 ) -> Dict[str, Any]:
     """Return non-secret payload additions for an approved internal source."""
     config = system_payload_source_config(schedule)
@@ -732,6 +834,24 @@ async def materialize_system_schedule_payload(
             bot_registry=bot_registry,
             task_manager=task_manager,
             schedule_engine=schedule_engine,
+        )
+        return {config["target_field"]: json.dumps(snapshot, sort_keys=True, separators=(",", ":"))}
+    if config["type"] == SUPERVISION_PORTFOLIO_SOURCE:
+        if supervision_store is None:
+            raise SystemPayloadSourceError("supervision store is unavailable")
+        target_bot_id = str(schedule.get("target_bot_id") or "").strip()
+        if not target_bot_id:
+            raise SystemPayloadSourceError("supervision portfolio snapshots require a target_bot_id")
+        try:
+            manager_bot = await _await_if_needed(bot_registry.get(target_bot_id))
+        except Exception as exc:
+            raise SystemPayloadSourceError("supervision manager bot is unavailable") from exc
+        snapshot = await supervision_portfolio_snapshot(
+            manager_bot=manager_bot,
+            bot_registry=bot_registry,
+            task_manager=task_manager,
+            schedule_engine=schedule_engine,
+            supervision_store=supervision_store,
         )
         return {config["target_field"]: json.dumps(snapshot, sort_keys=True, separators=(",", ":"))}
     if config["type"] == CSV_WORK_ITEMS_SOURCE:

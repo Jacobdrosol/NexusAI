@@ -41,6 +41,7 @@ async def _require_schedule_target_ready(
             worker_probe_store=request.app.state.worker_probe_store,
             key_vault=request.app.state.key_vault,
             model_registry=request.app.state.model_registry,
+            supervision_store=getattr(request.app.state, "supervision_store", None),
         )
     except ScheduleAutonomySafetyError as exc:
         raise HTTPException(status_code=409, detail=exc.as_detail()) from exc
@@ -203,6 +204,8 @@ async def trigger_schedule(schedule_id: str, request: Request) -> Dict[str, Any]
         run = await engine.trigger_schedule(schedule_id)
         await record_audit_event(request, action="schedules.trigger", resource=f"schedule:{schedule_id}")
         return {"run": run}
+    except HTTPException:
+        raise
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except Exception as exc:

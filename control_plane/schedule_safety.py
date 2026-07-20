@@ -227,6 +227,7 @@ async def require_schedule_runtime_readiness(
     worker_probe_store: Any = None,
     key_vault: Any = None,
     model_registry: Any = None,
+    supervision_store: Any = None,
 ) -> None:
     """Verify a schedule target is dispatchable immediately before execution."""
     bot_id = str(
@@ -234,6 +235,20 @@ async def require_schedule_runtime_readiness(
     ).strip()
     if not bot_id:
         return
+    if supervision_store is not None:
+        try:
+            hold = await supervision_store.get_hold(bot_id)
+        except Exception as exc:
+            raise ScheduleAutonomySafetyError(
+                "schedule_supervision_state_unavailable",
+                f"Schedule target '{bot_id}' cannot be checked for an active supervision hold.",
+            ) from exc
+        if hold is not None:
+            raise ScheduleAutonomySafetyError(
+                "schedule_target_supervision_blocked",
+                f"Schedule target '{bot_id}' is on an active supervision hold.",
+                blockers=[str(hold.get("reason") or "supervision hold")[:2_000]],
+            )
     try:
         readiness = await assess_bot_readiness(
             bot_id,

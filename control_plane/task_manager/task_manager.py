@@ -3325,6 +3325,7 @@ class TaskManager:
         bot_registry: Optional[Any] = None,
         orchestration_workspace_store: Optional[Any] = None,
         connection_resolver: Optional[Any] = None,
+        supervision_store: Optional[Any] = None,
     ) -> None:
         if orchestration_workspace_store is None:
             from control_plane.orchestration_workspace_store import OrchestrationWorkspaceStore
@@ -3336,6 +3337,7 @@ class TaskManager:
         self._scheduler = scheduler
         self._bot_registry = bot_registry
         self._connection_resolver = connection_resolver
+        self._supervision_store = supervision_store
         self._project_registry = getattr(scheduler, "project_registry", None)
         self._orchestration_workspace_store = orchestration_workspace_store
         self._db_ready = False
@@ -5542,6 +5544,17 @@ class TaskManager:
                     bot = await self._bot_registry.get(task.bot_id)
                 except Exception:
                     bot = None
+            if self._supervision_store is not None:
+                hold = await self._supervision_store.get_hold(task.bot_id)
+                if hold is not None:
+                    raise _TaskPolicyViolation(
+                        f"Bot '{task.bot_id}' is on an active supervision hold.",
+                        code="supervision_blocked",
+                        details={
+                            "reason_code": "supervision_blocked",
+                            "hold_reason": str(hold.get("reason") or "")[:2_000],
+                        },
+                    )
             original_payload = copy.deepcopy(task.payload)
             payload = original_payload if isinstance(original_payload, dict) else {}
             runtime_payload = copy.deepcopy(payload)
@@ -5784,6 +5797,17 @@ class TaskManager:
                     raise
                 except Exception:
                     pass
+            if bot is not None and self._supervision_store is not None:
+                try:
+                    await self._supervision_store.record_manager_result(
+                        bot=bot,
+                        task_id=task.id,
+                        result=result,
+                    )
+                except Exception as exc:
+                    # A reporting persistence problem must not turn completed work
+                    # into a failed task or trigger an unsafe retry.
+                    logger.error("Task %s completed but manager report capture failed: %s", task_id, exc)
             await self.update_status(task_id, "completed", result=result)
         except asyncio.CancelledError:
             logger.info("Task %s cancelled", task_id)

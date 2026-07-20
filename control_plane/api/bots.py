@@ -562,17 +562,43 @@ async def preflight_bot(request: Request, payload: Any = Body(...)) -> Dict[str,
     return await _preflight_bot_payload(payload, request)
 
 
-def _with_operational_state(bot: Bot, readiness: Dict[str, Any]) -> Dict[str, Any]:
+def _with_operational_state(
+    bot: Bot,
+    readiness: Dict[str, Any],
+    supervision_hold: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
     """Add a dashboard-safe operational state without changing dispatch readiness."""
     result = dict(readiness)
+    if supervision_hold is not None:
+        checks = list(result.get("checks") or [])
+        checks.append(
+            {
+                "component": "supervision",
+                "status": "failed",
+                "message": "Bot is on an active supervision hold.",
+            }
+        )
+        result["checks"] = checks
+        summary = dict(result.get("summary") or {})
+        summary["checks"] = int(summary.get("checks") or 0) + 1
+        summary["failed"] = int(summary.get("failed") or 0) + 1
+        summary["blocking"] = int(summary.get("blocking") or 0) + 1
+        result["summary"] = summary
+        result["ready"] = False
     enabled = bool(bot.enabled)
     if not enabled:
         state = "disabled"
-    elif bool(readiness.get("ready")):
+    elif bool(result.get("ready")):
         state = "ready"
     else:
         state = "blocked"
-    result.update({"enabled": enabled, "state": state})
+    result.update(
+        {
+            "enabled": enabled,
+            "state": state,
+            "supervision_hold": supervision_hold,
+        }
+    )
     return result
 
 
@@ -581,6 +607,13 @@ async def list_bot_readiness(request: Request) -> Dict[str, Any]:
     """Return non-mutating dispatch readiness for every registered bot."""
     bot_registry = request.app.state.bot_registry
     bots = await bot_registry.list()
+    supervision_store = getattr(request.app.state, "supervision_store", None)
+    holds = await supervision_store.list_holds(limit=500) if supervision_store is not None else []
+    holds_by_bot = {
+        str(item.get("bot_id") or "").strip(): item
+        for item in holds
+        if isinstance(item, dict) and str(item.get("bot_id") or "").strip()
+    }
     readiness = []
     for bot in bots:
         assessed = await assess_bot_instance_readiness(
@@ -591,7 +624,7 @@ async def list_bot_readiness(request: Request) -> Dict[str, Any]:
             key_vault=request.app.state.key_vault,
             model_registry=request.app.state.model_registry,
         )
-        readiness.append(_with_operational_state(bot, assessed))
+        readiness.append(_with_operational_state(bot, assessed, holds_by_bot.get(str(bot.id))))
     summary = {
         state: sum(1 for item in readiness if item["state"] == state)
         for state in ("ready", "blocked", "disabled")
@@ -612,7 +645,9 @@ async def get_bot_readiness(bot_id: str, request: Request) -> Dict[str, Any]:
             key_vault=request.app.state.key_vault,
             model_registry=request.app.state.model_registry,
         )
-        return _with_operational_state(bot, readiness)
+        supervision_store = getattr(request.app.state, "supervision_store", None)
+        hold = await supervision_store.get_hold(bot.id) if supervision_store is not None else None
+        return _with_operational_state(bot, readiness, hold)
     except BotNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

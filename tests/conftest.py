@@ -27,6 +27,7 @@ async def cp_app(tmp_path):
     from control_plane.scheduler.scheduler import Scheduler
     from control_plane.task_manager.task_manager import TaskManager
     from control_plane.worker_probe_store import WorkerProbeStore
+    from control_plane.supervision_store import SupervisionStore
     from control_plane.vault.mcp_broker import MCPBroker
     from control_plane.vault.vault_manager import VaultManager
     from control_plane.connections.resolver import ConnectionResolver
@@ -50,6 +51,7 @@ async def cp_app(tmp_path):
         platform_ai,
         projects,
         schedules,
+        supervision,
         tasks,
         vault,
         workers as workers_api,
@@ -69,6 +71,7 @@ async def cp_app(tmp_path):
     app.include_router(assignments.router)
     app.include_router(platform_ai.router)
     app.include_router(schedules.router)
+    app.include_router(supervision.router)
     app.include_router(vault.router)
     app.include_router(audit.router)
 
@@ -89,6 +92,7 @@ async def cp_app(tmp_path):
     connection_resolver = ConnectionResolver(db_path=str(tmp_path / "dashboard.db"))
     worker_probe_store = WorkerProbeStore(db_path=str(tmp_path / "worker_probes.db"))
     repo_workspace_usage_store = RepoWorkspaceUsageStore(db_path=str(tmp_path / "repo_usage.db"))
+    supervision_store = SupervisionStore(db_path=str(tmp_path / "supervision.db"))
     scheduler = Scheduler(
         bot_registry,
         worker_registry,
@@ -104,6 +108,7 @@ async def cp_app(tmp_path):
         db_path=str(tmp_path / "tasks.db"),
         orchestration_workspace_store=orchestration_workspace_store,
         connection_resolver=connection_resolver,
+        supervision_store=supervision_store,
     )
     pm_orchestrator = PMOrchestrator(
         bot_registry=bot_registry,
@@ -142,6 +147,7 @@ async def cp_app(tmp_path):
     app.state.orchestration_workspace_store = orchestration_workspace_store
     app.state.repo_workspace_usage_store = repo_workspace_usage_store
     app.state.worker_probe_store = worker_probe_store
+    app.state.supervision_store = supervision_store
     app.state.scheduler = scheduler
     app.state.task_manager = task_manager
     app.state.pm_orchestrator = pm_orchestrator

@@ -23,6 +23,7 @@ from control_plane.api import (
     platform_ai,
     projects,
     schedules,
+    supervision,
     tasks,
     vault,
     workers,
@@ -56,6 +57,7 @@ from control_plane.schedule_safety import (
     require_schedule_runtime_readiness,
 )
 from control_plane.schedule_payload_sources import materialize_system_schedule_payload
+from control_plane.supervision_store import SupervisionStore
 from control_plane.task_manager.task_manager import TaskManager
 from control_plane.vault.mcp_broker import MCPBroker
 from control_plane.vault.vault_manager import VaultManager
@@ -96,6 +98,7 @@ async def lifespan(app: FastAPI):
     repo_workspace_usage_store = RepoWorkspaceUsageStore()
     orchestration_workspace_store = OrchestrationWorkspaceStore()
     worker_probe_store = WorkerProbeStore()
+    supervision_store = SupervisionStore()
 
     # Load from YAML configs
     workers_dir = cp_cfg.get("workers_config_dir", "config/workers")
@@ -130,6 +133,7 @@ async def lifespan(app: FastAPI):
         bot_registry=bot_registry,
         orchestration_workspace_store=orchestration_workspace_store,
         connection_resolver=connection_resolver,
+        supervision_store=supervision_store,
     )
     pm_orchestrator = PMOrchestrator(
         bot_registry=bot_registry,
@@ -163,6 +167,7 @@ async def lifespan(app: FastAPI):
             worker_probe_store=worker_probe_store,
             key_vault=key_vault,
             model_registry=model_registry,
+            supervision_store=supervision_store,
         )
 
     async def _schedule_payload_materializer(schedule: dict) -> dict:
@@ -173,6 +178,7 @@ async def lifespan(app: FastAPI):
             bot_registry=bot_registry,
             task_manager=task_manager,
             schedule_engine=agent_schedule_engine,
+            supervision_store=supervision_store,
         )
 
     agent_schedule_engine = AgentScheduleEngine(
@@ -212,6 +218,7 @@ async def lifespan(app: FastAPI):
     app.state.repo_workspace_usage_store = repo_workspace_usage_store
     app.state.orchestration_workspace_store = orchestration_workspace_store
     app.state.worker_probe_store = worker_probe_store
+    app.state.supervision_store = supervision_store
     app.state.scheduler = scheduler
     app.state.task_manager = task_manager
     app.state.pm_orchestrator = pm_orchestrator
@@ -345,6 +352,7 @@ def create_app() -> FastAPI:
     app.include_router(platform_ai.router)
     app.include_router(orchestration.router)
     app.include_router(schedules.router)
+    app.include_router(supervision.router)
     app.include_router(vault.router)
     app.include_router(audit.router)
     app.include_router(database.router)

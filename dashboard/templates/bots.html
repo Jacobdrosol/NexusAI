@@ -158,6 +158,24 @@
           <input class="form-control" id="specialist-cli-runtime-model" name="cli_runtime_model" placeholder="glm-5.2:cloud" maxlength="128">
         </div>
       </div>
+      <fieldset id="specialist-manager-portfolio" style="display:none;margin:0 0 0.75rem;padding:0.75rem;">
+        <legend>Manager Portfolio</legend>
+        <div class="mini-note" style="margin-bottom:0.65rem;">Choose the worker bots this manager may supervise. Schedule IDs are optional, but enable approval-gated pause proposals for those schedules.</div>
+        <div class="form-group">
+          <label>Worker Bots</label>
+          <div id="specialist-manager-bot-list" style="max-height:155px;overflow:auto;">
+            {% for bot in bots %}
+            <label style="display:block;margin:0.25rem 0;"><input type="checkbox" name="portfolio_bot_ids" value="{{ bot.id }}"> {{ bot.name }} ({{ bot.id }})</label>
+            {% else %}
+            <div class="mini-note">No bots are registered yet. Add a schedule ID below after its specialist exists.</div>
+            {% endfor %}
+          </div>
+        </div>
+        <div class="form-group" style="margin-bottom:0;">
+          <label for="specialist-manager-schedule-ids">Schedule IDs</label>
+          <textarea class="form-control" id="specialist-manager-schedule-ids" name="portfolio_schedule_ids" rows="3" maxlength="2000" placeholder="One schedule ID per line"></textarea>
+        </div>
+      </fieldset>
       <div class="form-group">
         <label for="specialist-mission">Mission (optional)</label>
         <textarea class="form-control" id="specialist-mission" name="mission" rows="3" maxlength="4000"></textarea>
@@ -255,8 +273,10 @@ function refreshSpecialistDetails() {
   const selected = selectedSpecialist();
   const description = document.getElementById('specialist-description');
   const writeOption = document.getElementById('specialist-write-option');
+  const managerPortfolio = document.getElementById('specialist-manager-portfolio');
   if (description) description.textContent = selected ? selected.description : '';
   if (writeOption) writeOption.style.display = selected?.supports_repo_writes ? 'block' : 'none';
+  if (managerPortfolio) managerPortfolio.style.display = selected?.kind === 'operations_manager' ? 'block' : 'none';
   if (!selected?.supports_repo_writes) {
     const writes = document.getElementById('specialist-allow-writes');
     if (writes) writes.checked = false;
@@ -340,8 +360,19 @@ function specialistPayload() {
   if (backendType === 'cli' && (!cliProfile || !cliRuntimeModel)) {
     throw new Error('The CLI profile and Ollama runtime model are required for a CLI worker.');
   }
+  const portfolioBotIds = Array.from(form.querySelectorAll('input[name="portfolio_bot_ids"]:checked'))
+    .map((input) => String(input.value || '').trim())
+    .filter(Boolean);
+  const portfolioScheduleIds = String(fd.get('portfolio_schedule_ids') || '')
+    .split(/[\n,]/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const kind = String(fd.get('kind') || '').trim();
+  if (kind === 'operations_manager' && !portfolioBotIds.length && !portfolioScheduleIds.length) {
+    throw new Error('An Operations Manager requires at least one worker bot or schedule in its portfolio.');
+  }
   return {
-    kind: String(fd.get('kind') || '').trim(),
+    kind,
     name: String(fd.get('name') || '').trim(),
     mission: String(fd.get('mission') || '').trim() || null,
     project_id: String(fd.get('project_id') || '').trim() || null,
@@ -349,6 +380,8 @@ function specialistPayload() {
     allow_repo_writes: !!document.getElementById('specialist-allow-writes')?.checked,
     cli_command_profile: cliProfile || null,
     cli_runtime_model: cliRuntimeModel || null,
+    portfolio_bot_ids: portfolioBotIds,
+    portfolio_schedule_ids: portfolioScheduleIds,
     backends: [{
       type: backendType,
       provider,
@@ -395,6 +428,8 @@ document.getElementById('specialist-activate').addEventListener('change', clearS
 document.getElementById('specialist-allow-writes').addEventListener('change', clearSpecialistPreflight);
 document.getElementById('specialist-cli-profile').addEventListener('change', clearSpecialistPreflight);
 document.getElementById('specialist-cli-runtime-model').addEventListener('input', clearSpecialistPreflight);
+document.querySelectorAll('input[name="portfolio_bot_ids"]').forEach((input) => input.addEventListener('change', clearSpecialistPreflight));
+document.getElementById('specialist-manager-schedule-ids').addEventListener('input', clearSpecialistPreflight);
 
 document.getElementById('form-create-specialist').addEventListener('submit', async function(event) {
   event.preventDefault();

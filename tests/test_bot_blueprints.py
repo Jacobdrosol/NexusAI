@@ -123,6 +123,8 @@ def test_operations_manager_blueprint_stays_read_only_and_requests_operator_deci
             kind="operations_manager",
             name="GlobeIQ Operations Manager",
             project_id="globeiq",
+            portfolio_bot_ids=["content-writer-01", "quality-review-01"],
+            portfolio_schedule_ids=["quality-review-hourly"],
             backends=[_backend()],
         )
     )
@@ -131,14 +133,50 @@ def test_operations_manager_blueprint_stays_read_only_and_requests_operator_deci
     assert bot.execution_policy.repo_output_mode == "deny"
     assert bot.routing_rules["specialist"]["risk_level"] == "read_only"
     assert bot.routing_rules["output_contract"]["required_fields"] == [
-        "status",
-        "operational_summary",
-        "worker_reports",
+        "executive_summary",
+        "overall_status",
+        "accomplishments",
         "risks",
         "decisions_needed",
-        "handoff_notes",
+        "portfolio",
+        "action_proposals",
     ]
-    assert "do not enable workers" in bot.system_prompt.lower()
+    assert bot.routing_rules["worker_profile"] == {
+        "role": "operations-manager",
+        "task_scope": "read-only-manager-review",
+        "can_edit": False,
+    }
+    assert bot.routing_rules["supervision_manager"] == {
+        "enabled": True,
+        "portfolio": {
+            "project_id": "globeiq",
+            "bot_ids": ["content-writer-01", "quality-review-01"],
+            "schedule_ids": ["quality-review-hourly"],
+        },
+        "action_policy": {
+            "allow_actions": ["pause_schedule", "hold_bot", "configuration_review"],
+        },
+    }
+    assert validate_bot_configuration(bot) == []
+    assert "propose pause_schedule" in bot.system_prompt.lower()
+
+
+@pytest.mark.parametrize(
+    "kwargs, message",
+    [
+        ({}, "requires at least one portfolio"),
+        ({"portfolio_bot_ids": ["GlobeIQ Operations Manager"]}, "control-plane identifiers"),
+        ({"portfolio_bot_ids": ["globeiq-operations-manager"]}, "cannot include itself"),
+    ],
+)
+def test_operations_manager_blueprint_requires_a_bounded_external_portfolio(kwargs, message):
+    with pytest.raises(ValueError, match=message):
+        SpecialistBlueprintRequest(
+            kind="operations_manager",
+            name="GlobeIQ Operations Manager",
+            backends=[_backend()],
+            **kwargs,
+        )
 
 
 def test_code_implementer_requires_explicit_write_escalation():

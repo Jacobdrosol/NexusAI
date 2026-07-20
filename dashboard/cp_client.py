@@ -863,6 +863,22 @@ class CPClient:
     def list_schedule_runs(self, schedule_id: str, limit: int = 50) -> Optional[Dict[str, Any]]:
         return self._get(f"/v1/schedules/{schedule_id}/runs?limit={max(1, int(limit))}")
 
+    # Supervisory operations
+    def get_supervision_overview(self) -> Optional[Dict[str, Any]]:
+        return self._get("/v1/supervision/overview")
+
+    def list_supervision_reports(self, limit: int = 50) -> Optional[Dict[str, Any]]:
+        return self._get(f"/v1/supervision/reports?limit={max(1, min(int(limit), 200))}")
+
+    def approve_supervision_action(self, action_id: str, body: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+        return self._post(f"/v1/supervision/actions/{action_id}/approve", body or {})
+
+    def reject_supervision_action(self, action_id: str, body: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+        return self._post(f"/v1/supervision/actions/{action_id}/reject", body or {})
+
+    def release_supervision_hold(self, bot_id: str, body: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+        return self._post(f"/v1/supervision/holds/{bot_id}/release", body or {})
+
     def mark_pm_run_failed(self, conversation_id: str, orchestration_id: str) -> Optional[Dict[str, Any]]:
         return self._post(
             f"/v1/chat/conversations/{conversation_id}/orchestrations/{orchestration_id}/mark-failed",

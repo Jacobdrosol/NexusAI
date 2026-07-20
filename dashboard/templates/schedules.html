@@ -111,6 +111,7 @@
           <option value="">None</option>
           <option value="control_plane_fleet_summary_v1">Control-plane fleet health summary (read-only monitoring only)</option>
           <option value="control_plane_operational_quality_v1">Aggregate operational quality snapshot (read-only QC only)</option>
+          <option value="control_plane_supervision_portfolio_v1">Declared manager portfolio snapshot (read-only manager only)</option>
           <option value="csv_work_items_v1">Read-only CSV work queue</option>
         </select>
       </div>
@@ -527,6 +528,10 @@ document.getElementById('form-create-schedule').addEventListener('submit', async
       control_plane_operational_quality_v1: {
         targetField: 'artifact',
         placeholder: 'A current aggregate operational quality snapshot will be materialized at dispatch.',
+      },
+      control_plane_supervision_portfolio_v1: {
+        targetField: 'portfolio_snapshot',
+        placeholder: 'A current declared manager portfolio snapshot will be materialized at dispatch.',
       },
     };
     const sourceConfig = systemPayloadConfig[systemPayloadSource];
