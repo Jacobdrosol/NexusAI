@@ -1779,7 +1779,7 @@ def _repo_output_policy_prompt_suffix(bot: Any, payload: Any = None) -> str:
 
 
 def _prepare_payload_for_backend(bot: Any, backend: BackendConfig, payload: Any, *, task: Task | None = None) -> Any:
-    if backend.type == "browser":
+    if backend.type in {"browser", "documentation"}:
         if _is_autonomous_schedule_task(task) and isinstance(payload, dict):
             schedule_envelope_fields = {"instruction", "source", "schedule_id", "project_id", "node_overrides"}
             return {key: value for key, value in payload.items() if key not in schedule_envelope_fields}
@@ -2066,7 +2066,11 @@ class Scheduler:
         return self._execution_provenance_by_task.pop(str(task_id or ""), None)
 
     def _worker_capacity_limit(self, worker: Worker, backend: BackendConfig) -> int:
-        if str(getattr(backend, "type", "") or "").strip().lower() in {"browser", "local_llm"}:
+        if str(getattr(backend, "type", "") or "").strip().lower() in {
+            "browser",
+            "documentation",
+            "local_llm",
+        }:
             return 1
         return 2**31 - 1
 
@@ -2841,7 +2845,7 @@ class Scheduler:
         raise NoViableBackendError(_backend_failure_message(task.id, last_error, attempts)) from last_error
 
     async def _dispatch_backend(self, backend: BackendConfig, payload: Any, task: Task | None = None) -> Any:
-        if _is_non_mutating_test_task(task) and backend.type in {"cli", "browser", "custom"}:
+        if _is_non_mutating_test_task(task) and backend.type in {"cli", "browser", "documentation", "custom"}:
             raise BackendError(
                 "Test-mode tasks do not execute CLI, browser, or custom backends; configure an LLM backend for analysis."
             )
@@ -2886,6 +2890,11 @@ class Scheduler:
             await self._require_fresh_autonomous_worker_probe(worker, task)
             self._record_execution_provenance(task, backend, worker=worker)
             return await self._dispatch_browser_inspection(worker, backend, safe_payload, task=task)
+        elif backend.type == "documentation":
+            worker = await self._resolve_documentation_worker(backend, task=task)
+            await self._require_fresh_autonomous_worker_probe(worker, task)
+            self._record_execution_provenance(task, backend, worker=worker)
+            return await self._dispatch_documentation_write(worker, backend, safe_payload, task=task)
         elif backend.type == "custom":
             self._record_execution_provenance(task, backend)
             return await self._dispatch_custom_backend(backend, safe_payload, task=task)
@@ -3773,7 +3782,7 @@ class Scheduler:
         return os.environ.get(default_env_var, "").strip()
 
     async def _validate_model_if_catalog_present(self, backend: BackendConfig) -> None:
-        if backend.type == "browser" or (
+        if backend.type in {"browser", "documentation"} or (
             backend.type == "custom"
             and str(backend.provider or "").strip().lower() == "http_connection"
         ):
@@ -3890,7 +3899,7 @@ class Scheduler:
     def _worker_supports_backend(self, worker: Worker, backend: BackendConfig) -> bool:
         backend_provider = str(backend.provider or "").strip().lower()
         backend_model = str(backend.model or "").strip()
-        expected_capability_type = "tool" if backend.type == "browser" else "llm"
+        expected_capability_type = "tool" if backend.type in {"browser", "documentation"} else "llm"
         for cap in worker.capabilities:
             if str(cap.type).lower() != expected_capability_type:
                 continue
@@ -3921,6 +3930,32 @@ class Scheduler:
             )
         if not self._worker_supports_backend(worker, backend):
             raise BackendError(f"Worker {worker.id} does not advertise browser/browser-ui")
+        await self._require_task_worker_tools(worker, task)
+        return worker
+
+    async def _resolve_documentation_worker(
+        self, backend: BackendConfig, *, task: Task | None = None
+    ) -> Worker:
+        """Resolve one attested worker for a fixed Docs Hub write contract."""
+
+        if str(backend.provider or "").strip().lower() != "documentation" or str(
+            backend.model or ""
+        ).strip().lower() != "documentation-v1":
+            raise BackendError("Documentation backends must use provider=documentation and model=documentation-v1")
+        if not backend.worker_id:
+            raise BackendError("worker_id is required for documentation backends")
+        try:
+            worker = await self.worker_registry.get(backend.worker_id)
+        except Exception as exc:
+            raise BackendError(f"Worker not found: {backend.worker_id}") from exc
+        if not worker.enabled or worker.status != "online":
+            raise BackendError(f"Worker {worker.id} is not online and enabled")
+        if not self._worker_has_capacity(worker, backend):
+            raise BackendError(
+                f"Worker {worker.id} has no remaining task capacity for backend type {backend.type}"
+            )
+        if not self._worker_supports_backend(worker, backend):
+            raise BackendError(f"Worker {worker.id} does not advertise documentation/documentation-v1")
         await self._require_task_worker_tools(worker, task)
         return worker
 
@@ -3971,6 +4006,75 @@ class Scheduler:
             for field in allowed_fields - {"browser_action", "owner_approval_id"}
             if field in payload
         }
+
+    async def _dispatch_documentation_write(
+        self,
+        worker: Worker,
+        backend: BackendConfig,
+        payload: Any,
+        *,
+        task: Task | None,
+    ) -> dict[str, Any]:
+        """Dispatch one allowlisted Markdown create or compare-and-save operation."""
+
+        if task is None:
+            raise BackendError("Documentation writes require a persisted task")
+        if not isinstance(payload, dict):
+            raise BackendError("Documentation writes require a JSON object payload")
+        allowed_fields = {"action", "path", "content", "expectedContentHash"}
+        unexpected_fields = sorted(set(payload) - allowed_fields)
+        if unexpected_fields:
+            raise BackendError(
+                "Documentation write payload contains unsupported fields: " + ", ".join(unexpected_fields)
+            )
+        action = str(payload.get("action") or "").strip().lower()
+        if action not in {"create", "save"}:
+            raise BackendError("Documentation action must be create or save")
+        path = payload.get("path")
+        content = payload.get("content")
+        if not isinstance(path, str) or not path.strip() or not isinstance(content, str):
+            raise BackendError("Documentation writes require a non-empty path and text content")
+        has_expected_hash = "expectedContentHash" in payload
+        if action == "save" and not has_expected_hash:
+            raise BackendError("Documentation save requires expectedContentHash")
+        if action == "create" and has_expected_hash:
+            raise BackendError("Documentation create cannot include expectedContentHash")
+        try:
+            bot = await self.bot_registry.get(task.bot_id)
+        except Exception as exc:
+            raise BackendError(f"Bot {task.bot_id} was not found for documentation authorization") from exc
+        action_key = f"documentation.{action}"
+        if action_key not in bot_execution_policy(bot).documentation_action_allowlist:
+            raise BackendError(f"Bot {bot.id} is not authorized for {action_key}")
+        if not backend.api_key_ref:
+            raise BackendError("Documentation backends require api_key_ref for the worker request token")
+        token = await self._resolve_api_key(backend.api_key_ref, "")
+        if not token:
+            raise BackendError("Documentation worker request token is not configured")
+        try:
+            url = f"{worker_base_url(worker)}/documentation/write"
+        except WorkerProbeError as exc:
+            raise BackendError(f"Worker {worker.id} has an invalid address") from exc
+
+        body = {field: payload[field] for field in allowed_fields if field in payload}
+        self._inflight_by_worker[worker.id] = int(self._inflight_by_worker.get(worker.id, 0)) + 1
+        started = time.perf_counter()
+        async with httpx.AsyncClient(timeout=_worker_timeout()) as client:
+            try:
+                response = await client.post(url, json=body, headers={"X-Nexus-Worker-Token": token})
+                response.raise_for_status()
+                result = response.json()
+                if not isinstance(result, dict):
+                    raise BackendError("Documentation worker returned an invalid write response")
+                return result
+            finally:
+                elapsed_ms = (time.perf_counter() - started) * 1000.0
+                previous = float(self._latency_ema_ms.get(worker.id, self._default_latency_ms))
+                alpha = min(max(self._latency_alpha, 0.01), 1.0)
+                self._latency_ema_ms[worker.id] = (alpha * elapsed_ms) + ((1.0 - alpha) * previous)
+                self._inflight_by_worker[worker.id] = max(
+                    0, int(self._inflight_by_worker.get(worker.id, 1)) - 1
+                )
 
     async def _dispatch_browser_inspection(
         self,

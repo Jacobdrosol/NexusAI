@@ -18,6 +18,7 @@ class Capability(BaseModel):
         "vertex",
         "cli",
         "browser",
+        "documentation",
         "custom",
     ]
     models: List[str]
@@ -77,7 +78,15 @@ class BackendParams(BaseModel):
 
 class BackendConfig(BaseModel):
     model_config = ConfigDict(from_attributes=True)
-    type: Literal["local_llm", "remote_llm", "cloud_api", "cli", "browser", "custom"]
+    type: Literal[
+        "local_llm",
+        "remote_llm",
+        "cloud_api",
+        "cli",
+        "browser",
+        "documentation",
+        "custom",
+    ]
     worker_id: Optional[str] = None
     model: str
     provider: str
@@ -141,6 +150,7 @@ class BotExecutionPolicy(BaseModel):
     browser_action_allowlist: List[str] = Field(default_factory=list)
     browser_action_owner_approval_required: List[str] = Field(default_factory=list)
     browser_inspection_path_allowlist: List[str] = Field(default_factory=list)
+    documentation_action_allowlist: List[str] = Field(default_factory=list)
 
 
 class BotContextAccess(BaseModel):

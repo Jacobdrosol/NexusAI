@@ -65,6 +65,40 @@ def _is_attested_read_only_browser_inspection(bot: Any, schedule: Dict[str, Any]
     )
 
 
+def _is_attested_allowlisted_documentation_write(bot: Any, schedule: Dict[str, Any]) -> bool:
+    """Allow a schedule to create or compare-and-save one bounded Docs Hub record."""
+
+    metadata = schedule.get("metadata") if isinstance(schedule.get("metadata"), dict) else {}
+    if str(metadata.get("connection_operation") or "").strip().lower() != "documentation_write":
+        return False
+    payload = _schedule_task_payload(schedule)
+    action = str(payload.get("action") or "").strip().lower()
+    path = str(payload.get("path") or "").strip()
+    content = payload.get("content")
+    if action not in {"create", "save"} or not path or not isinstance(content, str):
+        return False
+    routing_rules = getattr(bot, "routing_rules", None)
+    profile = routing_rules.get("worker_profile") if isinstance(routing_rules, dict) else None
+    profile = profile if isinstance(profile, dict) else {}
+    execution_policy = getattr(bot, "execution_policy", None)
+    if hasattr(execution_policy, "model_dump"):
+        execution_policy = execution_policy.model_dump()
+    execution_policy = execution_policy if isinstance(execution_policy, dict) else {}
+    allowed_actions = {
+        str(item or "").strip()
+        for item in execution_policy.get("documentation_action_allowlist") or []
+        if str(item or "").strip()
+    }
+    return (
+        str(profile.get("role") or "").strip().lower() == "docs-hub-writer"
+        and str(profile.get("task_scope") or "").strip().lower() == "allowlisted-documentation-write"
+        and profile.get("can_edit") is False
+        and str(execution_policy.get("repo_output_mode") or "").strip().lower() == "deny"
+        and execution_policy.get("can_apply_db_actions") is False
+        and f"documentation.{action}" in allowed_actions
+    )
+
+
 def _payload_field_value(payload: Dict[str, Any], field_path: str) -> Any:
     value: Any = payload
     for segment in (part.strip() for part in str(field_path or "").split(".") if part.strip()):
@@ -200,9 +234,11 @@ async def require_schedule_autonomy_safety(
 
     _require_bot_project_scope(schedule, bot)
 
-    allowed_restricted_backends = (
-        {"browser"} if _is_attested_read_only_browser_inspection(bot, schedule) else set()
-    )
+    allowed_restricted_backends = set()
+    if _is_attested_read_only_browser_inspection(bot, schedule):
+        allowed_restricted_backends.add("browser")
+    if _is_attested_allowlisted_documentation_write(bot, schedule):
+        allowed_restricted_backends.add("documentation")
     blockers = bot_autonomous_dispatch_blockers(
         bot,
         allowed_restricted_backend_types=allowed_restricted_backends,

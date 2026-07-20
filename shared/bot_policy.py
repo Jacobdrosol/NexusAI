@@ -5,7 +5,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 from shared.models import Bot, BotExecutionPolicy
 
 
-_AUTONOMOUSLY_RESTRICTED_BACKEND_TYPES = frozenset({"browser", "cli"})
+_AUTONOMOUSLY_RESTRICTED_BACKEND_TYPES = frozenset({"browser", "cli", "documentation"})
 _SUPERVISION_ACTION_TYPES = frozenset({"pause_schedule", "hold_bot", "configuration_review"})
 
 
@@ -205,6 +205,19 @@ def validate_bot_configuration(bot: Bot) -> List[str]:
         errors.append(
             f"Bot '{bot.id}' requires owner approval for browser actions not present in its allowlist: "
             + ", ".join(unrecognized_approval_actions)
+        )
+    authorized_documentation_actions = {
+        str(action or "").strip()
+        for action in execution_policy.documentation_action_allowlist
+        if str(action or "").strip()
+    }
+    unsupported_documentation_actions = sorted(
+        authorized_documentation_actions - {"documentation.create", "documentation.save"}
+    )
+    if unsupported_documentation_actions:
+        errors.append(
+            f"Bot '{bot.id}' has unsupported documentation actions: "
+            + ", ".join(unsupported_documentation_actions)
         )
     if bot_is_project_manager(bot) and not bot_has_explicit_workflow(bot):
         errors.append(f"Bot '{bot.id}' is marked as a project manager but has no explicit workflow triggers.")

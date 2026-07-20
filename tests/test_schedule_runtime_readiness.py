@@ -160,6 +160,52 @@ async def test_autonomous_schedule_allows_matching_specialist_project_scope():
 
 
 @pytest.mark.anyio
+async def test_autonomous_schedule_allows_attested_docs_hub_write():
+    backend = BackendConfig(
+        type="documentation",
+        provider="documentation",
+        model="documentation-v1",
+        worker_id="docs-writer-01",
+        api_key_ref="DOCUMENTATION_WORKER_TOKEN",
+    )
+    bot = Bot(
+        id="docs-hub-writer",
+        name="Docs Hub Writer",
+        role="docs-hub-writer",
+        project_id="globeiq",
+        enabled=True,
+        backends=[backend],
+        execution_policy={
+            "repo_output_mode": "deny",
+            "can_apply_db_actions": False,
+            "documentation_action_allowlist": ["documentation.create"],
+        },
+        routing_rules={
+            "worker_profile": {
+                "role": "docs-hub-writer",
+                "task_scope": "allowlisted-documentation-write",
+                "can_edit": False,
+            }
+        },
+    )
+
+    await require_schedule_autonomy_safety(
+        {
+            "target_bot_id": bot.id,
+            "project_id": "globeiq",
+            "task_payload": {
+                "action": "create",
+                "path": "docs/Automation_Workforce/Docs_Dana/activity.md",
+                "content": "# Activity",
+            },
+            "metadata": {"mutation_safe": True, "connection_operation": "documentation_write"},
+        },
+        bot_registry=_BotRegistry(bot),
+        only_when_active=False,
+    )
+
+
+@pytest.mark.anyio
 async def test_autonomous_schedule_enforces_explicit_bot_project_scope():
     bot = Bot(
         id="project-bound-monitor",

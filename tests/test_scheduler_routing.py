@@ -798,6 +798,129 @@ async def test_scheduler_rejects_browser_backend_without_a_pinned_attested_worke
 
 
 @pytest.mark.anyio
+async def test_scheduler_dispatches_only_allowlisted_documentation_writes(monkeypatch):
+    from control_plane.scheduler.scheduler import Scheduler
+
+    worker = Worker(
+        id="docs-writer-01",
+        name="Docs Writer",
+        host="docs-writer.local",
+        port=8010,
+        capabilities=[Capability(type="tool", provider="documentation", models=["documentation-v1"])],
+        status="online",
+        enabled=True,
+    )
+    backend = BackendConfig(
+        type="documentation",
+        provider="documentation",
+        model="documentation-v1",
+        worker_id=worker.id,
+        api_key_ref="DOCUMENTATION_WORKER_TOKEN",
+    )
+    bot = Bot(
+        id="docs-hub-writer",
+        name="Docs Hub Writer",
+        role="docs-hub-writer",
+        execution_policy={
+            "required_worker_tools": ["documentation-v1"],
+            "documentation_action_allowlist": ["documentation.create"],
+        },
+        backends=[backend],
+    )
+    task = Task(
+        id="task-docs-write",
+        bot_id=bot.id,
+        payload={},
+        created_at="now",
+        updated_at="now",
+    )
+    monkeypatch.setenv("DOCUMENTATION_WORKER_TOKEN", "worker-token")
+    fake_response = MagicMock()
+    fake_response.raise_for_status.return_value = None
+    fake_response.json.return_value = {
+        "action": "create",
+        "path": "docs/Automation_Workforce/Docs_Dana/activity.md",
+        "content_hash": "a" * 64,
+        "bytes_written": 8,
+    }
+    mock_client = AsyncMock()
+    mock_client.__aenter__.return_value = mock_client
+    mock_client.__aexit__.return_value = False
+    mock_client.post.return_value = fake_response
+    worker_registry = AsyncMock()
+    worker_registry.get.return_value = worker
+    bot_registry = AsyncMock()
+    bot_registry.get.return_value = bot
+    scheduler = Scheduler(bot_registry=bot_registry, worker_registry=worker_registry)
+
+    with patch("control_plane.scheduler.scheduler.httpx.AsyncClient", return_value=mock_client):
+        result = await scheduler._dispatch_backend(
+            backend,
+            {
+                "action": "create",
+                "path": "docs/Automation_Workforce/Docs_Dana/activity.md",
+                "content": "# Report",
+            },
+            task=task,
+        )
+
+    assert result["action"] == "create"
+    assert mock_client.post.await_args.args[0] == "http://docs-writer.local:8010/documentation/write"
+    assert mock_client.post.await_args.kwargs["json"] == {
+        "action": "create",
+        "path": "docs/Automation_Workforce/Docs_Dana/activity.md",
+        "content": "# Report",
+    }
+
+
+@pytest.mark.anyio
+async def test_scheduler_rejects_documentation_action_not_in_bot_policy():
+    from control_plane.scheduler.scheduler import BackendError, Scheduler
+
+    worker = Worker(
+        id="docs-writer-01",
+        name="Docs Writer",
+        host="docs-writer.local",
+        port=8010,
+        capabilities=[Capability(type="tool", provider="documentation", models=["documentation-v1"])],
+        status="online",
+        enabled=True,
+    )
+    backend = BackendConfig(
+        type="documentation",
+        provider="documentation",
+        model="documentation-v1",
+        worker_id=worker.id,
+        api_key_ref="DOCUMENTATION_WORKER_TOKEN",
+    )
+    bot = Bot(
+        id="docs-hub-writer",
+        name="Docs Hub Writer",
+        role="docs-hub-writer",
+        execution_policy={"documentation_action_allowlist": ["documentation.create"]},
+        backends=[backend],
+    )
+    task = Task(id="task-docs-save", bot_id=bot.id, payload={}, created_at="now", updated_at="now")
+    worker_registry = AsyncMock()
+    worker_registry.get.return_value = worker
+    bot_registry = AsyncMock()
+    bot_registry.get.return_value = bot
+    scheduler = Scheduler(bot_registry=bot_registry, worker_registry=worker_registry)
+
+    with pytest.raises(BackendError, match="not authorized for documentation.save"):
+        await scheduler._dispatch_backend(
+            backend,
+            {
+                "action": "save",
+                "path": "docs/Automation_Workforce/Docs_Dana/activity.md",
+                "content": "# Report",
+                "expectedContentHash": "a" * 64,
+            },
+            task=task,
+        )
+
+
+@pytest.mark.anyio
 async def test_scheduler_dispatches_only_authorized_draft_test_builder_actions(monkeypatch):
     from control_plane.scheduler.scheduler import Scheduler
 

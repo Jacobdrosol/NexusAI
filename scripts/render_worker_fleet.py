@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import re
@@ -83,7 +84,79 @@ def _load_profile(path: Path) -> dict[str, Any]:
         raise ValueError("Worker fleet profile must be a YAML object.")
     if not isinstance(data.get("workers"), list):
         raise ValueError("Worker fleet profile must contain a workers list.")
+    fleet = data.get("fleet") if isinstance(data.get("fleet"), dict) else {}
+    data["workers"] = _expand_worker_replicas(data["workers"], fleet)
     return data
+
+
+def _render_replica_text(value: Any, *, index: int, count: int, field: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return text
+    if "{index" in text:
+        try:
+            return text.format(index=index, count=count)
+        except (KeyError, ValueError) as exc:
+            raise ValueError(f"Invalid replica template for {field}: {text!r}") from exc
+    if count == 1:
+        return text
+    if field == "name":
+        return f"{text} {index:02d}"
+    return f"{text}-{index:02d}"
+
+
+def _expand_worker_replicas(raw_workers: list[Any], fleet: dict[str, Any]) -> list[dict[str, Any]]:
+    try:
+        max_workers = int(fleet.get("max_workers") or 64)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("fleet.max_workers must be an integer between 1 and 256.") from exc
+    if not 1 <= max_workers <= 256:
+        raise ValueError("fleet.max_workers must be between 1 and 256.")
+
+    expanded: list[dict[str, Any]] = []
+    for raw_worker in raw_workers:
+        if not isinstance(raw_worker, dict):
+            raise ValueError("Worker fleet entries must be mappings.")
+        try:
+            replicas = int(raw_worker.get("replicas") or 1)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Worker {raw_worker.get('id') or raw_worker.get('name')} replicas must be an integer."
+            ) from exc
+        if not 1 <= replicas <= max_workers:
+            raise ValueError(
+                f"Worker {raw_worker.get('id') or raw_worker.get('name')} replicas must be between 1 and {max_workers}."
+            )
+
+        for index in range(1, replicas + 1):
+            worker = copy.deepcopy(raw_worker)
+            worker.pop("replicas", None)
+            for field in ("id", "name", "service"):
+                worker[field] = _render_replica_text(
+                    worker.get(field),
+                    index=index,
+                    count=replicas,
+                    field=field,
+                )
+            bot = worker.get("bot")
+            if isinstance(bot, dict) and bot.get("id"):
+                bot["id"] = _render_replica_text(
+                    bot.get("id"),
+                    index=index,
+                    count=replicas,
+                    field="bot.id",
+                )
+            expanded.append(worker)
+
+    if len(expanded) > max_workers:
+        raise ValueError(
+            f"Worker fleet expands to {len(expanded)} workers, exceeding fleet.max_workers={max_workers}."
+        )
+
+    worker_ids = [str(worker.get("id") or "").strip() for worker in expanded]
+    if not all(worker_ids) or len(worker_ids) != len(set(worker_ids)):
+        raise ValueError("Expanded worker IDs must be present and unique.")
+    return expanded
 
 
 def _compose_project_name(fleet: dict[str, Any]) -> str:
