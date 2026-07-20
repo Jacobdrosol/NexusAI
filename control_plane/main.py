@@ -13,6 +13,7 @@ from control_plane.api import (
     assignments,
     audit,
     browser_action_approvals,
+    connection_action_approvals,
     bot_blueprints,
     bots,
     chat,
@@ -30,6 +31,7 @@ from control_plane.api import (
 )
 from control_plane.audit.audit_log import AuditLog
 from control_plane.browser_action_approvals import BrowserActionApprovalStore
+from control_plane.connection_action_approvals import ConnectionActionApprovalStore
 from control_plane.chat.chat_manager import ChatManager
 from control_plane.chat.pm_orchestrator import PMOrchestrator
 from control_plane.connections.resolver import ConnectionResolver
@@ -95,6 +97,7 @@ async def lifespan(app: FastAPI):
     github_webhook_store = GitHubWebhookStore()
     audit_log = AuditLog()
     browser_action_approval_store = BrowserActionApprovalStore()
+    connection_action_approval_store = ConnectionActionApprovalStore()
     repo_workspace_usage_store = RepoWorkspaceUsageStore()
     orchestration_workspace_store = OrchestrationWorkspaceStore()
     worker_probe_store = WorkerProbeStore()
@@ -127,6 +130,7 @@ async def lifespan(app: FastAPI):
         connection_resolver=connection_resolver,
         worker_probe_store=worker_probe_store,
         browser_action_approval_store=browser_action_approval_store,
+        connection_action_approval_store=connection_action_approval_store,
     )
     task_manager = TaskManager(
         scheduler,
@@ -215,6 +219,7 @@ async def lifespan(app: FastAPI):
     app.state.github_webhook_store = github_webhook_store
     app.state.audit_log = audit_log
     app.state.browser_action_approval_store = browser_action_approval_store
+    app.state.connection_action_approval_store = connection_action_approval_store
     app.state.repo_workspace_usage_store = repo_workspace_usage_store
     app.state.orchestration_workspace_store = orchestration_workspace_store
     app.state.worker_probe_store = worker_probe_store
@@ -341,6 +346,7 @@ def create_app() -> FastAPI:
 
     app.include_router(tasks.router)
     app.include_router(browser_action_approvals.router)
+    app.include_router(connection_action_approvals.router)
     app.include_router(bot_blueprints.router)
     app.include_router(bots.router)
     app.include_router(workers.router)

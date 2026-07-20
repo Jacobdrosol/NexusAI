@@ -15,6 +15,10 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 
 from control_plane.browser_action_approvals import browser_action_payload_digest
+from control_plane.connection_action_approvals import (
+    connection_action_key,
+    connection_action_payload_digest,
+)
 from control_plane.connections.resolver import ConnectionResolver
 from control_plane.worker_probe import (
     WorkerProbeError,
@@ -2020,6 +2024,7 @@ class Scheduler:
         connection_resolver: Any = None,
         worker_probe_store: Any = None,
         browser_action_approval_store: Any = None,
+        connection_action_approval_store: Any = None,
     ) -> None:
         self.bot_registry = bot_registry
         self.worker_registry = worker_registry
@@ -2029,6 +2034,7 @@ class Scheduler:
         self._connection_resolver = connection_resolver or ConnectionResolver()
         self._worker_probe_store = worker_probe_store
         self._browser_action_approval_store = browser_action_approval_store
+        self._connection_action_approval_store = connection_action_approval_store
         self._inflight_by_worker: dict[str, int] = {}
         self._latency_ema_ms: dict[str, float] = {}
         self._latency_alpha = float(os.environ.get("NEXUSAI_WORKER_LATENCY_EMA_ALPHA", "0.30"))
@@ -2917,7 +2923,92 @@ class Scheduler:
             raise BackendError("http_connection backend requires a task context")
         if not isinstance(payload, dict):
             raise BackendError("http_connection backend requires a JSON object payload")
+        await self._authorize_http_connection_actions(payload, task)
         return await asyncio.to_thread(self._run_http_connection_backend_sync, payload, task.bot_id)
+
+    @staticmethod
+    def _connection_actions_from_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
+        raw_actions = payload.get("connection_actions")
+        if isinstance(raw_actions, dict):
+            return [raw_actions]
+        if isinstance(raw_actions, list):
+            return [item for item in raw_actions if isinstance(item, dict)]
+        if isinstance(payload.get("connection_action"), dict):
+            return [payload["connection_action"]]
+        return []
+
+    async def _authorize_http_connection_actions(self, payload: dict[str, Any], task: Task) -> None:
+        """Fail closed for all state-changing OpenAPI actions before dispatch."""
+
+        actions = self._connection_actions_from_payload(payload)
+        if not actions:
+            raise BackendError("http_connection backend requires at least one connection action")
+        connection_ref = payload.get("connection") if isinstance(payload.get("connection"), dict) else {}
+        connection = self._connection_resolver.find_bot_connection(
+            str(task.bot_id),
+            requested_name=str(connection_ref.get("name") or payload.get("connection_name") or "").strip() or None,
+            requested_id=str(connection_ref.get("id") or payload.get("connection_id") or "").strip() or None,
+        )
+        if connection is None:
+            raise BackendError(
+                "Requested bot connection was not found or multiple connections are attached "
+                "without an explicit connection.id/name selector"
+            )
+        if str(connection.get("kind") or "").strip().lower() != "http":
+            raise BackendError("http_connection backend only supports HTTP connections")
+        try:
+            bot = await self.bot_registry.get(task.bot_id)
+        except Exception as exc:
+            raise BackendError(f"Bot {task.bot_id} was not found for connection-action authorization") from exc
+
+        policy = bot_execution_policy(bot)
+        required_approval_keys: list[str] = []
+        for action in actions:
+            declared = connection_runtime.resolve_declared_http_action(
+                str(connection.get("schema_text") or ""),
+                action,
+            )
+            if declared is None:
+                raise BackendError("The requested HTTP connection action is not declared in the attached schema")
+            method = str(declared.get("method") or "").upper()
+            if method not in {"POST", "PUT", "PATCH", "DELETE"}:
+                continue
+            action_key = connection_action_key(
+                connection.get("name"),
+                {"operation_id": declared.get("operation_id")},
+            )
+            if action_key not in policy.connection_action_allowlist:
+                raise BackendError(f"Bot {bot.id} is not authorized for connection mutation {action_key}")
+            if action.get("agent_approval") is not None and (
+                action_key not in policy.connection_action_owner_approval_required
+            ):
+                raise BackendError(
+                    f"{action_key} may only request a remote approval when owner approval is required"
+                )
+            if action_key in policy.connection_action_owner_approval_required:
+                required_approval_keys.append(action_key)
+
+        if not required_approval_keys:
+            return
+        if len(required_approval_keys) != 1:
+            raise BackendError("Only one owner-approved connection mutation is allowed per task")
+        approval_id = str(payload.get("owner_approval_id") or "").strip()
+        if not approval_id:
+            raise BackendError(f"{required_approval_keys[0]} requires a valid, unused owner approval")
+        if self._connection_action_approval_store is None:
+            raise BackendError("Connection action approval service is unavailable")
+        try:
+            connection_action_payload_digest(payload)
+            consumed = await self._connection_action_approval_store.consume(
+                approval_id=approval_id,
+                bot_id=bot.id,
+                action_key=required_approval_keys[0],
+                payload=payload,
+            )
+        except ValueError as exc:
+            raise BackendError("Connection action approval payload is invalid") from exc
+        if not consumed:
+            raise BackendError(f"{required_approval_keys[0]} requires a valid, unused owner approval")
 
     def _run_http_connection_backend_sync(self, payload: dict[str, Any], bot_id: str) -> dict[str, Any]:
         connection_ref = payload.get("connection") if isinstance(payload.get("connection"), dict) else {}
@@ -2925,15 +3016,7 @@ class Scheduler:
         requested_id = str(connection_ref.get("id") or payload.get("connection_id") or "").strip()
         continue_on_error = bool(payload.get("continue_on_error", False))
 
-        raw_actions = payload.get("connection_actions")
-        if isinstance(raw_actions, dict):
-            actions = [raw_actions]
-        elif isinstance(raw_actions, list):
-            actions = [item for item in raw_actions if isinstance(item, dict)]
-        elif isinstance(payload.get("connection_action"), dict):
-            actions = [payload["connection_action"]]
-        else:
-            actions = []
+        actions = self._connection_actions_from_payload(payload)
         if not actions:
             raise BackendError("http_connection backend requires at least one connection action")
         connection = self._connection_resolver.find_bot_connection(

@@ -206,6 +206,24 @@ def validate_bot_configuration(bot: Bot) -> List[str]:
             f"Bot '{bot.id}' requires owner approval for browser actions not present in its allowlist: "
             + ", ".join(unrecognized_approval_actions)
         )
+    connection_approval_required = {
+        str(action or "").strip()
+        for action in execution_policy.connection_action_owner_approval_required
+        if str(action or "").strip()
+    }
+    authorized_connection_actions = {
+        str(action or "").strip()
+        for action in execution_policy.connection_action_allowlist
+        if str(action or "").strip()
+    }
+    unrecognized_connection_approval_actions = sorted(
+        connection_approval_required - authorized_connection_actions
+    )
+    if unrecognized_connection_approval_actions:
+        errors.append(
+            f"Bot '{bot.id}' requires owner approval for connection actions not present in its allowlist: "
+            + ", ".join(unrecognized_connection_approval_actions)
+        )
     authorized_documentation_actions = {
         str(action or "").strip()
         for action in execution_policy.documentation_action_allowlist

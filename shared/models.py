@@ -151,6 +151,10 @@ class BotExecutionPolicy(BaseModel):
     browser_action_owner_approval_required: List[str] = Field(default_factory=list)
     browser_inspection_path_allowlist: List[str] = Field(default_factory=list)
     documentation_action_allowlist: List[str] = Field(default_factory=list)
+    # HTTP connections may expose both read and write operations.  Mutations are
+    # disabled unless the exact connection operation is explicitly allowlisted.
+    connection_action_allowlist: List[str] = Field(default_factory=list)
+    connection_action_owner_approval_required: List[str] = Field(default_factory=list)
 
 
 class BotContextAccess(BaseModel):
