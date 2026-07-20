@@ -720,6 +720,25 @@ def _bot_payload(worker: dict[str, Any], fleet: dict[str, Any]) -> dict[str, Any
         "provider": primary_backend["provider"],
         "model": primary_backend["model"],
     }
+    execution_policy = {
+        "repo_output_mode": str(configured_policy.get("repo_output_mode") or "deny"),
+        "workspace_context_injection": bool(configured_policy.get("workspace_context_injection", False)),
+        "inline_coding_default": bool(configured_policy.get("inline_coding_default", False)),
+        "required_worker_tools": required_worker_tools,
+        "can_apply_db_actions": bool(configured_policy.get("can_apply_db_actions", False)),
+        "allow_run_result_ingest": bool(configured_policy.get("allow_run_result_ingest", True)),
+    }
+    for field in (
+        "browser_action_allowlist",
+        "browser_action_owner_approval_required",
+        "documentation_action_allowlist",
+        "connection_action_allowlist",
+        "connection_action_owner_approval_required",
+    ):
+        values = _as_list(configured_policy.get(field))
+        if values:
+            execution_policy[field] = values
+
     return {
         "id": bot_id,
         "name": str(bot.get("name") or worker.get("name") or bot_id).strip(),
@@ -732,14 +751,7 @@ def _bot_payload(worker: dict[str, Any], fleet: dict[str, Any]) -> dict[str, Any
             "receives": ["instruction", "job", "worker_profile"],
             "can_self_serve": [],
         },
-        "execution_policy": {
-            "repo_output_mode": str(configured_policy.get("repo_output_mode") or "deny"),
-            "workspace_context_injection": bool(configured_policy.get("workspace_context_injection", False)),
-            "inline_coding_default": bool(configured_policy.get("inline_coding_default", False)),
-            "required_worker_tools": required_worker_tools,
-            "can_apply_db_actions": bool(configured_policy.get("can_apply_db_actions", False)),
-            "allow_run_result_ingest": bool(configured_policy.get("allow_run_result_ingest", True)),
-        },
+        "execution_policy": execution_policy,
         "routing_rules": routing_rules,
     }
 

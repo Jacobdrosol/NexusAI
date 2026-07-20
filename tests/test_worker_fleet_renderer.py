@@ -732,6 +732,32 @@ def test_render_worker_fleet_preserves_private_bot_input_contract(tmp_path):
     assert bot_payload["routing_rules"]["worker_profile"]["worker_id"] == "content-repair-01"
 
 
+def test_render_worker_fleet_preserves_connection_action_safety_policy(tmp_path):
+    renderer = _load_renderer()
+    profile = _profile(tmp_path / "workers.yaml")
+    profile_data = yaml.safe_load(profile.read_text(encoding="utf-8"))
+    profile_data["workers"][0]["bot"]["execution_policy"] = {
+        "connection_action_allowlist": ["globeiq-agent-api.createdraftcourseunit"],
+        "connection_action_owner_approval_required": ["globeiq-agent-api.createdraftcourseunit"],
+    }
+    profile.write_text(yaml.safe_dump(profile_data, sort_keys=False), encoding="utf-8")
+
+    out = tmp_path / "runtime"
+    renderer.render(
+        profile,
+        out,
+        {"CONTROL_PLANE_API_TOKEN": "control-token", "OLLAMA_API_KEY": "ollama-token"},
+    )
+
+    bot_payload = json.loads((out / "bots" / "content-repair-01.bot.json").read_text())
+    assert bot_payload["execution_policy"]["connection_action_allowlist"] == [
+        "globeiq-agent-api.createdraftcourseunit"
+    ]
+    assert bot_payload["execution_policy"]["connection_action_owner_approval_required"] == [
+        "globeiq-agent-api.createdraftcourseunit"
+    ]
+
+
 def test_render_worker_fleet_rejects_private_override_of_managed_routing_fields(tmp_path):
     renderer = _load_renderer()
     profile = _profile(tmp_path / "workers.yaml")
