@@ -131,6 +131,31 @@ def _normalized_portfolio(value: Any) -> list[Dict[str, str]]:
     return entries
 
 
+def _normalized_portfolio_metrics(value: Any) -> Dict[str, Any]:
+    """Keep a small scalar metric snapshot when a manager uses a map format.
+
+    Portfolio entries remain the canonical per-bot report format.  This tolerant
+    projection preserves aggregate counters from a manager without allowing it
+    to persist arbitrary nested data or unbounded text.
+    """
+    if not isinstance(value, dict):
+        return {}
+    metrics: Dict[str, Any] = {}
+    for key, raw_value in list(value.items())[:32]:
+        metric_name = _short_text(key, limit=80)
+        if not metric_name:
+            continue
+        if isinstance(raw_value, bool):
+            metrics[metric_name] = raw_value
+        elif isinstance(raw_value, int):
+            metrics[metric_name] = raw_value
+        elif isinstance(raw_value, float):
+            metrics[metric_name] = raw_value
+        elif isinstance(raw_value, str):
+            metrics[metric_name] = _short_text(raw_value, limit=400)
+    return metrics
+
+
 class SupervisionStore:
     """Store manager reports, approval-gated actions, and enforced bot holds."""
 
@@ -412,6 +437,7 @@ class SupervisionStore:
             "risks": _short_list(parsed.get("risks"), limit=16, item_limit=1_000),
             "decisions_needed": _short_list(parsed.get("decisions_needed"), limit=16, item_limit=1_000),
             "portfolio": _normalized_portfolio(parsed.get("portfolio")),
+            "portfolio_metrics": _normalized_portfolio_metrics(parsed.get("portfolio")),
         }
         report_id = str(uuid.uuid4())
         created_at = _utc_now()
@@ -488,8 +514,13 @@ class SupervisionStore:
         for raw in value[:20]:
             if not isinstance(raw, dict):
                 continue
-            action_type = _short_text(raw.get("action_type"), limit=64).lower()
-            target_id = _short_text(raw.get("target_id"), limit=160)
+            # Some model providers naturally use the shorter proposal/target
+            # names.  Accept those aliases only after the exact same declared
+            # portfolio and action-type allowlists below have been enforced.
+            action_type = _short_text(
+                raw.get("action_type") or raw.get("proposal"), limit=64
+            ).lower()
+            target_id = _short_text(raw.get("target_id") or raw.get("target"), limit=160)
             expected_target_type = _ACTION_TARGET_TYPES.get(action_type)
             if (
                 action_type not in _ALLOWED_ACTION_TYPES

@@ -134,6 +134,16 @@ async def test_manager_reports_create_portfolio_bound_actions_and_operator_can_a
                 "target_id": "not-in-the-portfolio",
                 "rationale": "This must be ignored.",
             },
+            {
+                "proposal": "configuration_review",
+                "target": "specialist",
+                "rationale": "The common model alias must still be portfolio-bound.",
+            },
+            {
+                "proposal": "hold_bot",
+                "target": "free-text target",
+                "rationale": "The common model alias must reject free-text targets.",
+            },
         ],
     }
     scheduler = _RecordingScheduler(manager_result)
@@ -161,6 +171,8 @@ async def test_manager_reports_create_portfolio_bound_actions_and_operator_can_a
         "configuration_review",
     }
     assert all(action["target_id"] != "not-in-the-portfolio" for action in actions)
+    assert all(action["target_id"] != "free-text target" for action in actions)
+    assert sum(action["action_type"] == "configuration_review" for action in actions) == 2
 
     by_type = {action["action_type"]: action for action in actions}
     pause_response = await cp_client.post(
