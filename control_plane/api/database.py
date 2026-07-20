@@ -47,17 +47,17 @@ def _schema_validation_errors(errors: List[str]) -> List[Dict[str, Any]]:
 
 
 @router.get("/schema")
-async def get_schema() -> Dict[str, Any]:
+async def get_schema(request: Request) -> Dict[str, Any]:
     """Get current database schema structure."""
-    enforce_rate_limit("schema_read", 60)
+    await enforce_rate_limit(request, "schema_read", 60, 60)
     engineer = get_database_engineer()
     return await engineer.get_schema()
 
 
 @router.get("/schema/table/{table_name}")
-async def get_table_info(table_name: str) -> List[Dict[str, Any]]:
+async def get_table_info(request: Request, table_name: str) -> List[Dict[str, Any]]:
     """Get column information for a specific table."""
-    enforce_rate_limit("schema_read", 60)
+    await enforce_rate_limit(request, "schema_read", 60, 60)
     engineer = get_database_engineer()
 
     if not await engineer.table_exists(table_name):
@@ -83,8 +83,8 @@ async def plan_migration(
     This endpoint validates that all proposed changes are safe (additive only).
     No changes are applied - use POST /v1/migrations/apply to execute.
     """
-    enforce_rate_limit("migration_plan", 10)
-    enforce_body_size(request, max_size=65536)
+    await enforce_rate_limit(request, "migration_plan", 10, 60)
+    await enforce_body_size(request, "migration_plan", 65536)
 
     engineer = get_database_engineer()
 
@@ -152,8 +152,8 @@ async def apply_migration(
 
     The plan is re-validated before execution. Only safe, additive changes are allowed.
     """
-    enforce_rate_limit("migration_apply", 5)
-    enforce_body_size(request, max_size=65536)
+    await enforce_rate_limit(request, "migration_apply", 5, 60)
+    await enforce_body_size(request, "migration_apply", 65536)
 
     engineer = get_database_engineer()
 
@@ -242,9 +242,12 @@ async def apply_migration(
 
 
 @router.get("/migrations/history")
-async def get_migration_history(limit: int = Query(50, ge=1, le=500)) -> List[Dict[str, Any]]:
+async def get_migration_history(
+    request: Request,
+    limit: int = Query(50, ge=1, le=500),
+) -> List[Dict[str, Any]]:
     """Get history of applied migrations."""
-    enforce_rate_limit("migration_history", 30)
+    await enforce_rate_limit(request, "migration_history", 30, 60)
     engineer = get_database_engineer()
     history = await engineer.get_migration_history()
     return history[:limit]
@@ -260,8 +263,8 @@ async def validate_sql(
 
     Returns whether the statement is safe and any validation errors.
     """
-    enforce_rate_limit("sql_validate", 60)
-    enforce_body_size(request, max_size=8192)
+    await enforce_rate_limit(request, "sql_validate", 60, 60)
+    await enforce_body_size(request, "sql_validate", 8192)
 
     engineer = get_database_engineer()
     is_safe, errors = engineer.validate_sql_statement(sql)
@@ -285,8 +288,8 @@ async def execute_sql(
     Only additive operations (CREATE TABLE, ALTER TABLE ADD COLUMN, CREATE INDEX)
     and read operations (SELECT, PRAGMA) are allowed without special approval.
     """
-    enforce_rate_limit("sql_execute", 30)
-    enforce_body_size(request, max_size=16384)
+    await enforce_rate_limit(request, "sql_execute", 30, 60)
+    await enforce_body_size(request, "sql_execute", 16384)
 
     engineer = get_database_engineer()
     result = await engineer.execute_safe_sql(
@@ -316,10 +319,11 @@ async def execute_sql(
 
 @router.get("/connections")
 async def list_connections(
+    request: Request,
     enabled_only: bool = Query(False, description="Only return enabled connections"),
 ) -> List[Dict[str, Any]]:
     """List all database connections."""
-    enforce_rate_limit("connection_list", 60)
+    await enforce_rate_limit(request, "connection_list", 60, 60)
     engineer = get_database_engineer()
     return [_public_connection_payload(item) for item in await engineer.list_connections(enabled_only=enabled_only)]
 
@@ -335,8 +339,8 @@ async def create_connection(
     credentials_ref: Optional[str] = Body(None, description="Reference to stored credentials"),
 ) -> Dict[str, Any]:
     """Create a new database connection."""
-    enforce_rate_limit("connection_create", 10)
-    enforce_body_size(request, max_size=8192)
+    await enforce_rate_limit(request, "connection_create", 10, 60)
+    await enforce_body_size(request, "connection_create", 8192)
 
     engineer = get_database_engineer()
 
@@ -373,9 +377,9 @@ async def create_connection(
 
 
 @router.get("/connections/{connection_id}")
-async def get_connection(connection_id: str) -> Dict[str, Any]:
+async def get_connection(request: Request, connection_id: str) -> Dict[str, Any]:
     """Get a specific database connection."""
-    enforce_rate_limit("connection_get", 60)
+    await enforce_rate_limit(request, "connection_get", 60, 60)
     engineer = get_database_engineer()
     connection = await engineer.get_connection(connection_id)
 
@@ -396,8 +400,8 @@ async def update_connection(
     enabled: Optional[bool] = Body(None),
 ) -> Dict[str, Any]:
     """Update a database connection."""
-    enforce_rate_limit("connection_update", 10)
-    enforce_body_size(request, max_size=8192)
+    await enforce_rate_limit(request, "connection_update", 10, 60)
+    await enforce_body_size(request, "connection_update", 8192)
 
     engineer = get_database_engineer()
     connection = await engineer.update_connection(
@@ -436,9 +440,9 @@ async def update_connection(
 
 
 @router.delete("/connections/{connection_id}")
-async def delete_connection(connection_id: str) -> Dict[str, Any]:
+async def delete_connection(request: Request, connection_id: str) -> Dict[str, Any]:
     """Delete a database connection."""
-    enforce_rate_limit("connection_delete", 10)
+    await enforce_rate_limit(request, "connection_delete", 10, 60)
 
     engineer = get_database_engineer()
     deleted = await engineer.delete_connection(connection_id)
@@ -457,9 +461,9 @@ async def delete_connection(connection_id: str) -> Dict[str, Any]:
 
 
 @router.post("/connections/{connection_id}/test")
-async def test_connection(connection_id: str) -> Dict[str, Any]:
+async def test_connection(request: Request, connection_id: str) -> Dict[str, Any]:
     """Test a database connection."""
-    enforce_rate_limit("connection_test", 10)
+    await enforce_rate_limit(request, "connection_test", 10, 60)
 
     engineer = get_database_engineer()
     result = await engineer.test_connection(connection_id)
@@ -482,9 +486,9 @@ async def test_connection(connection_id: str) -> Dict[str, Any]:
 
 
 @router.get("/connections/{connection_id}/schema")
-async def get_connection_schema(connection_id: str) -> Dict[str, Any]:
+async def get_connection_schema(request: Request, connection_id: str) -> Dict[str, Any]:
     """Get stored schema snapshot for a connection."""
-    enforce_rate_limit("schema_read", 30)
+    await enforce_rate_limit(request, "schema_read", 30, 60)
 
     engineer = get_database_engineer()
     snapshot = await engineer._connection_repo.get_schema_snapshot(connection_id)
@@ -499,8 +503,8 @@ async def get_connection_schema(connection_id: str) -> Dict[str, Any]:
 
 
 @router.get("/schema/snapshot")
-async def capture_schema_snapshot() -> Dict[str, Any]:
+async def capture_schema_snapshot(request: Request) -> Dict[str, Any]:
     """Capture current database schema as a snapshot."""
-    enforce_rate_limit("schema_snapshot", 10)
+    await enforce_rate_limit(request, "schema_snapshot", 10, 60)
     engineer = get_database_engineer()
     return await engineer.capture_schema_snapshot()
