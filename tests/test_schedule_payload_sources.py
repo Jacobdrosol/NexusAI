@@ -14,6 +14,7 @@ from control_plane.schedule_payload_sources import (
     list_csv_work_items_sources,
     materialize_system_schedule_payload,
     system_payload_source_config,
+    system_payload_source_configs,
     validate_system_payload_source,
 )
 from control_plane.schedule_safety import require_schedule_autonomy_safety
@@ -114,6 +115,52 @@ async def test_materialized_fleet_summary_is_sanitized_and_bounded():
     assert "prompt" not in payload["monitoring_events"]
     assert "policy" not in payload["monitoring_events"]
     assert "private-token-must-not-leak" not in payload["monitoring_events"]
+
+
+@pytest.mark.anyio
+async def test_multiple_system_payload_sources_materialize_into_distinct_fields():
+    schedule = {
+        "metadata": {
+            "system_payload_sources": [
+                {"type": FLEET_HEALTH_SUMMARY_SOURCE, "target_field": "fleet_snapshot"},
+                {
+                    "type": OPERATIONAL_QUALITY_SNAPSHOT_SOURCE,
+                    "target_field": "operations_snapshot",
+                },
+            ]
+        }
+    }
+
+    assert [config["target_field"] for config in system_payload_source_configs(schedule)] == [
+        "fleet_snapshot",
+        "operations_snapshot",
+    ]
+    payload = await materialize_system_schedule_payload(
+        schedule,
+        worker_registry=_FakeWorkerRegistry(),
+        worker_probe_store=_FakeProbeStore(),
+        bot_registry=_FakeBotRegistry(),
+        task_manager=_FakeTaskManager(),
+        schedule_engine=_FakeScheduleEngine(),
+    )
+
+    assert set(payload) == {"fleet_snapshot", "operations_snapshot"}
+    assert json.loads(payload["fleet_snapshot"])["source"] == FLEET_HEALTH_SUMMARY_SOURCE
+    assert json.loads(payload["operations_snapshot"])["source"] == OPERATIONAL_QUALITY_SNAPSHOT_SOURCE
+
+
+def test_multiple_system_payload_sources_reject_duplicate_target_fields():
+    with pytest.raises(SystemPayloadSourceError, match="distinct target_field"):
+        system_payload_source_configs(
+            {
+                "metadata": {
+                    "system_payload_sources": [
+                        {"type": FLEET_HEALTH_SUMMARY_SOURCE, "target_field": "snapshot"},
+                        {"type": OPERATIONAL_QUALITY_SNAPSHOT_SOURCE, "target_field": "snapshot"},
+                    ]
+                }
+            }
+        )
 
 
 @pytest.mark.anyio

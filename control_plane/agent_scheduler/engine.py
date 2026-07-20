@@ -420,7 +420,7 @@ class AgentScheduleEngine:
             "node_overrides": schedule.get("node_overrides") if isinstance(schedule.get("node_overrides"), dict) else {},
             "overlap_policy": str(schedule.get("overlap_policy") or _DEFAULT_SCHEDULE_OVERLAP_POLICY).strip().lower(),
         }
-        for key in ("connection_operation", "system_payload_source"):
+        for key in ("connection_operation", "system_payload_source", "system_payload_sources"):
             if key in metadata:
                 identity[key] = metadata[key]
         return identity

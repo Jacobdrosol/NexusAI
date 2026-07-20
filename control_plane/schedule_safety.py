@@ -6,7 +6,7 @@ from typing import Any, Dict, Iterable
 from control_plane.bot_readiness import assess_bot_readiness
 from control_plane.schedule_payload_sources import (
     SystemPayloadSourceError,
-    system_payload_source_config,
+    system_payload_source_configs,
     validate_system_payload_source,
 )
 from shared.bot_policy import bot_autonomous_dispatch_blockers
@@ -97,8 +97,8 @@ def _require_schedule_input_contract(schedule: Dict[str, Any], bot: Any) -> None
             "node_overrides": schedule.get("node_overrides") if isinstance(schedule.get("node_overrides"), dict) else {},
         }
     )
-    source_config = system_payload_source_config(schedule)
-    if isinstance(source_config, dict):
+    source_configs = system_payload_source_configs(schedule)
+    for source_config in source_configs:
         target_field = str(source_config.get("target_field") or "").strip()
         if target_field:
             # System payload sources are materialized immediately before task creation.

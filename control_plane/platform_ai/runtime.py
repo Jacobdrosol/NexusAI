@@ -2211,7 +2211,7 @@ class PlatformAISessionRuntime:
             "overlap_policy": "forbid",
             "platform_ai_proposal": True,
         }
-        for key in ("connection_operation", "system_payload_source"):
+        for key in ("connection_operation", "system_payload_source", "system_payload_sources"):
             if key in source_metadata:
                 proposed_metadata[key] = copy.deepcopy(source_metadata[key])
         schedule_payload = {

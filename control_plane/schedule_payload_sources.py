@@ -19,6 +19,8 @@ OPERATIONAL_QUALITY_SNAPSHOT_SOURCE = "control_plane_operational_quality_v1"
 CSV_WORK_ITEMS_SOURCE = "csv_work_items_v1"
 SUPERVISION_PORTFOLIO_SOURCE = "control_plane_supervision_portfolio_v1"
 _SYSTEM_PAYLOAD_SOURCE_KEY = "system_payload_source"
+_SYSTEM_PAYLOAD_SOURCES_KEY = "system_payload_sources"
+_MAX_SYSTEM_PAYLOAD_SOURCES = 4
 _SAFE_FIELD_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
 _FLEET_HEALTH_RECENT_WINDOW_HOURS = 24
 _CSV_SOURCE_MAX_COLUMNS = 16
@@ -224,13 +226,9 @@ def _csv_source_config(raw: Dict[str, Any], *, target_field: str) -> Dict[str, A
     }
 
 
-def system_payload_source_config(schedule: Dict[str, Any]) -> Dict[str, Any] | None:
-    metadata = schedule.get("metadata") if isinstance(schedule.get("metadata"), dict) else {}
-    raw = metadata.get(_SYSTEM_PAYLOAD_SOURCE_KEY)
-    if raw is None:
-        return None
+def _system_payload_source_config(raw: Any, *, field_name: str) -> Dict[str, Any]:
     if not isinstance(raw, dict):
-        raise SystemPayloadSourceError("system_payload_source must be an object")
+        raise SystemPayloadSourceError(f"{field_name} must be an object")
     source_type = str(raw.get("type") or "").strip()
     target_field = str(raw.get("target_field") or "monitoring_events").strip()
     if source_type not in {
@@ -239,18 +237,62 @@ def system_payload_source_config(schedule: Dict[str, Any]) -> Dict[str, Any] | N
         CSV_WORK_ITEMS_SOURCE,
         SUPERVISION_PORTFOLIO_SOURCE,
     }:
-        raise SystemPayloadSourceError(f"unsupported system_payload_source type: {source_type or 'unset'}")
+        raise SystemPayloadSourceError(f"unsupported {field_name} type: {source_type or 'unset'}")
     if not _SAFE_FIELD_NAME.fullmatch(target_field):
-        raise SystemPayloadSourceError("system_payload_source target_field must be a simple payload field name")
+        raise SystemPayloadSourceError(f"{field_name} target_field must be a simple payload field name")
     if source_type == CSV_WORK_ITEMS_SOURCE:
         return _csv_source_config(raw, target_field=target_field)
     return {"type": source_type, "target_field": target_field}
 
 
+def system_payload_source_configs(schedule: Dict[str, Any]) -> list[Dict[str, Any]]:
+    """Return every bounded internal source configured for a read-only schedule.
+
+    ``system_payload_source`` remains supported for existing schedules. New schedules
+    can use ``system_payload_sources`` to compose a small number of independently
+    bounded snapshots into distinct task-payload fields.
+    """
+    metadata = schedule.get("metadata") if isinstance(schedule.get("metadata"), dict) else {}
+    legacy = metadata.get(_SYSTEM_PAYLOAD_SOURCE_KEY)
+    raw_sources = metadata.get(_SYSTEM_PAYLOAD_SOURCES_KEY)
+    if legacy is not None and raw_sources is not None:
+        raise SystemPayloadSourceError(
+            "system_payload_source and system_payload_sources cannot be used together"
+        )
+    if raw_sources is None:
+        return [] if legacy is None else [_system_payload_source_config(legacy, field_name=_SYSTEM_PAYLOAD_SOURCE_KEY)]
+    if not isinstance(raw_sources, list) or not raw_sources:
+        raise SystemPayloadSourceError("system_payload_sources must be a non-empty list")
+    if len(raw_sources) > _MAX_SYSTEM_PAYLOAD_SOURCES:
+        raise SystemPayloadSourceError(
+            f"system_payload_sources exceeds the maximum of {_MAX_SYSTEM_PAYLOAD_SOURCES} sources"
+        )
+    configs = [
+        _system_payload_source_config(raw, field_name=f"system_payload_sources[{index}]")
+        for index, raw in enumerate(raw_sources)
+    ]
+    target_fields = [str(config["target_field"]) for config in configs]
+    if len(target_fields) != len(set(target_fields)):
+        raise SystemPayloadSourceError("system_payload_sources must use distinct target_field values")
+    return configs
+
+
+def system_payload_source_config(schedule: Dict[str, Any]) -> Dict[str, Any] | None:
+    """Return the legacy single source configuration, if present.
+
+    Callers that can compose more than one payload field must use
+    :func:`system_payload_source_configs` instead.
+    """
+    configs = system_payload_source_configs(schedule)
+    if len(configs) > 1:
+        raise SystemPayloadSourceError("multiple system payload sources require plural-aware handling")
+    return configs[0] if configs else None
+
+
 def validate_system_payload_source(schedule: Dict[str, Any], bot: Any) -> None:
     """Allow system sources only for bots with explicitly non-mutating scopes."""
-    source_config = system_payload_source_config(schedule)
-    if source_config is None:
+    source_configs = system_payload_source_configs(schedule)
+    if not source_configs:
         return
     routing_rules = getattr(bot, "routing_rules", None)
     profile = routing_rules.get("worker_profile") if isinstance(routing_rules, dict) else None
@@ -258,30 +300,30 @@ def validate_system_payload_source(schedule: Dict[str, Any], bot: Any) -> None:
     task_scope = str(profile.get("task_scope") or "").strip().lower()
     if bool(profile.get("can_edit")):
         raise SystemPayloadSourceError("system payload sources require a non-editing worker_profile")
-    if source_config["type"] == FLEET_HEALTH_SUMMARY_SOURCE and not task_scope.startswith("read-only-monitoring"):
-        raise SystemPayloadSourceError(
-            "system payload sources require a worker_profile with a read-only monitoring task scope"
-        )
-    if (
-        source_config["type"] == OPERATIONAL_QUALITY_SNAPSHOT_SOURCE
-        and not task_scope.startswith("read-only-quality-review")
-    ):
-        raise SystemPayloadSourceError(
-            "operational quality snapshots require a worker_profile with a read-only quality-review task scope"
-        )
-    if source_config["type"] == SUPERVISION_PORTFOLIO_SOURCE:
-        if not task_scope.startswith("read-only-manager-review"):
+    for source_config in source_configs:
+        if source_config["type"] == FLEET_HEALTH_SUMMARY_SOURCE and not task_scope.startswith("read-only-monitoring"):
             raise SystemPayloadSourceError(
-                "supervision portfolio snapshots require a worker_profile with a read-only manager-review task scope"
+                "system payload sources require a worker_profile with a read-only monitoring task scope"
             )
-        if supervision_manager_config(bot) is None:
+        if source_config["type"] == OPERATIONAL_QUALITY_SNAPSHOT_SOURCE and not task_scope.startswith(
+            ("read-only-quality-review", "read-only-manager-review")
+        ):
             raise SystemPayloadSourceError(
-                "supervision portfolio snapshots require an enabled bounded supervision_manager configuration"
+                "operational quality snapshots require a worker_profile with a read-only quality-review or manager-review task scope"
             )
-    if source_config["type"] == CSV_WORK_ITEMS_SOURCE and not task_scope.startswith(("read-only", "draft-only")):
-        raise SystemPayloadSourceError(
-            "csv_work_items_v1 requires a worker_profile with a read-only or draft-only task scope"
-        )
+        if source_config["type"] == SUPERVISION_PORTFOLIO_SOURCE:
+            if not task_scope.startswith("read-only-manager-review"):
+                raise SystemPayloadSourceError(
+                    "supervision portfolio snapshots require a worker_profile with a read-only manager-review task scope"
+                )
+            if supervision_manager_config(bot) is None:
+                raise SystemPayloadSourceError(
+                    "supervision portfolio snapshots require an enabled bounded supervision_manager configuration"
+                )
+        if source_config["type"] == CSV_WORK_ITEMS_SOURCE and not task_scope.startswith(("read-only", "draft-only")):
+            raise SystemPayloadSourceError(
+                "csv_work_items_v1 requires a worker_profile with a read-only or draft-only task scope"
+            )
 
 
 def _csv_source_root() -> Path:
@@ -815,9 +857,41 @@ async def materialize_system_schedule_payload(
     supervision_store: Any = None,
 ) -> Dict[str, Any]:
     """Return non-secret payload additions for an approved internal source."""
-    config = system_payload_source_config(schedule)
-    if config is None:
+    configs = system_payload_source_configs(schedule)
+    if not configs:
         return {}
+    materialized: Dict[str, Any] = {}
+    for config in configs:
+        additions = await _materialize_system_payload_source(
+            schedule,
+            config=config,
+            worker_registry=worker_registry,
+            worker_probe_store=worker_probe_store,
+            bot_registry=bot_registry,
+            task_manager=task_manager,
+            schedule_engine=schedule_engine,
+            supervision_store=supervision_store,
+        )
+        duplicate_fields = set(materialized).intersection(additions)
+        if duplicate_fields:
+            raise SystemPayloadSourceError(
+                "system payload sources produced duplicate fields: " + ", ".join(sorted(duplicate_fields))
+            )
+        materialized.update(additions)
+    return materialized
+
+
+async def _materialize_system_payload_source(
+    schedule: Dict[str, Any],
+    *,
+    config: Dict[str, Any],
+    worker_registry: Any,
+    worker_probe_store: Any,
+    bot_registry: Any,
+    task_manager: Any,
+    schedule_engine: Any,
+    supervision_store: Any = None,
+) -> Dict[str, Any]:
     if config["type"] == FLEET_HEALTH_SUMMARY_SOURCE:
         summary = await fleet_health_summary(
             worker_registry=worker_registry,
