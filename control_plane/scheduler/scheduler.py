@@ -3767,7 +3767,10 @@ class Scheduler:
         return os.environ.get(default_env_var, "").strip()
 
     async def _validate_model_if_catalog_present(self, backend: BackendConfig) -> None:
-        if backend.type == "browser":
+        if backend.type == "browser" or (
+            backend.type == "custom"
+            and str(backend.provider or "").strip().lower() == "http_connection"
+        ):
             return
         if not self.model_registry:
             return

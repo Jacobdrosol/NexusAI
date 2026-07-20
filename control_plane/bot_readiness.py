@@ -70,7 +70,13 @@ async def _vault_credential_status(key_vault: Any, key_ref: str) -> tuple[bool, 
 async def _catalog_model_blocker(backend: BackendConfig, model_registry: Any) -> str:
     """Mirror scheduler catalog enforcement without exposing catalog internals."""
 
-    if str(backend.type or "").strip().lower() == "browser" or model_registry is None:
+    backend_type = str(backend.type or "").strip().lower()
+    provider = str(backend.provider or "").strip().lower()
+    if (
+        backend_type == "browser"
+        or (backend_type == "custom" and provider == "http_connection")
+        or model_registry is None
+    ):
         return ""
     try:
         if not await model_registry.has_any():

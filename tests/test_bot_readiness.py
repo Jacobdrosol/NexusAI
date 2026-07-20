@@ -1,6 +1,8 @@
 import pytest
+from unittest.mock import AsyncMock, Mock
 
-from shared.models import CatalogModel
+from control_plane.bot_readiness import assess_bot_instance_readiness
+from shared.models import BackendConfig, Bot, CatalogModel
 
 
 @pytest.mark.anyio
@@ -103,6 +105,41 @@ async def test_bot_activation_blocks_backend_missing_from_nonempty_model_catalog
         == "Model 'missing-model' (provider 'ollama_cloud') is not present/enabled in the model catalog."
         for check in checks
     )
+
+
+@pytest.mark.anyio
+async def test_bot_readiness_allows_http_connection_without_catalog_model():
+    model_registry = AsyncMock()
+    model_registry.has_any.return_value = True
+    model_registry.exists.return_value = False
+    connection_resolver = Mock()
+    connection_resolver.list_bot_connections.return_value = [
+        {"id": 1, "name": "Catalog API", "kind": "http", "enabled": True}
+    ]
+    bot = Bot(
+        id="catalog-intake",
+        name="Catalog Intake",
+        role="reviewer",
+        backends=[
+            BackendConfig(
+                type="custom",
+                provider="http_connection",
+                model="declared-catalog-api",
+            )
+        ],
+    )
+
+    readiness = await assess_bot_instance_readiness(
+        bot,
+        worker_registry=AsyncMock(),
+        connection_resolver=connection_resolver,
+        model_registry=model_registry,
+    )
+
+    assert readiness["ready"] is True
+    assert readiness["summary"]["failed"] == 0
+    model_registry.has_any.assert_not_awaited()
+    model_registry.exists.assert_not_awaited()
 
 
 @pytest.mark.anyio
