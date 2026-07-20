@@ -5,6 +5,9 @@ from typing import Dict, Iterable, List, Sequence, Set, Tuple
 from shared.models import Bot, BotExecutionPolicy
 
 
+_AUTONOMOUSLY_RESTRICTED_BACKEND_TYPES = frozenset({"browser", "cli"})
+
+
 def bot_execution_policy(bot: Bot) -> BotExecutionPolicy:
     policy = getattr(bot, "execution_policy", None)
     if policy is not None:
@@ -44,6 +47,42 @@ def bot_allows_run_result_ingest(bot: Bot) -> bool:
 
 def bot_can_apply_db_actions(bot: Bot) -> bool:
     return bool(bot_execution_policy(bot).can_apply_db_actions)
+
+
+def bot_autonomous_dispatch_blockers(
+    bot: Bot,
+    *,
+    allowed_restricted_backend_types: Iterable[str] = (),
+) -> List[str]:
+    """Return the policy reasons a bot cannot run without an operator present."""
+
+    allowed_backend_types = {
+        str(backend_type or "").strip().lower()
+        for backend_type in allowed_restricted_backend_types
+        if str(backend_type or "").strip()
+    }
+    blockers: List[str] = []
+    if bot_allows_repo_output(bot):
+        blockers.append("the bot permits repository writes")
+    if bot_can_apply_db_actions(bot):
+        blockers.append("the bot can apply database actions")
+    if bot_is_pipeline_entry(bot):
+        blockers.append("the bot can dispatch a pipeline")
+
+    restricted_backends = sorted(
+        {
+            str(backend.type or "").strip().lower()
+            for backend in bot.backends
+            if str(backend.type or "").strip().lower()
+            in _AUTONOMOUSLY_RESTRICTED_BACKEND_TYPES
+            and str(backend.type or "").strip().lower() not in allowed_backend_types
+        }
+    )
+    if restricted_backends:
+        blockers.append(
+            "the bot uses restricted backend types: " + ", ".join(restricted_backends)
+        )
+    return blockers
 
 
 def bot_workflow_graph_id(bot: Bot) -> str:
@@ -112,6 +151,21 @@ def validate_bot_configuration(bot: Bot) -> List[str]:
     errors = validate_reference_graph(bot)
     if bot_is_project_manager(bot) and not bot_has_explicit_workflow(bot):
         errors.append(f"Bot '{bot.id}' is marked as a project manager but has no explicit workflow triggers.")
+    routing = getattr(bot, "routing_rules", None)
+    external_trigger = routing.get("external_trigger") if isinstance(routing, dict) else None
+    if isinstance(external_trigger, dict) and bool(external_trigger.get("enabled", False)):
+        if external_trigger.get("require_auth") is not True:
+            errors.append(
+                f"Bot '{bot.id}' external_trigger.require_auth must be true when external triggering is enabled."
+            )
+        if str(external_trigger.get("auth_token") or "").strip():
+            errors.append(
+                f"Bot '{bot.id}' external_trigger.auth_token is not permitted; use auth_token_ref for an encrypted vault key."
+            )
+        if not str(external_trigger.get("auth_token_ref") or "").strip():
+            errors.append(
+                f"Bot '{bot.id}' external_trigger.auth_token_ref is required when external triggering is enabled."
+            )
     return errors
 
 

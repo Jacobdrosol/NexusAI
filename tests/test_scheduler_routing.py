@@ -476,6 +476,43 @@ async def test_scheduler_dispatch_tracks_latency_and_inflight():
 
 
 @pytest.mark.anyio
+async def test_scheduler_dispatch_uses_declared_worker_request_token(monkeypatch):
+    from control_plane.scheduler.scheduler import Scheduler
+
+    worker = Worker(
+        id="w-token",
+        name="Worker Token",
+        host="token.local",
+        port=8001,
+        capabilities=[Capability(type="llm", provider="ollama", models=["llama3"])],
+        request_token_env="NEXUS_WORKER_REQUEST_TOKEN",
+        status="online",
+        enabled=True,
+    )
+    backend = BackendConfig(type="local_llm", provider="ollama", model="llama3", worker_id=worker.id)
+    monkeypatch.setenv("NEXUS_WORKER_REQUEST_TOKEN", "node-token")
+
+    fake_response = MagicMock()
+    fake_response.raise_for_status.return_value = None
+    fake_response.json.return_value = {"output": "ok"}
+    mock_client = AsyncMock()
+    mock_client.__aenter__.return_value = mock_client
+    mock_client.__aexit__.return_value = False
+    mock_client.post.return_value = fake_response
+
+    scheduler = Scheduler(bot_registry=AsyncMock(), worker_registry=AsyncMock())
+    with patch("control_plane.scheduler.scheduler.httpx.AsyncClient", return_value=mock_client):
+        result = await scheduler._dispatch_to_worker(
+            worker,
+            backend,
+            [{"role": "user", "content": "hello"}],
+        )
+
+    assert result == {"output": "ok"}
+    assert mock_client.post.await_args.kwargs["headers"] == {"X-Nexus-Worker-Token": "node-token"}
+
+
+@pytest.mark.anyio
 async def test_scheduler_dispatches_fixed_cli_command_to_worker():
     from control_plane.scheduler.scheduler import Scheduler
 
@@ -561,6 +598,163 @@ async def test_scheduler_dispatches_scoped_browser_inspection_with_worker_token(
     assert mock_client.post.await_args.args[0] == "http://browser.local:8010/browser/inspect"
     assert mock_client.post.await_args.kwargs["json"] == {"path": "/admin/courses", "text_limit": 500}
     assert mock_client.post.await_args.kwargs["headers"] == {"X-Nexus-Worker-Token": "worker-token"}
+
+
+@pytest.mark.anyio
+async def test_scheduler_allows_browser_inspection_in_bot_path_allowlist(monkeypatch):
+    from control_plane.scheduler.scheduler import Scheduler
+
+    worker = Worker(
+        id="browser-worker",
+        name="Browser Worker",
+        host="browser.local",
+        port=8010,
+        capabilities=[Capability(type="tool", provider="browser", models=["browser-ui"])],
+        status="online",
+        enabled=True,
+    )
+    backend = BackendConfig(
+        type="browser",
+        provider="browser",
+        model="browser-ui",
+        worker_id=worker.id,
+        api_key_ref="BROWSER_WORKER_TOKEN",
+    )
+    bot = Bot(
+        id="course-evidence",
+        name="Course Evidence",
+        role="browser-evidence-inspector",
+        execution_policy={
+            "required_worker_tools": ["browser-ui"],
+            "browser_inspection_path_allowlist": ["/admin/courses/57/lessons"],
+        },
+        backends=[backend],
+    )
+    task = Task(
+        id="task-course-evidence",
+        bot_id=bot.id,
+        payload={"path": "/admin/courses/57/lessons"},
+        created_at="now",
+        updated_at="now",
+    )
+    monkeypatch.setenv("BROWSER_WORKER_TOKEN", "worker-token")
+    fake_response = MagicMock()
+    fake_response.raise_for_status.return_value = None
+    fake_response.json.return_value = {"url": "https://app.example/admin/courses/57/lessons", "text": "Lessons"}
+    mock_client = AsyncMock()
+    mock_client.__aenter__.return_value = mock_client
+    mock_client.__aexit__.return_value = False
+    mock_client.post.return_value = fake_response
+    worker_registry = AsyncMock()
+    worker_registry.get.return_value = worker
+    bot_registry = AsyncMock()
+    bot_registry.get.return_value = bot
+    scheduler = Scheduler(bot_registry=bot_registry, worker_registry=worker_registry)
+
+    with patch("control_plane.scheduler.scheduler.httpx.AsyncClient", return_value=mock_client):
+        result = await scheduler._dispatch_backend(backend, task.payload, task=task)
+
+    assert result["text"] == "Lessons"
+    assert mock_client.post.await_args.kwargs["json"] == {"path": "/admin/courses/57/lessons"}
+
+
+@pytest.mark.anyio
+async def test_scheduler_rejects_browser_inspection_outside_bot_path_allowlist(monkeypatch):
+    from control_plane.scheduler.scheduler import BackendError, Scheduler
+
+    worker = Worker(
+        id="browser-worker",
+        name="Browser Worker",
+        host="browser.local",
+        port=8010,
+        capabilities=[Capability(type="tool", provider="browser", models=["browser-ui"])],
+        status="online",
+        enabled=True,
+    )
+    backend = BackendConfig(
+        type="browser",
+        provider="browser",
+        model="browser-ui",
+        worker_id=worker.id,
+        api_key_ref="BROWSER_WORKER_TOKEN",
+    )
+    bot = Bot(
+        id="course-evidence",
+        name="Course Evidence",
+        role="browser-evidence-inspector",
+        execution_policy={
+            "required_worker_tools": ["browser-ui"],
+            "browser_inspection_path_allowlist": ["/admin/courses/57/lessons"],
+        },
+        backends=[backend],
+    )
+    task = Task(
+        id="task-course-evidence",
+        bot_id=bot.id,
+        payload={"path": "/admin/courses/57"},
+        created_at="now",
+        updated_at="now",
+    )
+    monkeypatch.setenv("BROWSER_WORKER_TOKEN", "worker-token")
+    worker_registry = AsyncMock()
+    worker_registry.get.return_value = worker
+    bot_registry = AsyncMock()
+    bot_registry.get.return_value = bot
+    scheduler = Scheduler(bot_registry=bot_registry, worker_registry=worker_registry)
+
+    with pytest.raises(BackendError, match="is not authorized to inspect path /admin/courses/57"):
+        await scheduler._dispatch_backend(backend, task.payload, task=task)
+
+
+@pytest.mark.anyio
+async def test_scheduler_captures_pinned_worker_execution_provenance(monkeypatch):
+    from control_plane.scheduler.scheduler import Scheduler
+
+    worker = Worker(
+        id="browser-worker",
+        name="Browser Worker",
+        host="browser.local",
+        port=8010,
+        capabilities=[Capability(type="tool", provider="browser", models=["browser-ui"])],
+        status="online",
+        enabled=True,
+    )
+    backend = BackendConfig(
+        type="browser",
+        provider="browser",
+        model="browser-ui",
+        worker_id=worker.id,
+        api_key_ref="BROWSER_WORKER_TOKEN",
+    )
+    task = Task(
+        id="task-browser-provenance",
+        bot_id="browser-bot",
+        payload={"path": "/admin/courses"},
+        created_at="now",
+        updated_at="now",
+    )
+    monkeypatch.setenv("BROWSER_WORKER_TOKEN", "worker-token")
+    fake_response = MagicMock()
+    fake_response.raise_for_status.return_value = None
+    fake_response.json.return_value = {"url": "https://app.example/admin/courses", "text": "Courses"}
+    mock_client = AsyncMock()
+    mock_client.__aenter__.return_value = mock_client
+    mock_client.__aexit__.return_value = False
+    mock_client.post.return_value = fake_response
+    worker_registry = AsyncMock()
+    worker_registry.get.return_value = worker
+    scheduler = Scheduler(bot_registry=AsyncMock(), worker_registry=worker_registry)
+
+    with patch("control_plane.scheduler.scheduler.httpx.AsyncClient", return_value=mock_client):
+        await scheduler._dispatch_backend(backend, task.payload, task=task)
+
+    provenance = scheduler.consume_task_execution_provenance(task.id)
+    assert provenance is not None
+    assert provenance["backend_type"] == "browser"
+    assert provenance["provider"] == "browser"
+    assert provenance["model"] == "browser-ui"
+    assert provenance["worker_id"] == worker.id
+    assert scheduler.consume_task_execution_provenance(task.id) is None
 
 
 @pytest.mark.anyio
@@ -2643,6 +2837,47 @@ def test_prepare_payload_for_browser_backend_preserves_inspection_request():
     prepared = _prepare_payload_for_backend(bot, bot.backends[0], payload)
 
     assert prepared == payload
+
+
+def test_prepare_payload_for_scheduled_browser_backend_removes_only_scheduler_envelope():
+    from control_plane.scheduler.scheduler import _prepare_payload_for_backend
+
+    bot = Bot(
+        id="browser-inspector",
+        name="Browser Inspector",
+        role="browser-inspector",
+        backends=[
+            BackendConfig(
+                type="browser",
+                provider="browser",
+                model="browser-ui",
+                worker_id="browser-worker",
+                api_key_ref="BROWSER_TOKEN",
+            )
+        ],
+    )
+    payload = {
+        "path": "/admin/dashboard",
+        "text_limit": 200,
+        "element_limit": 5,
+        "instruction": "Inspect without mutation.",
+        "source": "agent_schedule",
+        "schedule_id": "schedule-1",
+        "project_id": None,
+        "node_overrides": {},
+    }
+    task = Task(
+        id="scheduled-browser-task",
+        bot_id=bot.id,
+        payload=payload,
+        metadata=TaskMetadata(source="agent_schedule"),
+        created_at="2026-07-19T00:00:00+00:00",
+        updated_at="2026-07-19T00:00:00+00:00",
+    )
+
+    prepared = _prepare_payload_for_backend(bot, bot.backends[0], payload, task=task)
+
+    assert prepared == {"path": "/admin/dashboard", "text_limit": 200, "element_limit": 5}
 
 
 @pytest.mark.anyio

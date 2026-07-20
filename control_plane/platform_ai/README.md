@@ -204,23 +204,25 @@ Example:
 
 ## Edit Runners
 
-Control actions `code_edit`, `hotfix`, and `external_repo_edit` now execute real asynchronous runner jobs instead of returning stub acceptance responses.
+Control actions `code_edit`, `hotfix`, and `external_repo_edit` can run asynchronous jobs only through a deliberately configured runner. The control plane never invokes a shell for these actions.
 
 Environment variables:
 
 - `NEXUS_PLATFORM_AI_REPO_EDIT_RUN_CMD` (required for `code_edit`/`hotfix`)
 - `NEXUS_PLATFORM_AI_EXTERNAL_REPO_EDIT_RUN_CMD` (required for `external_repo_edit`)
-- `NEXUS_PLATFORM_AI_REPO_EDIT_CWD` (optional working directory)
+- `NEXUS_PLATFORM_AI_REPO_EDIT_CWD` (required working directory inside the configured runner workspace)
 - `NEXUS_PLATFORM_AI_REPO_EDIT_TIMEOUT_SECONDS` (runner hard timeout; default `1800`)
 - `NEXUS_PLATFORM_AI_REPO_EDIT_AUTO_DEPLOY=1` (optional; auto-start deploy after successful internal repo edit)
 - `NEXUS_PLATFORM_AI_PRIVILEGED_ENABLED=1` + `NEXUS_PLATFORM_AI_OWNER_ALLOWLIST` are required; runtime now enforces these checks even when actions are triggered from chat directives.
+- `NEXUS_PLATFORM_AI_LOCAL_SUBPROCESS_RUNNERS_ENABLED=1` is an explicit development-only opt-in. Leave it disabled in production and dispatch edits to a dedicated worker node instead.
+- Local subprocess mode additionally requires `NEXUS_PLATFORM_AI_RUNNER_WORKSPACE_ROOT` and `NEXUS_PLATFORM_AI_RUNNER_EXECUTABLE_ALLOWLIST`. The configured command must begin with an allowlisted absolute executable, and the working directory must be inside the workspace root.
 
-The runner executes in a separate subprocess, streams logs into `action_trace` events, posts completion status back into the session chat, and releases control to the main Platform AI loop when done.
+When local development mode is explicitly enabled, the runner is started as an argument vector rather than a shell command. It receives only the session fields, locale/path values, and `GIT_TERMINAL_PROMPT=0`; control-plane credentials are not inherited.
 
 Public project-edit path (`project_code_edit`) is separate:
 
 - `NEXUS_PLATFORM_AI_PROJECT_EDIT_ENABLED=1`
-- `NEXUS_PLATFORM_AI_PROJECT_EDIT_RUN_CMD` (for example `bash /opt/NexusAI/scripts/platform_ai_project_edit_runner.sh`)
+- `NEXUS_PLATFORM_AI_PROJECT_EDIT_RUN_CMD` (an allowlisted absolute runner executable)
 - `NEXUS_PLATFORM_AI_PROJECT_EDIT_REQUIRE_PROJECT_ID=1` and optional `NEXUS_PLATFORM_AI_PROJECT_EDIT_PROJECT_ALLOWLIST`
 
 Public project-edit is patch+tests+report only and intentionally does not commit/push. The session checkpoints back to `ready` after runner completion.

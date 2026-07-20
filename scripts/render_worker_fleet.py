@@ -346,6 +346,17 @@ def _worker_service(worker: dict[str, Any]) -> str:
     return _slug(str(worker.get("service") or worker.get("id") or worker.get("name")))
 
 
+def _worker_request_token_env(worker: dict[str, Any], fleet: dict[str, Any]) -> str:
+    value = str(worker.get("request_token_env") or fleet.get("worker_request_token_env") or "").strip()
+    if not value:
+        return ""
+    if not _ENV_NAME.fullmatch(value):
+        raise ValueError(
+            f"Worker {worker.get('id') or worker.get('name')} request_token_env must be an environment variable name."
+        )
+    return value
+
+
 def _worker_config(worker: dict[str, Any], fleet: dict[str, Any]) -> dict[str, Any]:
     worker_id = str(worker.get("id") or "").strip()
     if not worker_id:
@@ -382,6 +393,9 @@ def _worker_config(worker: dict[str, Any], fleet: dict[str, Any]) -> dict[str, A
         tooling["browser"] = browser
     if tooling:
         config["tooling"] = tooling
+    request_token_env = _worker_request_token_env(worker, fleet)
+    if request_token_env:
+        config["request_token_env"] = request_token_env
     return config
 
 
@@ -673,6 +687,15 @@ def _worker_node_env(
             )
             continue
         values[target_name] = value
+    request_token_env = _worker_request_token_env(worker, fleet)
+    if request_token_env:
+        token = str(env.get(request_token_env, "")).strip()
+        if not token:
+            warnings.append(
+                f"Missing worker request token: {request_token_env} for worker {worker.get('id') or worker.get('name')}"
+            )
+        else:
+            values[request_token_env] = token
     return values
 
 

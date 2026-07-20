@@ -14,6 +14,18 @@ async def infer(
         raise ValueError("OLLAMA_API_KEY is not configured")
 
     request_params = dict(params or {})
+    response_format = request_params.pop("response_format", None)
+    max_tokens = request_params.pop("max_tokens", None)
+    # Ollama's chat API names the generation ceiling ``num_predict``.  Keep
+    # the public worker configuration provider-neutral while ensuring remote
+    # Ollama Cloud nodes receive the option they actually honor.
+    if max_tokens is not None and "num_predict" not in request_params:
+        try:
+            max_tokens_value = int(max_tokens)
+        except (TypeError, ValueError):
+            max_tokens_value = 0
+        if max_tokens_value > 0:
+            request_params["num_predict"] = max_tokens_value
     body = {
         "model": model,
         "messages": messages,
@@ -23,6 +35,8 @@ async def infer(
         "think": request_params.pop("think", False),
         "options": request_params,
     }
+    if response_format == "json":
+        body["format"] = "json"
     async with httpx.AsyncClient(timeout=120.0) as client:
         response = await client.post(
             f"{base_url.rstrip('/')}/chat",

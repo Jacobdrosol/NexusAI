@@ -17,6 +17,7 @@ env/
 .env.*
 !.env.example
 *.log
-data/*.log
-data/*.db
+data/
+data.backup.*/
+tmp_*/
 tests/

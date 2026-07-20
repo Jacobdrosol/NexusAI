@@ -3,6 +3,7 @@ name: "Local Worker 01"
 host: "worker_agent"
 port: 8001
 status: "offline"
+request_token_env: "NEXUS_WORKER_REQUEST_TOKEN"
 capabilities:
   - type: "llm"
     provider: "ollama_cloud"

@@ -12,6 +12,7 @@ from worker_agent.backends import (
     claude_backend,
     gemini_backend,
 )
+from worker_agent.request_auth import require_worker_request_token
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["infer"])
@@ -57,6 +58,7 @@ def _is_declared_model(worker_config: Dict[str, Any], provider: str, model: str)
 async def infer(request: Request, body: InferRequest) -> dict:
     params = body.params or {}
     worker_config = getattr(request.app.state, "worker_config", {})
+    require_worker_request_token(request, worker_config)
     provider = str(body.provider or "").strip().lower()
     if provider not in _SUPPORTED_PROVIDERS:
         raise HTTPException(status_code=400, detail=f"Unsupported provider: {body.provider}")

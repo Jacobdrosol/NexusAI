@@ -6,8 +6,10 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -31,6 +33,13 @@ _AUTONOMOUS_PIPELINE_ACTIONS = {"set_pipeline_target", "launch_pipeline"}
 _APPROVABLE_PROPOSAL_BACKEND_TYPES = {"local_llm", "remote_llm", "cloud_api"}
 _DIRECT_CREDENTIAL_PREFIXES = ("sk-", "ghp_", "github_pat_", "xoxb-", "xoxp-", "akia", "aiza")
 _PROPOSAL_PREFLIGHT_TTL_SECONDS = 300
+
+
+@dataclass(frozen=True)
+class _RestrictedRunnerSpec:
+    argv: List[str]
+    cwd: Path
+    env: Dict[str, str]
 
 
 def _env_enabled(name: str) -> bool:
@@ -101,6 +110,66 @@ def _safe_timeout_seconds(env_name: str, default: float, *, min_value: float, ma
     except Exception:
         return default
     return max(min_value, min(max_value, value))
+
+
+def _path_is_within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def _restricted_runner_spec(*, run_cmd: str, cwd_env: str, session_env: Dict[str, str]) -> _RestrictedRunnerSpec:
+    """Build the only supported local runner shape; production uses worker runners instead."""
+    if not _env_enabled("NEXUS_PLATFORM_AI_LOCAL_SUBPROCESS_RUNNERS_ENABLED"):
+        raise ValueError("control-plane local subprocess runners are disabled; use an isolated worker runner")
+
+    workspace_root_raw = str(os.environ.get("NEXUS_PLATFORM_AI_RUNNER_WORKSPACE_ROOT", "") or "").strip()
+    if not workspace_root_raw:
+        raise ValueError("NEXUS_PLATFORM_AI_RUNNER_WORKSPACE_ROOT is required for local subprocess runners")
+    workspace_root = Path(workspace_root_raw).resolve()
+    if not workspace_root.is_dir():
+        raise ValueError("NEXUS_PLATFORM_AI_RUNNER_WORKSPACE_ROOT must resolve to an existing directory")
+
+    configured_cwd = str(os.environ.get(cwd_env, "") or "").strip()
+    if not configured_cwd:
+        raise ValueError(f"{cwd_env} is required for local subprocess runners")
+    cwd_path = Path(configured_cwd).resolve()
+    if not cwd_path.is_dir() or not _path_is_within(cwd_path, workspace_root):
+        raise ValueError(f"{cwd_env} must be an existing directory inside NEXUS_PLATFORM_AI_RUNNER_WORKSPACE_ROOT")
+
+    try:
+        argv = shlex.split(run_cmd, posix=os.name != "nt")
+    except ValueError as exc:
+        raise ValueError("runner command could not be parsed") from exc
+    if not argv:
+        raise ValueError("runner command is empty")
+
+    executable_path = Path(argv[0])
+    if not executable_path.is_absolute():
+        raise ValueError("runner executable must be an executable absolute file path")
+    executable = executable_path.resolve()
+    if not executable.is_file() or not os.access(executable, os.X_OK):
+        raise ValueError("runner executable must be an executable absolute file path")
+    allowed_executables = {Path(value).resolve() for value in _csv_env_values("NEXUS_PLATFORM_AI_RUNNER_EXECUTABLE_ALLOWLIST")}
+    if not allowed_executables or executable not in allowed_executables:
+        raise ValueError("runner executable is not in NEXUS_PLATFORM_AI_RUNNER_EXECUTABLE_ALLOWLIST")
+    argv[0] = str(executable)
+
+    env = {key: value for key in ("PATH", "LANG", "LC_ALL", "TZ") if (value := os.environ.get(key))}
+    env.update(
+        {
+            "GIT_TERMINAL_PROMPT": "0",
+            "NEXUS_PLATFORM_AI_SESSION_ID": session_env["session_id"],
+            "NEXUS_PLATFORM_AI_REQUESTED_BY": session_env["requested_by"],
+            "NEXUS_PLATFORM_AI_OPERATOR_INSTRUCTION": session_env["instruction"],
+            "NEXUS_PLATFORM_AI_REPO_EDIT_KIND": session_env["kind"],
+            "NEXUS_PLATFORM_AI_SESSION_PROJECT_ID": session_env["project_id"],
+            "NEXUS_PLATFORM_AI_SESSION_MODE": session_env["mode"],
+        }
+    )
+    return _RestrictedRunnerSpec(argv=argv, cwd=cwd_path, env=env)
 
 
 def _extract_json_chunks(text: str) -> List[Any]:
@@ -1433,6 +1502,11 @@ class PlatformAISessionRuntime:
         )
         if not bool(scope_gate.get("ok")):
             return {"status": str(scope_gate.get("status") or "denied"), "detail": str(scope_gate.get("detail") or "project scope denied")}
+        if not _env_enabled("NEXUS_PLATFORM_AI_LOCAL_SUBPROCESS_RUNNERS_ENABLED"):
+            return {
+                "status": "disabled",
+                "detail": "project_code_edit requires an isolated worker runner; control-plane subprocess runners are disabled",
+            }
         existing = self._project_edit_tasks.get(sid)
         if existing is not None and not existing.done():
             return {"status": "running", "detail": "project edit runner already active"}
@@ -1506,6 +1580,11 @@ class PlatformAISessionRuntime:
                 }
         else:
             scope_gate = {"project_id": None}
+        if not _env_enabled("NEXUS_PLATFORM_AI_LOCAL_SUBPROCESS_RUNNERS_ENABLED"):
+            return {
+                "status": "disabled",
+                "detail": "repo edit requires an isolated worker runner; control-plane subprocess runners are disabled",
+            }
         existing = self._repo_edit_tasks.get(sid)
         if existing is not None and not existing.done():
             return {"status": "running", "detail": "repo edit runner already active"}
@@ -1551,6 +1630,36 @@ class PlatformAISessionRuntime:
         if candidate not in allowlist:
             return {"ok": False, "status": "denied", "detail": f"operator '{candidate or 'unknown'}' is not allowlisted"}
         return {"ok": True, "status": "ok"}
+
+    async def _authorize_configuration_proposal_approval(
+        self,
+        session: Dict[str, Any],
+        *,
+        requested_by: Optional[str],
+    ) -> Dict[str, Any]:
+        """Require the session owner to approve a preflighted bot proposal.
+
+        The Platform AI may draft a declarative bot configuration, but it never
+        receives authority to apply it. This boundary deliberately requires the
+        deployment flag, an owner allowlist, and an exact match between the
+        authenticated approval identity and the session's recorded owner.
+        """
+        if not _configuration_mutations_enabled():
+            return {"ok": False, "status": "disabled", "detail": "configuration_mutations_disabled"}
+        allowlist = _owner_allowlist()
+        if not allowlist:
+            return {"ok": False, "status": "denied", "detail": "owner_allowlist_empty"}
+        session_operator = str(session.get("operator_id") or "").strip().lower()
+        requested = str(requested_by or "").strip().lower()
+        if not requested:
+            return {"ok": False, "status": "denied", "detail": "operator_id_required"}
+        if not session_operator:
+            return {"ok": False, "status": "denied", "detail": "session_owner_required"}
+        if requested != session_operator:
+            return {"ok": False, "status": "denied", "detail": "session_owner_mismatch"}
+        if requested not in allowlist:
+            return {"ok": False, "status": "denied", "detail": "operator_not_allowlisted"}
+        return {"ok": True, "status": "ok", "operator_id": requested}
 
     async def _record_project_scope_denied(
         self,
@@ -1751,7 +1860,7 @@ class PlatformAISessionRuntime:
         )
         return {
             "ok": False,
-            "detail": "configuration_mutations_disabled",
+            "detail": "configuration_proposal_required",
             "proposal_only": True,
             "proposal_id": proposal["id"],
             "bot_id": safe_id,
@@ -2068,7 +2177,6 @@ class PlatformAISessionRuntime:
         actions_taken: List[Dict[str, Any]] = []
         mode = str(session.get("mode") or "").strip().lower()
         metadata = session.get("metadata") if isinstance(session.get("metadata"), dict) else {}
-        allow_scope_expansion = mode in {"bot_creator", "pipeline_creator", "pipeline_tuner"}
         payloads = _extract_json_chunks(content)
         directives: List[Any] = []
         for payload in payloads:
@@ -2088,7 +2196,7 @@ class PlatformAISessionRuntime:
             action = str(directive.get("platform_ai_action") or directive.get("action") or "").strip().lower()
             if not action and self._looks_like_bot_payload(directive):
                 action = "upsert_bot"
-            if action in _CONFIGURATION_MUTATION_ACTIONS and not _configuration_mutations_enabled():
+            if action in _CONFIGURATION_MUTATION_ACTIONS:
                 if action == "upsert_bot":
                     bot_payload = directive.get("bot") if isinstance(directive.get("bot"), dict) else directive
                     result = await self._create_bot_configuration_proposal(
@@ -2112,12 +2220,14 @@ class PlatformAISessionRuntime:
                         )
                         actions_taken.append({"action": "upsert_bot", "result": result})
                     continue
-                actions_taken.append(
-                    {
-                        "action": action,
-                        "result": {"ok": False, "detail": "configuration_mutations_disabled", "proposal_only": True},
-                    }
-                )
+                actions_taken.append({
+                    "action": action,
+                    "result": {
+                        "ok": False,
+                        "detail": "configuration_action_requires_direct_operator_edit",
+                        "proposal_only": True,
+                    },
+                })
                 continue
             if action in _AUTONOMOUS_PIPELINE_ACTIONS and not _autonomous_pipeline_runs_enabled():
                 actions_taken.append(
@@ -2127,72 +2237,7 @@ class PlatformAISessionRuntime:
                     }
                 )
                 continue
-            if action == "upsert_bot":
-                bot_payload = directive.get("bot") if isinstance(directive.get("bot"), dict) else directive
-                result = await self._upsert_bot_payload(
-                    bot_payload if isinstance(bot_payload, dict) else {},
-                    session_id=session_id,
-                    session=session,
-                    allow_scope_expansion=allow_scope_expansion,
-                )
-                actions_taken.append({"action": "upsert_bot", "result": result})
-            elif action == "upsert_bots":
-                bots = directive.get("bots") if isinstance(directive.get("bots"), list) else []
-                for item in bots:
-                    if not isinstance(item, dict):
-                        continue
-                    result = await self._upsert_bot_payload(
-                        item,
-                        session_id=session_id,
-                        session=session,
-                        allow_scope_expansion=allow_scope_expansion,
-                    )
-                    actions_taken.append({"action": "upsert_bot", "result": result})
-            elif action in {"delete_bot", "remove_bot"}:
-                bot_id = str(directive.get("bot_id") or directive.get("id") or "").strip()
-                if not bot_id:
-                    actions_taken.append({"action": action, "result": {"ok": False, "detail": "bot_id_required"}})
-                elif self._bot_registry is None:
-                    actions_taken.append({"action": action, "result": {"ok": False, "detail": "bot_registry_unavailable"}})
-                else:
-                    policy = self._mode_mutation_policy(mode=mode, metadata=metadata)
-                    scope = await self._editable_bot_scope(session=session)
-                    reference_scope = await self._reference_bot_scope(session=session)
-                    if not bool(policy.get("delete")):
-                        actions_taken.append({"action": action, "result": {"ok": False, "detail": "delete_denied_by_policy", "bot_id": bot_id}})
-                    elif bot_id in reference_scope:
-                        await self._record_scope_denied(
-                            session_id=session_id,
-                            action="delete_bot",
-                            bot_id=bot_id,
-                            allowed_scope=sorted(scope),
-                            reason="reference_scope_read_only",
-                        )
-                        actions_taken.append({"action": action, "result": {"ok": False, "detail": "reference_scope_read_only", "bot_id": bot_id}})
-                    elif scope and bot_id not in scope:
-                        await self._record_scope_denied(
-                            session_id=session_id,
-                            action="delete_bot",
-                            bot_id=bot_id,
-                            allowed_scope=sorted(scope),
-                        )
-                        actions_taken.append({"action": action, "result": {"ok": False, "detail": "out_of_scope", "bot_id": bot_id}})
-                    else:
-                        try:
-                            await self._bot_registry.remove(bot_id)
-                            actions_taken.append({"action": action, "result": {"ok": True, "bot_id": bot_id, "operation": "deleted"}})
-                        except Exception as exc:
-                            actions_taken.append({"action": action, "result": {"ok": False, "detail": f"bot_delete_failed:{exc}", "bot_id": bot_id}})
-            elif action == "configure_pipeline_entry":
-                stage_ids = [str(item) for item in (directive.get("stage_bot_ids") or [])]
-                result = await self._configure_linear_pipeline_entry(
-                    entry_bot_id=str(directive.get("entry_bot_id") or "").strip(),
-                    stage_bot_ids=stage_ids,
-                    pipeline_name=str(directive.get("pipeline_name") or "").strip(),
-                    launch_instruction=str(directive.get("launch_instruction") or "").strip(),
-                )
-                actions_taken.append({"action": "configure_pipeline_entry", "result": result})
-            elif action == "set_pipeline_target":
+            if action == "set_pipeline_target":
                 pipeline_bot_id = str(directive.get("pipeline_bot_id") or "").strip()
                 pipeline_name = str(directive.get("pipeline_name") or "").strip()
                 updates: Dict[str, Any] = {}
@@ -4328,23 +4373,41 @@ class PlatformAISessionRuntime:
             )
             return
 
-        default_cwd = Path(__file__).resolve().parents[2]
-        configured_cwd = str(os.environ.get("NEXUS_PLATFORM_AI_PROJECT_EDIT_CWD", "") or "").strip()
-        cwd_path = Path(configured_cwd).resolve() if configured_cwd else default_cwd
-        if not cwd_path.exists() or not cwd_path.is_dir():
-            cwd_path = default_cwd
-
         live_session = await self._store.get_session(session_id)
         live_metadata = live_session.get("metadata") if isinstance((live_session or {}).get("metadata"), dict) else {}
         session_project_id = str(live_metadata.get("project_id") or "").strip()
         session_mode = str((live_session or {}).get("mode") or "").strip()
-        env = os.environ.copy()
-        env["NEXUS_PLATFORM_AI_SESSION_ID"] = str(session_id)
-        env["NEXUS_PLATFORM_AI_REQUESTED_BY"] = str(requested_by or "")
-        env["NEXUS_PLATFORM_AI_OPERATOR_INSTRUCTION"] = str(instruction or "")
-        env["NEXUS_PLATFORM_AI_REPO_EDIT_KIND"] = kind
-        env["NEXUS_PLATFORM_AI_SESSION_PROJECT_ID"] = session_project_id
-        env["NEXUS_PLATFORM_AI_SESSION_MODE"] = session_mode
+        try:
+            runner = _restricted_runner_spec(
+                run_cmd=run_cmd,
+                cwd_env="NEXUS_PLATFORM_AI_PROJECT_EDIT_CWD",
+                session_env={
+                    "session_id": str(session_id),
+                    "requested_by": str(requested_by or ""),
+                    "instruction": str(instruction or ""),
+                    "kind": kind,
+                    "project_id": session_project_id,
+                    "mode": session_mode,
+                },
+            )
+        except ValueError as exc:
+            await self._store.update_session(
+                session_id,
+                status="ready",
+                metadata={
+                    "project_edit_runner_state": "failed",
+                    "project_edit_runner_last_error": str(exc),
+                    "project_edit_runner_finished_at": _now(),
+                    "checkpoint_reason": "project_edit_runner_unavailable",
+                },
+            )
+            await self._store.append_message(
+                session_id,
+                role="assistant",
+                content=f"Project code edit runner is unavailable: {exc}",
+                metadata={"source": "project_edit_runner", "state": "failed"},
+            )
+            return
         timeout_seconds = _safe_timeout_seconds(
             "NEXUS_PLATFORM_AI_PROJECT_EDIT_TIMEOUT_SECONDS",
             1800.0,
@@ -4352,18 +4415,18 @@ class PlatformAISessionRuntime:
             max_value=14400.0,
         )
         try:
-            proc = await asyncio.create_subprocess_shell(
-                run_cmd,
-                cwd=str(cwd_path),
+            proc = await asyncio.create_subprocess_exec(
+                *runner.argv,
+                cwd=str(runner.cwd),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
-                env=env,
+                env=runner.env,
             )
             assert proc.stdout is not None
             await self._store.append_event(
                 session_id,
                 "action_trace",
-                {"action": "project_edit_requested", "cwd": str(cwd_path), "command_env": cmd_env},
+                {"action": "project_edit_requested", "cwd": str(runner.cwd), "command_env": cmd_env},
             )
             lines: List[str] = []
             async def _stream_lines() -> None:
@@ -4525,23 +4588,40 @@ class PlatformAISessionRuntime:
             )
             return
 
-        default_cwd = Path(__file__).resolve().parents[2]
-        configured_cwd = str(os.environ.get("NEXUS_PLATFORM_AI_REPO_EDIT_CWD", "") or "").strip()
-        cwd_path = Path(configured_cwd).resolve() if configured_cwd else default_cwd
-        if not cwd_path.exists() or not cwd_path.is_dir():
-            cwd_path = default_cwd
-
         live_session = await self._store.get_session(session_id)
         live_metadata = live_session.get("metadata") if isinstance((live_session or {}).get("metadata"), dict) else {}
         session_project_id = str(live_metadata.get("project_id") or "").strip()
         session_mode = str((live_session or {}).get("mode") or "").strip()
-        env = os.environ.copy()
-        env["NEXUS_PLATFORM_AI_SESSION_ID"] = str(session_id)
-        env["NEXUS_PLATFORM_AI_REQUESTED_BY"] = str(requested_by or "")
-        env["NEXUS_PLATFORM_AI_OPERATOR_INSTRUCTION"] = str(instruction or "")
-        env["NEXUS_PLATFORM_AI_REPO_EDIT_KIND"] = kind
-        env["NEXUS_PLATFORM_AI_SESSION_PROJECT_ID"] = session_project_id
-        env["NEXUS_PLATFORM_AI_SESSION_MODE"] = session_mode
+        try:
+            runner = _restricted_runner_spec(
+                run_cmd=run_cmd,
+                cwd_env="NEXUS_PLATFORM_AI_REPO_EDIT_CWD",
+                session_env={
+                    "session_id": str(session_id),
+                    "requested_by": str(requested_by or ""),
+                    "instruction": str(instruction or ""),
+                    "kind": kind,
+                    "project_id": session_project_id,
+                    "mode": session_mode,
+                },
+            )
+        except ValueError as exc:
+            await self._store.update_session(
+                session_id,
+                status="ready",
+                metadata={
+                    "repo_edit_runner_state": "failed",
+                    "repo_edit_runner_last_error": str(exc),
+                    "repo_edit_runner_finished_at": _now(),
+                },
+            )
+            await self._store.append_message(
+                session_id,
+                role="assistant",
+                content=f"Repo edit runner is unavailable: {exc}",
+                metadata={"source": "repo_edit_runner", "state": "failed", "kind": kind},
+            )
+            return
         timeout_seconds = _safe_timeout_seconds(
             "NEXUS_PLATFORM_AI_REPO_EDIT_TIMEOUT_SECONDS",
             1800.0,
@@ -4550,12 +4630,12 @@ class PlatformAISessionRuntime:
         )
 
         try:
-            proc = await asyncio.create_subprocess_shell(
-                run_cmd,
-                cwd=str(cwd_path),
+            proc = await asyncio.create_subprocess_exec(
+                *runner.argv,
+                cwd=str(runner.cwd),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
-                env=env,
+                env=runner.env,
             )
             assert proc.stdout is not None
             await self._store.append_event(
@@ -4564,7 +4644,7 @@ class PlatformAISessionRuntime:
                 {
                     "action": "repo_edit_requested",
                     "kind": kind,
-                    "cwd": str(cwd_path),
+                    "cwd": str(runner.cwd),
                     "command_env": cmd_env,
                 },
             )
@@ -4863,6 +4943,12 @@ class PlatformAISessionRuntime:
             session = await self._store.get_session(session_id)
             if session is None:
                 return {"status": "error", "detail": "session_not_found"}
+            authorization = await self._authorize_configuration_proposal_approval(
+                session,
+                requested_by=operator_id,
+            )
+            if not bool(authorization.get("ok")):
+                return {"status": "blocked", "detail": authorization.get("detail"), "proposal": proposal}
             preflight = after_state.get("preflight") if isinstance(after_state.get("preflight"), dict) else {}
             if not bool(preflight.get("ready_for_operator_review")):
                 return {"status": "blocked", "detail": "proposal_preflight_required", "proposal": proposal}

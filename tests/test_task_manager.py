@@ -3936,6 +3936,53 @@ async def test_run_reports_capture_usage_metadata(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_task_execution_provenance_persists_without_changing_result_contract(tmp_path):
+    import asyncio
+
+    from control_plane.task_manager.task_manager import TaskManager
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {"output": "done", "usage": {"total_tokens": 1}}
+
+        def consume_task_execution_provenance(self, task_id):
+            assert task_id
+            return {
+                "backend_type": "browser",
+                "provider": "browser",
+                "model": "browser-ui",
+                "worker_id": "browser-inspector-01",
+                "captured_at": "2026-07-19T00:00:00+00:00",
+            }
+
+    db_path = str(tmp_path / "provenance.db")
+    manager = TaskManager(StubScheduler(), db_path=db_path)
+    task = await manager.create_task(bot_id="browser-bot", payload={"path": "/admin/dashboard"})
+
+    for _ in range(40):
+        updated = await manager.get_task(task.id)
+        if updated.status == "completed":
+            break
+        await asyncio.sleep(0.1)
+
+    assert updated.status == "completed"
+    assert updated.result == {"output": "done", "usage": {"total_tokens": 1}}
+    assert updated.metadata is not None
+    assert updated.metadata.execution_provenance == {
+        "backend_type": "browser",
+        "provider": "browser",
+        "model": "browser-ui",
+        "worker_id": "browser-inspector-01",
+        "captured_at": "2026-07-19T00:00:00+00:00",
+    }
+
+    restarted = TaskManager(StubScheduler(), db_path=db_path)
+    reloaded = await restarted.get_task(task.id)
+    assert reloaded.metadata is not None
+    assert reloaded.metadata.execution_provenance["worker_id"] == "browser-inspector-01"
+
+
+@pytest.mark.anyio
 async def test_output_contract_extracts_json_from_text_result(tmp_path):
     import asyncio
 
@@ -3980,6 +4027,135 @@ async def test_output_contract_extracts_json_from_text_result(tmp_path):
     assert updated.result["status"] == "pass"
     assert updated.result["items"][0]["title"] == "Unit 1"
     assert updated.result["usage"]["total_tokens"] == 12
+
+
+@pytest.mark.anyio
+async def test_output_contract_preserves_structured_browser_evidence_with_text_field(tmp_path):
+    import asyncio
+
+    from control_plane.registry.bot_registry import BotRegistry
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import Bot
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {
+                "url": "https://example.test/admin/courses/57",
+                "title": "Course Management",
+                "text": "Visible page evidence is plain text, not a JSON response.",
+                "elements": [{"role": "link", "text": "Lesson"}],
+            }
+
+    bot_registry = BotRegistry(db_path=str(tmp_path / "browser-contract-bots.db"))
+    await bot_registry.register(
+        Bot(
+            id="browser-evidence-bot",
+            name="Browser Evidence",
+            role="browser-inspector",
+            backends=[],
+            routing_rules={
+                "output_contract": {
+                    "enabled": True,
+                    "format": "json_object",
+                    "required_fields": ["url", "title", "text", "elements"],
+                    "non_empty_fields": ["url", "title"],
+                }
+            },
+        )
+    )
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "browser-contract.db"), bot_registry=bot_registry)
+    task = await tm.create_task(bot_id="browser-evidence-bot", payload={"path": "/admin/courses/57"})
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.1)
+
+    assert updated.status == "completed"
+    assert updated.result["text"] == "Visible page evidence is plain text, not a JSON response."
+    assert updated.result["elements"] == [{"role": "link", "text": "Lesson"}]
+
+
+@pytest.mark.anyio
+async def test_history_retention_previews_and_purges_only_unreferenced_terminal_records(tmp_path):
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.models import BotRunArtifact, Task, TaskMetadata
+
+    class StubScheduler:
+        pass
+
+    manager = TaskManager(StubScheduler(), db_path=str(tmp_path / "retention.db"))
+    await manager._ensure_db()
+    old_time = "2024-01-01T00:00:00+00:00"
+    active_time = "2026-01-01T00:00:00+00:00"
+    purgeable = Task(
+        id="purgeable-task",
+        bot_id="retention-bot",
+        payload={"safe": True},
+        metadata=TaskMetadata(),
+        status="completed",
+        created_at=old_time,
+        updated_at=old_time,
+    )
+    protected = Task(
+        id="protected-task",
+        bot_id="retention-bot",
+        payload={"safe": True},
+        metadata=TaskMetadata(),
+        status="completed",
+        created_at=old_time,
+        updated_at=old_time,
+    )
+    dependent = Task(
+        id="active-dependent-task",
+        bot_id="retention-bot",
+        payload={"safe": True},
+        metadata=TaskMetadata(),
+        depends_on=[protected.id],
+        status="blocked",
+        created_at=active_time,
+        updated_at=active_time,
+    )
+    for task in (purgeable, protected, dependent):
+        manager._tasks[task.id] = task
+        await manager._persist_task(task)
+        await manager._upsert_bot_run(task)
+    await manager._persist_dependencies(dependent)
+    await manager._upsert_artifact(
+        BotRunArtifact(
+            id="purgeable-task:result",
+            run_id=purgeable.id,
+            task_id=purgeable.id,
+            bot_id=purgeable.bot_id,
+            kind="result",
+            label="Result",
+            content="retained output",
+            metadata={},
+            created_at=old_time,
+        )
+    )
+
+    preview = await manager.preview_history_retention(older_than_days=30)
+
+    assert preview["eligible_task_count"] == 1
+    assert preview["protected_by_active_dependency_count"] == 1
+    assert preview["eligible_artifact_count"] == 1
+    with pytest.raises(ValueError, match="confirmation"):
+        await manager.purge_history_retention(older_than_days=30, confirmation="no")
+
+    result = await manager.purge_history_retention(
+        older_than_days=30,
+        max_tasks=10,
+        confirmation="delete-terminal-history",
+    )
+
+    assert result["deleted_task_count"] == 1
+    assert result["deleted_artifact_count"] == 1
+    assert purgeable.id not in manager._tasks
+    assert protected.id in manager._tasks
+    await manager.close()
 
 
 @pytest.mark.anyio

@@ -9,7 +9,7 @@ import re
 import shutil
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -3704,6 +3704,7 @@ class TaskManager:
                      created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
+                    metadata   = excluded.metadata,
                     depends_on = excluded.depends_on,
                     status     = excluded.status,
                     result     = excluded.result,
@@ -3724,6 +3725,38 @@ class TaskManager:
                 ),
             )
             await db.commit()
+
+    async def _persist_scheduler_execution_provenance(self, task_id: str) -> None:
+        """Persist scheduler route evidence without changing worker result payloads."""
+        # Query the class rather than the instance: dynamic test doubles such as
+        # AsyncMock fabricate arbitrary attributes and must not be treated as
+        # schedulers that implement this optional capability.
+        consume = getattr(type(self._scheduler), "consume_task_execution_provenance", None)
+        if not callable(consume):
+            return
+        try:
+            provenance = consume(self._scheduler, task_id)
+        except Exception:
+            logger.warning("Unable to read execution provenance for task %s", task_id, exc_info=True)
+            return
+        if not isinstance(provenance, dict) or not provenance:
+            return
+
+        async with self._lock:
+            existing_task = self._tasks.get(task_id)
+            if existing_task is None:
+                return
+            metadata = existing_task.metadata or TaskMetadata()
+            updated_metadata = metadata.model_copy(update={"execution_provenance": dict(provenance)})
+            updated_task = existing_task.model_copy(
+                update={
+                    "metadata": updated_metadata,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+            self._tasks[task_id] = updated_task
+        await self._persist_task(updated_task)
+        await self._upsert_bot_run(updated_task)
 
     async def _upsert_bot_run(self, task: Task) -> None:
         metadata = task.metadata.model_dump() if task.metadata else None
@@ -4329,6 +4362,166 @@ class TaskManager:
             created_at=row["created_at"],
         )
 
+    @staticmethod
+    def _history_retention_statuses(statuses: Optional[List[str]]) -> List[str]:
+        requested = {
+            str(status or "").strip().lower()
+            for status in (statuses or ["completed", "retried", "cancelled"])
+            if str(status or "").strip()
+        }
+        if not requested or not requested.issubset(TaskManager._TERMINAL_TASK_STATUSES):
+            raise ValueError("History retention only accepts terminal task statuses")
+        return sorted(requested)
+
+    @staticmethod
+    def _history_retention_cutoff(older_than_days: int) -> str:
+        safe_days = max(1, min(int(older_than_days), 3_650))
+        return (datetime.now(timezone.utc) - timedelta(days=safe_days)).isoformat()
+
+    @staticmethod
+    def _history_retention_candidate_sql(statuses: List[str]) -> tuple[str, tuple[str, ...]]:
+        placeholders = ", ".join("?" for _ in statuses)
+        terminal_placeholders = ", ".join("?" for _ in TaskManager._TERMINAL_TASK_STATUSES)
+        sql = f"""
+            SELECT candidate.id
+            FROM {_TASKS_TABLE} AS candidate
+            WHERE candidate.status IN ({placeholders})
+              AND candidate.updated_at < ?
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM {_TASK_DEPENDENCIES_TABLE} AS dependency
+                  INNER JOIN {_TASKS_TABLE} AS dependent ON dependent.id = dependency.task_id
+                  WHERE dependency.depends_on_task_id = candidate.id
+                    AND dependent.status NOT IN ({terminal_placeholders})
+              )
+        """
+        return sql, tuple(statuses) + tuple(sorted(TaskManager._TERMINAL_TASK_STATUSES))
+
+    async def preview_history_retention(
+        self,
+        *,
+        older_than_days: int = 90,
+        statuses: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Summarize terminal history eligible for an explicit operator-approved purge."""
+
+        await self._ensure_db()
+        safe_statuses = self._history_retention_statuses(statuses)
+        cutoff = self._history_retention_cutoff(older_than_days)
+        candidate_sql, status_params = self._history_retention_candidate_sql(safe_statuses)
+        candidate_params = status_params[: len(safe_statuses)] + (cutoff,) + status_params[len(safe_statuses) :]
+        protected_sql = f"""
+            SELECT COUNT(DISTINCT candidate.id)
+            FROM {_TASKS_TABLE} AS candidate
+            INNER JOIN {_TASK_DEPENDENCIES_TABLE} AS dependency
+                ON dependency.depends_on_task_id = candidate.id
+            INNER JOIN {_TASKS_TABLE} AS dependent ON dependent.id = dependency.task_id
+            WHERE candidate.status IN ({", ".join("?" for _ in safe_statuses)})
+              AND candidate.updated_at < ?
+              AND dependent.status NOT IN ({", ".join("?" for _ in self._TERMINAL_TASK_STATUSES)})
+        """
+        async with open_sqlite(self._db_path) as db:
+            async with db.execute(
+                f"SELECT COUNT(*) FROM ({candidate_sql})",
+                candidate_params,
+            ) as cursor:
+                eligible_task_count = int((await cursor.fetchone())[0] or 0)
+            async with db.execute(
+                f"SELECT COUNT(*) FROM {_BOT_RUNS_TABLE} WHERE task_id IN ({candidate_sql})",
+                candidate_params,
+            ) as cursor:
+                eligible_run_count = int((await cursor.fetchone())[0] or 0)
+            async with db.execute(
+                f"""
+                SELECT COUNT(*), COALESCE(SUM(LENGTH(COALESCE(content, ''))), 0)
+                FROM {_BOT_RUN_ARTIFACTS_TABLE}
+                WHERE task_id IN ({candidate_sql})
+                """,
+                candidate_params,
+            ) as cursor:
+                artifact_row = await cursor.fetchone()
+            async with db.execute(protected_sql, candidate_params) as cursor:
+                protected_by_active_dependency_count = int((await cursor.fetchone())[0] or 0)
+
+        return {
+            "cutoff_before": cutoff,
+            "statuses": safe_statuses,
+            "eligible_task_count": eligible_task_count,
+            "eligible_bot_run_count": eligible_run_count,
+            "eligible_artifact_count": int(artifact_row[0] or 0),
+            "eligible_artifact_content_bytes": int(artifact_row[1] or 0),
+            "protected_by_active_dependency_count": protected_by_active_dependency_count,
+            "requires_explicit_confirmation": True,
+        }
+
+    async def purge_history_retention(
+        self,
+        *,
+        older_than_days: int = 90,
+        statuses: Optional[List[str]] = None,
+        max_tasks: int = 500,
+        confirmation: str,
+    ) -> Dict[str, Any]:
+        """Delete a bounded batch of previewed terminal history after explicit confirmation."""
+
+        if str(confirmation or "").strip() != "delete-terminal-history":
+            raise ValueError("History retention requires confirmation 'delete-terminal-history'")
+        safe_limit = max(1, min(int(max_tasks), 10_000))
+        preview = await self.preview_history_retention(
+            older_than_days=older_than_days,
+            statuses=statuses,
+        )
+        safe_statuses = list(preview["statuses"])
+        cutoff = str(preview["cutoff_before"])
+        candidate_sql, status_params = self._history_retention_candidate_sql(safe_statuses)
+        candidate_params = status_params[: len(safe_statuses)] + (cutoff,) + status_params[len(safe_statuses) :]
+        selection_sql = f"""
+            SELECT candidate.id
+            FROM {_TASKS_TABLE} AS candidate
+            WHERE candidate.id IN ({candidate_sql})
+            ORDER BY candidate.updated_at ASC, candidate.id ASC
+            LIMIT ?
+        """
+        async with open_sqlite(self._db_path) as db:
+            async with db.execute(selection_sql, candidate_params + (safe_limit,)) as cursor:
+                task_ids = [str(row[0]) for row in await cursor.fetchall()]
+            if not task_ids:
+                return {**preview, "deleted_task_count": 0, "deleted_artifact_count": 0}
+            placeholders = ", ".join("?" for _ in task_ids)
+            async with db.execute(
+                f"SELECT COUNT(*) FROM {_BOT_RUN_ARTIFACTS_TABLE} WHERE task_id IN ({placeholders})",
+                tuple(task_ids),
+            ) as cursor:
+                deleted_artifact_count = int((await cursor.fetchone())[0] or 0)
+            await db.execute(
+                f"DELETE FROM {_BOT_RUN_ARTIFACTS_TABLE} WHERE task_id IN ({placeholders})",
+                tuple(task_ids),
+            )
+            await db.execute(
+                f"DELETE FROM {_BOT_RUNS_TABLE} WHERE task_id IN ({placeholders})",
+                tuple(task_ids),
+            )
+            await db.execute(
+                f"DELETE FROM {_TASK_DEPENDENCIES_TABLE} WHERE task_id IN ({placeholders})",
+                tuple(task_ids),
+            )
+            await db.execute(
+                f"DELETE FROM {_TASKS_TABLE} WHERE id IN ({placeholders})",
+                tuple(task_ids),
+            )
+            await db.commit()
+        async with self._lock:
+            for task_id in task_ids:
+                self._tasks.pop(task_id, None)
+                self._watchdog_state.pop(task_id, None)
+                self._trigger_dispatch_pending.discard(task_id)
+        return {
+            **preview,
+            "deleted_task_count": len(task_ids),
+            "deleted_artifact_count": deleted_artifact_count,
+            "remaining_eligible_task_count": max(0, int(preview["eligible_task_count"]) - len(task_ids)),
+        }
+
     async def _bot_output_contract(self, bot_id: str) -> dict[str, Any]:
         if self._bot_registry is None:
             return {}
@@ -4515,6 +4708,16 @@ class TaskManager:
         if mode != "payload_transform" and (output_format in {"json_object", "json_array"} or required_fields):
             parsed = None
             if isinstance(result, (dict, list)) and output_format == "json_array" and isinstance(result, list):
+                parsed = result
+            elif isinstance(result, dict) and output_format in {"json_object", "any"} and _payload_satisfies_output_contract(
+                result,
+                [str(field) for field in required_fields],
+                [str(field) for field in non_empty_fields],
+                allow_blocked_status=allow_blocked_status,
+            ):
+                # Browser and tool backends can already return a contract-shaped object
+                # whose visible evidence includes a plain-text "text" field. Prefer that
+                # object over treating its evidence text as model JSON.
                 parsed = result
             elif raw_text:
                 try:
@@ -4991,6 +5194,7 @@ class TaskManager:
 
     async def _run_task(self, task_id: str) -> None:
         raw_result: Any = None
+        execution_provenance_persisted = False
         try:
             if self._is_closing:
                 return
@@ -5135,6 +5339,8 @@ class TaskManager:
                 # pm-final-qc → pm-orchestrator trigger doesn't forward assignment_scope).
                 task_for_execution = await self._inherit_orchestration_assignment_scope(task_for_execution)
                 raw_result = await self._scheduler.schedule(task_for_execution)
+                await self._persist_scheduler_execution_provenance(task_id)
+                execution_provenance_persisted = True
             result = await self._normalize_task_result(task_for_execution, copy.deepcopy(raw_result))
             if bot is not None and not bot_allows_repo_output_for_task:
                 result = _strip_repo_output_claims_for_deny_policy(result)
@@ -5240,6 +5446,8 @@ class TaskManager:
             task = await self.get_task(task_id)
             await self.update_status(task_id, "failed", result=e.result, error=task_error)
         except Exception as e:
+            if not execution_provenance_persisted:
+                await self._persist_scheduler_execution_provenance(task_id)
             logger.error("Task %s failed: %s", task_id, e)
             task = await self.get_task(task_id)
             error_message = str(e)

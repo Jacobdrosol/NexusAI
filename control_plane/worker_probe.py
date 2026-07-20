@@ -13,6 +13,7 @@ import httpx
 from shared.models import Worker
 
 _HOST_RE = re.compile(r"^(?=.{1,253}$)[A-Za-z0-9_](?:[A-Za-z0-9_.-]*[A-Za-z0-9_])?$")
+_ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _MAX_CAPABILITIES = 64
 _MAX_LIST_ITEMS = 64
 _MAX_VALUE_LENGTH = 160
@@ -80,6 +81,19 @@ def _verification_timeout_seconds() -> float:
     except (TypeError, ValueError):
         configured = 60.0
     return min(max(configured, 5.0), 90.0)
+
+
+def _worker_inference_headers(worker: Worker) -> dict[str, str]:
+    """Return an optional node token for the bounded inference verification call."""
+    token_env = str(getattr(worker, "request_token_env", "") or "").strip()
+    if not token_env:
+        return {}
+    if not _ENV_NAME_RE.fullmatch(token_env):
+        raise WorkerProbeError("worker request token environment variable is invalid")
+    token = os.environ.get(token_env, "").strip()
+    if not token:
+        raise WorkerProbeError("worker request token is not configured on the control plane")
+    return {"X-Nexus-Worker-Token": token}
 
 
 def _worker_llm_models(worker: Worker) -> list[tuple[str, str]]:
@@ -281,6 +295,11 @@ async def verify_worker_inference(
     except WorkerProbeError as exc:
         result["detail"] = str(exc)
         return result
+    try:
+        request_headers = _worker_inference_headers(worker)
+    except WorkerProbeError as exc:
+        result["detail"] = str(exc)
+        return result
 
     request_body = {
         "provider": selected_provider,
@@ -296,7 +315,11 @@ async def verify_worker_inference(
         ) as client:
             response = await client.post(
                 f"{base_url}/infer",
-                headers={"Accept": "application/json", "Content-Type": "application/json"},
+                headers={
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                    **request_headers,
+                },
                 json=request_body,
             )
         result["latency_ms"] = round((time.perf_counter() - started) * 1000, 1)

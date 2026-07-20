@@ -1779,7 +1779,12 @@ def _repo_output_policy_prompt_suffix(bot: Any, payload: Any = None) -> str:
 
 
 def _prepare_payload_for_backend(bot: Any, backend: BackendConfig, payload: Any, *, task: Task | None = None) -> Any:
-    if backend.type in {"browser", "custom"}:
+    if backend.type == "browser":
+        if _is_autonomous_schedule_task(task) and isinstance(payload, dict):
+            schedule_envelope_fields = {"instruction", "source", "schedule_id", "project_id", "node_overrides"}
+            return {key: value for key, value in payload.items() if key not in schedule_envelope_fields}
+        return payload
+    if backend.type == "custom":
         return payload
     payload = _reduce_payload_for_context_limits(payload)
     return _inject_system_prompt(
@@ -2027,6 +2032,36 @@ class Scheduler:
         self._latency_alpha = float(os.environ.get("NEXUSAI_WORKER_LATENCY_EMA_ALPHA", "0.30"))
         self._default_latency_ms = float(os.environ.get("NEXUSAI_WORKER_DEFAULT_LATENCY_MS", "800"))
         self._vertex_token_cache: dict[str, tuple[str, float]] = {}
+        self._execution_provenance_by_task: dict[str, dict[str, Any]] = {}
+
+    def _record_execution_provenance(
+        self,
+        task: "Task | None",
+        backend: "BackendConfig",
+        *,
+        worker: "Worker | None" = None,
+    ) -> None:
+        """Store the selected execution route until the task manager persists it.
+
+        This is operational metadata only. Keeping it separate from backend
+        responses avoids weakening strict bot output contracts.
+        """
+        if task is None:
+            return
+        task_id = str(getattr(task, "id", "") or "").strip()
+        if not task_id:
+            return
+        self._execution_provenance_by_task[task_id] = {
+            "backend_type": str(getattr(backend, "type", "") or ""),
+            "provider": str(getattr(backend, "provider", "") or ""),
+            "model": str(getattr(backend, "model", "") or ""),
+            "worker_id": str(getattr(worker, "id", "") or "") or None,
+            "captured_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    def consume_task_execution_provenance(self, task_id: str) -> Optional[dict[str, Any]]:
+        """Return and clear execution route metadata for a completed task attempt."""
+        return self._execution_provenance_by_task.pop(str(task_id or ""), None)
 
     def _worker_capacity_limit(self, worker: Worker, backend: BackendConfig) -> int:
         if str(getattr(backend, "type", "") or "").strip().lower() == "local_llm":
@@ -2814,8 +2849,10 @@ class Scheduler:
                 raise BackendError(
                     f"Worker {worker.id} is not online (status={worker.status})"
                 )
+            self._record_execution_provenance(task, backend, worker=worker)
             return await self._dispatch_to_worker(worker, backend, safe_payload)
         elif backend.type == "cloud_api":
+            self._record_execution_provenance(task, backend)
             if backend.provider == "openai":
                 return await self._call_openai(backend, safe_payload)
             elif backend.provider == "ollama_cloud":
@@ -2837,12 +2874,15 @@ class Scheduler:
                 raise BackendError(f"Worker not found: {backend.worker_id}") from e
             await self._require_fresh_autonomous_worker_probe(worker, task)
             await self._require_task_worker_tools(worker, task)
+            self._record_execution_provenance(task, backend, worker=worker)
             return await self._dispatch_to_worker(worker, backend, safe_payload)
         elif backend.type == "browser":
             worker = await self._resolve_browser_worker(backend, task=task)
             await self._require_fresh_autonomous_worker_probe(worker, task)
+            self._record_execution_provenance(task, backend, worker=worker)
             return await self._dispatch_browser_inspection(worker, backend, safe_payload, task=task)
         elif backend.type == "custom":
+            self._record_execution_provenance(task, backend)
             return await self._dispatch_custom_backend(backend, safe_payload, task=task)
         else:
             raise BackendError(f"Unsupported backend type: {backend.type}")
@@ -3089,10 +3129,23 @@ class Scheduler:
             return override
         return "allow"
 
+    async def _worker_request_headers(self, worker: Worker) -> dict[str, str]:
+        """Resolve an optional node request token without exposing it in task data."""
+        token_ref = str(getattr(worker, "request_token_env", "") or "").strip()
+        if not token_ref:
+            return {}
+        token = os.environ.get(token_ref, "").strip()
+        if not token:
+            raise BackendError(
+                f"Worker {worker.id} declares request token '{token_ref}', but it is not configured."
+            )
+        return {"X-Nexus-Worker-Token": token}
+
     async def _dispatch_to_worker(
         self, worker: Worker, backend: BackendConfig, payload: Any
     ) -> Any:
         url = f"http://{worker.host}:{worker.port}/infer"
+        headers = await self._worker_request_headers(worker)
         params_dict = backend.params.model_dump(exclude_none=True) if backend.params else {}
         # Apply provider-specific param normalization (e.g., Ollama num_predict default)
         if str(backend.provider or "").strip().lower() == "ollama":
@@ -3111,7 +3164,7 @@ class Scheduler:
         started = time.perf_counter()
         async with httpx.AsyncClient(timeout=_worker_timeout()) as client:
             try:
-                response = await client.post(url, json=body)
+                response = await client.post(url, json=body, headers=headers)
                 response.raise_for_status()
                 return response.json()
             finally:
@@ -3127,6 +3180,7 @@ class Scheduler:
         self, worker: Worker, backend: BackendConfig, payload: Any
     ) -> AsyncGenerator[dict[str, Any], None]:
         url = f"http://{worker.host}:{worker.port}/infer/stream"
+        headers = await self._worker_request_headers(worker)
         params_dict = backend.params.model_dump(exclude_none=True) if backend.params else {}
         # Apply provider-specific param normalization (e.g., Ollama num_predict default)
         if str(backend.provider or "").strip().lower() == "ollama":
@@ -3153,7 +3207,7 @@ class Scheduler:
         )
         async with httpx.AsyncClient(timeout=_worker_timeout()) as client:
             try:
-                async with client.stream("POST", url, json=body) as response:
+                async with client.stream("POST", url, json=body, headers=headers) as response:
                     response.raise_for_status()
                     buffer = ""
                     event_type = "message"
@@ -3885,12 +3939,29 @@ class Scheduler:
         path = payload.get("path")
         if not isinstance(path, str) or not path.strip():
             raise BackendError("Browser inspection payload requires a non-empty path")
+        normalized_path = path.strip()
+        if task is not None:
+            try:
+                bot = await self.bot_registry.get(task.bot_id)
+            except Exception as exc:
+                raise BackendError(
+                    f"Bot {task.bot_id} was not found for browser inspection authorization"
+                ) from exc
+            allowed_paths = {
+                str(candidate).strip()
+                for candidate in bot_execution_policy(bot).browser_inspection_path_allowlist
+                if str(candidate).strip()
+            }
+            if allowed_paths and normalized_path not in allowed_paths:
+                raise BackendError(
+                    f"Bot {bot.id} is not authorized to inspect path {normalized_path}"
+                )
         if not backend.api_key_ref:
             raise BackendError("Browser backends require api_key_ref for the worker request token")
         token = await self._resolve_api_key(backend.api_key_ref, "")
         if not token:
             raise BackendError("Browser worker request token is not configured")
-        body = {"path": path.strip()}
+        body = {"path": normalized_path}
         for field in ("text_limit", "element_limit"):
             if field in payload:
                 body[field] = payload[field]

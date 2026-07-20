@@ -5,10 +5,7 @@ from typing import Any, Dict, Iterable
 
 from control_plane.bot_readiness import assess_bot_readiness
 from control_plane.schedule_payload_sources import SystemPayloadSourceError, validate_system_payload_source
-from shared.bot_policy import bot_allows_repo_output, bot_can_apply_db_actions, bot_is_pipeline_entry
-
-
-_AUTONOMOUSLY_UNSAFE_BACKEND_TYPES = {"browser", "cli"}
+from shared.bot_policy import bot_autonomous_dispatch_blockers
 
 
 class ScheduleAutonomySafetyError(ValueError):
@@ -41,6 +38,27 @@ def _schedule_task_payload(schedule: Dict[str, Any]) -> Dict[str, Any]:
     if isinstance(metadata, dict) and isinstance(metadata.get("task_payload"), dict):
         return dict(metadata["task_payload"])
     return {}
+
+
+def _is_attested_read_only_browser_inspection(bot: Any, schedule: Dict[str, Any]) -> bool:
+    """Allow the single browser shape that cannot interact with the target UI."""
+    metadata = schedule.get("metadata") if isinstance(schedule.get("metadata"), dict) else {}
+    if str(metadata.get("connection_operation") or "").strip().lower() != "inspect":
+        return False
+    routing_rules = getattr(bot, "routing_rules", None)
+    profile = routing_rules.get("worker_profile") if isinstance(routing_rules, dict) else None
+    profile = profile if isinstance(profile, dict) else {}
+    execution_policy = getattr(bot, "execution_policy", None)
+    if hasattr(execution_policy, "model_dump"):
+        execution_policy = execution_policy.model_dump()
+    execution_policy = execution_policy if isinstance(execution_policy, dict) else {}
+    return (
+        str(profile.get("role") or "").strip().lower() == "browser-inspector"
+        and str(profile.get("task_scope") or "").strip().lower() == "read-only-browser-inspection"
+        and profile.get("can_edit") is False
+        and str(execution_policy.get("repo_output_mode") or "").strip().lower() == "deny"
+        and execution_policy.get("can_apply_db_actions") is False
+    )
 
 
 def _payload_field_value(payload: Dict[str, Any], field_path: str) -> Any:
@@ -130,22 +148,13 @@ async def require_schedule_autonomy_safety(
             f"Schedule target '{bot_id}' cannot be inspected for autonomous safety.",
         ) from exc
 
-    blockers: list[str] = []
-    if bot_allows_repo_output(bot):
-        blockers.append("the bot permits repository writes")
-    if bot_can_apply_db_actions(bot):
-        blockers.append("the bot can apply database actions")
-    if bot_is_pipeline_entry(bot):
-        blockers.append("the bot can dispatch a pipeline")
-    unsafe_backends = sorted(
-        {
-            str(backend.type or "").strip().lower()
-            for backend in bot.backends
-            if str(backend.type or "").strip().lower() in _AUTONOMOUSLY_UNSAFE_BACKEND_TYPES
-        }
+    allowed_restricted_backends = (
+        {"browser"} if _is_attested_read_only_browser_inspection(bot, schedule) else set()
     )
-    if unsafe_backends:
-        blockers.append(f"the bot uses restricted backend types: {', '.join(unsafe_backends)}")
+    blockers = bot_autonomous_dispatch_blockers(
+        bot,
+        allowed_restricted_backend_types=allowed_restricted_backends,
+    )
     if blockers:
         raise ScheduleAutonomySafetyError(
             "schedule_target_not_autonomy_safe",
