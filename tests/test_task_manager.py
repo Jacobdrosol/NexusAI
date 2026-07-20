@@ -1015,6 +1015,72 @@ async def test_task_manager_queues_browser_tasks_for_the_same_worker(tmp_path, m
 
 
 @pytest.mark.anyio
+async def test_task_manager_queues_documentation_tasks_for_the_same_worker(tmp_path, monkeypatch):
+    import asyncio
+
+    from control_plane.task_manager.task_manager import TaskManager
+
+    active_by_worker = {"docs-a": 0, "docs-b": 0}
+    peak_by_worker = {"docs-a": 0, "docs-b": 0}
+
+    class StubRegistry:
+        def __init__(self):
+            self._bots = {
+                "docs-a-one": Bot(
+                    id="docs-a-one",
+                    name="Docs A One",
+                    role="docs-hub-writer",
+                    backends=[{"type": "documentation", "provider": "documentation", "model": "documentation-v1", "worker_id": "docs-a"}],
+                ),
+                "docs-a-two": Bot(
+                    id="docs-a-two",
+                    name="Docs A Two",
+                    role="docs-hub-writer",
+                    backends=[{"type": "documentation", "provider": "documentation", "model": "documentation-v1", "worker_id": "docs-a"}],
+                ),
+                "docs-b": Bot(
+                    id="docs-b",
+                    name="Docs B",
+                    role="docs-hub-writer",
+                    backends=[{"type": "documentation", "provider": "documentation", "model": "documentation-v1", "worker_id": "docs-b"}],
+                ),
+            }
+
+        async def get(self, bot_id):
+            return self._bots[bot_id]
+
+    class StubScheduler:
+        async def schedule(self, task):
+            worker_id = "docs-b" if task.bot_id == "docs-b" else "docs-a"
+            active_by_worker[worker_id] += 1
+            peak_by_worker[worker_id] = max(peak_by_worker[worker_id], active_by_worker[worker_id])
+            await asyncio.sleep(0.05)
+            active_by_worker[worker_id] -= 1
+            return {"task": task.id, "worker_id": worker_id}
+
+    monkeypatch.setenv("NEXUSAI_TASK_MAX_CONCURRENCY", "3")
+    tm = TaskManager(
+        StubScheduler(),
+        db_path=str(tmp_path / "documentation-worker-queue.db"),
+        bot_registry=StubRegistry(),
+    )
+    for bot_id in ("docs-a-one", "docs-a-two", "docs-b"):
+        await tm.create_task(bot_id=bot_id, payload={"action": "create"})
+
+    for _ in range(80):
+        tasks = await tm.list_tasks()
+        if len(tasks) == 3 and all(task.status == "completed" for task in tasks):
+            break
+        await asyncio.sleep(0.05)
+
+    tasks = await tm.list_tasks()
+    assert len(tasks) == 3
+    assert all(task.status == "completed" for task in tasks)
+    assert peak_by_worker["docs-a"] == 1
+    assert peak_by_worker["docs-b"] == 1
+
+
+@pytest.mark.anyio
 async def test_task_fails_on_scheduler_error():
     import asyncio
     from control_plane.task_manager.task_manager import TaskManager
