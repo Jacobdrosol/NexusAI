@@ -5649,13 +5649,15 @@ class TaskManager:
                 bot is not None
                 and getattr(bot, "backends", None)
                 and all(
-                    str(getattr(backend, "type", "") or "").strip().lower() in {"browser", "custom"}
+                    str(getattr(backend, "type", "") or "").strip().lower()
+                    in {"browser", "documentation", "custom"}
                     for backend in bot.backends
                 )
             )
             if bot is not None and not bot_allows_repo_output_for_task and isinstance(task_for_execution.payload, dict):
-                # Browser and custom backends own strict payload contracts. Do not add
-                # LLM-specific routing metadata that their workers must reject.
+                # Browser, documentation, and custom backends own strict payload
+                # contracts. Do not add LLM-specific routing metadata that their
+                # workers must reject.
                 if not structured_payload_backend and "role_hint" not in runtime_payload and bot.role:
                     runtime_payload = dict(runtime_payload)
                     runtime_payload["role_hint"] = str(bot.role).strip().lower()

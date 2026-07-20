@@ -175,6 +175,56 @@ async def test_task_manager_preserves_strict_browser_payload_for_scheduler(tmp_p
 
 
 @pytest.mark.anyio
+async def test_task_manager_preserves_strict_documentation_payload_for_scheduler(tmp_path):
+    import asyncio
+
+    from control_plane.task_manager.task_manager import TaskManager
+
+    class StubRegistry:
+        def __init__(self):
+            self._bots = {
+                "docs-writer": Bot(
+                    id="docs-writer",
+                    name="Docs Writer",
+                    role="docs-hub-writer",
+                    backends=[
+                        BackendConfig(
+                            type="documentation",
+                            provider="documentation",
+                            model="documentation-v1",
+                            worker_id="docs-worker",
+                            api_key_ref="DOCS_TOKEN",
+                        )
+                    ],
+                    execution_policy={"repo_output_mode": "deny", "required_worker_tools": ["documentation-v1"]},
+                )
+            }
+
+        async def get(self, bot_id):
+            return self._bots[bot_id]
+
+    mock_scheduler = AsyncMock()
+    mock_scheduler.schedule.return_value = {"action": "create", "path": "docs/Automation_Workforce/report.md"}
+    tm = TaskManager(mock_scheduler, db_path=str(tmp_path / "documentation-payload.db"), bot_registry=StubRegistry())
+    original_payload = {
+        "action": "create",
+        "path": "docs/Automation_Workforce/report.md",
+        "content": "# Report",
+    }
+    task = await tm.create_task(bot_id="docs-writer", payload=original_payload)
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.05)
+
+    assert updated.status == "completed"
+    scheduled_task = mock_scheduler.schedule.await_args[0][0]
+    assert scheduled_task.payload == original_payload
+
+
+@pytest.mark.anyio
 async def test_task_manager_fails_deny_policy_bot_that_emits_repo_file(tmp_path):
     import asyncio
 
