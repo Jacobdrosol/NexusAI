@@ -298,6 +298,7 @@ def test_bot_import_can_overwrite_existing_bot_config_and_connections(dashboard_
                 "id": "course-bot",
                 "name": "Imported Bot",
                 "role": "planner",
+                "project_id": "globeiq",
                 "priority": 7,
                 "enabled": True,
                 "system_prompt": "Imported prompt",
@@ -330,6 +331,7 @@ def test_bot_import_can_overwrite_existing_bot_config_and_connections(dashboard_
         body = import_resp.get_json()
         assert body["overwritten"] is True
         assert body["bot"]["name"] == "Imported Bot"
+        assert body["bot"]["project_id"] == "globeiq"
         assert body["bot"]["context_access"] == {"receives": ["instruction"], "can_self_serve": ["repo"]}
         assert fake_cp.deleted_bot_ids == []
         assert fake_cp.updated_bot_ids == ["course-bot"]

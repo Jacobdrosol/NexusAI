@@ -665,6 +665,7 @@ def api_import_bot():
         "id": bot_id,
         "name": bot_name,
         "role": bot_payload.get("role", "") or "assistant",
+        "project_id": bot_payload.get("project_id"),
         "priority": int(bot_payload.get("priority", 0) or 0),
         "enabled": bool(bot_payload.get("enabled", True)),
         "system_prompt": bot_payload.get("system_prompt"),
