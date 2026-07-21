@@ -134,3 +134,35 @@ def test_http_connection_injects_one_time_remote_approval_without_returning_toke
     assert result["agent_approval"]["operation_id"] == "createApproval"
     assert "remote-one-time-token" not in json.dumps(result)
     assert captured_headers[1]["X-globeiq-agent-approval"] == "remote-one-time-token"
+
+
+def test_http_connection_rejects_html_when_json_is_required(monkeypatch):
+    class FakeResponse:
+        status = 200
+        headers = {"Content-Type": "text/html; charset=utf-8"}
+
+        def read(self, _limit):
+            return b"<html>fallback</html>"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(
+        "shared.connection_runtime.urllib.request.urlopen",
+        lambda *_args, **_kwargs: FakeResponse(),
+    )
+
+    result = run_http_connection(
+        config={"base_url": "https://api.example.test"},
+        auth={"type": "none"},
+        schema_text="",
+        payload={"method": "GET", "path": "/records", "expect_json": True},
+    )
+
+    assert result["ok"] is False
+    assert result["status"] == 200
+    assert result["content_type"] == "text/html; charset=utf-8"
+    assert "Expected a JSON response" in result["error"]

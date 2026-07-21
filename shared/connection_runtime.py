@@ -276,15 +276,31 @@ def test_http_connection(
     request = urllib.request.Request(url=url, method=method, headers=headers, data=body_bytes)
     ssl_context = None if verify_ssl else ssl._create_unverified_context()
     result_url = safe_result_url(url, auth)
+    expect_json = bool(action_payload.get("expect_json", False))
     try:
         with urllib.request.urlopen(request, timeout=timeout_seconds, context=ssl_context) as response:
             body_preview = response.read(8000).decode("utf-8", errors="replace")
+            response_headers = getattr(response, "headers", {})
+            get_header = getattr(response_headers, "get", None)
+            content_type = str(get_header("Content-Type") or "") if callable(get_header) else ""
+            if expect_json and "json" not in content_type.lower():
+                return {
+                    "ok": False,
+                    "status": int(response.status),
+                    "url": result_url,
+                    "method": method,
+                    "verify_ssl": verify_ssl,
+                    "content_type": content_type,
+                    "body_preview": body_preview,
+                    "error": "Expected a JSON response but received a different content type.",
+                }
             return {
                 "ok": 200 <= int(response.status) < 300,
                 "status": int(response.status),
                 "url": result_url,
                 "method": method,
                 "verify_ssl": verify_ssl,
+                "content_type": content_type,
                 "body_preview": body_preview,
             }
     except urllib.error.HTTPError as exc:
