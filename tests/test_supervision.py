@@ -268,7 +268,21 @@ async def test_manager_schedule_payload_contains_only_declared_portfolio_metadat
                     bot_id=specialist.id,
                     status="completed",
                     updated_at="2026-07-19T12:00:00+00:00",
-                    payload={"instruction": "private task text must not appear"},
+                    payload={
+                        "instruction": "private task text must not appear",
+                        "artifact": {
+                            "course_id": 197,
+                            "lesson_id": 605009044,
+                            "unit_number": 1,
+                            "lesson_number": 3,
+                            "artifact_type": "FullDraftReview",
+                            "lesson_title": "private lesson title must not appear",
+                        },
+                    },
+                    result={
+                        "status": "passed",
+                        "findings": "private generated prose must not appear",
+                    },
                 )
             ]
 
@@ -307,8 +321,18 @@ async def test_manager_schedule_payload_contains_only_declared_portfolio_metadat
     snapshot = json.loads(payload["portfolio_snapshot"])
     assert snapshot["source"] == SUPERVISION_PORTFOLIO_SOURCE
     assert snapshot["bots"][0]["bot_id"] == specialist.id
+    assert snapshot["bots"][0]["latest_task"]["result_status"] == "passed"
+    assert snapshot["bots"][0]["latest_task"]["workflow_scope"] == {
+        "course_id": 197,
+        "lesson_id": 605009044,
+        "unit_number": 1,
+        "lesson_number": 3,
+        "artifact_type": "FullDraftReview",
+    }
     assert snapshot["schedules"][0]["schedule_id"] == "specialist-hourly"
     assert "private task text" not in payload["portfolio_snapshot"]
+    assert "private lesson title" not in payload["portfolio_snapshot"]
+    assert "private generated prose" not in payload["portfolio_snapshot"]
 
 
 @pytest.mark.anyio

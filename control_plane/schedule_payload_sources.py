@@ -43,6 +43,18 @@ _CSV_RESERVED_PAYLOAD_FIELDS = {
     "source",
     "task_id",
 }
+_SUPERVISION_RESULT_STATUSES = {
+    "approved",
+    "attention",
+    "blocked",
+    "completed",
+    "failed",
+    "healthy",
+    "passed",
+    "rejected",
+}
+_SUPERVISION_ARTIFACT_TYPE = re.compile(r"^[A-Za-z0-9._:-]{1,96}$")
+_SUPERVISION_SCOPE_INTEGER_FIELDS = ("course_id", "lesson_id", "unit_number", "lesson_number")
 
 
 def _failure_category(task: Any) -> str:
@@ -94,6 +106,51 @@ def _task_execution_provenance(task: Any) -> dict[str, Any]:
         return {}
     provenance = metadata.get("execution_provenance")
     return provenance if isinstance(provenance, dict) else {}
+
+
+def _task_result_status(task: Any) -> str | None:
+    """Return only an allowlisted terminal outcome from a task result.
+
+    Manager schedules need enough evidence to distinguish a successful QC from a
+    merely completed transport call.  Do not forward generated prose, findings,
+    or arbitrary result fields into a manager payload.
+    """
+
+    result = getattr(task, "result", None)
+    if isinstance(result, str):
+        try:
+            result = json.loads(result)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None
+    if not isinstance(result, dict):
+        return None
+    status = str(result.get("status") or "").strip().lower()
+    return status if status in _SUPERVISION_RESULT_STATUSES else None
+
+
+def _task_workflow_scope(task: Any) -> dict[str, Any]:
+    """Expose only bounded, non-content workflow identifiers to managers."""
+
+    payload = getattr(task, "payload", None)
+    if hasattr(payload, "model_dump"):
+        payload = payload.model_dump()
+    if not isinstance(payload, dict):
+        return {}
+    artifact = payload.get("artifact")
+    if not isinstance(artifact, dict):
+        return {}
+
+    scope: dict[str, Any] = {}
+    for field in _SUPERVISION_SCOPE_INTEGER_FIELDS:
+        value = artifact.get(field)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int) and 0 < value <= 2_147_483_647:
+            scope[field] = value
+    artifact_type = str(artifact.get("artifact_type") or "").strip()
+    if _SUPERVISION_ARTIFACT_TYPE.fullmatch(artifact_type):
+        scope["artifact_type"] = artifact_type
+    return scope
 
 
 class SystemPayloadSourceError(ValueError):
@@ -817,6 +874,16 @@ async def supervision_portfolio_snapshot(
                     {
                         "status": str(getattr(task, "status", "unknown") or "unknown").lower(),
                         "updated_at": getattr(task, "updated_at", None),
+                        **(
+                            {"result_status": result_status}
+                            if (result_status := _task_result_status(task)) is not None
+                            else {}
+                        ),
+                        **(
+                            {"workflow_scope": workflow_scope}
+                            if (workflow_scope := _task_workflow_scope(task))
+                            else {}
+                        ),
                     }
                     if task is not None
                     else None
