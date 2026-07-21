@@ -44,8 +44,35 @@ def _is_sensitive_query_key(query_key: str, configured_secret_key: str) -> bool:
     )
 
 
+def _append_declared_action(
+    actions: list[dict[str, str]],
+    *,
+    operation_id: object,
+    method: object,
+    path: object,
+) -> None:
+    """Append one normalized declared action when all required fields are valid."""
+
+    normalized_method = str(method or "").strip().lower()
+    normalized_path = str(path or "").strip()
+    if normalized_method not in {"get", "post", "put", "patch", "delete", "head", "options"}:
+        return
+    if not normalized_path.startswith("/"):
+        return
+    normalized_operation_id = str(operation_id or f"{normalized_method}_{normalized_path}").strip()
+    if not normalized_operation_id:
+        return
+    actions.append(
+        {
+            "operation_id": normalized_operation_id,
+            "method": normalized_method.upper(),
+            "path": normalized_path,
+        }
+    )
+
+
 def parse_openapi_actions(schema_text: str) -> list[dict[str, str]]:
-    """Extract the HTTP operations explicitly declared by an OpenAPI document."""
+    """Extract declared HTTP operations from OpenAPI or a native operation catalog."""
     raw = (schema_text or "").strip()
     if not raw:
         return []
@@ -58,26 +85,34 @@ def parse_openapi_actions(schema_text: str) -> list[dict[str, str]]:
             return []
     if not isinstance(document, dict):
         return []
-    paths = document.get("paths")
-    if not isinstance(paths, dict):
-        return []
-
     actions: list[dict[str, str]] = []
-    for path, methods in paths.items():
-        if not isinstance(methods, dict):
-            continue
-        for method, operation in methods.items():
-            normalized_method = str(method or "").strip().lower()
-            if normalized_method not in {"get", "post", "put", "patch", "delete", "head", "options"}:
+    paths = document.get("paths")
+    if isinstance(paths, dict):
+        for path, methods in paths.items():
+            if not isinstance(methods, dict):
                 continue
-            operation_data = operation if isinstance(operation, dict) else {}
-            actions.append(
-                {
-                    "operation_id": str(operation_data.get("operationId") or f"{normalized_method}_{path}").strip(),
-                    "method": normalized_method.upper(),
-                    "path": str(path),
-                }
-            )
+            for method, operation in methods.items():
+                operation_data = operation if isinstance(operation, dict) else {}
+                _append_declared_action(
+                    actions,
+                    operation_id=operation_data.get("operationId"),
+                    method=method,
+                    path=path,
+                )
+        return actions
+
+    operations = document.get("operations")
+    if not isinstance(operations, list):
+        return []
+    for operation in operations:
+        if not isinstance(operation, dict):
+            continue
+        _append_declared_action(
+            actions,
+            operation_id=operation.get("operationId", operation.get("operation_id")),
+            method=operation.get("method"),
+            path=operation.get("path"),
+        )
     return actions
 
 

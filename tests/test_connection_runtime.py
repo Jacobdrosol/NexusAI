@@ -1,5 +1,39 @@
 from shared.connection_runtime import test_http_connection as run_http_connection
+from shared.connection_runtime import parse_openapi_actions
 import json
+
+
+def test_parse_openapi_actions_accepts_native_operation_catalog():
+    schema = json.dumps(
+        {
+            "apiVersion": "1.0",
+            "operations": [
+                {
+                    "operationId": "listLessonBlocksPage",
+                    "method": "GET",
+                    "path": "/api/agent/lesson-blocks/{lessonId}?skip={skip}&take={take}",
+                },
+                {
+                    "operationId": "updateLessonBlock",
+                    "method": "PATCH",
+                    "path": "/api/agent/lesson-blocks/{blockId}",
+                },
+            ],
+        }
+    )
+
+    assert parse_openapi_actions(schema) == [
+        {
+            "operation_id": "listLessonBlocksPage",
+            "method": "GET",
+            "path": "/api/agent/lesson-blocks/{lessonId}?skip={skip}&take={take}",
+        },
+        {
+            "operation_id": "updateLessonBlock",
+            "method": "PATCH",
+            "path": "/api/agent/lesson-blocks/{blockId}",
+        },
+    ]
 
 
 def test_http_connection_redacts_query_auth_from_returned_url(monkeypatch):
