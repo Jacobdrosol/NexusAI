@@ -113,6 +113,47 @@ async def test_token_governor_keeps_llm_task_queued_when_budget_reserved(tmp_pat
 
 
 @pytest.mark.anyio
+async def test_token_governor_rejects_extra_queued_llm_task_for_same_bot(tmp_path, monkeypatch):
+    import asyncio
+
+    from control_plane.task_manager.task_manager import TaskManager
+
+    class StubRegistry:
+        async def get(self, bot_id):
+            return Bot(
+                id=bot_id,
+                name="LLM Bot",
+                role="assistant",
+                backends=[
+                    BackendConfig(
+                        type="cloud_api",
+                        provider="ollama_cloud",
+                        model="qwen-test",
+                    )
+                ],
+            )
+
+    monkeypatch.setenv("NEXUSAI_TOKEN_GOVERNOR_ENABLED", "true")
+    monkeypatch.setenv("NEXUSAI_TOKEN_GOVERNOR_GLOBAL_HOURLY_LIMIT", "50")
+    monkeypatch.setenv("NEXUSAI_TOKEN_GOVERNOR_ESTIMATED_TOKENS_PER_TASK", "100")
+    monkeypatch.setenv("NEXUSAI_TOKEN_GOVERNOR_MAX_QUEUED_LLM_TASKS_PER_BOT", "1")
+
+    mock_scheduler = AsyncMock()
+    mock_scheduler.schedule.return_value = {"output": "should not run"}
+    tm = TaskManager(mock_scheduler, db_path=str(tmp_path / "token-governor-queued.db"), bot_registry=StubRegistry())
+
+    first = await tm.create_task(bot_id="llm-bot", payload={"q": "expensive"})
+    await asyncio.sleep(0.1)
+
+    with pytest.raises(ValueError, match="queued metered task"):
+        await tm.create_task(bot_id="llm-bot", payload={"q": "also expensive"})
+
+    updated = await tm.get_task(first.id)
+    assert updated.status == "queued"
+    assert mock_scheduler.schedule.await_count == 0
+
+
+@pytest.mark.anyio
 async def test_token_governor_allows_non_llm_tool_task_under_llm_budget(tmp_path, monkeypatch):
     import asyncio
 

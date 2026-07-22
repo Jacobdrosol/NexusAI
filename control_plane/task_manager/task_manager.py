@@ -3526,12 +3526,21 @@ class TaskManager:
                 20_000,
             ),
         )
+        max_queued_llm_tasks_per_bot = max(
+            0,
+            _env_or_settings_int(
+                "NEXUSAI_TOKEN_GOVERNOR_MAX_QUEUED_LLM_TASKS_PER_BOT",
+                "token_governor_max_queued_llm_tasks_per_bot",
+                1,
+            ),
+        )
         return {
             "enabled": bool(enabled),
             "global_hourly_limit": hourly_global_limit,
             "bot_hourly_limit": hourly_bot_limit,
             "llm_concurrency": llm_concurrency_limit,
             "estimated_tokens_per_task": estimated_tokens_per_task,
+            "max_queued_llm_tasks_per_bot": max_queued_llm_tasks_per_bot,
         }
 
     @staticmethod
@@ -3619,6 +3628,7 @@ class TaskManager:
                 "bot_hourly_tokens": int(config["bot_hourly_limit"] or 0),
                 "llm_concurrency": int(config["llm_concurrency"] or 0),
                 "estimated_tokens_per_task": int(config["estimated_tokens_per_task"] or 0),
+                "max_queued_llm_tasks_per_bot": int(config["max_queued_llm_tasks_per_bot"] or 0),
             },
             "current": {
                 "global_hourly_tokens": global_used,
@@ -4522,6 +4532,50 @@ class TaskManager:
                 )
             await db.commit()
 
+    async def _validate_token_governor_admission(self, task: Task) -> None:
+        token_governor = self._token_governor_config()
+        if not bool(token_governor.get("enabled")):
+            return
+        provider_keys = await self._bot_provider_keys_for_tasks([task])
+        provider_key = provider_keys.get(task.id, "")
+        if not self._is_token_metered_provider(provider_key):
+            return
+
+        estimated = int(token_governor.get("estimated_tokens_per_task") or 20_000)
+        max_queued_per_bot = int(token_governor.get("max_queued_llm_tasks_per_bot") or 0)
+        async with self._lock:
+            queued_for_bot = sum(
+                1
+                for existing in self._tasks.values()
+                if existing.bot_id == task.bot_id
+                and existing.status == "queued"
+                and existing.id not in self._pending_task_creations
+            )
+        if max_queued_per_bot > 0 and queued_for_bot >= max_queued_per_bot:
+            raise ValueError(
+                "token governor rejected task creation for bot '{0}': {1} queued metered task(s) already waiting; limit is {2}".format(
+                    task.bot_id,
+                    queued_for_bot,
+                    max_queued_per_bot,
+                )
+            )
+
+        bot_limit = int(token_governor.get("bot_hourly_limit") or 0)
+        if bot_limit > 0:
+            token_usage = await self._token_usage_totals_since(hours=1)
+            bot_usage = token_usage.get("by_bot") or {}
+            bot_used = int((bot_usage.get(str(task.bot_id or "")) or {}).get("total_tokens") or 0)
+            if bot_used + (queued_for_bot + 1) * estimated > bot_limit:
+                raise ValueError(
+                    "token governor rejected task creation for bot '{0}': hourly usage {1} plus {2} queued estimate(s) of {3} would exceed limit {4}".format(
+                        task.bot_id,
+                        bot_used,
+                        queued_for_bot + 1,
+                        estimated,
+                        bot_limit,
+                    )
+                )
+
     async def create_task(
         self,
         bot_id: str,
@@ -4566,6 +4620,8 @@ class TaskManager:
             created_at=now,
             updated_at=now,
         )
+        if initial_status == "queued":
+            await self._validate_token_governor_admission(task)
         async with self._lock:
             self._tasks[task_id] = task
             self._pending_task_creations.add(task_id)

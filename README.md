@@ -267,6 +267,7 @@ Copy `.env.example` to `.env` and set the following variables before starting th
 | `NEXUSAI_TOKEN_GOVERNOR_BOT_HOURLY_LIMIT` | `0` | Rolling one-hour token ceiling for any single bot; `0` disables this ceiling |
 | `NEXUSAI_TOKEN_GOVERNOR_LLM_CONCURRENCY` | `0` | Maximum model-backed tasks allowed to run at once; `0` disables this ceiling |
 | `NEXUSAI_TOKEN_GOVERNOR_ESTIMATED_TOKENS_PER_TASK` | `20000` | Pre-launch token reservation used to prevent bursts before provider usage is recorded |
+| `NEXUSAI_TOKEN_GOVERNOR_MAX_QUEUED_LLM_TASKS_PER_BOT` | `1` | Maximum queued model-backed tasks allowed for one bot before new task creation is rejected; `0` disables this queue-admission ceiling |
 | `NEXUSAI_WORKER_LATENCY_EMA_ALPHA` | `0.30` | Scheduler EMA smoothing factor for worker latency scoring (0.01-1.0) |
 | `NEXUSAI_WORKER_DEFAULT_LATENCY_MS` | `800` | Default worker latency estimate used before dispatch history exists |
 | `NEXUSAI_GITHUB_WEBHOOK_REQUIRE_DELIVERY_ID` | `1` | Require `X-GitHub-Delivery` header for webhook replay protection |
