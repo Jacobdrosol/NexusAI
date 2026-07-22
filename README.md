@@ -262,6 +262,11 @@ Copy `.env.example` to `.env` and set the following variables before starting th
 | `CP_INGEST_TIMEOUT` | `1800` | Dashboard timeout in seconds for long-running project ingestion calls such as GitHub full-context sync |
 | `NEXUSAI_CLOUD_CONTEXT_POLICY` | `allow` | Cloud egress policy for context blocks (`allow`, `redact`, `block`) on control-plane scheduler cloud backends |
 | `NEXUS_WORKER_CLOUD_CONTEXT_POLICY` | `redact` | Standalone worker cloud egress policy for context blocks (`allow`, `redact`, `block`) |
+| `NEXUSAI_TOKEN_GOVERNOR_ENABLED` | `0` | Enable dispatch-time token guardrails for model-backed tasks |
+| `NEXUSAI_TOKEN_GOVERNOR_GLOBAL_HOURLY_LIMIT` | `0` | Rolling one-hour token ceiling across all model-backed task results; `0` disables this ceiling |
+| `NEXUSAI_TOKEN_GOVERNOR_BOT_HOURLY_LIMIT` | `0` | Rolling one-hour token ceiling for any single bot; `0` disables this ceiling |
+| `NEXUSAI_TOKEN_GOVERNOR_LLM_CONCURRENCY` | `0` | Maximum model-backed tasks allowed to run at once; `0` disables this ceiling |
+| `NEXUSAI_TOKEN_GOVERNOR_ESTIMATED_TOKENS_PER_TASK` | `20000` | Pre-launch token reservation used to prevent bursts before provider usage is recorded |
 | `NEXUSAI_WORKER_LATENCY_EMA_ALPHA` | `0.30` | Scheduler EMA smoothing factor for worker latency scoring (0.01-1.0) |
 | `NEXUSAI_WORKER_DEFAULT_LATENCY_MS` | `800` | Default worker latency estimate used before dispatch history exists |
 | `NEXUSAI_GITHUB_WEBHOOK_REQUIRE_DELIVERY_ID` | `1` | Require `X-GitHub-Delivery` header for webhook replay protection |

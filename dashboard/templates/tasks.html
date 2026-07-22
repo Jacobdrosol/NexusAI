@@ -39,6 +39,9 @@
     {% endif %}
   </div>
   {% if usage_summary %}
+  {% set governor = usage_summary.token_governor or {} %}
+  {% set governor_limits = governor.limits or {} %}
+  {% set governor_current = governor.current or {} %}
   <div class="split-grid" style="grid-template-columns:0.85fr 1.15fr;gap:1rem;">
     <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0.75rem;">
       <div>
@@ -59,6 +62,31 @@
       <div>
         <div class="mini-note">Missing Usage</div>
         <div style="font-size:1.05rem;font-weight:700;">{{ "{:,}".format(usage_summary.totals.tasks_without_usage or 0) }}</div>
+      </div>
+      <div>
+        <div class="mini-note">Governor</div>
+        <div style="font-size:1.05rem;font-weight:700;">{{ "Enabled" if governor.enabled else "Disabled" }}</div>
+      </div>
+      <div>
+        <div class="mini-note">Hourly Remaining</div>
+        <div style="font-size:1.05rem;font-weight:700;">
+          {% if governor_current.global_hourly_remaining is not none %}
+          {{ "{:,}".format(governor_current.global_hourly_remaining or 0) }}
+          {% else %}
+          No cap
+          {% endif %}
+        </div>
+      </div>
+      <div>
+        <div class="mini-note">LLM Running Cap</div>
+        <div style="font-size:1.05rem;font-weight:700;">
+          {{ governor_current.running_llm_tasks or 0 }} /
+          {{ governor_limits.llm_concurrency or "No cap" }}
+        </div>
+      </div>
+      <div>
+        <div class="mini-note">Reserve / Task</div>
+        <div style="font-size:1.05rem;font-weight:700;">{{ "{:,}".format(governor_limits.estimated_tokens_per_task or 0) }}</div>
       </div>
     </div>
     <div class="table-wrap">

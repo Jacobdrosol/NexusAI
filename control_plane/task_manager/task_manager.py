@@ -32,6 +32,17 @@ _BOT_RUNS_TABLE = "cp_bot_runs"
 _BOT_RUN_ARTIFACTS_TABLE = "cp_bot_run_artifacts"
 _ORCHESTRATION_CANCELLATIONS_TABLE = "cp_orchestration_cancellations"
 _STATUS_UPDATE_UNSET = object()
+_TOKEN_METERED_PROVIDERS = {
+    "anthropic",
+    "claude",
+    "gemini",
+    "lmstudio",
+    "ollama",
+    "ollama_cloud",
+    "openai",
+    "vertex",
+    "vllm",
+}
 
 _CREATE_TASKS = f"""
 CREATE TABLE IF NOT EXISTS {_TASKS_TABLE} (
@@ -781,6 +792,23 @@ def _settings_bool(name: str, default: bool) -> bool:
     if isinstance(value, bool):
         return value
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_or_settings_bool(env_name: str, setting_name: str, default: bool) -> bool:
+    raw = os.environ.get(env_name)
+    if raw is not None and str(raw).strip() != "":
+        return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+    return _settings_bool(setting_name, default)
+
+
+def _env_or_settings_int(env_name: str, setting_name: str, default: int) -> int:
+    raw = os.environ.get(env_name)
+    if raw is not None and str(raw).strip() != "":
+        try:
+            return int(raw)
+        except Exception:
+            return default
+    return _settings_int(setting_name, default)
 
 
 def _is_retryable_error_message(message: str) -> bool:
@@ -3459,6 +3487,147 @@ class TaskManager:
             limits[key] = parsed
         return limits
 
+    def _token_governor_config(self) -> Dict[str, Any]:
+        enabled = _env_or_settings_bool(
+            "NEXUSAI_TOKEN_GOVERNOR_ENABLED",
+            "token_governor_enabled",
+            False,
+        )
+        hourly_global_limit = max(
+            0,
+            _env_or_settings_int(
+                "NEXUSAI_TOKEN_GOVERNOR_GLOBAL_HOURLY_LIMIT",
+                "token_governor_global_hourly_limit",
+                0,
+            ),
+        )
+        hourly_bot_limit = max(
+            0,
+            _env_or_settings_int(
+                "NEXUSAI_TOKEN_GOVERNOR_BOT_HOURLY_LIMIT",
+                "token_governor_bot_hourly_limit",
+                0,
+            ),
+        )
+        llm_concurrency_limit = max(
+            0,
+            _env_or_settings_int(
+                "NEXUSAI_TOKEN_GOVERNOR_LLM_CONCURRENCY",
+                "token_governor_llm_concurrency",
+                0,
+            ),
+        )
+        estimated_tokens_per_task = max(
+            1,
+            _env_or_settings_int(
+                "NEXUSAI_TOKEN_GOVERNOR_ESTIMATED_TOKENS_PER_TASK",
+                "token_governor_estimated_tokens_per_task",
+                20_000,
+            ),
+        )
+        return {
+            "enabled": bool(enabled),
+            "global_hourly_limit": hourly_global_limit,
+            "bot_hourly_limit": hourly_bot_limit,
+            "llm_concurrency": llm_concurrency_limit,
+            "estimated_tokens_per_task": estimated_tokens_per_task,
+        }
+
+    @staticmethod
+    def _is_token_metered_provider(provider: str) -> bool:
+        return str(provider or "").strip().lower() in _TOKEN_METERED_PROVIDERS
+
+    async def _token_usage_totals_since(self, *, hours: int = 1) -> Dict[str, Any]:
+        await self._ensure_db()
+        safe_hours = max(1, int(hours or 1))
+        now = datetime.now(timezone.utc)
+        since = now - timedelta(hours=safe_hours)
+        totals = {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "tasks_with_usage": 0,
+        }
+        by_bot: Dict[str, Dict[str, int]] = {}
+        query = f"""
+            SELECT bot_id, result
+            FROM {_TASKS_TABLE}
+            WHERE result IS NOT NULL
+              AND updated_at >= ?
+        """
+        async with open_sqlite(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(query, (since.isoformat(),)) as cursor:
+                rows = await cursor.fetchall()
+        for row in rows:
+            try:
+                result = json.loads(row["result"]) if row["result"] else None
+            except json.JSONDecodeError:
+                result = None
+            usage = _extract_result_usage(result)
+            if not usage:
+                continue
+            summary = _usage_summary(usage)
+            prompt_tokens = _usage_int(summary.get("prompt_tokens")) or 0
+            completion_tokens = _usage_int(summary.get("completion_tokens")) or 0
+            total_tokens = _usage_int(summary.get("total_tokens"))
+            if total_tokens is None:
+                total_tokens = prompt_tokens + completion_tokens if prompt_tokens or completion_tokens else 0
+            bot_id = str(row["bot_id"] or "unknown")
+            bucket = by_bot.setdefault(
+                bot_id,
+                {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                    "tasks_with_usage": 0,
+                },
+            )
+            for target in (totals, bucket):
+                target["prompt_tokens"] += prompt_tokens
+                target["completion_tokens"] += completion_tokens
+                target["total_tokens"] += total_tokens
+                target["tasks_with_usage"] += 1
+        return {
+            "window_hours": safe_hours,
+            "totals": totals,
+            "by_bot": by_bot,
+        }
+
+    async def token_governor_status(self) -> Dict[str, Any]:
+        config = self._token_governor_config()
+        usage = await self._token_usage_totals_since(hours=1)
+        async with self._lock:
+            running_tasks = [
+                self._tasks[task_id]
+                for task_id in self._running_task_ids
+                if task_id in self._tasks
+            ]
+        provider_keys = await self._bot_provider_keys_for_tasks(running_tasks)
+        running_llm_tasks = sum(
+            1
+            for task in running_tasks
+            if self._is_token_metered_provider(provider_keys.get(task.id, ""))
+        )
+        global_limit = int(config["global_hourly_limit"] or 0)
+        global_used = int((usage.get("totals") or {}).get("total_tokens") or 0)
+        return {
+            "enabled": bool(config["enabled"]),
+            "limits": {
+                "global_hourly_tokens": global_limit,
+                "bot_hourly_tokens": int(config["bot_hourly_limit"] or 0),
+                "llm_concurrency": int(config["llm_concurrency"] or 0),
+                "estimated_tokens_per_task": int(config["estimated_tokens_per_task"] or 0),
+            },
+            "current": {
+                "global_hourly_tokens": global_used,
+                "global_hourly_remaining": (
+                    max(0, global_limit - global_used) if global_limit > 0 else None
+                ),
+                "running_llm_tasks": running_llm_tasks,
+            },
+        }
+
     @staticmethod
     def _task_from_db_row(
         row: aiosqlite.Row,
@@ -4750,6 +4919,7 @@ class TaskManager:
             "by_bot": bot_rows[:safe_limit_bots],
             "bot_count": len(bot_rows),
             "by_status": status_rows,
+            "token_governor": await self.token_governor_status(),
         }
 
     async def list_bot_runs(self, bot_id: str, limit: int = 50) -> List[BotRun]:
@@ -6109,6 +6279,13 @@ class TaskManager:
         provider_limits = self._provider_concurrency_limits()
         browser_worker_keys = await self._browser_worker_keys_for_tasks([*queued, *running_snapshot])
         documentation_worker_keys = await self._documentation_worker_keys_for_tasks([*queued, *running_snapshot])
+        provider_keys = await self._bot_provider_keys_for_tasks([*queued, *running_snapshot])
+        token_governor = self._token_governor_config()
+        token_usage = (
+            await self._token_usage_totals_since(hours=1)
+            if bool(token_governor.get("enabled"))
+            else {"totals": {}, "by_bot": {}}
+        )
         browser_worker_counts: dict[str, int] = {}
         documentation_worker_counts: dict[str, int] = {}
         for task in running_snapshot:
@@ -6126,6 +6303,49 @@ class TaskManager:
             orchestration_id = str(metadata.orchestration_id or "").strip()
             if orchestration_id and self._orchestration_concurrency_limit(metadata) is not None:
                 orchestration_counts[orchestration_id] = orchestration_counts.get(orchestration_id, 0) + 1
+
+        token_reserved_total = 0
+        token_reserved_by_bot: dict[str, int] = {}
+        running_llm_count = sum(
+            1
+            for task in running_snapshot
+            if self._is_token_metered_provider(provider_keys.get(task.id, ""))
+        )
+
+        def _has_token_governor_capacity(task: Task) -> bool:
+            if not bool(token_governor.get("enabled")):
+                return True
+            provider_key = provider_keys.get(task.id, "")
+            if not self._is_token_metered_provider(provider_key):
+                return True
+            estimated = int(token_governor.get("estimated_tokens_per_task") or 20_000)
+            llm_limit = int(token_governor.get("llm_concurrency") or 0)
+            if llm_limit > 0 and running_llm_count >= llm_limit:
+                return False
+            global_limit = int(token_governor.get("global_hourly_limit") or 0)
+            if global_limit > 0:
+                global_used = int((token_usage.get("totals") or {}).get("total_tokens") or 0)
+                if global_used + token_reserved_total + estimated > global_limit:
+                    return False
+            bot_limit = int(token_governor.get("bot_hourly_limit") or 0)
+            if bot_limit > 0:
+                bot_usage = token_usage.get("by_bot") or {}
+                bot_used = int((bot_usage.get(str(task.bot_id or "")) or {}).get("total_tokens") or 0)
+                if bot_used + token_reserved_by_bot.get(task.bot_id, 0) + estimated > bot_limit:
+                    return False
+            return True
+
+        def _reserve_token_governor_slot(task: Task) -> None:
+            nonlocal running_llm_count, token_reserved_total
+            if not bool(token_governor.get("enabled")):
+                return
+            provider_key = provider_keys.get(task.id, "")
+            if not self._is_token_metered_provider(provider_key):
+                return
+            estimated = int(token_governor.get("estimated_tokens_per_task") or 20_000)
+            running_llm_count += 1
+            token_reserved_total += estimated
+            token_reserved_by_bot[task.bot_id] = token_reserved_by_bot.get(task.bot_id, 0) + estimated
 
         def _has_orchestration_capacity(task: Task) -> bool:
             metadata = task.metadata or TaskMetadata()
@@ -6158,7 +6378,6 @@ class TaskManager:
                 documentation_worker_counts[worker_id] = documentation_worker_counts.get(worker_id, 0) + 1
 
         if provider_limits:
-            provider_keys = await self._bot_provider_keys_for_tasks([*queued, *running_snapshot])
             provider_counts: dict[str, int] = {}
             for task in running_snapshot:
                 provider_key = provider_keys.get(task.id, "")
@@ -6175,6 +6394,8 @@ class TaskManager:
                     continue
                 if not _has_documentation_worker_capacity(task):
                     continue
+                if not _has_token_governor_capacity(task):
+                    continue
                 provider_key = provider_keys.get(task.id, "")
                 limit = provider_limits.get(provider_key)
                 if limit is not None and provider_counts.get(provider_key, 0) >= limit:
@@ -6183,6 +6404,7 @@ class TaskManager:
                 _reserve_orchestration_slot(task)
                 _reserve_browser_worker_slot(task)
                 _reserve_documentation_worker_slot(task)
+                _reserve_token_governor_slot(task)
                 if provider_key:
                     provider_counts[provider_key] = provider_counts.get(provider_key, 0) + 1
         else:
@@ -6196,10 +6418,13 @@ class TaskManager:
                     continue
                 if not _has_documentation_worker_capacity(task):
                     continue
+                if not _has_token_governor_capacity(task):
+                    continue
                 selected.append(task)
                 _reserve_orchestration_slot(task)
                 _reserve_browser_worker_slot(task)
                 _reserve_documentation_worker_slot(task)
+                _reserve_token_governor_slot(task)
 
         async with self._lock:
             still_selected: list[Task] = []

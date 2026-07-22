@@ -76,6 +76,83 @@ async def test_task_runs_and_completes():
 
 
 @pytest.mark.anyio
+async def test_token_governor_keeps_llm_task_queued_when_budget_reserved(tmp_path, monkeypatch):
+    import asyncio
+
+    from control_plane.task_manager.task_manager import TaskManager
+
+    class StubRegistry:
+        async def get(self, bot_id):
+            return Bot(
+                id=bot_id,
+                name="LLM Bot",
+                role="assistant",
+                backends=[
+                    BackendConfig(
+                        type="cloud_api",
+                        provider="ollama_cloud",
+                        model="qwen-test",
+                    )
+                ],
+            )
+
+    monkeypatch.setenv("NEXUSAI_TOKEN_GOVERNOR_ENABLED", "true")
+    monkeypatch.setenv("NEXUSAI_TOKEN_GOVERNOR_GLOBAL_HOURLY_LIMIT", "50")
+    monkeypatch.setenv("NEXUSAI_TOKEN_GOVERNOR_ESTIMATED_TOKENS_PER_TASK", "100")
+
+    mock_scheduler = AsyncMock()
+    mock_scheduler.schedule.return_value = {"output": "should not run"}
+    tm = TaskManager(mock_scheduler, db_path=str(tmp_path / "token-governor.db"), bot_registry=StubRegistry())
+
+    task = await tm.create_task(bot_id="llm-bot", payload={"q": "expensive"})
+    await asyncio.sleep(0.1)
+
+    updated = await tm.get_task(task.id)
+    assert updated.status == "queued"
+    assert mock_scheduler.schedule.await_count == 0
+
+
+@pytest.mark.anyio
+async def test_token_governor_allows_non_llm_tool_task_under_llm_budget(tmp_path, monkeypatch):
+    import asyncio
+
+    from control_plane.task_manager.task_manager import TaskManager
+
+    class StubRegistry:
+        async def get(self, bot_id):
+            return Bot(
+                id=bot_id,
+                name="Browser Bot",
+                role="browser",
+                backends=[
+                    BackendConfig(
+                        type="browser",
+                        provider="browser",
+                        model="browser-ui",
+                    )
+                ],
+            )
+
+    monkeypatch.setenv("NEXUSAI_TOKEN_GOVERNOR_ENABLED", "true")
+    monkeypatch.setenv("NEXUSAI_TOKEN_GOVERNOR_GLOBAL_HOURLY_LIMIT", "50")
+    monkeypatch.setenv("NEXUSAI_TOKEN_GOVERNOR_ESTIMATED_TOKENS_PER_TASK", "100")
+
+    mock_scheduler = AsyncMock()
+    mock_scheduler.schedule.return_value = {"status": "ok"}
+    tm = TaskManager(mock_scheduler, db_path=str(tmp_path / "token-governor-tool.db"), bot_registry=StubRegistry())
+
+    task = await tm.create_task(bot_id="browser-bot", payload={"path": "/admin"})
+    for _ in range(20):
+        updated = await tm.get_task(task.id)
+        if updated.status == "completed":
+            break
+        await asyncio.sleep(0.05)
+
+    assert updated.status == "completed"
+    assert mock_scheduler.schedule.await_count == 1
+
+
+@pytest.mark.anyio
 async def test_task_manager_preserves_non_dict_payload_for_scheduler(tmp_path):
     import asyncio
 
