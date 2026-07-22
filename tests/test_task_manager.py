@@ -113,6 +113,55 @@ async def test_token_governor_keeps_llm_task_queued_when_budget_reserved(tmp_pat
 
 
 @pytest.mark.anyio
+async def test_token_governor_uses_bot_specific_estimates(tmp_path, monkeypatch):
+    import asyncio
+
+    from control_plane.task_manager.task_manager import TaskManager
+
+    class StubRegistry:
+        async def get(self, bot_id):
+            return Bot(
+                id=bot_id,
+                name=bot_id,
+                role="assistant",
+                backends=[
+                    BackendConfig(
+                        type="cloud_api",
+                        provider="ollama_cloud",
+                        model="qwen-test",
+                    )
+                ],
+            )
+
+    monkeypatch.setenv("NEXUSAI_TOKEN_GOVERNOR_ENABLED", "true")
+    monkeypatch.setenv("NEXUSAI_TOKEN_GOVERNOR_GLOBAL_HOURLY_LIMIT", "50")
+    monkeypatch.setenv("NEXUSAI_TOKEN_GOVERNOR_ESTIMATED_TOKENS_PER_TASK", "100")
+    monkeypatch.setenv("NEXUSAI_TOKEN_GOVERNOR_BOT_ESTIMATES", '{"cheap-bot": 25}')
+
+    mock_scheduler = AsyncMock()
+    mock_scheduler.schedule.return_value = {"output": "ok"}
+    tm = TaskManager(
+        mock_scheduler,
+        db_path=str(tmp_path / "token-governor-bot-estimates.db"),
+        bot_registry=StubRegistry(),
+    )
+
+    cheap = await tm.create_task(bot_id="cheap-bot", payload={"q": "small"})
+    expensive = await tm.create_task(bot_id="expensive-bot", payload={"q": "large"})
+
+    for _ in range(20):
+        cheap_updated = await tm.get_task(cheap.id)
+        if cheap_updated.status == "completed":
+            break
+        await asyncio.sleep(0.05)
+
+    expensive_updated = await tm.get_task(expensive.id)
+    assert cheap_updated.status == "completed"
+    assert expensive_updated.status == "queued"
+    assert mock_scheduler.schedule.await_count == 1
+
+
+@pytest.mark.anyio
 async def test_token_governor_rejects_extra_queued_llm_task_for_same_bot(tmp_path, monkeypatch):
     import asyncio
 

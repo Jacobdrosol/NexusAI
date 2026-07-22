@@ -811,6 +811,47 @@ def _env_or_settings_int(env_name: str, setting_name: str, default: int) -> int:
     return _settings_int(setting_name, default)
 
 
+def _env_or_settings_int_map(env_name: str, setting_name: str) -> Dict[str, int]:
+    raw: Any = os.environ.get(env_name)
+    if raw is None or str(raw).strip() == "":
+        try:
+            raw = SettingsManager.instance().get(setting_name, {})
+        except Exception:
+            raw = {}
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            raw = {}
+        elif text.startswith("{"):
+            try:
+                raw = json.loads(text)
+            except Exception:
+                raw = {}
+        else:
+            parsed: Dict[str, Any] = {}
+            for part in text.split(","):
+                if "=" not in part:
+                    continue
+                key, value = part.split("=", 1)
+                parsed[key.strip()] = value.strip()
+            raw = parsed
+    if not isinstance(raw, dict):
+        return {}
+    result: Dict[str, int] = {}
+    for key, value in raw.items():
+        bot_id = str(key or "").strip()
+        if not bot_id:
+            continue
+        try:
+            estimate = int(value)
+        except Exception:
+            continue
+        if estimate <= 0:
+            continue
+        result[bot_id] = max(1, estimate)
+    return result
+
+
 def _is_retryable_error_message(message: str) -> bool:
     normalized = str(message or "").strip().lower()
     if not normalized:
@@ -3526,6 +3567,10 @@ class TaskManager:
                 20_000,
             ),
         )
+        bot_estimated_tokens_per_task = _env_or_settings_int_map(
+            "NEXUSAI_TOKEN_GOVERNOR_BOT_ESTIMATES",
+            "token_governor_bot_estimates",
+        )
         max_queued_llm_tasks_per_bot = max(
             0,
             _env_or_settings_int(
@@ -3540,12 +3585,24 @@ class TaskManager:
             "bot_hourly_limit": hourly_bot_limit,
             "llm_concurrency": llm_concurrency_limit,
             "estimated_tokens_per_task": estimated_tokens_per_task,
+            "bot_estimated_tokens_per_task": bot_estimated_tokens_per_task,
             "max_queued_llm_tasks_per_bot": max_queued_llm_tasks_per_bot,
         }
 
     @staticmethod
     def _is_token_metered_provider(provider: str) -> bool:
         return str(provider or "").strip().lower() in _TOKEN_METERED_PROVIDERS
+
+    @staticmethod
+    def _token_governor_task_estimate(token_governor: Dict[str, Any], bot_id: str) -> int:
+        default_estimate = int(token_governor.get("estimated_tokens_per_task") or 20_000)
+        bot_estimates = token_governor.get("bot_estimated_tokens_per_task") or {}
+        if isinstance(bot_estimates, dict):
+            try:
+                return max(1, int(bot_estimates.get(str(bot_id or ""), default_estimate)))
+            except Exception:
+                return max(1, default_estimate)
+        return max(1, default_estimate)
 
     async def _token_usage_totals_since(self, *, hours: int = 1) -> Dict[str, Any]:
         await self._ensure_db()
@@ -3628,6 +3685,9 @@ class TaskManager:
                 "bot_hourly_tokens": int(config["bot_hourly_limit"] or 0),
                 "llm_concurrency": int(config["llm_concurrency"] or 0),
                 "estimated_tokens_per_task": int(config["estimated_tokens_per_task"] or 0),
+                "bot_estimated_tokens_per_task": dict(
+                    config.get("bot_estimated_tokens_per_task") or {}
+                ),
                 "max_queued_llm_tasks_per_bot": int(config["max_queued_llm_tasks_per_bot"] or 0),
             },
             "current": {
@@ -4541,7 +4601,7 @@ class TaskManager:
         if not self._is_token_metered_provider(provider_key):
             return
 
-        estimated = int(token_governor.get("estimated_tokens_per_task") or 20_000)
+        estimated = self._token_governor_task_estimate(token_governor, task.bot_id)
         max_queued_per_bot = int(token_governor.get("max_queued_llm_tasks_per_bot") or 0)
         async with self._lock:
             queued_for_bot = sum(
@@ -6392,7 +6452,7 @@ class TaskManager:
             provider_key = provider_keys.get(task.id, "")
             if not self._is_token_metered_provider(provider_key):
                 return True
-            estimated = int(token_governor.get("estimated_tokens_per_task") or 20_000)
+            estimated = self._token_governor_task_estimate(token_governor, task.bot_id)
             llm_limit = int(token_governor.get("llm_concurrency") or 0)
             if llm_limit > 0 and running_llm_count >= llm_limit:
                 return False
@@ -6416,7 +6476,7 @@ class TaskManager:
             provider_key = provider_keys.get(task.id, "")
             if not self._is_token_metered_provider(provider_key):
                 return
-            estimated = int(token_governor.get("estimated_tokens_per_task") or 20_000)
+            estimated = self._token_governor_task_estimate(token_governor, task.bot_id)
             running_llm_count += 1
             token_reserved_total += estimated
             token_reserved_by_bot[task.bot_id] = token_reserved_by_bot.get(task.bot_id, 0) + estimated
