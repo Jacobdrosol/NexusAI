@@ -174,6 +174,16 @@ async def list_tasks(
     return [_task_summary(task) for task in tasks]
 
 
+@router.get("/usage")
+async def task_usage_summary(
+    request: Request,
+    hours: int = Query(default=24, ge=1, le=2160),
+    limit_bots: int = Query(default=25, ge=1, le=250),
+) -> Dict[str, Any]:
+    task_manager = request.app.state.task_manager
+    return await task_manager.summarize_token_usage(hours=hours, limit_bots=limit_bots)
+
+
 @router.get("/{task_id}", response_model=Task)
 async def get_task(task_id: str, request: Request) -> Task:
     task_manager = request.app.state.task_manager

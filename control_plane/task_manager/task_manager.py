@@ -581,14 +581,24 @@ def _usage_summary(usage: dict[str, Any]) -> dict[str, Any]:
     completion = usage.get("completion_tokens")
     if prompt is None and "input_tokens" in usage:
         prompt = usage.get("input_tokens")
+    if prompt is None and "inputTokenCount" in usage:
+        prompt = usage.get("inputTokenCount")
     if completion is None and "output_tokens" in usage:
         completion = usage.get("output_tokens")
+    if completion is None and "outputTokenCount" in usage:
+        completion = usage.get("outputTokenCount")
     if prompt is None and "promptTokenCount" in usage:
         prompt = usage.get("promptTokenCount")
+    if prompt is None and "prompt_eval_count" in usage:
+        prompt = usage.get("prompt_eval_count")
     if completion is None and "candidatesTokenCount" in usage:
         completion = usage.get("candidatesTokenCount")
+    if completion is None and "eval_count" in usage:
+        completion = usage.get("eval_count")
 
     total = usage.get("total_tokens")
+    if total is None:
+        total = usage.get("totalTokenCount")
     if total is None:
         try:
             total = int(prompt or 0) + int(completion or 0)
@@ -604,6 +614,15 @@ def _usage_summary(usage: dict[str, Any]) -> dict[str, Any]:
         if key not in summary:
             summary[key] = value
     return {key: value for key, value in summary.items() if value not in (None, "")}
+
+
+def _usage_int(value: Any) -> Optional[int]:
+    if value in (None, ""):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _is_output_contract_error_message(message: str) -> bool:
@@ -4618,6 +4637,120 @@ class TaskManager:
             ) as cursor:
                 rows = await cursor.fetchall()
         return {str(row[0]): int(row[1] or 0) for row in rows}
+
+    async def summarize_token_usage(self, *, hours: int = 24, limit_bots: int = 25) -> Dict[str, Any]:
+        await self._ensure_db()
+        safe_hours = max(1, min(int(hours or 24), 2160))
+        safe_limit_bots = max(1, min(int(limit_bots or 25), 250))
+        now = datetime.now(timezone.utc)
+        since = now - timedelta(hours=safe_hours)
+        clauses = ["result IS NOT NULL", "updated_at >= ?"]
+        params: List[Any] = [since.isoformat()]
+        query = f"""
+            SELECT id, bot_id, status, result, created_at, updated_at
+            FROM {_TASKS_TABLE}
+            WHERE {' AND '.join(clauses)}
+            ORDER BY updated_at DESC, created_at DESC
+        """
+        totals: Dict[str, Any] = {
+            "tasks": 0,
+            "tasks_with_usage": 0,
+            "tasks_without_usage": 0,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "unknown_total_tasks": 0,
+        }
+        by_bot: Dict[str, Dict[str, Any]] = {}
+        by_status: Dict[str, Dict[str, Any]] = {}
+
+        async with open_sqlite(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(query, tuple(params)) as cursor:
+                rows = await cursor.fetchall()
+
+        for row in rows:
+            totals["tasks"] += 1
+            bot_id = str(row["bot_id"] or "unknown")
+            status = str(row["status"] or "unknown")
+            updated_at = str(row["updated_at"] or "")
+            bot_bucket = by_bot.setdefault(
+                bot_id,
+                {
+                    "bot_id": bot_id,
+                    "tasks": 0,
+                    "tasks_with_usage": 0,
+                    "tasks_without_usage": 0,
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                    "unknown_total_tasks": 0,
+                    "last_task_at": updated_at,
+                },
+            )
+            status_bucket = by_status.setdefault(
+                status,
+                {
+                    "status": status,
+                    "tasks": 0,
+                    "tasks_with_usage": 0,
+                    "tasks_without_usage": 0,
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                    "unknown_total_tasks": 0,
+                },
+            )
+            bot_bucket["tasks"] += 1
+            status_bucket["tasks"] += 1
+            if updated_at > str(bot_bucket.get("last_task_at") or ""):
+                bot_bucket["last_task_at"] = updated_at
+
+            try:
+                result = json.loads(row["result"]) if row["result"] else None
+            except json.JSONDecodeError:
+                result = None
+            usage = _extract_result_usage(result)
+            if not usage:
+                totals["tasks_without_usage"] += 1
+                bot_bucket["tasks_without_usage"] += 1
+                status_bucket["tasks_without_usage"] += 1
+                continue
+
+            summary = _usage_summary(usage)
+            prompt_tokens = _usage_int(summary.get("prompt_tokens")) or 0
+            completion_tokens = _usage_int(summary.get("completion_tokens")) or 0
+            total_tokens = _usage_int(summary.get("total_tokens"))
+            if total_tokens is None:
+                total_tokens = prompt_tokens + completion_tokens if prompt_tokens or completion_tokens else 0
+            if total_tokens == 0 and not (prompt_tokens or completion_tokens):
+                totals["unknown_total_tasks"] += 1
+                bot_bucket["unknown_total_tasks"] += 1
+                status_bucket["unknown_total_tasks"] += 1
+
+            for bucket in (totals, bot_bucket, status_bucket):
+                bucket["tasks_with_usage"] += 1
+                bucket["prompt_tokens"] += prompt_tokens
+                bucket["completion_tokens"] += completion_tokens
+                bucket["total_tokens"] += total_tokens
+
+        bot_rows = sorted(
+            by_bot.values(),
+            key=lambda item: (int(item.get("total_tokens") or 0), str(item.get("last_task_at") or "")),
+            reverse=True,
+        )
+        status_rows = sorted(by_status.values(), key=lambda item: str(item.get("status") or ""))
+        return {
+            "window": {
+                "hours": safe_hours,
+                "since": since.isoformat(),
+                "until": now.isoformat(),
+            },
+            "totals": totals,
+            "by_bot": bot_rows[:safe_limit_bots],
+            "bot_count": len(bot_rows),
+            "by_status": status_rows,
+        }
 
     async def list_bot_runs(self, bot_id: str, limit: int = 50) -> List[BotRun]:
         await self._ensure_db()

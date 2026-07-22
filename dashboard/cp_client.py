@@ -289,6 +289,11 @@ class CPClient:
     def get_task(self, task_id: str) -> Optional[Dict]:
         return self._get(f"/v1/tasks/{task_id}")
 
+    def task_usage(self, hours: int = 24, limit_bots: int = 25) -> Optional[Dict[str, Any]]:
+        return self._get(
+            f"/v1/tasks/usage?hours={max(1, int(hours))}&limit_bots={max(1, int(limit_bots))}"
+        )
+
     def retry_task(self, task_id: str, payload: Any = None) -> Optional[Dict[str, Any]]:
         body: Dict[str, Any] = {}
         if payload is not None:

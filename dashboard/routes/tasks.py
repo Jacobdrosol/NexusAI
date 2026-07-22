@@ -40,6 +40,13 @@ def _safe_cp_list_tasks(cp, **kwargs):
         return cp.list_tasks()
 
 
+def _safe_cp_task_usage(cp, **kwargs):
+    try:
+        return cp.task_usage(**kwargs)
+    except (AttributeError, TypeError):
+        return None
+
+
 def _task_to_dict(t: Task) -> dict[str, Any]:
     """Serialise a Task ORM row to a plain dict."""
     return {
@@ -100,6 +107,7 @@ def tasks_page() -> str:
 
     cp = get_cp_client()
     cp_data = _safe_cp_list_tasks(cp, limit=400, include_content=False)
+    usage_summary = _safe_cp_task_usage(cp, hours=24, limit_bots=15)
     if cp_data is not None:
         now = datetime.now(timezone.utc)
         recent_cutoff = now - timedelta(hours=24)
@@ -124,6 +132,7 @@ def tasks_page() -> str:
             recent_completed_tasks=recent_completed,
             recent_failed_tasks=recent_failed,
             launchable_bots=launchable_bots(cp.list_bots() or [], surface="tasks"),
+            usage_summary=usage_summary,
             error=None,
         )
 
@@ -140,6 +149,7 @@ def tasks_page() -> str:
             recent_completed_tasks=[task for task in task_rows if task.get("status") == "completed"],
             recent_failed_tasks=[task for task in task_rows if task.get("status") in {"failed", "retried"}],
             launchable_bots=[],
+            usage_summary=None,
             error=None,
         )
     finally:
@@ -188,6 +198,24 @@ def api_list_tasks():
         return jsonify([_task_summary(row) for row in rows])
     finally:
         db.close()
+
+
+@bp.get("/api/tasks/usage")
+@login_required
+def api_task_usage():
+    cp = get_cp_client()
+    try:
+        hours = min(max(int(request.args.get("hours", "24")), 1), 2160)
+    except (TypeError, ValueError):
+        hours = 24
+    try:
+        limit_bots = min(max(int(request.args.get("limit_bots", "25")), 1), 250)
+    except (TypeError, ValueError):
+        limit_bots = 25
+    summary = _safe_cp_task_usage(cp, hours=hours, limit_bots=limit_bots)
+    if summary is None:
+        return jsonify({"error": "control plane unavailable"}), 503
+    return jsonify(summary)
 
 
 @bp.get("/api/tasks/<task_id>")

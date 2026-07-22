@@ -30,6 +30,66 @@
 {% endif %}
 
 <section class="panel" style="margin-bottom:1rem;">
+  <div class="page-header" style="margin-bottom:0.75rem;">
+    <h2 class="panel-title">Token Usage (24h)</h2>
+    {% if usage_summary %}
+    <div class="mini-note">{{ usage_summary.totals.tasks_with_usage }} measured tasks</div>
+    {% else %}
+    <div class="mini-note">Control plane usage unavailable</div>
+    {% endif %}
+  </div>
+  {% if usage_summary %}
+  <div class="split-grid" style="grid-template-columns:0.85fr 1.15fr;gap:1rem;">
+    <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0.75rem;">
+      <div>
+        <div class="mini-note">Total Tokens</div>
+        <div style="font-size:1.65rem;font-weight:700;">{{ "{:,}".format(usage_summary.totals.total_tokens or 0) }}</div>
+      </div>
+      <div>
+        <div class="mini-note">Prompt / Completion</div>
+        <div style="font-size:1.05rem;font-weight:700;">
+          {{ "{:,}".format(usage_summary.totals.prompt_tokens or 0) }} /
+          {{ "{:,}".format(usage_summary.totals.completion_tokens or 0) }}
+        </div>
+      </div>
+      <div>
+        <div class="mini-note">Tasks With Usage</div>
+        <div style="font-size:1.05rem;font-weight:700;">{{ "{:,}".format(usage_summary.totals.tasks_with_usage or 0) }}</div>
+      </div>
+      <div>
+        <div class="mini-note">Missing Usage</div>
+        <div style="font-size:1.05rem;font-weight:700;">{{ "{:,}".format(usage_summary.totals.tasks_without_usage or 0) }}</div>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Bot</th><th>Total</th><th>Prompt</th><th>Completion</th><th>Tasks</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in usage_summary.by_bot[:10] %}
+          <tr>
+            <td>{{ row.bot_id }}</td>
+            <td>{{ "{:,}".format(row.total_tokens or 0) }}</td>
+            <td>{{ "{:,}".format(row.prompt_tokens or 0) }}</td>
+            <td>{{ "{:,}".format(row.completion_tokens or 0) }}</td>
+            <td>{{ row.tasks_with_usage }} / {{ row.tasks }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="5" class="empty">No token usage recorded in the last 24 hours</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% else %}
+  <div class="mini-note">Token usage will appear here when the control plane is reachable and worker results include provider usage data.</div>
+  {% endif %}
+</section>
+
+<section class="panel" style="margin-bottom:1rem;">
   <div class="split-grid" style="grid-template-columns:1.35fr 1fr;gap:1rem;">
     <div style="display:flex;flex-direction:column;gap:1rem;">
       <div>
