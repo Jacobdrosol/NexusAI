@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import ssl
 import urllib.error
 import urllib.parse
@@ -312,9 +313,13 @@ def test_http_connection(
     ssl_context = None if verify_ssl else ssl._create_unverified_context()
     result_url = safe_result_url(url, auth)
     expect_json = bool(action_payload.get("expect_json", False))
+    max_body_bytes = max(8000, int(os.environ.get("NEXUSAI_CONNECTION_RESULT_BODY_MAX_BYTES", "1048576")))
     try:
         with urllib.request.urlopen(request, timeout=timeout_seconds, context=ssl_context) as response:
-            body_preview = response.read(8000).decode("utf-8", errors="replace")
+            raw_body = response.read(max_body_bytes + 1)
+            body_truncated = len(raw_body) > max_body_bytes
+            body_text = raw_body[:max_body_bytes].decode("utf-8", errors="replace")
+            body_preview = body_text[:8000]
             response_headers = getattr(response, "headers", {})
             get_header = getattr(response_headers, "get", None)
             content_type = str(get_header("Content-Type") or "") if callable(get_header) else ""
@@ -327,9 +332,10 @@ def test_http_connection(
                     "verify_ssl": verify_ssl,
                     "content_type": content_type,
                     "body_preview": body_preview,
+                    "body_truncated": body_truncated,
                     "error": "Expected a JSON response but received a different content type.",
                 }
-            return {
+            result = {
                 "ok": 200 <= int(response.status) < 300,
                 "status": int(response.status),
                 "url": result_url,
@@ -337,7 +343,11 @@ def test_http_connection(
                 "verify_ssl": verify_ssl,
                 "content_type": content_type,
                 "body_preview": body_preview,
+                "body_truncated": body_truncated,
             }
+            if not body_truncated:
+                result["body"] = body_text
+            return result
     except urllib.error.HTTPError as exc:
         body_preview = exc.read(8000).decode("utf-8", errors="replace")
         return {

@@ -106,6 +106,40 @@ def test_http_connection_redacts_sensitive_supplied_query_params(monkeypatch):
     assert "page=2" in result["url"]
 
 
+def test_http_connection_returns_full_body_when_within_limit(monkeypatch):
+    payload = b'{"items":[' + b'{"value":true},' * 700 + b'{"value":false}]}'
+
+    class FakeResponse:
+        status = 200
+        headers = {"Content-Type": "application/json"}
+
+        def read(self, _limit):
+            return payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(
+        "shared.connection_runtime.urllib.request.urlopen",
+        lambda *_args, **_kwargs: FakeResponse(),
+    )
+
+    result = run_http_connection(
+        config={"base_url": "https://api.example.test"},
+        auth={"type": "none"},
+        schema_text="",
+        payload={"method": "GET", "path": "/records", "expect_json": True},
+    )
+
+    assert result["ok"] is True
+    assert result["body"] == payload.decode("utf-8")
+    assert result["body_preview"] == payload.decode("utf-8")[:8000]
+    assert result["body_truncated"] is False
+
+
 def test_http_connection_injects_one_time_remote_approval_without_returning_token(monkeypatch):
     captured_headers = []
 
