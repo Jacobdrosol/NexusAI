@@ -3394,6 +3394,7 @@ class TaskManager:
         self._retry_tasks: Set[asyncio.Task[Any]] = set()
         self._watchdog_task: Optional[asyncio.Task[Any]] = None
         self._watchdog_state: Dict[str, Dict[str, Any]] = {}
+        self._startup_dispatch_done = False
         self._trigger_dispatch_pending: Set[str] = set()
         self._cancelled_orchestrations: Dict[str, Dict[str, str]] = {}
         self._is_closing = False
@@ -3862,10 +3863,12 @@ class TaskManager:
         """Lazily initialise the SQLite tasks table and load existing rows."""
         if self._db_ready:
             await self._ensure_watchdog_started()
+            await self._schedule_startup_ready_tasks()
             return
         async with self._init_lock:
             if self._db_ready:
                 await self._ensure_watchdog_started()
+                await self._schedule_startup_ready_tasks()
                 return
             Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
             async with open_sqlite(self._db_path) as db:
@@ -3998,6 +4001,21 @@ class TaskManager:
                     )
             self._db_ready = True
         await self._ensure_watchdog_started()
+        await self._schedule_startup_ready_tasks()
+
+    async def _schedule_startup_ready_tasks(self) -> None:
+        if self._startup_dispatch_done or self._is_closing:
+            return
+        async with self._lock:
+            self._startup_dispatch_done = True
+            has_queued = any(
+                task.status == "queued"
+                and task.id not in self._running_task_ids
+                and task.id not in self._pending_task_creations
+                for task in self._tasks.values()
+            )
+        if has_queued:
+            await self._schedule_ready_tasks()
 
     async def _ensure_watchdog_started(self) -> None:
         if self._is_closing or not _settings_bool("running_task_watchdog_enabled", True):

@@ -4536,6 +4536,57 @@ async def test_task_execution_provenance_persists_without_changing_result_contra
 
 
 @pytest.mark.anyio
+async def test_startup_dispatches_persisted_queued_tasks(tmp_path):
+    import asyncio
+    import sqlite3
+    from datetime import datetime, timezone
+
+    from control_plane.task_manager.task_manager import TaskManager
+
+    class StubScheduler:
+        async def schedule(self, task):
+            return {"output": f"resumed {task.id}", "usage": {"total_tokens": 1}}
+
+    db_path = str(tmp_path / "startup-queued.db")
+    initializer = TaskManager(StubScheduler(), db_path=db_path)
+    await initializer._ensure_db()
+    await initializer.close()
+
+    now = datetime.now(timezone.utc).isoformat()
+    with sqlite3.connect(db_path) as db:
+        db.execute(
+            """
+            INSERT INTO cp_tasks
+                (id, bot_id, payload, metadata, depends_on, status, result, error, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "queued-on-restart",
+                "bot1",
+                json.dumps({"q": "resume me"}),
+                json.dumps(TaskMetadata(workflow_root_task_id="queued-on-restart").model_dump()),
+                json.dumps([]),
+                "queued",
+                None,
+                None,
+                now,
+                now,
+            ),
+        )
+        db.commit()
+
+    restarted = TaskManager(StubScheduler(), db_path=db_path)
+    for _ in range(40):
+        task = await restarted.get_task("queued-on-restart")
+        if task.status == "completed":
+            break
+        await asyncio.sleep(0.05)
+
+    assert task.status == "completed"
+    assert task.result == {"output": "resumed queued-on-restart", "usage": {"total_tokens": 1}}
+
+
+@pytest.mark.anyio
 async def test_output_contract_extracts_json_from_text_result(tmp_path):
     import asyncio
 
