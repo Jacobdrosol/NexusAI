@@ -277,9 +277,7 @@ class ChatManager:
             db.row_factory = aiosqlite.Row
             clauses: list[str] = []
             params: list[Any] = []
-            if project_id:
-                clauses.append("project_id = ?")
-                params.append(project_id)
+            normalized_project_id = str(project_id or "").strip()
             if archived == "active":
                 clauses.append("archived_at IS NULL")
             elif archived == "archived":
@@ -302,7 +300,13 @@ class ChatManager:
                     data["tool_access_enabled"] = bool(data.get("tool_access_enabled") or False)
                     data["tool_access_filesystem"] = bool(data.get("tool_access_filesystem") or False)
                     data["tool_access_repo_search"] = bool(data.get("tool_access_repo_search") or False)
-                    result.append(ChatConversation.model_validate(data))
+                    conversation = ChatConversation.model_validate(data)
+                    if normalized_project_id:
+                        project_ids = [str(conversation.project_id or "").strip()]
+                        project_ids.extend(str(pid or "").strip() for pid in conversation.bridge_project_ids)
+                        if normalized_project_id not in {pid for pid in project_ids if pid}:
+                            continue
+                    result.append(conversation)
                 return result
 
     async def get_conversation(self, conversation_id: str) -> ChatConversation:

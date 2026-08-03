@@ -207,10 +207,9 @@
     <div class="chat-conversation-toolbar">
       <label for="chat-project-filter" class="mini-note">Filter by project</label>
       <select id="chat-project-filter" class="form-control chat-project-filter">
-        <option value="">All projects</option>
-        <option value="__none__">Unscoped chats</option>
+        <option value="" {% if not active_project_filter %}selected{% endif %}>All projects</option>
         {% for p in projects if p.enabled %}
-        <option value="{{ p.id }}">{{ p.name }} ({{ p.id }})</option>
+        <option value="{{ p.id }}" {% if active_project_filter == p.id %}selected{% endif %}>{{ p.name }} ({{ p.id }})</option>
         {% endfor %}
       </select>
     </div>
@@ -222,7 +221,7 @@
         data-project-id="{{ c.project_id or '' }}"
         data-bridge-project-ids="{{ (c.bridge_project_ids or [])|join(',') }}"
       >
-        <a href="{{ url_for('chat.chat_page') }}?conversation_id={{ c.id }}" class="chat-conversation-link">
+        <a href="{{ url_for('chat.chat_page') }}?conversation_id={{ c.id }}{% if active_project_filter %}&project_id={{ active_project_filter }}{% endif %}" class="chat-conversation-link">
           <div>{{ c.title }}</div>
           <small>{{ (c.updated_at[:19] if c.updated_at else '') | replace('T', ' ') }}</small>
         </a>
@@ -234,7 +233,7 @@
         >Archive</button>
       </div>
       {% else %}
-      <div class="empty">No conversations yet</div>
+      <div class="empty">{% if active_project_filter %}No conversations match this project.{% else %}No conversations yet{% endif %}</div>
       {% endfor %}
       <div class="empty chat-filter-empty" data-filter-empty="active" hidden>No conversations match this project.</div>
     </div>
@@ -250,7 +249,7 @@
           data-project-id="{{ c.project_id or '' }}"
           data-bridge-project-ids="{{ (c.bridge_project_ids or [])|join(',') }}"
         >
-          <a href="{{ url_for('chat.chat_page') }}?conversation_id={{ c.id }}" class="chat-conversation-link">
+          <a href="{{ url_for('chat.chat_page') }}?conversation_id={{ c.id }}{% if active_project_filter %}&project_id={{ active_project_filter }}{% endif %}" class="chat-conversation-link">
             <div>{{ c.title }}</div>
             <small>Archived {{ (c.archived_at[:19] if c.archived_at else '') | replace('T', ' ') }}</small>
           </a>
@@ -265,7 +264,7 @@
           </div>
         </div>
         {% else %}
-        <div class="empty">No archived conversations</div>
+        <div class="empty">{% if active_project_filter %}No archived conversations match this project.{% else %}No archived conversations{% endif %}</div>
         {% endfor %}
         <div class="empty chat-filter-empty" data-filter-empty="archived" hidden>No archived conversations match this project.</div>
       </div>
@@ -542,8 +541,8 @@
       <div class="form-group">
         <label>Scope</label>
         <select class="form-control" name="scope" id="create-convo-scope">
-          <option value="global">global</option>
-          <option value="project">project</option>
+          <option value="global" {% if not active_project_filter %}selected{% endif %}>global</option>
+          <option value="project" {% if active_project_filter %}selected{% endif %}>project</option>
           <option value="bridged">bridged</option>
         </select>
       </div>
@@ -552,7 +551,7 @@
         <select class="form-control" name="project_id" id="create-convo-project-id">
           <option value="">Select project</option>
           {% for p in projects if p.enabled %}
-          <option value="{{ p.id }}">{{ p.name }} ({{ p.id }})</option>
+          <option value="{{ p.id }}" {% if active_project_filter == p.id %}selected{% endif %}>{{ p.name }} ({{ p.id }})</option>
           {% endfor %}
         </select>
       </div>
@@ -706,6 +705,7 @@
 <script>
 const selectedConversationId = {{ (selected_conversation.id if selected_conversation else "")|tojson }};
 const selectedConversationProjectId = {{ (selected_conversation.project_id if selected_conversation and selected_conversation.project_id else "")|tojson }};
+const activeProjectFilter = {{ (active_project_filter or "")|tojson }};
 const availableProjects = {{ projects|tojson }};
 const initialMessages = {{ messages|tojson }};
 const availableBots = {{ bots|tojson }};
@@ -733,18 +733,13 @@ function scrollMessagesToLatest() {
   container.scrollTop = container.scrollHeight;
 }
 
-function conversationMatchesProjectFilter(row, projectFilter) {
-  if (!row) return false;
-  if (!projectFilter) return true;
-  const projectId = String(row.dataset.projectId || '').trim();
-  const bridgeProjectIds = String(row.dataset.bridgeProjectIds || '')
-    .split(',')
-    .map((value) => value.trim())
-    .filter(Boolean);
-  if (projectFilter === '__none__') {
-    return !projectId && bridgeProjectIds.length === 0;
-  }
-  return projectId === projectFilter || bridgeProjectIds.includes(projectFilter);
+function buildChatUrl(params = {}) {
+  const url = new URL('/chat', window.location.origin);
+  const conversationId = String(params.conversation_id || '').trim();
+  const projectId = String(params.project_id || '').trim();
+  if (conversationId) url.searchParams.set('conversation_id', conversationId);
+  if (projectId) url.searchParams.set('project_id', projectId);
+  return url.pathname + url.search;
 }
 
 function applyConversationProjectFilter() {
@@ -754,8 +749,8 @@ function applyConversationProjectFilter() {
   let activeVisible = 0;
   let archivedVisible = 0;
   rows.forEach((row) => {
-    const matches = conversationMatchesProjectFilter(row, projectFilter);
-    row.hidden = !matches;
+    const matches = true;
+    row.hidden = false;
     const archived = !!row.closest('.chat-archived-list');
     if (matches) {
       if (archived) archivedVisible += 1;
@@ -765,9 +760,9 @@ function applyConversationProjectFilter() {
   document.querySelectorAll('.chat-filter-empty').forEach((emptyEl) => {
     const kind = String(emptyEl.dataset.filterEmpty || '').trim();
     if (kind === 'archived') {
-      emptyEl.hidden = archivedVisible > 0 || !projectFilter;
+      emptyEl.hidden = archivedVisible > 0 || !projectFilter || !rows.some((row) => !!row.closest('.chat-archived-list'));
     } else {
-      emptyEl.hidden = activeVisible > 0 || !projectFilter;
+      emptyEl.hidden = activeVisible > 0 || !projectFilter || !rows.some((row) => !row.closest('.chat-archived-list'));
     }
   });
 }
@@ -974,6 +969,24 @@ function syncConversationScopeFields() {
   if (scope !== 'bridged' && bridgeProjects) {
     Array.from(bridgeProjects.options).forEach((opt) => { opt.selected = false; });
   }
+}
+
+function resizeChatTextarea(textarea) {
+  if (!textarea) return;
+  textarea.style.height = 'auto';
+  textarea.style.height = Math.min(textarea.scrollHeight, Math.round(window.innerHeight * 0.28)) + 'px';
+}
+
+function bindChatTextareaBehavior() {
+  const textarea = document.querySelector('#chat-send-form textarea[name=content]');
+  if (!textarea) return;
+  resizeChatTextarea(textarea);
+  textarea.addEventListener('input', () => resizeChatTextarea(textarea));
+  textarea.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) return;
+    event.preventDefault();
+    sendMessage(true);
+  });
 }
 
 function syncCreateConversationToolFields() {
@@ -1972,7 +1985,11 @@ async function sendMessage(streamMode) {
     if (pending) {
       pending.dataset.pendingAssistant = 'true';
     }
-    form.querySelector('textarea[name=content]').value = '';
+    const textarea = form.querySelector('textarea[name=content]');
+    if (textarea) {
+      textarea.value = '';
+      resizeChatTextarea(textarea);
+    }
     const codingToggle = document.getElementById('enable-inline-coding-message');
     if (codingToggle) codingToggle.checked = false;
     pendingComposerAttachments = [];
@@ -2047,6 +2064,7 @@ async function sendMessage(streamMode) {
     pending.dataset.pendingAssistant = 'true';
   }
   form.reset();
+  resizeChatTextarea(form.querySelector('textarea[name=content]'));
   syncSendBotSelection();
   pendingComposerAttachments = [];
   renderComposerAttachments();
@@ -2147,7 +2165,10 @@ document.getElementById('form-create-convo')?.addEventListener('submit', async f
     return;
   }
   const created = await res.json();
-  window.location = '/chat?conversation_id=' + encodeURIComponent(created.id);
+  window.location = buildChatUrl({
+    conversation_id: created.id,
+    project_id: projectId || activeProjectFilter,
+  });
 });
 
 document.getElementById('form-assign')?.addEventListener('submit', async function(e) {
@@ -3017,7 +3038,9 @@ async function openDagViewer(orchestrationId) {
 }
 
 bindConversationActions();
-document.getElementById('chat-project-filter')?.addEventListener('change', applyConversationProjectFilter);
+document.getElementById('chat-project-filter')?.addEventListener('change', function() {
+  window.location = buildChatUrl({project_id: this.value});
+});
 document.getElementById('create-convo-scope')?.addEventListener('change', syncConversationScopeFields);
 document.getElementById('create-convo-tool-enabled')?.addEventListener('change', syncCreateConversationToolFields);
 document.getElementById('chat-tool-enabled')?.addEventListener('change', syncConversationToolAccessEditor);
@@ -3031,6 +3054,7 @@ syncConversationScopeFields();
 syncCreateConversationToolFields();
 syncConversationToolAccessEditor();
 syncSendBotSelection();
+bindChatTextareaBehavior();
 renderComposerAttachments();
 setupChatComposerDragDrop();
 setTaskEventsVisible(false);

@@ -372,6 +372,16 @@ def _normalize_conversation_rows(rows: Any) -> list[dict[str, Any]]:
     return result
 
 
+def _conversation_matches_project(row: dict[str, Any], project_id: str) -> bool:
+    pid = str(project_id or "").strip()
+    if not pid:
+        return True
+    primary_id = str(row.get("project_id") or "").strip()
+    bridge_ids = {str(item or "").strip() for item in row.get("bridge_project_ids") or []}
+    bridge_ids.discard("")
+    return primary_id == pid or pid in bridge_ids
+
+
 def _normalize_message_row(raw: Any) -> dict[str, Any] | None:
     if not isinstance(raw, dict):
         return None
@@ -484,6 +494,7 @@ def _cp_list_tasks_safe(cp: Any, **kwargs) -> Any:
 def chat_page() -> str:
     cp = get_cp_client()
     page_error: str | None = None
+    active_project_filter = str(request.args.get("project_id") or "").strip()
     try:
         try:
             conversations = _normalize_conversation_rows(cp.list_conversations(archived="all") or [])
@@ -504,6 +515,9 @@ def chat_page() -> str:
             model_catalog = cp.list_models() or []
         except Exception:
             model_catalog = []
+
+        if active_project_filter:
+            conversations = [c for c in conversations if _conversation_matches_project(c, active_project_filter)]
 
         selected_id = str(request.args.get("conversation_id") or "").strip()
         selected = None
@@ -581,6 +595,7 @@ def chat_page() -> str:
             "chat.html",
             conversations=[c for c in conversations if not c.get("archived_at")],
             archived_conversations=[c for c in conversations if c.get("archived_at")],
+            active_project_filter=active_project_filter,
             selected_conversation=selected,
             messages=messages,
             bots=bots,
@@ -605,6 +620,7 @@ def chat_page() -> str:
             "chat.html",
             conversations=[],
             archived_conversations=[],
+            active_project_filter=active_project_filter,
             selected_conversation=None,
             messages=[],
             bots=[],

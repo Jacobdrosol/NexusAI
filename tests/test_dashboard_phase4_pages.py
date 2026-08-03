@@ -453,7 +453,79 @@ def test_chat_page_renders_project_filter_metadata_on_conversations(dashboard_cl
     assert resp.status_code == 200
     assert b'data-project-id="globeiq"' in resp.data
     assert b'data-bridge-project-ids="bridge-a,bridge-b"' in resp.data
-    assert b"Unscoped chats" in resp.data
+    assert b"All projects" in resp.data
+
+
+def test_chat_page_project_filter_limits_conversation_list(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_conversations(self, archived="all", project_id=None):
+            return [
+                {
+                    "id": "c-primary",
+                    "title": "Primary Project Chat",
+                    "project_id": "globeiq",
+                    "bridge_project_ids": [],
+                    "updated_at": "2026-03-12T00:00:00+00:00",
+                    "archived_at": None,
+                    "tool_access_enabled": False,
+                    "tool_access_filesystem": False,
+                    "tool_access_repo_search": False,
+                },
+                {
+                    "id": "c-bridged",
+                    "title": "Bridged Project Chat",
+                    "project_id": "nexusai",
+                    "bridge_project_ids": ["globeiq"],
+                    "updated_at": "2026-03-11T00:00:00+00:00",
+                    "archived_at": None,
+                    "tool_access_enabled": False,
+                    "tool_access_filesystem": False,
+                    "tool_access_repo_search": False,
+                },
+                {
+                    "id": "c-other",
+                    "title": "Other Project Chat",
+                    "project_id": "other",
+                    "bridge_project_ids": [],
+                    "updated_at": "2026-03-10T00:00:00+00:00",
+                    "archived_at": None,
+                    "tool_access_enabled": False,
+                    "tool_access_filesystem": False,
+                    "tool_access_repo_search": False,
+                },
+            ]
+
+        def list_messages(self, conversation_id, limit=None):
+            return []
+
+        def list_bots(self):
+            return []
+
+        def list_projects(self):
+            return [
+                {"id": "globeiq", "name": "GlobeIQ", "enabled": True},
+                {"id": "nexusai", "name": "NexusAI", "enabled": True},
+                {"id": "other", "name": "Other", "enabled": True},
+            ]
+
+        def list_models(self):
+            return []
+
+        def list_vault_items(self, **kwargs):
+            return []
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/chat?project_id=globeiq")
+
+    assert resp.status_code == 200
+    assert b"Primary Project Chat" in resp.data
+    assert b"Bridged Project Chat" in resp.data
+    assert b"Other Project Chat" not in resp.data
+    assert b'option value="globeiq" selected' in resp.data
+    assert b"conversation_id=c-primary" in resp.data
+    assert b"project_id=globeiq" in resp.data
 
 
 def test_chat_page_handles_conversation_list_error_gracefully(dashboard_client):
