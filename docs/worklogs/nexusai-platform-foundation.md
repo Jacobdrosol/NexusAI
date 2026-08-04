@@ -6,7 +6,7 @@ Improve NexusAI one scoped platform foundation at a time so it can become the pr
 
 ## Current Scope
 
-Current item: surface token usage coverage gaps in Work Overview.
+Current item: add a Work Overview attention rollup for operator triage.
 
 ## Completion Criteria For This Item
 
@@ -18,6 +18,7 @@ Current item: surface token usage coverage gaps in Work Overview.
 - Work Overview flags enabled-offline, disabled, high-load, and queued workers so operators can identify capacity problems quickly.
 - Token usage is visible by project, manager, and provider/model for the current operational window.
 - Work Overview flags tasks missing token usage records so operators can distinguish low usage from missing telemetry.
+- Work Overview provides a single attention rollup across problem tasks, stale work, metadata gaps, worker issues, and usage gaps.
 - Metered LLM work can be capped by project and manager at admission time.
 - Metered LLM dispatch reserves project and manager budgets so queued work cannot burst past configured limits.
 - Admins can view and update token-governor limits from a dedicated Settings tab without editing env values.
@@ -100,6 +101,8 @@ Current item: surface token usage coverage gaps in Work Overview.
 - Added a Worker Issues card and Worker Load summary text that expose capacity problems on the Work page.
 - Added a stable empty usage summary shape when token usage is unavailable.
 - Added a Usage Gaps card and usage coverage text for measured tasks, missing-usage tasks, and total tokens.
+- Added an attention summary to the Work Overview API after task, worker, metadata, and usage data are loaded.
+- Added a Needs Attention card and Attention Breakdown panel on the Work page.
 
 ## Validation Plan
 
@@ -131,6 +134,7 @@ Current item: surface token usage coverage gaps in Work Overview.
 - Added dashboard access test proving non-admin users receive 403 for Work Overview and its read APIs.
 - Added Work Overview assertions proving worker health issue counts are computed and rendered.
 - Added Work Overview assertions proving token usage gaps are rendered and missing usage data has a stable API fallback shape.
+- Added Work Overview assertions proving the attention rollup totals and severity level are calculated and rendered.
 - Run focused pytest coverage for new route, task summaries, and dashboard smoke where applicable.
 - After deployment, measure route render time and verify no fresh 500 or slow-request logs.
 
@@ -156,3 +160,4 @@ Current item: surface token usage coverage gaps in Work Overview.
 - Work Overview is an operator/admin surface. Learner or non-admin project users need separate, narrower project status views if they should see any work progress.
 - Worker high-load status currently uses a fixed 0.85 load threshold from reported worker metrics. It depends on workers reporting comparable load values.
 - Usage-gap counts depend on the control plane returning `tasks_without_usage`. A zero count means either no gap was reported or the usage endpoint was unavailable and the stable fallback was used with a degraded-data warning if the call failed.
+- The attention rollup is an operator triage signal. Counts can overlap because one underlying task may contribute to multiple signals, such as stale work and missing metadata.

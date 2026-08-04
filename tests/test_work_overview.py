@@ -339,6 +339,10 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
 
     assert resp.status_code == 200
     assert b"Work" in resp.data
+    assert b"Needs Attention" in resp.data
+    assert b"Attention Breakdown" in resp.data
+    assert b"Problem tasks" in resp.data
+    assert b"Usage gaps" in resp.data
     assert b"GlobeIQ" in resp.data
     assert b"GlobeIQ Manager" in resp.data
     assert b"lesson-writer" in resp.data
@@ -380,6 +384,18 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert fake.task_calls[0]["statuses"] == ["blocked", "failed", "queued", "retried", "running"]
     assert fake.task_calls[0]["limit"] == 1000
     assert fake.task_calls[1]["limit"] == 250
+
+    with patch("dashboard.routes.work.get_cp_client", return_value=fake):
+        api_resp = dashboard_client.get("/api/work/overview")
+    assert api_resp.status_code == 200
+    data = api_resp.get_json()
+    assert data["attention"]["problem_tasks"] == 0
+    assert data["attention"]["stale_work"] == 2
+    assert data["attention"]["metadata_gaps"] == 0
+    assert data["attention"]["worker_issues"] == 2
+    assert data["attention"]["usage_gaps"] == 2
+    assert data["attention"]["total"] == 6
+    assert data["attention"]["level"] == "critical"
 
 
 def test_work_overview_routes_require_admin_role(dashboard_client):

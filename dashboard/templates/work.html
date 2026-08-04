@@ -33,7 +33,14 @@
 {% set metadata_gap_count = (metadata_health.missing_project_count or 0) + (metadata_health.inferred_manager_count or 0) %}
 {% set problem_summary = overview.problem_summary or {} %}
 {% set orchestrations = overview.orchestrations or [] %}
+{% set attention = overview.attention or {} %}
 <div class="cards">
+  <div class="card">
+    <div class="card-label">Needs Attention</div>
+    <div class="card-value {% if attention.level == 'critical' %}card-red{% elif attention.level == 'warning' %}card-yellow{% else %}card-green{% endif %}">
+      {{ attention.total or 0 }}
+    </div>
+  </div>
   <div class="card">
     <div class="card-label">Active</div>
     <div class="card-value card-blue">{{ totals.active or 0 }}</div>
@@ -327,6 +334,22 @@
   </div>
 
   <aside style="display:flex;flex-direction:column;gap:1rem;">
+    <section class="panel">
+      <h2 class="panel-title">Attention Breakdown</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Signal</th><th>Count</th></tr></thead>
+          <tbody>
+            <tr><td>Problem tasks</td><td>{{ attention.problem_tasks or 0 }}</td></tr>
+            <tr><td>Stale work</td><td>{{ attention.stale_work or 0 }}</td></tr>
+            <tr><td>Metadata gaps</td><td>{{ attention.metadata_gaps or 0 }}</td></tr>
+            <tr><td>Worker issues</td><td>{{ attention.worker_issues or 0 }}</td></tr>
+            <tr><td>Usage gaps</td><td>{{ attention.usage_gaps or 0 }}</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
     <section class="panel">
       <h2 class="panel-title">Worker Load</h2>
       <div class="mini-note" style="margin-bottom:0.75rem;">
