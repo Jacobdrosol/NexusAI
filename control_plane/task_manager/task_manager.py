@@ -3534,6 +3534,150 @@ class TaskManager:
             limits[key] = parsed
         return limits
 
+    @staticmethod
+    def _work_hold_scope_key(project_id: str, manager_id: str = "") -> str:
+        safe_project = str(project_id or "").strip() or "unassigned"
+        safe_manager = str(manager_id or "").strip()
+        return f"{safe_project}::{safe_manager or '*'}"
+
+    @staticmethod
+    def _normalize_work_hold(value: Any) -> dict[str, str] | None:
+        if not isinstance(value, dict):
+            return None
+        project_id = str(value.get("project_id") or "").strip()
+        if not project_id:
+            return None
+        manager_id = str(value.get("manager_id") or "").strip()
+        created_at = str(value.get("created_at") or "").strip()
+        if not created_at:
+            created_at = datetime.now(timezone.utc).isoformat()
+        hold = {
+            "id": TaskManager._work_hold_scope_key(project_id, manager_id),
+            "project_id": project_id,
+            "manager_id": manager_id,
+            "reason": str(value.get("reason") or "operator_hold").strip() or "operator_hold",
+            "created_at": created_at,
+            "created_by": str(value.get("created_by") or "operator").strip() or "operator",
+        }
+        return hold
+
+    def _work_dispatch_holds(self) -> list[dict[str, str]]:
+        try:
+            raw = SettingsManager.instance().get("work_dispatch_holds", {"holds": []})
+        except Exception:
+            raw = {"holds": []}
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw or "{}")
+            except Exception:
+                raw = {"holds": []}
+        rows = raw.get("holds") if isinstance(raw, dict) else []
+        if not isinstance(rows, list):
+            return []
+        holds: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for row in rows:
+            hold = self._normalize_work_hold(row)
+            if hold is None or hold["id"] in seen:
+                continue
+            seen.add(hold["id"])
+            holds.append(hold)
+        return holds
+
+    def _persist_work_dispatch_holds(self, holds: list[dict[str, str]], *, changed_by: str) -> None:
+        normalized: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for row in holds:
+            hold = self._normalize_work_hold(row)
+            if hold is None or hold["id"] in seen:
+                continue
+            seen.add(hold["id"])
+            normalized.append(hold)
+        SettingsManager.instance().set(
+            "work_dispatch_holds",
+            json.dumps({"holds": normalized}, sort_keys=True),
+            changed_by=changed_by,
+        )
+
+    @staticmethod
+    def _work_hold_matches_task(hold: dict[str, str], task: Task) -> bool:
+        project_id = TaskManager._token_governor_project_id(task)
+        if str(hold.get("project_id") or "") != project_id:
+            return False
+        manager_id = str(hold.get("manager_id") or "").strip()
+        return not manager_id or manager_id == TaskManager._token_governor_manager_id(task)
+
+    def _is_task_dispatch_held(self, task: Task, holds: list[dict[str, str]] | None = None) -> bool:
+        active_holds = self._work_dispatch_holds() if holds is None else holds
+        return any(self._work_hold_matches_task(hold, task) for hold in active_holds)
+
+    async def list_work_dispatch_holds(self) -> dict[str, Any]:
+        await self._ensure_db()
+        holds = self._work_dispatch_holds()
+        async with self._lock:
+            queued_tasks = [
+                task
+                for task in self._tasks.values()
+                if task.status == "queued" and task.id not in self._pending_task_creations
+            ]
+        rows: list[dict[str, Any]] = []
+        for hold in holds:
+            matching = [task for task in queued_tasks if self._work_hold_matches_task(hold, task)]
+            rows.append(
+                {
+                    **hold,
+                    "queued_task_count": len(matching),
+                    "bot_count": len({task.bot_id for task in matching}),
+                }
+            )
+        return {"holds": rows}
+
+    async def set_work_dispatch_hold(
+        self,
+        *,
+        project_id: str,
+        manager_id: str = "",
+        reason: str = "operator_hold",
+        created_by: str = "operator",
+    ) -> dict[str, Any]:
+        await self._ensure_db()
+        safe_project = str(project_id or "").strip()
+        if not safe_project:
+            raise ValueError("project_id is required")
+        hold = {
+            "project_id": safe_project,
+            "manager_id": str(manager_id or "").strip(),
+            "reason": str(reason or "operator_hold").strip() or "operator_hold",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_by": str(created_by or "operator").strip() or "operator",
+        }
+        normalized = self._normalize_work_hold(hold)
+        assert normalized is not None
+        holds = [row for row in self._work_dispatch_holds() if row.get("id") != normalized["id"]]
+        holds.append(normalized)
+        self._persist_work_dispatch_holds(holds, changed_by=normalized["created_by"])
+        return {"status": "held", "hold": normalized, "holds": holds}
+
+    async def release_work_dispatch_hold(
+        self,
+        *,
+        project_id: str,
+        manager_id: str = "",
+        released_by: str = "operator",
+    ) -> dict[str, Any]:
+        await self._ensure_db()
+        safe_project = str(project_id or "").strip()
+        if not safe_project:
+            raise ValueError("project_id is required")
+        hold_id = self._work_hold_scope_key(safe_project, str(manager_id or "").strip())
+        existing_holds = self._work_dispatch_holds()
+        remaining = [row for row in existing_holds if row.get("id") != hold_id]
+        released = len(remaining) != len(existing_holds)
+        self._persist_work_dispatch_holds(remaining, changed_by=str(released_by or "operator").strip() or "operator")
+        if released:
+            await self._schedule_ready_tasks()
+        return {"status": "released" if released else "not_found", "hold_id": hold_id, "holds": remaining}
+
     def _token_governor_config(self) -> Dict[str, Any]:
         enabled = _env_or_settings_bool(
             "NEXUSAI_TOKEN_GOVERNOR_ENABLED",
@@ -6744,6 +6888,7 @@ class TaskManager:
         documentation_worker_keys = await self._documentation_worker_keys_for_tasks([*queued, *running_snapshot])
         provider_keys = await self._bot_provider_keys_for_tasks([*queued, *running_snapshot])
         token_governor = self._token_governor_config()
+        work_dispatch_holds = self._work_dispatch_holds()
         token_usage = (
             await self._token_usage_totals_since(hours=1)
             if bool(token_governor.get("enabled"))
@@ -6844,6 +6989,9 @@ class TaskManager:
             if orchestration_id and self._orchestration_concurrency_limit(metadata) is not None:
                 orchestration_counts[orchestration_id] = orchestration_counts.get(orchestration_id, 0) + 1
 
+        def _is_dispatch_held(task: Task) -> bool:
+            return self._is_task_dispatch_held(task, work_dispatch_holds)
+
         def _has_browser_worker_capacity(task: Task) -> bool:
             worker_id = browser_worker_keys.get(task.id, "")
             return not worker_id or browser_worker_counts.get(worker_id, 0) < 1
@@ -6873,6 +7021,8 @@ class TaskManager:
             for task in queued:
                 if len(selected) >= available_slots:
                     break
+                if _is_dispatch_held(task):
+                    continue
                 if not _has_orchestration_capacity(task):
                     continue
                 if not _has_browser_worker_capacity(task):
@@ -6897,6 +7047,8 @@ class TaskManager:
             for task in queued:
                 if len(selected) >= available_slots:
                     break
+                if _is_dispatch_held(task):
+                    continue
                 if not _has_orchestration_capacity(task):
                     continue
                 if not _has_browser_worker_capacity(task):

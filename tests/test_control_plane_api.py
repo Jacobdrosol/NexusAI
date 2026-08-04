@@ -1254,6 +1254,36 @@ async def test_cancel_task_endpoint_preserves_reason(cp_client, cp_app):
 
 
 @pytest.mark.anyio
+async def test_work_dispatch_hold_endpoints_set_list_and_release_scope(cp_client):
+    set_resp = await cp_client.post(
+        "/v1/tasks/work-dispatch-holds",
+        json={
+            "project_id": "globeiq",
+            "manager_id": "manager-a",
+            "reason": "operator checkpoint",
+            "operator_id": "admin@test.com",
+        },
+    )
+    assert set_resp.status_code == 200
+    set_data = set_resp.json()
+    assert set_data["status"] == "held"
+    assert set_data["hold"]["id"] == "globeiq::manager-a"
+    assert set_data["hold"]["reason"] == "operator checkpoint"
+
+    list_resp = await cp_client.get("/v1/tasks/work-dispatch-holds")
+    assert list_resp.status_code == 200
+    holds = list_resp.json()["holds"]
+    assert any(hold["id"] == "globeiq::manager-a" for hold in holds)
+
+    release_resp = await cp_client.post(
+        "/v1/tasks/work-dispatch-holds/release",
+        json={"project_id": "globeiq", "manager_id": "manager-a", "operator_id": "admin@test.com"},
+    )
+    assert release_resp.status_code == 200
+    assert release_resp.json()["status"] == "released"
+
+
+@pytest.mark.anyio
 async def test_bot_runs_and_artifacts_endpoints_expose_task_history(cp_client):
     await cp_client.post(
         "/v1/bots",

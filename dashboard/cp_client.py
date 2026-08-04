@@ -301,6 +301,43 @@ class CPClient:
             timeout=timeout,
         )
 
+    def list_work_dispatch_holds(self, *, timeout: Optional[float] = None) -> Optional[Dict[str, Any]]:
+        return self._get("/v1/tasks/work-dispatch-holds", timeout=timeout)
+
+    def set_work_dispatch_hold(
+        self,
+        *,
+        project_id: str,
+        manager_id: str = "",
+        reason: str = "operator_hold",
+        operator_id: str = "operator",
+    ) -> Optional[Dict[str, Any]]:
+        return self._post(
+            "/v1/tasks/work-dispatch-holds",
+            {
+                "project_id": project_id,
+                "manager_id": manager_id,
+                "reason": reason,
+                "operator_id": operator_id,
+            },
+        )
+
+    def release_work_dispatch_hold(
+        self,
+        *,
+        project_id: str,
+        manager_id: str = "",
+        operator_id: str = "operator",
+    ) -> Optional[Dict[str, Any]]:
+        return self._post(
+            "/v1/tasks/work-dispatch-holds/release",
+            {
+                "project_id": project_id,
+                "manager_id": manager_id,
+                "operator_id": operator_id,
+            },
+        )
+
     def retry_task(self, task_id: str, payload: Any = None) -> Optional[Dict[str, Any]]:
         body: Dict[str, Any] = {}
         if payload is not None:

@@ -177,12 +177,68 @@ def _worker_row(worker: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _normalize_holds(holds: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for hold in holds or []:
+        if not isinstance(hold, dict):
+            continue
+        project_id = str(hold.get("project_id") or "").strip()
+        if not project_id:
+            continue
+        manager_id = str(hold.get("manager_id") or "").strip()
+        hold_id = str(hold.get("id") or f"{project_id}::{manager_id or '*'}").strip()
+        if hold_id in seen:
+            continue
+        seen.add(hold_id)
+        rows.append(
+            {
+                "id": hold_id,
+                "project_id": project_id,
+                "manager_id": manager_id,
+                "reason": str(hold.get("reason") or "").strip(),
+                "created_at": str(hold.get("created_at") or "").strip(),
+                "created_by": str(hold.get("created_by") or "").strip(),
+                "queued_task_count": _safe_int(hold.get("queued_task_count")),
+                "bot_count": _safe_int(hold.get("bot_count")),
+            }
+        )
+    return rows
+
+
+def _hold_for_scope(
+    holds: list[dict[str, Any]],
+    *,
+    project_id: str,
+    manager_id: str = "",
+) -> dict[str, Any] | None:
+    for hold in holds:
+        if hold["project_id"] != project_id:
+            continue
+        hold_manager = str(hold.get("manager_id") or "").strip()
+        if manager_id:
+            if hold_manager == manager_id:
+                return hold
+            continue
+        if not hold_manager:
+            return hold
+    return None
+
+
 def build_work_overview(
     *,
     tasks: list[dict[str, Any]] | None,
     projects: list[dict[str, Any]] | None,
     bots: list[dict[str, Any]] | None,
     workers: list[dict[str, Any]] | None,
+    holds: list[dict[str, Any]] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     now_utc = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
@@ -190,6 +246,7 @@ def build_work_overview(
     project_rows = [project for project in (projects or []) if isinstance(project, dict)]
     bot_rows = [bot for bot in (bots or []) if isinstance(bot, dict)]
     worker_rows = [_worker_row(worker) for worker in (workers or []) if isinstance(worker, dict)]
+    hold_rows = _normalize_holds(holds)
     project_names = _project_name_map(project_rows)
     bot_lookup = _bot_lookup(bot_rows)
 
@@ -233,6 +290,8 @@ def build_work_overview(
                 "project_name": project_names.get(project_id, project_id if project_id != "unassigned" else "Unassigned"),
                 "totals": Counter(),
                 "freshness": _freshness_summary(),
+                "hold": None,
+                "held": False,
                 "managers": [],
             },
         )
@@ -262,6 +321,8 @@ def build_work_overview(
                 "manager_name": str((bot_lookup.get(manager_id) or {}).get("name") or manager_id),
                 "totals": Counter(),
                 "freshness": _freshness_summary(),
+                "hold": None,
+                "held": False,
                 "bots": Counter(),
                 "latest_tasks": [],
             },
@@ -297,7 +358,46 @@ def build_work_overview(
             if status in PROBLEM_STATUSES:
                 recent_problem_tasks.append(compact_task | {"project_id": project_id, "manager_id": manager_id})
 
+    for hold in hold_rows:
+        hold_project_id = hold["project_id"]
+        project_bucket = projects_by_id.setdefault(
+            hold_project_id,
+            {
+                "project_id": hold_project_id,
+                "project_name": project_names.get(hold_project_id, hold_project_id),
+                "totals": Counter(),
+                "freshness": _freshness_summary(),
+                "hold": None,
+                "held": False,
+                "managers": [],
+            },
+        )
+        hold_manager_id = str(hold.get("manager_id") or "").strip()
+        if hold_manager_id:
+            manager_buckets.setdefault(
+                (hold_project_id, hold_manager_id),
+                {
+                    "project_id": hold_project_id,
+                    "manager_id": hold_manager_id,
+                    "manager_name": str((bot_lookup.get(hold_manager_id) or {}).get("name") or hold_manager_id),
+                    "totals": Counter(),
+                    "freshness": _freshness_summary(),
+                    "hold": None,
+                    "held": False,
+                    "bots": Counter(),
+                    "latest_tasks": [],
+                },
+            )
+
     for bucket in manager_buckets.values():
+        project_hold = _hold_for_scope(hold_rows, project_id=bucket["project_id"])
+        manager_hold = _hold_for_scope(
+            hold_rows,
+            project_id=bucket["project_id"],
+            manager_id=bucket["manager_id"],
+        )
+        bucket["hold"] = manager_hold or project_hold
+        bucket["held"] = bucket["hold"] is not None
         bucket["totals"] = dict(bucket["totals"])
         bucket["bots"] = [
             {"bot_id": bot_id, "task_count": count}
@@ -312,6 +412,8 @@ def build_work_overview(
 
     project_summaries = []
     for bucket in projects_by_id.values():
+        bucket["hold"] = _hold_for_scope(hold_rows, project_id=bucket["project_id"])
+        bucket["held"] = bucket["hold"] is not None
         bucket["totals"] = dict(bucket["totals"])
         bucket["managers"] = sorted(
             bucket["managers"],
@@ -348,6 +450,7 @@ def build_work_overview(
         "freshness": freshness,
         "projects": project_summaries,
         "workers": worker_summary,
+        "holds": hold_rows,
         "recent_problem_tasks": sorted(
             recent_problem_tasks,
             key=lambda item: str(item.get("updated_at") or ""),

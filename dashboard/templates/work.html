@@ -15,6 +15,7 @@
 {% set workers = overview.workers or {} %}
 {% set usage = overview.usage or {} %}
 {% set usage_totals = usage.totals or {} %}
+{% set holds = overview.holds or [] %}
 <div class="cards">
   <div class="card">
     <div class="card-label">Active</div>
@@ -45,6 +46,10 @@
   <div class="card">
     <div class="card-label">Worker Queue</div>
     <div class="card-value {% if workers.queue_depth %}card-yellow{% else %}card-green{% endif %}">{{ workers.queue_depth or 0 }}</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Held Lanes</div>
+    <div class="card-value {% if holds|length %}card-yellow{% else %}card-green{% endif %}">{{ holds|length }}</div>
   </div>
   <div class="card">
     <div class="card-label">Workers Online</div>
@@ -127,6 +132,20 @@
           {% if (project.freshness.stale_active or 0) + (project.freshness.stale_waiting or 0) > 0 %}
           <span class="badge badge-failed">{{ (project.freshness.stale_active or 0) + (project.freshness.stale_waiting or 0) }} stale</span>
           {% endif %}
+          {% if project.held %}
+          <span class="badge badge-yellow">held</span>
+          <button class="btn btn-sm"
+                  type="button"
+                  onclick="setWorkHold({action: 'release', project_id: {{ project.project_id|tojson }}, manager_id: '', label: {{ project.project_name|tojson }}})">
+            Release Project
+          </button>
+          {% else %}
+          <button class="btn btn-sm"
+                  type="button"
+                  onclick="setWorkHold({action: 'hold', project_id: {{ project.project_id|tojson }}, manager_id: '', label: {{ project.project_name|tojson }}})">
+            Hold Project
+          </button>
+          {% endif %}
           {% if (project.totals.active or 0) + (project.totals.waiting or 0) > 0 %}
           <button class="btn btn-sm btn-danger"
                   type="button"
@@ -148,6 +167,7 @@
               <th>QC</th>
               <th>Stale</th>
               <th>Oldest</th>
+              <th>Hold</th>
               <th>Completed</th>
               <th>Total</th>
               <th>Top Bots</th>
@@ -185,6 +205,16 @@
                 <div class="mini-note">active {{ manager.freshness.oldest_active_label or "none" }}</div>
                 <div class="mini-note">waiting {{ manager.freshness.oldest_waiting_label or "none" }}</div>
               </td>
+              <td>
+                {% if manager.held %}
+                <span class="badge badge-yellow">held</span>
+                {% if manager.hold and manager.hold.reason %}
+                <div class="mini-note">{{ manager.hold.reason }}</div>
+                {% endif %}
+                {% else %}
+                <span class="badge badge-ready">open</span>
+                {% endif %}
+              </td>
               <td>{{ manager.totals.completed or 0 }}</td>
               <td>{{ manager.totals.total or 0 }}</td>
               <td>
@@ -206,6 +236,19 @@
                 {% endfor %}
               </td>
               <td>
+                {% if manager.held and manager.hold and manager.hold.manager_id %}
+                <button class="btn btn-sm"
+                        type="button"
+                        onclick="setWorkHold({action: 'release', project_id: {{ project.project_id|tojson }}, manager_id: {{ manager.manager_id|tojson }}, label: {{ manager.manager_name|tojson }}})">
+                  Release Lane
+                </button>
+                {% elif not manager.held %}
+                <button class="btn btn-sm"
+                        type="button"
+                        onclick="setWorkHold({action: 'hold', project_id: {{ project.project_id|tojson }}, manager_id: {{ manager.manager_id|tojson }}, label: {{ manager.manager_name|tojson }}})">
+                  Hold Lane
+                </button>
+                {% endif %}
                 {% if (manager.totals.active or 0) + (manager.totals.waiting or 0) > 0 %}
                 <button class="btn btn-sm btn-danger"
                         type="button"
@@ -302,6 +345,35 @@
 {% block scripts %}
 <script>
 var _csrfToken = document.getElementById('csrf-token').value;
+
+function setWorkHold(scope) {
+  var action = scope.action === 'release' ? 'release' : 'hold';
+  var label = scope.label || scope.manager_id || scope.project_id;
+  var target = scope.manager_id ? 'manager lane' : 'project';
+  var verb = action === 'release' ? 'Release' : 'Hold';
+  if (!confirm(verb + ' dispatch for this ' + target + ': ' + label + '?')) {
+    return;
+  }
+  fetch('/api/work/hold', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-CSRFToken': _csrfToken},
+    body: JSON.stringify({
+      action: action,
+      project_id: scope.project_id,
+      manager_id: scope.manager_id || '',
+      reason: 'operator_hold_from_work_overview'
+    })
+  })
+  .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
+  .then(function(res) {
+    if (!res.ok) {
+      alert(verb + ' failed: ' + (res.data.error || 'unknown error'));
+      return;
+    }
+    window.location.reload();
+  })
+  .catch(function(e) { alert('Network error: ' + e); });
+}
 
 function stopWork(scope) {
   var label = scope.label || scope.manager_id || scope.project_id;

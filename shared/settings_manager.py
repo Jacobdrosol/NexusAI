@@ -96,6 +96,8 @@ _DEFAULTS: List[tuple] = [
      "Maximum number of concurrently running control-plane tasks across the whole platform."),
     ("task_provider_concurrency_limits", "{}", "json", "advanced", "Task Provider Concurrency Limits",
      "Optional JSON object mapping provider name to max concurrent running tasks, for example {\"ollama_cloud\": 6, \"openai\": 3}. Local worker-backed models still enforce one active task per worker."),
+    ("work_dispatch_holds", "{\"holds\": []}", "json", "advanced", "Work Dispatch Holds",
+     "Operator-controlled holds that prevent queued task dispatch for a project or project-manager lane without cancelling existing work."),
     ("token_governor_enabled", "false", "bool", "advanced", "Token Governor Enabled",
      "Whether metered LLM task admission should enforce configured token and concurrency limits."),
     ("token_governor_global_hourly_limit", "0", "int", "advanced", "Token Governor Global Hourly Limit",

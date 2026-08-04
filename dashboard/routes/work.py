@@ -43,7 +43,9 @@ def _load_work_overview() -> dict[str, Any]:
     projects = _safe_call(cp.list_projects, timeout=1.0) or []
     bots = _safe_call(cp.list_bots, timeout=1.0) or []
     workers = _safe_call(cp.list_workers, timeout=1.0) or []
-    overview = build_work_overview(tasks=tasks, projects=projects, bots=bots, workers=workers)
+    holds_payload = _safe_call(cp.list_work_dispatch_holds, timeout=1.0) or {}
+    holds = holds_payload.get("holds") if isinstance(holds_payload, dict) else []
+    overview = build_work_overview(tasks=tasks, projects=projects, bots=bots, workers=workers, holds=holds)
     task_usage = getattr(cp, "task_usage", None)
     overview["usage"] = _safe_call(task_usage, hours=24, limit_bots=25, timeout=1.5) if callable(task_usage) else None
     return overview
@@ -160,3 +162,44 @@ def api_stop_work():
             "failed": failed,
         }
     ), (200 if not failed else 207)
+
+
+@bp.post("/api/work/hold")
+@login_required
+def api_hold_work():
+    _require_admin()
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"error": "Request body must be a JSON object."}), 400
+
+    action = str(body.get("action") or "hold").strip().lower()
+    project_id = str(body.get("project_id") or "").strip()
+    manager_id = str(body.get("manager_id") or "").strip()
+    reason = str(body.get("reason") or "operator_hold_from_work_overview").strip()
+    if action not in {"hold", "release"}:
+        return jsonify({"error": "action must be hold or release."}), 400
+    if not project_id:
+        return jsonify({"error": "project_id is required."}), 400
+    if action == "hold" and not reason:
+        return jsonify({"error": "reason is required."}), 400
+
+    cp = get_cp_client()
+    operator_id = str(getattr(current_user, "email", "") or "operator").strip() or "operator"
+    if action == "release":
+        result = _safe_call(
+            cp.release_work_dispatch_hold,
+            project_id=project_id,
+            manager_id=manager_id,
+            operator_id=operator_id,
+        )
+    else:
+        result = _safe_call(
+            cp.set_work_dispatch_hold,
+            project_id=project_id,
+            manager_id=manager_id,
+            reason=reason,
+            operator_id=operator_id,
+        )
+    if result is None:
+        return jsonify({"error": "control plane unavailable"}), 503
+    return jsonify(result)

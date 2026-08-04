@@ -76,6 +76,57 @@ async def test_task_runs_and_completes():
 
 
 @pytest.mark.anyio
+async def test_work_dispatch_hold_keeps_matching_project_manager_task_queued(tmp_path):
+    import asyncio
+
+    from control_plane.task_manager.task_manager import TaskManager
+    from shared.settings_manager import SettingsManager
+
+    original_settings = SettingsManager._instance
+    SettingsManager._instance = SettingsManager(str(tmp_path / "settings.db"))
+    try:
+        mock_scheduler = AsyncMock()
+        mock_scheduler.schedule.return_value = {"answer": "42"}
+        tm = TaskManager(mock_scheduler, db_path=str(tmp_path / "tasks.db"))
+        await tm.set_work_dispatch_hold(
+            project_id="globeiq",
+            manager_id="manager-a",
+            reason="operator checkpoint",
+            created_by="admin@test.com",
+        )
+
+        task = await tm.create_task(
+            bot_id="lesson-writer",
+            payload={"q": "hello"},
+            metadata=TaskMetadata(project_id="globeiq", root_pm_bot_id="manager-a"),
+        )
+        await asyncio.sleep(0.05)
+
+        queued = await tm.get_task(task.id)
+        assert queued.status == "queued"
+        mock_scheduler.schedule.assert_not_awaited()
+
+        holds = await tm.list_work_dispatch_holds()
+        assert holds["holds"][0]["id"] == "globeiq::manager-a"
+        assert holds["holds"][0]["queued_task_count"] == 1
+
+        await tm.release_work_dispatch_hold(
+            project_id="globeiq",
+            manager_id="manager-a",
+            released_by="admin@test.com",
+        )
+        for _ in range(20):
+            updated = await tm.get_task(task.id)
+            if updated.status == "completed":
+                break
+            await asyncio.sleep(0.1)
+        assert updated.status == "completed"
+        mock_scheduler.schedule.assert_awaited_once()
+    finally:
+        SettingsManager._instance = original_settings
+
+
+@pytest.mark.anyio
 async def test_task_manager_close_clears_running_task_watchdog(tmp_path):
     from control_plane.task_manager.task_manager import TaskManager
 

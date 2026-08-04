@@ -38,6 +38,16 @@ def test_work_overview_groups_tasks_by_project_and_manager():
             {"id": "worker-a", "name": "Worker A", "status": "online", "enabled": True, "metrics": {"queue_depth": 3, "load": 0.4}},
             {"id": "worker-b", "name": "Worker B", "status": "offline", "enabled": True, "metrics": {"queue_depth": 1}},
         ],
+        holds=[
+            {
+                "id": "globeiq::globeiq-pm",
+                "project_id": "globeiq",
+                "manager_id": "globeiq-pm",
+                "reason": "quality review",
+                "queued_task_count": 1,
+                "bot_count": 1,
+            }
+        ],
         now=datetime(2026, 8, 4, 11, 10, tzinfo=timezone.utc),
         tasks=[
             {
@@ -99,6 +109,9 @@ def test_work_overview_groups_tasks_by_project_and_manager():
     assert manager["totals"]["total"] == 4
     assert manager["freshness"]["stale_active"] == 1
     assert manager["freshness"]["stale_waiting"] == 1
+    assert manager["held"] is True
+    assert manager["hold"]["reason"] == "quality review"
+    assert overview["holds"][0]["id"] == "globeiq::globeiq-pm"
     assert manager["latest_tasks"][0]["age_label"] == "1h 5m"
     assert overview["recent_problem_tasks"][0]["id"] == "task-failed"
 
@@ -137,6 +150,9 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
         def list_workers(self, **kwargs):
             return [{"id": "worker-a", "name": "Worker A", "status": "online", "enabled": True, "metrics": {"queue_depth": 2, "load": 0.25}}]
 
+        def list_work_dispatch_holds(self, **kwargs):
+            return {"holds": [{"id": "globeiq::*", "project_id": "globeiq", "manager_id": "", "reason": "operator hold"}]}
+
         def task_usage(self, **kwargs):
             return {
                 "window": {"hours": 24},
@@ -162,8 +178,35 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"qwen3.5:cloud" in resp.data
     assert b"Stale Work" in resp.data
     assert b"Oldest" in resp.data
+    assert b"Held Lanes" in resp.data
+    assert b"operator hold" in resp.data
+    assert b"Release Project" in resp.data
     assert b"Stop Project" in resp.data
     assert b"Stop Lane" in resp.data
+
+
+def test_work_overview_renders_held_lane_without_loaded_tasks():
+    overview = build_work_overview(
+        projects=[{"id": "globeiq", "name": "GlobeIQ"}],
+        bots=[{"id": "manager-a", "name": "Manager A"}],
+        workers=[],
+        tasks=[],
+        holds=[
+            {
+                "id": "globeiq::manager-a",
+                "project_id": "globeiq",
+                "manager_id": "manager-a",
+                "reason": "release checkpoint",
+                "queued_task_count": "not numeric",
+            }
+        ],
+    )
+
+    assert overview["holds"][0]["queued_task_count"] == 0
+    assert overview["projects"][0]["held"] is False
+    manager = overview["projects"][0]["managers"][0]
+    assert manager["held"] is True
+    assert manager["hold"]["reason"] == "release checkpoint"
 
 
 def test_work_stop_api_dry_run_filters_stoppable_project_manager_tasks(dashboard_client):
@@ -278,3 +321,55 @@ def test_work_stop_api_rejects_missing_project(dashboard_client):
 
     assert resp.status_code == 400
     assert "project_id is required" in resp.get_data(as_text=True)
+
+
+def test_work_hold_api_sets_and_releases_project_manager_scope(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def __init__(self):
+            self.calls = []
+
+        def set_work_dispatch_hold(self, **kwargs):
+            self.calls.append(("hold", kwargs))
+            return {"status": "held", "hold": kwargs}
+
+        def release_work_dispatch_hold(self, **kwargs):
+            self.calls.append(("release", kwargs))
+            return {"status": "released", "holds": []}
+
+    fake = FakeCP()
+    with patch("dashboard.routes.work.get_cp_client", return_value=fake):
+        hold_resp = dashboard_client.post(
+            "/api/work/hold",
+            json={
+                "action": "hold",
+                "project_id": "globeiq",
+                "manager_id": "manager-a",
+                "reason": "audit checkpoint",
+            },
+        )
+        release_resp = dashboard_client.post(
+            "/api/work/hold",
+            json={"action": "release", "project_id": "globeiq", "manager_id": "manager-a"},
+        )
+
+    assert hold_resp.status_code == 200
+    assert release_resp.status_code == 200
+    assert fake.calls[0][0] == "hold"
+    assert fake.calls[0][1]["project_id"] == "globeiq"
+    assert fake.calls[0][1]["manager_id"] == "manager-a"
+    assert fake.calls[0][1]["reason"] == "audit checkpoint"
+    assert fake.calls[1][0] == "release"
+
+
+def test_work_hold_api_rejects_invalid_action_or_missing_project(dashboard_client):
+    _login_admin(dashboard_client)
+
+    bad_action = dashboard_client.post("/api/work/hold", json={"action": "freeze", "project_id": "globeiq"})
+    missing_project = dashboard_client.post("/api/work/hold", json={"action": "hold"})
+
+    assert bad_action.status_code == 400
+    assert "action must be hold or release" in bad_action.get_data(as_text=True)
+    assert missing_project.status_code == 400
+    assert "project_id is required" in missing_project.get_data(as_text=True)

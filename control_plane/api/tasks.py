@@ -36,6 +36,13 @@ class CancelTaskRequest(BaseModel):
     reason: Optional[str] = Field(default=None, max_length=500)
 
 
+class WorkDispatchHoldRequest(BaseModel):
+    project_id: str = Field(min_length=1, max_length=200)
+    manager_id: Optional[str] = Field(default=None, max_length=200)
+    reason: Optional[str] = Field(default=None, max_length=500)
+    operator_id: Optional[str] = Field(default=None, max_length=200)
+
+
 class TaskListItem(BaseModel):
     id: str
     bot_id: str
@@ -191,6 +198,58 @@ async def task_usage_summary(
 ) -> Dict[str, Any]:
     task_manager = request.app.state.task_manager
     return await task_manager.summarize_token_usage(hours=hours, limit_bots=limit_bots)
+
+
+@router.get("/work-dispatch-holds")
+async def list_work_dispatch_holds(request: Request) -> Dict[str, Any]:
+    task_manager = request.app.state.task_manager
+    return await task_manager.list_work_dispatch_holds()
+
+
+@router.post("/work-dispatch-holds")
+async def set_work_dispatch_hold(request: Request, body: WorkDispatchHoldRequest) -> Dict[str, Any]:
+    task_manager = request.app.state.task_manager
+    try:
+        result = await task_manager.set_work_dispatch_hold(
+            project_id=body.project_id,
+            manager_id=body.manager_id or "",
+            reason=str(body.reason or "operator_hold").strip() or "operator_hold",
+            created_by=str(body.operator_id or "operator").strip() or "operator",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    hold = result.get("hold") if isinstance(result, dict) else {}
+    await record_audit_event(
+        request,
+        action="tasks.work_dispatch_hold.set",
+        resource=f"work:{body.project_id}",
+        details=hold if isinstance(hold, dict) else {},
+    )
+    return result
+
+
+@router.post("/work-dispatch-holds/release")
+async def release_work_dispatch_hold(request: Request, body: WorkDispatchHoldRequest) -> Dict[str, Any]:
+    task_manager = request.app.state.task_manager
+    try:
+        result = await task_manager.release_work_dispatch_hold(
+            project_id=body.project_id,
+            manager_id=body.manager_id or "",
+            released_by=str(body.operator_id or "operator").strip() or "operator",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await record_audit_event(
+        request,
+        action="tasks.work_dispatch_hold.release",
+        resource=f"work:{body.project_id}",
+        details={
+            "project_id": body.project_id,
+            "manager_id": body.manager_id or "",
+            "status": result.get("status"),
+        },
+    )
+    return result
 
 
 @router.get("/{task_id}", response_model=Task)

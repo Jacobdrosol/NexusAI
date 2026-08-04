@@ -6,7 +6,7 @@ Improve NexusAI one scoped platform foundation at a time so it can become the pr
 
 ## Current Scope
 
-Current item: add stale-work visibility to Work Overview so operators can identify aging project and manager lanes.
+Current item: add non-destructive project and manager dispatch holds so operators can pause work lanes without cancelling queued tasks.
 
 ## Completion Criteria For This Item
 
@@ -20,6 +20,8 @@ Current item: add stale-work visibility to Work Overview so operators can identi
 - The token-governor controls expose live one-hour governor status when the control plane is reachable.
 - Admins can stop active/waiting work for one project or one project-manager lane from Work Overview.
 - Stop actions cancel only non-terminal running, queued, or blocked tasks and preserve an explicit cancellation reason.
+- Admins can place or release a dispatch hold for one project or one project-manager lane from Work Overview.
+- Dispatch holds prevent queued matching tasks from starting while leaving task rows intact for later release, inspection, or cancellation.
 - Control-plane shutdown closes the TaskManager and cancels its watchdog/runner/retry background tasks cleanly.
 - Control-plane API tests tear down TaskManager background tasks after each fixture instance.
 - Work Overview shows stale active/waiting counts and oldest active/waiting ages by project and manager.
@@ -58,6 +60,9 @@ Current item: add stale-work visibility to Work Overview so operators can identi
 - Added a TaskManager lifecycle test proving `close()` clears a running watchdog task.
 - Added Work Overview freshness metrics for stale running tasks, stale queued/blocked tasks, oldest active age, and oldest waiting age.
 - Added Work page stale-work card, project stale badges, manager stale counts, manager oldest-age columns, and per-task age labels.
+- Added `work_dispatch_holds` runtime setting and control-plane endpoints to list, set, and release project/manager dispatch holds.
+- Added task-manager dispatch gating so held project/manager queued tasks remain queued until the hold is released.
+- Added Work Overview held-lane visibility plus Hold/Release Project and Hold/Release Lane controls.
 
 ## Validation Plan
 
@@ -70,6 +75,9 @@ Current item: add stale-work visibility to Work Overview so operators can identi
 - Added control-plane API test proving single-task cancellation preserves the provided reason.
 - Added lifecycle test proving TaskManager watchdog shutdown is explicit and leaves no stored watchdog task.
 - Added Work Overview assertions with a fixed clock proving stale active/waiting counts and age labels are deterministic.
+- Added task-manager test proving a held project-manager lane does not dispatch until released.
+- Added control-plane task API test covering dispatch hold set/list/release.
+- Added dashboard tests covering Work Overview hold rendering and dashboard hold/release API proxy behavior.
 - Run focused pytest coverage for new route, task summaries, and dashboard smoke where applicable.
 - After deployment, measure route render time and verify no fresh 500 or slow-request logs.
 
@@ -82,3 +90,4 @@ Current item: add stale-work visibility to Work Overview so operators can identi
 - Environment variables still override setting values in the task manager. The Settings tab is the normal runtime control, but deployment environment overrides must be checked when a saved value appears ineffective.
 - Work Overview stop controls are scoped cancellation, not pause/resume state. Cancelled orchestrations still need orchestration-level cancellation when future fan-out must be blocked.
 - Stale active work currently means a running task has not updated in at least 60 minutes. Stale waiting work means a queued or blocked task has been waiting at least 30 minutes.
+- Dispatch holds block task start only. They do not cancel running tasks, block task creation, pause schedules, or prevent future orchestration fan-out from adding more queued work.
