@@ -26,6 +26,9 @@ CREATE TABLE IF NOT EXISTS conversations (
     scope TEXT NOT NULL,
     default_bot_id TEXT,
     default_model_id TEXT,
+    owner_user_id TEXT,
+    memory_profiles_enabled INTEGER NOT NULL DEFAULT 1,
+    memory_profile_id TEXT,
     tool_access_enabled INTEGER NOT NULL DEFAULT 0,
     tool_access_filesystem INTEGER NOT NULL DEFAULT 0,
     tool_access_repo_search INTEGER NOT NULL DEFAULT 0,
@@ -79,6 +82,27 @@ CREATE INDEX IF NOT EXISTS idx_chat_message_memory_message
 ON chat_message_memory(message_id)
 """
 
+_CREATE_MEMORY_PROFILE_ITEMS = """
+CREATE TABLE IF NOT EXISTS memory_profile_items (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    profile_id TEXT NOT NULL,
+    message_id TEXT NOT NULL,
+    conversation_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    embedding TEXT NOT NULL,
+    metadata TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE(user_id, profile_id, message_id)
+)
+"""
+
+_CREATE_MEMORY_PROFILE_USER_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_memory_profile_items_user_profile
+ON memory_profile_items(user_id, profile_id, created_at)
+"""
+
 _CREATE_CONVERSATIONS_ARCHIVED_UPDATED_INDEX = """
 CREATE INDEX IF NOT EXISTS idx_conversations_archived_updated_at
 ON conversations(archived_at, updated_at)
@@ -114,6 +138,8 @@ class ChatManager:
                 await db.execute(_CREATE_MESSAGE_MEMORY)
                 await db.execute(_CREATE_MESSAGE_MEMORY_CONVERSATION_INDEX)
                 await db.execute(_CREATE_MESSAGE_MEMORY_MESSAGE_INDEX)
+                await db.execute(_CREATE_MEMORY_PROFILE_ITEMS)
+                await db.execute(_CREATE_MEMORY_PROFILE_USER_INDEX)
                 await db.execute(_CREATE_CONVERSATIONS_ARCHIVED_UPDATED_INDEX)
                 await self._ensure_conversation_columns(db)
                 await db.commit()
@@ -209,6 +235,12 @@ class ChatManager:
             await db.execute("ALTER TABLE conversations ADD COLUMN tool_access_filesystem INTEGER NOT NULL DEFAULT 0")
         if "tool_access_repo_search" not in columns:
             await db.execute("ALTER TABLE conversations ADD COLUMN tool_access_repo_search INTEGER NOT NULL DEFAULT 0")
+        if "owner_user_id" not in columns:
+            await db.execute("ALTER TABLE conversations ADD COLUMN owner_user_id TEXT")
+        if "memory_profiles_enabled" not in columns:
+            await db.execute("ALTER TABLE conversations ADD COLUMN memory_profiles_enabled INTEGER NOT NULL DEFAULT 1")
+        if "memory_profile_id" not in columns:
+            await db.execute("ALTER TABLE conversations ADD COLUMN memory_profile_id TEXT")
 
     async def create_conversation(
         self,
@@ -218,6 +250,9 @@ class ChatManager:
         scope: str = "global",
         default_bot_id: Optional[str] = None,
         default_model_id: Optional[str] = None,
+        owner_user_id: Optional[str] = None,
+        memory_profiles_enabled: bool = True,
+        memory_profile_id: Optional[str] = "default",
         tool_access_enabled: bool = False,
         tool_access_filesystem: bool = False,
         tool_access_repo_search: bool = False,
@@ -232,6 +267,9 @@ class ChatManager:
             scope=scope,
             default_bot_id=default_bot_id,
             default_model_id=default_model_id,
+            owner_user_id=str(owner_user_id or "").strip() or None,
+            memory_profiles_enabled=bool(memory_profiles_enabled),
+            memory_profile_id=str(memory_profile_id or "default").strip() or "default",
             tool_access_enabled=bool(tool_access_enabled),
             tool_access_filesystem=bool(tool_access_filesystem),
             tool_access_repo_search=bool(tool_access_repo_search),
@@ -244,9 +282,9 @@ class ChatManager:
                 await db.execute(
                     """
                     INSERT INTO conversations (
-                        id, title, project_id, bridge_project_ids, scope, default_bot_id, default_model_id, tool_access_enabled, tool_access_filesystem, tool_access_repo_search, archived_at, created_at, updated_at
+                        id, title, project_id, bridge_project_ids, scope, default_bot_id, default_model_id, owner_user_id, memory_profiles_enabled, memory_profile_id, tool_access_enabled, tool_access_filesystem, tool_access_repo_search, archived_at, created_at, updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         conversation.id,
@@ -256,6 +294,9 @@ class ChatManager:
                         conversation.scope,
                         conversation.default_bot_id,
                         conversation.default_model_id,
+                        conversation.owner_user_id,
+                        1 if conversation.memory_profiles_enabled else 0,
+                        conversation.memory_profile_id,
                         1 if conversation.tool_access_enabled else 0,
                         1 if conversation.tool_access_filesystem else 0,
                         1 if conversation.tool_access_repo_search else 0,
@@ -300,6 +341,8 @@ class ChatManager:
                     data["tool_access_enabled"] = bool(data.get("tool_access_enabled") or False)
                     data["tool_access_filesystem"] = bool(data.get("tool_access_filesystem") or False)
                     data["tool_access_repo_search"] = bool(data.get("tool_access_repo_search") or False)
+                    data["memory_profiles_enabled"] = bool(data.get("memory_profiles_enabled", 1))
+                    data["memory_profile_id"] = str(data.get("memory_profile_id") or "default").strip() or "default"
                     conversation = ChatConversation.model_validate(data)
                     if normalized_project_id:
                         project_ids = [str(conversation.project_id or "").strip()]
@@ -332,6 +375,8 @@ class ChatManager:
                 data["tool_access_enabled"] = bool(data.get("tool_access_enabled") or False)
                 data["tool_access_filesystem"] = bool(data.get("tool_access_filesystem") or False)
                 data["tool_access_repo_search"] = bool(data.get("tool_access_repo_search") or False)
+                data["memory_profiles_enabled"] = bool(data.get("memory_profiles_enabled", 1))
+                data["memory_profile_id"] = str(data.get("memory_profile_id") or "default").strip() or "default"
                 return ChatConversation.model_validate(data)
 
     async def delete_conversation(self, conversation_id: str) -> None:
@@ -400,6 +445,34 @@ class ChatManager:
                 await db.commit()
         return await self.get_conversation(conversation_id)
 
+    async def update_conversation_memory_profile(
+        self,
+        conversation_id: str,
+        *,
+        memory_profiles_enabled: bool,
+        memory_profile_id: Optional[str] = "default",
+    ) -> ChatConversation:
+        await self.get_conversation(conversation_id)
+        now = datetime.now(timezone.utc).isoformat()
+        profile_id = str(memory_profile_id or "default").strip() or "default"
+        async with self._lock:
+            async with open_sqlite(self._db_path) as db:
+                await db.execute(
+                    """
+                    UPDATE conversations
+                    SET memory_profiles_enabled = ?, memory_profile_id = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        1 if memory_profiles_enabled else 0,
+                        profile_id,
+                        now,
+                        conversation_id,
+                    ),
+                )
+                await db.commit()
+        return await self.get_conversation(conversation_id)
+
     async def add_message(
         self,
         conversation_id: str,
@@ -459,6 +532,104 @@ class ChatManager:
                 )
                 await db.commit()
         return message
+
+    async def add_memory_profile_item(
+        self,
+        *,
+        user_id: str,
+        profile_id: str,
+        message: ChatMessage,
+        metadata: Optional[Any] = None,
+    ) -> None:
+        await self._ensure_db()
+        normalized_user_id = str(user_id or "").strip()
+        normalized_profile_id = str(profile_id or "default").strip() or "default"
+        if not normalized_user_id:
+            return
+        if not self._message_is_indexable(role=message.role, metadata=message.metadata):
+            return
+        normalized_content = str(message.content or "").strip()
+        if not normalized_content:
+            return
+        async with self._lock:
+            async with open_sqlite(self._db_path) as db:
+                await db.execute(
+                    """
+                    INSERT INTO memory_profile_items (
+                        id, user_id, profile_id, message_id, conversation_id, role, content, embedding, metadata, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(user_id, profile_id, message_id) DO UPDATE SET
+                        role = excluded.role,
+                        content = excluded.content,
+                        embedding = excluded.embedding,
+                        metadata = excluded.metadata,
+                        created_at = excluded.created_at
+                    """,
+                    (
+                        str(uuid.uuid4()),
+                        normalized_user_id,
+                        normalized_profile_id,
+                        message.id,
+                        message.conversation_id,
+                        message.role,
+                        normalized_content,
+                        json.dumps(self._embed(normalized_content)),
+                        json.dumps(metadata) if metadata is not None else None,
+                        message.created_at,
+                    ),
+                )
+                await db.commit()
+
+    async def search_memory_profile(
+        self,
+        *,
+        user_id: str,
+        profile_id: str = "default",
+        query: str,
+        limit: int = 8,
+    ) -> List[Dict[str, Any]]:
+        await self._ensure_db()
+        normalized_user_id = str(user_id or "").strip()
+        normalized_profile_id = str(profile_id or "default").strip() or "default"
+        normalized_query = str(query or "").strip()
+        if not normalized_user_id or not normalized_query:
+            return []
+        qvec = self._embed(normalized_query)
+        async with open_sqlite(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                """
+                SELECT *
+                FROM memory_profile_items
+                WHERE user_id = ? AND profile_id = ?
+                """,
+                (normalized_user_id, normalized_profile_id),
+            ) as cursor:
+                rows = await cursor.fetchall()
+        scored: List[Dict[str, Any]] = []
+        for row in rows:
+            try:
+                embedding = json.loads(row["embedding"])
+            except Exception:
+                continue
+            role = str(row["role"] or "").strip().lower()
+            score = self._cosine(qvec, embedding)
+            role_bonus = 0.08 if role == "user" else 0.02
+            scored.append(
+                {
+                    "id": row["id"],
+                    "message_id": row["message_id"],
+                    "conversation_id": row["conversation_id"],
+                    "role": role,
+                    "content": row["content"],
+                    "created_at": row["created_at"],
+                    "score": score,
+                    "weighted_score": score + role_bonus,
+                }
+            )
+        scored.sort(key=lambda item: (item["weighted_score"], item["score"], item["created_at"]), reverse=True)
+        return scored[: max(1, min(int(limit or 8), 25))]
 
     async def list_messages(self, conversation_id: str, limit: Optional[int] = None) -> List[ChatMessage]:
         await self.get_conversation(conversation_id)

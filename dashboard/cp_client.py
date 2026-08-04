@@ -962,6 +962,18 @@ class CPClient:
         }
         return self._put(f"/v1/chat/conversations/{conversation_id}/tool-access", body)
 
+    def update_conversation_memory_profile(
+        self,
+        conversation_id: str,
+        *,
+        enabled: bool,
+        profile_id: str = "default",
+    ) -> Optional[Dict[str, Any]]:
+        return self._put(
+            f"/v1/chat/conversations/{conversation_id}/memory-profile",
+            {"enabled": bool(enabled), "profile_id": profile_id or "default"},
+        )
+
     # Vault
     def list_vault_items(
         self,

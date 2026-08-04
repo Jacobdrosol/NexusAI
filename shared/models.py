@@ -225,6 +225,7 @@ class Bot(BaseModel):
     assignment_capabilities: Optional[AssignmentCapabilities] = None
     execution_policy: Optional[BotExecutionPolicy] = None
     updated_at: Optional[str] = None
+    memory_profiles_enabled: bool = False
 
 
 class TaskMetadata(BaseModel):
@@ -329,6 +330,7 @@ class Project(BaseModel):
     bot_ids: List[str] = Field(default_factory=list)
     settings_overrides: Optional[Any] = None
     enabled: bool = True
+    memory_profiles_enabled: bool = False
 
 
 class CatalogModel(BaseModel):
@@ -353,6 +355,9 @@ class ChatConversation(BaseModel):
     scope: Literal["global", "project", "bridged"] = "global"
     default_bot_id: Optional[str] = None
     default_model_id: Optional[str] = None
+    owner_user_id: Optional[str] = None
+    memory_profiles_enabled: bool = True
+    memory_profile_id: Optional[str] = "default"
     tool_access_enabled: bool = False
     tool_access_filesystem: bool = False
     tool_access_repo_search: bool = False

@@ -8,13 +8,15 @@ from typing import Any, Dict, Iterable
 
 import requests
 from flask import Blueprint, Response, jsonify, render_template, request, stream_with_context
-from flask_login import login_required
+from flask_login import current_user, login_required
 
 from dashboard.cp_client import get_cp_client
 from dashboard.routes._sse_proxy import proxy_upstream_sse_lines
 from shared.chat_attachments import CHAT_ATTACHMENT_MAX_FILES, CHAT_ATTACHMENT_MAX_TOTAL_BYTES
 
 bp = Blueprint("chat", __name__)
+
+UNSCOPED_PROJECT_FILTER = "__unscoped__"
 
 
 def _task_sort_key(task: dict[str, Any]) -> tuple[int, int, str, str]:
@@ -299,6 +301,17 @@ def _stream_cp_headers(cp) -> dict[str, str]:
     return headers
 
 
+def _current_memory_user_id() -> str | None:
+    email = str(getattr(current_user, "email", "") or "").strip()
+    if email:
+        return email
+    try:
+        value = str(current_user.get_id() or "").strip()
+    except Exception:
+        value = ""
+    return value or None
+
+
 def _json_safe(value: Any) -> Any:
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
@@ -351,6 +364,9 @@ def _normalize_conversation_row(raw: Any) -> dict[str, Any] | None:
     normalized["scope"] = str(raw.get("scope") or "").strip() or "global"
     normalized["default_bot_id"] = str(raw.get("default_bot_id") or "").strip() or None
     normalized["default_model_id"] = str(raw.get("default_model_id") or "").strip() or None
+    normalized["owner_user_id"] = str(raw.get("owner_user_id") or "").strip() or None
+    normalized["memory_profiles_enabled"] = bool(raw.get("memory_profiles_enabled", True))
+    normalized["memory_profile_id"] = str(raw.get("memory_profile_id") or "default").strip() or "default"
     normalized["created_at"] = str(raw.get("created_at") or "").strip() or None
     normalized["updated_at"] = str(raw.get("updated_at") or "").strip() or None
     normalized["archived_at"] = str(raw.get("archived_at") or "").strip() or None
@@ -379,6 +395,8 @@ def _conversation_matches_project(row: dict[str, Any], project_id: str) -> bool:
     primary_id = str(row.get("project_id") or "").strip()
     bridge_ids = {str(item or "").strip() for item in row.get("bridge_project_ids") or []}
     bridge_ids.discard("")
+    if pid == UNSCOPED_PROJECT_FILTER:
+        return not primary_id and not bridge_ids
     return primary_id == pid or pid in bridge_ids
 
 
@@ -596,6 +614,7 @@ def chat_page() -> str:
             conversations=[c for c in conversations if not c.get("archived_at")],
             archived_conversations=[c for c in conversations if c.get("archived_at")],
             active_project_filter=active_project_filter,
+            unscoped_project_filter=UNSCOPED_PROJECT_FILTER,
             selected_conversation=selected,
             messages=messages,
             bots=bots,
@@ -621,6 +640,7 @@ def chat_page() -> str:
             conversations=[],
             archived_conversations=[],
             active_project_filter=active_project_filter,
+            unscoped_project_filter=UNSCOPED_PROJECT_FILTER,
             selected_conversation=None,
             messages=[],
             bots=[],
@@ -654,6 +674,9 @@ def api_create_conversation():
             "scope": data.get("scope", "global"),
             "default_bot_id": data.get("default_bot_id"),
             "default_model_id": data.get("default_model_id"),
+            "owner_user_id": _current_memory_user_id(),
+            "memory_profiles_enabled": bool(data.get("memory_profiles_enabled", True)),
+            "memory_profile_id": data.get("memory_profile_id") or "default",
             "tool_access_enabled": bool(data.get("tool_access_enabled", False)),
             "tool_access_filesystem": bool(data.get("tool_access_filesystem", False)),
             "tool_access_repo_search": bool(data.get("tool_access_repo_search", False)),
@@ -710,6 +733,21 @@ def api_update_conversation_tool_access(conversation_id: str):
     return jsonify(updated)
 
 
+@bp.put("/api/chat/conversations/<conversation_id>/memory-profile")
+@login_required
+def api_update_conversation_memory_profile(conversation_id: str):
+    data: dict[str, Any] = request.get_json(force=True) or {}
+    cp = get_cp_client()
+    updated = cp.update_conversation_memory_profile(
+        conversation_id=conversation_id,
+        enabled=bool(data.get("enabled", True)),
+        profile_id=str(data.get("profile_id") or "default").strip() or "default",
+    )
+    if updated is None:
+        return _cp_error_response(cp, "conversation memory profile update failed")
+    return jsonify(updated)
+
+
 @bp.post("/api/chat/messages")
 @login_required
 def api_send_message():
@@ -726,6 +764,7 @@ def api_send_message():
         {
             "content": content,
             "bot_id": data.get("bot_id"),
+            "user_id": _current_memory_user_id(),
             "attachments": data.get("attachments") or [],
             "context_items": data.get("context_items"),
             "context_item_ids": data.get("context_item_ids"),
@@ -928,6 +967,7 @@ def api_send_message_stream():
     payload = {
         "content": content,
         "bot_id": data.get("bot_id"),
+        "user_id": _current_memory_user_id(),
         "attachments": data.get("attachments") or [],
         "context_items": data.get("context_items"),
         "context_item_ids": data.get("context_item_ids"),

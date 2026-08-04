@@ -232,6 +232,7 @@
       <label for="chat-project-filter" class="mini-note">Filter by project</label>
       <select id="chat-project-filter" class="form-control chat-project-filter">
         <option value="" {% if not active_project_filter %}selected{% endif %}>All projects</option>
+        <option value="{{ unscoped_project_filter }}" {% if active_project_filter == unscoped_project_filter %}selected{% endif %}>Unscoped chats</option>
         {% for p in projects if p.enabled %}
         <option value="{{ p.id }}" {% if active_project_filter == p.id %}selected{% endif %}>{{ p.name }} ({{ p.id }})</option>
         {% endfor %}
@@ -259,7 +260,7 @@
       {% else %}
       <div class="empty">{% if active_project_filter %}No conversations match this project.{% else %}No conversations yet{% endif %}</div>
       {% endfor %}
-      <div class="empty chat-filter-empty" data-filter-empty="active" hidden>No conversations match this project.</div>
+      <div class="empty chat-filter-empty" data-filter-empty="active" hidden>No conversations match this filter.</div>
     </div>
 
     <hr class="chat-divider">
@@ -290,7 +291,7 @@
         {% else %}
         <div class="empty">{% if active_project_filter %}No archived conversations match this project.{% else %}No archived conversations{% endif %}</div>
         {% endfor %}
-        <div class="empty chat-filter-empty" data-filter-empty="archived" hidden>No archived conversations match this project.</div>
+        <div class="empty chat-filter-empty" data-filter-empty="archived" hidden>No archived conversations match this filter.</div>
       </div>
     </details>
 
@@ -352,6 +353,18 @@
       <p class="mini-note">Optional per message. Uses semantic query against synced repo context.</p>
     </div>
     {% endif %}
+    <div class="form-group">
+      <label>Personal Memory</label>
+      <label class="context-item">
+        <input type="checkbox" id="chat-memory-enabled" {% if selected_conversation.memory_profiles_enabled %}checked{% endif %}>
+        <span>Allow this chat to use and build my memory profile</span>
+      </label>
+      <input class="form-control" id="chat-memory-profile-id" value="{{ selected_conversation.memory_profile_id or 'default' }}" aria-label="Memory profile id">
+      <div class="chat-tool-save-wrap">
+        <button type="button" class="btn btn-sm" onclick="saveConversationMemoryProfile()">Save Personal Memory</button>
+      </div>
+      <p class="mini-note">Memory is used only when this chat, the selected bot, and the scoped project all allow it. Unscoped chats ignore the project gate.</p>
+    </div>
     <div class="form-group">
       <label>Chat Tool Access</label>
       <label class="context-item">
@@ -566,8 +579,8 @@
       <div class="form-group">
         <label>Scope</label>
         <select class="form-control" name="scope" id="create-convo-scope">
-          <option value="global" {% if not active_project_filter %}selected{% endif %}>global</option>
-          <option value="project" {% if active_project_filter %}selected{% endif %}>project</option>
+          <option value="global" {% if not active_project_filter or active_project_filter == unscoped_project_filter %}selected{% endif %}>global</option>
+          <option value="project" {% if active_project_filter and active_project_filter != unscoped_project_filter %}selected{% endif %}>project</option>
           <option value="bridged">bridged</option>
         </select>
       </div>
@@ -606,6 +619,14 @@
           <option value="{{ b.id }}">{{ b.name }} ({{ b.id }})</option>
           {% endfor %}
         </select>
+      </div>
+      <div class="form-group">
+        <label>Personal Memory</label>
+        <label class="context-item">
+          <input type="checkbox" id="create-convo-memory-enabled" name="memory_profiles_enabled" checked>
+          <span>Allow this chat to use and build my memory profile</span>
+        </label>
+        <input class="form-control" name="memory_profile_id" value="default" aria-label="Memory profile id">
       </div>
       <div class="form-group">
         <label>Chat Tool Access</label>
@@ -731,6 +752,7 @@
 const selectedConversationId = {{ (selected_conversation.id if selected_conversation else "")|tojson }};
 const selectedConversationProjectId = {{ (selected_conversation.project_id if selected_conversation and selected_conversation.project_id else "")|tojson }};
 const activeProjectFilter = {{ (active_project_filter or "")|tojson }};
+const unscopedProjectFilter = {{ unscoped_project_filter|tojson }};
 const availableProjects = {{ projects|tojson }};
 const initialMessages = {{ messages|tojson }};
 const availableBots = {{ bots|tojson }};
@@ -832,7 +854,10 @@ function applyConversationProjectFilter() {
       .split(',')
       .map((item) => item.trim())
       .filter(Boolean);
-    const matches = !projectFilter || primaryProjectId === projectFilter || bridgeProjectIds.includes(projectFilter);
+    const matches = !projectFilter
+      || (projectFilter === unscopedProjectFilter && !primaryProjectId && bridgeProjectIds.length === 0)
+      || primaryProjectId === projectFilter
+      || bridgeProjectIds.includes(projectFilter);
     row.hidden = !matches;
     const archived = !!row.closest('.chat-archived-list');
     if (matches) {
@@ -1966,6 +1991,26 @@ async function saveConversationToolAccess() {
   window.location.reload();
 }
 
+async function saveConversationMemoryProfile() {
+  if (!selectedConversationId) return;
+  const enabled = !!document.getElementById('chat-memory-enabled')?.checked;
+  const profileId = String(document.getElementById('chat-memory-profile-id')?.value || 'default').trim() || 'default';
+  const res = await fetch('/api/chat/conversations/' + encodeURIComponent(selectedConversationId) + '/memory-profile', {
+    method: 'PUT',
+    headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify({
+      enabled,
+      profile_id: profileId,
+    }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    alert(data.error || 'Failed to update chat memory profile.');
+    return;
+  }
+  window.location.reload();
+}
+
 function syncConversationToolAccessEditor() {
   const enabled = !!document.getElementById('chat-tool-enabled')?.checked;
   const filesystem = document.getElementById('chat-tool-filesystem');
@@ -2252,6 +2297,8 @@ document.getElementById('form-create-convo')?.addEventListener('submit', async f
       bridge_project_ids: bridgeProjectIds,
       scope,
       default_bot_id: fd.get('default_bot_id') || null,
+      memory_profiles_enabled: !!document.getElementById('create-convo-memory-enabled')?.checked,
+      memory_profile_id: fd.get('memory_profile_id') || 'default',
       tool_access_enabled: !!document.getElementById('create-convo-tool-enabled')?.checked,
       tool_access_filesystem: !!document.getElementById('create-convo-tool-filesystem')?.checked,
       tool_access_repo_search: !!document.getElementById('create-convo-tool-repo-search')?.checked
