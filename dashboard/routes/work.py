@@ -12,6 +12,7 @@ from dashboard.work_overview import build_work_overview, manager_id_for_task, pr
 bp = Blueprint("work", __name__)
 
 STOPPABLE_WORK_STATUSES = {"queued", "blocked", "running"}
+LANE_DETAIL_STATUSES = {"queued", "blocked", "running", "failed", "retried"}
 
 
 def _safe_call(fn: Any, *args: Any, **kwargs: Any) -> Any:
@@ -75,6 +76,40 @@ def _stoppable_work_matches(
     if project_id_for_task(task) != project_id:
         return False
     return not manager_id or manager_id_for_task(task) == manager_id
+
+
+def _lane_work_matches(
+    task: dict[str, Any],
+    *,
+    project_id: str,
+    manager_id: str,
+) -> bool:
+    status = str(task.get("status") or "").strip().lower()
+    if status not in LANE_DETAIL_STATUSES:
+        return False
+    if project_id_for_task(task) != project_id:
+        return False
+    return not manager_id or manager_id_for_task(task) == manager_id
+
+
+def _compact_lane_task(task: dict[str, Any]) -> dict[str, Any]:
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    error = task.get("error") if isinstance(task.get("error"), dict) else None
+    return {
+        "id": str(task.get("id") or ""),
+        "bot_id": str(task.get("bot_id") or ""),
+        "status": str(task.get("status") or ""),
+        "project_id": project_id_for_task(task),
+        "manager_id": manager_id_for_task(task),
+        "created_at": str(task.get("created_at") or ""),
+        "updated_at": str(task.get("updated_at") or ""),
+        "orchestration_id": str(metadata.get("orchestration_id") or ""),
+        "step_id": str(metadata.get("step_id") or ""),
+        "source": str(metadata.get("source") or ""),
+        "has_error": bool(task.get("has_error")),
+        "error_code": str((error or {}).get("code") or ""),
+        "error_message": str((error or {}).get("message") or ""),
+    }
 
 
 @bp.post("/api/work/stop")
@@ -162,6 +197,66 @@ def api_stop_work():
             "failed": failed,
         }
     ), (200 if not failed else 207)
+
+
+@bp.get("/api/work/lane")
+@login_required
+def api_work_lane():
+    project_id = str(request.args.get("project_id") or "").strip()
+    manager_id = str(request.args.get("manager_id") or "").strip()
+    if not project_id:
+        return jsonify({"error": "project_id is required."}), 400
+    try:
+        limit = min(max(int(request.args.get("limit", 50)), 1), 200)
+    except (TypeError, ValueError):
+        return jsonify({"error": "limit must be an integer between 1 and 200."}), 400
+
+    cp = get_cp_client()
+    tasks = _safe_call(cp.list_tasks, limit=1000, include_content=False, timeout=2.0)
+    if tasks is None:
+        return jsonify({"error": "control plane unavailable"}), 503
+    holds_payload = _safe_call(cp.list_work_dispatch_holds, timeout=1.0) or {}
+    holds = holds_payload.get("holds") if isinstance(holds_payload, dict) else []
+    hold = None
+    if isinstance(holds, list):
+        for row in holds:
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("project_id") or "").strip() != project_id:
+                continue
+            hold_manager = str(row.get("manager_id") or "").strip()
+            if (manager_id and hold_manager == manager_id) or (not manager_id and not hold_manager):
+                hold = row
+                break
+
+    matches = [
+        task
+        for task in tasks
+        if isinstance(task, dict)
+        and _lane_work_matches(task, project_id=project_id, manager_id=manager_id)
+    ]
+    matches.sort(key=lambda task: str(task.get("updated_at") or task.get("created_at") or ""), reverse=True)
+    counts: dict[str, int] = {}
+    for task in matches:
+        status = str(task.get("status") or "unknown").strip().lower() or "unknown"
+        counts[status] = counts.get(status, 0) + 1
+
+    return jsonify(
+        {
+            "project_id": project_id,
+            "manager_id": manager_id,
+            "count": len(matches),
+            "counts": counts,
+            "stoppable_count": sum(
+                1
+                for task in matches
+                if str(task.get("status") or "").strip().lower() in STOPPABLE_WORK_STATUSES
+            ),
+            "hold": hold,
+            "tasks": [_compact_lane_task(task) for task in matches[:limit]],
+            "truncated": len(matches) > limit,
+        }
+    )
 
 
 @bp.post("/api/work/hold")

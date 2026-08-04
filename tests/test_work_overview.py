@@ -183,6 +183,8 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"Release Project" in resp.data
     assert b"dry_run: true" in resp.data
     assert b"Stop preview failed" in resp.data
+    assert b"Lane Details" in resp.data
+    assert b"showLaneDetails" in resp.data
     assert b"Stop Project" in resp.data
     assert b"Stop Lane" in resp.data
 
@@ -261,6 +263,79 @@ def test_work_stop_api_dry_run_filters_stoppable_project_manager_tasks(dashboard
     assert data["status"] == "dry_run"
     assert data["matched_task_count"] == 2
     assert [task["id"] for task in data["tasks"]] == ["running-target", "queued-target"]
+
+
+def test_work_lane_api_returns_bounded_project_manager_task_details(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_tasks(self, **kwargs):
+            assert kwargs["include_content"] is False
+            return [
+                {
+                    "id": "running-target",
+                    "bot_id": "lesson-writer",
+                    "status": "running",
+                    "created_at": "2026-08-04T10:00:00+00:00",
+                    "updated_at": "2026-08-04T10:05:00+00:00",
+                    "metadata": {
+                        "project_id": "globeiq",
+                        "root_pm_bot_id": "manager-a",
+                        "orchestration_id": "orch-1",
+                        "step_id": "lesson_write",
+                    },
+                },
+                {
+                    "id": "failed-target",
+                    "bot_id": "lesson-qc",
+                    "status": "failed",
+                    "created_at": "2026-08-04T10:00:00+00:00",
+                    "updated_at": "2026-08-04T10:06:00+00:00",
+                    "metadata": {"project_id": "globeiq", "root_pm_bot_id": "manager-a"},
+                    "has_error": True,
+                    "error": {"code": "qc_failed", "message": "needs repair"},
+                },
+                {
+                    "id": "completed-ignore",
+                    "bot_id": "lesson-writer",
+                    "status": "completed",
+                    "metadata": {"project_id": "globeiq", "root_pm_bot_id": "manager-a"},
+                },
+                {
+                    "id": "other-manager-ignore",
+                    "bot_id": "lesson-writer",
+                    "status": "running",
+                    "metadata": {"project_id": "globeiq", "root_pm_bot_id": "manager-b"},
+                },
+            ]
+
+        def list_work_dispatch_holds(self, **kwargs):
+            return {"holds": [{"id": "globeiq::manager-a", "project_id": "globeiq", "manager_id": "manager-a", "reason": "checkpoint"}]}
+
+    with patch("dashboard.routes.work.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/api/work/lane?project_id=globeiq&manager_id=manager-a&limit=1")
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["count"] == 2
+    assert data["counts"] == {"failed": 1, "running": 1}
+    assert data["stoppable_count"] == 1
+    assert data["hold"]["reason"] == "checkpoint"
+    assert data["truncated"] is True
+    assert len(data["tasks"]) == 1
+    assert data["tasks"][0]["id"] == "failed-target"
+
+
+def test_work_lane_api_rejects_missing_project_or_invalid_limit(dashboard_client):
+    _login_admin(dashboard_client)
+
+    missing_project = dashboard_client.get("/api/work/lane")
+    bad_limit = dashboard_client.get("/api/work/lane?project_id=globeiq&limit=wide")
+
+    assert missing_project.status_code == 400
+    assert "project_id is required" in missing_project.get_data(as_text=True)
+    assert bad_limit.status_code == 400
+    assert "limit must be an integer" in bad_limit.get_data(as_text=True)
 
 
 def test_work_stop_api_cancels_selected_project_work_only(dashboard_client):

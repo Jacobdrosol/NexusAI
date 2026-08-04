@@ -236,6 +236,11 @@
                 {% endfor %}
               </td>
               <td>
+                <button class="btn btn-sm"
+                        type="button"
+                        onclick="showLaneDetails({project_id: {{ project.project_id|tojson }}, manager_id: {{ manager.manager_id|tojson }}, label: {{ manager.manager_name|tojson }}})">
+                  Details
+                </button>
                 {% if manager.held and manager.hold and manager.hold.manager_id %}
                 <button class="btn btn-sm"
                         type="button"
@@ -340,6 +345,16 @@
     </section>
   </aside>
 </div>
+<section class="panel" id="lane-detail-panel" style="display:none;margin-top:1rem;">
+  <div class="page-header" style="margin-bottom:0.75rem;">
+    <div>
+      <h2 class="panel-title" id="lane-detail-title">Lane Details</h2>
+      <div class="mini-note" id="lane-detail-meta"></div>
+    </div>
+    <button class="btn btn-sm" type="button" onclick="hideLaneDetails()">Close</button>
+  </div>
+  <div id="lane-detail-body" class="empty">No lane selected.</div>
+</section>
 {% endblock %}
 
 {% block scripts %}
@@ -373,6 +388,74 @@ function setWorkHold(scope) {
     window.location.reload();
   })
   .catch(function(e) { alert('Network error: ' + e); });
+}
+
+function escapeText(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function hideLaneDetails() {
+  document.getElementById('lane-detail-panel').style.display = 'none';
+}
+
+function showLaneDetails(scope) {
+  var panel = document.getElementById('lane-detail-panel');
+  var title = document.getElementById('lane-detail-title');
+  var meta = document.getElementById('lane-detail-meta');
+  var body = document.getElementById('lane-detail-body');
+  title.textContent = scope.label || scope.manager_id || 'Lane Details';
+  meta.textContent = 'Loading lane details...';
+  body.className = 'empty';
+  body.textContent = 'Loading';
+  panel.style.display = 'block';
+  var params = new URLSearchParams({
+    project_id: scope.project_id,
+    manager_id: scope.manager_id || '',
+    limit: '50'
+  });
+  fetch('/api/work/lane?' + params.toString())
+  .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
+  .then(function(res) {
+    if (!res.ok) {
+      meta.textContent = '';
+      body.className = 'alert alert-error';
+      body.textContent = res.data.error || 'Unable to load lane details.';
+      return;
+    }
+    var data = res.data;
+    var counts = data.counts || {};
+    var countParts = Object.keys(counts).sort().map(function(key) {
+      return key + ': ' + counts[key];
+    });
+    meta.textContent = 'Project ' + data.project_id + ' | Manager ' + (data.manager_id || 'all') + ' | ' + data.count + ' active/problem task(s)' + (data.truncated ? ' | truncated' : '');
+    var holdText = data.hold ? '<div class="alert alert-warning" style="margin-bottom:0.75rem;">Dispatch held: ' + escapeText(data.hold.reason || 'operator hold') + '</div>' : '';
+    var rows = (data.tasks || []).map(function(task) {
+      return '<tr>' +
+        '<td><code>' + escapeText(task.id.slice(0, 12)) + (task.id.length > 12 ? '...' : '') + '</code></td>' +
+        '<td><code>' + escapeText(task.bot_id) + '</code></td>' +
+        '<td><span class="badge badge-' + escapeText(task.status) + '">' + escapeText(task.status) + '</span></td>' +
+        '<td>' + escapeText(task.step_id || task.source || '') + '</td>' +
+        '<td>' + escapeText(task.updated_at || '') + '</td>' +
+        '<td>' + escapeText(task.error_code || task.error_message || '') + '</td>' +
+      '</tr>';
+    }).join('');
+    body.className = '';
+    body.innerHTML = holdText +
+      '<div class="mini-note" style="margin-bottom:0.75rem;">' + escapeText(countParts.join(' | ') || 'No active/problem tasks') + '</div>' +
+      '<div class="table-wrap"><table><thead><tr><th>Task</th><th>Bot</th><th>Status</th><th>Step</th><th>Updated</th><th>Error</th></tr></thead><tbody>' +
+      (rows || '<tr><td colspan="6" class="empty">No active, waiting, or problem tasks in this lane.</td></tr>') +
+      '</tbody></table></div>';
+  })
+  .catch(function(e) {
+    meta.textContent = '';
+    body.className = 'alert alert-error';
+    body.textContent = 'Network error: ' + e;
+  });
 }
 
 function stopWork(scope) {
