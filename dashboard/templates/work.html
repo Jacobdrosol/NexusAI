@@ -1122,6 +1122,7 @@ function showLaneDetails(scope) {
         '<td><span class="badge badge-' + escapeText(task.status) + '">' + escapeText(task.status) + '</span></td>' +
         '<td><code>' + escapeText(task.worker_id || 'unknown') + '</code><div class="mini-note">' + escapeText([task.provider, task.model].filter(Boolean).join(' / ')) + '</div></td>' +
         '<td>' + escapeText(task.step_id || task.source || '') + '</td>' +
+        '<td>' + escapeText(task.age_label || 'unknown') + (task.stale ? '<div><span class="badge badge-yellow">stale</span></div>' : '') + '<div class="mini-note">' + escapeText(task.age_basis || '') + '</div></td>' +
         '<td>' + escapeText(task.updated_at || '') + '</td>' +
         '<td>' + escapeText(errorParts.join(' | ')) + '</td>' +
       '</tr>';
@@ -1129,8 +1130,8 @@ function showLaneDetails(scope) {
     body.className = '';
     body.innerHTML = holdText +
       '<div class="mini-note" style="margin-bottom:0.75rem;">' + escapeText(countParts.join(' | ') || 'No active/problem tasks') + '</div>' +
-      '<div class="table-wrap"><table><thead><tr><th>Task</th><th>Bot</th><th>Status</th><th>Worker</th><th>Step</th><th>Updated</th><th>Error</th></tr></thead><tbody>' +
-      (rows || '<tr><td colspan="7" class="empty">No active, waiting, or problem tasks in this lane.</td></tr>') +
+      '<div class="table-wrap"><table><thead><tr><th>Task</th><th>Bot</th><th>Status</th><th>Worker</th><th>Step</th><th>Age</th><th>Updated</th><th>Error</th></tr></thead><tbody>' +
+      (rows || '<tr><td colspan="8" class="empty">No active, waiting, or problem tasks in this lane.</td></tr>') +
       '</tbody></table></div>';
   })
   .catch(function(e) {
@@ -1184,6 +1185,7 @@ function showOrchestrationDetails(scope) {
         '<td><code>' + escapeText(task.manager_id || '') + '</code></td>' +
         '<td><code>' + escapeText(task.worker_id || 'unknown') + '</code><div class="mini-note">' + escapeText([task.provider, task.model].filter(Boolean).join(' / ')) + '</div></td>' +
         '<td>' + escapeText(task.step_id || task.source || '') + '</td>' +
+        '<td>' + escapeText(task.age_label || 'unknown') + (task.stale ? '<div><span class="badge badge-yellow">stale</span></div>' : '') + '<div class="mini-note">' + escapeText(task.age_basis || '') + '</div></td>' +
         '<td>' + escapeText(task.updated_at || '') + '</td>' +
         '<td>' + escapeText(errorParts.join(' | ')) + '</td>' +
       '</tr>';
@@ -1191,8 +1193,8 @@ function showOrchestrationDetails(scope) {
     body.className = '';
     body.innerHTML =
       '<div class="mini-note" style="margin-bottom:0.75rem;">' + escapeText(countParts.join(' | ') || 'No tasks') + '</div>' +
-      '<div class="table-wrap"><table><thead><tr><th>Task</th><th>Bot</th><th>Status</th><th>Project</th><th>Manager</th><th>Worker</th><th>Step</th><th>Updated</th><th>Error</th></tr></thead><tbody>' +
-      (rows || '<tr><td colspan="9" class="empty">No tasks found for this run in the loaded window.</td></tr>') +
+      '<div class="table-wrap"><table><thead><tr><th>Task</th><th>Bot</th><th>Status</th><th>Project</th><th>Manager</th><th>Worker</th><th>Step</th><th>Age</th><th>Updated</th><th>Error</th></tr></thead><tbody>' +
+      (rows || '<tr><td colspan="10" class="empty">No tasks found for this run in the loaded window.</td></tr>') +
       '</tbody></table></div>';
   })
   .catch(function(e) {

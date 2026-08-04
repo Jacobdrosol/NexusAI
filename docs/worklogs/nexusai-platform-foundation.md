@@ -144,6 +144,7 @@ Current item: make Work Overview bot usage pressure actionable with bot hourly c
 - Added Work Overview Bot Usage Pressure actions to cap a bot at its current measured usage or clear an existing override.
 - Added Bot Cap Audit visibility to Work Overview from the existing settings audit log so cap changes show who changed them, when they changed, how many overrides remain, and which bots changed.
 - Added Token Governor Queue Caps visibility to Work Overview so loaded queued tasks are compared against configured bot, project, and manager queued-task caps.
+- Added age and stale markers to Work Overview lane and orchestration drilldowns so operators can quickly identify old running, queued, or blocked task rows.
 
 ## Validation Plan
 
@@ -182,6 +183,7 @@ Current item: make Work Overview bot usage pressure actionable with bot hourly c
 - Added Work Overview assertions proving route-gap attention counts only active/problem worker-attribution gaps while waiting unknown rows remain visible separately.
 - Added Work Overview tests proving bot-cap audit rows are returned by the API, rendered on the page, and mutating Work APIs reject non-admin users.
 - Added Work Overview tests proving token-governor queue cap pressure is returned by the API and rendered when bot and manager queues reach configured caps.
+- Added Work Overview API and page tests proving drilldown task rows include age basis, age seconds, stale flags, and an Age column.
 - Added Work Overview API assertions proving lane and orchestration drilldowns expose execution-provenance worker/backend fields without changing their bounded summary behavior.
 - Added Work Overview assertions proving attention lanes identify the affected project-manager lane and bounded reason labels.
 - Added Work Overview assertions proving Attention Lanes render direct review/stop actions and preserve project-hold scope.

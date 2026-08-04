@@ -2,13 +2,25 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from typing import Any
 
 from flask import Blueprint, abort, jsonify, render_template, request
 from flask_login import current_user, login_required
 
 from dashboard.cp_client import get_cp_client
-from dashboard.work_overview import build_work_overview, manager_id_for_task, project_id_for_task
+from dashboard.work_overview import (
+    ACTIVE_STATUSES,
+    STALE_ACTIVE_SECONDS,
+    STALE_WAITING_SECONDS,
+    WAITING_STATUSES,
+    _age_label,
+    _age_seconds,
+    _parse_datetime,
+    build_work_overview,
+    manager_id_for_task,
+    project_id_for_task,
+)
 from shared.settings_manager import SettingsManager
 
 bp = Blueprint("work", __name__)
@@ -504,14 +516,33 @@ def _compact_lane_task(task: dict[str, Any]) -> dict[str, Any]:
     provenance = metadata.get("execution_provenance") if isinstance(metadata.get("execution_provenance"), dict) else {}
     error_summary = task.get("error_summary") if isinstance(task.get("error_summary"), dict) else {}
     error = task.get("error") if isinstance(task.get("error"), dict) else {}
+    status = str(task.get("status") or "")
+    status_key = status.strip().lower()
+    created_at = _parse_datetime(task.get("created_at"))
+    updated_at = _parse_datetime(task.get("updated_at")) or created_at
+    now = datetime.now(timezone.utc)
+    active_age_seconds = _age_seconds(updated_at, now)
+    waiting_age_seconds = _age_seconds(created_at or updated_at, now)
+    if status_key in WAITING_STATUSES:
+        age_seconds = waiting_age_seconds
+        age_basis = "created_at"
+        stale = waiting_age_seconds is None or waiting_age_seconds >= STALE_WAITING_SECONDS
+    else:
+        age_seconds = active_age_seconds
+        age_basis = "updated_at"
+        stale = status_key in ACTIVE_STATUSES and (active_age_seconds is None or active_age_seconds >= STALE_ACTIVE_SECONDS)
     return {
         "id": str(task.get("id") or ""),
         "bot_id": str(task.get("bot_id") or ""),
-        "status": str(task.get("status") or ""),
+        "status": status,
         "project_id": project_id_for_task(task),
         "manager_id": manager_id_for_task(task),
         "created_at": str(task.get("created_at") or ""),
         "updated_at": str(task.get("updated_at") or ""),
+        "age_seconds": age_seconds,
+        "age_label": _age_label(age_seconds),
+        "age_basis": age_basis,
+        "stale": stale,
         "orchestration_id": str(metadata.get("orchestration_id") or ""),
         "step_id": str(metadata.get("step_id") or ""),
         "source": str(metadata.get("source") or ""),

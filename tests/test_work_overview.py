@@ -563,6 +563,7 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"Stop preview failed" in resp.data
     assert b"Lane Details" in resp.data
     assert b"showLaneDetails" in resp.data
+    assert b"<th>Age</th>" in resp.data
     assert b"Work snapshot" in resp.data
     assert b"3 task summaries loaded" in resp.data
     assert b"Snapshot Health" in resp.data
@@ -1022,7 +1023,7 @@ def test_work_orchestration_api_returns_bounded_run_task_details(dashboard_clien
                     "bot_id": "lesson-writer",
                     "status": "running",
                     "created_at": "2026-08-04T10:00:00+00:00",
-                    "updated_at": "2026-08-04T10:05:00+00:00",
+                    "updated_at": "2000-01-01T00:00:00+00:00",
                     "metadata": {
                         "project_id": "globeiq",
                         "root_pm_bot_id": "manager-a",
@@ -1083,6 +1084,9 @@ def test_work_orchestration_api_returns_bounded_run_task_details(dashboard_clien
     assert running["backend_type"] == "browser"
     assert running["provider"] == "browser"
     assert running["model"] == "browser-ui"
+    assert running["age_basis"] == "updated_at"
+    assert running["age_seconds"] >= 3600
+    assert running["stale"] is True
     assert fake.request["orchestration_id"] == "orch-target"
     assert fake.request["include_content"] is False
     assert fake.request["limit"] == 1000
@@ -1213,7 +1217,7 @@ def test_work_lane_api_returns_bounded_project_manager_task_details(dashboard_cl
                     "bot_id": "lesson-writer",
                     "status": "running",
                     "created_at": "2026-08-04T10:00:00+00:00",
-                    "updated_at": "2026-08-04T10:05:00+00:00",
+                    "updated_at": "2000-01-01T00:00:00+00:00",
                     "metadata": {
                         "project_id": "globeiq",
                         "root_pm_bot_id": "manager-a",
@@ -1277,6 +1281,9 @@ def test_work_lane_api_returns_bounded_project_manager_task_details(dashboard_cl
     assert running["backend_type"] == "browser"
     assert running["provider"] == "browser"
     assert running["model"] == "browser-ui"
+    assert running["age_basis"] == "updated_at"
+    assert running["age_seconds"] >= 3600
+    assert running["stale"] is True
 
 
 def test_work_lane_api_rejects_missing_project_or_invalid_limit(dashboard_client):
