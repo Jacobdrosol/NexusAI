@@ -6,7 +6,7 @@ Improve NexusAI one scoped platform foundation at a time so it can become the pr
 
 ## Current Scope
 
-Current item: add enforceable token-governor caps by project and manager, building on the Work Overview usage buckets.
+Current item: add operator-facing token-governor controls so project/manager safety limits can be tuned from the platform.
 
 ## Completion Criteria For This Item
 
@@ -16,6 +16,8 @@ Current item: add enforceable token-governor caps by project and manager, buildi
 - Token usage is visible by project, manager, and provider/model for the current operational window.
 - Metered LLM work can be capped by project and manager at admission time.
 - Metered LLM dispatch reserves project and manager budgets so queued work cannot burst past configured limits.
+- Admins can view and update token-governor limits from a dedicated Settings tab without editing env values.
+- The token-governor controls expose live one-hour governor status when the control plane is reachable.
 - Page render uses bounded control-plane calls and does not reintroduce slow navigation.
 - Focused tests cover grouping behavior and dashboard rendering.
 - Documentation describes the purpose, data flow, and limitations.
@@ -40,6 +42,8 @@ Current item: add enforceable token-governor caps by project and manager, buildi
 - Extended token governor status to expose project/manager limits.
 - Added project and manager budget checks during task admission.
 - Added scheduler-side project and manager token reservation so eligible queued tasks are selected within configured limits.
+- Added a dedicated Settings tab for token-governor controls.
+- Added `/api/settings/token-governor` GET/PUT endpoints that whitelist governor keys, normalize valid values, reject invalid values, and include live status when available.
 
 ## Validation Plan
 
@@ -47,6 +51,7 @@ Current item: add enforceable token-governor caps by project and manager, buildi
 - Added dashboard route test proving the page renders project and manager groupings.
 - Added task-manager test proving usage grouping by project, manager, and provider/model.
 - Added task-manager tests proving project queued-task rejection, manager hourly rejection after recorded usage, and scheduler project-budget reservation.
+- Added dashboard tests proving the token-governor Settings tab renders, the API reports settings/live status, valid updates are normalized, and invalid updates are rejected.
 - Run focused pytest coverage for new route, task summaries, and dashboard smoke where applicable.
 - After deployment, measure route render time and verify no fresh 500 or slow-request logs.
 
@@ -56,3 +61,4 @@ Current item: add enforceable token-governor caps by project and manager, buildi
 - “Manager” may be inferred until all manager-created tasks consistently stamp `root_pm_bot_id`.
 - Project and manager caps only apply to metered LLM providers. Tool/browser-only workers remain governed by their existing concurrency controls.
 - Token caps use measured usage plus configured per-task estimates, so estimates must be tuned per bot for the best balance between throughput and safety.
+- Environment variables still override setting values in the task manager. The Settings tab is the normal runtime control, but deployment environment overrides must be checked when a saved value appears ineffective.

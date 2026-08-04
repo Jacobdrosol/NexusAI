@@ -25,6 +25,13 @@
   </button>
   {% endfor %}
   <button class="tab-btn"
+          data-target="section-token-governor"
+          onclick="switchTab(this); refreshTokenGovernor();"
+          style="padding:0.4rem 1rem;border-radius:20px;border:1px solid #2d3045;
+                 background:#1a1d27;color:#e0e0e0;cursor:pointer;font-size:0.85rem;transition:background 0.2s;">
+    Token Governor
+  </button>
+  <button class="tab-btn"
           data-target="section-api-keys"
           onclick="switchTab(this)"
           style="padding:0.4rem 1rem;border-radius:20px;border:1px solid #2d3045;
@@ -144,6 +151,82 @@
   </form>
 </section>
 {% endfor %}
+
+<!-- Token Governor -->
+<section id="section-token-governor"
+         style="display:none;background:#1a1d27;border-radius:8px;padding:1.5rem;margin-bottom:1.5rem;border:1px solid #2d3045;">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:1rem;flex-wrap:wrap;margin-bottom:1rem;">
+    <div>
+      <h2 style="font-size:1.1rem;margin:0 0 0.25rem;color:#f0f0f0;">Token Governor</h2>
+      <p style="color:#a0aec0;font-size:0.85rem;margin:0;">
+        Control metered LLM work with global, bot, project, manager, queue, and concurrency caps.
+      </p>
+    </div>
+    <button class="btn" type="button" onclick="refreshTokenGovernor()">Refresh Status</button>
+  </div>
+
+  {% set tg = token_governor_status or {} %}
+  {% set tg_limits = tg.limits or {} %}
+  {% set tg_current = tg.current or {} %}
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:0.75rem;margin-bottom:1.25rem;">
+    <div style="background:#12141e;border:1px solid #2d3045;border-radius:6px;padding:0.85rem;">
+      <div class="mini-note">State</div>
+      <div id="tg-state" style="font-size:1.15rem;font-weight:700;">{{ "Enabled" if tg.enabled else "Disabled" }}</div>
+    </div>
+    <div style="background:#12141e;border:1px solid #2d3045;border-radius:6px;padding:0.85rem;">
+      <div class="mini-note">Hourly Remaining</div>
+      <div id="tg-global-remaining" style="font-size:1.15rem;font-weight:700;">
+        {% if tg_current.global_hourly_remaining is not none %}
+        {{ "{:,}".format(tg_current.global_hourly_remaining or 0) }}
+        {% else %}
+        No cap
+        {% endif %}
+      </div>
+    </div>
+    <div style="background:#12141e;border:1px solid #2d3045;border-radius:6px;padding:0.85rem;">
+      <div class="mini-note">Running LLM Tasks</div>
+      <div id="tg-running-llm" style="font-size:1.15rem;font-weight:700;">
+        {{ tg_current.running_llm_tasks or 0 }} / {{ tg_limits.llm_concurrency or "No cap" }}
+      </div>
+    </div>
+    <div style="background:#12141e;border:1px solid #2d3045;border-radius:6px;padding:0.85rem;">
+      <div class="mini-note">Reserve / Task</div>
+      <div id="tg-estimate" style="font-size:1.15rem;font-weight:700;">{{ "{:,}".format(tg_limits.estimated_tokens_per_task or 0) }}</div>
+    </div>
+  </div>
+
+  <form id="form-token-governor" onsubmit="saveTokenGovernor(event)">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:1rem;">
+      {% for s in token_governor_settings %}
+      <div class="form-group">
+        <label for="tg-field-{{ s.key }}"
+               style="display:block;font-size:0.85rem;font-weight:600;color:#a0aec0;margin-bottom:0.35rem;">
+          {{ s.label or s.key }}
+        </label>
+        {% if s.value_type == "bool" %}
+        <label style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;">
+          <input type="checkbox" id="tg-field-{{ s.key }}" name="{{ s.key }}"
+                 {% if s.value == "true" or s.value == True %}checked{% endif %}
+                 style="width:16px;height:16px;accent-color:#7c3aed;">
+          <span style="font-size:0.85rem;color:#718096;">Enabled</span>
+        </label>
+        {% elif s.value_type == "json" %}
+        <textarea id="tg-field-{{ s.key }}" name="{{ s.key }}" rows="4"
+                  class="form-control"
+                  style="font-family:monospace;resize:vertical;">{{ s.value }}</textarea>
+        {% else %}
+        <input type="number" id="tg-field-{{ s.key }}" name="{{ s.key }}"
+               value="{{ s.value }}" min="0" step="1" class="form-control">
+        {% endif %}
+        {% if s.description %}
+        <p style="font-size:0.78rem;color:#718096;margin-top:0.3rem;">{{ s.description }}</p>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    <button type="submit" class="btn btn-primary">Save Token Governor</button>
+  </form>
+</section>
 
 <!-- API Keys -->
 <section id="section-api-keys"
@@ -679,6 +762,85 @@ function saveSection(evt, categoryId) {
     } else {
       showToast('Error: ' + (res.data.error || 'Save failed'), false);
     }
+  })
+  .catch(function(e) { showToast('Network error: ' + e, false); });
+}
+
+// ---------------------------------------------------------------------------
+// Token governor controls
+// ---------------------------------------------------------------------------
+function formatInt(value) {
+  var parsed = Number(value || 0);
+  if (!Number.isFinite(parsed)) return '0';
+  return Math.trunc(parsed).toLocaleString();
+}
+
+function applyTokenGovernorStatus(status) {
+  status = status || {};
+  var limits = status.limits || {};
+  var current = status.current || {};
+  var state = document.getElementById('tg-state');
+  var remaining = document.getElementById('tg-global-remaining');
+  var running = document.getElementById('tg-running-llm');
+  var estimate = document.getElementById('tg-estimate');
+  if (state) state.textContent = status.enabled ? 'Enabled' : 'Disabled';
+  if (remaining) {
+    remaining.textContent = current.global_hourly_remaining == null ? 'No cap' : formatInt(current.global_hourly_remaining);
+  }
+  if (running) {
+    running.textContent = formatInt(current.running_llm_tasks) + ' / ' + (limits.llm_concurrency || 'No cap');
+  }
+  if (estimate) estimate.textContent = formatInt(limits.estimated_tokens_per_task);
+}
+
+function applyTokenGovernorSettings(settings) {
+  (settings || []).forEach(function(setting) {
+    var el = document.getElementById('tg-field-' + setting.key);
+    if (!el) return;
+    if (el.type === 'checkbox') {
+      el.checked = setting.value === true || String(setting.value).toLowerCase() === 'true';
+    } else {
+      el.value = setting.value == null ? '' : setting.value;
+    }
+  });
+}
+
+function refreshTokenGovernor() {
+  fetch('/api/settings/token-governor', {headers: {'X-CSRFToken': _csrfToken}})
+    .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
+    .then(function(res) {
+      if (!res.ok) {
+        showToast('Failed to refresh token governor', false);
+        return;
+      }
+      applyTokenGovernorSettings(res.data.settings || []);
+      applyTokenGovernorStatus(res.data.status || {});
+    })
+    .catch(function(e) { showToast('Network error: ' + e, false); });
+}
+
+function saveTokenGovernor(evt) {
+  evt.preventDefault();
+  var payload = {};
+  var form = document.getElementById('form-token-governor');
+  form.querySelectorAll('input, textarea').forEach(function(el) {
+    if (!el.name) return;
+    payload[el.name] = el.type === 'checkbox' ? el.checked : el.value;
+  });
+  fetch('/api/settings/token-governor', {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json', 'X-CSRFToken': _csrfToken},
+    body: JSON.stringify(payload)
+  })
+  .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
+  .then(function(res) {
+    if (!res.ok) {
+      showToast('Error: ' + (res.data.error || 'Save failed'), false);
+      return;
+    }
+    applyTokenGovernorSettings(res.data.settings || []);
+    applyTokenGovernorStatus(res.data.token_governor || {});
+    showToast('Saved token governor settings', true);
   })
   .catch(function(e) { showToast('Network error: ' + e, false); });
 }

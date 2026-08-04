@@ -56,6 +56,23 @@ _CATEGORY_LABELS: Dict[str, str] = {
     "advanced": "Advanced",
 }
 
+_TOKEN_GOVERNOR_SETTING_KEYS: tuple[str, ...] = (
+    "token_governor_enabled",
+    "token_governor_global_hourly_limit",
+    "token_governor_bot_hourly_limit",
+    "token_governor_project_hourly_limit",
+    "token_governor_manager_hourly_limit",
+    "token_governor_llm_concurrency",
+    "token_governor_estimated_tokens_per_task",
+    "token_governor_bot_estimates",
+    "token_governor_max_queued_llm_tasks_per_bot",
+    "token_governor_max_queued_llm_tasks_per_project",
+    "token_governor_max_queued_llm_tasks_per_manager",
+)
+_TOKEN_GOVERNOR_BOOL_KEYS = {"token_governor_enabled"}
+_TOKEN_GOVERNOR_JSON_KEYS = {"token_governor_bot_estimates"}
+_TOKEN_GOVERNOR_INT_KEYS = set(_TOKEN_GOVERNOR_SETTING_KEYS) - _TOKEN_GOVERNOR_BOOL_KEYS - _TOKEN_GOVERNOR_JSON_KEYS
+
 
 def _get_mgr() -> SettingsManager:
     """Return the shared SettingsManager singleton."""
@@ -128,6 +145,78 @@ def _compose_core_args() -> list[str]:
         "-f",
         "docker-compose.yml",
     ]
+
+
+def _token_governor_settings_view(mgr: SettingsManager) -> list[Dict[str, Any]]:
+    all_settings = mgr.get_all(mask_secrets=False)
+    rows: list[Dict[str, Any]] = []
+    for key in _TOKEN_GOVERNOR_SETTING_KEYS:
+        meta = all_settings.get(key)
+        if not isinstance(meta, dict):
+            continue
+        rows.append({"key": key, **meta})
+    return rows
+
+
+def _coerce_token_governor_setting(key: str, value: Any) -> Any:
+    if key in _TOKEN_GOVERNOR_BOOL_KEYS:
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        normalized = str(value or "").strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return "true"
+        if normalized in {"false", "0", "no", "off", ""}:
+            return "false"
+        raise ValueError(f"{key} must be true or false")
+
+    if key in _TOKEN_GOVERNOR_INT_KEYS:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{key} must be a non-negative integer") from exc
+        if parsed < 0:
+            raise ValueError(f"{key} must be a non-negative integer")
+        return str(parsed)
+
+    if key in _TOKEN_GOVERNOR_JSON_KEYS:
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value or "{}")
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"{key} must be a JSON object") from exc
+        else:
+            parsed = value
+        if not isinstance(parsed, dict):
+            raise ValueError(f"{key} must be a JSON object")
+        coerced: dict[str, int] = {}
+        for bot_id, estimate in parsed.items():
+            bot_key = str(bot_id or "").strip()
+            if not bot_key:
+                continue
+            try:
+                estimate_int = int(estimate)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"{key} values must be positive integers") from exc
+            if estimate_int <= 0:
+                raise ValueError(f"{key} values must be positive integers")
+            coerced[bot_key] = estimate_int
+        return json.dumps(coerced, sort_keys=True)
+
+    raise ValueError(f"Unsupported token governor setting: {key}")
+
+
+def _token_governor_live_status() -> dict[str, Any] | None:
+    try:
+        from dashboard.cp_client import get_cp_client
+
+        usage = get_cp_client().task_usage(hours=1, limit_bots=1, timeout=1.0)
+    except Exception:
+        logger.exception("Failed to load token governor live status")
+        return None
+    if not isinstance(usage, dict):
+        return None
+    status = usage.get("token_governor")
+    return status if isinstance(status, dict) else None
 
 
 def _compose_project_name() -> str:
@@ -744,6 +833,8 @@ def settings_page() -> str:
     return render_template(
         "settings.html",
         groups=groups,
+        token_governor_settings=_token_governor_settings_view(mgr),
+        token_governor_status=_token_governor_live_status(),
         audit_log=audit_log,
         api_keys=api_keys,
         model_catalog=model_catalog,
@@ -815,6 +906,52 @@ def list_settings():
     _require_admin()
     mgr = _get_mgr()
     return jsonify(mgr.get_all(mask_secrets=True))
+
+
+@bp.get("/api/settings/token-governor")
+@login_required
+def token_governor_settings():
+    _require_admin()
+    mgr = _get_mgr()
+    return jsonify(
+        {
+            "settings": _token_governor_settings_view(mgr),
+            "status": _token_governor_live_status(),
+        }
+    )
+
+
+@bp.put("/api/settings/token-governor")
+@login_required
+def update_token_governor_settings():
+    _require_admin()
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"error": "Request body must be a JSON object."}), 400
+
+    unknown_keys = sorted(set(body) - set(_TOKEN_GOVERNOR_SETTING_KEYS))
+    if unknown_keys:
+        return jsonify({"error": "Unsupported token governor setting.", "keys": unknown_keys}), 400
+
+    updates: dict[str, Any] = {}
+    try:
+        for key, value in body.items():
+            updates[key] = _coerce_token_governor_setting(key, value)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    mgr = _get_mgr()
+    changed_by = getattr(current_user, "email", "api")
+    for key, value in updates.items():
+        mgr.set(key, value, changed_by)
+    return jsonify(
+        {
+            "status": "ok",
+            "updated": len(updates),
+            "settings": _token_governor_settings_view(mgr),
+            "token_governor": _token_governor_live_status(),
+        }
+    )
 
 
 @bp.get("/api/settings/keys")

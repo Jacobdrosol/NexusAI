@@ -2194,6 +2194,88 @@ def test_settings_page_loads_for_admin(dashboard_client):
     assert b'data-target="section-deploy"' in resp.data
     assert b"Test Enabled Tools" in resp.data
     assert b"Task Provider Concurrency Limits" in resp.data
+    assert b"Token Governor" in resp.data
+    assert b'data-target="section-token-governor"' in resp.data
+    assert b"Token Governor Project Hourly Limit" in resp.data
+
+
+def test_settings_token_governor_api_reports_settings_and_live_status(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def task_usage(self, hours=24, limit_bots=25, timeout=None):
+            return {
+                "token_governor": {
+                    "enabled": True,
+                    "limits": {
+                        "global_hourly_tokens": 1000,
+                        "project_hourly_tokens": 500,
+                        "manager_hourly_tokens": 250,
+                        "llm_concurrency": 3,
+                        "estimated_tokens_per_task": 50,
+                    },
+                    "current": {
+                        "global_hourly_remaining": 800,
+                        "running_llm_tasks": 1,
+                    },
+                }
+            }
+
+    with patch("dashboard.cp_client.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/api/settings/token-governor")
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    keys = {item["key"] for item in data["settings"]}
+    assert "token_governor_project_hourly_limit" in keys
+    assert "token_governor_manager_hourly_limit" in keys
+    assert data["status"]["limits"]["project_hourly_tokens"] == 500
+    assert data["status"]["current"]["running_llm_tasks"] == 1
+
+
+def test_settings_token_governor_api_updates_whitelisted_values(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def task_usage(self, hours=24, limit_bots=25, timeout=None):
+            return {"token_governor": {"enabled": True, "limits": {}, "current": {}}}
+
+    with patch("dashboard.cp_client.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.put(
+            "/api/settings/token-governor",
+            json={
+                "token_governor_enabled": True,
+                "token_governor_project_hourly_limit": "120000",
+                "token_governor_manager_hourly_limit": 30000,
+                "token_governor_bot_estimates": {"audit-reader": "2500"},
+            },
+        )
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    settings = {item["key"]: item["value"] for item in data["settings"]}
+    assert settings["token_governor_enabled"] == "true"
+    assert settings["token_governor_project_hourly_limit"] == "120000"
+    assert settings["token_governor_manager_hourly_limit"] == "30000"
+    assert json.loads(settings["token_governor_bot_estimates"]) == {"audit-reader": 2500}
+
+
+def test_settings_token_governor_api_rejects_unknown_or_invalid_values(dashboard_client):
+    _login_admin(dashboard_client)
+
+    unknown = dashboard_client.put(
+        "/api/settings/token-governor",
+        json={"task_provider_concurrency_limits": "{}"},
+    )
+    assert unknown.status_code == 400
+    assert "task_provider_concurrency_limits" in unknown.get_data(as_text=True)
+
+    negative = dashboard_client.put(
+        "/api/settings/token-governor",
+        json={"token_governor_project_hourly_limit": -1},
+    )
+    assert negative.status_code == 400
+    assert "non-negative integer" in negative.get_data(as_text=True)
 
 
 def test_settings_page_handles_noncanonical_cp_payloads(dashboard_client):
