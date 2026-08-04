@@ -229,6 +229,11 @@ def _compact_lane_task(task: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _orchestration_task_matches(task: dict[str, Any], orchestration_id: str) -> bool:
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    return str(metadata.get("orchestration_id") or "").strip() == orchestration_id
+
+
 @bp.post("/api/work/stop")
 @login_required
 def api_stop_work():
@@ -320,6 +325,71 @@ def api_stop_work():
             "failed": failed,
         }
     ), (200 if not failed else 207)
+
+
+@bp.post("/api/work/orchestration/stop")
+@login_required
+def api_stop_orchestration_work():
+    _require_admin()
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"error": "Request body must be a JSON object."}), 400
+
+    orchestration_id = str(body.get("orchestration_id") or "").strip()
+    reason = str(body.get("reason") or "operator_stopped_orchestration_from_work_overview").strip()
+    if not orchestration_id:
+        return jsonify({"error": "orchestration_id is required."}), 400
+    if not reason:
+        return jsonify({"error": "reason is required."}), 400
+    dry_run = bool(body.get("dry_run", False))
+
+    cp = get_cp_client()
+    tasks = _safe_call(
+        cp.list_tasks,
+        orchestration_id=orchestration_id,
+        limit=1000,
+        include_content=False,
+        timeout=2.0,
+    )
+    if tasks is None:
+        return jsonify({"error": "control plane unavailable"}), 503
+    matching_tasks = [
+        task
+        for task in tasks
+        if isinstance(task, dict) and _orchestration_task_matches(task, orchestration_id)
+    ]
+    status_counts: dict[str, int] = {}
+    cancellable_tasks: list[dict[str, Any]] = []
+    for task in matching_tasks:
+        status = str(task.get("status") or "unknown").strip().lower() or "unknown"
+        status_counts[status] = status_counts.get(status, 0) + 1
+        if status in STOPPABLE_WORK_STATUSES:
+            cancellable_tasks.append(task)
+
+    preview = {
+        "orchestration_id": orchestration_id,
+        "task_count": len(matching_tasks),
+        "cancellable_task_count": len(cancellable_tasks),
+        "status_counts": status_counts,
+        "tasks": [
+            {
+                "id": str(task.get("id") or ""),
+                "bot_id": str(task.get("bot_id") or ""),
+                "status": str(task.get("status") or ""),
+                "project_id": project_id_for_task(task),
+                "manager_id": manager_id_for_task(task),
+            }
+            for task in cancellable_tasks[:50]
+        ],
+        "truncated": len(cancellable_tasks) > 50,
+    }
+    if dry_run:
+        return jsonify({"status": "dry_run", **preview})
+
+    result = _safe_call(cp.cancel_orchestration, orchestration_id, reason=reason)
+    if result is None:
+        return jsonify({"error": "control plane unavailable"}), 503
+    return jsonify({"status": "ok", "preview": preview, "result": result})
 
 
 @bp.get("/api/work/lane")

@@ -6,7 +6,7 @@ Improve NexusAI one scoped platform foundation at a time so it can become the pr
 
 ## Current Scope
 
-Current item: add bounded orchestration rollups to Work Overview so operators can see active run-level spread across project-manager lanes without loading task payloads.
+Current item: add safe orchestration stop controls to Work Overview with a bounded preview before cancelling a run.
 
 ## Completion Criteria For This Item
 
@@ -23,6 +23,7 @@ Current item: add bounded orchestration rollups to Work Overview so operators ca
 - Admins can stop active/waiting work for one project or one project-manager lane from Work Overview.
 - Stop actions cancel only non-terminal running, queued, or blocked tasks and preserve an explicit cancellation reason.
 - Stop actions preview the matching and selected task counts before cancellation so destructive work controls are explicit.
+- Orchestration stop actions preview loaded run task counts and active/waiting cancellable counts before cancellation.
 - Admins can place or release a dispatch hold for one project or one project-manager lane from Work Overview.
 - Dispatch holds prevent queued matching tasks from starting while leaving task rows intact for later release, inspection, or cancellation.
 - Control-plane shutdown closes the TaskManager and cancels its watchdog/runner/retry background tasks cleanly.
@@ -82,6 +83,8 @@ Current item: add bounded orchestration rollups to Work Overview so operators ca
 - Added Work Overview problem-source aggregation by error code/type, task source, and bot.
 - Added a Work page Problem Sources panel.
 - Added Work Overview orchestration rollups from loaded task summaries and a Work page Orchestrations panel.
+- Added `/api/work/orchestration/stop` for admin-only orchestration stop previews and control-plane cancellation proxying.
+- Added Work page Stop Run controls for orchestration rows that have active or waiting work.
 
 ## Validation Plan
 
@@ -105,6 +108,8 @@ Current item: add bounded orchestration rollups to Work Overview so operators ca
 - Added TaskManager test proving non-content task summaries include bounded error labels without returning full error content.
 - Added Work Overview test proving failed/retried work is grouped by error label, source, and bot.
 - Added Work Overview test proving orchestration rollups include active, waiting, problem, stale, latest-task, project, and manager details.
+- Added Work Overview API tests proving orchestration stop dry-runs count only matching run tasks, actual stop proxies to the control plane, and missing orchestration IDs are rejected.
+- Added dashboard rendering assertions that Work Overview exposes Stop Run controls.
 - Run focused pytest coverage for new route, task summaries, and dashboard smoke where applicable.
 - After deployment, measure route render time and verify no fresh 500 or slow-request logs.
 
@@ -124,3 +129,4 @@ Current item: add bounded orchestration rollups to Work Overview so operators ca
 - Metadata-gap counts are based only on the bounded loaded task-summary windows, so they are routing indicators rather than a full historical metadata audit.
 - Problem-source counts are based only on loaded failed/retried task summaries and use bounded error labels, not full task payloads or results.
 - Orchestration rollups are based only on the bounded loaded task-summary windows. They are an operator snapshot, not a complete historical run graph.
+- Orchestration stop previews use bounded loaded summaries for operator confirmation; the control-plane cancellation remains authoritative and blocks later fan-out for the orchestration ID.

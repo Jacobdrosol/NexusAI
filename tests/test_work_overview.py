@@ -329,6 +329,8 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"Loaded task summaries include project and manager metadata." in resp.data
     assert b"Orchestrations" in resp.data
     assert b"orch-1" in resp.data
+    assert b"Stop Run" in resp.data
+    assert b"stopOrchestration" in resp.data
     assert b"Problem Sources" in resp.data
     assert b"Usage By Project And Manager" in resp.data
     assert b"ollama_cloud" in resp.data
@@ -491,6 +493,106 @@ def test_work_stop_api_dry_run_filters_stoppable_project_manager_tasks(dashboard
     assert data["status"] == "dry_run"
     assert data["matched_task_count"] == 2
     assert [task["id"] for task in data["tasks"]] == ["running-target", "queued-target"]
+
+
+def test_work_orchestration_stop_api_dry_run_counts_cancellable_tasks(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def __init__(self):
+            self.request = None
+
+        def list_tasks(self, **kwargs):
+            self.request = kwargs
+            return [
+                {
+                    "id": "running-target",
+                    "bot_id": "lesson-writer",
+                    "status": "running",
+                    "metadata": {"project_id": "globeiq", "root_pm_bot_id": "manager-a", "orchestration_id": "orch-target"},
+                },
+                {
+                    "id": "blocked-target",
+                    "bot_id": "lesson-qc",
+                    "status": "blocked",
+                    "metadata": {"project_id": "globeiq", "root_pm_bot_id": "manager-a", "orchestration_id": "orch-target"},
+                },
+                {
+                    "id": "completed-target",
+                    "bot_id": "lesson-writer",
+                    "status": "completed",
+                    "metadata": {"project_id": "globeiq", "root_pm_bot_id": "manager-a", "orchestration_id": "orch-target"},
+                },
+                {
+                    "id": "other-orch-ignore",
+                    "bot_id": "lesson-writer",
+                    "status": "running",
+                    "metadata": {"project_id": "globeiq", "root_pm_bot_id": "manager-a", "orchestration_id": "orch-other"},
+                },
+            ]
+
+    fake = FakeCP()
+    with patch("dashboard.routes.work.get_cp_client", return_value=fake):
+        resp = dashboard_client.post(
+            "/api/work/orchestration/stop",
+            json={"orchestration_id": "orch-target", "dry_run": True},
+        )
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["status"] == "dry_run"
+    assert data["task_count"] == 3
+    assert data["cancellable_task_count"] == 2
+    assert data["status_counts"] == {"blocked": 1, "completed": 1, "running": 1}
+    assert [task["id"] for task in data["tasks"]] == ["running-target", "blocked-target"]
+    assert fake.request["orchestration_id"] == "orch-target"
+    assert fake.request["include_content"] is False
+    assert fake.request["limit"] == 1000
+
+
+def test_work_orchestration_stop_api_proxies_cancel_after_preview(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def __init__(self):
+            self.cancel_request = None
+
+        def list_tasks(self, **kwargs):
+            return [
+                {
+                    "id": "queued-target",
+                    "bot_id": "lesson-writer",
+                    "status": "queued",
+                    "metadata": {"project_id": "globeiq", "root_pm_bot_id": "manager-a", "orchestration_id": "orch-target"},
+                }
+            ]
+
+        def cancel_orchestration(self, orchestration_id, reason=None):
+            self.cancel_request = {"orchestration_id": orchestration_id, "reason": reason}
+            return {"orchestration_id": orchestration_id, "cancelled_task_count": 1}
+
+    fake = FakeCP()
+    with patch("dashboard.routes.work.get_cp_client", return_value=fake):
+        resp = dashboard_client.post(
+            "/api/work/orchestration/stop",
+            json={"orchestration_id": "orch-target", "reason": "test_orch_stop"},
+        )
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["status"] == "ok"
+    assert data["preview"]["cancellable_task_count"] == 1
+    assert data["result"]["cancelled_task_count"] == 1
+    assert fake.cancel_request == {"orchestration_id": "orch-target", "reason": "test_orch_stop"}
+
+
+def test_work_orchestration_stop_api_rejects_missing_orchestration(dashboard_client):
+    _login_admin(dashboard_client)
+
+    resp = dashboard_client.post("/api/work/orchestration/stop", json={})
+
+    assert resp.status_code == 400
+    assert "orchestration_id is required" in resp.get_data(as_text=True)
 
 
 def test_work_lane_api_returns_bounded_project_manager_task_details(dashboard_client):

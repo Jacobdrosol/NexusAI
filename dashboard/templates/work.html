@@ -374,6 +374,7 @@
               <th>Problem</th>
               <th>Stale</th>
               <th>Total</th>
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -403,9 +404,20 @@
                 {% endif %}
               </td>
               <td>{{ orchestration.task_count or 0 }}</td>
+              <td>
+                {% if (orchestration.active or 0) + (orchestration.waiting or 0) > 0 %}
+                <button class="btn btn-sm btn-danger"
+                        type="button"
+                        onclick="stopOrchestration({orchestration_id: {{ orchestration.orchestration_id|tojson }}})">
+                  Stop Run
+                </button>
+                {% else %}
+                <span class="empty">No active work</span>
+                {% endif %}
+              </td>
             </tr>
             {% else %}
-            <tr><td colspan="8" class="empty">No orchestration IDs in the loaded task window.</td></tr>
+            <tr><td colspan="9" class="empty">No orchestration IDs in the loaded task window.</td></tr>
             {% endfor %}
           </tbody>
         </table>
@@ -663,6 +675,53 @@ function stopWork(scope) {
     var message = 'Cancelled ' + (res.data.cancelled_task_count || 0) + ' task(s).';
     if (failed) message += ' Failed: ' + failed + '.';
     alert(message);
+    window.location.reload();
+  })
+  .catch(function(e) { alert('Network error: ' + e); });
+}
+
+function stopOrchestration(scope) {
+  var orchestrationId = String(scope.orchestration_id || '').trim();
+  if (!orchestrationId) {
+    alert('orchestration_id is required');
+    return;
+  }
+  var payload = {
+    orchestration_id: orchestrationId,
+    reason: 'operator_stopped_orchestration_from_work_overview'
+  };
+  function postStop(body) {
+    return fetch('/api/work/orchestration/stop', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-CSRFToken': _csrfToken},
+      body: JSON.stringify(body)
+    }).then(function(r) {
+      return r.json().then(function(d) { return {ok: r.ok, status: r.status, data: d}; });
+    });
+  }
+  postStop(Object.assign({}, payload, {dry_run: true}))
+  .then(function(preview) {
+    if (!preview.ok) {
+      alert('Run stop preview failed: ' + (preview.data.error || 'unknown error'));
+      return null;
+    }
+    var cancellable = preview.data.cancellable_task_count || 0;
+    var total = preview.data.task_count || 0;
+    if (!confirm('Stop orchestration ' + orchestrationId + '? This will cancel ' + cancellable + ' active/waiting task(s) out of ' + total + ' loaded task(s), and block later fan-out for this run.')) {
+      return null;
+    }
+    return postStop(payload);
+  })
+  .then(function(res) {
+    if (!res) {
+      return;
+    }
+    if (!res.ok) {
+      alert('Run stop failed: ' + (res.data.error || 'unknown error'));
+      return;
+    }
+    var result = res.data.result || {};
+    alert('Cancelled ' + (result.cancelled_task_count || 0) + ' task(s) for orchestration ' + orchestrationId + '.');
     window.location.reload();
   })
   .catch(function(e) { alert('Network error: ' + e); });
