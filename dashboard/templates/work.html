@@ -29,6 +29,8 @@
 {% set usage_totals = usage.totals or {} %}
 {% set holds = overview.holds or [] %}
 {% set task_snapshot = overview.task_snapshot or {} %}
+{% set metadata_health = overview.metadata_health or {} %}
+{% set metadata_gap_count = (metadata_health.missing_project_count or 0) + (metadata_health.inferred_manager_count or 0) %}
 <div class="cards">
   <div class="card">
     <div class="card-label">Active</div>
@@ -47,6 +49,10 @@
     <div class="card-value {% if (totals.stale_active or 0) + (totals.stale_waiting or 0) %}card-red{% else %}card-green{% endif %}">
       {{ (totals.stale_active or 0) + (totals.stale_waiting or 0) }}
     </div>
+  </div>
+  <div class="card">
+    <div class="card-label">Metadata Gaps</div>
+    <div class="card-value {% if metadata_gap_count %}card-yellow{% else %}card-green{% endif %}">{{ metadata_gap_count }}</div>
   </div>
   <div class="card">
     <div class="card-label">QC / Review</div>
@@ -349,6 +355,42 @@
             {% endfor %}
           </tbody>
         </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2 class="panel-title">Metadata Gaps</h2>
+      <div class="cards" style="grid-template-columns:1fr;gap:0.75rem;margin-bottom:0.75rem;">
+        <div class="card">
+          <div class="card-label">Missing Project</div>
+          <div class="card-value {% if metadata_health.missing_project_count %}card-yellow{% else %}card-green{% endif %}">
+            {{ metadata_health.missing_project_count or 0 }}
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-label">Inferred Manager</div>
+          <div class="card-value {% if metadata_health.inferred_manager_count %}card-yellow{% else %}card-green{% endif %}">
+            {{ metadata_health.inferred_manager_count or 0 }}
+          </div>
+        </div>
+      </div>
+      <div class="list">
+        {% for task in metadata_health.sample_tasks or [] %}
+        <a class="list-item" href="{{ url_for('tasks.tasks_page') }}">
+          <strong>{{ task.issue }}</strong>
+          <small>
+            <span class="badge badge-{{ task.status }}">{{ task.status }}</span>
+            <code>{{ task.id[:8] }}{% if task.id|length > 8 %}...{% endif %}</code>
+            <code>{{ task.project_id }}</code>
+            <code>{{ task.manager_id }}</code>
+          </small>
+          {% if task.manager_source %}
+          <small>manager source: {{ task.manager_source }}</small>
+          {% endif %}
+        </a>
+        {% else %}
+        <div class="empty">Loaded task summaries include project and manager metadata.</div>
+        {% endfor %}
       </div>
     </section>
 

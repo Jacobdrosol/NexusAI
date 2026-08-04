@@ -19,22 +19,39 @@ def _safe_metadata(task: dict[str, Any]) -> dict[str, Any]:
 
 
 def _project_id_for_task(task: dict[str, Any]) -> str:
+    project_id, _source = _project_scope_for_task(task)
+    return project_id
+
+
+def _project_scope_for_task(task: dict[str, Any]) -> tuple[str, str]:
     metadata = _safe_metadata(task)
-    project_id = str(metadata.get("project_id") or task.get("project_id") or "").strip()
-    return project_id or "unassigned"
+    metadata_project_id = str(metadata.get("project_id") or "").strip()
+    if metadata_project_id:
+        return metadata_project_id, "metadata.project_id"
+    task_project_id = str(task.get("project_id") or "").strip()
+    if task_project_id:
+        return task_project_id, "task.project_id"
+    return "unassigned", "missing"
 
 
 def _manager_id_for_task(task: dict[str, Any]) -> str:
+    manager_id, _source = _manager_scope_for_task(task)
+    return manager_id
+
+
+def _manager_scope_for_task(task: dict[str, Any]) -> tuple[str, str]:
     metadata = _safe_metadata(task)
     for key in ("root_pm_bot_id", "pipeline_entry_bot_id", "manager_bot_id"):
         value = str(metadata.get(key) or "").strip()
         if value:
-            return value
+            return value, f"metadata.{key}"
     parent_task_id = str(metadata.get("parent_task_id") or "").strip()
     if parent_task_id:
-        return f"parent:{parent_task_id[:12]}"
+        return f"parent:{parent_task_id[:12]}", "metadata.parent_task_id"
     bot_id = str(task.get("bot_id") or "").strip()
-    return bot_id or "unassigned-manager"
+    if bot_id:
+        return bot_id, "task.bot_id"
+    return "unassigned-manager", "missing"
 
 
 def project_id_for_task(task: dict[str, Any]) -> str:
@@ -90,6 +107,41 @@ def _freshness_summary() -> dict[str, Any]:
         "oldest_waiting_age_seconds": None,
         "oldest_waiting_label": "none",
     }
+
+
+def _metadata_health_summary() -> dict[str, Any]:
+    return {
+        "task_count": 0,
+        "missing_project_count": 0,
+        "inferred_manager_count": 0,
+        "missing_manager_count": 0,
+        "sample_tasks": [],
+    }
+
+
+def _record_metadata_gap(
+    metadata_health: dict[str, Any],
+    *,
+    task: dict[str, Any],
+    issue: str,
+    project_id: str,
+    manager_id: str,
+    manager_source: str,
+) -> None:
+    samples = metadata_health["sample_tasks"]
+    if len(samples) >= 12:
+        return
+    samples.append(
+        {
+            "id": str(task.get("id") or ""),
+            "bot_id": str(task.get("bot_id") or ""),
+            "status": str(task.get("status") or "unknown").strip().lower() or "unknown",
+            "issue": issue,
+            "project_id": project_id,
+            "manager_id": manager_id,
+            "manager_source": manager_source,
+        }
+    )
 
 
 def _record_age(
@@ -255,17 +307,41 @@ def build_work_overview(
     manager_buckets: dict[tuple[str, str], dict[str, Any]] = {}
     recent_problem_tasks: list[dict[str, Any]] = []
     freshness = _freshness_summary()
+    metadata_health = _metadata_health_summary()
 
     for task in task_rows:
         status = str(task.get("status") or "unknown").strip().lower() or "unknown"
-        project_id = _project_id_for_task(task)
-        manager_id = _manager_id_for_task(task)
+        project_id, project_source = _project_scope_for_task(task)
+        manager_id, manager_source = _manager_scope_for_task(task)
         bot_id = str(task.get("bot_id") or "").strip()
         is_qc = _is_qc_task(task, bot_lookup)
         created_at = _parse_datetime(task.get("created_at"))
         updated_at = _parse_datetime(task.get("updated_at")) or created_at
         active_age_seconds = _age_seconds(updated_at, now_utc)
         waiting_age_seconds = _age_seconds(created_at or updated_at, now_utc)
+        metadata_health["task_count"] += 1
+        if project_source == "missing":
+            metadata_health["missing_project_count"] += 1
+            _record_metadata_gap(
+                metadata_health,
+                task=task,
+                issue="missing_project",
+                project_id=project_id,
+                manager_id=manager_id,
+                manager_source=manager_source,
+            )
+        if manager_source in {"metadata.parent_task_id", "task.bot_id", "missing"}:
+            metadata_health["inferred_manager_count"] += 1
+            if manager_source == "missing":
+                metadata_health["missing_manager_count"] += 1
+            _record_metadata_gap(
+                metadata_health,
+                task=task,
+                issue="inferred_manager",
+                project_id=project_id,
+                manager_id=manager_id,
+                manager_source=manager_source,
+            )
         totals["total"] += 1
         totals[status] += 1
         if status in ACTIVE_STATUSES:
@@ -451,6 +527,7 @@ def build_work_overview(
         "projects": project_summaries,
         "workers": worker_summary,
         "holds": hold_rows,
+        "metadata_health": metadata_health,
         "recent_problem_tasks": sorted(
             recent_problem_tasks,
             key=lambda item: str(item.get("updated_at") or ""),

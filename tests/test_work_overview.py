@@ -114,6 +114,47 @@ def test_work_overview_groups_tasks_by_project_and_manager():
     assert overview["holds"][0]["id"] == "globeiq::globeiq-pm"
     assert manager["latest_tasks"][0]["age_label"] == "1h 5m"
     assert overview["recent_problem_tasks"][0]["id"] == "task-failed"
+    assert overview["metadata_health"]["missing_project_count"] == 0
+    assert overview["metadata_health"]["inferred_manager_count"] == 0
+
+
+def test_work_overview_surfaces_metadata_routing_gaps():
+    overview = build_work_overview(
+        projects=[{"id": "globeiq", "name": "GlobeIQ"}],
+        bots=[],
+        workers=[],
+        tasks=[
+            {
+                "id": "missing-project-bot-manager",
+                "bot_id": "loose-worker",
+                "status": "queued",
+                "created_at": "2026-08-04T10:00:00+00:00",
+            },
+            {
+                "id": "parent-derived-manager",
+                "bot_id": "lesson-worker",
+                "status": "running",
+                "metadata": {"project_id": "globeiq", "parent_task_id": "parent-task-123456789"},
+            },
+            {
+                "id": "missing-manager",
+                "status": "failed",
+                "metadata": {"project_id": "globeiq"},
+            },
+        ],
+        now=datetime(2026, 8, 4, 11, 10, tzinfo=timezone.utc),
+    )
+
+    health = overview["metadata_health"]
+    assert health["task_count"] == 3
+    assert health["missing_project_count"] == 1
+    assert health["inferred_manager_count"] == 3
+    assert health["missing_manager_count"] == 1
+    assert {sample["issue"] for sample in health["sample_tasks"]} == {"missing_project", "inferred_manager"}
+    assert any(sample["manager_source"] == "task.bot_id" for sample in health["sample_tasks"])
+    assert any(sample["manager_source"] == "metadata.parent_task_id" for sample in health["sample_tasks"])
+    assert any(sample["manager_source"] == "missing" for sample in health["sample_tasks"])
+    assert any(project["project_id"] == "unassigned" for project in overview["projects"])
 
 
 def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
@@ -197,6 +238,8 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"Worker Load" in resp.data
     assert b"worker-a" in resp.data
     assert b"Worker Queue" in resp.data
+    assert b"Metadata Gaps" in resp.data
+    assert b"Loaded task summaries include project and manager metadata." in resp.data
     assert b"Usage By Project And Manager" in resp.data
     assert b"ollama_cloud" in resp.data
     assert b"qwen3.5:cloud" in resp.data
