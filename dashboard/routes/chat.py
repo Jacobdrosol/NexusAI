@@ -17,6 +17,44 @@ from shared.chat_attachments import CHAT_ATTACHMENT_MAX_FILES, CHAT_ATTACHMENT_M
 bp = Blueprint("chat", __name__)
 
 UNSCOPED_PROJECT_FILTER = "__unscoped__"
+_CHAT_SELECTABLE_ROLES = {
+    "assistant",
+    "coding_assistant",
+    "code-reviewer",
+    "tutor",
+}
+
+
+def _bot_value(bot: Any, key: str, default: Any = None) -> Any:
+    if isinstance(bot, dict):
+        return bot.get(key, default)
+    return getattr(bot, key, default)
+
+
+def _routing_rules(bot: Any) -> dict[str, Any]:
+    rules = _bot_value(bot, "routing_rules", {}) or {}
+    return rules if isinstance(rules, dict) else {}
+
+
+def _chat_selectable_bots(bots: Iterable[Any]) -> list[Any]:
+    selectable: list[Any] = []
+    for bot in bots:
+        rules = _routing_rules(bot)
+        operator_profile = rules.get("operator_profile") if isinstance(rules.get("operator_profile"), dict) else {}
+        chat_tool_access = rules.get("chat_tool_access") if isinstance(rules.get("chat_tool_access"), dict) else {}
+        autonomy = str(operator_profile.get("autonomy") or "").strip().lower()
+        role = str(_bot_value(bot, "role", "") or "").strip().lower()
+        name = str(_bot_value(bot, "name", "") or "").strip().lower()
+        bot_id = str(_bot_value(bot, "id", "") or "").strip().lower()
+        if (
+            autonomy == "manual_chat_only"
+            or bool(chat_tool_access.get("enabled"))
+            or role in _CHAT_SELECTABLE_ROLES
+            or bot_id.startswith("personal-")
+            or "chat" in name
+        ):
+            selectable.append(bot)
+    return selectable
 
 
 def _task_sort_key(task: dict[str, Any]) -> tuple[int, int, str, str]:
@@ -618,6 +656,7 @@ def chat_page() -> str:
             selected_conversation=selected,
             messages=messages,
             bots=bots,
+            chat_bots=_chat_selectable_bots(bots),
             projects=projects,
             vault_items=vault_items,
             repo_context_items=repo_context_items,
@@ -644,6 +683,7 @@ def chat_page() -> str:
             selected_conversation=None,
             messages=[],
             bots=[],
+            chat_bots=[],
             projects=[],
             vault_items=[],
             repo_context_items=[],

@@ -396,7 +396,7 @@
       <div class="chat-main-header-controls">
         <select id="chat-bot-selector" class="form-control chat-bot-selector" aria-label="Message bot">
           <option value="">Conversation Bot</option>
-          {% for b in bots %}
+          {% for b in chat_bots %}
           <option value="{{ b.id }}" {% if selected_conversation.default_bot_id and selected_conversation.default_bot_id == b.id %}selected{% endif %}>
             {{ b.name }}
           </option>
@@ -615,7 +615,7 @@
         <label>Default Bot</label>
         <select class="form-control" name="default_bot_id">
           <option value="">None</option>
-          {% for b in bots %}
+          {% for b in chat_bots %}
           <option value="{{ b.id }}">{{ b.name }} ({{ b.id }})</option>
           {% endfor %}
         </select>
@@ -755,7 +755,7 @@ const activeProjectFilter = {{ (active_project_filter or "")|tojson }};
 const unscopedProjectFilter = {{ unscoped_project_filter|tojson }};
 const availableProjects = {{ projects|tojson }};
 const initialMessages = {{ messages|tojson }};
-const availableBots = {{ bots|tojson }};
+const availableBots = {{ chat_bots|tojson }};
 const availableModels = {{ model_catalog|tojson }};
 const chatAttachmentLimits = {{ chat_attachment_limits|tojson }};
 const CHAT_ATTACHMENT_MAX_FILES = Number(chatAttachmentLimits?.max_files || 15);

@@ -658,6 +658,75 @@ def test_chat_page_project_filter_limits_conversation_list(dashboard_client):
     assert b"project_id=globeiq" in resp.data
 
 
+def test_chat_page_limits_normal_bot_selectors_to_chat_bots(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_conversations(self, archived="all", project_id=None):
+            return [
+                {
+                    "id": "c-chat",
+                    "title": "Chat",
+                    "project_id": None,
+                    "bridge_project_ids": [],
+                    "updated_at": "2026-03-12T00:00:00+00:00",
+                    "archived_at": None,
+                    "default_bot_id": "personal-general-chat",
+                    "memory_profiles_enabled": True,
+                    "memory_profile_id": "default",
+                    "tool_access_enabled": False,
+                    "tool_access_filesystem": False,
+                    "tool_access_repo_search": False,
+                }
+            ]
+
+        def list_messages(self, conversation_id, limit=None):
+            return []
+
+        def list_bots(self):
+            return [
+                {
+                    "id": "personal-general-chat",
+                    "name": "Personal General Chat",
+                    "role": "assistant",
+                    "routing_rules": {"operator_profile": {"autonomy": "manual_chat_only"}},
+                    "assignment_capabilities": None,
+                },
+                {
+                    "id": "globeiq-live-audit-qc-02-bot",
+                    "name": "GlobeIQ Live Audit QC 02",
+                    "role": "qc",
+                    "routing_rules": {"operator_profile": {"autonomy": "scheduled_worker"}},
+                    "assignment_capabilities": None,
+                },
+                {
+                    "id": "pm-orchestrator",
+                    "name": "PM Orchestrator",
+                    "role": "pm",
+                    "routing_rules": {"operator_profile": {"autonomy": "scheduled_worker"}},
+                    "assignment_capabilities": {"is_project_manager": True},
+                },
+            ]
+
+        def list_projects(self):
+            return []
+
+        def list_models(self):
+            return []
+
+        def list_vault_items(self, **kwargs):
+            return []
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/chat?conversation_id=c-chat")
+
+    assert resp.status_code == 200
+    assert b"Personal General Chat" in resp.data
+    assert b"GlobeIQ Live Audit QC 02" not in resp.data
+    assert b"PM Orchestrator" in resp.data
+    assert b"Select a project manager bot" in resp.data
+
+
 def test_chat_page_unscoped_filter_limits_conversation_list(dashboard_client):
     _login_admin(dashboard_client)
 
