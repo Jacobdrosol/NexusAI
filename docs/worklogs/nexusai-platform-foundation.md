@@ -6,7 +6,7 @@ Improve NexusAI one scoped platform foundation at a time so it can become the pr
 
 ## Current Scope
 
-Current item: show worker route evidence in Work Overview lane and run drilldowns.
+Current item: show prioritized project-manager attention lanes in Work Overview.
 
 ## Completion Criteria For This Item
 
@@ -19,6 +19,7 @@ Current item: show worker route evidence in Work Overview lane and run drilldown
 - Token usage is visible by project, manager, and provider/model for the current operational window.
 - Work Overview flags tasks missing token usage records so operators can distinguish low usage from missing telemetry.
 - Work Overview provides a single attention rollup across problem tasks, stale work, metadata gaps, worker issues, and usage gaps.
+- Work Overview lists the project-manager lanes that need attention first, with bounded reason labels and active/waiting counts.
 - Metered LLM work can be capped by project and manager at admission time.
 - Metered LLM dispatch reserves project and manager budgets so queued work cannot burst past configured limits.
 - Admins can view and update token-governor limits from a dedicated Settings tab without editing env values.
@@ -115,6 +116,7 @@ Current item: show worker route evidence in Work Overview lane and run drilldown
 - Added per-lane worker route evidence with attributed task counts, unknown-worker counts, top worker IDs, and latest task worker labels when task metadata includes execution provenance.
 - Added top-level Route Gaps and Route Coverage signals so operators can distinguish missing execution provenance on active/problem work from queued or blocked work that has not started.
 - Added worker/backend/provider/model fields to lane and orchestration drilldown task rows when execution provenance is present.
+- Added a prioritized Attention Lanes panel from loaded project-manager summaries, including problem, stale, route-gap, and held reasons.
 
 ## Validation Plan
 
@@ -152,6 +154,7 @@ Current item: show worker route evidence in Work Overview lane and run drilldown
 - Added Work Overview assertions proving worker route evidence is preserved, rendered, and missing worker attribution is shown explicitly.
 - Added Work Overview assertions proving route-gap attention counts only active/problem worker-attribution gaps while waiting unknown rows remain visible separately.
 - Added Work Overview API assertions proving lane and orchestration drilldowns expose execution-provenance worker/backend fields without changing their bounded summary behavior.
+- Added Work Overview assertions proving attention lanes identify the affected project-manager lane and bounded reason labels.
 - Run focused pytest coverage for new route, task summaries, and dashboard smoke where applicable.
 - After deployment, measure route render time and verify no fresh 500 or slow-request logs.
 
@@ -182,3 +185,4 @@ Current item: show worker route evidence in Work Overview lane and run drilldown
 - Dispatch-hold impact counts are control-plane reported values. They are visibility for operator decisions and do not independently enforce hold behavior.
 - Worker route evidence depends on `metadata.execution_provenance`. Running or queued tasks may not have worker attribution yet, so the page reports unknown worker counts instead of guessing.
 - Route Gaps count only missing worker attribution on active/problem rows. Waiting unknown counts are shown for visibility but are not treated as an attention issue because queued work may not have an assigned worker yet.
+- Attention Lanes are based on the bounded loaded Work Overview task windows. They prioritize operator triage for the visible snapshot and are not a full historical audit.

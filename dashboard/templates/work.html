@@ -35,6 +35,7 @@
 {% set orchestrations = overview.orchestrations or [] %}
 {% set attention = overview.attention or {} %}
 {% set route_evidence = overview.route_evidence or {} %}
+{% set attention_lanes = overview.attention_lanes or [] %}
 <div class="cards">
   <div class="card">
     <div class="card-label">Needs Attention</div>
@@ -409,6 +410,38 @@
             <tr><td>Route gaps</td><td>{{ attention.route_gaps or 0 }}</td></tr>
             <tr><td>Worker issues</td><td>{{ attention.worker_issues or 0 }}</td></tr>
             <tr><td>Usage gaps</td><td>{{ attention.usage_gaps or 0 }}</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2 class="panel-title">Attention Lanes</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Lane</th><th>Reasons</th><th>Work</th></tr></thead>
+          <tbody>
+            {% for lane in attention_lanes[:12] %}
+            <tr>
+              <td>
+                <strong>{{ lane.project_name }}</strong>
+                <div class="mini-note"><code>{{ lane.project_id }}</code></div>
+                <div class="mini-note"><code>{{ lane.manager_id }}</code></div>
+              </td>
+              <td>
+                {% for reason in lane.reasons %}
+                <div><span class="badge {% if 'problem' in reason %}badge-failed{% elif 'stale' in reason %}badge-yellow{% else %}badge-queued{% endif %}">{{ reason }}</span></div>
+                {% endfor %}
+              </td>
+              <td>
+                <div class="mini-note">{{ lane.active }} active / {{ lane.waiting }} waiting</div>
+                <div class="mini-note">oldest active {{ lane.oldest_active_label }}</div>
+                <div class="mini-note">oldest waiting {{ lane.oldest_waiting_label }}</div>
+              </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="3" class="empty">No project-manager lanes need attention in the loaded window.</td></tr>
+            {% endfor %}
           </tbody>
         </table>
       </div>

@@ -367,6 +367,66 @@ def _record_route_evidence(
         )
 
 
+def _attention_lanes(project_summaries: list[dict[str, Any]], limit: int = 12) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for project in project_summaries:
+        project_id = str(project.get("project_id") or "")
+        project_name = str(project.get("project_name") or project_id)
+        for manager in project.get("managers") or []:
+            if not isinstance(manager, dict):
+                continue
+            totals = manager.get("totals") if isinstance(manager.get("totals"), dict) else {}
+            freshness = manager.get("freshness") if isinstance(manager.get("freshness"), dict) else {}
+            route = manager.get("route_evidence") if isinstance(manager.get("route_evidence"), dict) else {}
+            problem = _safe_int(totals.get("problem"))
+            stale = _safe_int(freshness.get("stale_active")) + _safe_int(freshness.get("stale_waiting"))
+            route_gaps = _safe_int(route.get("missing_active_problem_count"))
+            held = bool(manager.get("held"))
+            active = _safe_int(totals.get("active"))
+            waiting = _safe_int(totals.get("waiting"))
+            reasons: list[str] = []
+            if problem:
+                reasons.append(f"{problem} problem")
+            if stale:
+                reasons.append(f"{stale} stale")
+            if route_gaps:
+                reasons.append(f"{route_gaps} route gap")
+            if held:
+                reasons.append("held")
+            if not reasons:
+                continue
+            score = (problem * 100) + (stale * 25) + (route_gaps * 15) + (10 if held else 0) + active + waiting
+            rows.append(
+                {
+                    "project_id": project_id,
+                    "project_name": project_name,
+                    "manager_id": str(manager.get("manager_id") or ""),
+                    "manager_name": str(manager.get("manager_name") or manager.get("manager_id") or ""),
+                    "active": active,
+                    "waiting": waiting,
+                    "problem": problem,
+                    "stale": stale,
+                    "route_gaps": route_gaps,
+                    "held": held,
+                    "oldest_active_label": str(freshness.get("oldest_active_label") or "none"),
+                    "oldest_waiting_label": str(freshness.get("oldest_waiting_label") or "none"),
+                    "reasons": reasons,
+                    "score": score,
+                }
+            )
+    rows.sort(
+        key=lambda row: (
+            int(row.get("score", 0)),
+            int(row.get("problem", 0)),
+            int(row.get("stale", 0)),
+            int(row.get("route_gaps", 0)),
+            int(row.get("active", 0)) + int(row.get("waiting", 0)),
+        ),
+        reverse=True,
+    )
+    return rows[:limit]
+
+
 def build_work_overview(
     *,
     tasks: list[dict[str, Any]] | None,
@@ -718,6 +778,7 @@ def build_work_overview(
         "holds": hold_rows,
         "metadata_health": metadata_health,
         "route_evidence": route_evidence,
+        "attention_lanes": _attention_lanes(project_summaries),
         "problem_summary": {
             "total": int(sum(problem_codes.values())),
             "by_code": _counter_rows(problem_codes, "code"),

@@ -150,6 +150,14 @@ def test_work_overview_groups_tasks_by_project_and_manager():
     assert overview["route_evidence"]["attributed_task_count"] == 1
     assert overview["route_evidence"]["missing_active_problem_count"] == 1
     assert overview["route_evidence"]["missing_waiting_count"] == 1
+    attention_lane = overview["attention_lanes"][0]
+    assert attention_lane["project_id"] == "globeiq"
+    assert attention_lane["manager_id"] == "globeiq-pm"
+    assert attention_lane["problem"] == 1
+    assert attention_lane["stale"] == 2
+    assert attention_lane["route_gaps"] == 1
+    assert attention_lane["held"] is True
+    assert attention_lane["reasons"] == ["1 problem", "2 stale", "1 route gap", "held"]
     assert manager["latest_tasks"][2]["worker_id"] == "browser-worker-01"
     assert overview["holds"][0]["id"] == "globeiq::globeiq-pm"
     assert overview["holds"][0]["queued_task_count"] == 1
@@ -415,12 +423,15 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"Work" in resp.data
     assert b"Needs Attention" in resp.data
     assert b"Attention Breakdown" in resp.data
+    assert b"Attention Lanes" in resp.data
     assert b"Problem tasks" in resp.data
     assert b"Usage gaps" in resp.data
     assert b"Route gaps" in resp.data
     assert b"Route Coverage" in resp.data
     assert b"1 active/problem unknown" in resp.data
     assert b"1 waiting unknown" in resp.data
+    assert b"1 route gap" in resp.data
+    assert b"2 stale" in resp.data
     assert b"GlobeIQ" in resp.data
     assert b"GlobeIQ Manager" in resp.data
     assert b"lesson-writer" in resp.data
