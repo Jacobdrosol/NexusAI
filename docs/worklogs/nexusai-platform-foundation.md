@@ -6,7 +6,7 @@ Improve NexusAI one scoped platform foundation at a time so it can become the pr
 
 ## Current Scope
 
-Current item: show Work Overview usage-health classification so operators can distinguish complete usage telemetry from missing telemetry and idle windows.
+Current item: add bot-specific hourly token governor caps so one runaway worker can be constrained without lowering every bot's default cap.
 
 ## Completion Criteria For This Item
 
@@ -28,6 +28,7 @@ Current item: show Work Overview usage-health classification so operators can di
 - Work Overview shows snapshot health so operators know when task counts come from complete, capped, or partially unavailable task-summary windows.
 - Metered LLM work can be capped by project and manager at admission time.
 - Metered LLM dispatch reserves project and manager budgets so queued work cannot burst past configured limits.
+- Metered LLM work can be capped for specific bot IDs at admission and dispatch time without changing the default per-bot cap.
 - Admins can view and update token-governor limits from a dedicated Settings tab without editing env values.
 - The token-governor controls expose live one-hour governor status when the control plane is reachable.
 - Admins can stop active/waiting work for one project or one project-manager lane from Work Overview.
@@ -134,6 +135,8 @@ Current item: show Work Overview usage-health classification so operators can di
 - Added bot-level token usage to the Work page using the control-plane `by_bot` summary.
 - Added `by_bot` to the Work Overview stable usage fallback shape so unavailable usage data has a consistent contract.
 - Added usage-health classification to Work Overview API and page output so missing token telemetry is visible as an explicit operator health signal.
+- Added `token_governor_bot_hourly_limits` for bot-specific hourly token caps, with environment override support through `NEXUSAI_TOKEN_GOVERNOR_BOT_HOURLY_LIMITS`.
+- Applied bot-specific hourly caps during both task admission and dispatch reservation so queued metered tasks cannot burst past a noisy bot's override.
 
 ## Validation Plan
 
@@ -178,6 +181,8 @@ Current item: show Work Overview usage-health classification so operators can di
 - Added Work Overview route assertions proving healthy snapshots render as ready, unavailable active/problem windows render as critical, and capped windows render as warning.
 - Added TaskManager and Work Overview assertions proving bot-level usage totals are emitted, rendered, and stable when usage is unavailable.
 - Added Work Overview assertions proving usage-health levels and reasons are emitted for critical missing-telemetry and idle fallback windows.
+- Added TaskManager assertions proving bot-specific hourly caps reject over-budget task creation and reserve dispatch budget across multiple queued tasks for the same bot.
+- Added Settings API assertions proving bot-specific hourly cap settings are whitelisted and normalized.
 - Run focused pytest coverage for new route, task summaries, and dashboard smoke where applicable.
 - After deployment, measure route render time and verify no fresh 500 or slow-request logs.
 
@@ -215,3 +220,4 @@ Current item: show Work Overview usage-health classification so operators can di
 - Snapshot health only describes the bounded dashboard task-summary windows. The control plane remains authoritative for cancellation, dispatch, and complete historical state.
 - Bot-level usage is based on measured usage in completed task results. Tasks without usage are counted as gaps rather than estimated spend.
 - Usage health is based on the current token-usage summary window. It flags missing telemetry, but it does not estimate unreported token spend.
+- Bot-specific hourly token caps use exact bot IDs. They are a safety override for known noisy workers, not a pattern or role-based policy.

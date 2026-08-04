@@ -104,6 +104,8 @@ _DEFAULTS: List[tuple] = [
      "Maximum measured plus reserved tokens allowed globally in a rolling hour. 0 disables this cap."),
     ("token_governor_bot_hourly_limit", "0", "int", "advanced", "Token Governor Bot Hourly Limit",
      "Maximum measured plus reserved tokens allowed per bot in a rolling hour. 0 disables this cap."),
+    ("token_governor_bot_hourly_limits", "{}", "json", "advanced", "Token Governor Bot Hourly Limits",
+     "Optional JSON object mapping bot ID to a bot-specific hourly token cap. Bots not listed use the default bot hourly limit."),
     ("token_governor_project_hourly_limit", "0", "int", "advanced", "Token Governor Project Hourly Limit",
      "Maximum measured plus reserved tokens allowed per project in a rolling hour. 0 disables this cap."),
     ("token_governor_manager_hourly_limit", "0", "int", "advanced", "Token Governor Manager Hourly Limit",

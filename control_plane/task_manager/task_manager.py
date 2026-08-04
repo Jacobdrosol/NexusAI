@@ -3700,6 +3700,10 @@ class TaskManager:
                 0,
             ),
         )
+        hourly_bot_limits = _env_or_settings_int_map(
+            "NEXUSAI_TOKEN_GOVERNOR_BOT_HOURLY_LIMITS",
+            "token_governor_bot_hourly_limits",
+        )
         hourly_project_limit = max(
             0,
             _env_or_settings_int(
@@ -3764,6 +3768,7 @@ class TaskManager:
             "enabled": bool(enabled),
             "global_hourly_limit": hourly_global_limit,
             "bot_hourly_limit": hourly_bot_limit,
+            "bot_hourly_limits": hourly_bot_limits,
             "project_hourly_limit": hourly_project_limit,
             "manager_hourly_limit": hourly_manager_limit,
             "llm_concurrency": llm_concurrency_limit,
@@ -3788,6 +3793,17 @@ class TaskManager:
             except Exception:
                 return max(1, default_estimate)
         return max(1, default_estimate)
+
+    @staticmethod
+    def _token_governor_bot_hourly_limit(token_governor: Dict[str, Any], bot_id: str) -> int:
+        default_limit = max(0, int(token_governor.get("bot_hourly_limit") or 0))
+        bot_limits = token_governor.get("bot_hourly_limits") or {}
+        if isinstance(bot_limits, dict):
+            try:
+                return max(0, int(bot_limits.get(str(bot_id or ""), default_limit)))
+            except Exception:
+                return default_limit
+        return default_limit
 
     @staticmethod
     def _token_governor_project_id(task: Task) -> str:
@@ -3912,6 +3928,7 @@ class TaskManager:
             "limits": {
                 "global_hourly_tokens": global_limit,
                 "bot_hourly_tokens": int(config["bot_hourly_limit"] or 0),
+                "bot_hourly_token_overrides": dict(config.get("bot_hourly_limits") or {}),
                 "project_hourly_tokens": int(config["project_hourly_limit"] or 0),
                 "manager_hourly_tokens": int(config["manager_hourly_limit"] or 0),
                 "llm_concurrency": int(config["llm_concurrency"] or 0),
@@ -4905,7 +4922,7 @@ class TaskManager:
             )
 
         token_usage = None
-        bot_limit = int(token_governor.get("bot_hourly_limit") or 0)
+        bot_limit = self._token_governor_bot_hourly_limit(token_governor, task.bot_id)
         if bot_limit > 0:
             token_usage = token_usage or await self._token_usage_totals_since(hours=1)
             bot_usage = token_usage.get("by_bot") or {}
@@ -6961,7 +6978,7 @@ class TaskManager:
                 global_used = int((token_usage.get("totals") or {}).get("total_tokens") or 0)
                 if global_used + token_reserved_total + estimated > global_limit:
                     return False
-            bot_limit = int(token_governor.get("bot_hourly_limit") or 0)
+            bot_limit = self._token_governor_bot_hourly_limit(token_governor, task.bot_id)
             if bot_limit > 0:
                 bot_usage = token_usage.get("by_bot") or {}
                 bot_used = int((bot_usage.get(str(task.bot_id or "")) or {}).get("total_tokens") or 0)

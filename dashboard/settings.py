@@ -60,6 +60,7 @@ _TOKEN_GOVERNOR_SETTING_KEYS: tuple[str, ...] = (
     "token_governor_enabled",
     "token_governor_global_hourly_limit",
     "token_governor_bot_hourly_limit",
+    "token_governor_bot_hourly_limits",
     "token_governor_project_hourly_limit",
     "token_governor_manager_hourly_limit",
     "token_governor_llm_concurrency",
@@ -70,7 +71,7 @@ _TOKEN_GOVERNOR_SETTING_KEYS: tuple[str, ...] = (
     "token_governor_max_queued_llm_tasks_per_manager",
 )
 _TOKEN_GOVERNOR_BOOL_KEYS = {"token_governor_enabled"}
-_TOKEN_GOVERNOR_JSON_KEYS = {"token_governor_bot_estimates"}
+_TOKEN_GOVERNOR_JSON_KEYS = {"token_governor_bot_estimates", "token_governor_bot_hourly_limits"}
 _TOKEN_GOVERNOR_INT_KEYS = set(_TOKEN_GOVERNOR_SETTING_KEYS) - _TOKEN_GOVERNOR_BOOL_KEYS - _TOKEN_GOVERNOR_JSON_KEYS
 
 
