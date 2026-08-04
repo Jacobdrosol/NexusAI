@@ -386,6 +386,9 @@
               <td>
                 {% if manager.totals.problem %}
                 <span class="badge badge-failed">{{ manager.totals.problem }}</span>
+                {% for problem in manager.problem_labels[:3] %}
+                <div class="mini-note"><code>{{ problem.code }}</code> {{ problem.count }}</div>
+                {% endfor %}
                 {% else %}
                 <span class="badge badge-ready">0</span>
                 {% endif %}

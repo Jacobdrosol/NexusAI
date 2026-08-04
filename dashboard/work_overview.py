@@ -692,6 +692,7 @@ def build_work_overview(
                 "hold": None,
                 "held": False,
                 "bots": Counter(),
+                "problem_labels": Counter(),
                 "route_evidence": _route_evidence_summary(),
                 "latest_tasks": [],
             },
@@ -704,6 +705,7 @@ def build_work_overview(
             manager_bucket["totals"]["waiting"] += 1
         if status in PROBLEM_STATUSES:
             manager_bucket["totals"]["problem"] += 1
+            manager_bucket["problem_labels"][_problem_label(task)] += 1
         if is_qc:
             manager_bucket["totals"]["qc"] += 1
         _record_age(
@@ -783,6 +785,7 @@ def build_work_overview(
                     "hold": None,
                     "held": False,
                     "bots": Counter(),
+                    "problem_labels": Counter(),
                     "route_evidence": _route_evidence_summary(),
                     "latest_tasks": [],
                 },
@@ -802,6 +805,7 @@ def build_work_overview(
             {"bot_id": bot_id, "task_count": count}
             for bot_id, count in bucket["bots"].most_common(8)
         ]
+        bucket["problem_labels"] = _counter_rows(bucket["problem_labels"], "code", limit=6)
         manager_route_evidence = bucket["route_evidence"]
         manager_route_evidence["by_worker"] = [
             {"worker_id": worker_id, "task_count": count}

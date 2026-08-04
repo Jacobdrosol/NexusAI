@@ -147,6 +147,7 @@ def test_work_overview_groups_tasks_by_project_and_manager():
     assert manager["totals"]["failed"] == 1
     assert manager["totals"]["completed"] == 1
     assert manager["totals"]["total"] == 4
+    assert manager["problem_labels"] == [{"code": "qc_failed", "count": 1}]
     assert manager["freshness"]["stale_active"] == 1
     assert manager["freshness"]["stale_waiting"] == 1
     assert manager["held"] is True
