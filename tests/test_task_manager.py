@@ -658,6 +658,9 @@ async def test_token_usage_summary_groups_by_project_manager_and_model(tmp_path)
     assert usage["by_manager"][0]["project_id"] == "globeiq"
     assert usage["by_manager"][0]["manager_id"] == "globeiq-pm"
     assert usage["by_manager"][0]["total_tokens"] == 140
+    assert usage["by_bot"][0]["bot_id"] == "lesson-writer"
+    assert usage["by_bot"][0]["total_tokens"] == 140
+    assert usage["by_bot"][0]["tasks_with_usage"] == 1
     assert usage["by_provider_model"][0]["provider"] == "ollama_cloud"
     assert usage["by_provider_model"][0]["model"] == "qwen3.5:cloud"
     assert usage["by_provider_model"][0]["total_tokens"] == 140

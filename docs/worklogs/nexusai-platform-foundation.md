@@ -6,7 +6,7 @@ Improve NexusAI one scoped platform foundation at a time so it can become the pr
 
 ## Current Scope
 
-Current item: show Work Overview snapshot completeness health.
+Current item: show bot-level token usage in Work Overview.
 
 ## Completion Criteria For This Item
 
@@ -18,6 +18,7 @@ Current item: show Work Overview snapshot completeness health.
 - Work Overview flags enabled-offline, disabled, high-load, and queued workers so operators can identify capacity problems quickly.
 - Token usage is visible by project, manager, and provider/model for the current operational window.
 - Work Overview flags tasks missing token usage records so operators can distinguish low usage from missing telemetry.
+- Work Overview shows token usage by bot so runaway usage can be traced to the worker identity causing it.
 - Work Overview provides a single attention rollup across problem tasks, stale work, metadata gaps, worker issues, and usage gaps.
 - Work Overview lists the project-manager lanes that need attention first, with bounded reason labels and active/waiting counts.
 - Attention Lanes expose direct bounded Details, Hold/Release, and Stop controls for the affected project-manager lane.
@@ -129,6 +130,8 @@ Current item: show Work Overview snapshot completeness health.
 - Capacity pressure flags work with no online workers as critical instead of making operators infer that from separate worker and queue tables.
 - Added snapshot health to Work Overview API and page output, including ready, warning, and critical levels for loaded, capped, or unavailable task-summary windows.
 - Snapshot Health shows active/problem row counts, recent row counts, merged rows, capped windows, and unavailable windows.
+- Added bot-level token usage to the Work page using the control-plane `by_bot` summary.
+- Added `by_bot` to the Work Overview stable usage fallback shape so unavailable usage data has a consistent contract.
 
 ## Validation Plan
 
@@ -171,6 +174,7 @@ Current item: show Work Overview snapshot completeness health.
 - Added Work Overview assertions proving queue-pressure lanes compute queue state and render direct review/stop actions.
 - Added Work Overview assertions proving capacity pressure ratios are computed and work-without-online-workers is classified as critical.
 - Added Work Overview route assertions proving healthy snapshots render as ready, unavailable active/problem windows render as critical, and capped windows render as warning.
+- Added TaskManager and Work Overview assertions proving bot-level usage totals are emitted, rendered, and stable when usage is unavailable.
 - Run focused pytest coverage for new route, task summaries, and dashboard smoke where applicable.
 - After deployment, measure route render time and verify no fresh 500 or slow-request logs.
 
@@ -206,3 +210,4 @@ Current item: show Work Overview snapshot completeness health.
 - Queue Pressure is calculated from the bounded loaded Work Overview task windows. It is an operator pressure snapshot, not a full historical backlog inventory.
 - Capacity pressure is a coarse operational signal from bounded task and worker snapshots. It does not replace provider-level concurrency, host resource, or token-governor controls.
 - Snapshot health only describes the bounded dashboard task-summary windows. The control plane remains authoritative for cancellation, dispatch, and complete historical state.
+- Bot-level usage is based on measured usage in completed task results. Tasks without usage are counted as gaps rather than estimated spend.

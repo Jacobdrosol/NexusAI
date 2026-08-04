@@ -462,6 +462,7 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
                 "totals": {"total_tokens": 140, "tasks_with_usage": 1, "tasks_without_usage": 2},
                 "by_project": [{"project_id": "globeiq", "total_tokens": 140, "tasks_with_usage": 1, "tasks_without_usage": 2}],
                 "by_manager": [{"project_id": "globeiq", "manager_id": "globeiq-pm", "total_tokens": 140, "tasks_with_usage": 1}],
+                "by_bot": [{"bot_id": "lesson-writer", "total_tokens": 140, "tasks_with_usage": 1, "tasks_without_usage": 0}],
                 "by_provider_model": [{"provider": "ollama_cloud", "model": "qwen3.5:cloud", "total_tokens": 140, "tasks_with_usage": 1}],
             }
 
@@ -522,8 +523,11 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"browser_evidence_missing" in resp.data
     assert b"lesson_audit" in resp.data
     assert b"Usage By Project And Manager" in resp.data
+    assert b"<th>Bot</th><th>Tokens</th><th>Measured</th><th>Missing</th>" in resp.data
+    assert b"No bot token usage" not in resp.data
     assert b"Usage Gaps" in resp.data
     assert b"2 missing usage" in resp.data
+    assert b"lesson-writer" in resp.data
     assert b"ollama_cloud" in resp.data
     assert b"qwen3.5:cloud" in resp.data
     assert b"Stale Work" in resp.data
@@ -648,6 +652,7 @@ def test_work_overview_surfaces_partial_control_plane_data(dashboard_client):
     assert data["snapshot_health"]["reason"] == "task snapshot windows unavailable: active/problem"
     assert data["snapshot_health"]["unavailable_windows"] == ["active/problem"]
     assert data["snapshot_health"]["capped_windows"] == []
+    assert data["usage"]["by_bot"] == []
 
 
 def test_work_overview_flags_snapshot_windows_at_limit(dashboard_client):
@@ -679,7 +684,7 @@ def test_work_overview_flags_snapshot_windows_at_limit(dashboard_client):
             return {"holds": []}
 
         def task_usage(self, **kwargs):
-            return {"totals": {"total_tokens": 0}, "by_project": [], "by_manager": [], "by_provider_model": []}
+            return {"totals": {"total_tokens": 0}, "by_project": [], "by_manager": [], "by_bot": [], "by_provider_model": []}
 
     with patch("dashboard.routes.work.get_cp_client", return_value=FakeCP()):
         api_resp = dashboard_client.get("/api/work/overview")
@@ -723,6 +728,7 @@ def test_work_overview_usage_fallback_has_stable_shape(dashboard_client):
     assert data["usage"]["totals"]["tasks_without_usage"] == 0
     assert data["usage"]["by_project"] == []
     assert data["usage"]["by_manager"] == []
+    assert data["usage"]["by_bot"] == []
     assert data["usage"]["by_provider_model"] == []
 
 

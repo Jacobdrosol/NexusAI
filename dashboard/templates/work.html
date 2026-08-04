@@ -186,6 +186,23 @@
           </table>
         </div>
       </div>
+      <div class="table-wrap" style="margin-top:0.75rem;">
+        <table>
+          <thead><tr><th>Bot</th><th>Tokens</th><th>Measured</th><th>Missing</th></tr></thead>
+          <tbody>
+            {% for row in usage.by_bot[:10] %}
+            <tr>
+              <td><code>{{ row.bot_id }}</code></td>
+              <td>{{ "{:,}".format(row.total_tokens or 0) }}</td>
+              <td>{{ row.tasks_with_usage }}</td>
+              <td>{{ row.tasks_without_usage }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="4" class="empty">No bot token usage in the selected window</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
       {% else %}
       <div class="empty">Token usage is unavailable.</div>
       {% endif %}

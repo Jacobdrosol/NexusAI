@@ -29,8 +29,25 @@ def _empty_usage_summary() -> dict[str, Any]:
         },
         "by_project": [],
         "by_manager": [],
+        "by_bot": [],
         "by_provider_model": [],
     }
+
+
+def _normalize_usage_summary(summary: Any) -> dict[str, Any]:
+    normalized = _empty_usage_summary()
+    if not isinstance(summary, dict):
+        return normalized
+    for key, value in summary.items():
+        if key not in normalized:
+            normalized[key] = value
+    totals = summary.get("totals")
+    if isinstance(totals, dict):
+        normalized["totals"] = {**normalized["totals"], **totals}
+    for key in ("by_project", "by_manager", "by_bot", "by_provider_model"):
+        value = summary.get(key)
+        normalized[key] = value if isinstance(value, list) else []
+    return normalized
 
 
 def _safe_count(container: dict[str, Any], key: str) -> int:
@@ -245,7 +262,7 @@ def _load_work_overview() -> dict[str, Any]:
     task_usage = getattr(cp, "task_usage", None)
     if callable(task_usage):
         usage, warning = _safe_cp_call(cp, "token usage", task_usage, hours=24, limit_bots=25, timeout=1.5)
-        overview["usage"] = usage if isinstance(usage, dict) else _empty_usage_summary()
+        overview["usage"] = _normalize_usage_summary(usage)
         if warning:
             warnings.append(warning)
             overview["data_degraded"] = True
