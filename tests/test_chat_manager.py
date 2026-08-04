@@ -43,3 +43,25 @@ async def test_update_conversation_tool_access(tmp_path):
     assert updated.tool_access_enabled is True
     assert updated.tool_access_filesystem is True
     assert updated.tool_access_repo_search is False
+
+
+@pytest.mark.anyio
+async def test_list_conversations_project_filter_includes_bridged_membership(tmp_path):
+    from control_plane.chat.chat_manager import ChatManager
+
+    mgr = ChatManager(db_path=str(tmp_path / "chat.db"))
+    primary = await mgr.create_conversation(title="Primary", project_id="globeiq", scope="project")
+    bridged = await mgr.create_conversation(
+        title="Bridge",
+        project_id="nexusai",
+        bridge_project_ids=["globeiq"],
+        scope="bridged",
+    )
+    await mgr.create_conversation(title="Other", project_id="other", scope="project")
+
+    rows = await mgr.list_conversations(project_id="globeiq", archived="all")
+    ids = {row.id for row in rows}
+
+    assert primary.id in ids
+    assert bridged.id in ids
+    assert len(rows) == 2

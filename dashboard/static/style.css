@@ -834,7 +834,7 @@ select.form-control {
 }
 
 .page-chat .chat-panel-main {
-  padding: 0.75rem 0.9rem;
+  padding: 0;
   background: #212121;
   display: flex;
   flex-direction: column;
@@ -850,7 +850,10 @@ select.form-control {
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
-  margin-bottom: 0.25rem;
+  flex: 0 0 auto;
+  margin-bottom: 0;
+  padding: 0.72rem 0.9rem;
+  border-bottom: 1px solid #303030;
 }
 
 .page-chat .chat-main-header .panel-title {
@@ -984,7 +987,9 @@ select.form-control {
 }
 
 .page-chat .chat-task-shell {
+  flex: 0 0 auto;
   margin-bottom: 0.25rem;
+  padding: 0.35rem 0.9rem 0;
 }
 
 .page-chat .chat-task-shell[hidden] {
@@ -1003,9 +1008,10 @@ select.form-control {
   max-height: none;
   overflow-y: auto;
   width: min(100%, 960px);
-  margin: 0 auto 0.12rem;
-  padding: 0.55rem 0.15rem 0 0;
+  margin: 0 auto;
+  padding: 1rem 0.45rem 1.25rem;
   border-top: 0;
+  scroll-behavior: smooth;
 }
 
 .page-chat .chat-composer {
@@ -1016,8 +1022,8 @@ select.form-control {
   width: min(100%, 960px);
   margin: 0 auto;
   border-top: 0;
-  padding-top: 0.35rem;
-  background: #212121;
+  padding: 0.45rem 0.45rem 0.75rem;
+  background: linear-gradient(180deg, rgba(33,33,33,0), #212121 18%, #212121 100%);
 }
 
 .page-chat .chat-compose-row {
@@ -1028,8 +1034,10 @@ select.form-control {
 }
 
 .page-chat .chat-composer textarea {
-  min-height: 68px;
-  max-height: 18vh;
+  min-height: 44px;
+  max-height: 28vh;
+  resize: none;
+  overflow-y: auto;
 }
 
 .page-chat .chat-stream-btn {
@@ -1047,17 +1055,19 @@ select.form-control {
 .page-chat .message {
   border-radius: 8px;
   border: 0;
-  padding: 0.7rem 0.75rem;
+  padding: 0.76rem 0.85rem;
+  margin-bottom: 0.72rem;
 }
 
 .page-chat .message.user {
-  max-width: 82%;
+  max-width: min(82%, 760px);
   margin-left: auto;
   background: #303030;
   border-color: transparent;
 }
 
 .page-chat .message.assistant {
+  max-width: min(100%, 860px);
   background: transparent;
   border-color: transparent;
 }
@@ -1947,6 +1957,7 @@ select.form-control {
 
   .page-chat .chat-main-header {
     align-items: flex-start;
+    padding: 0.65rem;
   }
 
   .page-chat .chat-main-header-controls {
@@ -1962,12 +1973,13 @@ select.form-control {
   .page-chat .chat-messages {
     min-height: 42vh;
     max-height: 54vh;
+    padding: 0.75rem 0.65rem 1rem;
   }
 
   .page-chat .chat-composer {
     position: static;
     border-top: 0;
-    padding-top: 0;
+    padding: 0.45rem 0.65rem 0.75rem;
   }
 
   .page-chat .chat-compose-row {

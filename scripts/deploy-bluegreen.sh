@@ -357,11 +357,16 @@ fix_runtime_file_permissions() {
   fi
 }
 
-echo "[deploy] fetching latest main"
+DEPLOY_REF="${NEXUSAI_DEPLOY_REF:-main}"
+if [ -z "$DEPLOY_REF" ]; then
+  DEPLOY_REF="main"
+fi
+
+echo "[deploy] fetching latest $DEPLOY_REF"
 REPO_ROOT="$(pwd -P 2>/dev/null || pwd)"
-git -c "safe.directory=$REPO_ROOT" fetch origin main
-git -c "safe.directory=$REPO_ROOT" checkout main
-git -c "safe.directory=$REPO_ROOT" pull --ff-only origin main
+git -c "safe.directory=$REPO_ROOT" fetch origin "$DEPLOY_REF"
+git -c "safe.directory=$REPO_ROOT" checkout "$DEPLOY_REF"
+git -c "safe.directory=$REPO_ROOT" reset --hard "origin/$DEPLOY_REF"
 
 if [ "$CORE_RECREATE" = "1" ] && [ -f "docker-compose.yml" ]; then
   echo "[deploy] recreating core runtime services against persistent $RUNTIME_DATA_DIR state"
