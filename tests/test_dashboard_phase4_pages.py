@@ -339,6 +339,8 @@ def test_chat_page_loads_when_logged_in(dashboard_client):
     assert resp.status_code == 200
     assert b'class="app-shell"' in resp.data
     assert b'class="app-sidebar"' in resp.data
+    assert b'class="nav-menu-toggle"' in resp.data
+    assert b'id="primary-nav-menu"' in resp.data
     assert b'class="app-main"' in resp.data
     assert b"Chat" in resp.data
     assert b"New Conversation" in resp.data
@@ -453,6 +455,8 @@ def test_chat_page_renders_project_filter_metadata_on_conversations(dashboard_cl
     assert resp.status_code == 200
     assert b'data-project-id="globeiq"' in resp.data
     assert b'data-bridge-project-ids="bridge-a,bridge-b"' in resp.data
+    assert b"bridgeProjectIds.includes(projectFilter)" in resp.data
+    assert b"row.hidden = !matches" in resp.data
     assert b"All projects" in resp.data
 
 

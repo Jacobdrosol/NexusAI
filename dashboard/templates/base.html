@@ -18,42 +18,53 @@
         </span>
       </a>
 
-      <div class="nav-section">
-        <span class="nav-section-label">Workspace</span>
-        <a href="{{ url_for('main.index') }}" {% if active_page == 'overview' %}class="active"{% endif %}>Overview</a>
-        <a href="{{ url_for('projects.projects_page') }}" {% if active_page == 'projects' %}class="active"{% endif %}>Projects</a>
-        <a href="{{ url_for('chat.chat_page') }}" {% if active_page == 'chat' %}class="active"{% endif %}>Chat</a>
-      </div>
+      <button
+        type="button"
+        class="nav-menu-toggle"
+        aria-controls="primary-nav-menu"
+        aria-expanded="false"
+      >
+        Menu
+      </button>
 
-      <div class="nav-section">
-        <span class="nav-section-label">Operations</span>
-        <a href="{{ url_for('work.work_page') }}" {% if active_page == 'work' %}class="active"{% endif %}>Work</a>
-        <a href="{{ url_for('bots.bots_page') }}" {% if active_page == 'bots' %}class="active"{% endif %}>Bots</a>
-        <a href="{{ url_for('workers.workers_page') }}" {% if active_page == 'workers' %}class="active"{% endif %}>Workers</a>
-        <a href="{{ url_for('schedules.schedules_page') }}" {% if active_page == 'schedules' %}class="active"{% endif %}>Schedules</a>
-        <a href="{{ url_for('supervision.supervision_page') }}" {% if active_page == 'supervision' %}class="active"{% endif %}>Supervision</a>
-        <a href="{{ url_for('tasks.tasks_page') }}" {% if active_page == 'tasks' %}class="active"{% endif %}>Tasks</a>
-      </div>
+      <div id="primary-nav-menu" class="nav-menu">
+        <div class="nav-section">
+          <span class="nav-section-label">Workspace</span>
+          <a href="{{ url_for('main.index') }}" {% if active_page == 'overview' %}class="active"{% endif %}>Overview</a>
+          <a href="{{ url_for('projects.projects_page') }}" {% if active_page == 'projects' %}class="active"{% endif %}>Projects</a>
+          <a href="{{ url_for('chat.chat_page') }}" {% if active_page == 'chat' %}class="active"{% endif %}>Chat</a>
+        </div>
 
-      <div class="nav-section">
-        <span class="nav-section-label">Build</span>
-        <a href="{{ url_for('pipelines.pipelines_page') }}" {% if active_page == 'pipelines' %}class="active"{% endif %}>Pipelines</a>
-        <a href="{{ url_for('platform_ai.platform_ai_page') }}" {% if active_page == 'platform_ai' %}class="active"{% endif %}>Platform AI</a>
-        <a href="{{ url_for('vault.vault_page') }}" {% if active_page == 'vault' %}class="active"{% endif %}>Vault</a>
-      </div>
+        <div class="nav-section">
+          <span class="nav-section-label">Operations</span>
+          <a href="{{ url_for('work.work_page') }}" {% if active_page == 'work' %}class="active"{% endif %}>Work</a>
+          <a href="{{ url_for('bots.bots_page') }}" {% if active_page == 'bots' %}class="active"{% endif %}>Bots</a>
+          <a href="{{ url_for('workers.workers_page') }}" {% if active_page == 'workers' %}class="active"{% endif %}>Workers</a>
+          <a href="{{ url_for('schedules.schedules_page') }}" {% if active_page == 'schedules' %}class="active"{% endif %}>Schedules</a>
+          <a href="{{ url_for('supervision.supervision_page') }}" {% if active_page == 'supervision' %}class="active"{% endif %}>Supervision</a>
+          <a href="{{ url_for('tasks.tasks_page') }}" {% if active_page == 'tasks' %}class="active"{% endif %}>Tasks</a>
+        </div>
 
-      {% if current_user.role == 'admin' %}
-      <div class="nav-section nav-section-admin">
-        <span class="nav-section-label">Admin</span>
-        <a href="{{ url_for('users.users_page') }}" {% if active_page == 'users' %}class="active"{% endif %}>Users</a>
-        <a href="{{ url_for('settings.settings_page') }}" {% if active_page == 'settings' %}class="active"{% endif %}>Settings</a>
-      </div>
-      {% endif %}
+        <div class="nav-section">
+          <span class="nav-section-label">Build</span>
+          <a href="{{ url_for('pipelines.pipelines_page') }}" {% if active_page == 'pipelines' %}class="active"{% endif %}>Pipelines</a>
+          <a href="{{ url_for('platform_ai.platform_ai_page') }}" {% if active_page == 'platform_ai' %}class="active"{% endif %}>Platform AI</a>
+          <a href="{{ url_for('vault.vault_page') }}" {% if active_page == 'vault' %}class="active"{% endif %}>Vault</a>
+        </div>
 
-      <div class="nav-account">
-        <span class="nav-account-label">Signed in as</span>
-        <span class="nav-user">{{ current_user.email }}</span>
-        <a href="{{ url_for('auth.logout') }}" class="nav-logout">Logout</a>
+        {% if current_user.role == 'admin' %}
+        <div class="nav-section nav-section-admin">
+          <span class="nav-section-label">Admin</span>
+          <a href="{{ url_for('users.users_page') }}" {% if active_page == 'users' %}class="active"{% endif %}>Users</a>
+          <a href="{{ url_for('settings.settings_page') }}" {% if active_page == 'settings' %}class="active"{% endif %}>Settings</a>
+        </div>
+        {% endif %}
+
+        <div class="nav-account">
+          <span class="nav-account-label">Signed in as</span>
+          <span class="nav-user">{{ current_user.email }}</span>
+          <a href="{{ url_for('auth.logout') }}" class="nav-logout">Logout</a>
+        </div>
       </div>
     </nav>
 
@@ -75,5 +86,13 @@
     </main>
   </div>
   {% block scripts %}{% endblock %}
+  <script>
+    document.querySelector('.nav-menu-toggle')?.addEventListener('click', function() {
+      const menu = document.getElementById('primary-nav-menu');
+      const expanded = this.getAttribute('aria-expanded') === 'true';
+      this.setAttribute('aria-expanded', expanded ? 'false' : 'true');
+      if (menu) menu.classList.toggle('nav-menu-open', !expanded);
+    });
+  </script>
 </body>
 </html>

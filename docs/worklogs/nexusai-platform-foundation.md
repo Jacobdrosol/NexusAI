@@ -6,7 +6,7 @@ Improve NexusAI one scoped platform foundation at a time so it can become the pr
 
 ## Current Scope
 
-Current item: make Work Overview bot usage pressure actionable with bot hourly cap set/clear controls.
+Current item: complete. Next platform slice should focus on making Chat usable as the daily NexusAI workspace before adding more autonomous site-work features.
 
 ## Completion Criteria For This Item
 

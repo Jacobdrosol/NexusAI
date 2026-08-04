@@ -749,8 +749,13 @@ function applyConversationProjectFilter() {
   let activeVisible = 0;
   let archivedVisible = 0;
   rows.forEach((row) => {
-    const matches = true;
-    row.hidden = false;
+    const primaryProjectId = String(row.dataset.projectId || '').trim();
+    const bridgeProjectIds = String(row.dataset.bridgeProjectIds || '')
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean);
+    const matches = !projectFilter || primaryProjectId === projectFilter || bridgeProjectIds.includes(projectFilter);
+    row.hidden = !matches;
     const archived = !!row.closest('.chat-archived-list');
     if (matches) {
       if (archived) archivedVisible += 1;

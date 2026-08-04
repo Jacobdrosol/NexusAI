@@ -2582,33 +2582,65 @@ select.form-control {
 /* ── Application shell ───────────────────────────────────────────────────── */
 .app-shell {
   display: grid;
-  grid-template-columns: 248px minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   min-height: 100dvh;
 }
 
 .app-sidebar {
   position: sticky;
   top: 0;
-  height: 100dvh;
   display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 0;
-  padding: 1rem 0.75rem 0.85rem;
-  overflow-y: auto;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  width: 100%;
+  max-width: 100vw;
+  min-height: 3.6rem;
+  padding: 0.45rem 0.75rem;
+  overflow: visible;
   background: rgba(12, 21, 33, 0.96);
-  border-right: 1px solid var(--line);
-  border-bottom: 0;
+  border-right: 0;
+  border-bottom: 1px solid var(--line);
   backdrop-filter: blur(12px);
+  z-index: 20;
 }
 
 .app-sidebar .brand {
   display: flex;
   align-items: center;
   gap: 0.7rem;
-  margin: 0 0 1.25rem;
+  margin: 0;
   padding: 0.45rem 0.5rem;
   color: var(--ink);
+  flex: 0 0 auto;
+}
+
+.nav-menu-toggle {
+  display: none;
+  margin-left: auto;
+  padding: 0.45rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: rgba(148, 163, 184, 0.08);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.86rem;
+  cursor: pointer;
+}
+
+.nav-menu-toggle:hover,
+.nav-menu-toggle:focus {
+  border-color: rgba(45, 212, 191, 0.55);
+  color: #f8fbff;
+}
+
+.nav-menu {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .brand-mark {
@@ -2641,28 +2673,25 @@ select.form-control {
 }
 
 .app-sidebar .nav-section {
-  display: grid;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   gap: 0.1rem;
-  margin-bottom: 1rem;
+  margin: 0;
 }
 
 .app-sidebar .nav-section-label {
-  padding: 0 0.5rem;
-  margin: 0 0 0.3rem;
-  color: #71839c;
-  font-size: 0.68rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  display: none;
 }
 
 .app-sidebar a:not(.brand) {
   display: block;
-  padding: 0.46rem 0.5rem;
-  border-left: 2px solid transparent;
+  padding: 0.34rem 0.42rem;
+  border-left: 0;
+  border-bottom: 2px solid transparent;
   border-radius: 4px;
   color: var(--muted);
-  font-size: 0.86rem;
+  font-size: 0.8rem;
   font-weight: 500;
 }
 
@@ -2673,20 +2702,24 @@ select.form-control {
 }
 
 .app-sidebar a:not(.brand).active {
-  border-left-color: var(--brand);
+  border-bottom-color: var(--brand);
   background: rgba(45, 212, 191, 0.1);
   color: #e8fffb;
 }
 
 .app-sidebar .nav-account {
-  display: grid;
+  display: flex;
+  align-items: center;
   gap: 0.25rem;
-  margin-top: auto;
-  padding: 0.8rem 0.5rem 0.1rem;
-  border-top: 1px solid var(--line);
+  flex: 0 1 auto;
+  margin-left: auto;
+  padding: 0 0 0 0.8rem;
+  border-top: 0;
+  border-left: 1px solid var(--line);
 }
 
 .nav-account-label {
+  display: none;
   color: #71839c;
   font-size: 0.68rem;
   font-weight: 700;
@@ -2696,15 +2729,16 @@ select.form-control {
 
 .app-sidebar .nav-user {
   overflow: hidden;
+  max-width: 170px;
   color: var(--ink);
-  font-size: 0.78rem;
+  font-size: 0.74rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .app-sidebar .nav-logout {
   width: fit-content;
-  padding-left: 0;
+  padding: 0.2rem 0 0.2rem 0.35rem;
   color: var(--link);
   font-size: 0.78rem;
 }
@@ -2748,8 +2782,7 @@ select.form-control {
   display: block;
 }
 
-.page-chat .app-shell,
-.page-chat .app-main {
+.page-chat .app-shell {
   height: 100dvh;
   min-height: 0;
 }
@@ -2757,6 +2790,7 @@ select.form-control {
 .page-chat .app-main {
   display: flex;
   flex-direction: column;
+  min-height: 0;
 }
 
 .page-chat .app-sidebar {
@@ -2780,51 +2814,21 @@ select.form-control {
 }
 
 @media (max-width: 1050px) {
-  .app-shell {
-    grid-template-columns: 1fr;
-  }
-
   .app-sidebar {
-    position: static;
-    height: auto;
-    display: flex;
-    flex-flow: row wrap;
-    align-items: center;
-    gap: 0.3rem 0.55rem;
     padding: 0.55rem 0.75rem;
-    overflow: visible;
-    border-right: 0;
-    border-bottom: 1px solid var(--line);
   }
 
-  .app-sidebar .brand {
-    margin: 0 0.2rem 0 0;
-    padding: 0.2rem;
+  .nav-menu {
+    gap: 0.4rem;
   }
 
-  .app-sidebar .brand-lockup small,
-  .app-sidebar .nav-section-label,
-  .app-sidebar .nav-account {
+  .app-sidebar .nav-section-label {
     display: none;
-  }
-
-  .app-sidebar .nav-section {
-    display: flex;
-    flex: 0 1 auto;
-    gap: 0.1rem;
-    margin: 0;
   }
 
   .app-sidebar a:not(.brand) {
     padding: 0.35rem 0.42rem;
-    border-left: 0;
-    border-bottom: 2px solid transparent;
     font-size: 0.78rem;
-  }
-
-  .app-sidebar a:not(.brand).active {
-    border-left-color: transparent;
-    border-bottom-color: var(--brand);
   }
 
   .app-topbar {
@@ -2844,5 +2848,81 @@ select.form-control {
   .page-chat .app-sidebar {
     background: #171717;
     border-bottom-color: #303030;
+  }
+}
+
+@media (max-width: 760px) {
+  .app-sidebar {
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .app-sidebar .brand {
+    padding-left: 0.2rem;
+  }
+
+  .nav-menu-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .nav-menu {
+    display: none;
+    flex: 1 0 100%;
+    width: 100%;
+    align-items: stretch;
+    gap: 0.75rem;
+    padding: 0.25rem 0 0.4rem;
+  }
+
+  .nav-menu.nav-menu-open {
+    display: grid;
+  }
+
+  .app-sidebar .nav-section {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 0.25rem;
+  }
+
+  .app-sidebar .nav-section-label {
+    display: block;
+    grid-column: 1 / -1;
+    padding: 0.35rem 0.2rem 0;
+    margin: 0;
+    color: #71839c;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .app-sidebar a:not(.brand) {
+    min-height: 2.35rem;
+    padding: 0.45rem 0.55rem;
+    border-bottom: 0;
+    border-left: 2px solid transparent;
+  }
+
+  .app-sidebar a:not(.brand).active {
+    border-left-color: var(--brand);
+    border-bottom-color: transparent;
+  }
+
+  .app-sidebar .nav-account {
+    display: grid;
+    margin-left: 0;
+    padding: 0.6rem 0.2rem 0;
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+
+  .app-sidebar .nav-user {
+    max-width: 100%;
+  }
+
+  .app-sidebar .nav-logout {
+    padding-left: 0;
   }
 }
