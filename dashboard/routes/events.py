@@ -7,6 +7,7 @@ from typing import Generator
 
 from flask import Blueprint, Response, stream_with_context
 from flask_login import login_required
+from sqlalchemy import func
 
 from dashboard.db import get_db
 from dashboard.models import Bot, Task, Worker
@@ -18,17 +19,17 @@ def _build_snapshot() -> str:
     """Query current stats and return as an SSE-formatted data line."""
     db = get_db()
     try:
-        total_workers = db.query(Worker).count()
-        online_workers = db.query(Worker).filter(Worker.status == "online").count()
-        offline_workers = db.query(Worker).filter(Worker.status == "offline").count()
-        active_bots = db.query(Bot).filter(Bot.enabled.is_(True)).count()
-        queued_tasks = db.query(Task).filter(Task.status == "queued").count()
-        blocked_tasks = db.query(Task).filter(Task.status == "blocked").count()
-        running_tasks = db.query(Task).filter(Task.status == "running").count()
-        completed_tasks = db.query(Task).filter(Task.status == "completed").count()
-        failed_tasks = db.query(Task).filter(Task.status == "failed").count()
-        retried_tasks = db.query(Task).filter(Task.status == "retried").count()
-        cancelled_tasks = db.query(Task).filter(Task.status == "cancelled").count()
+        total_workers = db.query(func.count(Worker.id)).scalar() or 0
+        online_workers = db.query(func.count(Worker.id)).filter(Worker.status == "online").scalar() or 0
+        offline_workers = db.query(func.count(Worker.id)).filter(Worker.status == "offline").scalar() or 0
+        active_bots = db.query(func.count(Bot.id)).filter(Bot.enabled.is_(True)).scalar() or 0
+        queued_tasks = db.query(func.count(Task.id)).filter(Task.status == "queued").scalar() or 0
+        blocked_tasks = db.query(func.count(Task.id)).filter(Task.status == "blocked").scalar() or 0
+        running_tasks = db.query(func.count(Task.id)).filter(Task.status == "running").scalar() or 0
+        completed_tasks = db.query(func.count(Task.id)).filter(Task.status == "completed").scalar() or 0
+        failed_tasks = db.query(func.count(Task.id)).filter(Task.status == "failed").scalar() or 0
+        retried_tasks = db.query(func.count(Task.id)).filter(Task.status == "retried").scalar() or 0
+        cancelled_tasks = db.query(func.count(Task.id)).filter(Task.status == "cancelled").scalar() or 0
         payload = {
             "workers": {
                 "total": total_workers,

@@ -15,10 +15,11 @@
 {% if error %}
 <div class="alert alert-error">{{ error }}</div>
 {% endif %}
+<div class="table-scroll">
 <table id="bots-table">
   <thead>
     <tr>
-      <th>Name</th><th>Role</th><th>Priority</th><th>Enabled</th><th>Readiness</th><th>Dispatch mode</th><th>Backends</th><th>Actions</th>
+      <th>Name</th><th>Role</th><th>Chat profile</th><th>Priority</th><th>Enabled</th><th>Readiness</th><th>Dispatch mode</th><th>Backends</th><th>Actions</th>
     </tr>
   </thead>
   <tbody>
@@ -26,6 +27,13 @@
     <tr data-id="{{ b.id }}">
       <td><a href="{{ url_for('bots.bot_detail_page', bot_id=b.id) }}">{{ b.name }}</a></td>
       <td>{{ b.role }}</td>
+      <td>
+        {% set profile = b.chat_profile or {'label': 'Chat Only', 'capabilities': []} %}
+        <span class="badge badge-info">{{ profile.label }}</span>
+        {% if profile.capabilities %}
+        <div class="metrics">{{ profile.capabilities | join(', ') }}</div>
+        {% endif %}
+      </td>
       <td>{{ b.priority }}</td>
       <td><span class="badge badge-{{ 'enabled' if b.enabled else 'disabled' }}">{{ 'enabled' if b.enabled else 'disabled' }}</span></td>
       <td>
@@ -50,10 +58,11 @@
       </td>
     </tr>
     {% else %}
-    <tr><td colspan="8" style="text-align:center;color:#718096;">No bots registered</td></tr>
+    <tr><td colspan="9" style="text-align:center;color:#718096;">No bots registered</td></tr>
     {% endfor %}
   </tbody>
 </table>
+</div>
 
 <!-- Add Bot Modal -->
 <div id="modal-add-bot" class="modal" style="display:none;">

@@ -64,13 +64,107 @@ def _merge_routing_rules(data: dict[str, Any], existing: Any = None) -> dict[str
         merged["launch_profile"] = data.get("launch_profile")
     if "external_trigger" in data:
         merged["external_trigger"] = data.get("external_trigger")
+    if "chat_profile" in data:
+        merged["chat_profile"] = data.get("chat_profile")
     return merged
+
+
+_CHAT_PROFILE_LABELS = {
+    "chat": "Chat Only",
+    "tutor": "Tutor / Reasoning",
+    "vision": "Vision / Math",
+    "coding": "Coding",
+    "automation": "Automation",
+}
+
+
+def _dict_from_any(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if value is None:
+        return {}
+    if hasattr(value, "model_dump"):
+        dumped = value.model_dump()
+        return dumped if isinstance(dumped, dict) else {}
+    return {}
+
+
+def _bot_chat_tool_access(bot: dict[str, Any]) -> dict[str, Any]:
+    routing = bot.get("routing_rules") if isinstance(bot.get("routing_rules"), dict) else {}
+    raw = routing.get("chat_tool_access") if isinstance(routing, dict) else None
+    if not isinstance(raw, dict):
+        raw = routing.get("tool_access") if isinstance(routing, dict) else None
+    cfg = raw if isinstance(raw, dict) else {}
+    return {
+        "enabled": bool(cfg.get("enabled", False)),
+        "filesystem": bool(cfg.get("filesystem", False)),
+        "repo_search": bool(cfg.get("repo_search", False)),
+    }
+
+
+def _bot_chat_profile(bot: dict[str, Any]) -> dict[str, Any]:
+    routing = bot.get("routing_rules") if isinstance(bot.get("routing_rules"), dict) else {}
+    raw_profile = routing.get("chat_profile") if isinstance(routing, dict) else None
+    profile = raw_profile if isinstance(raw_profile, dict) else {}
+    tool_access = _bot_chat_tool_access(bot)
+    policy = _dict_from_any(bot.get("execution_policy"))
+    mode = str(profile.get("mode") or "").strip().lower()
+    if mode not in _CHAT_PROFILE_LABELS:
+        if (
+            str(policy.get("repo_output_mode") or "").strip().lower() == "allow"
+            or bool(policy.get("inline_coding_default", False))
+            or bool(tool_access.get("filesystem", False))
+        ):
+            mode = "coding"
+        elif any(
+            str(cap or "").strip().lower() in {"vision", "image", "images", "multimodal", "math"}
+            for backend in bot.get("backends") or []
+            for cap in (
+                backend.get("capabilities", []) if isinstance(backend, dict) and isinstance(backend.get("capabilities"), list) else []
+            )
+        ):
+            mode = "vision"
+        else:
+            mode = "chat"
+    capabilities: list[str] = []
+    if bool(profile.get("attachments", True)):
+        capabilities.append("attachments")
+    if mode in {"vision", "tutor"} or bool(profile.get("image_understanding", False)):
+        capabilities.append("image_understanding")
+    if mode in {"vision", "tutor"} or bool(profile.get("diagrams", False)):
+        capabilities.append("diagrams")
+    if bool(tool_access.get("repo_search", False)):
+        capabilities.append("repo_search")
+    if bool(tool_access.get("filesystem", False)):
+        capabilities.append("filesystem")
+    if bool(policy.get("inline_coding_default", False)):
+        capabilities.append("inline_coding_default")
+    if str(policy.get("repo_output_mode") or "").strip().lower() == "allow":
+        capabilities.append("repo_output")
+    return {
+        "mode": mode,
+        "label": str(profile.get("label") or _CHAT_PROFILE_LABELS[mode]).strip(),
+        "description": str(profile.get("description") or "").strip(),
+        "capabilities": capabilities,
+        "tool_access": tool_access,
+        "repo_output_mode": str(policy.get("repo_output_mode") or "deny").strip().lower(),
+        "inline_coding_default": bool(policy.get("inline_coding_default", False)),
+    }
+
+
+def _with_bot_chat_profiles(bots: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    enriched: list[dict[str, Any]] = []
+    for bot in bots:
+        row = dict(bot)
+        row["chat_profile"] = _bot_chat_profile(row)
+        enriched.append(row)
+    return enriched
 
 
 def _bot_to_dict(b: Bot) -> dict[str, Any]:
     """Serialise a Bot ORM row to a plain dict."""
     routing_rules = json.loads(b.routing_rules) if b.routing_rules else {}
-    return {
+    payload = {
         "id": b.id,
         "name": b.name,
         "role": b.role,
@@ -88,6 +182,8 @@ def _bot_to_dict(b: Bot) -> dict[str, Any]:
         "assignment_capabilities": None,
         "execution_policy": None,
     }
+    payload["chat_profile"] = _bot_chat_profile(payload)
+    return payload
 
 
 def _parse_json(raw: str, default: Any) -> Any:
@@ -344,7 +440,7 @@ def bots_page() -> str:
         schedule_payload = schedule_getter(limit=200) if callable(schedule_getter) else None
         return render_template(
             "bots.html",
-            bots=_with_bot_operating_mode(cp_data, readiness_payload, schedule_payload),
+            bots=_with_bot_chat_profiles(_with_bot_operating_mode(cp_data, readiness_payload, schedule_payload)),
             workers=_cp_catalog_items(cp, "list_workers"),
             models=_cp_catalog_items(cp, "list_models"),
             api_keys=_cp_catalog_items(cp, "list_keys"),
@@ -388,11 +484,11 @@ def bot_detail_page(bot_id: str):
     cp_models = cp.list_models() or []
     cp_keys = cp.list_keys() or []
 
-    if cp_bot is not None and cp_tasks is not None:
-        tasks = [t for t in cp_tasks if str(t.get("bot_id")) == str(bot_id)]
+    if cp_bot is not None:
+        tasks = [t for t in (cp_tasks or []) if str(t.get("bot_id")) == str(bot_id)]
         return render_template(
             "bot_detail.html",
-            bot=cp_bot,
+            bot=_with_bot_chat_profiles([cp_bot])[0],
             tasks=tasks,
             runs=cp_runs,
             artifacts=cp_artifacts,

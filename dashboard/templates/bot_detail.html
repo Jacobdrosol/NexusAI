@@ -153,6 +153,24 @@
 </section>
 
 <section class="panel" style="margin-bottom:1rem;">
+  <h2 class="panel-title">Chat Profile</h2>
+  {% set chat_profile = bot.chat_profile if bot.chat_profile else {'label': 'Chat Only', 'mode': 'chat', 'capabilities': []} %}
+  <div class="split-grid" style="grid-template-columns:1fr 1fr;">
+    <div>
+      <div><strong>Mode:</strong> <span class="badge badge-info">{{ chat_profile.label }}</span></div>
+      <div><strong>Capabilities:</strong> {{ chat_profile.capabilities | join(', ') if chat_profile.capabilities else 'standard chat' }}</div>
+    </div>
+    <div>
+      <div><strong>Repo Output:</strong> {{ chat_profile.repo_output_mode or 'deny' }}</div>
+      <div><strong>Inline Coding Default:</strong> {{ 'yes' if chat_profile.inline_coding_default else 'no' }}</div>
+    </div>
+  </div>
+  {% if chat_profile.description %}
+  <div class="mini-note" style="margin-top:0.65rem;">{{ chat_profile.description }}</div>
+  {% endif %}
+</section>
+
+<section class="panel" style="margin-bottom:1rem;">
   <h2 class="panel-title">Execution Policy</h2>
   {% set policy = bot.execution_policy if bot.execution_policy else {} %}
   {% set db_policy = policy.db_action_policy if policy and policy.db_action_policy else {} %}
@@ -358,6 +376,37 @@
     </div>
   </div>
   <p class="mini-note" style="margin-bottom:0.75rem;">Bot-level workspace tool policy is one gate in a strict 3-switch hierarchy. Tools are available only when bot, project, and chat settings are all enabled.</p>
+  <div class="split-grid" style="grid-template-columns:1fr 1fr;">
+    <div class="form-group">
+      <label>Chat Profile</label>
+      <select class="form-control" id="bot-chat-profile-mode">
+        <option value="chat">Chat Only</option>
+        <option value="tutor">Tutor / Reasoning</option>
+        <option value="vision">Vision / Math</option>
+        <option value="coding">Coding</option>
+        <option value="automation">Automation</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Profile Label</label>
+      <input class="form-control" id="bot-chat-profile-label" maxlength="80" placeholder="Physics Tutor">
+    </div>
+  </div>
+  <div class="form-group">
+    <label>Profile Notes</label>
+    <textarea class="form-control" id="bot-chat-profile-description" rows="2" maxlength="600" placeholder="Short operator-facing purpose for this bot."></textarea>
+  </div>
+  <div class="split-grid" style="grid-template-columns:1fr 1fr 1fr;">
+    <div class="form-group">
+      <label><input type="checkbox" id="bot-chat-profile-attachments"> Attachments</label>
+    </div>
+    <div class="form-group">
+      <label><input type="checkbox" id="bot-chat-profile-images"> Image understanding</label>
+    </div>
+    <div class="form-group">
+      <label><input type="checkbox" id="bot-chat-profile-diagrams"> Diagrams</label>
+    </div>
+  </div>
   <div class="form-group">
     <label><input type="checkbox" id="bot-chat-tool-enabled"> Enable workspace tools for this bot</label>
   </div>
@@ -951,6 +1000,7 @@
 {% endif %}
 {% endblock %}
 {% block scripts %}
+{% if bot %}
 <script>
 const BOT_ID = {{ bot.id|tojson }};
 let BOT = {{ bot|tojson }};
@@ -1053,6 +1103,11 @@ BOT.chat_tool_access = BOT.chat_tool_access && typeof BOT.chat_tool_access === '
     : ((BOT.routing_rules && typeof BOT.routing_rules === 'object' && BOT.routing_rules.tool_access && typeof BOT.routing_rules.tool_access === 'object')
       ? BOT.routing_rules.tool_access
       : {enabled: false, filesystem: false, repo_search: false}));
+BOT.chat_profile = BOT.chat_profile && typeof BOT.chat_profile === 'object'
+  ? BOT.chat_profile
+  : ((BOT.routing_rules && typeof BOT.routing_rules === 'object' && BOT.routing_rules.chat_profile && typeof BOT.routing_rules.chat_profile === 'object')
+    ? BOT.routing_rules.chat_profile
+    : {mode: 'chat', label: 'Chat Only', description: '', attachments: true, image_understanding: false, diagrams: false});
 const ARTIFACTS_BY_TASK = ARTIFACTS.reduce((acc, artifact) => {
   const taskId = String(artifact.task_id || '');
   if (!taskId) return acc;
@@ -1149,6 +1204,7 @@ function botPayloadForSave() {
   routingRules.connection_context = normalizedConnectionContext();
   routingRules.launch_profile = normalizedLaunchProfile();
   routingRules.external_trigger = normalizedExternalTrigger();
+  routingRules.chat_profile = normalizedChatProfile();
   routingRules.chat_tool_access = normalizedChatToolAccess();
   payload.routing_rules = routingRules;
   payload.workflow = BOT.workflow;
@@ -1517,6 +1573,28 @@ function normalizedChatToolAccess() {
   };
 }
 
+function normalizedChatProfile() {
+  const cfg = BOT.chat_profile && typeof BOT.chat_profile === 'object' ? BOT.chat_profile : {};
+  const allowedModes = ['chat', 'tutor', 'vision', 'coding', 'automation'];
+  const requestedMode = String(cfg.mode || '').trim().toLowerCase();
+  const mode = allowedModes.includes(requestedMode) ? requestedMode : 'chat';
+  const defaultLabels = {
+    chat: 'Chat Only',
+    tutor: 'Tutor / Reasoning',
+    vision: 'Vision / Math',
+    coding: 'Coding',
+    automation: 'Automation',
+  };
+  return {
+    mode,
+    label: String(cfg.label || defaultLabels[mode] || 'Chat Only').trim(),
+    description: String(cfg.description || '').trim(),
+    attachments: cfg.attachments !== false,
+    image_understanding: cfg.image_understanding === true,
+    diagrams: cfg.diagrams === true,
+  };
+}
+
 function syncChatToolAccessInputs() {
   const enabled = !!document.getElementById('bot-chat-tool-enabled')?.checked;
   const filesystem = document.getElementById('bot-chat-tool-filesystem');
@@ -1532,6 +1610,19 @@ function syncChatToolAccessInputs() {
 }
 
 function loadChatToolAccessEditor() {
+  const profile = normalizedChatProfile();
+  const profileMode = document.getElementById('bot-chat-profile-mode');
+  const profileLabel = document.getElementById('bot-chat-profile-label');
+  const profileDescription = document.getElementById('bot-chat-profile-description');
+  const profileAttachments = document.getElementById('bot-chat-profile-attachments');
+  const profileImages = document.getElementById('bot-chat-profile-images');
+  const profileDiagrams = document.getElementById('bot-chat-profile-diagrams');
+  if (profileMode) profileMode.value = profile.mode;
+  if (profileLabel) profileLabel.value = profile.label;
+  if (profileDescription) profileDescription.value = profile.description;
+  if (profileAttachments) profileAttachments.checked = profile.attachments !== false;
+  if (profileImages) profileImages.checked = profile.image_understanding === true;
+  if (profileDiagrams) profileDiagrams.checked = profile.diagrams === true;
   const cfg = normalizedChatToolAccess();
   const enabled = document.getElementById('bot-chat-tool-enabled');
   const filesystem = document.getElementById('bot-chat-tool-filesystem');
@@ -1543,6 +1634,14 @@ function loadChatToolAccessEditor() {
 }
 
 function saveChatToolAccess() {
+  BOT.chat_profile = {
+    mode: String(document.getElementById('bot-chat-profile-mode')?.value || 'chat').trim() || 'chat',
+    label: String(document.getElementById('bot-chat-profile-label')?.value || '').trim(),
+    description: String(document.getElementById('bot-chat-profile-description')?.value || '').trim(),
+    attachments: !!document.getElementById('bot-chat-profile-attachments')?.checked,
+    image_understanding: !!document.getElementById('bot-chat-profile-images')?.checked,
+    diagrams: !!document.getElementById('bot-chat-profile-diagrams')?.checked,
+  };
   BOT.chat_tool_access = {
     enabled: !!document.getElementById('bot-chat-tool-enabled')?.checked,
     filesystem: !!document.getElementById('bot-chat-tool-filesystem')?.checked,
@@ -2392,4 +2491,5 @@ document.querySelector('#form-backend select[name=type]')?.addEventListener('cha
 });
 document.getElementById('bot-chat-tool-enabled')?.addEventListener('change', syncChatToolAccessInputs);
 </script>
+{% endif %}
 {% endblock %}

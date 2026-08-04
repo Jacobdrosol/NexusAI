@@ -786,6 +786,20 @@ def test_vault_page_loads_when_logged_in(dashboard_client):
     assert b"Upload / Ingest" in resp.data
 
 
+def test_events_stream_emits_dashboard_counts(dashboard_client):
+    _login_admin(dashboard_client)
+
+    resp = dashboard_client.get("/events", buffered=False)
+
+    assert resp.status_code == 200
+    first_frame = next(resp.response).decode()
+    assert first_frame.startswith("data: ")
+    payload = json.loads(first_frame.removeprefix("data: ").strip())
+    assert "workers" in payload
+    assert "bots" in payload
+    assert "tasks" in payload
+
+
 def test_bot_detail_page_loads_when_logged_in(dashboard_client):
     _login_admin(dashboard_client)
     from dashboard.db import get_db
@@ -820,6 +834,124 @@ def test_bot_detail_page_loads_when_logged_in(dashboard_client):
     assert b"Auto: 1024 for local Ollama chat" in resp.data
     assert b"Context Window" in resp.data
     assert b"GPU Layers" in resp.data
+
+
+def test_bot_detail_page_renders_chat_profile_controls(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def get_bot(self, bot_id):
+            return {
+                "id": bot_id,
+                "name": "Coding Helper",
+                "role": "coder",
+                "priority": 1,
+                "enabled": True,
+                "backends": [],
+                "routing_rules": {
+                    "chat_profile": {
+                        "mode": "coding",
+                        "label": "Coding",
+                        "description": "Repo-scoped coding chat.",
+                        "attachments": True,
+                        "diagrams": False,
+                        "image_understanding": False,
+                    },
+                    "chat_tool_access": {
+                        "enabled": True,
+                        "filesystem": True,
+                        "repo_search": True,
+                    },
+                },
+                "execution_policy": {
+                    "repo_output_mode": "allow",
+                    "inline_coding_default": True,
+                },
+            }
+
+        def get_bot_readiness(self, bot_id):
+            return {"bot_id": bot_id, "ready": True, "summary": {"checks": 0, "blocking": 0, "warnings": 0}, "checks": []}
+
+        def get_bot_dependencies(self, bot_id):
+            return {"dependencies": []}
+
+        def list_tasks(self, **kwargs):
+            return []
+
+        def list_bot_runs(self, bot_id, **kwargs):
+            return []
+
+        def list_bot_artifacts(self, bot_id, **kwargs):
+            return []
+
+        def list_workers(self):
+            return []
+
+        def list_models(self):
+            return []
+
+        def list_keys(self):
+            return []
+
+    with patch("dashboard.cp_client.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/bots/coding-helper")
+
+    assert resp.status_code == 200
+    assert b"Chat Profile" in resp.data
+    assert b"Coding" in resp.data
+    assert b"repo_search" in resp.data
+    assert b"filesystem" in resp.data
+    assert b'id="bot-chat-profile-mode"' in resp.data
+    assert b'id="bot-chat-profile-description"' in resp.data
+    assert b'id="bot-chat-profile-diagrams"' in resp.data
+
+
+def test_bot_detail_page_still_loads_when_history_endpoints_fail(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def get_bot(self, bot_id):
+            return {
+                "id": bot_id,
+                "name": "History Fault Bot",
+                "role": "assistant",
+                "priority": 1,
+                "enabled": True,
+                "backends": [],
+                "routing_rules": {},
+                "execution_policy": {},
+            }
+
+        def get_bot_readiness(self, bot_id):
+            return None
+
+        def get_bot_dependencies(self, bot_id):
+            return None
+
+        def list_tasks(self, **kwargs):
+            return None
+
+        def list_bot_runs(self, bot_id, **kwargs):
+            return None
+
+        def list_bot_artifacts(self, bot_id, **kwargs):
+            return None
+
+        def list_workers(self):
+            return []
+
+        def list_models(self):
+            return []
+
+        def list_keys(self):
+            return []
+
+    with patch("dashboard.cp_client.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/bots/history-fault-bot")
+
+    assert resp.status_code == 200
+    assert b"History Fault Bot" in resp.data
+    assert b"Chat Profile" in resp.data
 
 
 def test_bot_test_run_api_proxies_to_control_plane(dashboard_client):
@@ -2609,6 +2741,72 @@ def test_bots_page_identifies_scheduled_and_manual_dispatch_modes(dashboard_clie
     assert b"manual" in resp.data
     assert b"paused" in resp.data
     assert b"disabled" in resp.data
+
+
+def test_bots_page_surfaces_bot_scoped_chat_profiles(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_bots(self):
+            return [
+                {
+                    "id": "chat-only",
+                    "name": "Chat Only",
+                    "role": "assistant",
+                    "enabled": True,
+                    "backends": [],
+                    "routing_rules": {},
+                    "execution_policy": {"repo_output_mode": "deny"},
+                },
+                {
+                    "id": "repo-coder",
+                    "name": "Repo Coder",
+                    "role": "coder",
+                    "enabled": True,
+                    "backends": [],
+                    "routing_rules": {
+                        "chat_tool_access": {
+                            "enabled": True,
+                            "filesystem": True,
+                            "repo_search": True,
+                        }
+                    },
+                    "execution_policy": {
+                        "repo_output_mode": "allow",
+                        "inline_coding_default": True,
+                    },
+                },
+            ]
+
+        def list_bot_readiness(self):
+            return {"readiness": []}
+
+        def list_schedules(self, **kwargs):
+            return {"schedules": []}
+
+        def list_workers(self):
+            return []
+
+        def list_models(self):
+            return []
+
+        def list_keys(self):
+            return []
+
+        def list_projects(self):
+            return []
+
+    with patch("dashboard.cp_client.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/bots")
+
+    assert resp.status_code == 200
+    assert b"Chat profile" in resp.data
+    assert b"Chat Only" in resp.data
+    assert b"Coding" in resp.data
+    assert b"attachments" in resp.data
+    assert b"repo_search" in resp.data
+    assert b"filesystem" in resp.data
+    assert b"repo_output" in resp.data
 
 
 def test_worker_live_endpoint_returns_payload(dashboard_client):
