@@ -41,6 +41,7 @@
 {% set attention_lanes = overview.attention_lanes or [] %}
 {% set queue_pressure_lanes = overview.queue_pressure_lanes or [] %}
 {% set usage_pressure_lanes = overview.usage_pressure_lanes or [] %}
+{% set bot_cap_audit = overview.bot_cap_audit or [] %}
 <div class="cards">
   <div class="card">
     <div class="card-label">Needs Attention</div>
@@ -249,6 +250,31 @@
             </tr>
             {% else %}
             <tr><td colspan="6" class="empty">No bot hourly caps are active for measured usage</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <h3 class="panel-title" style="font-size:1rem;margin-top:1rem;">Bot Cap Audit</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Changed</th><th>By</th><th>Overrides</th><th>Changed Bots</th></tr></thead>
+          <tbody>
+            {% for row in bot_cap_audit %}
+            <tr>
+              <td>{{ row.changed_at }}</td>
+              <td>{{ row.changed_by }}</td>
+              <td>{{ row.override_count }}</td>
+              <td>
+                {% for bot_id in row.changed_bots %}
+                <code>{{ bot_id }}</code>{% if not loop.last %}, {% endif %}
+                {% endfor %}
+                {% if row.changed_bot_count > row.changed_bots|length %}
+                <span class="mini-note">+{{ row.changed_bot_count - row.changed_bots|length }} more</span>
+                {% endif %}
+              </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="4" class="empty">No recent bot cap changes</td></tr>
             {% endfor %}
           </tbody>
         </table>

@@ -623,6 +623,80 @@ def test_work_overview_routes_require_admin_role(dashboard_client):
     assert dashboard_client.get("/api/work/overview").status_code == 403
     assert dashboard_client.get("/api/work/lane?project_id=globeiq").status_code == 403
     assert dashboard_client.get("/api/work/orchestration?orchestration_id=orch-1").status_code == 403
+    assert dashboard_client.post("/api/work/stop", json={"project_id": "globeiq"}).status_code == 403
+    assert dashboard_client.post("/api/work/orchestration/stop", json={"orchestration_id": "orch-1"}).status_code == 403
+    assert dashboard_client.post("/api/work/hold", json={"action": "hold", "project_id": "globeiq"}).status_code == 403
+    assert dashboard_client.post(
+        "/api/work/bot-cap",
+        json={"action": "set", "bot_id": "audit-reader", "hourly_limit": 50000},
+    ).status_code == 403
+
+
+def test_work_overview_surfaces_bot_cap_audit_rows(dashboard_client, tmp_path):
+    from shared.settings_manager import SettingsManager
+
+    _login_admin(dashboard_client)
+    original_settings = SettingsManager._instance
+    SettingsManager._instance = SettingsManager(str(tmp_path / "work-bot-cap-audit.db"))
+
+    class FakeCP:
+        def list_tasks(self, *args, **kwargs):
+            return []
+
+        def list_projects(self, *args, **kwargs):
+            return []
+
+        def list_bots(self, *args, **kwargs):
+            return []
+
+        def list_workers(self, *args, **kwargs):
+            return []
+
+        def list_work_dispatch_holds(self, *args, **kwargs):
+            return {"holds": []}
+
+        def task_usage(self, *args, **kwargs):
+            return {
+                "totals": {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                    "tasks_with_usage": 0,
+                    "tasks_without_usage": 0,
+                },
+                "by_project": [],
+                "by_manager": [],
+                "by_bot": [],
+                "by_provider_model": [],
+                "token_governor": {
+                    "enabled": True,
+                    "limits": {"bot_hourly_tokens": 100000, "bot_hourly_token_overrides": {"audit-reader": 50000}},
+                },
+            }
+
+    try:
+        SettingsManager._instance.set(
+            "token_governor_bot_hourly_limits",
+            json.dumps({"audit-reader": 50000}),
+            changed_by="operator@test.com",
+        )
+
+        with patch("dashboard.routes.work.get_cp_client", return_value=FakeCP()):
+            api_resp = dashboard_client.get("/api/work/overview")
+            page_resp = dashboard_client.get("/work")
+
+        assert api_resp.status_code == 200
+        data = api_resp.get_json()
+        assert data["bot_cap_audit"][0]["changed_by"] == "operator@test.com"
+        assert data["bot_cap_audit"][0]["override_count"] == 1
+        assert data["bot_cap_audit"][0]["changed_bots"] == ["audit-reader"]
+
+        assert page_resp.status_code == 200
+        assert b"Bot Cap Audit" in page_resp.data
+        assert b"operator@test.com" in page_resp.data
+        assert b"audit-reader" in page_resp.data
+    finally:
+        SettingsManager._instance = original_settings
 
 
 def test_work_overview_surfaces_partial_control_plane_data(dashboard_client):

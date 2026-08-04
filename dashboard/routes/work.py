@@ -128,6 +128,49 @@ def _usage_pressure_lanes(usage: dict[str, Any], *, limit: int = 10) -> list[dic
     return rows[: max(1, int(limit or 10))]
 
 
+def _parse_json_object(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    if not isinstance(raw, str) or not raw.strip():
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _bot_cap_audit_rows(*, limit: int = 8) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    try:
+        audit_log = SettingsManager.instance().get_audit_log(50)
+    except Exception:
+        return rows
+
+    for item in audit_log:
+        if not isinstance(item, dict) or item.get("key") != "token_governor_bot_hourly_limits":
+            continue
+        old_limits = _parse_json_object(item.get("old_value"))
+        new_limits = _parse_json_object(item.get("new_value"))
+        changed_bots = sorted(
+            str(bot_id)
+            for bot_id in set(old_limits) | set(new_limits)
+            if old_limits.get(bot_id) != new_limits.get(bot_id)
+        )
+        rows.append(
+            {
+                "changed_at": item.get("changed_at") or "",
+                "changed_by": item.get("changed_by") or "unknown",
+                "override_count": len(new_limits),
+                "changed_bots": changed_bots[:8],
+                "changed_bot_count": len(changed_bots),
+            }
+        )
+        if len(rows) >= max(1, int(limit or 8)):
+            break
+    return rows
+
+
 def _safe_count(container: dict[str, Any], key: str) -> int:
     try:
         return max(0, int(container.get(key) or 0))
@@ -349,6 +392,7 @@ def _load_work_overview() -> dict[str, Any]:
         overview["usage"] = _empty_usage_summary()
     overview["usage_health"] = _usage_health(overview["usage"])
     overview["usage_pressure_lanes"] = _usage_pressure_lanes(overview["usage"])
+    overview["bot_cap_audit"] = _bot_cap_audit_rows()
     _attach_attention_summary(overview)
     return overview
 
