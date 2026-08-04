@@ -294,6 +294,14 @@ async def test_token_governor_rejects_manager_when_hourly_budget_would_be_exceed
         await asyncio.sleep(0.05)
 
     assert updated.status == "completed"
+    manager_key = "globeiq::audit-manager"
+    for _ in range(40):
+        usage = await tm._token_usage_totals_since(hours=1)
+        manager_used = int((usage.get("by_manager") or {}).get(manager_key, {}).get("total_tokens") or 0)
+        if manager_used >= 80:
+            break
+        await asyncio.sleep(0.05)
+    assert manager_used == 80
     with pytest.raises(ValueError, match="manager 'audit-manager' in project 'globeiq'"):
         await tm.create_task(
             bot_id="lesson-auditor-b",

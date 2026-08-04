@@ -34,6 +34,14 @@ def _manager_id_for_task(task: dict[str, Any]) -> str:
     return bot_id or "unassigned-manager"
 
 
+def project_id_for_task(task: dict[str, Any]) -> str:
+    return _project_id_for_task(task)
+
+
+def manager_id_for_task(task: dict[str, Any]) -> str:
+    return _manager_id_for_task(task)
+
+
 def _is_qc_task(task: dict[str, Any], bot_lookup: dict[str, dict[str, Any]]) -> bool:
     bot_id = str(task.get("bot_id") or "").strip()
     bot = bot_lookup.get(bot_id) or {}

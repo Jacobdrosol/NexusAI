@@ -9,6 +9,7 @@
 {% if error %}
 <div class="alert alert-error">{{ error }}</div>
 {% endif %}
+<input type="hidden" id="csrf-token" value="{{ csrf_token() }}">
 
 {% set totals = overview.totals or {} %}
 {% set workers = overview.workers or {} %}
@@ -117,6 +118,13 @@
           {% if project.totals.qc %}
           <span class="badge badge-ready">{{ project.totals.qc }} QC</span>
           {% endif %}
+          {% if (project.totals.active or 0) + (project.totals.waiting or 0) > 0 %}
+          <button class="btn btn-sm btn-danger"
+                  type="button"
+                  onclick="stopWork({project_id: {{ project.project_id|tojson }}, manager_id: '', label: {{ project.project_name|tojson }}})">
+            Stop Project
+          </button>
+          {% endif %}
         </div>
       </div>
       <div class="table-wrap">
@@ -133,6 +141,7 @@
               <th>Total</th>
               <th>Top Bots</th>
               <th>Latest Work</th>
+              <th>Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -171,6 +180,17 @@
                 {% else %}
                 <span class="empty">No active task rows</span>
                 {% endfor %}
+              </td>
+              <td>
+                {% if (manager.totals.active or 0) + (manager.totals.waiting or 0) > 0 %}
+                <button class="btn btn-sm btn-danger"
+                        type="button"
+                        onclick="stopWork({project_id: {{ project.project_id|tojson }}, manager_id: {{ manager.manager_id|tojson }}, label: {{ manager.manager_name|tojson }}})">
+                  Stop Lane
+                </button>
+                {% else %}
+                <span class="empty">No active work</span>
+                {% endif %}
               </td>
             </tr>
             {% endfor %}
@@ -253,4 +273,40 @@
     </section>
   </aside>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+var _csrfToken = document.getElementById('csrf-token').value;
+
+function stopWork(scope) {
+  var label = scope.label || scope.manager_id || scope.project_id;
+  var target = scope.manager_id ? 'manager lane' : 'project';
+  if (!confirm('Stop active and waiting work for this ' + target + ': ' + label + '?')) {
+    return;
+  }
+  fetch('/api/work/stop', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-CSRFToken': _csrfToken},
+    body: JSON.stringify({
+      project_id: scope.project_id,
+      manager_id: scope.manager_id || '',
+      reason: 'operator_stopped_from_work_overview'
+    })
+  })
+  .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, status: r.status, data: d}; }); })
+  .then(function(res) {
+    if (!res.ok && res.status !== 207) {
+      alert('Stop failed: ' + (res.data.error || 'unknown error'));
+      return;
+    }
+    var failed = res.data.failed_task_count || 0;
+    var message = 'Cancelled ' + (res.data.cancelled_task_count || 0) + ' task(s).';
+    if (failed) message += ' Failed: ' + failed + '.';
+    alert(message);
+    window.location.reload();
+  })
+  .catch(function(e) { alert('Network error: ' + e); });
+}
+</script>
 {% endblock %}

@@ -151,3 +151,119 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"Usage By Project And Manager" in resp.data
     assert b"ollama_cloud" in resp.data
     assert b"qwen3.5:cloud" in resp.data
+    assert b"Stop Project" in resp.data
+    assert b"Stop Lane" in resp.data
+
+
+def test_work_stop_api_dry_run_filters_stoppable_project_manager_tasks(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_tasks(self, **kwargs):
+            assert kwargs["include_content"] is False
+            return [
+                {
+                    "id": "running-target",
+                    "bot_id": "lesson-writer",
+                    "status": "running",
+                    "metadata": {"project_id": "globeiq", "root_pm_bot_id": "manager-a"},
+                },
+                {
+                    "id": "queued-target",
+                    "bot_id": "lesson-qc",
+                    "status": "queued",
+                    "metadata": {"project_id": "globeiq", "root_pm_bot_id": "manager-a"},
+                },
+                {
+                    "id": "completed-ignore",
+                    "bot_id": "lesson-writer",
+                    "status": "completed",
+                    "metadata": {"project_id": "globeiq", "root_pm_bot_id": "manager-a"},
+                },
+                {
+                    "id": "other-manager-ignore",
+                    "bot_id": "lesson-writer",
+                    "status": "running",
+                    "metadata": {"project_id": "globeiq", "root_pm_bot_id": "manager-b"},
+                },
+                {
+                    "id": "other-project-ignore",
+                    "bot_id": "lesson-writer",
+                    "status": "running",
+                    "metadata": {"project_id": "other", "root_pm_bot_id": "manager-a"},
+                },
+            ]
+
+    with patch("dashboard.routes.work.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/work/stop",
+            json={"project_id": "globeiq", "manager_id": "manager-a", "dry_run": True},
+        )
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["status"] == "dry_run"
+    assert data["matched_task_count"] == 2
+    assert [task["id"] for task in data["tasks"]] == ["running-target", "queued-target"]
+
+
+def test_work_stop_api_cancels_selected_project_work_only(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def __init__(self):
+            self.cancelled = []
+
+        def list_tasks(self, **kwargs):
+            return [
+                {
+                    "id": "running-target",
+                    "bot_id": "lesson-writer",
+                    "status": "running",
+                    "metadata": {"project_id": "globeiq", "root_pm_bot_id": "manager-a"},
+                },
+                {
+                    "id": "blocked-target",
+                    "bot_id": "lesson-qc",
+                    "status": "blocked",
+                    "metadata": {"project_id": "globeiq", "root_pm_bot_id": "manager-b"},
+                },
+                {
+                    "id": "failed-ignore",
+                    "bot_id": "lesson-writer",
+                    "status": "failed",
+                    "metadata": {"project_id": "globeiq", "root_pm_bot_id": "manager-a"},
+                },
+                {
+                    "id": "other-project-ignore",
+                    "bot_id": "lesson-writer",
+                    "status": "running",
+                    "metadata": {"project_id": "other", "root_pm_bot_id": "manager-a"},
+                },
+            ]
+
+        def cancel_task(self, task_id, reason=None):
+            self.cancelled.append((task_id, reason))
+            return {"id": task_id, "status": "cancelled"}
+
+    fake = FakeCP()
+    with patch("dashboard.routes.work.get_cp_client", return_value=fake):
+        resp = dashboard_client.post(
+            "/api/work/stop",
+            json={"project_id": "globeiq", "reason": "test_stop"},
+        )
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["cancelled_task_count"] == 2
+    assert data["failed_task_count"] == 0
+    assert fake.cancelled == [("running-target", "test_stop"), ("blocked-target", "test_stop")]
+
+
+def test_work_stop_api_rejects_missing_project(dashboard_client):
+    _login_admin(dashboard_client)
+
+    resp = dashboard_client.post("/api/work/stop", json={"manager_id": "manager-a"})
+
+    assert resp.status_code == 400
+    assert "project_id is required" in resp.get_data(as_text=True)

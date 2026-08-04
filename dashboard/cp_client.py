@@ -307,8 +307,11 @@ class CPClient:
             body["payload"] = payload
         return self._post(f"/v1/tasks/{task_id}/retry", body)
 
-    def cancel_task(self, task_id: str) -> Optional[Dict[str, Any]]:
-        return self._post(f"/v1/tasks/{task_id}/cancel", {})
+    def cancel_task(self, task_id: str, reason: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        body: Dict[str, Any] = {}
+        if reason:
+            body["reason"] = reason
+        return self._post(f"/v1/tasks/{task_id}/cancel", body)
 
     def cancel_orchestration(self, orchestration_id: str, reason: Optional[str] = None) -> Optional[Dict[str, Any]]:
         body: Dict[str, Any] = {}

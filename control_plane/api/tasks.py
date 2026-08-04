@@ -32,6 +32,10 @@ class CancelOrchestrationRequest(BaseModel):
     reason: Optional[str] = Field(default=None, max_length=500)
 
 
+class CancelTaskRequest(BaseModel):
+    reason: Optional[str] = Field(default=None, max_length=500)
+
+
 class TaskListItem(BaseModel):
     id: str
     bot_id: str
@@ -241,10 +245,11 @@ async def retry_task(task_id: str, request: Request, body: RetryTaskRequest) -> 
 
 
 @router.post("/{task_id}/cancel", response_model=Task)
-async def cancel_task(task_id: str, request: Request) -> Task:
+async def cancel_task(task_id: str, request: Request, body: CancelTaskRequest | None = None) -> Task:
     task_manager = request.app.state.task_manager
     try:
-        return await task_manager.cancel_task(task_id)
+        reason = str((body.reason if body else None) or "operator_cancelled").strip() or "operator_cancelled"
+        return await task_manager.cancel_task(task_id, reason=reason)
     except TaskNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:

@@ -1225,6 +1225,35 @@ async def test_cancel_orchestration_endpoint_returns_task_scope(cp_client):
 
 
 @pytest.mark.anyio
+async def test_cancel_task_endpoint_preserves_reason(cp_client, cp_app):
+    from datetime import datetime, timezone
+
+    from shared.models import Task
+
+    now = datetime.now(timezone.utc).isoformat()
+    seeded = Task(
+        id="task-cancel-reason",
+        bot_id="bot-cancel-reason",
+        payload={"instruction": "cancel"},
+        status="queued",
+        created_at=now,
+        updated_at=now,
+    )
+    async with cp_app.state.task_manager._lock:
+        cp_app.state.task_manager._tasks[seeded.id] = seeded
+
+    response = await cp_client.post(
+        f"/v1/tasks/{seeded.id}/cancel",
+        json={"reason": "work_overview_stop"},
+    )
+
+    assert response.status_code == 200
+    result = response.json()
+    assert result["status"] == "cancelled"
+    assert result["error"]["details"]["reason"] == "work_overview_stop"
+
+
+@pytest.mark.anyio
 async def test_bot_runs_and_artifacts_endpoints_expose_task_history(cp_client):
     await cp_client.post(
         "/v1/bots",
