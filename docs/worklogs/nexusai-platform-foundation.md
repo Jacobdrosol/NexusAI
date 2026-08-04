@@ -6,7 +6,7 @@ Improve NexusAI one scoped platform foundation at a time so it can become the pr
 
 ## Current Scope
 
-Current item: surface Work Overview routing metadata gaps so tasks missing project or explicit manager metadata cannot blend into normal project-manager lanes unnoticed.
+Current item: classify Work Overview problem sources so failed/retried work can be triaged by bounded error label, task source, and bot without loading task payloads.
 
 ## Completion Criteria For This Item
 
@@ -30,6 +30,7 @@ Current item: surface Work Overview routing metadata gaps so tasks missing proje
 - Work Overview shows stale active/waiting counts and oldest active/waiting ages by project and manager.
 - Recent work rows include age labels so operators can see whether active, waiting, or problem tasks are fresh.
 - Work Overview identifies task summaries that are missing project metadata or are grouped under inferred managers instead of explicit manager metadata.
+- Work Overview classifies failed/retried work by bounded error label, source, and bot so operators can identify repeated failure modes quickly.
 - Page render uses bounded control-plane calls and does not reintroduce slow navigation.
 - Focused tests cover grouping behavior and dashboard rendering.
 - Documentation describes the purpose, data flow, and limitations.
@@ -76,6 +77,9 @@ Current item: surface Work Overview routing metadata gaps so tasks missing proje
 - Added active/recent unavailable snapshot flags so a missing task window is visible next to the loaded row counts.
 - Added metadata-health summaries to Work Overview with missing-project counts, inferred-manager counts, missing-manager counts, and bounded sample task rows.
 - Added Work page metadata-gap cards and a side-panel sample list for routing follow-up.
+- Added bounded `error_summary` fields to task summaries so dashboards can classify failures while keeping payload/result content excluded.
+- Added Work Overview problem-source aggregation by error code/type, task source, and bot.
+- Added a Work page Problem Sources panel.
 
 ## Validation Plan
 
@@ -96,6 +100,8 @@ Current item: surface Work Overview routing metadata gaps so tasks missing proje
 - Added dashboard tests proving Work Overview requests active/problem statuses separately, merges duplicate summary rows, and status-filters stop/lane API queries.
 - Added dashboard test proving a failed active/problem summary load renders a partial-data warning and is returned by `/api/work/overview`.
 - Added Work Overview tests proving clean tasks have no metadata gaps and fallback-routed tasks are counted with source-specific samples.
+- Added TaskManager test proving non-content task summaries include bounded error labels without returning full error content.
+- Added Work Overview test proving failed/retried work is grouped by error label, source, and bot.
 - Run focused pytest coverage for new route, task summaries, and dashboard smoke where applicable.
 - After deployment, measure route render time and verify no fresh 500 or slow-request logs.
 
@@ -113,3 +119,4 @@ Current item: surface Work Overview routing metadata gaps so tasks missing proje
 - Work Overview task counts are based on bounded loaded windows. The page flags when an active/problem or recent-history window reaches its configured cap.
 - Degraded-data warnings identify failed control-plane calls, but they do not retry or repair the control plane. They are operator visibility for safe decisions.
 - Metadata-gap counts are based only on the bounded loaded task-summary windows, so they are routing indicators rather than a full historical metadata audit.
+- Problem-source counts are based only on loaded failed/retried task summaries and use bounded error labels, not full task payloads or results.

@@ -5286,6 +5286,7 @@ class TaskManager:
                 payload IS NOT NULL AS has_payload,
                 result IS NOT NULL AS has_result,
                 error IS NOT NULL AS has_error,
+                error,
                 created_at,
                 updated_at
             FROM {_TASKS_TABLE}
@@ -5307,6 +5308,7 @@ class TaskManager:
         for row in rows:
             metadata = self._decode_json_field(row["metadata"], default=None)
             depends_on = self._decode_json_field(row["depends_on"], default=[])
+            error_summary = self._summarize_task_error(row["error"])
             task_id = str(row["id"])
             status = str(row["status"] or "unknown")
             if task_id in pending_dispatch and status == "completed":
@@ -5325,11 +5327,33 @@ class TaskManager:
                     "has_error": bool(row["has_error"]),
                     "payload_type": None,
                     "result_type": None,
-                    "error_type": None,
+                    "error_type": error_summary.get("type") if error_summary else None,
+                    "error_summary": error_summary,
                     "usage": None,
                 }
             )
         return summaries
+
+    def _summarize_task_error(self, raw_error: Any) -> Optional[Dict[str, Any]]:
+        error = self._decode_json_field(raw_error, default=None)
+        if error is None:
+            return None
+        if isinstance(error, dict):
+            error_type = str(error.get("type") or error.get("error_type") or "dict").strip() or "dict"
+            code = str(error.get("code") or error.get("error_code") or "").strip()
+            message = str(error.get("message") or error.get("detail") or error.get("error") or "").strip()
+        else:
+            error_type = type(error).__name__
+            code = ""
+            message = str(error or "").strip()
+        if len(message) > 240:
+            message = f"{message[:237]}..."
+        summary: Dict[str, Any] = {"type": error_type}
+        if code:
+            summary["code"] = code
+        if message:
+            summary["message"] = message
+        return summary
 
     async def count_tasks_by_status(self) -> Dict[str, int]:
         await self._ensure_db()

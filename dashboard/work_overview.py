@@ -144,6 +144,24 @@ def _record_metadata_gap(
     )
 
 
+def _problem_label(task: dict[str, Any]) -> str:
+    error_summary = task.get("error_summary") if isinstance(task.get("error_summary"), dict) else {}
+    error = task.get("error") if isinstance(task.get("error"), dict) else {}
+    code = str(error_summary.get("code") or error.get("code") or error.get("error_code") or "").strip()
+    if code:
+        return code
+    error_type = str(error_summary.get("type") or task.get("error_type") or "").strip()
+    if error_type:
+        return error_type
+    if bool(task.get("has_error")):
+        return "error_without_summary"
+    return str(task.get("status") or "problem").strip().lower() or "problem"
+
+
+def _counter_rows(counter: Counter, key_name: str, limit: int = 8) -> list[dict[str, Any]]:
+    return [{key_name: str(key), "count": int(count)} for key, count in counter.most_common(limit)]
+
+
 def _record_age(
     freshness: dict[str, Any],
     *,
@@ -306,6 +324,9 @@ def build_work_overview(
     projects_by_id: dict[str, dict[str, Any]] = {}
     manager_buckets: dict[tuple[str, str], dict[str, Any]] = {}
     recent_problem_tasks: list[dict[str, Any]] = []
+    problem_codes = Counter()
+    problem_sources = Counter()
+    problem_bots = Counter()
     freshness = _freshness_summary()
     metadata_health = _metadata_health_summary()
 
@@ -350,6 +371,9 @@ def build_work_overview(
             totals["waiting"] += 1
         if status in PROBLEM_STATUSES:
             totals["problem"] += 1
+            problem_codes[_problem_label(task)] += 1
+            problem_sources[str(_safe_metadata(task).get("source") or "unknown").strip() or "unknown"] += 1
+            problem_bots[bot_id or "unknown"] += 1
         if is_qc:
             totals["qc"] += 1
         _record_age(
@@ -528,6 +552,12 @@ def build_work_overview(
         "workers": worker_summary,
         "holds": hold_rows,
         "metadata_health": metadata_health,
+        "problem_summary": {
+            "total": int(sum(problem_codes.values())),
+            "by_code": _counter_rows(problem_codes, "code"),
+            "by_source": _counter_rows(problem_sources, "source"),
+            "by_bot": _counter_rows(problem_bots, "bot_id"),
+        },
         "recent_problem_tasks": sorted(
             recent_problem_tasks,
             key=lambda item: str(item.get("updated_at") or ""),

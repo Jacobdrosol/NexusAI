@@ -157,6 +157,46 @@ def test_work_overview_surfaces_metadata_routing_gaps():
     assert any(project["project_id"] == "unassigned" for project in overview["projects"])
 
 
+def test_work_overview_groups_problem_sources_from_error_summaries():
+    overview = build_work_overview(
+        projects=[{"id": "globeiq", "name": "GlobeIQ"}],
+        bots=[],
+        workers=[],
+        tasks=[
+            {
+                "id": "failed-qc",
+                "bot_id": "lesson-qc",
+                "status": "failed",
+                "metadata": {"project_id": "globeiq", "root_pm_bot_id": "pm-a", "source": "lesson_audit"},
+                "has_error": True,
+                "error_summary": {"type": "dict", "code": "browser_evidence_missing", "message": "No browser evidence."},
+            },
+            {
+                "id": "retried-qc",
+                "bot_id": "lesson-qc",
+                "status": "retried",
+                "metadata": {"project_id": "globeiq", "root_pm_bot_id": "pm-a", "source": "lesson_audit"},
+                "has_error": True,
+                "error_summary": {"type": "dict", "code": "browser_evidence_missing"},
+            },
+            {
+                "id": "failed-writer",
+                "bot_id": "lesson-writer",
+                "status": "failed",
+                "metadata": {"project_id": "globeiq", "root_pm_bot_id": "pm-a", "source": "repair_lane"},
+                "has_error": True,
+                "error_type": "TimeoutError",
+            },
+        ],
+    )
+
+    assert overview["problem_summary"]["total"] == 3
+    assert overview["problem_summary"]["by_code"][0] == {"code": "browser_evidence_missing", "count": 2}
+    assert {"code": "TimeoutError", "count": 1} in overview["problem_summary"]["by_code"]
+    assert overview["problem_summary"]["by_source"][0] == {"source": "lesson_audit", "count": 2}
+    assert overview["problem_summary"]["by_bot"][0] == {"bot_id": "lesson-qc", "count": 2}
+
+
 def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     _login_admin(dashboard_client)
 
@@ -240,6 +280,7 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"Worker Queue" in resp.data
     assert b"Metadata Gaps" in resp.data
     assert b"Loaded task summaries include project and manager metadata." in resp.data
+    assert b"Problem Sources" in resp.data
     assert b"Usage By Project And Manager" in resp.data
     assert b"ollama_cloud" in resp.data
     assert b"qwen3.5:cloud" in resp.data

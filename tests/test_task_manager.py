@@ -581,6 +581,43 @@ async def test_task_manager_lists_task_summaries_without_content(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_task_manager_task_summaries_include_bounded_error_summary(tmp_path):
+    import asyncio
+
+    from control_plane.task_manager.task_manager import TaskManager
+
+    class StubRegistry:
+        async def get(self, bot_id):
+            return Bot(id=bot_id, name="Failing Bot", role="assistant", backends=[])
+
+    mock_scheduler = AsyncMock()
+    mock_scheduler.schedule.side_effect = RuntimeError("remote model refused malformed tool payload " + ("x" * 400))
+    tm = TaskManager(mock_scheduler, db_path=str(tmp_path / "task-summary-errors.db"), bot_registry=StubRegistry())
+    task = await tm.create_task(
+        bot_id="failing-bot",
+        payload={"instruction": "fail"},
+        metadata=TaskMetadata(source="chat_assign", project_id="proj-summary"),
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.05)
+
+    summaries = await tm.list_task_summaries(limit=10)
+
+    summary = next(item for item in summaries if item["id"] == task.id)
+    assert summary["status"] == "failed"
+    assert summary["has_error"] is True
+    assert summary["error_type"] == "dict"
+    assert summary["error_summary"]["type"] == "dict"
+    assert "remote model refused malformed tool payload" in summary["error_summary"]["message"]
+    assert len(summary["error_summary"]["message"]) <= 240
+    assert "error" not in summary
+
+
+@pytest.mark.anyio
 async def test_token_usage_summary_groups_by_project_manager_and_model(tmp_path):
     import asyncio
 

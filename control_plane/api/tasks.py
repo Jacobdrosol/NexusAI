@@ -60,7 +60,29 @@ class TaskListItem(BaseModel):
     payload_type: Optional[str] = None
     result_type: Optional[str] = None
     error_type: Optional[str] = None
+    error_summary: Optional[Dict[str, Any]] = None
     usage: Optional[Dict[str, Any]] = None
+
+
+def _summarize_error(error: Any) -> Optional[Dict[str, Any]]:
+    if error is None:
+        return None
+    if isinstance(error, dict):
+        error_type = str(error.get("type") or error.get("error_type") or "dict").strip() or "dict"
+        code = str(error.get("code") or error.get("error_code") or "").strip()
+        message = str(error.get("message") or error.get("detail") or error.get("error") or "").strip()
+    else:
+        error_type = type(error).__name__
+        code = ""
+        message = str(error or "").strip()
+    if len(message) > 240:
+        message = f"{message[:237]}..."
+    summary: Dict[str, Any] = {"type": error_type}
+    if code:
+        summary["code"] = code
+    if message:
+        summary["message"] = message
+    return summary
 
 
 def _task_summary(task: Task) -> Dict[str, Any]:
@@ -98,6 +120,7 @@ def _task_summary(task: Task) -> Dict[str, Any]:
         "payload_type": type(payload).__name__ if payload is not None else None,
         "result_type": type(result).__name__ if result is not None else None,
         "error_type": type(error).__name__ if error is not None else None,
+        "error_summary": _summarize_error(error),
         "usage": usage,
     }
 

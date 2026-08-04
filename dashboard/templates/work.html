@@ -31,6 +31,7 @@
 {% set task_snapshot = overview.task_snapshot or {} %}
 {% set metadata_health = overview.metadata_health or {} %}
 {% set metadata_gap_count = (metadata_health.missing_project_count or 0) + (metadata_health.inferred_manager_count or 0) %}
+{% set problem_summary = overview.problem_summary or {} %}
 <div class="cards">
   <div class="card">
     <div class="card-label">Active</div>
@@ -352,6 +353,46 @@
             </tr>
             {% else %}
             <tr><td colspan="3" class="empty">No model usage in the selected window</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2 class="panel-title">Problem Sources</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Code / Type</th><th>Count</th></tr></thead>
+          <tbody>
+            {% for row in problem_summary.by_code[:8] %}
+            <tr><td><code>{{ row.code }}</code></td><td>{{ row.count }}</td></tr>
+            {% else %}
+            <tr><td colspan="2" class="empty">No failed or retried tasks in the loaded window</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="table-wrap" style="margin-top:0.75rem;">
+        <table>
+          <thead><tr><th>Source</th><th>Count</th></tr></thead>
+          <tbody>
+            {% for row in problem_summary.by_source[:8] %}
+            <tr><td><code>{{ row.source }}</code></td><td>{{ row.count }}</td></tr>
+            {% else %}
+            <tr><td colspan="2" class="empty">No problem sources in the loaded window</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="table-wrap" style="margin-top:0.75rem;">
+        <table>
+          <thead><tr><th>Bot</th><th>Count</th></tr></thead>
+          <tbody>
+            {% for row in problem_summary.by_bot[:8] %}
+            <tr><td><code>{{ row.bot_id }}</code></td><td>{{ row.count }}</td></tr>
+            {% else %}
+            <tr><td colspan="2" class="empty">No problem bots in the loaded window</td></tr>
             {% endfor %}
           </tbody>
         </table>
