@@ -1,6 +1,7 @@
 """Work overview blueprint for project and manager operational visibility."""
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from flask import Blueprint, abort, jsonify, render_template, request
@@ -8,6 +9,7 @@ from flask_login import current_user, login_required
 
 from dashboard.cp_client import get_cp_client
 from dashboard.work_overview import build_work_overview, manager_id_for_task, project_id_for_task
+from shared.settings_manager import SettingsManager
 
 bp = Blueprint("work", __name__)
 
@@ -739,3 +741,55 @@ def api_hold_work():
     if result is None:
         return jsonify({"error": "control plane unavailable"}), 503
     return jsonify(result)
+
+
+@bp.post("/api/work/bot-cap")
+@login_required
+def api_work_bot_cap():
+    _require_admin()
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"error": "Request body must be a JSON object."}), 400
+
+    action = str(body.get("action") or "set").strip().lower()
+    bot_id = str(body.get("bot_id") or "").strip()
+    if action not in {"set", "clear"}:
+        return jsonify({"error": "action must be set or clear."}), 400
+    if not bot_id:
+        return jsonify({"error": "bot_id is required."}), 400
+
+    mgr = SettingsManager.instance()
+    raw_limits = mgr.get("token_governor_bot_hourly_limits", {})
+    limits = raw_limits if isinstance(raw_limits, dict) else {}
+    updated_limits: dict[str, int] = {}
+    for key, value in limits.items():
+        normalized_key = str(key or "").strip()
+        if not normalized_key or normalized_key == bot_id:
+            continue
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            continue
+        if parsed > 0:
+            updated_limits[normalized_key] = parsed
+
+    if action == "set":
+        try:
+            hourly_limit = int(body.get("hourly_limit"))
+        except (TypeError, ValueError):
+            return jsonify({"error": "hourly_limit must be a positive integer."}), 400
+        if hourly_limit <= 0:
+            return jsonify({"error": "hourly_limit must be a positive integer."}), 400
+        updated_limits[bot_id] = hourly_limit
+
+    changed_by = getattr(current_user, "email", "api")
+    mgr.set("token_governor_bot_hourly_limits", json.dumps(updated_limits, sort_keys=True), changed_by)
+    return jsonify(
+        {
+            "status": "ok",
+            "action": action,
+            "bot_id": bot_id,
+            "hourly_limit": updated_limits.get(bot_id),
+            "token_governor_bot_hourly_limits": updated_limits,
+        }
+    )

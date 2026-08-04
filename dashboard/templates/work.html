@@ -220,7 +220,7 @@
       <h2 class="panel-title">Bot Usage Pressure</h2>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Bot</th><th>Tokens</th><th>Cap</th><th>Remaining</th><th>Pressure</th></tr></thead>
+          <thead><tr><th>Bot</th><th>Tokens</th><th>Cap</th><th>Remaining</th><th>Pressure</th><th>Actions</th></tr></thead>
           <tbody>
             {% for row in usage_pressure_lanes %}
             <tr>
@@ -232,9 +232,23 @@
               <td>{{ "{:,}".format(row.hourly_limit or 0) }}</td>
               <td>{{ "{:,}".format(row.remaining_tokens or 0) }}</td>
               <td><span class="badge {% if row.level == 'critical' %}badge-failed{% elif row.level == 'warning' %}badge-yellow{% else %}badge-completed{% endif %}">{{ row.level }} {{ row.usage_ratio }}</span></td>
+              <td>
+                <button class="btn btn-sm"
+                        type="button"
+                        onclick="setBotHourlyCap({bot_id: {{ row.bot_id|tojson }}, hourly_limit: {{ row.total_tokens or 0 }}, label: {{ row.bot_id|tojson }}})">
+                  Cap At Current
+                </button>
+                {% if row.cap_source == 'override' %}
+                <button class="btn btn-sm"
+                        type="button"
+                        onclick="clearBotHourlyCap({bot_id: {{ row.bot_id|tojson }}, label: {{ row.bot_id|tojson }}})">
+                  Clear Cap
+                </button>
+                {% endif %}
+              </td>
             </tr>
             {% else %}
-            <tr><td colspan="5" class="empty">No bot hourly caps are active for measured usage</td></tr>
+            <tr><td colspan="6" class="empty">No bot hourly caps are active for measured usage</td></tr>
             {% endfor %}
           </tbody>
         </table>
@@ -962,6 +976,57 @@ function escapeText(value) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+function setBotHourlyCap(scope) {
+  var botId = String(scope.bot_id || '').trim();
+  var hourlyLimit = Number(scope.hourly_limit || 0);
+  if (!botId || !Number.isFinite(hourlyLimit) || hourlyLimit <= 0) {
+    alert('A bot and positive hourly limit are required.');
+    return;
+  }
+  if (!confirm('Set hourly token cap for ' + (scope.label || botId) + ' to ' + Math.trunc(hourlyLimit).toLocaleString() + '?')) {
+    return;
+  }
+  fetch('/api/work/bot-cap', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-CSRFToken': _csrfToken},
+    body: JSON.stringify({action: 'set', bot_id: botId, hourly_limit: Math.trunc(hourlyLimit)})
+  })
+  .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
+  .then(function(res) {
+    if (!res.ok) {
+      alert('Bot cap update failed: ' + (res.data.error || 'unknown error'));
+      return;
+    }
+    window.location.reload();
+  })
+  .catch(function(e) { alert('Network error: ' + e); });
+}
+
+function clearBotHourlyCap(scope) {
+  var botId = String(scope.bot_id || '').trim();
+  if (!botId) {
+    alert('bot_id is required.');
+    return;
+  }
+  if (!confirm('Clear hourly token cap override for ' + (scope.label || botId) + '?')) {
+    return;
+  }
+  fetch('/api/work/bot-cap', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-CSRFToken': _csrfToken},
+    body: JSON.stringify({action: 'clear', bot_id: botId})
+  })
+  .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
+  .then(function(res) {
+    if (!res.ok) {
+      alert('Bot cap clear failed: ' + (res.data.error || 'unknown error'));
+      return;
+    }
+    window.location.reload();
+  })
+  .catch(function(e) { alert('Network error: ' + e); });
 }
 
 function hideLaneDetails() {

@@ -1,3 +1,5 @@
+import json
+
 import bcrypt
 from datetime import datetime, timezone
 from unittest.mock import patch
@@ -538,6 +540,9 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"Bot Usage Pressure" in resp.data
     assert b"override cap" in resp.data
     assert b"warning 0.93" in resp.data
+    assert b"Cap At Current" in resp.data
+    assert b"Clear Cap" in resp.data
+    assert b"setBotHourlyCap" in resp.data
     assert b"No bot token usage" not in resp.data
     assert b"Usage Gaps" in resp.data
     assert b"2 missing usage" in resp.data
@@ -1253,3 +1258,56 @@ def test_work_hold_api_rejects_invalid_action_or_missing_project(dashboard_clien
     assert "action must be hold or release" in bad_action.get_data(as_text=True)
     assert missing_project.status_code == 400
     assert "project_id is required" in missing_project.get_data(as_text=True)
+
+
+def test_work_bot_cap_api_sets_and_clears_override(dashboard_client, tmp_path):
+    from shared.settings_manager import SettingsManager
+
+    _login_admin(dashboard_client)
+    original_settings = SettingsManager._instance
+    SettingsManager._instance = SettingsManager(str(tmp_path / "work-bot-cap.db"))
+    try:
+        SettingsManager._instance.set(
+            "token_governor_bot_hourly_limits",
+            json.dumps({"existing-bot": 12345}),
+            changed_by="test",
+        )
+
+        set_resp = dashboard_client.post(
+            "/api/work/bot-cap",
+            json={"action": "set", "bot_id": "audit-reader", "hourly_limit": 50000},
+        )
+        assert set_resp.status_code == 200
+        data = set_resp.get_json()
+        assert data["token_governor_bot_hourly_limits"] == {
+            "audit-reader": 50000,
+            "existing-bot": 12345,
+        }
+
+        clear_resp = dashboard_client.post(
+            "/api/work/bot-cap",
+            json={"action": "clear", "bot_id": "audit-reader"},
+        )
+        assert clear_resp.status_code == 200
+        data = clear_resp.get_json()
+        assert data["token_governor_bot_hourly_limits"] == {"existing-bot": 12345}
+    finally:
+        SettingsManager._instance = original_settings
+
+
+def test_work_bot_cap_api_rejects_invalid_payload(dashboard_client):
+    _login_admin(dashboard_client)
+
+    bad_action = dashboard_client.post("/api/work/bot-cap", json={"action": "freeze", "bot_id": "audit-reader"})
+    missing_bot = dashboard_client.post("/api/work/bot-cap", json={"action": "set", "hourly_limit": 100})
+    bad_limit = dashboard_client.post(
+        "/api/work/bot-cap",
+        json={"action": "set", "bot_id": "audit-reader", "hourly_limit": 0},
+    )
+
+    assert bad_action.status_code == 400
+    assert "action must be set or clear" in bad_action.get_data(as_text=True)
+    assert missing_bot.status_code == 400
+    assert "bot_id is required" in missing_bot.get_data(as_text=True)
+    assert bad_limit.status_code == 400
+    assert "hourly_limit must be a positive integer" in bad_limit.get_data(as_text=True)
