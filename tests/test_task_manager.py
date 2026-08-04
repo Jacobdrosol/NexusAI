@@ -203,6 +203,183 @@ async def test_token_governor_rejects_extra_queued_llm_task_for_same_bot(tmp_pat
 
 
 @pytest.mark.anyio
+async def test_token_governor_rejects_extra_queued_llm_task_for_same_project(tmp_path, monkeypatch):
+    import asyncio
+
+    from control_plane.task_manager.task_manager import TaskManager
+
+    class StubRegistry:
+        async def get(self, bot_id):
+            return Bot(
+                id=bot_id,
+                name=bot_id,
+                role="assistant",
+                backends=[
+                    BackendConfig(
+                        type="cloud_api",
+                        provider="ollama_cloud",
+                        model="qwen-test",
+                    )
+                ],
+            )
+
+    monkeypatch.setenv("NEXUSAI_TOKEN_GOVERNOR_ENABLED", "true")
+    monkeypatch.setenv("NEXUSAI_TOKEN_GOVERNOR_GLOBAL_HOURLY_LIMIT", "50")
+    monkeypatch.setenv("NEXUSAI_TOKEN_GOVERNOR_ESTIMATED_TOKENS_PER_TASK", "100")
+    monkeypatch.setenv("NEXUSAI_TOKEN_GOVERNOR_MAX_QUEUED_LLM_TASKS_PER_BOT", "0")
+    monkeypatch.setenv("NEXUSAI_TOKEN_GOVERNOR_MAX_QUEUED_LLM_TASKS_PER_PROJECT", "1")
+
+    mock_scheduler = AsyncMock()
+    mock_scheduler.schedule.return_value = {"output": "should not run"}
+    tm = TaskManager(mock_scheduler, db_path=str(tmp_path / "token-governor-project-queued.db"), bot_registry=StubRegistry())
+
+    first = await tm.create_task(
+        bot_id="lesson-auditor-a",
+        payload={"q": "expensive"},
+        metadata=TaskMetadata(project_id="globeiq"),
+    )
+    await asyncio.sleep(0.1)
+
+    with pytest.raises(ValueError, match="project 'globeiq'"):
+        await tm.create_task(
+            bot_id="lesson-auditor-b",
+            payload={"q": "also expensive"},
+            metadata=TaskMetadata(project_id="globeiq"),
+        )
+
+    updated = await tm.get_task(first.id)
+    assert updated.status == "queued"
+    assert mock_scheduler.schedule.await_count == 0
+
+
+@pytest.mark.anyio
+async def test_token_governor_rejects_manager_when_hourly_budget_would_be_exceeded(tmp_path, monkeypatch):
+    import asyncio
+
+    from control_plane.task_manager.task_manager import TaskManager
+
+    class StubRegistry:
+        async def get(self, bot_id):
+            return Bot(
+                id=bot_id,
+                name=bot_id,
+                role="assistant",
+                backends=[
+                    BackendConfig(
+                        type="cloud_api",
+                        provider="ollama_cloud",
+                        model="qwen-test",
+                    )
+                ],
+            )
+
+    monkeypatch.setenv("NEXUSAI_TOKEN_GOVERNOR_ENABLED", "true")
+    monkeypatch.setenv("NEXUSAI_TOKEN_GOVERNOR_ESTIMATED_TOKENS_PER_TASK", "30")
+    monkeypatch.setenv("NEXUSAI_TOKEN_GOVERNOR_MANAGER_HOURLY_LIMIT", "100")
+    monkeypatch.setenv("NEXUSAI_TOKEN_GOVERNOR_MAX_QUEUED_LLM_TASKS_PER_BOT", "0")
+
+    mock_scheduler = AsyncMock()
+    mock_scheduler.schedule.return_value = {"output": "ok", "usage": {"total_tokens": 80}}
+    tm = TaskManager(mock_scheduler, db_path=str(tmp_path / "token-governor-manager-hourly.db"), bot_registry=StubRegistry())
+
+    first = await tm.create_task(
+        bot_id="lesson-auditor-a",
+        payload={"q": "audit"},
+        metadata=TaskMetadata(project_id="globeiq", root_pm_bot_id="audit-manager"),
+    )
+    for _ in range(40):
+        updated = await tm.get_task(first.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.05)
+
+    assert updated.status == "completed"
+    with pytest.raises(ValueError, match="manager 'audit-manager' in project 'globeiq'"):
+        await tm.create_task(
+            bot_id="lesson-auditor-b",
+            payload={"q": "audit next"},
+            metadata=TaskMetadata(project_id="globeiq", root_pm_bot_id="audit-manager"),
+        )
+
+
+@pytest.mark.anyio
+async def test_token_governor_dispatch_reserves_project_budget(tmp_path, monkeypatch):
+    import asyncio
+    from datetime import datetime, timezone
+
+    from control_plane.task_manager.task_manager import TaskManager
+
+    class StubRegistry:
+        async def get(self, bot_id):
+            return Bot(
+                id=bot_id,
+                name=bot_id,
+                role="assistant",
+                backends=[
+                    BackendConfig(
+                        type="cloud_api",
+                        provider="ollama_cloud",
+                        model="qwen-test",
+                    )
+                ],
+            )
+
+    monkeypatch.setenv("NEXUSAI_TOKEN_GOVERNOR_ENABLED", "true")
+    monkeypatch.setenv("NEXUSAI_TOKEN_GOVERNOR_ESTIMATED_TOKENS_PER_TASK", "100")
+    monkeypatch.setenv("NEXUSAI_TOKEN_GOVERNOR_PROJECT_HOURLY_LIMIT", "150")
+    monkeypatch.setenv("NEXUSAI_TOKEN_GOVERNOR_MAX_QUEUED_LLM_TASKS_PER_BOT", "0")
+
+    started = 0
+    release = asyncio.Event()
+
+    class StubScheduler:
+        async def schedule(self, task):
+            nonlocal started
+            started += 1
+            await release.wait()
+            return {"output": "ok", "usage": {"total_tokens": 10}}
+
+    tm = TaskManager(StubScheduler(), db_path=str(tmp_path / "token-governor-project-dispatch.db"), bot_registry=StubRegistry())
+    now = datetime.now(timezone.utc).isoformat()
+    first = Task(
+        id="project-budget-1",
+        bot_id="lesson-auditor-a",
+        payload={"q": "audit"},
+        metadata=TaskMetadata(project_id="globeiq"),
+        status="queued",
+        created_at=now,
+        updated_at=now,
+    )
+    second = Task(
+        id="project-budget-2",
+        bot_id="lesson-auditor-b",
+        payload={"q": "audit"},
+        metadata=TaskMetadata(project_id="globeiq"),
+        status="queued",
+        created_at=now,
+        updated_at=now,
+    )
+    async with tm._lock:
+        tm._tasks[first.id] = first
+        tm._tasks[second.id] = second
+
+    await tm._schedule_ready_tasks()
+    await asyncio.sleep(0.1)
+
+    first_updated = await tm.get_task(first.id)
+    second_updated = await tm.get_task(second.id)
+    assert started == 1
+    assert {first_updated.status, second_updated.status} == {"running", "queued"}
+
+    release.set()
+    for _ in range(40):
+        first_updated = await tm.get_task(first.id)
+        if first_updated.status == "completed":
+            break
+        await asyncio.sleep(0.05)
+
+
+@pytest.mark.anyio
 async def test_token_governor_allows_non_llm_tool_task_under_llm_budget(tmp_path, monkeypatch):
     import asyncio
 

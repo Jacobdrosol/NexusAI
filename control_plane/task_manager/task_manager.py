@@ -3556,6 +3556,22 @@ class TaskManager:
                 0,
             ),
         )
+        hourly_project_limit = max(
+            0,
+            _env_or_settings_int(
+                "NEXUSAI_TOKEN_GOVERNOR_PROJECT_HOURLY_LIMIT",
+                "token_governor_project_hourly_limit",
+                0,
+            ),
+        )
+        hourly_manager_limit = max(
+            0,
+            _env_or_settings_int(
+                "NEXUSAI_TOKEN_GOVERNOR_MANAGER_HOURLY_LIMIT",
+                "token_governor_manager_hourly_limit",
+                0,
+            ),
+        )
         llm_concurrency_limit = max(
             0,
             _env_or_settings_int(
@@ -3584,14 +3600,34 @@ class TaskManager:
                 1,
             ),
         )
+        max_queued_llm_tasks_per_project = max(
+            0,
+            _env_or_settings_int(
+                "NEXUSAI_TOKEN_GOVERNOR_MAX_QUEUED_LLM_TASKS_PER_PROJECT",
+                "token_governor_max_queued_llm_tasks_per_project",
+                0,
+            ),
+        )
+        max_queued_llm_tasks_per_manager = max(
+            0,
+            _env_or_settings_int(
+                "NEXUSAI_TOKEN_GOVERNOR_MAX_QUEUED_LLM_TASKS_PER_MANAGER",
+                "token_governor_max_queued_llm_tasks_per_manager",
+                0,
+            ),
+        )
         return {
             "enabled": bool(enabled),
             "global_hourly_limit": hourly_global_limit,
             "bot_hourly_limit": hourly_bot_limit,
+            "project_hourly_limit": hourly_project_limit,
+            "manager_hourly_limit": hourly_manager_limit,
             "llm_concurrency": llm_concurrency_limit,
             "estimated_tokens_per_task": estimated_tokens_per_task,
             "bot_estimated_tokens_per_task": bot_estimated_tokens_per_task,
             "max_queued_llm_tasks_per_bot": max_queued_llm_tasks_per_bot,
+            "max_queued_llm_tasks_per_project": max_queued_llm_tasks_per_project,
+            "max_queued_llm_tasks_per_manager": max_queued_llm_tasks_per_manager,
         }
 
     @staticmethod
@@ -3609,6 +3645,27 @@ class TaskManager:
                 return max(1, default_estimate)
         return max(1, default_estimate)
 
+    @staticmethod
+    def _token_governor_project_id(task: Task) -> str:
+        metadata = task.metadata or TaskMetadata()
+        return str(metadata.project_id or "unassigned").strip() or "unassigned"
+
+    @staticmethod
+    def _token_governor_manager_id(task: Task) -> str:
+        metadata = task.metadata or TaskMetadata()
+        for value in (
+            metadata.root_pm_bot_id,
+            metadata.pipeline_entry_bot_id,
+            getattr(metadata, "manager_bot_id", None),
+        ):
+            normalized = str(value or "").strip()
+            if normalized:
+                return normalized
+        parent_task_id = str(metadata.parent_task_id or "").strip()
+        if parent_task_id:
+            return f"parent:{parent_task_id[:12]}"
+        return str(task.bot_id or "unassigned-manager").strip() or "unassigned-manager"
+
     async def _token_usage_totals_since(self, *, hours: int = 1) -> Dict[str, Any]:
         await self._ensure_db()
         safe_hours = max(1, int(hours or 1))
@@ -3621,8 +3678,10 @@ class TaskManager:
             "tasks_with_usage": 0,
         }
         by_bot: Dict[str, Dict[str, int]] = {}
+        by_project: Dict[str, Dict[str, int]] = {}
+        by_manager: Dict[str, Dict[str, int]] = {}
         query = f"""
-            SELECT bot_id, result
+            SELECT bot_id, metadata, result
             FROM {_TASKS_TABLE}
             WHERE result IS NOT NULL
               AND updated_at >= ?
@@ -3646,16 +3705,35 @@ class TaskManager:
             if total_tokens is None:
                 total_tokens = prompt_tokens + completion_tokens if prompt_tokens or completion_tokens else 0
             bot_id = str(row["bot_id"] or "unknown")
-            bucket = by_bot.setdefault(
-                bot_id,
-                {
-                    "prompt_tokens": 0,
-                    "completion_tokens": 0,
-                    "total_tokens": 0,
-                    "tasks_with_usage": 0,
-                },
-            )
-            for target in (totals, bucket):
+            metadata = self._decode_json_field(row["metadata"], default={})
+            metadata = metadata if isinstance(metadata, dict) else {}
+            project_id = str(metadata.get("project_id") or "unassigned").strip() or "unassigned"
+            manager_id = ""
+            for key in ("root_pm_bot_id", "pipeline_entry_bot_id", "manager_bot_id"):
+                manager_id = str(metadata.get(key) or "").strip()
+                if manager_id:
+                    break
+            if not manager_id:
+                parent_task_id = str(metadata.get("parent_task_id") or "").strip()
+                manager_id = f"parent:{parent_task_id[:12]}" if parent_task_id else bot_id
+
+            def _bucket(target: Dict[str, Dict[str, int]], key: str) -> Dict[str, int]:
+                return target.setdefault(
+                    key,
+                    {
+                        "prompt_tokens": 0,
+                        "completion_tokens": 0,
+                        "total_tokens": 0,
+                        "tasks_with_usage": 0,
+                    },
+                )
+
+            for target in (
+                totals,
+                _bucket(by_bot, bot_id),
+                _bucket(by_project, project_id),
+                _bucket(by_manager, f"{project_id}::{manager_id}"),
+            ):
                 target["prompt_tokens"] += prompt_tokens
                 target["completion_tokens"] += completion_tokens
                 target["total_tokens"] += total_tokens
@@ -3664,6 +3742,8 @@ class TaskManager:
             "window_hours": safe_hours,
             "totals": totals,
             "by_bot": by_bot,
+            "by_project": by_project,
+            "by_manager": by_manager,
         }
 
     async def token_governor_status(self) -> Dict[str, Any]:
@@ -3688,12 +3768,20 @@ class TaskManager:
             "limits": {
                 "global_hourly_tokens": global_limit,
                 "bot_hourly_tokens": int(config["bot_hourly_limit"] or 0),
+                "project_hourly_tokens": int(config["project_hourly_limit"] or 0),
+                "manager_hourly_tokens": int(config["manager_hourly_limit"] or 0),
                 "llm_concurrency": int(config["llm_concurrency"] or 0),
                 "estimated_tokens_per_task": int(config["estimated_tokens_per_task"] or 0),
                 "bot_estimated_tokens_per_task": dict(
                     config.get("bot_estimated_tokens_per_task") or {}
                 ),
                 "max_queued_llm_tasks_per_bot": int(config["max_queued_llm_tasks_per_bot"] or 0),
+                "max_queued_llm_tasks_per_project": int(
+                    config["max_queued_llm_tasks_per_project"] or 0
+                ),
+                "max_queued_llm_tasks_per_manager": int(
+                    config["max_queued_llm_tasks_per_manager"] or 0
+                ),
             },
             "current": {
                 "global_hourly_tokens": global_used,
@@ -4618,14 +4706,34 @@ class TaskManager:
 
         estimated = self._token_governor_task_estimate(token_governor, task.bot_id)
         max_queued_per_bot = int(token_governor.get("max_queued_llm_tasks_per_bot") or 0)
+        max_queued_per_project = int(token_governor.get("max_queued_llm_tasks_per_project") or 0)
+        max_queued_per_manager = int(token_governor.get("max_queued_llm_tasks_per_manager") or 0)
+        project_id = self._token_governor_project_id(task)
+        manager_id = self._token_governor_manager_id(task)
         async with self._lock:
-            queued_for_bot = sum(
-                1
+            queued_candidates = [
+                existing
                 for existing in self._tasks.values()
-                if existing.bot_id == task.bot_id
-                and existing.status == "queued"
-                and existing.id not in self._pending_task_creations
-            )
+                if existing.status == "queued" and existing.id not in self._pending_task_creations
+            ]
+        queued_provider_keys = await self._bot_provider_keys_for_tasks(queued_candidates)
+        queued_metered = [
+            existing
+            for existing in queued_candidates
+            if self._is_token_metered_provider(queued_provider_keys.get(existing.id, ""))
+        ]
+        queued_for_bot = sum(1 for existing in queued_metered if existing.bot_id == task.bot_id)
+        queued_for_project = sum(
+            1
+            for existing in queued_metered
+            if self._token_governor_project_id(existing) == project_id
+        )
+        queued_for_manager = sum(
+            1
+            for existing in queued_metered
+            if self._token_governor_project_id(existing) == project_id
+            and self._token_governor_manager_id(existing) == manager_id
+        )
         if max_queued_per_bot > 0 and queued_for_bot >= max_queued_per_bot:
             raise ValueError(
                 "token governor rejected task creation for bot '{0}': {1} queued metered task(s) already waiting; limit is {2}".format(
@@ -4634,10 +4742,28 @@ class TaskManager:
                     max_queued_per_bot,
                 )
             )
+        if max_queued_per_project > 0 and queued_for_project >= max_queued_per_project:
+            raise ValueError(
+                "token governor rejected task creation for project '{0}': {1} queued metered task(s) already waiting; limit is {2}".format(
+                    project_id,
+                    queued_for_project,
+                    max_queued_per_project,
+                )
+            )
+        if max_queued_per_manager > 0 and queued_for_manager >= max_queued_per_manager:
+            raise ValueError(
+                "token governor rejected task creation for manager '{0}' in project '{1}': {2} queued metered task(s) already waiting; limit is {3}".format(
+                    manager_id,
+                    project_id,
+                    queued_for_manager,
+                    max_queued_per_manager,
+                )
+            )
 
+        token_usage = None
         bot_limit = int(token_governor.get("bot_hourly_limit") or 0)
         if bot_limit > 0:
-            token_usage = await self._token_usage_totals_since(hours=1)
+            token_usage = token_usage or await self._token_usage_totals_since(hours=1)
             bot_usage = token_usage.get("by_bot") or {}
             bot_used = int((bot_usage.get(str(task.bot_id or "")) or {}).get("total_tokens") or 0)
             if bot_used + (queued_for_bot + 1) * estimated > bot_limit:
@@ -4648,6 +4774,38 @@ class TaskManager:
                         queued_for_bot + 1,
                         estimated,
                         bot_limit,
+                    )
+                )
+        project_limit = int(token_governor.get("project_hourly_limit") or 0)
+        if project_limit > 0:
+            token_usage = token_usage or await self._token_usage_totals_since(hours=1)
+            project_usage = token_usage.get("by_project") or {}
+            project_used = int((project_usage.get(project_id) or {}).get("total_tokens") or 0)
+            if project_used + (queued_for_project + 1) * estimated > project_limit:
+                raise ValueError(
+                    "token governor rejected task creation for project '{0}': hourly usage {1} plus {2} queued estimate(s) of {3} would exceed limit {4}".format(
+                        project_id,
+                        project_used,
+                        queued_for_project + 1,
+                        estimated,
+                        project_limit,
+                    )
+                )
+        manager_limit = int(token_governor.get("manager_hourly_limit") or 0)
+        if manager_limit > 0:
+            token_usage = token_usage or await self._token_usage_totals_since(hours=1)
+            manager_usage = token_usage.get("by_manager") or {}
+            manager_key = f"{project_id}::{manager_id}"
+            manager_used = int((manager_usage.get(manager_key) or {}).get("total_tokens") or 0)
+            if manager_used + (queued_for_manager + 1) * estimated > manager_limit:
+                raise ValueError(
+                    "token governor rejected task creation for manager '{0}' in project '{1}': hourly usage {2} plus {3} queued estimate(s) of {4} would exceed limit {5}".format(
+                        manager_id,
+                        project_id,
+                        manager_used,
+                        queued_for_manager + 1,
+                        estimated,
+                        manager_limit,
                     )
                 )
 
@@ -6611,6 +6769,8 @@ class TaskManager:
 
         token_reserved_total = 0
         token_reserved_by_bot: dict[str, int] = {}
+        token_reserved_by_project: dict[str, int] = {}
+        token_reserved_by_manager: dict[str, int] = {}
         running_llm_count = sum(
             1
             for task in running_snapshot
@@ -6638,6 +6798,21 @@ class TaskManager:
                 bot_used = int((bot_usage.get(str(task.bot_id or "")) or {}).get("total_tokens") or 0)
                 if bot_used + token_reserved_by_bot.get(task.bot_id, 0) + estimated > bot_limit:
                     return False
+            project_id = self._token_governor_project_id(task)
+            project_limit = int(token_governor.get("project_hourly_limit") or 0)
+            if project_limit > 0:
+                project_usage = token_usage.get("by_project") or {}
+                project_used = int((project_usage.get(project_id) or {}).get("total_tokens") or 0)
+                if project_used + token_reserved_by_project.get(project_id, 0) + estimated > project_limit:
+                    return False
+            manager_id = self._token_governor_manager_id(task)
+            manager_key = f"{project_id}::{manager_id}"
+            manager_limit = int(token_governor.get("manager_hourly_limit") or 0)
+            if manager_limit > 0:
+                manager_usage = token_usage.get("by_manager") or {}
+                manager_used = int((manager_usage.get(manager_key) or {}).get("total_tokens") or 0)
+                if manager_used + token_reserved_by_manager.get(manager_key, 0) + estimated > manager_limit:
+                    return False
             return True
 
         def _reserve_token_governor_slot(task: Task) -> None:
@@ -6648,9 +6823,14 @@ class TaskManager:
             if not self._is_token_metered_provider(provider_key):
                 return
             estimated = self._token_governor_task_estimate(token_governor, task.bot_id)
+            project_id = self._token_governor_project_id(task)
+            manager_id = self._token_governor_manager_id(task)
+            manager_key = f"{project_id}::{manager_id}"
             running_llm_count += 1
             token_reserved_total += estimated
             token_reserved_by_bot[task.bot_id] = token_reserved_by_bot.get(task.bot_id, 0) + estimated
+            token_reserved_by_project[project_id] = token_reserved_by_project.get(project_id, 0) + estimated
+            token_reserved_by_manager[manager_key] = token_reserved_by_manager.get(manager_key, 0) + estimated
 
         def _has_orchestration_capacity(task: Task) -> bool:
             metadata = task.metadata or TaskMetadata()
