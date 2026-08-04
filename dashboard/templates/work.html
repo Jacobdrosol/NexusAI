@@ -40,6 +40,7 @@
 {% set route_evidence = overview.route_evidence or {} %}
 {% set attention_lanes = overview.attention_lanes or [] %}
 {% set queue_pressure_lanes = overview.queue_pressure_lanes or [] %}
+{% set usage_pressure_lanes = overview.usage_pressure_lanes or [] %}
 <div class="cards">
   <div class="card">
     <div class="card-label">Needs Attention</div>
@@ -213,6 +214,31 @@
       {% else %}
       <div class="empty">Token usage is unavailable.</div>
       {% endif %}
+    </section>
+
+    <section class="panel">
+      <h2 class="panel-title">Bot Usage Pressure</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Bot</th><th>Tokens</th><th>Cap</th><th>Remaining</th><th>Pressure</th></tr></thead>
+          <tbody>
+            {% for row in usage_pressure_lanes %}
+            <tr>
+              <td>
+                <code>{{ row.bot_id }}</code>
+                <div class="mini-note">{{ row.cap_source }} cap</div>
+              </td>
+              <td>{{ "{:,}".format(row.total_tokens or 0) }}</td>
+              <td>{{ "{:,}".format(row.hourly_limit or 0) }}</td>
+              <td>{{ "{:,}".format(row.remaining_tokens or 0) }}</td>
+              <td><span class="badge {% if row.level == 'critical' %}badge-failed{% elif row.level == 'warning' %}badge-yellow{% else %}badge-completed{% endif %}">{{ row.level }} {{ row.usage_ratio }}</span></td>
+            </tr>
+            {% else %}
+            <tr><td colspan="5" class="empty">No bot hourly caps are active for measured usage</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
     </section>
 
     {% for project in overview.projects %}

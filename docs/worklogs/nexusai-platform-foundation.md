@@ -6,7 +6,7 @@ Improve NexusAI one scoped platform foundation at a time so it can become the pr
 
 ## Current Scope
 
-Current item: add bot-specific hourly token governor caps so one runaway worker can be constrained without lowering every bot's default cap.
+Current item: show bot usage pressure against effective hourly governor caps in Work Overview.
 
 ## Completion Criteria For This Item
 
@@ -19,6 +19,7 @@ Current item: add bot-specific hourly token governor caps so one runaway worker 
 - Token usage is visible by project, manager, and provider/model for the current operational window.
 - Work Overview flags tasks missing token usage records so operators can distinguish low usage from missing telemetry.
 - Work Overview shows token usage by bot so runaway usage can be traced to the worker identity causing it.
+- Work Overview shows each capped bot's measured token pressure, remaining tokens, and whether the effective cap came from a default or bot-specific override.
 - Work Overview classifies usage telemetry health as idle, ready, warning, or critical from measured task usage and missing usage counts.
 - Work Overview provides a single attention rollup across problem tasks, stale work, metadata gaps, worker issues, and usage gaps.
 - Work Overview lists the project-manager lanes that need attention first, with bounded reason labels and active/waiting counts.
@@ -137,6 +138,7 @@ Current item: add bot-specific hourly token governor caps so one runaway worker 
 - Added usage-health classification to Work Overview API and page output so missing token telemetry is visible as an explicit operator health signal.
 - Added `token_governor_bot_hourly_limits` for bot-specific hourly token caps, with environment override support through `NEXUSAI_TOKEN_GOVERNOR_BOT_HOURLY_LIMITS`.
 - Applied bot-specific hourly caps during both task admission and dispatch reservation so queued metered tasks cannot burst past a noisy bot's override.
+- Added Work Overview bot usage pressure lanes that compare measured bot usage with default or override hourly caps and show remaining token headroom.
 
 ## Validation Plan
 
@@ -183,6 +185,7 @@ Current item: add bot-specific hourly token governor caps so one runaway worker 
 - Added Work Overview assertions proving usage-health levels and reasons are emitted for critical missing-telemetry and idle fallback windows.
 - Added TaskManager assertions proving bot-specific hourly caps reject over-budget task creation and reserve dispatch budget across multiple queued tasks for the same bot.
 - Added Settings API assertions proving bot-specific hourly cap settings are whitelisted and normalized.
+- Added Work Overview assertions proving bot usage pressure rows expose override cap source, warning level, remaining tokens, and stable empty fallback behavior.
 - Run focused pytest coverage for new route, task summaries, and dashboard smoke where applicable.
 - After deployment, measure route render time and verify no fresh 500 or slow-request logs.
 
@@ -221,3 +224,4 @@ Current item: add bot-specific hourly token governor caps so one runaway worker 
 - Bot-level usage is based on measured usage in completed task results. Tasks without usage are counted as gaps rather than estimated spend.
 - Usage health is based on the current token-usage summary window. It flags missing telemetry, but it does not estimate unreported token spend.
 - Bot-specific hourly token caps use exact bot IDs. They are a safety override for known noisy workers, not a pattern or role-based policy.
+- Bot usage pressure is based on measured completed-task usage in the current summary window. It does not include unmeasured queued estimates beyond what the governor enforces during admission and dispatch.

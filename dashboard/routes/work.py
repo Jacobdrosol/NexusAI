@@ -82,6 +82,50 @@ def _usage_health(usage: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _usage_pressure_lanes(usage: dict[str, Any], *, limit: int = 10) -> list[dict[str, Any]]:
+    governor = usage.get("token_governor") if isinstance(usage.get("token_governor"), dict) else {}
+    limits = governor.get("limits") if isinstance(governor.get("limits"), dict) else {}
+    default_bot_limit = _safe_count(limits, "bot_hourly_tokens")
+    bot_overrides = limits.get("bot_hourly_token_overrides")
+    bot_overrides = bot_overrides if isinstance(bot_overrides, dict) else {}
+    rows: list[dict[str, Any]] = []
+    for item in usage.get("by_bot") or []:
+        if not isinstance(item, dict):
+            continue
+        bot_id = str(item.get("bot_id") or "").strip()
+        if not bot_id:
+            continue
+        try:
+            effective_limit = int(bot_overrides.get(bot_id, default_bot_limit) or 0)
+        except (TypeError, ValueError):
+            effective_limit = default_bot_limit
+        if effective_limit <= 0:
+            continue
+        total_tokens = _safe_count(item, "total_tokens")
+        ratio = round(total_tokens / effective_limit, 2) if effective_limit else 0.0
+        if ratio >= 1:
+            level = "critical"
+        elif ratio >= 0.8:
+            level = "warning"
+        else:
+            level = "ready"
+        rows.append(
+            {
+                "bot_id": bot_id,
+                "total_tokens": total_tokens,
+                "hourly_limit": effective_limit,
+                "remaining_tokens": max(0, effective_limit - total_tokens),
+                "usage_ratio": ratio,
+                "level": level,
+                "cap_source": "override" if bot_id in bot_overrides else "default",
+                "tasks_with_usage": _safe_count(item, "tasks_with_usage"),
+                "tasks_without_usage": _safe_count(item, "tasks_without_usage"),
+            }
+        )
+    rows.sort(key=lambda row: (row["level"] != "critical", row["level"] != "warning", -row["usage_ratio"], -row["total_tokens"]))
+    return rows[: max(1, int(limit or 10))]
+
+
 def _safe_count(container: dict[str, Any], key: str) -> int:
     try:
         return max(0, int(container.get(key) or 0))
@@ -302,6 +346,7 @@ def _load_work_overview() -> dict[str, Any]:
     else:
         overview["usage"] = _empty_usage_summary()
     overview["usage_health"] = _usage_health(overview["usage"])
+    overview["usage_pressure_lanes"] = _usage_pressure_lanes(overview["usage"])
     _attach_attention_summary(overview)
     return overview
 

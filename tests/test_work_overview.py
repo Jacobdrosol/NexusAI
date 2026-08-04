@@ -464,6 +464,14 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
                 "by_manager": [{"project_id": "globeiq", "manager_id": "globeiq-pm", "total_tokens": 140, "tasks_with_usage": 1}],
                 "by_bot": [{"bot_id": "lesson-writer", "total_tokens": 140, "tasks_with_usage": 1, "tasks_without_usage": 0}],
                 "by_provider_model": [{"provider": "ollama_cloud", "model": "qwen3.5:cloud", "total_tokens": 140, "tasks_with_usage": 1}],
+                "token_governor": {
+                    "enabled": True,
+                    "limits": {
+                        "bot_hourly_tokens": 200,
+                        "bot_hourly_token_overrides": {"lesson-writer": 150},
+                    },
+                    "current": {},
+                },
             }
 
     fake = FakeCP()
@@ -527,6 +535,9 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"lesson_audit" in resp.data
     assert b"Usage By Project And Manager" in resp.data
     assert b"<th>Bot</th><th>Tokens</th><th>Measured</th><th>Missing</th>" in resp.data
+    assert b"Bot Usage Pressure" in resp.data
+    assert b"override cap" in resp.data
+    assert b"warning 0.93" in resp.data
     assert b"No bot token usage" not in resp.data
     assert b"Usage Gaps" in resp.data
     assert b"2 missing usage" in resp.data
@@ -585,6 +596,19 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
         "missing_ratio": 0.67,
         "total_tokens": 140,
     }
+    assert data["usage_pressure_lanes"] == [
+        {
+            "bot_id": "lesson-writer",
+            "total_tokens": 140,
+            "hourly_limit": 150,
+            "remaining_tokens": 10,
+            "usage_ratio": 0.93,
+            "level": "warning",
+            "cap_source": "override",
+            "tasks_with_usage": 1,
+            "tasks_without_usage": 0,
+        }
+    ]
 
 
 def test_work_overview_routes_require_admin_role(dashboard_client):
@@ -743,6 +767,7 @@ def test_work_overview_usage_fallback_has_stable_shape(dashboard_client):
     assert data["usage"]["by_manager"] == []
     assert data["usage"]["by_bot"] == []
     assert data["usage"]["by_provider_model"] == []
+    assert data["usage_pressure_lanes"] == []
     assert data["usage_health"] == {
         "level": "idle",
         "reason": "no token usage recorded in this window",
