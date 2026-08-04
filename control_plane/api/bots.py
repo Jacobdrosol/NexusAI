@@ -547,7 +547,7 @@ async def create_bot(request: Request, payload: Any = Body(...)) -> Bot:
     bot_registry = request.app.state.bot_registry
     await bot_registry.register(bot)
     await record_audit_event(request, action="bots.create", resource=f"bot:{bot.id}")
-    return bot
+    return await bot_registry.get(bot.id)
 
 
 @router.get("", response_model=List[Bot])
@@ -707,7 +707,7 @@ async def update_bot(bot_id: str, request: Request, payload: Any = Body(...)) ->
             await _require_bot_ready_to_enable(bot, request)
         await bot_registry.update(bot_id, bot)
         await record_audit_event(request, action="bots.update", resource=f"bot:{bot_id}")
-        return bot
+        return await bot_registry.get(bot_id)
     except BotNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
 

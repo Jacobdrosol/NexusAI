@@ -116,9 +116,9 @@ All services share **`data/nexusai.db`** (SQLite). Tables are created lazily on 
 | `cp_task_dependencies` | TaskManager | Dependency graph: task_id → depends_on_task_id |
 | `cp_bot_runs` | TaskManager | Per-run tracking: started_at, completed_at, triggered_by_task_id |
 | `cp_bot_run_artifacts` | TaskManager | Artifacts: kind (payload/result/error/file/note), label, content, path |
-| `cp_bots` | BotRegistry | Bot configs stored as JSON blobs |
+| `cp_bots` | BotRegistry | Bot configs stored as JSON blobs, including the latest `updated_at` mutation timestamp |
 | `conversations` | ChatManager | Chat conversations metadata |
-| `messages` | ChatManager | Chat messages with role/content/bot_id/model |
+| `messages` | ChatManager | Chat messages with role/content/bot_id/model/provider and compact bot/model provenance metadata |
 | `chat_message_memory` | ChatManager | Chunked embeddings for semantic search within conversations |
 | `vault_items` | VaultManager | Ingested context items: title, content, namespace, project_id |
 | `vault_chunks` | VaultManager | Chunked text with 64-dim hash embeddings for similarity search |

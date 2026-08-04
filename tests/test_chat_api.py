@@ -23,7 +23,7 @@ async def test_create_conversation_and_post_message(cp_app):
                 "id": "bot-chat",
                 "name": "Chat Bot",
                 "role": "assistant",
-                "backends": [],
+                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "qwen3.5:397b"}],
                 "enabled": True,
             },
         )
@@ -36,6 +36,16 @@ async def test_create_conversation_and_post_message(cp_app):
         data = post_resp.json()
         assert data["user_message"]["content"] == "hello"
         assert data["assistant_message"]["content"] == "assistant reply"
+        assert data["assistant_message"]["bot_id"] == "bot-chat"
+        assert data["assistant_message"]["model"] == "qwen3.5:397b"
+        assert data["assistant_message"]["provider"] == "ollama_cloud"
+        metadata = data["assistant_message"]["metadata"]
+        assert metadata["bot"]["id"] == "bot-chat"
+        assert metadata["bot"]["name"] == "Chat Bot"
+        assert metadata["bot"]["updated_at"]
+        assert metadata["model"]["provider"] == "ollama_cloud"
+        assert metadata["model"]["model"] == "qwen3.5:397b"
+        assert metadata["model"]["source"] == "bot_config"
 
 
 @pytest.mark.anyio
@@ -416,6 +426,12 @@ async def test_stream_message_endpoint(cp_app):
         assert messages[-1]["model"] == "llama3.1:8b"
         assert messages[-1]["provider"] == "ollama"
         assert messages[-1]["metadata"]["streaming"] is False
+        assert messages[-1]["metadata"]["bot"]["id"] == "bot-stream"
+        assert messages[-1]["metadata"]["bot"]["updated_at"]
+        assert messages[-1]["metadata"]["model"]["provider"] == "ollama"
+        assert messages[-1]["metadata"]["model"]["model"] == "llama3.1:8b"
+        assert messages[-1]["metadata"]["model"]["worker_id"] == "w1"
+        assert messages[-1]["metadata"]["model"]["source"] == "scheduler"
 
 
 @pytest.mark.anyio
@@ -2260,7 +2276,8 @@ async def test_post_message_code_phrase_does_not_trigger_inline_without_flag(cp_
         assert resp.status_code == 200
         body = resp.json()
         assert body["assistant_message"]["content"] == "non-inline reply"
-        assert body["assistant_message"].get("metadata") in (None, {})
+        assert body["assistant_message"]["metadata"]["bot"]["id"] == "bot-inline-require-flag"
+        assert body["assistant_message"]["metadata"]["model"]["source"] == "bot_config"
 
     assert cp_app.state.scheduler.schedule.await_count == 1
     cp_app.state.task_manager.create_task.assert_not_awaited()

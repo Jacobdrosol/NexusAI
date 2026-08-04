@@ -112,6 +112,36 @@ async def test_list_workers_empty(cp_client):
     assert resp.json() == []
 
 
+@pytest.mark.anyio
+async def test_bot_create_and_update_stamp_updated_at(cp_client):
+    create_resp = await cp_client.post(
+        "/v1/bots",
+        json={
+            "id": "timestamped-bot",
+            "name": "Timestamped Bot",
+            "role": "assistant",
+            "backends": [],
+            "enabled": True,
+        },
+    )
+    assert create_resp.status_code == 200
+    created = create_resp.json()
+    assert created["updated_at"]
+
+    update_resp = await cp_client.put(
+        "/v1/bots/timestamped-bot",
+        json={
+            **created,
+            "name": "Timestamped Bot Updated",
+        },
+    )
+    assert update_resp.status_code == 200
+    updated = update_resp.json()
+    assert updated["name"] == "Timestamped Bot Updated"
+    assert updated["updated_at"]
+    assert datetime.fromisoformat(updated["updated_at"]) >= datetime.fromisoformat(created["updated_at"])
+
+
 def test_public_default_config_keeps_example_bot_seeding_opt_in():
     from shared.config_loader import ConfigLoader
 

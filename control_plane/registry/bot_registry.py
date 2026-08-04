@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timezone
 import json
 import logging
 import os
@@ -22,6 +23,14 @@ CREATE TABLE IF NOT EXISTS cp_bots (
     data TEXT NOT NULL
 )
 """
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _stamp_bot_updated_at(bot: Bot, *, timestamp: str | None = None) -> Bot:
+    return bot.model_copy(update={"updated_at": timestamp or _utc_now_iso()})
 
 
 class BotRegistry:
@@ -80,10 +89,11 @@ class BotRegistry:
         errors = validate_bot_configuration(bot)
         if errors:
             raise ValueError(" ".join(errors))
+        stamped = _stamp_bot_updated_at(bot)
         async with self._lock:
-            self._bots[bot.id] = bot
-            logger.info("Registered bot %s", bot.id)
-        await self._persist_bot(bot)
+            self._bots[stamped.id] = stamped
+            logger.info("Registered bot %s", stamped.id)
+        await self._persist_bot(stamped)
 
     async def get(self, bot_id: str) -> Bot:
         await self._ensure_db()
@@ -102,11 +112,12 @@ class BotRegistry:
         errors = validate_bot_configuration(bot)
         if errors:
             raise ValueError(" ".join(errors))
+        stamped = _stamp_bot_updated_at(bot)
         async with self._lock:
             if bot_id not in self._bots:
                 raise BotNotFoundError(f"Bot not found: {bot_id}")
-            self._bots[bot_id] = bot
-        await self._persist_bot(bot)
+            self._bots[bot_id] = stamped
+        await self._persist_bot(stamped)
 
     async def remove(self, bot_id: str) -> None:
         await self._ensure_db()
@@ -121,7 +132,7 @@ class BotRegistry:
         async with self._lock:
             if bot_id not in self._bots:
                 raise BotNotFoundError(f"Bot not found: {bot_id}")
-            updated = self._bots[bot_id].model_copy(update={"enabled": True})
+            updated = _stamp_bot_updated_at(self._bots[bot_id].model_copy(update={"enabled": True}))
             self._bots[bot_id] = updated
         await self._persist_bot(updated)
 
@@ -130,7 +141,7 @@ class BotRegistry:
         async with self._lock:
             if bot_id not in self._bots:
                 raise BotNotFoundError(f"Bot not found: {bot_id}")
-            updated = self._bots[bot_id].model_copy(update={"enabled": False})
+            updated = _stamp_bot_updated_at(self._bots[bot_id].model_copy(update={"enabled": False}))
             self._bots[bot_id] = updated
         await self._persist_bot(updated)
 
@@ -145,6 +156,10 @@ class BotRegistry:
                         raise ValueError(" ".join(errors))
                     if bot.id in self._bots and not force:
                         continue
+                    if bot.id in self._bots or force:
+                        bot = _stamp_bot_updated_at(bot)
+                    elif not bot.updated_at:
+                        bot = _stamp_bot_updated_at(bot)
                     for backend in bot.backends:
                         if backend.worker_id and backend.worker_id not in worker_ids:
                             logger.warning(

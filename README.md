@@ -164,6 +164,7 @@ Dashboard and workflow:
 - Bot detail editor with backend chain management, workflow triggers, saved input contracts, saved launch profiles, test runs, run history, and task board.
 - Typed specialist blueprints for bounded roles such as content work, quality review, research, monitoring, operations reporting, and code review or implementation; each specialist is preflighted before activation.
 - Bot export from the bot detail page and bot import from the bots index page, including bot configuration and bot-scoped connections, with overwrite confirmation on ID conflicts.
+- Bot create, update, enable, disable, and forced config seeding stamp `updated_at` so chat records can identify which bot version produced a response.
 - Bot-scoped external Connections workspace for HTTP/OpenAPI and database integration setup.
 - Attached connection schemas are injected into model-backed bot runs as authoring context, so bots can follow shared API and JSON structure definitions without exposing auth secrets in prompts.
 - Connection-context rules can also fetch live JSON from attached HTTP connections before inference, which lets a bot pull platform-owned schemas or examples from a payload-driven list such as requested block types.
@@ -174,6 +175,7 @@ Dashboard and workflow:
 Chat and orchestration:
 
 - Persistent chat conversations with SSE streaming.
+- Assistant messages store compact execution provenance: selected bot id/name/role/project binding, bot `updated_at`, and provider/model/backend route. Full prompts, routing rules, execution policies, backend params, and secrets are not copied into message metadata.
 - Context picker and one-click chat-to-vault ingestion.
 - Project-scoped and bridged chats can optionally attach semantic repo context from synced vault namespaces (`project:<id>:repo`) per message with `include_project_context=true`.
 - Optional workspace tooling in chat supports Codex-style repo help with strict three-level access control: bot policy, project policy, and chat policy must all be enabled or workspace tool access is denied.

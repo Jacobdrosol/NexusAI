@@ -224,6 +224,7 @@ class Bot(BaseModel):
     context_access: Optional[BotContextAccess] = None
     assignment_capabilities: Optional[AssignmentCapabilities] = None
     execution_policy: Optional[BotExecutionPolicy] = None
+    updated_at: Optional[str] = None
 
 
 class TaskMetadata(BaseModel):

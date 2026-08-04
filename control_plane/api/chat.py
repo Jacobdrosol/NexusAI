@@ -53,6 +53,74 @@ def _get_context_limits_for_bot(bot) -> tuple[int, int]:
         return 30, 12  # Default limits
     return get_context_limits_for_model(model)
 
+
+def _first_backend_snapshot(bot: Any) -> Dict[str, Any]:
+    if not bot or not getattr(bot, "backends", None):
+        return {}
+    backend = bot.backends[0]
+    return {
+        "backend_type": str(getattr(backend, "type", "") or "") or None,
+        "provider": str(getattr(backend, "provider", "") or "") or None,
+        "model": str(getattr(backend, "model", "") or "") or None,
+        "worker_id": str(getattr(backend, "worker_id", "") or "") or None,
+    }
+
+
+def _assistant_bot_metadata(
+    bot: Any,
+    *,
+    bot_id: str,
+    execution_provenance: Optional[Dict[str, Any]] = None,
+    extra: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    backend = dict(_first_backend_snapshot(bot))
+    if execution_provenance:
+        backend.update(
+            {
+                "backend_type": execution_provenance.get("backend_type") or backend.get("backend_type"),
+                "provider": execution_provenance.get("provider") or backend.get("provider"),
+                "model": execution_provenance.get("model") or backend.get("model"),
+                "worker_id": execution_provenance.get("worker_id") or backend.get("worker_id"),
+            }
+        )
+        captured_at = str(execution_provenance.get("captured_at") or "").strip()
+        if captured_at:
+            backend["captured_at"] = captured_at
+        backend["source"] = "scheduler"
+    else:
+        backend["source"] = "bot_config"
+    metadata: Dict[str, Any] = {
+        "bot": {
+            "id": str(getattr(bot, "id", "") or bot_id),
+            "name": str(getattr(bot, "name", "") or "") or None,
+            "role": str(getattr(bot, "role", "") or "") or None,
+            "project_id": str(getattr(bot, "project_id", "") or "") or None,
+            "updated_at": str(getattr(bot, "updated_at", "") or "") or None,
+        },
+        "model": backend,
+    }
+    if extra:
+        metadata.update(extra)
+    return metadata
+
+
+def _assistant_model_provider(
+    bot: Any,
+    execution_provenance: Optional[Dict[str, Any]] = None,
+) -> Tuple[Optional[str], Optional[str]]:
+    backend = dict(_first_backend_snapshot(bot))
+    if execution_provenance:
+        backend.update(
+            {
+                "provider": execution_provenance.get("provider") or backend.get("provider"),
+                "model": execution_provenance.get("model") or backend.get("model"),
+            }
+        )
+    return (
+        str(backend.get("model") or "") or None,
+        str(backend.get("provider") or "") or None,
+    )
+
 router = APIRouter(prefix="/v1/chat", tags=["chat"])
 
 
@@ -3586,6 +3654,7 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
             )
             # Get model-aware context limits for assign
             assign_bot_registry = getattr(request.app.state, "bot_registry", None)
+            assign_bot = None
             assign_item_limit, _ = 30, 12  # defaults
             if assign_bot_registry:
                 try:
@@ -3659,15 +3728,19 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                     "A full assignment summary will be posted when the workflow finishes."
                 ),
                 bot_id=str(assignment.get("pm_bot_id") or assign_bot_id or ""),
-                metadata={
-                    "mode": "assign_pending",
-                    "orchestration_id": assignment.get("orchestration_id"),
-                    "assignment_id": assignment.get("assignment_id"),
-                    "run_id": assignment.get("run_id") or assignment.get("orchestration_run_id"),
-                    "task_count": len(assignment.get("tasks", [])),
-                    "assigned_pm_bot_id": str(assignment.get("pm_bot_id") or assign_bot_id or ""),
-                    **context_meta,
-                },
+                metadata=_assistant_bot_metadata(
+                    assign_bot,
+                    bot_id=str(assignment.get("pm_bot_id") or assign_bot_id or ""),
+                    extra={
+                        "mode": "assign_pending",
+                        "orchestration_id": assignment.get("orchestration_id"),
+                        "assignment_id": assignment.get("assignment_id"),
+                        "run_id": assignment.get("run_id") or assignment.get("orchestration_run_id"),
+                        "task_count": len(assignment.get("tasks", [])),
+                        "assigned_pm_bot_id": str(assignment.get("pm_bot_id") or assign_bot_id or ""),
+                        **context_meta,
+                    },
+                ),
             )
 
             async def _persist_assignment_summary() -> None:
@@ -3687,10 +3760,14 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                             f"failed while summarizing: {exc}"
                         ),
                         bot_id=str(assignment.get("pm_bot_id") or assign_bot_id or ""),
-                        metadata={
-                            "mode": "assign_error",
-                            "orchestration_id": assignment.get("orchestration_id"),
-                        },
+                        metadata=_assistant_bot_metadata(
+                            assign_bot,
+                            bot_id=str(assignment.get("pm_bot_id") or assign_bot_id or ""),
+                            extra={
+                                "mode": "assign_error",
+                                "orchestration_id": assignment.get("orchestration_id"),
+                            },
+                        ),
                     )
 
             asyncio.create_task(_persist_assignment_summary())
@@ -3739,6 +3816,7 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                     role="assistant",
                     content=_inline_code_unavailable_message(),
                     bot_id=target_bot_id,
+                    metadata=_assistant_bot_metadata(ns_bot, bot_id=target_bot_id),
                 )
                 return {"user_message": user_message, "assistant_message": assistant_message}
             if not str(conversation.project_id or "").strip():
@@ -3747,6 +3825,7 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                     role="assistant",
                     content=_inline_code_requires_project_message(),
                     bot_id=target_bot_id,
+                    metadata=_assistant_bot_metadata(ns_bot, bot_id=target_bot_id),
                 )
                 return {"user_message": user_message, "assistant_message": assistant_message}
             exec_policy = getattr(ns_bot, "execution_policy", None) if ns_bot is not None else None
@@ -3762,6 +3841,7 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                     role="assistant",
                     content=_inline_code_bot_policy_message(),
                     bot_id=target_bot_id,
+                    metadata=_assistant_bot_metadata(ns_bot, bot_id=target_bot_id),
                 )
                 return {"user_message": user_message, "assistant_message": assistant_message}
         resolved_context = await _resolve_context_items(
@@ -3782,6 +3862,7 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                 role="assistant",
                 content=_repo_context_unavailable_message(),
                 bot_id=target_bot_id,
+                metadata=_assistant_bot_metadata(ns_bot, bot_id=target_bot_id),
             )
             return {"user_message": user_message, "assistant_message": assistant_message}
         payload = _messages_to_payload(
@@ -4145,11 +4226,15 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                             role="assistant",
                             content=_inline_code_no_changes_message(terminal_task),
                             bot_id=target_bot_id,
-                            metadata=_inline_code_assistant_metadata(
-                                orchestration_id=orchestration_id,
-                                task=terminal_task,
-                                run_status="failed",
-                                files_touched=[],
+                            metadata=_assistant_bot_metadata(
+                                ns_bot,
+                                bot_id=target_bot_id,
+                                extra=_inline_code_assistant_metadata(
+                                    orchestration_id=orchestration_id,
+                                    task=terminal_task,
+                                    run_status="failed",
+                                    files_touched=[],
+                                ),
                             ),
                         )
                         return {"user_message": user_message, "assistant_message": assistant_message}
@@ -4159,11 +4244,15 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                             role="assistant",
                             content=_inline_code_quality_gate_failure_message(terminal_task, quality_gate_failures, files_touched),
                             bot_id=target_bot_id,
-                            metadata=_inline_code_assistant_metadata(
-                                orchestration_id=orchestration_id,
-                                task=terminal_task,
-                                run_status="failed",
-                                files_touched=files_touched,
+                            metadata=_assistant_bot_metadata(
+                                ns_bot,
+                                bot_id=target_bot_id,
+                                extra=_inline_code_assistant_metadata(
+                                    orchestration_id=orchestration_id,
+                                    task=terminal_task,
+                                    run_status="failed",
+                                    files_touched=files_touched,
+                                ),
                             ),
                         )
                         return {"user_message": user_message, "assistant_message": assistant_message}
@@ -4185,11 +4274,15 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                         role="assistant",
                         content=assistant_output,
                         bot_id=target_bot_id,
-                        metadata=_inline_code_assistant_metadata(
-                            orchestration_id=orchestration_id,
-                            task=terminal_task,
-                            run_status="passed",
-                            files_touched=files_touched,
+                        metadata=_assistant_bot_metadata(
+                            ns_bot,
+                            bot_id=target_bot_id,
+                            extra=_inline_code_assistant_metadata(
+                                orchestration_id=orchestration_id,
+                                task=terminal_task,
+                                run_status="passed",
+                                files_touched=files_touched,
+                            ),
                         ),
                     )
                     return {"user_message": user_message, "assistant_message": assistant_message}
@@ -4199,11 +4292,15 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                     role="assistant",
                     content=_inline_code_terminal_error_message(terminal_task),
                     bot_id=target_bot_id,
-                    metadata=_inline_code_assistant_metadata(
-                        orchestration_id=orchestration_id,
-                        task=terminal_task,
-                        run_status="failed",
-                        files_touched=[],
+                    metadata=_assistant_bot_metadata(
+                        ns_bot,
+                        bot_id=target_bot_id,
+                        extra=_inline_code_assistant_metadata(
+                            orchestration_id=orchestration_id,
+                            task=terminal_task,
+                            run_status="failed",
+                            files_touched=[],
+                        ),
                     ),
                 )
                 return {"user_message": user_message, "assistant_message": assistant_message}
@@ -4213,6 +4310,7 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                     role="assistant",
                     content=f"Inline coding mode could not start: {exc.detail}",
                     bot_id=target_bot_id,
+                    metadata=_assistant_bot_metadata(ns_bot, bot_id=target_bot_id),
                 )
                 return {"user_message": user_message, "assistant_message": assistant_message}
             except Exception as exc:
@@ -4221,7 +4319,11 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                     role="assistant",
                     content=f"Inline coding run failed before completion: {exc}",
                     bot_id=target_bot_id,
-                    metadata={"mode": "assign_error", "orchestration_id": orchestration_id},
+                    metadata=_assistant_bot_metadata(
+                        ns_bot,
+                        bot_id=target_bot_id,
+                        extra={"mode": "assign_error", "orchestration_id": orchestration_id},
+                    ),
                 )
                 return {"user_message": user_message, "assistant_message": assistant_message}
         task = Task(
@@ -4238,17 +4340,24 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
             updated_at=user_message.created_at,
         )
         result = await scheduler.schedule(task)
+        execution_provenance = None
+        if hasattr(scheduler, "consume_task_execution_provenance"):
+            execution_provenance = scheduler.consume_task_execution_provenance(task.id)
         assistant_output = _extract_task_output(result)
         assistant_output = _apply_repo_evidence_envelope(
             assistant_output,
             require_repo_evidence=require_repo_evidence,
             context_sources=context_sources,
         )
+        assistant_model, assistant_provider = _assistant_model_provider(ns_bot, execution_provenance)
         assistant_message = await chat_manager.add_message(
             conversation_id=conversation_id,
             role="assistant",
             content=assistant_output,
             bot_id=target_bot_id,
+            model=assistant_model,
+            provider=assistant_provider,
+            metadata=_assistant_bot_metadata(ns_bot, bot_id=target_bot_id, execution_provenance=execution_provenance),
         )
         return {"user_message": user_message, "assistant_message": assistant_message}
     except ConversationNotFoundError as e:
@@ -4494,6 +4603,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                         role="assistant",
                         content=_inline_code_unavailable_message(),
                         bot_id=target_bot_id,
+                        metadata=_assistant_bot_metadata(bot, bot_id=target_bot_id),
                     )
                     yield f"event: assistant_message\ndata: {assistant_message.model_dump_json()}\n\n"
                     yield "event: done\ndata: {}\n\n"
@@ -4504,6 +4614,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                         role="assistant",
                         content=_inline_code_requires_project_message(),
                         bot_id=target_bot_id,
+                        metadata=_assistant_bot_metadata(bot, bot_id=target_bot_id),
                     )
                     yield f"event: assistant_message\ndata: {assistant_message.model_dump_json()}\n\n"
                     yield "event: done\ndata: {}\n\n"
@@ -4521,6 +4632,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                         role="assistant",
                         content=_inline_code_bot_policy_message(),
                         bot_id=target_bot_id,
+                        metadata=_assistant_bot_metadata(bot, bot_id=target_bot_id),
                     )
                     yield f"event: assistant_message\ndata: {assistant_message.model_dump_json()}\n\n"
                     yield "event: done\ndata: {}\n\n"
@@ -4561,6 +4673,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                     role="assistant",
                     content=_repo_context_unavailable_message(),
                     bot_id=target_bot_id,
+                    metadata=_assistant_bot_metadata(bot, bot_id=target_bot_id),
                 )
                 yield f"event: assistant_message\ndata: {assistant_message.model_dump_json()}\n\n"
                 yield "event: done\ndata: {}\n\n"
@@ -5013,11 +5126,15 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                                 role="assistant",
                                 content=_inline_code_no_changes_message(terminal_task),
                                 bot_id=target_bot_id,
-                                metadata=_inline_code_assistant_metadata(
-                                    orchestration_id=orchestration_id,
-                                    task=terminal_task,
-                                    run_status="failed",
-                                    files_touched=[],
+                                metadata=_assistant_bot_metadata(
+                                    bot,
+                                    bot_id=target_bot_id,
+                                    extra=_inline_code_assistant_metadata(
+                                        orchestration_id=orchestration_id,
+                                        task=terminal_task,
+                                        run_status="failed",
+                                        files_touched=[],
+                                    ),
                                 ),
                             )
                             yield f"event: assistant_message\ndata: {assistant_message.model_dump_json()}\n\n"
@@ -5029,11 +5146,15 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                                 role="assistant",
                                 content=_inline_code_quality_gate_failure_message(terminal_task, quality_gate_failures, files_touched),
                                 bot_id=target_bot_id,
-                                metadata=_inline_code_assistant_metadata(
-                                    orchestration_id=orchestration_id,
-                                    task=terminal_task,
-                                    run_status="failed",
-                                    files_touched=files_touched,
+                                metadata=_assistant_bot_metadata(
+                                    bot,
+                                    bot_id=target_bot_id,
+                                    extra=_inline_code_assistant_metadata(
+                                        orchestration_id=orchestration_id,
+                                        task=terminal_task,
+                                        run_status="failed",
+                                        files_touched=files_touched,
+                                    ),
                                 ),
                             )
                             yield f"event: assistant_message\ndata: {assistant_message.model_dump_json()}\n\n"
@@ -5059,11 +5180,15 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                             role="assistant",
                             content=assistant_output,
                             bot_id=target_bot_id,
-                            metadata=_inline_code_assistant_metadata(
-                                orchestration_id=orchestration_id,
-                                task=terminal_task,
-                                run_status="passed",
-                                files_touched=files_touched,
+                            metadata=_assistant_bot_metadata(
+                                bot,
+                                bot_id=target_bot_id,
+                                extra=_inline_code_assistant_metadata(
+                                    orchestration_id=orchestration_id,
+                                    task=terminal_task,
+                                    run_status="passed",
+                                    files_touched=files_touched,
+                                ),
                             ),
                         )
                         yield f"event: assistant_message\ndata: {assistant_message.model_dump_json()}\n\n"
@@ -5075,11 +5200,15 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                         role="assistant",
                         content=_inline_code_terminal_error_message(terminal_task),
                         bot_id=target_bot_id,
-                        metadata=_inline_code_assistant_metadata(
-                            orchestration_id=orchestration_id,
-                            task=terminal_task,
-                            run_status="failed",
-                            files_touched=[],
+                        metadata=_assistant_bot_metadata(
+                            bot,
+                            bot_id=target_bot_id,
+                            extra=_inline_code_assistant_metadata(
+                                orchestration_id=orchestration_id,
+                                task=terminal_task,
+                                run_status="failed",
+                                files_touched=[],
+                            ),
                         ),
                     )
                     yield f"event: assistant_message\ndata: {assistant_message.model_dump_json()}\n\n"
@@ -5091,6 +5220,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                         role="assistant",
                         content=f"Inline coding mode could not start: {exc.detail}",
                         bot_id=target_bot_id,
+                        metadata=_assistant_bot_metadata(bot, bot_id=target_bot_id),
                     )
                     yield f"event: assistant_message\ndata: {assistant_message.model_dump_json()}\n\n"
                     yield "event: done\ndata: {}\n\n"
@@ -5101,7 +5231,11 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                         role="assistant",
                         content=f"Inline coding run failed before completion: {exc}",
                         bot_id=target_bot_id,
-                        metadata={"mode": "assign_error", "orchestration_id": orchestration_id},
+                        metadata=_assistant_bot_metadata(
+                            bot,
+                            bot_id=target_bot_id,
+                            extra={"mode": "assign_error", "orchestration_id": orchestration_id},
+                        ),
                     )
                     yield f"event: assistant_message\ndata: {assistant_message.model_dump_json()}\n\n"
                     yield "event: done\ndata: {}\n\n"
@@ -5126,6 +5260,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
             assistant_message: Optional[ChatMessage] = None
             stream_provider: Optional[str] = None
             stream_model: Optional[str] = None
+            stream_worker_id: Optional[str] = None
             token_counter = 0
             async for event in scheduler.stream(task):
                 event_name = str(event.get("event") or "")
@@ -5135,6 +5270,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                     stream_provider = provider
                     stream_model = model
                     worker_id = str(event.get("worker_id") or "").strip()
+                    stream_worker_id = worker_id or None
                     label = f"Using {provider}/{model}"
                     if worker_id:
                         label += f" on {worker_id}"
@@ -5160,7 +5296,21 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                                 )
                             continue
                         partial_content = "".join(streamed_chunks)
-                        partial_metadata = {"streaming": True}
+                        stream_execution_provenance = (
+                            {
+                                "provider": stream_provider,
+                                "model": stream_model,
+                                "worker_id": stream_worker_id,
+                            }
+                            if stream_provider or stream_model or stream_worker_id
+                            else None
+                        )
+                        partial_metadata = _assistant_bot_metadata(
+                            bot,
+                            bot_id=target_bot_id,
+                            execution_provenance=stream_execution_provenance,
+                            extra={"streaming": True},
+                        )
                         if assistant_message is None:
                             assistant_message = await chat_manager.add_message(
                                 conversation_id=conversation_id,
@@ -5204,7 +5354,21 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                 context_sources=context_sources,
             )
             yield 'event: status\ndata: {"phase":"persisting","label":"Saving response..."}\n\n'
-            metadata = {"usage": (result or {}).get("usage", {})} if isinstance(result, dict) else {}
+            stream_execution_provenance = (
+                {
+                    "provider": stream_provider,
+                    "model": stream_model,
+                    "worker_id": stream_worker_id,
+                }
+                if stream_provider or stream_model or stream_worker_id
+                else None
+            )
+            metadata = _assistant_bot_metadata(
+                bot,
+                bot_id=target_bot_id,
+                execution_provenance=stream_execution_provenance,
+                extra={"usage": (result or {}).get("usage", {})} if isinstance(result, dict) else {},
+            )
             metadata["streaming"] = False
             if isinstance(result, dict) and result.get("partial"):
                 metadata["partial"] = True
