@@ -160,6 +160,18 @@ def test_work_overview_groups_tasks_by_project_and_manager():
     assert attention_lane["hold_manager_id"] == "globeiq-pm"
     assert attention_lane["held_by_project"] is False
     assert attention_lane["reasons"] == ["1 problem", "2 stale", "1 route gap", "held"]
+    queue_lane = overview["queue_pressure_lanes"][0]
+    assert queue_lane["project_id"] == "globeiq"
+    assert queue_lane["manager_id"] == "globeiq-pm"
+    assert queue_lane["active"] == 1
+    assert queue_lane["waiting"] == 1
+    assert queue_lane["queued"] == 1
+    assert queue_lane["blocked"] == 0
+    assert queue_lane["problem"] == 1
+    assert queue_lane["stale_waiting"] == 1
+    assert queue_lane["held"] is True
+    assert queue_lane["hold_manager_id"] == "globeiq-pm"
+    assert queue_lane["held_by_project"] is False
     assert manager["latest_tasks"][2]["worker_id"] == "browser-worker-01"
     assert overview["holds"][0]["id"] == "globeiq::globeiq-pm"
     assert overview["holds"][0]["queued_task_count"] == 1
@@ -437,6 +449,10 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"Review Lane" in resp.data
     assert b"project hold" in resp.data
     assert b"Stop Attention Lane" in resp.data
+    assert b"Queue Pressure" in resp.data
+    assert b"Review Queue" in resp.data
+    assert b"Stop Queue Lane" in resp.data
+    assert b"stale waiting" in resp.data
     assert b"GlobeIQ" in resp.data
     assert b"GlobeIQ Manager" in resp.data
     assert b"lesson-writer" in resp.data

@@ -431,6 +431,67 @@ def _attention_lanes(project_summaries: list[dict[str, Any]], limit: int = 12) -
     return rows[:limit]
 
 
+def _queue_pressure_lanes(project_summaries: list[dict[str, Any]], limit: int = 12) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for project in project_summaries:
+        project_id = str(project.get("project_id") or "")
+        project_name = str(project.get("project_name") or project_id)
+        for manager in project.get("managers") or []:
+            if not isinstance(manager, dict):
+                continue
+            totals = manager.get("totals") if isinstance(manager.get("totals"), dict) else {}
+            freshness = manager.get("freshness") if isinstance(manager.get("freshness"), dict) else {}
+            waiting = _safe_int(totals.get("waiting"))
+            queued = _safe_int(totals.get("queued"))
+            blocked = _safe_int(totals.get("blocked"))
+            active = _safe_int(totals.get("active"))
+            problem = _safe_int(totals.get("problem"))
+            stale_waiting = _safe_int(freshness.get("stale_waiting"))
+            if not any((waiting, queued, blocked, active, problem, stale_waiting)):
+                continue
+            hold = manager.get("hold") if isinstance(manager.get("hold"), dict) else {}
+            held = bool(manager.get("held"))
+            hold_manager_id = str(hold.get("manager_id") or "")
+            score = (
+                (blocked * 50)
+                + (problem * 40)
+                + (stale_waiting * 30)
+                + (waiting * 10)
+                + (active * 5)
+                + (15 if held else 0)
+            )
+            rows.append(
+                {
+                    "project_id": project_id,
+                    "project_name": project_name,
+                    "manager_id": str(manager.get("manager_id") or ""),
+                    "manager_name": str(manager.get("manager_name") or manager.get("manager_id") or ""),
+                    "active": active,
+                    "waiting": waiting,
+                    "queued": queued,
+                    "blocked": blocked,
+                    "problem": problem,
+                    "stale_waiting": stale_waiting,
+                    "held": held,
+                    "hold_manager_id": hold_manager_id,
+                    "held_by_project": held and not hold_manager_id,
+                    "oldest_waiting_label": str(freshness.get("oldest_waiting_label") or "none"),
+                    "score": score,
+                }
+            )
+    rows.sort(
+        key=lambda row: (
+            int(row.get("score", 0)),
+            int(row.get("blocked", 0)),
+            int(row.get("problem", 0)),
+            int(row.get("stale_waiting", 0)),
+            int(row.get("waiting", 0)),
+        ),
+        reverse=True,
+    )
+    return rows[:limit]
+
+
 def build_work_overview(
     *,
     tasks: list[dict[str, Any]] | None,
@@ -783,6 +844,7 @@ def build_work_overview(
         "metadata_health": metadata_health,
         "route_evidence": route_evidence,
         "attention_lanes": _attention_lanes(project_summaries),
+        "queue_pressure_lanes": _queue_pressure_lanes(project_summaries),
         "problem_summary": {
             "total": int(sum(problem_codes.values())),
             "by_code": _counter_rows(problem_codes, "code"),

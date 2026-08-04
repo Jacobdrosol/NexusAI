@@ -36,6 +36,7 @@
 {% set attention = overview.attention or {} %}
 {% set route_evidence = overview.route_evidence or {} %}
 {% set attention_lanes = overview.attention_lanes or [] %}
+{% set queue_pressure_lanes = overview.queue_pressure_lanes or [] %}
 <div class="cards">
   <div class="card">
     <div class="card-label">Needs Attention</div>
@@ -470,6 +471,66 @@
             </tr>
             {% else %}
             <tr><td colspan="4" class="empty">No project-manager lanes need attention in the loaded window.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2 class="panel-title">Queue Pressure</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Lane</th><th>Pressure</th><th>Oldest</th><th>Actions</th></tr></thead>
+          <tbody>
+            {% for lane in queue_pressure_lanes[:12] %}
+            <tr>
+              <td>
+                <strong>{{ lane.project_name }}</strong>
+                <div class="mini-note"><code>{{ lane.project_id }}</code></div>
+                <div class="mini-note"><code>{{ lane.manager_id }}</code></div>
+              </td>
+              <td>
+                <div class="mini-note">{{ lane.active }} active / {{ lane.waiting }} waiting</div>
+                {% if lane.blocked %}<div><span class="badge badge-failed">{{ lane.blocked }} blocked</span></div>{% endif %}
+                {% if lane.queued %}<div><span class="badge badge-queued">{{ lane.queued }} queued</span></div>{% endif %}
+                {% if lane.problem %}<div><span class="badge badge-failed">{{ lane.problem }} problem</span></div>{% endif %}
+                {% if lane.stale_waiting %}<div><span class="badge badge-yellow">{{ lane.stale_waiting }} stale waiting</span></div>{% endif %}
+                {% if lane.held %}<div><span class="badge badge-yellow">held</span></div>{% endif %}
+              </td>
+              <td>{{ lane.oldest_waiting_label }}</td>
+              <td>
+                <button class="btn btn-sm"
+                        type="button"
+                        onclick="showLaneDetails({project_id: {{ lane.project_id|tojson }}, manager_id: {{ lane.manager_id|tojson }}, label: {{ lane.manager_name|tojson }}})">
+                  Review Queue
+                </button>
+                {% if lane.held and not lane.held_by_project %}
+                <button class="btn btn-sm"
+                        type="button"
+                        onclick="setWorkHold({action: 'release', project_id: {{ lane.project_id|tojson }}, manager_id: {{ lane.manager_id|tojson }}, label: {{ lane.manager_name|tojson }}})">
+                  Release Queue Lane
+                </button>
+                {% elif not lane.held %}
+                <button class="btn btn-sm"
+                        type="button"
+                        onclick="setWorkHold({action: 'hold', project_id: {{ lane.project_id|tojson }}, manager_id: {{ lane.manager_id|tojson }}, label: {{ lane.manager_name|tojson }}})">
+                  Hold Queue Lane
+                </button>
+                {% else %}
+                <span class="empty">project hold</span>
+                {% endif %}
+                {% if (lane.active or 0) + (lane.waiting or 0) > 0 %}
+                <button class="btn btn-sm btn-danger"
+                        type="button"
+                        onclick="stopWork({project_id: {{ lane.project_id|tojson }}, manager_id: {{ lane.manager_id|tojson }}, label: {{ lane.manager_name|tojson }}})">
+                  Stop Queue Lane
+                </button>
+                {% endif %}
+              </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="4" class="empty">No active or waiting project-manager queues in the loaded window.</td></tr>
             {% endfor %}
           </tbody>
         </table>
