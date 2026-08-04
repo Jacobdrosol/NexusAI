@@ -140,8 +140,8 @@ class CPClient:
             logger.warning("CP %s %s failed: %s", method, path, exc)
             return None
 
-    def _get(self, path: str) -> Optional[Any]:
-        return self._request("GET", path)
+    def _get(self, path: str, *, timeout: Optional[float] = None) -> Optional[Any]:
+        return self._request("GET", path, timeout=timeout)
 
     def _post(self, path: str, json: Any, *, timeout: Optional[float] = None) -> Optional[Any]:
         return self._request("POST", path, json=json, timeout=timeout)
@@ -870,10 +870,20 @@ class CPClient:
 
     # Supervisory operations
     def get_supervision_overview(self) -> Optional[Dict[str, Any]]:
-        return self._get("/v1/supervision/overview")
+        return self._get("/v1/supervision/overview", timeout=float(os.environ.get("CP_SUPERVISION_OVERVIEW_TIMEOUT", "1.0")))
 
     def list_supervision_reports(self, limit: int = 50) -> Optional[Dict[str, Any]]:
         return self._get(f"/v1/supervision/reports?limit={max(1, min(int(limit), 200))}")
+
+    def list_supervision_actions(self, status: Optional[str] = None, limit: int = 100) -> Optional[Dict[str, Any]]:
+        safe_limit = max(1, min(int(limit), 200))
+        query = f"limit={safe_limit}"
+        if status:
+            query += f"&status={status}"
+        return self._get(f"/v1/supervision/actions?{query}")
+
+    def list_supervision_holds(self, limit: int = 100) -> Optional[Dict[str, Any]]:
+        return self._get(f"/v1/supervision/holds?limit={max(1, min(int(limit), 200))}")
 
     def approve_supervision_action(self, action_id: str, body: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
         return self._post(f"/v1/supervision/actions/{action_id}/approve", body or {})

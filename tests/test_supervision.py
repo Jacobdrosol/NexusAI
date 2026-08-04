@@ -206,6 +206,9 @@ async def test_manager_reports_create_portfolio_bound_actions_and_operator_can_a
     overview = await cp_client.get("/v1/supervision/overview")
     assert overview.status_code == 200
     assert overview.json()["active_holds"][0]["bot_id"] == specialist.id
+    holds = await cp_client.get("/v1/supervision/holds")
+    assert holds.status_code == 200
+    assert holds.json()["holds"][0]["bot_id"] == specialist.id
 
     release_response = await cp_client.post(
         f"/v1/supervision/holds/{specialist.id}/release",
@@ -449,3 +452,50 @@ def test_supervision_dashboard_renders_executive_decisions(dashboard_client):
     assert b"Pending Decisions" in response.data
     assert b"One decision requires approval." in response.data
     assert b"specialist-hourly" in response.data
+
+
+def test_supervision_dashboard_falls_back_when_overview_unavailable(dashboard_client):
+    from dashboard.db import get_db
+    from dashboard.models import User
+
+    password = "password123"
+    db = get_db()
+    try:
+        if db.query(User).filter_by(email="admin@test.com").first() is None:
+            db.add(
+                User(
+                    email="admin@test.com",
+                    password_hash=bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode(),
+                    role="admin",
+                    is_active=True,
+                )
+            )
+            db.commit()
+    finally:
+        db.close()
+    login = dashboard_client.post(
+        "/login",
+        data={"email": "admin@test.com", "password": password},
+        follow_redirects=False,
+    )
+    assert login.status_code in {302, 303}
+
+    class _FakeCP:
+        def get_supervision_overview(self):
+            return None
+
+        def list_supervision_reports(self, limit=20):
+            return {"reports": []}
+
+        def list_supervision_actions(self, status=None, limit=100):
+            return {"actions": []}
+
+        def list_supervision_holds(self, limit=100):
+            return {"holds": [{"bot_id": "held-bot", "reason": "review", "updated_at": "2026-07-19T12:00:00+00:00"}]}
+
+    with patch("dashboard.routes.supervision.get_cp_client", return_value=_FakeCP()):
+        response = dashboard_client.get("/supervision")
+    assert response.status_code == 200
+    assert b"Control plane supervision overview is temporarily unavailable." in response.data
+    assert b"Enabled workers" in response.data
+    assert b"held-bot" in response.data

@@ -82,6 +82,17 @@ async def list_supervision_actions(
     return {"actions": actions}
 
 
+@router.get("/holds")
+async def list_supervision_holds(
+    request: Request,
+    limit: int = 100,
+) -> Dict[str, Any]:
+    holds = await request.app.state.supervision_store.list_holds(
+        limit=_bounded_limit(limit, default=100),
+    )
+    return {"holds": holds}
+
+
 @router.post("/actions/{action_id}/approve")
 async def approve_supervision_action(
     action_id: str,
