@@ -405,6 +405,11 @@
               </td>
               <td>{{ orchestration.task_count or 0 }}</td>
               <td>
+                <button class="btn btn-sm"
+                        type="button"
+                        onclick="showOrchestrationDetails({orchestration_id: {{ orchestration.orchestration_id|tojson }}})">
+                  View Run
+                </button>
                 {% if (orchestration.active or 0) + (orchestration.waiting or 0) > 0 %}
                 <button class="btn btn-sm btn-danger"
                         type="button"
@@ -624,6 +629,67 @@ function showLaneDetails(scope) {
       '<div class="mini-note" style="margin-bottom:0.75rem;">' + escapeText(countParts.join(' | ') || 'No active/problem tasks') + '</div>' +
       '<div class="table-wrap"><table><thead><tr><th>Task</th><th>Bot</th><th>Status</th><th>Step</th><th>Updated</th><th>Error</th></tr></thead><tbody>' +
       (rows || '<tr><td colspan="6" class="empty">No active, waiting, or problem tasks in this lane.</td></tr>') +
+      '</tbody></table></div>';
+  })
+  .catch(function(e) {
+    meta.textContent = '';
+    body.className = 'alert alert-error';
+    body.textContent = 'Network error: ' + e;
+  });
+}
+
+function showOrchestrationDetails(scope) {
+  var orchestrationId = String(scope.orchestration_id || '').trim();
+  if (!orchestrationId) {
+    alert('orchestration_id is required');
+    return;
+  }
+  var panel = document.getElementById('lane-detail-panel');
+  var title = document.getElementById('lane-detail-title');
+  var meta = document.getElementById('lane-detail-meta');
+  var body = document.getElementById('lane-detail-body');
+  title.textContent = 'Run ' + orchestrationId;
+  meta.textContent = 'Loading run details...';
+  body.className = 'empty';
+  body.textContent = 'Loading';
+  panel.style.display = 'block';
+  var params = new URLSearchParams({
+    orchestration_id: orchestrationId,
+    limit: '100'
+  });
+  fetch('/api/work/orchestration?' + params.toString())
+  .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, data: d}; }); })
+  .then(function(res) {
+    if (!res.ok) {
+      meta.textContent = '';
+      body.className = 'alert alert-error';
+      body.textContent = res.data.error || 'Unable to load run details.';
+      return;
+    }
+    var data = res.data;
+    var counts = data.counts || {};
+    var countParts = Object.keys(counts).sort().map(function(key) {
+      return key + ': ' + counts[key];
+    });
+    meta.textContent = data.count + ' loaded task(s) | stoppable ' + (data.stoppable_count || 0) + (data.truncated ? ' | truncated' : '');
+    var rows = (data.tasks || []).map(function(task) {
+      var errorParts = [task.error_code, task.error_type, task.error_message].filter(Boolean);
+      return '<tr>' +
+        '<td><code>' + escapeText(task.id.slice(0, 12)) + (task.id.length > 12 ? '...' : '') + '</code></td>' +
+        '<td><code>' + escapeText(task.bot_id) + '</code></td>' +
+        '<td><span class="badge badge-' + escapeText(task.status) + '">' + escapeText(task.status) + '</span></td>' +
+        '<td><code>' + escapeText(task.project_id || '') + '</code></td>' +
+        '<td><code>' + escapeText(task.manager_id || '') + '</code></td>' +
+        '<td>' + escapeText(task.step_id || task.source || '') + '</td>' +
+        '<td>' + escapeText(task.updated_at || '') + '</td>' +
+        '<td>' + escapeText(errorParts.join(' | ')) + '</td>' +
+      '</tr>';
+    }).join('');
+    body.className = '';
+    body.innerHTML =
+      '<div class="mini-note" style="margin-bottom:0.75rem;">' + escapeText(countParts.join(' | ') || 'No tasks') + '</div>' +
+      '<div class="table-wrap"><table><thead><tr><th>Task</th><th>Bot</th><th>Status</th><th>Project</th><th>Manager</th><th>Step</th><th>Updated</th><th>Error</th></tr></thead><tbody>' +
+      (rows || '<tr><td colspan="8" class="empty">No tasks found for this run in the loaded window.</td></tr>') +
       '</tbody></table></div>';
   })
   .catch(function(e) {

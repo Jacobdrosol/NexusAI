@@ -329,6 +329,8 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"Loaded task summaries include project and manager metadata." in resp.data
     assert b"Orchestrations" in resp.data
     assert b"orch-1" in resp.data
+    assert b"View Run" in resp.data
+    assert b"showOrchestrationDetails" in resp.data
     assert b"Stop Run" in resp.data
     assert b"stopOrchestration" in resp.data
     assert b"Problem Sources" in resp.data
@@ -493,6 +495,86 @@ def test_work_stop_api_dry_run_filters_stoppable_project_manager_tasks(dashboard
     assert data["status"] == "dry_run"
     assert data["matched_task_count"] == 2
     assert [task["id"] for task in data["tasks"]] == ["running-target", "queued-target"]
+
+
+def test_work_orchestration_api_returns_bounded_run_task_details(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def __init__(self):
+            self.request = None
+
+        def list_tasks(self, **kwargs):
+            self.request = kwargs
+            return [
+                {
+                    "id": "older-running",
+                    "bot_id": "lesson-writer",
+                    "status": "running",
+                    "created_at": "2026-08-04T10:00:00+00:00",
+                    "updated_at": "2026-08-04T10:05:00+00:00",
+                    "metadata": {
+                        "project_id": "globeiq",
+                        "root_pm_bot_id": "manager-a",
+                        "orchestration_id": "orch-target",
+                        "step_id": "lesson_write",
+                    },
+                },
+                {
+                    "id": "newer-failed",
+                    "bot_id": "lesson-qc",
+                    "status": "failed",
+                    "created_at": "2026-08-04T10:00:00+00:00",
+                    "updated_at": "2026-08-04T10:06:00+00:00",
+                    "metadata": {
+                        "project_id": "globeiq",
+                        "root_pm_bot_id": "manager-a",
+                        "orchestration_id": "orch-target",
+                        "source": "lesson_audit",
+                    },
+                    "has_error": True,
+                    "error_summary": {"type": "dict", "code": "browser_evidence_missing", "message": "No browser evidence."},
+                },
+                {
+                    "id": "other-orch-ignore",
+                    "bot_id": "lesson-writer",
+                    "status": "running",
+                    "metadata": {"project_id": "globeiq", "root_pm_bot_id": "manager-a", "orchestration_id": "orch-other"},
+                },
+            ]
+
+    fake = FakeCP()
+    with patch("dashboard.routes.work.get_cp_client", return_value=fake):
+        resp = dashboard_client.get("/api/work/orchestration?orchestration_id=orch-target&limit=1")
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["orchestration_id"] == "orch-target"
+    assert data["count"] == 2
+    assert data["counts"] == {"failed": 1, "running": 1}
+    assert data["stoppable_count"] == 1
+    assert data["truncated"] is True
+    assert len(data["tasks"]) == 1
+    assert data["tasks"][0]["id"] == "newer-failed"
+    assert data["tasks"][0]["project_id"] == "globeiq"
+    assert data["tasks"][0]["manager_id"] == "manager-a"
+    assert data["tasks"][0]["source"] == "lesson_audit"
+    assert data["tasks"][0]["error_code"] == "browser_evidence_missing"
+    assert fake.request["orchestration_id"] == "orch-target"
+    assert fake.request["include_content"] is False
+    assert fake.request["limit"] == 1000
+
+
+def test_work_orchestration_api_rejects_missing_orchestration_or_invalid_limit(dashboard_client):
+    _login_admin(dashboard_client)
+
+    missing = dashboard_client.get("/api/work/orchestration")
+    bad_limit = dashboard_client.get("/api/work/orchestration?orchestration_id=orch-target&limit=wide")
+
+    assert missing.status_code == 400
+    assert "orchestration_id is required" in missing.get_data(as_text=True)
+    assert bad_limit.status_code == 400
+    assert "limit must be an integer" in bad_limit.get_data(as_text=True)
 
 
 def test_work_orchestration_stop_api_dry_run_counts_cancellable_tasks(dashboard_client):

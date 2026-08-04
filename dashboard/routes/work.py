@@ -329,6 +329,55 @@ def api_stop_work():
     ), (200 if not failed else 207)
 
 
+@bp.get("/api/work/orchestration")
+@login_required
+def api_work_orchestration():
+    orchestration_id = str(request.args.get("orchestration_id") or "").strip()
+    if not orchestration_id:
+        return jsonify({"error": "orchestration_id is required."}), 400
+    try:
+        limit = min(max(int(request.args.get("limit", 100)), 1), 200)
+    except (TypeError, ValueError):
+        return jsonify({"error": "limit must be an integer between 1 and 200."}), 400
+
+    cp = get_cp_client()
+    tasks = _safe_call(
+        cp.list_tasks,
+        orchestration_id=orchestration_id,
+        limit=1000,
+        include_content=False,
+        timeout=2.0,
+    )
+    if tasks is None:
+        return jsonify({"error": "control plane unavailable"}), 503
+
+    matching_tasks = [
+        task
+        for task in tasks
+        if isinstance(task, dict) and _orchestration_task_matches(task, orchestration_id)
+    ]
+    matching_tasks.sort(key=lambda task: str(task.get("updated_at") or task.get("created_at") or ""), reverse=True)
+    counts: dict[str, int] = {}
+    for task in matching_tasks:
+        status = str(task.get("status") or "unknown").strip().lower() or "unknown"
+        counts[status] = counts.get(status, 0) + 1
+
+    return jsonify(
+        {
+            "orchestration_id": orchestration_id,
+            "count": len(matching_tasks),
+            "counts": counts,
+            "stoppable_count": sum(
+                1
+                for task in matching_tasks
+                if str(task.get("status") or "").strip().lower() in STOPPABLE_WORK_STATUSES
+            ),
+            "tasks": [_compact_lane_task(task) for task in matching_tasks[:limit]],
+            "truncated": len(matching_tasks) > limit,
+        }
+    )
+
+
 @bp.post("/api/work/orchestration/stop")
 @login_required
 def api_stop_orchestration_work():

@@ -6,7 +6,7 @@ Improve NexusAI one scoped platform foundation at a time so it can become the pr
 
 ## Current Scope
 
-Current item: show bounded failure labels in Work Overview lane details from summary-only task rows.
+Current item: add read-only orchestration drilldown to Work Overview so run inspection is separate from stop previews.
 
 ## Completion Criteria For This Item
 
@@ -33,6 +33,7 @@ Current item: show bounded failure labels in Work Overview lane details from sum
 - Work Overview identifies task summaries that are missing project metadata or are grouped under inferred managers instead of explicit manager metadata.
 - Work Overview classifies failed/retried work by bounded error label, source, and bot so operators can identify repeated failure modes quickly.
 - Work Overview summarizes loaded orchestration IDs with project, manager, active/waiting/problem/stale counts, latest task status, and total task count.
+- Operators can inspect bounded task details for one orchestration without invoking cancellation preview or loading task content.
 - Lane details show bounded error type, code, and message from non-content task summaries.
 - Page render uses bounded control-plane calls and does not reintroduce slow navigation.
 - Focused tests cover grouping behavior and dashboard rendering.
@@ -88,6 +89,8 @@ Current item: show bounded failure labels in Work Overview lane details from sum
 - Added Work page Stop Run controls for orchestration rows that have active or waiting work.
 - Updated lane-detail compaction to use bounded `error_summary` fields from task-summary rows, with legacy full-error fallback.
 - Updated lane-detail rendering to show error code, type, and bounded message together when available.
+- Added `/api/work/orchestration` for read-only, summary-only orchestration task drilldown with status counts and stoppable counts.
+- Added Work page View Run controls that load one orchestration into the existing detail panel without using the stop endpoint.
 
 ## Validation Plan
 
@@ -114,6 +117,8 @@ Current item: show bounded failure labels in Work Overview lane details from sum
 - Added Work Overview API tests proving orchestration stop dry-runs count only matching run tasks, actual stop proxies to the control plane, and missing orchestration IDs are rejected.
 - Added dashboard rendering assertions that Work Overview exposes Stop Run controls.
 - Added lane-detail API assertions proving summary-only error labels are returned without loading full task content.
+- Added Work Overview API tests proving orchestration drilldown filters to one run, returns bounded task details, sorts newest first, and rejects missing IDs or invalid limits.
+- Added dashboard rendering assertions that Work Overview exposes View Run controls.
 - Run focused pytest coverage for new route, task summaries, and dashboard smoke where applicable.
 - After deployment, measure route render time and verify no fresh 500 or slow-request logs.
 
@@ -135,3 +140,4 @@ Current item: show bounded failure labels in Work Overview lane details from sum
 - Orchestration rollups are based only on the bounded loaded task-summary windows. They are an operator snapshot, not a complete historical run graph.
 - Orchestration stop previews use bounded loaded summaries for operator confirmation; the control-plane cancellation remains authoritative and blocks later fan-out for the orchestration ID.
 - Lane-detail error labels are intentionally bounded summaries for routing and triage, not complete failure payloads.
+- Orchestration drilldown is read-only and summary-only. It does not replace the full pipeline/detail graph views for artifact review or result inspection.
