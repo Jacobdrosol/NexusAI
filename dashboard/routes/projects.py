@@ -318,6 +318,16 @@ def projects_page() -> str:
     return render_template("projects.html", projects=projects, error=error)
 
 
+@bp.get("/api/projects")
+@login_required
+def api_list_projects():
+    cp = get_cp_client()
+    projects = cp.list_projects()
+    if projects is None:
+        return _cp_error_response(cp)
+    return jsonify(projects)
+
+
 @bp.get("/projects/<project_id>")
 @login_required
 def project_detail_page(project_id: str):

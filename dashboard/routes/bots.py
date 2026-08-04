@@ -546,6 +546,13 @@ def bot_detail_page(bot_id: str):
 @login_required
 def api_list_bots():
     """List all bots as JSON."""
+    from dashboard.cp_client import get_cp_client
+
+    cp = get_cp_client()
+    cp_bots = cp.list_bots()
+    if cp_bots is not None:
+        return jsonify(cp_bots)
+
     db = get_db()
     try:
         bots = db.query(Bot).order_by(Bot.priority).all()

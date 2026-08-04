@@ -122,6 +122,65 @@ def _assistant_model_provider(
     )
 
 router = APIRouter(prefix="/v1/chat", tags=["chat"])
+_MEMORY_PROFILE_MIN_RELEVANCE = 0.35
+_MEMORY_PROFILE_MIN_OVERLAP_RELEVANCE = 0.12
+_MEMORY_PROFILE_STOPWORDS = {
+    "a",
+    "about",
+    "all",
+    "am",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "but",
+    "by",
+    "can",
+    "do",
+    "does",
+    "for",
+    "from",
+    "have",
+    "he",
+    "her",
+    "him",
+    "how",
+    "i",
+    "in",
+    "is",
+    "it",
+    "me",
+    "my",
+    "of",
+    "on",
+    "or",
+    "our",
+    "she",
+    "should",
+    "so",
+    "that",
+    "the",
+    "their",
+    "them",
+    "this",
+    "to",
+    "use",
+    "we",
+    "what",
+    "when",
+    "where",
+    "who",
+    "will",
+    "with",
+    "you",
+    "your",
+}
+_MEMORY_PROFILE_RECALL_RE = re.compile(
+    r"\b(remember|memory|memories|profile|preference|preferences|prefer|preferred|like|called|name|codename)\b",
+    re.IGNORECASE,
+)
 
 
 class CreateConversationRequest(BaseModel):
@@ -832,12 +891,35 @@ async def _search_memory_profile_for_turn(
 ) -> List[Dict[str, Any]]:
     if not bool(decision.get("eligible")):
         return []
-    return await chat_manager.search_memory_profile(
+    hits = await chat_manager.search_memory_profile(
         user_id=str(decision.get("user_id") or ""),
         profile_id=str(decision.get("profile_id") or "default"),
         query=query,
         limit=8,
     )
+    relevant = [hit for hit in hits if _memory_profile_hit_is_relevant(query, hit)]
+    return relevant[:6]
+
+
+def _memory_profile_terms(value: str) -> set[str]:
+    terms = set()
+    for term in re.findall(r"[a-zA-Z0-9][a-zA-Z0-9_-]{2,}", str(value or "").lower()):
+        if term not in _MEMORY_PROFILE_STOPWORDS:
+            terms.add(term)
+    return terms
+
+
+def _memory_profile_hit_is_relevant(query: str, hit: Dict[str, Any]) -> bool:
+    try:
+        score = float(hit.get("score") or 0.0)
+    except Exception:
+        score = 0.0
+    query_terms = _memory_profile_terms(query)
+    content_terms = _memory_profile_terms(str(hit.get("content") or ""))
+    if query_terms & content_terms:
+        return score >= _MEMORY_PROFILE_MIN_OVERLAP_RELEVANCE
+
+    return score >= _MEMORY_PROFILE_MIN_RELEVANCE and bool(_MEMORY_PROFILE_RECALL_RE.search(str(query or "")))
 
 
 async def _index_memory_profile_turn(

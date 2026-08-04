@@ -341,6 +341,21 @@ def test_chat_page_loads_when_logged_in(dashboard_client):
     assert resp.status_code == 200
 
 
+def test_projects_api_lists_control_plane_projects(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_projects(self):
+            return [{"id": "globeiq", "name": "GlobeIQ", "memory_profiles_enabled": True}]
+
+    with patch("dashboard.routes.projects.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/api/projects")
+
+    assert resp.status_code == 200
+    assert resp.get_json()[0]["id"] == "globeiq"
+    assert resp.get_json()[0]["memory_profiles_enabled"] is True
+
+
 def test_memory_page_loads_user_scoped_items(dashboard_client):
     _login_admin(dashboard_client)
 
@@ -439,6 +454,21 @@ def test_bot_create_can_enable_memory(dashboard_client):
 
     assert resp.status_code == 201
     assert created_payload["memory_profiles_enabled"] is True
+
+
+def test_bots_api_prefers_control_plane_bots(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_bots(self):
+            return [{"id": "personal-general-chat", "name": "Personal General Chat", "memory_profiles_enabled": True}]
+
+    with patch("dashboard.cp_client.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/api/bots")
+
+    assert resp.status_code == 200
+    assert resp.get_json()[0]["id"] == "personal-general-chat"
+    assert resp.get_json()[0]["memory_profiles_enabled"] is True
 
 
 def test_chat_mobile_layout_prioritizes_active_conversation():

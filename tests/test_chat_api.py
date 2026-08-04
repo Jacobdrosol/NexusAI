@@ -163,6 +163,63 @@ async def test_project_memory_gate_blocks_profile_retrieval_when_project_disable
 
 
 @pytest.mark.anyio
+async def test_memory_profile_ignores_low_relevance_hits(cp_app):
+    captured_payloads = []
+
+    async def _capture_schedule(task):
+        captured_payloads.append(task.payload)
+        return {"output": "assistant reply"}
+
+    cp_app.state.scheduler.schedule = _capture_schedule
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-memory-relevance",
+                "name": "Memory Relevance Bot",
+                "role": "assistant",
+                "memory_profiles_enabled": True,
+                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "qwen3.5:397b"}],
+                "enabled": True,
+            },
+        )
+        seed_resp = await client.post(
+            "/v1/chat/conversations",
+            json={"title": "Seed Memory", "owner_user_id": "user@example.com"},
+        )
+        seed_id = seed_resp.json()["id"]
+        await client.post(
+            f"/v1/chat/conversations/{seed_id}/messages",
+            json={
+                "content": "My preferred project codename is Blue Lantern.",
+                "bot_id": "bot-memory-relevance",
+                "user_id": "user@example.com",
+            },
+        )
+
+        math_resp = await client.post(
+            "/v1/chat/conversations",
+            json={"title": "Math Chat", "owner_user_id": "user@example.com"},
+        )
+        math_id = math_resp.json()["id"]
+        turn = await client.post(
+            f"/v1/chat/conversations/{math_id}/messages",
+            json={
+                "content": "Solve: a two kilogram cart accelerates at three meters per second squared for four seconds.",
+                "bot_id": "bot-memory-relevance",
+                "user_id": "user@example.com",
+            },
+        )
+
+        assert turn.status_code == 200
+        assert turn.json()["assistant_message"]["metadata"]["memory_profile"]["hit_count"] == 0
+        assert not any(
+            item["role"] == "system" and "Personal Memory Profile:" in str(item["content"])
+            for item in captured_payloads[-1]
+        )
+
+
+@pytest.mark.anyio
 async def test_memory_profile_item_crud_is_user_scoped(cp_app):
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
         create_resp = await client.post(
