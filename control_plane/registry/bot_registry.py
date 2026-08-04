@@ -62,8 +62,25 @@ class BotRegistry:
                 await db.commit()
                 async with db.execute("SELECT id, data FROM cp_bots") as cursor:
                     rows = await cursor.fetchall()
+                    missing_updated_at: list[Bot] = []
                     for row in rows:
-                        self._bots[row["id"]] = Bot.model_validate(json.loads(row["data"]))
+                        bot = Bot.model_validate(json.loads(row["data"]))
+                        if not bot.updated_at:
+                            bot = _stamp_bot_updated_at(bot)
+                            missing_updated_at.append(bot)
+                        self._bots[row["id"]] = bot
+                    for bot in missing_updated_at:
+                        await db.execute(
+                            """
+                            INSERT INTO cp_bots (id, data)
+                            VALUES (?, ?)
+                            ON CONFLICT(id) DO UPDATE SET
+                                data = excluded.data
+                            """,
+                            (bot.id, json.dumps(bot.model_dump())),
+                        )
+                    if missing_updated_at:
+                        await db.commit()
             self._db_ready = True
 
     async def _persist_bot(self, bot: Bot) -> None:

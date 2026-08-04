@@ -142,6 +142,33 @@ async def test_bot_create_and_update_stamp_updated_at(cp_client):
     assert datetime.fromisoformat(updated["updated_at"]) >= datetime.fromisoformat(created["updated_at"])
 
 
+@pytest.mark.anyio
+async def test_bot_registry_backfills_missing_updated_at(tmp_path):
+    from control_plane.registry.bot_registry import BotRegistry
+
+    db_path = tmp_path / "bots.db"
+    legacy_bot = {
+        "id": "legacy-bot",
+        "name": "Legacy Bot",
+        "role": "assistant",
+        "backends": [],
+        "enabled": True,
+    }
+    with sqlite3.connect(db_path) as conn:
+        conn.execute("CREATE TABLE cp_bots (id TEXT PRIMARY KEY, data TEXT NOT NULL)")
+        conn.execute("INSERT INTO cp_bots (id, data) VALUES (?, ?)", ("legacy-bot", json.dumps(legacy_bot)))
+
+    registry = BotRegistry(db_path=str(db_path))
+    bot = await registry.get("legacy-bot")
+    assert bot.updated_at
+
+    with sqlite3.connect(db_path) as conn:
+        row = conn.execute("SELECT data FROM cp_bots WHERE id = ?", ("legacy-bot",)).fetchone()
+    assert row is not None
+    persisted = json.loads(row[0])
+    assert persisted["updated_at"] == bot.updated_at
+
+
 def test_public_default_config_keeps_example_bot_seeding_opt_in():
     from shared.config_loader import ConfigLoader
 
