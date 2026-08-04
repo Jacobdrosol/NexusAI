@@ -44,20 +44,23 @@ def _attach_attention_summary(overview: dict[str, Any]) -> None:
     totals = overview.get("totals") if isinstance(overview.get("totals"), dict) else {}
     workers = overview.get("workers") if isinstance(overview.get("workers"), dict) else {}
     metadata_health = overview.get("metadata_health") if isinstance(overview.get("metadata_health"), dict) else {}
+    route_evidence = overview.get("route_evidence") if isinstance(overview.get("route_evidence"), dict) else {}
     usage = overview.get("usage") if isinstance(overview.get("usage"), dict) else {}
     usage_totals = usage.get("totals") if isinstance(usage.get("totals"), dict) else {}
 
     problem_tasks = _safe_count(totals, "problem")
     stale_work = _safe_count(totals, "stale_active") + _safe_count(totals, "stale_waiting")
     metadata_gaps = _safe_count(metadata_health, "missing_project_count") + _safe_count(metadata_health, "inferred_manager_count")
+    route_gaps = _safe_count(route_evidence, "missing_active_problem_count")
     worker_issues = _safe_count(workers, "issue_count")
     usage_gaps = _safe_count(usage_totals, "tasks_without_usage")
-    total = problem_tasks + stale_work + metadata_gaps + worker_issues + usage_gaps
+    total = problem_tasks + stale_work + metadata_gaps + route_gaps + worker_issues + usage_gaps
     overview["attention"] = {
         "total": total,
         "problem_tasks": problem_tasks,
         "stale_work": stale_work,
         "metadata_gaps": metadata_gaps,
+        "route_gaps": route_gaps,
         "worker_issues": worker_issues,
         "usage_gaps": usage_gaps,
         "level": "critical" if problem_tasks or stale_work or worker_issues else ("warning" if total else "ready"),

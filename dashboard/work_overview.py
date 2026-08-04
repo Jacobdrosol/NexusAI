@@ -124,6 +124,18 @@ def _metadata_health_summary() -> dict[str, Any]:
     }
 
 
+def _route_evidence_summary() -> dict[str, Any]:
+    return {
+        "task_count": 0,
+        "attributed_task_count": 0,
+        "missing_worker_count": 0,
+        "missing_active_problem_count": 0,
+        "missing_waiting_count": 0,
+        "by_worker": Counter(),
+        "sample_tasks": [],
+    }
+
+
 def _record_metadata_gap(
     metadata_health: dict[str, Any],
     *,
@@ -322,6 +334,39 @@ def _hold_for_scope(
     return None
 
 
+def _record_route_evidence(
+    route_evidence: dict[str, Any],
+    *,
+    task: dict[str, Any],
+    status: str,
+    bot_id: str,
+    worker_id: str,
+    provenance: dict[str, Any],
+) -> None:
+    route_evidence["task_count"] += 1
+    if worker_id:
+        route_evidence["attributed_task_count"] += 1
+        route_evidence["by_worker"][worker_id] += 1
+    else:
+        route_evidence["missing_worker_count"] += 1
+        if status in ACTIVE_STATUSES | PROBLEM_STATUSES:
+            route_evidence["missing_active_problem_count"] += 1
+        elif status in WAITING_STATUSES:
+            route_evidence["missing_waiting_count"] += 1
+    if len(route_evidence["sample_tasks"]) < 6:
+        route_evidence["sample_tasks"].append(
+            {
+                "id": str(task.get("id") or ""),
+                "bot_id": bot_id,
+                "status": status,
+                "worker_id": worker_id,
+                "backend_type": str(provenance.get("backend_type") or ""),
+                "provider": str(provenance.get("provider") or ""),
+                "model": str(provenance.get("model") or ""),
+            }
+        )
+
+
 def build_work_overview(
     *,
     tasks: list[dict[str, Any]] | None,
@@ -350,6 +395,7 @@ def build_work_overview(
     orchestrations: dict[str, dict[str, Any]] = {}
     freshness = _freshness_summary()
     metadata_health = _metadata_health_summary()
+    route_evidence = _route_evidence_summary()
 
     for task in task_rows:
         status = str(task.get("status") or "unknown").strip().lower() or "unknown"
@@ -476,12 +522,7 @@ def build_work_overview(
                 "hold": None,
                 "held": False,
                 "bots": Counter(),
-                "route_evidence": {
-                    "attributed_task_count": 0,
-                    "missing_worker_count": 0,
-                    "by_worker": Counter(),
-                    "sample_tasks": [],
-                },
+                "route_evidence": _route_evidence_summary(),
                 "latest_tasks": [],
             },
         )
@@ -507,24 +548,22 @@ def build_work_overview(
             metadata = _safe_metadata(task)
             provenance = _execution_provenance(task)
             worker_id = str(provenance.get("worker_id") or "").strip()
-            route_evidence = manager_bucket["route_evidence"]
-            if worker_id:
-                route_evidence["attributed_task_count"] += 1
-                route_evidence["by_worker"][worker_id] += 1
-            else:
-                route_evidence["missing_worker_count"] += 1
-            if len(route_evidence["sample_tasks"]) < 6:
-                route_evidence["sample_tasks"].append(
-                    {
-                        "id": str(task.get("id") or ""),
-                        "bot_id": bot_id,
-                        "status": status,
-                        "worker_id": worker_id,
-                        "backend_type": str(provenance.get("backend_type") or ""),
-                        "provider": str(provenance.get("provider") or ""),
-                        "model": str(provenance.get("model") or ""),
-                    }
-                )
+            _record_route_evidence(
+                route_evidence,
+                task=task,
+                status=status,
+                bot_id=bot_id,
+                worker_id=worker_id,
+                provenance=provenance,
+            )
+            _record_route_evidence(
+                manager_bucket["route_evidence"],
+                task=task,
+                status=status,
+                bot_id=bot_id,
+                worker_id=worker_id,
+                provenance=provenance,
+            )
             compact_task = {
                 "id": str(task.get("id") or ""),
                 "bot_id": bot_id,
@@ -574,12 +613,7 @@ def build_work_overview(
                     "hold": None,
                     "held": False,
                     "bots": Counter(),
-                    "route_evidence": {
-                        "attributed_task_count": 0,
-                        "missing_worker_count": 0,
-                        "by_worker": Counter(),
-                        "sample_tasks": [],
-                    },
+                    "route_evidence": _route_evidence_summary(),
                     "latest_tasks": [],
                 },
             )
@@ -598,10 +632,10 @@ def build_work_overview(
             {"bot_id": bot_id, "task_count": count}
             for bot_id, count in bucket["bots"].most_common(8)
         ]
-        route_evidence = bucket["route_evidence"]
-        route_evidence["by_worker"] = [
+        manager_route_evidence = bucket["route_evidence"]
+        manager_route_evidence["by_worker"] = [
             {"worker_id": worker_id, "task_count": count}
-            for worker_id, count in route_evidence["by_worker"].most_common(6)
+            for worker_id, count in manager_route_evidence["by_worker"].most_common(6)
         ]
         bucket["latest_tasks"] = sorted(
             bucket["latest_tasks"],
@@ -648,6 +682,10 @@ def build_work_overview(
     worker_summary["issue_count"] = (
         worker_summary["disabled"] + worker_summary["offline_enabled"] + worker_summary["overloaded"]
     )
+    route_evidence["by_worker"] = [
+        {"worker_id": worker_id, "task_count": count}
+        for worker_id, count in route_evidence["by_worker"].most_common(8)
+    ]
     totals_out = dict(totals)
     totals_out["stale_active"] = freshness["stale_active"]
     totals_out["stale_waiting"] = freshness["stale_waiting"]
@@ -679,6 +717,7 @@ def build_work_overview(
         "workers": worker_summary,
         "holds": hold_rows,
         "metadata_health": metadata_health,
+        "route_evidence": route_evidence,
         "problem_summary": {
             "total": int(sum(problem_codes.values())),
             "by_code": _counter_rows(problem_codes, "code"),

@@ -34,6 +34,7 @@
 {% set problem_summary = overview.problem_summary or {} %}
 {% set orchestrations = overview.orchestrations or [] %}
 {% set attention = overview.attention or {} %}
+{% set route_evidence = overview.route_evidence or {} %}
 <div class="cards">
   <div class="card">
     <div class="card-label">Needs Attention</div>
@@ -62,6 +63,12 @@
   <div class="card">
     <div class="card-label">Metadata Gaps</div>
     <div class="card-value {% if metadata_gap_count %}card-yellow{% else %}card-green{% endif %}">{{ metadata_gap_count }}</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Route Gaps</div>
+    <div class="card-value {% if route_evidence.missing_active_problem_count %}card-yellow{% else %}card-green{% endif %}">
+      {{ route_evidence.missing_active_problem_count or 0 }}
+    </div>
   </div>
   <div class="card">
     <div class="card-label">QC / Review</div>
@@ -399,6 +406,7 @@
             <tr><td>Problem tasks</td><td>{{ attention.problem_tasks or 0 }}</td></tr>
             <tr><td>Stale work</td><td>{{ attention.stale_work or 0 }}</td></tr>
             <tr><td>Metadata gaps</td><td>{{ attention.metadata_gaps or 0 }}</td></tr>
+            <tr><td>Route gaps</td><td>{{ attention.route_gaps or 0 }}</td></tr>
             <tr><td>Worker issues</td><td>{{ attention.worker_issues or 0 }}</td></tr>
             <tr><td>Usage gaps</td><td>{{ attention.usage_gaps or 0 }}</td></tr>
           </tbody>
@@ -442,6 +450,27 @@
             </tr>
             {% else %}
             <tr><td colspan="3" class="empty">No workers available</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2 class="panel-title">Route Coverage</h2>
+      <div class="mini-note" style="margin-bottom:0.75rem;">
+        {{ route_evidence.attributed_task_count or 0 }} attributed,
+        {{ route_evidence.missing_active_problem_count or 0 }} active/problem unknown,
+        {{ route_evidence.missing_waiting_count or 0 }} waiting unknown
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Worker</th><th>Tasks</th></tr></thead>
+          <tbody>
+            {% for worker in route_evidence.by_worker[:8] %}
+            <tr><td><code>{{ worker.worker_id }}</code></td><td>{{ worker.task_count }}</td></tr>
+            {% else %}
+            <tr><td colspan="2" class="empty">No execution provenance in loaded active/problem rows.</td></tr>
             {% endfor %}
           </tbody>
         </table>

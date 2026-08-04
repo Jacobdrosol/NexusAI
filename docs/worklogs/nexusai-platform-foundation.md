@@ -6,7 +6,7 @@ Improve NexusAI one scoped platform foundation at a time so it can become the pr
 
 ## Current Scope
 
-Current item: show per-lane worker route evidence in Work Overview.
+Current item: show Work Overview route-coverage gaps without treating queued work as a worker failure.
 
 ## Completion Criteria For This Item
 
@@ -30,6 +30,7 @@ Current item: show per-lane worker route evidence in Work Overview.
 - Admins can place or release a dispatch hold for one project or one project-manager lane from Work Overview.
 - Dispatch holds show affected queued task counts, bot counts, creator, and creation time where the control plane provides those fields.
 - Project-manager lanes show bounded worker route evidence from task execution provenance and count active/problem rows with unknown worker attribution.
+- Work Overview distinguishes active/problem tasks missing worker attribution from waiting tasks that may not have a worker yet.
 - Work Overview page and read APIs are admin-only because they expose operational task, worker, queue, token, and control-plane routing data.
 - Dispatch holds prevent queued matching tasks from starting while leaving task rows intact for later release, inspection, or cancellation.
 - Control-plane shutdown closes the TaskManager and cancels its watchdog/runner/retry background tasks cleanly.
@@ -111,6 +112,7 @@ Current item: show per-lane worker route evidence in Work Overview.
 - Added Dispatch Holds side-panel rows with project/manager scope, reason, queued task count, bot count, creator, and creation time.
 - Added hold impact details to held project badges and manager hold cells.
 - Added per-lane worker route evidence with attributed task counts, unknown-worker counts, top worker IDs, and latest task worker labels when task metadata includes execution provenance.
+- Added top-level Route Gaps and Route Coverage signals so operators can distinguish missing execution provenance on active/problem work from queued or blocked work that has not started.
 
 ## Validation Plan
 
@@ -146,6 +148,7 @@ Current item: show per-lane worker route evidence in Work Overview.
 - Added Work Overview assertions proving recent problem rows expose bounded failure labels and sources.
 - Added Work Overview assertions proving hold impact counts, creator, and creation time are preserved and rendered.
 - Added Work Overview assertions proving worker route evidence is preserved, rendered, and missing worker attribution is shown explicitly.
+- Added Work Overview assertions proving route-gap attention counts only active/problem worker-attribution gaps while waiting unknown rows remain visible separately.
 - Run focused pytest coverage for new route, task summaries, and dashboard smoke where applicable.
 - After deployment, measure route render time and verify no fresh 500 or slow-request logs.
 
@@ -175,3 +178,4 @@ Current item: show per-lane worker route evidence in Work Overview.
 - Recent problem labels use the same bounded error-summary classifier as the aggregate Problem Sources panel. They are triage labels, not full diagnostic payloads.
 - Dispatch-hold impact counts are control-plane reported values. They are visibility for operator decisions and do not independently enforce hold behavior.
 - Worker route evidence depends on `metadata.execution_provenance`. Running or queued tasks may not have worker attribution yet, so the page reports unknown worker counts instead of guessing.
+- Route Gaps count only missing worker attribution on active/problem rows. Waiting unknown counts are shown for visibility but are not treated as an attention issue because queued work may not have an assigned worker yet.

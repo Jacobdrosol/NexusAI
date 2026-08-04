@@ -143,7 +143,13 @@ def test_work_overview_groups_tasks_by_project_and_manager():
     assert manager["hold"]["reason"] == "quality review"
     assert manager["route_evidence"]["attributed_task_count"] == 1
     assert manager["route_evidence"]["missing_worker_count"] == 2
+    assert manager["route_evidence"]["missing_active_problem_count"] == 1
+    assert manager["route_evidence"]["missing_waiting_count"] == 1
     assert manager["route_evidence"]["by_worker"] == [{"worker_id": "browser-worker-01", "task_count": 1}]
+    assert overview["route_evidence"]["task_count"] == 3
+    assert overview["route_evidence"]["attributed_task_count"] == 1
+    assert overview["route_evidence"]["missing_active_problem_count"] == 1
+    assert overview["route_evidence"]["missing_waiting_count"] == 1
     assert manager["latest_tasks"][2]["worker_id"] == "browser-worker-01"
     assert overview["holds"][0]["id"] == "globeiq::globeiq-pm"
     assert overview["holds"][0]["queued_task_count"] == 1
@@ -411,6 +417,10 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"Attention Breakdown" in resp.data
     assert b"Problem tasks" in resp.data
     assert b"Usage gaps" in resp.data
+    assert b"Route gaps" in resp.data
+    assert b"Route Coverage" in resp.data
+    assert b"1 active/problem unknown" in resp.data
+    assert b"1 waiting unknown" in resp.data
     assert b"GlobeIQ" in resp.data
     assert b"GlobeIQ Manager" in resp.data
     assert b"lesson-writer" in resp.data
@@ -473,9 +483,10 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert data["attention"]["problem_tasks"] == 1
     assert data["attention"]["stale_work"] == 2
     assert data["attention"]["metadata_gaps"] == 0
+    assert data["attention"]["route_gaps"] == 1
     assert data["attention"]["worker_issues"] == 2
     assert data["attention"]["usage_gaps"] == 2
-    assert data["attention"]["total"] == 7
+    assert data["attention"]["total"] == 8
     assert data["attention"]["level"] == "critical"
 
 
