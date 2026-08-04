@@ -6,7 +6,7 @@ Improve NexusAI one scoped platform foundation at a time so it can become the pr
 
 ## Current Scope
 
-Current item: show bounded problem labels and sources in Work Overview problem rows.
+Current item: show dispatch-hold impact details in Work Overview.
 
 ## Completion Criteria For This Item
 
@@ -28,6 +28,7 @@ Current item: show bounded problem labels and sources in Work Overview problem r
 - Stop actions preview the matching and selected task counts before cancellation so destructive work controls are explicit.
 - Orchestration stop actions preview loaded run task counts and active/waiting cancellable counts before cancellation.
 - Admins can place or release a dispatch hold for one project or one project-manager lane from Work Overview.
+- Dispatch holds show affected queued task counts, bot counts, creator, and creation time where the control plane provides those fields.
 - Work Overview page and read APIs are admin-only because they expose operational task, worker, queue, token, and control-plane routing data.
 - Dispatch holds prevent queued matching tasks from starting while leaving task rows intact for later release, inspection, or cancellation.
 - Control-plane shutdown closes the TaskManager and cancels its watchdog/runner/retry background tasks cleanly.
@@ -106,6 +107,8 @@ Current item: show bounded problem labels and sources in Work Overview problem r
 - Added a Needs Attention card and Attention Breakdown panel on the Work page.
 - Added step/source metadata to latest manager task summaries.
 - Added bounded problem labels to recent problem task summaries and rendered them in the Recent Problems panel.
+- Added Dispatch Holds side-panel rows with project/manager scope, reason, queued task count, bot count, creator, and creation time.
+- Added hold impact details to held project badges and manager hold cells.
 
 ## Validation Plan
 
@@ -139,6 +142,7 @@ Current item: show bounded problem labels and sources in Work Overview problem r
 - Added Work Overview assertions proving token usage gaps are rendered and missing usage data has a stable API fallback shape.
 - Added Work Overview assertions proving the attention rollup totals and severity level are calculated and rendered.
 - Added Work Overview assertions proving recent problem rows expose bounded failure labels and sources.
+- Added Work Overview assertions proving hold impact counts, creator, and creation time are preserved and rendered.
 - Run focused pytest coverage for new route, task summaries, and dashboard smoke where applicable.
 - After deployment, measure route render time and verify no fresh 500 or slow-request logs.
 
@@ -166,3 +170,4 @@ Current item: show bounded problem labels and sources in Work Overview problem r
 - Usage-gap counts depend on the control plane returning `tasks_without_usage`. A zero count means either no gap was reported or the usage endpoint was unavailable and the stable fallback was used with a degraded-data warning if the call failed.
 - The attention rollup is an operator triage signal. Counts can overlap because one underlying task may contribute to multiple signals, such as stale work and missing metadata.
 - Recent problem labels use the same bounded error-summary classifier as the aggregate Problem Sources panel. They are triage labels, not full diagnostic payloads.
+- Dispatch-hold impact counts are control-plane reported values. They are visibility for operator decisions and do not independently enforce hold behavior.

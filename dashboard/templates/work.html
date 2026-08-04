@@ -190,6 +190,10 @@
           {% endif %}
           {% if project.held %}
           <span class="badge badge-yellow">held</span>
+          {% if project.hold %}
+          <span class="badge badge-queued">{{ project.hold.queued_task_count or 0 }} queued</span>
+          <span class="badge badge-ready">{{ project.hold.bot_count or 0 }} bots</span>
+          {% endif %}
           <button class="btn btn-sm"
                   type="button"
                   onclick="setWorkHold({action: 'release', project_id: {{ project.project_id|tojson }}, manager_id: '', label: {{ project.project_name|tojson }}})">
@@ -267,6 +271,12 @@
                 {% if manager.hold and manager.hold.reason %}
                 <div class="mini-note">{{ manager.hold.reason }}</div>
                 {% endif %}
+                {% if manager.hold %}
+                <div class="mini-note">{{ manager.hold.queued_task_count or 0 }} queued / {{ manager.hold.bot_count or 0 }} bots</div>
+                {% if manager.hold.created_by or manager.hold.created_at %}
+                <div class="mini-note">{{ manager.hold.created_by or "unknown" }} {{ manager.hold.created_at or "" }}</div>
+                {% endif %}
+                {% endif %}
                 {% else %}
                 <span class="badge badge-ready">open</span>
                 {% endif %}
@@ -337,6 +347,33 @@
   </div>
 
   <aside style="display:flex;flex-direction:column;gap:1rem;">
+    <section class="panel">
+      <h2 class="panel-title">Dispatch Holds</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Scope</th><th>Queued</th><th>Bots</th></tr></thead>
+          <tbody>
+            {% for hold in holds[:10] %}
+            <tr>
+              <td>
+                <code>{{ hold.project_id }}</code>
+                <div class="mini-note">{{ hold.manager_id or "project" }}</div>
+                {% if hold.reason %}<div class="mini-note">{{ hold.reason }}</div>{% endif %}
+                {% if hold.created_by or hold.created_at %}
+                <div class="mini-note">{{ hold.created_by or "unknown" }} {{ hold.created_at or "" }}</div>
+                {% endif %}
+              </td>
+              <td>{{ hold.queued_task_count or 0 }}</td>
+              <td>{{ hold.bot_count or 0 }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="3" class="empty">No dispatch holds.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
     <section class="panel">
       <h2 class="panel-title">Attention Breakdown</h2>
       <div class="table-wrap">

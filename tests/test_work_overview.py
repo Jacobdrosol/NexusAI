@@ -57,6 +57,8 @@ def test_work_overview_groups_tasks_by_project_and_manager():
                 "reason": "quality review",
                 "queued_task_count": 1,
                 "bot_count": 1,
+                "created_by": "admin@test.com",
+                "created_at": "2026-08-04T10:00:00+00:00",
             }
         ],
         now=datetime(2026, 8, 4, 11, 10, tzinfo=timezone.utc),
@@ -130,6 +132,10 @@ def test_work_overview_groups_tasks_by_project_and_manager():
     assert manager["held"] is True
     assert manager["hold"]["reason"] == "quality review"
     assert overview["holds"][0]["id"] == "globeiq::globeiq-pm"
+    assert overview["holds"][0]["queued_task_count"] == 1
+    assert overview["holds"][0]["bot_count"] == 1
+    assert overview["holds"][0]["created_by"] == "admin@test.com"
+    assert overview["holds"][0]["created_at"] == "2026-08-04T10:00:00+00:00"
     assert manager["latest_tasks"][0]["age_label"] == "1h 5m"
     assert any(task["source"] == "repair_lane" for task in manager["latest_tasks"])
     assert overview["recent_problem_tasks"][0]["id"] == "task-failed"
@@ -337,7 +343,20 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
             ]
 
         def list_work_dispatch_holds(self, **kwargs):
-            return {"holds": [{"id": "globeiq::*", "project_id": "globeiq", "manager_id": "", "reason": "operator hold"}]}
+            return {
+                "holds": [
+                    {
+                        "id": "globeiq::*",
+                        "project_id": "globeiq",
+                        "manager_id": "",
+                        "reason": "operator hold",
+                        "queued_task_count": 4,
+                        "bot_count": 3,
+                        "created_by": "admin@test.com",
+                        "created_at": "2026-08-04T10:07:00+00:00",
+                    }
+                ]
+            }
 
         def task_usage(self, **kwargs):
             return {
@@ -390,6 +409,11 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"Oldest" in resp.data
     assert b"Held Lanes" in resp.data
     assert b"operator hold" in resp.data
+    assert b"Dispatch Holds" in resp.data
+    assert b"4 queued" in resp.data
+    assert b"3 bots" in resp.data
+    assert b"admin@test.com" in resp.data
+    assert b"2026-08-04T10:07:00+00:00" in resp.data
     assert b"Release Project" in resp.data
     assert b"dry_run: true" in resp.data
     assert b"Stop preview failed" in resp.data
