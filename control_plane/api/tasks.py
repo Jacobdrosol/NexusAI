@@ -163,15 +163,20 @@ async def list_tasks(
 ) -> List[TaskListItem]:
     task_manager = request.app.state.task_manager
     statuses = [part.strip() for part in str(status or "").split(",") if part.strip()]
+    if not include_content:
+        return await task_manager.list_task_summaries(
+            orchestration_id=orchestration_id,
+            statuses=statuses or None,
+            bot_id=bot_id,
+            limit=limit,
+        )
     tasks = await task_manager.list_tasks(
         orchestration_id=orchestration_id,
         statuses=statuses or None,
         bot_id=bot_id,
         limit=limit,
     )
-    if include_content:
-        return tasks
-    return [_task_summary(task) for task in tasks]
+    return tasks
 
 
 @router.get("/usage")

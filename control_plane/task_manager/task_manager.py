@@ -114,6 +114,11 @@ CREATE INDEX IF NOT EXISTS idx_cp_tasks_status_updated_at
 ON {_TASKS_TABLE} (status, updated_at DESC)
 """
 
+_CREATE_TASK_RECENT_INDEX = f"""
+CREATE INDEX IF NOT EXISTS idx_cp_tasks_updated_created
+ON {_TASKS_TABLE} (updated_at DESC, created_at DESC)
+"""
+
 
 class _TaskExecutionFailure(Exception):
     def __init__(self, message: str, *, result: Any = None) -> None:
@@ -3700,6 +3705,15 @@ class TaskManager:
         }
 
     @staticmethod
+    def _decode_json_field(value: Any, *, default: Any) -> Any:
+        if value in (None, ""):
+            return default
+        try:
+            return json.loads(value)
+        except (TypeError, json.JSONDecodeError):
+            return default
+
+    @staticmethod
     def _task_from_db_row(
         row: aiosqlite.Row,
         dependency_map: Optional[Dict[str, List[str]]] = None,
@@ -3950,6 +3964,7 @@ class TaskManager:
                 await db.execute(_CREATE_ORCHESTRATION_CANCELLATIONS)
                 await self._migrate_tasks_table(db)
                 await db.execute(_CREATE_TASK_INDEXES)
+                await db.execute(_CREATE_TASK_RECENT_INDEX)
                 await db.commit()
                 async with db.execute(
                     f"SELECT orchestration_id, reason, cancelled_at FROM {_ORCHESTRATION_CANCELLATIONS_TABLE}"
@@ -4931,6 +4946,88 @@ class TaskManager:
                 for task in tasks
             ]
         return tasks
+
+    async def list_task_summaries(
+        self,
+        orchestration_id: Optional[str] = None,
+        statuses: Optional[List[str]] = None,
+        bot_id: Optional[str] = None,
+        limit: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        await self._ensure_db()
+        clauses: List[str] = []
+        params: List[Any] = []
+        if orchestration_id:
+            clauses.extend([
+                "metadata IS NOT NULL",
+                "json_valid(metadata)",
+                "json_extract(metadata, '$.orchestration_id') = ?",
+            ])
+            params.append(str(orchestration_id))
+        if statuses:
+            wanted = sorted(
+                {str(status).strip().lower() for status in statuses if str(status).strip()}
+            )
+            if wanted:
+                clauses.append(f"lower(status) IN ({', '.join('?' for _ in wanted)})")
+                params.extend(wanted)
+        if bot_id:
+            clauses.append("bot_id = ?")
+            params.append(str(bot_id))
+        query = f"""
+            SELECT
+                id,
+                bot_id,
+                status,
+                metadata,
+                depends_on,
+                payload IS NOT NULL AS has_payload,
+                result IS NOT NULL AS has_result,
+                error IS NOT NULL AS has_error,
+                created_at,
+                updated_at
+            FROM {_TASKS_TABLE}
+        """
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY updated_at DESC, created_at DESC"
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(max(1, int(limit)))
+        async with open_sqlite(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(query, tuple(params)) as cursor:
+                rows = await cursor.fetchall()
+        async with self._lock:
+            pending_dispatch = set(self._trigger_dispatch_pending)
+
+        summaries: List[Dict[str, Any]] = []
+        for row in rows:
+            metadata = self._decode_json_field(row["metadata"], default=None)
+            depends_on = self._decode_json_field(row["depends_on"], default=[])
+            task_id = str(row["id"])
+            status = str(row["status"] or "unknown")
+            if task_id in pending_dispatch and status == "completed":
+                status = "running"
+            summaries.append(
+                {
+                    "id": task_id,
+                    "bot_id": str(row["bot_id"] or ""),
+                    "status": status,
+                    "created_at": str(row["created_at"] or ""),
+                    "updated_at": str(row["updated_at"] or ""),
+                    "metadata": metadata if isinstance(metadata, dict) else None,
+                    "depends_on": depends_on if isinstance(depends_on, list) else [],
+                    "has_payload": bool(row["has_payload"]),
+                    "has_result": bool(row["has_result"]),
+                    "has_error": bool(row["has_error"]),
+                    "payload_type": None,
+                    "result_type": None,
+                    "error_type": None,
+                    "usage": None,
+                }
+            )
+        return summaries
 
     async def count_tasks_by_status(self) -> Dict[str, int]:
         await self._ensure_db()

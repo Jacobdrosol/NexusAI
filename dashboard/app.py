@@ -186,6 +186,12 @@ def create_app() -> Flask:
         except TypeError:
             return cp.list_tasks()
 
+    def _cp_get_fleet_summary_safe(cp, **kwargs):
+        try:
+            return cp.get_fleet_summary(**kwargs)
+        except TypeError:
+            return cp.get_fleet_summary()
+
     @main_bp.get("/")
     @login_required
     def index():
@@ -199,7 +205,7 @@ def create_app() -> Flask:
         cp_workers = cp.list_workers()
         cp_bots = cp.list_bots()
         cp_projects = cp.list_projects()
-        cp_tasks = _cp_list_tasks_safe(cp, limit=200, include_content=False)
+        cp_tasks = _cp_list_tasks_safe(cp, limit=200, include_content=False, timeout=1.0)
         cp_endpoint_checks = cp.probe_paths(
             ["/health", "/v1/projects", "/v1/bots", "/v1/workers"]
         )
@@ -240,7 +246,7 @@ def create_app() -> Flask:
             fleet_summary_getter = getattr(cp, "get_fleet_summary", None)
             if callable(fleet_summary_getter):
                 fleet_runtime_attention_details = _fleet_runtime_attention_details(
-                    fleet_summary_getter()
+                    _cp_get_fleet_summary_safe(cp, timeout=1.0)
                 )
 
             schedule_getter = getattr(cp, "list_schedules", None)

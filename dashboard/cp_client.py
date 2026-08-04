@@ -194,9 +194,9 @@ class CPClient:
     def list_worker_probes(self) -> Optional[Dict[str, Any]]:
         return self._get("/v1/workers/probes")
 
-    def get_fleet_summary(self) -> Optional[Dict[str, Any]]:
+    def get_fleet_summary(self, *, timeout: Optional[float] = None) -> Optional[Dict[str, Any]]:
         """Return the bounded, non-secret fleet health summary."""
-        return self._get("/v1/workers/fleet-summary")
+        return self._get("/v1/workers/fleet-summary", timeout=timeout)
 
     def verify_worker_inference(self, worker_id: str, body: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
         return self._post(f"/v1/workers/{worker_id}/verify-inference", body or {})
@@ -271,6 +271,7 @@ class CPClient:
         bot_id: Optional[str] = None,
         limit: int = 200,
         include_content: bool = True,
+        timeout: Optional[float] = None,
     ) -> Optional[List[Dict[str, Any]]]:
         params: List[str] = [
             f"limit={max(1, int(limit))}",
@@ -284,14 +285,20 @@ class CPClient:
                 params.append(f"status={encoded}")
         if bot_id:
             params.append(f"bot_id={bot_id}")
-        return self._get(f"/v1/tasks?{'&'.join(params)}")
+        return self._get(f"/v1/tasks?{'&'.join(params)}", timeout=timeout)
 
     def get_task(self, task_id: str) -> Optional[Dict]:
         return self._get(f"/v1/tasks/{task_id}")
 
-    def task_usage(self, hours: int = 24, limit_bots: int = 25) -> Optional[Dict[str, Any]]:
+    def task_usage(
+        self,
+        hours: int = 24,
+        limit_bots: int = 25,
+        timeout: Optional[float] = None,
+    ) -> Optional[Dict[str, Any]]:
         return self._get(
-            f"/v1/tasks/usage?hours={max(1, int(hours))}&limit_bots={max(1, int(limit_bots))}"
+            f"/v1/tasks/usage?hours={max(1, int(hours))}&limit_bots={max(1, int(limit_bots))}",
+            timeout=timeout,
         )
 
     def retry_task(self, task_id: str, payload: Any = None) -> Optional[Dict[str, Any]]:

@@ -106,8 +106,8 @@ def tasks_page() -> str:
     from dashboard.bot_launch import launchable_bots
 
     cp = get_cp_client()
-    cp_data = _safe_cp_list_tasks(cp, limit=400, include_content=False)
-    usage_summary = _safe_cp_task_usage(cp, hours=24, limit_bots=15)
+    cp_data = _safe_cp_list_tasks(cp, limit=200, include_content=False, timeout=1.0)
+    usage_summary = _safe_cp_task_usage(cp, hours=24, limit_bots=15, timeout=1.0)
     if cp_data is not None:
         now = datetime.now(timezone.utc)
         recent_cutoff = now - timedelta(hours=24)
@@ -180,6 +180,7 @@ def api_list_tasks():
         bot_id=bot_id,
         limit=limit,
         include_content=include_content,
+        timeout=2.0 if not include_content else None,
     )
     if cp_tasks is not None:
         return jsonify(cp_tasks)

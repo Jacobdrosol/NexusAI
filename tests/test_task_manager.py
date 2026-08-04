@@ -291,6 +291,42 @@ async def test_task_manager_preserves_non_dict_payload_for_scheduler(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_task_manager_lists_task_summaries_without_content(tmp_path):
+    import asyncio
+
+    from control_plane.task_manager.task_manager import TaskManager
+
+    class StubRegistry:
+        async def get(self, bot_id):
+            return Bot(id=bot_id, name="Summary Bot", role="assistant", backends=[])
+
+    mock_scheduler = AsyncMock()
+    mock_scheduler.schedule.return_value = {"output": "large-result"}
+    tm = TaskManager(mock_scheduler, db_path=str(tmp_path / "task-summaries.db"), bot_registry=StubRegistry())
+    task = await tm.create_task(
+        bot_id="summary-bot",
+        payload={"instruction": "summarize", "large": "x" * 1000},
+        metadata=TaskMetadata(source="chat_assign", project_id="proj-summary"),
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.05)
+
+    summaries = await tm.list_task_summaries(limit=10)
+
+    summary = next(item for item in summaries if item["id"] == task.id)
+    assert summary["bot_id"] == "summary-bot"
+    assert summary["metadata"]["project_id"] == "proj-summary"
+    assert summary["has_payload"] is True
+    assert summary["has_result"] is True
+    assert "payload" not in summary
+    assert "result" not in summary
+
+
+@pytest.mark.anyio
 async def test_task_manager_preserves_strict_browser_payload_for_scheduler(tmp_path):
     import asyncio
 
