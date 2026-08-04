@@ -13,6 +13,24 @@ bp = Blueprint("work", __name__)
 
 STOPPABLE_WORK_STATUSES = {"queued", "blocked", "running"}
 LANE_DETAIL_STATUSES = {"queued", "blocked", "running", "failed", "retried"}
+OVERVIEW_ACTIVE_STATUSES = sorted(LANE_DETAIL_STATUSES)
+OVERVIEW_RECENT_LIMIT = 250
+OVERVIEW_ACTIVE_LIMIT = 1000
+
+
+def _merge_task_rows(*groups: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    merged: dict[str, dict[str, Any]] = {}
+    anonymous_index = 0
+    for group in groups:
+        for task in group or []:
+            if not isinstance(task, dict):
+                continue
+            task_id = str(task.get("id") or "").strip()
+            if not task_id:
+                task_id = f"anonymous:{anonymous_index}"
+                anonymous_index += 1
+            merged[task_id] = task
+    return list(merged.values())
 
 
 def _safe_call(fn: Any, *args: Any, **kwargs: Any) -> Any:
@@ -40,13 +58,36 @@ def _require_admin() -> None:
 
 def _load_work_overview() -> dict[str, Any]:
     cp = get_cp_client()
-    tasks = _safe_call(cp.list_tasks, limit=500, include_content=False, timeout=1.5) or []
+    active_tasks = _safe_call(
+        cp.list_tasks,
+        limit=OVERVIEW_ACTIVE_LIMIT,
+        statuses=OVERVIEW_ACTIVE_STATUSES,
+        include_content=False,
+        timeout=1.5,
+    ) or []
+    recent_tasks = _safe_call(
+        cp.list_tasks,
+        limit=OVERVIEW_RECENT_LIMIT,
+        include_content=False,
+        timeout=1.5,
+    ) or []
+    tasks = _merge_task_rows(active_tasks, recent_tasks)
     projects = _safe_call(cp.list_projects, timeout=1.0) or []
     bots = _safe_call(cp.list_bots, timeout=1.0) or []
     workers = _safe_call(cp.list_workers, timeout=1.0) or []
     holds_payload = _safe_call(cp.list_work_dispatch_holds, timeout=1.0) or {}
     holds = holds_payload.get("holds") if isinstance(holds_payload, dict) else []
     overview = build_work_overview(tasks=tasks, projects=projects, bots=bots, workers=workers, holds=holds)
+    overview["task_snapshot"] = {
+        "active_limit": OVERVIEW_ACTIVE_LIMIT,
+        "recent_limit": OVERVIEW_RECENT_LIMIT,
+        "active_rows": len(active_tasks) if isinstance(active_tasks, list) else 0,
+        "recent_rows": len(recent_tasks) if isinstance(recent_tasks, list) else 0,
+        "merged_rows": len(tasks),
+        "active_statuses": OVERVIEW_ACTIVE_STATUSES,
+        "active_window_at_limit": isinstance(active_tasks, list) and len(active_tasks) >= OVERVIEW_ACTIVE_LIMIT,
+        "recent_window_at_limit": isinstance(recent_tasks, list) and len(recent_tasks) >= OVERVIEW_RECENT_LIMIT,
+    }
     task_usage = getattr(cp, "task_usage", None)
     overview["usage"] = _safe_call(task_usage, hours=24, limit_bots=25, timeout=1.5) if callable(task_usage) else None
     return overview
@@ -135,7 +176,13 @@ def api_stop_work():
     dry_run = bool(body.get("dry_run", False))
 
     cp = get_cp_client()
-    tasks = _safe_call(cp.list_tasks, limit=1000, include_content=False, timeout=2.0)
+    tasks = _safe_call(
+        cp.list_tasks,
+        limit=1000,
+        statuses=sorted(STOPPABLE_WORK_STATUSES),
+        include_content=False,
+        timeout=2.0,
+    )
     if tasks is None:
         return jsonify({"error": "control plane unavailable"}), 503
 
@@ -212,7 +259,13 @@ def api_work_lane():
         return jsonify({"error": "limit must be an integer between 1 and 200."}), 400
 
     cp = get_cp_client()
-    tasks = _safe_call(cp.list_tasks, limit=1000, include_content=False, timeout=2.0)
+    tasks = _safe_call(
+        cp.list_tasks,
+        limit=1000,
+        statuses=sorted(LANE_DETAIL_STATUSES),
+        include_content=False,
+        timeout=2.0,
+    )
     if tasks is None:
         return jsonify({"error": "control plane unavailable"}), 503
     holds_payload = _safe_call(cp.list_work_dispatch_holds, timeout=1.0) or {}

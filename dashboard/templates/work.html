@@ -16,6 +16,7 @@
 {% set usage = overview.usage or {} %}
 {% set usage_totals = usage.totals or {} %}
 {% set holds = overview.holds or [] %}
+{% set task_snapshot = overview.task_snapshot or {} %}
 <div class="cards">
   <div class="card">
     <div class="card-label">Active</div>
@@ -59,6 +60,13 @@
     <div class="card-label">Tokens 24h</div>
     <div class="card-value card-blue">{{ "{:,}".format(usage_totals.total_tokens or 0) }}</div>
   </div>
+</div>
+<div class="mini-note" style="margin:-0.25rem 0 1rem;">
+  Work snapshot: {{ task_snapshot.merged_rows or 0 }} task summaries loaded
+  ({{ task_snapshot.active_rows or 0 }} active/problem, {{ task_snapshot.recent_rows or 0 }} recent).
+  {% if task_snapshot.active_window_at_limit or task_snapshot.recent_window_at_limit %}
+  <span class="badge badge-warning">window at limit</span>
+  {% endif %}
 </div>
 
 <div class="split-grid" style="grid-template-columns:1fr 320px;gap:1rem;">

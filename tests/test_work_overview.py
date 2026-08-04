@@ -120,8 +120,31 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     _login_admin(dashboard_client)
 
     class FakeCP:
+        def __init__(self):
+            self.task_calls = []
+
         def list_tasks(self, **kwargs):
+            self.task_calls.append(kwargs)
             assert kwargs["include_content"] is False
+            if kwargs.get("statuses"):
+                return [
+                    {
+                        "id": "task-running",
+                        "bot_id": "lesson-writer",
+                        "status": "running",
+                        "created_at": "2026-08-04T10:00:00+00:00",
+                        "updated_at": "2026-08-04T10:01:00+00:00",
+                        "metadata": {"project_id": "globeiq", "root_pm_bot_id": "globeiq-pm", "orchestration_id": "orch-1"},
+                    },
+                    {
+                        "id": "task-blocked",
+                        "bot_id": "lesson-qc",
+                        "status": "blocked",
+                        "created_at": "2026-08-04T10:02:00+00:00",
+                        "updated_at": "2026-08-04T10:03:00+00:00",
+                        "metadata": {"project_id": "globeiq", "root_pm_bot_id": "globeiq-pm", "step_id": "quality_gate"},
+                    },
+                ]
             return [
                 {
                     "id": "task-running",
@@ -162,7 +185,8 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
                 "by_provider_model": [{"provider": "ollama_cloud", "model": "qwen3.5:cloud", "total_tokens": 140, "tasks_with_usage": 1}],
             }
 
-    with patch("dashboard.routes.work.get_cp_client", return_value=FakeCP()):
+    fake = FakeCP()
+    with patch("dashboard.routes.work.get_cp_client", return_value=fake):
         resp = dashboard_client.get("/work")
 
     assert resp.status_code == 200
@@ -185,8 +209,13 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"Stop preview failed" in resp.data
     assert b"Lane Details" in resp.data
     assert b"showLaneDetails" in resp.data
+    assert b"Work snapshot" in resp.data
+    assert b"2 task summaries loaded" in resp.data
     assert b"Stop Project" in resp.data
     assert b"Stop Lane" in resp.data
+    assert fake.task_calls[0]["statuses"] == ["blocked", "failed", "queued", "retried", "running"]
+    assert fake.task_calls[0]["limit"] == 1000
+    assert fake.task_calls[1]["limit"] == 250
 
 
 def test_work_overview_renders_held_lane_without_loaded_tasks():
@@ -219,6 +248,7 @@ def test_work_stop_api_dry_run_filters_stoppable_project_manager_tasks(dashboard
     class FakeCP:
         def list_tasks(self, **kwargs):
             assert kwargs["include_content"] is False
+            assert kwargs["statuses"] == ["blocked", "queued", "running"]
             return [
                 {
                     "id": "running-target",
@@ -271,6 +301,7 @@ def test_work_lane_api_returns_bounded_project_manager_task_details(dashboard_cl
     class FakeCP:
         def list_tasks(self, **kwargs):
             assert kwargs["include_content"] is False
+            assert kwargs["statuses"] == ["blocked", "failed", "queued", "retried", "running"]
             return [
                 {
                     "id": "running-target",
@@ -346,6 +377,7 @@ def test_work_stop_api_cancels_selected_project_work_only(dashboard_client):
             self.cancelled = []
 
         def list_tasks(self, **kwargs):
+            assert kwargs["statuses"] == ["blocked", "queued", "running"]
             return [
                 {
                     "id": "running-target",

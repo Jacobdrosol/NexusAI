@@ -6,11 +6,12 @@ Improve NexusAI one scoped platform foundation at a time so it can become the pr
 
 ## Current Scope
 
-Current item: add non-destructive project and manager dispatch holds, safer stop previews, and lane drilldown for scoped work controls.
+Current item: add non-destructive project and manager dispatch holds, safer stop previews, lane drilldown, and reliable active-work snapshot loading for scoped work controls.
 
 ## Completion Criteria For This Item
 
 - Operators can see active, queued, blocked, failed, QC, and completed work grouped by project.
+- Work Overview loads active/waiting/problem summaries separately from recent history so active work is not hidden behind a high volume of recently completed tasks.
 - Each project group is further split by manager, with enough detail to identify the manager bot, queue depth, active work, and recent problem tasks.
 - Operators can drill into one project-manager lane from Work Overview and inspect bounded active/waiting/problem task details without loading payload content.
 - Worker queue depth and active worker load are visible alongside project/manager work.
@@ -68,6 +69,8 @@ Current item: add non-destructive project and manager dispatch holds, safer stop
 - Updated Work Overview stop controls to call the existing dry-run endpoint first and include matched/selected task counts in the confirmation.
 - Added `/api/work/lane` to return bounded project/manager lane details from task summaries only.
 - Added a Work Overview lane-details panel with task IDs, bot IDs, status, step/source, updated time, error summary, counts, and hold state.
+- Split Work Overview loading into active/problem and recent-history task-summary windows, merged by task ID, with snapshot window metadata shown on the page.
+- Updated scoped stop and lane-detail APIs to request only relevant task statuses from the control plane.
 
 ## Validation Plan
 
@@ -85,6 +88,7 @@ Current item: add non-destructive project and manager dispatch holds, safer stop
 - Added dashboard tests covering Work Overview hold rendering and dashboard hold/release API proxy behavior.
 - Added dashboard rendering assertion that the Work page includes stop dry-run preview behavior.
 - Added dashboard API tests covering lane-detail filtering, bounded results, hold state, and validation errors.
+- Added dashboard tests proving Work Overview requests active/problem statuses separately, merges duplicate summary rows, and status-filters stop/lane API queries.
 - Run focused pytest coverage for new route, task summaries, and dashboard smoke where applicable.
 - After deployment, measure route render time and verify no fresh 500 or slow-request logs.
 
@@ -99,3 +103,4 @@ Current item: add non-destructive project and manager dispatch holds, safer stop
 - Stale active work currently means a running task has not updated in at least 60 minutes. Stale waiting work means a queued or blocked task has been waiting at least 30 minutes.
 - Dispatch holds block task start only. They do not cancel running tasks, block task creation, pause schedules, or prevent future orchestration fan-out from adding more queued work.
 - Lane drilldown intentionally uses `include_content=false`; it is for operational routing and triage, not full payload/result review.
+- Work Overview task counts are based on bounded loaded windows. The page flags when an active/problem or recent-history window reaches its configured cap.
