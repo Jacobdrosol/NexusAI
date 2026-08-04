@@ -382,6 +382,8 @@ def _attention_lanes(project_summaries: list[dict[str, Any]], limit: int = 12) -
             stale = _safe_int(freshness.get("stale_active")) + _safe_int(freshness.get("stale_waiting"))
             route_gaps = _safe_int(route.get("missing_active_problem_count"))
             held = bool(manager.get("held"))
+            hold = manager.get("hold") if isinstance(manager.get("hold"), dict) else {}
+            hold_manager_id = str(hold.get("manager_id") or "")
             active = _safe_int(totals.get("active"))
             waiting = _safe_int(totals.get("waiting"))
             reasons: list[str] = []
@@ -408,6 +410,8 @@ def _attention_lanes(project_summaries: list[dict[str, Any]], limit: int = 12) -
                     "stale": stale,
                     "route_gaps": route_gaps,
                     "held": held,
+                    "hold_manager_id": hold_manager_id,
+                    "held_by_project": held and not hold_manager_id,
                     "oldest_active_label": str(freshness.get("oldest_active_label") or "none"),
                     "oldest_waiting_label": str(freshness.get("oldest_waiting_label") or "none"),
                     "reasons": reasons,

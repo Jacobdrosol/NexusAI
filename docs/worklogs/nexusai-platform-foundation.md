@@ -6,7 +6,7 @@ Improve NexusAI one scoped platform foundation at a time so it can become the pr
 
 ## Current Scope
 
-Current item: show prioritized project-manager attention lanes in Work Overview.
+Current item: make prioritized project-manager attention lanes actionable in Work Overview.
 
 ## Completion Criteria For This Item
 
@@ -20,6 +20,7 @@ Current item: show prioritized project-manager attention lanes in Work Overview.
 - Work Overview flags tasks missing token usage records so operators can distinguish low usage from missing telemetry.
 - Work Overview provides a single attention rollup across problem tasks, stale work, metadata gaps, worker issues, and usage gaps.
 - Work Overview lists the project-manager lanes that need attention first, with bounded reason labels and active/waiting counts.
+- Attention Lanes expose direct bounded Details, Hold/Release, and Stop controls for the affected project-manager lane.
 - Metered LLM work can be capped by project and manager at admission time.
 - Metered LLM dispatch reserves project and manager budgets so queued work cannot burst past configured limits.
 - Admins can view and update token-governor limits from a dedicated Settings tab without editing env values.
@@ -117,6 +118,8 @@ Current item: show prioritized project-manager attention lanes in Work Overview.
 - Added top-level Route Gaps and Route Coverage signals so operators can distinguish missing execution provenance on active/problem work from queued or blocked work that has not started.
 - Added worker/backend/provider/model fields to lane and orchestration drilldown task rows when execution provenance is present.
 - Added a prioritized Attention Lanes panel from loaded project-manager summaries, including problem, stale, route-gap, and held reasons.
+- Added scoped action controls to Attention Lanes so operators can review details, hold/release eligible lanes, or stop active/waiting work without hunting through the full project table.
+- Attention Lanes distinguish manager-lane holds from inherited project holds so a project-level hold is not incorrectly released as a manager-lane hold.
 
 ## Validation Plan
 
@@ -155,6 +158,7 @@ Current item: show prioritized project-manager attention lanes in Work Overview.
 - Added Work Overview assertions proving route-gap attention counts only active/problem worker-attribution gaps while waiting unknown rows remain visible separately.
 - Added Work Overview API assertions proving lane and orchestration drilldowns expose execution-provenance worker/backend fields without changing their bounded summary behavior.
 - Added Work Overview assertions proving attention lanes identify the affected project-manager lane and bounded reason labels.
+- Added Work Overview assertions proving Attention Lanes render direct review/stop actions and preserve project-hold scope.
 - Run focused pytest coverage for new route, task summaries, and dashboard smoke where applicable.
 - After deployment, measure route render time and verify no fresh 500 or slow-request logs.
 
@@ -186,3 +190,4 @@ Current item: show prioritized project-manager attention lanes in Work Overview.
 - Worker route evidence depends on `metadata.execution_provenance`. Running or queued tasks may not have worker attribution yet, so the page reports unknown worker counts instead of guessing.
 - Route Gaps count only missing worker attribution on active/problem rows. Waiting unknown counts are shown for visibility but are not treated as an attention issue because queued work may not have an assigned worker yet.
 - Attention Lanes are based on the bounded loaded Work Overview task windows. They prioritize operator triage for the visible snapshot and are not a full historical audit.
+- Attention Lane controls reuse the existing scoped Work Overview lane APIs. Stop previews and control-plane cancellation remain authoritative for destructive actions.

@@ -157,6 +157,8 @@ def test_work_overview_groups_tasks_by_project_and_manager():
     assert attention_lane["stale"] == 2
     assert attention_lane["route_gaps"] == 1
     assert attention_lane["held"] is True
+    assert attention_lane["hold_manager_id"] == "globeiq-pm"
+    assert attention_lane["held_by_project"] is False
     assert attention_lane["reasons"] == ["1 problem", "2 stale", "1 route gap", "held"]
     assert manager["latest_tasks"][2]["worker_id"] == "browser-worker-01"
     assert overview["holds"][0]["id"] == "globeiq::globeiq-pm"
@@ -432,6 +434,9 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"1 waiting unknown" in resp.data
     assert b"1 route gap" in resp.data
     assert b"2 stale" in resp.data
+    assert b"Review Lane" in resp.data
+    assert b"project hold" in resp.data
+    assert b"Stop Attention Lane" in resp.data
     assert b"GlobeIQ" in resp.data
     assert b"GlobeIQ Manager" in resp.data
     assert b"lesson-writer" in resp.data

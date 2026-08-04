@@ -419,7 +419,7 @@
       <h2 class="panel-title">Attention Lanes</h2>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Lane</th><th>Reasons</th><th>Work</th></tr></thead>
+          <thead><tr><th>Lane</th><th>Reasons</th><th>Work</th><th>Actions</th></tr></thead>
           <tbody>
             {% for lane in attention_lanes[:12] %}
             <tr>
@@ -438,9 +438,38 @@
                 <div class="mini-note">oldest active {{ lane.oldest_active_label }}</div>
                 <div class="mini-note">oldest waiting {{ lane.oldest_waiting_label }}</div>
               </td>
+              <td>
+                <button class="btn btn-sm"
+                        type="button"
+                        onclick="showLaneDetails({project_id: {{ lane.project_id|tojson }}, manager_id: {{ lane.manager_id|tojson }}, label: {{ lane.manager_name|tojson }}})">
+                  Review Lane
+                </button>
+                {% if lane.held and not lane.held_by_project %}
+                <button class="btn btn-sm"
+                        type="button"
+                        onclick="setWorkHold({action: 'release', project_id: {{ lane.project_id|tojson }}, manager_id: {{ lane.manager_id|tojson }}, label: {{ lane.manager_name|tojson }}})">
+                  Release Attention Lane
+                </button>
+                {% elif not lane.held %}
+                <button class="btn btn-sm"
+                        type="button"
+                        onclick="setWorkHold({action: 'hold', project_id: {{ lane.project_id|tojson }}, manager_id: {{ lane.manager_id|tojson }}, label: {{ lane.manager_name|tojson }}})">
+                  Hold Attention Lane
+                </button>
+                {% else %}
+                <span class="empty">project hold</span>
+                {% endif %}
+                {% if (lane.active or 0) + (lane.waiting or 0) > 0 %}
+                <button class="btn btn-sm btn-danger"
+                        type="button"
+                        onclick="stopWork({project_id: {{ lane.project_id|tojson }}, manager_id: {{ lane.manager_id|tojson }}, label: {{ lane.manager_name|tojson }}})">
+                  Stop Attention Lane
+                </button>
+                {% endif %}
+              </td>
             </tr>
             {% else %}
-            <tr><td colspan="3" class="empty">No project-manager lanes need attention in the loaded window.</td></tr>
+            <tr><td colspan="4" class="empty">No project-manager lanes need attention in the loaded window.</td></tr>
             {% endfor %}
           </tbody>
         </table>
