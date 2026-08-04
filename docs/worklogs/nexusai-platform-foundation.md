@@ -6,7 +6,7 @@ Improve NexusAI one scoped platform foundation at a time so it can become the pr
 
 ## Current Scope
 
-Current item: add safe orchestration stop controls to Work Overview with a bounded preview before cancelling a run.
+Current item: show bounded failure labels in Work Overview lane details from summary-only task rows.
 
 ## Completion Criteria For This Item
 
@@ -33,6 +33,7 @@ Current item: add safe orchestration stop controls to Work Overview with a bound
 - Work Overview identifies task summaries that are missing project metadata or are grouped under inferred managers instead of explicit manager metadata.
 - Work Overview classifies failed/retried work by bounded error label, source, and bot so operators can identify repeated failure modes quickly.
 - Work Overview summarizes loaded orchestration IDs with project, manager, active/waiting/problem/stale counts, latest task status, and total task count.
+- Lane details show bounded error type, code, and message from non-content task summaries.
 - Page render uses bounded control-plane calls and does not reintroduce slow navigation.
 - Focused tests cover grouping behavior and dashboard rendering.
 - Documentation describes the purpose, data flow, and limitations.
@@ -85,6 +86,8 @@ Current item: add safe orchestration stop controls to Work Overview with a bound
 - Added Work Overview orchestration rollups from loaded task summaries and a Work page Orchestrations panel.
 - Added `/api/work/orchestration/stop` for admin-only orchestration stop previews and control-plane cancellation proxying.
 - Added Work page Stop Run controls for orchestration rows that have active or waiting work.
+- Updated lane-detail compaction to use bounded `error_summary` fields from task-summary rows, with legacy full-error fallback.
+- Updated lane-detail rendering to show error code, type, and bounded message together when available.
 
 ## Validation Plan
 
@@ -110,6 +113,7 @@ Current item: add safe orchestration stop controls to Work Overview with a bound
 - Added Work Overview test proving orchestration rollups include active, waiting, problem, stale, latest-task, project, and manager details.
 - Added Work Overview API tests proving orchestration stop dry-runs count only matching run tasks, actual stop proxies to the control plane, and missing orchestration IDs are rejected.
 - Added dashboard rendering assertions that Work Overview exposes Stop Run controls.
+- Added lane-detail API assertions proving summary-only error labels are returned without loading full task content.
 - Run focused pytest coverage for new route, task summaries, and dashboard smoke where applicable.
 - After deployment, measure route render time and verify no fresh 500 or slow-request logs.
 
@@ -130,3 +134,4 @@ Current item: add safe orchestration stop controls to Work Overview with a bound
 - Problem-source counts are based only on loaded failed/retried task summaries and use bounded error labels, not full task payloads or results.
 - Orchestration rollups are based only on the bounded loaded task-summary windows. They are an operator snapshot, not a complete historical run graph.
 - Orchestration stop previews use bounded loaded summaries for operator confirmation; the control-plane cancellation remains authoritative and blocks later fan-out for the orchestration ID.
+- Lane-detail error labels are intentionally bounded summaries for routing and triage, not complete failure payloads.

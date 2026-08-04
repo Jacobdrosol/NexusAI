@@ -609,13 +609,14 @@ function showLaneDetails(scope) {
     meta.textContent = 'Project ' + data.project_id + ' | Manager ' + (data.manager_id || 'all') + ' | ' + data.count + ' active/problem task(s)' + (data.truncated ? ' | truncated' : '');
     var holdText = data.hold ? '<div class="alert alert-warning" style="margin-bottom:0.75rem;">Dispatch held: ' + escapeText(data.hold.reason || 'operator hold') + '</div>' : '';
     var rows = (data.tasks || []).map(function(task) {
+      var errorParts = [task.error_code, task.error_type, task.error_message].filter(Boolean);
       return '<tr>' +
         '<td><code>' + escapeText(task.id.slice(0, 12)) + (task.id.length > 12 ? '...' : '') + '</code></td>' +
         '<td><code>' + escapeText(task.bot_id) + '</code></td>' +
         '<td><span class="badge badge-' + escapeText(task.status) + '">' + escapeText(task.status) + '</span></td>' +
         '<td>' + escapeText(task.step_id || task.source || '') + '</td>' +
         '<td>' + escapeText(task.updated_at || '') + '</td>' +
-        '<td>' + escapeText(task.error_code || task.error_message || '') + '</td>' +
+        '<td>' + escapeText(errorParts.join(' | ')) + '</td>' +
       '</tr>';
     }).join('');
     body.className = '';

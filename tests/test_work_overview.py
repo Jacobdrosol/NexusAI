@@ -624,7 +624,7 @@ def test_work_lane_api_returns_bounded_project_manager_task_details(dashboard_cl
                     "updated_at": "2026-08-04T10:06:00+00:00",
                     "metadata": {"project_id": "globeiq", "root_pm_bot_id": "manager-a"},
                     "has_error": True,
-                    "error": {"code": "qc_failed", "message": "needs repair"},
+                    "error_summary": {"type": "dict", "code": "qc_failed", "message": "needs repair"},
                 },
                 {
                     "id": "completed-ignore",
@@ -655,6 +655,9 @@ def test_work_lane_api_returns_bounded_project_manager_task_details(dashboard_cl
     assert data["truncated"] is True
     assert len(data["tasks"]) == 1
     assert data["tasks"][0]["id"] == "failed-target"
+    assert data["tasks"][0]["error_type"] == "dict"
+    assert data["tasks"][0]["error_code"] == "qc_failed"
+    assert data["tasks"][0]["error_message"] == "needs repair"
 
 
 def test_work_lane_api_rejects_missing_project_or_invalid_limit(dashboard_client):

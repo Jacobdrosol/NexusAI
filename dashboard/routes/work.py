@@ -211,7 +211,8 @@ def _lane_work_matches(
 
 def _compact_lane_task(task: dict[str, Any]) -> dict[str, Any]:
     metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
-    error = task.get("error") if isinstance(task.get("error"), dict) else None
+    error_summary = task.get("error_summary") if isinstance(task.get("error_summary"), dict) else {}
+    error = task.get("error") if isinstance(task.get("error"), dict) else {}
     return {
         "id": str(task.get("id") or ""),
         "bot_id": str(task.get("bot_id") or ""),
@@ -224,8 +225,9 @@ def _compact_lane_task(task: dict[str, Any]) -> dict[str, Any]:
         "step_id": str(metadata.get("step_id") or ""),
         "source": str(metadata.get("source") or ""),
         "has_error": bool(task.get("has_error")),
-        "error_code": str((error or {}).get("code") or ""),
-        "error_message": str((error or {}).get("message") or ""),
+        "error_type": str(error_summary.get("type") or task.get("error_type") or error.get("type") or ""),
+        "error_code": str(error_summary.get("code") or error.get("code") or error.get("error_code") or ""),
+        "error_message": str(error_summary.get("message") or error.get("message") or error.get("detail") or ""),
     }
 
 
