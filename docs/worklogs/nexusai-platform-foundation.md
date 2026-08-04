@@ -6,7 +6,7 @@ Improve NexusAI one scoped platform foundation at a time so it can become the pr
 
 ## Current Scope
 
-Current item: clean up TaskManager background lifecycle so control-plane shutdown and tests do not leave watchdog tasks pending.
+Current item: add stale-work visibility to Work Overview so operators can identify aging project and manager lanes.
 
 ## Completion Criteria For This Item
 
@@ -22,6 +22,8 @@ Current item: clean up TaskManager background lifecycle so control-plane shutdow
 - Stop actions cancel only non-terminal running, queued, or blocked tasks and preserve an explicit cancellation reason.
 - Control-plane shutdown closes the TaskManager and cancels its watchdog/runner/retry background tasks cleanly.
 - Control-plane API tests tear down TaskManager background tasks after each fixture instance.
+- Work Overview shows stale active/waiting counts and oldest active/waiting ages by project and manager.
+- Recent work rows include age labels so operators can see whether active, waiting, or problem tasks are fresh.
 - Page render uses bounded control-plane calls and does not reintroduce slow navigation.
 - Focused tests cover grouping behavior and dashboard rendering.
 - Documentation describes the purpose, data flow, and limitations.
@@ -54,6 +56,8 @@ Current item: clean up TaskManager background lifecycle so control-plane shutdow
 - Added TaskManager shutdown to the production FastAPI lifespan teardown.
 - Added control-plane test fixture cleanup for TaskManager background tasks.
 - Added a TaskManager lifecycle test proving `close()` clears a running watchdog task.
+- Added Work Overview freshness metrics for stale running tasks, stale queued/blocked tasks, oldest active age, and oldest waiting age.
+- Added Work page stale-work card, project stale badges, manager stale counts, manager oldest-age columns, and per-task age labels.
 
 ## Validation Plan
 
@@ -65,6 +69,7 @@ Current item: clean up TaskManager background lifecycle so control-plane shutdow
 - Added Work Overview tests proving stop controls render, dry-run filtering targets only stoppable project-manager tasks, actual cancellation ignores terminal/out-of-scope tasks, and missing project IDs are rejected.
 - Added control-plane API test proving single-task cancellation preserves the provided reason.
 - Added lifecycle test proving TaskManager watchdog shutdown is explicit and leaves no stored watchdog task.
+- Added Work Overview assertions with a fixed clock proving stale active/waiting counts and age labels are deterministic.
 - Run focused pytest coverage for new route, task summaries, and dashboard smoke where applicable.
 - After deployment, measure route render time and verify no fresh 500 or slow-request logs.
 
@@ -76,3 +81,4 @@ Current item: clean up TaskManager background lifecycle so control-plane shutdow
 - Token caps use measured usage plus configured per-task estimates, so estimates must be tuned per bot for the best balance between throughput and safety.
 - Environment variables still override setting values in the task manager. The Settings tab is the normal runtime control, but deployment environment overrides must be checked when a saved value appears ineffective.
 - Work Overview stop controls are scoped cancellation, not pause/resume state. Cancelled orchestrations still need orchestration-level cancellation when future fan-out must be blocked.
+- Stale active work currently means a running task has not updated in at least 60 minutes. Stale waiting work means a queued or blocked task has been waiting at least 30 minutes.

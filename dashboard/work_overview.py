@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 from collections import Counter
+from datetime import datetime, timezone
 from typing import Any
 
 ACTIVE_STATUSES = {"running"}
 WAITING_STATUSES = {"queued", "blocked"}
 PROBLEM_STATUSES = {"failed", "retried"}
 QC_MARKERS = ("qc", "quality", "review", "tester", "validator", "auditor")
+STALE_ACTIVE_SECONDS = 60 * 60
+STALE_WAITING_SECONDS = 30 * 60
 
 
 def _safe_metadata(task: dict[str, Any]) -> dict[str, Any]:
@@ -40,6 +43,78 @@ def project_id_for_task(task: dict[str, Any]) -> str:
 
 def manager_id_for_task(task: dict[str, Any]) -> str:
     return _manager_id_for_task(task)
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _age_seconds(since: datetime | None, now: datetime) -> int | None:
+    if since is None:
+        return None
+    return max(0, int((now - since).total_seconds()))
+
+
+def _age_label(seconds: int | None) -> str:
+    if seconds is None:
+        return "unknown"
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes}m"
+    hours = minutes // 60
+    remainder = minutes % 60
+    if hours < 24:
+        return f"{hours}h {remainder}m" if remainder else f"{hours}h"
+    days = hours // 24
+    day_hours = hours % 24
+    return f"{days}d {day_hours}h" if day_hours else f"{days}d"
+
+
+def _freshness_summary() -> dict[str, Any]:
+    return {
+        "stale_active": 0,
+        "stale_waiting": 0,
+        "oldest_active_age_seconds": None,
+        "oldest_active_label": "none",
+        "oldest_waiting_age_seconds": None,
+        "oldest_waiting_label": "none",
+    }
+
+
+def _record_age(
+    freshness: dict[str, Any],
+    *,
+    status: str,
+    active_age_seconds: int | None,
+    waiting_age_seconds: int | None,
+) -> None:
+    if status in ACTIVE_STATUSES:
+        if active_age_seconds is not None:
+            current = freshness.get("oldest_active_age_seconds")
+            if current is None or active_age_seconds > int(current):
+                freshness["oldest_active_age_seconds"] = active_age_seconds
+                freshness["oldest_active_label"] = _age_label(active_age_seconds)
+        if active_age_seconds is None or active_age_seconds >= STALE_ACTIVE_SECONDS:
+            freshness["stale_active"] += 1
+    if status in WAITING_STATUSES:
+        if waiting_age_seconds is not None:
+            current = freshness.get("oldest_waiting_age_seconds")
+            if current is None or waiting_age_seconds > int(current):
+                freshness["oldest_waiting_age_seconds"] = waiting_age_seconds
+                freshness["oldest_waiting_label"] = _age_label(waiting_age_seconds)
+        if waiting_age_seconds is None or waiting_age_seconds >= STALE_WAITING_SECONDS:
+            freshness["stale_waiting"] += 1
 
 
 def _is_qc_task(task: dict[str, Any], bot_lookup: dict[str, dict[str, Any]]) -> bool:
@@ -108,7 +183,9 @@ def build_work_overview(
     projects: list[dict[str, Any]] | None,
     bots: list[dict[str, Any]] | None,
     workers: list[dict[str, Any]] | None,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
+    now_utc = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     task_rows = [task for task in (tasks or []) if isinstance(task, dict)]
     project_rows = [project for project in (projects or []) if isinstance(project, dict)]
     bot_rows = [bot for bot in (bots or []) if isinstance(bot, dict)]
@@ -120,6 +197,7 @@ def build_work_overview(
     projects_by_id: dict[str, dict[str, Any]] = {}
     manager_buckets: dict[tuple[str, str], dict[str, Any]] = {}
     recent_problem_tasks: list[dict[str, Any]] = []
+    freshness = _freshness_summary()
 
     for task in task_rows:
         status = str(task.get("status") or "unknown").strip().lower() or "unknown"
@@ -127,6 +205,10 @@ def build_work_overview(
         manager_id = _manager_id_for_task(task)
         bot_id = str(task.get("bot_id") or "").strip()
         is_qc = _is_qc_task(task, bot_lookup)
+        created_at = _parse_datetime(task.get("created_at"))
+        updated_at = _parse_datetime(task.get("updated_at")) or created_at
+        active_age_seconds = _age_seconds(updated_at, now_utc)
+        waiting_age_seconds = _age_seconds(created_at or updated_at, now_utc)
         totals["total"] += 1
         totals[status] += 1
         if status in ACTIVE_STATUSES:
@@ -137,6 +219,12 @@ def build_work_overview(
             totals["problem"] += 1
         if is_qc:
             totals["qc"] += 1
+        _record_age(
+            freshness,
+            status=status,
+            active_age_seconds=active_age_seconds,
+            waiting_age_seconds=waiting_age_seconds,
+        )
 
         project_bucket = projects_by_id.setdefault(
             project_id,
@@ -144,6 +232,7 @@ def build_work_overview(
                 "project_id": project_id,
                 "project_name": project_names.get(project_id, project_id if project_id != "unassigned" else "Unassigned"),
                 "totals": Counter(),
+                "freshness": _freshness_summary(),
                 "managers": [],
             },
         )
@@ -157,6 +246,12 @@ def build_work_overview(
             project_bucket["totals"]["problem"] += 1
         if is_qc:
             project_bucket["totals"]["qc"] += 1
+        _record_age(
+            project_bucket["freshness"],
+            status=status,
+            active_age_seconds=active_age_seconds,
+            waiting_age_seconds=waiting_age_seconds,
+        )
 
         manager_key = (project_id, manager_id)
         manager_bucket = manager_buckets.setdefault(
@@ -166,6 +261,7 @@ def build_work_overview(
                 "manager_id": manager_id,
                 "manager_name": str((bot_lookup.get(manager_id) or {}).get("name") or manager_id),
                 "totals": Counter(),
+                "freshness": _freshness_summary(),
                 "bots": Counter(),
                 "latest_tasks": [],
             },
@@ -180,6 +276,12 @@ def build_work_overview(
             manager_bucket["totals"]["problem"] += 1
         if is_qc:
             manager_bucket["totals"]["qc"] += 1
+        _record_age(
+            manager_bucket["freshness"],
+            status=status,
+            active_age_seconds=active_age_seconds,
+            waiting_age_seconds=waiting_age_seconds,
+        )
         if bot_id:
             manager_bucket["bots"][bot_id] += 1
         if status in ACTIVE_STATUSES | WAITING_STATUSES | PROBLEM_STATUSES:
@@ -188,6 +290,7 @@ def build_work_overview(
                 "bot_id": bot_id,
                 "status": status,
                 "updated_at": str(task.get("updated_at") or ""),
+                "age_label": _age_label(waiting_age_seconds if status in WAITING_STATUSES else active_age_seconds),
                 "orchestration_id": str(_safe_metadata(task).get("orchestration_id") or ""),
             }
             manager_bucket["latest_tasks"].append(compact_task)
@@ -237,8 +340,12 @@ def build_work_overview(
         "queue_depth": sum(worker["queue_depth"] for worker in worker_rows),
         "workers": sorted(worker_rows, key=lambda worker: (worker["queue_depth"], worker["id"]), reverse=True),
     }
+    totals_out = dict(totals)
+    totals_out["stale_active"] = freshness["stale_active"]
+    totals_out["stale_waiting"] = freshness["stale_waiting"]
     return {
-        "totals": dict(totals),
+        "totals": totals_out,
+        "freshness": freshness,
         "projects": project_summaries,
         "workers": worker_summary,
         "recent_problem_tasks": sorted(

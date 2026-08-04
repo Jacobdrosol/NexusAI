@@ -29,6 +29,12 @@
     <div class="card-value {% if totals.problem %}card-red{% else %}card-green{% endif %}">{{ totals.problem or 0 }}</div>
   </div>
   <div class="card">
+    <div class="card-label">Stale Work</div>
+    <div class="card-value {% if (totals.stale_active or 0) + (totals.stale_waiting or 0) %}card-red{% else %}card-green{% endif %}">
+      {{ (totals.stale_active or 0) + (totals.stale_waiting or 0) }}
+    </div>
+  </div>
+  <div class="card">
     <div class="card-label">QC / Review</div>
     <div class="card-value card-blue">{{ totals.qc or 0 }}</div>
   </div>
@@ -118,6 +124,9 @@
           {% if project.totals.qc %}
           <span class="badge badge-ready">{{ project.totals.qc }} QC</span>
           {% endif %}
+          {% if (project.freshness.stale_active or 0) + (project.freshness.stale_waiting or 0) > 0 %}
+          <span class="badge badge-failed">{{ (project.freshness.stale_active or 0) + (project.freshness.stale_waiting or 0) }} stale</span>
+          {% endif %}
           {% if (project.totals.active or 0) + (project.totals.waiting or 0) > 0 %}
           <button class="btn btn-sm btn-danger"
                   type="button"
@@ -137,6 +146,8 @@
               <th>Blocked</th>
               <th>Problem</th>
               <th>QC</th>
+              <th>Stale</th>
+              <th>Oldest</th>
               <th>Completed</th>
               <th>Total</th>
               <th>Top Bots</th>
@@ -162,6 +173,18 @@
                 {% endif %}
               </td>
               <td>{{ manager.totals.qc or 0 }}</td>
+              <td>
+                {% set manager_stale = (manager.freshness.stale_active or 0) + (manager.freshness.stale_waiting or 0) %}
+                {% if manager_stale %}
+                <span class="badge badge-failed">{{ manager_stale }}</span>
+                {% else %}
+                <span class="badge badge-ready">0</span>
+                {% endif %}
+              </td>
+              <td>
+                <div class="mini-note">active {{ manager.freshness.oldest_active_label or "none" }}</div>
+                <div class="mini-note">waiting {{ manager.freshness.oldest_waiting_label or "none" }}</div>
+              </td>
               <td>{{ manager.totals.completed or 0 }}</td>
               <td>{{ manager.totals.total or 0 }}</td>
               <td>
@@ -176,6 +199,7 @@
                 <div>
                   <span class="badge badge-{{ task.status }}">{{ task.status }}</span>
                   <code>{{ task.id[:8] }}{% if task.id|length > 8 %}...{% endif %}</code>
+                  <span class="mini-note">{{ task.age_label }}</span>
                 </div>
                 {% else %}
                 <span class="empty">No active task rows</span>

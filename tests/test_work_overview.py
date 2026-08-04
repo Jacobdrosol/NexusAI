@@ -1,4 +1,5 @@
 import bcrypt
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 from dashboard.work_overview import build_work_overview
@@ -37,6 +38,7 @@ def test_work_overview_groups_tasks_by_project_and_manager():
             {"id": "worker-a", "name": "Worker A", "status": "online", "enabled": True, "metrics": {"queue_depth": 3, "load": 0.4}},
             {"id": "worker-b", "name": "Worker B", "status": "offline", "enabled": True, "metrics": {"queue_depth": 1}},
         ],
+        now=datetime(2026, 8, 4, 11, 10, tzinfo=timezone.utc),
         tasks=[
             {
                 "id": "task-running",
@@ -78,6 +80,10 @@ def test_work_overview_groups_tasks_by_project_and_manager():
     assert overview["totals"]["problem"] == 1
     assert overview["totals"]["qc"] == 1
     assert overview["totals"]["completed"] == 1
+    assert overview["totals"]["stale_active"] == 1
+    assert overview["totals"]["stale_waiting"] == 1
+    assert overview["freshness"]["oldest_active_label"] == "1h 9m"
+    assert overview["freshness"]["oldest_waiting_label"] == "1h 8m"
     assert overview["workers"]["queue_depth"] == 4
     assert overview["workers"]["online"] == 1
     project = overview["projects"][0]
@@ -91,6 +97,9 @@ def test_work_overview_groups_tasks_by_project_and_manager():
     assert manager["totals"]["failed"] == 1
     assert manager["totals"]["completed"] == 1
     assert manager["totals"]["total"] == 4
+    assert manager["freshness"]["stale_active"] == 1
+    assert manager["freshness"]["stale_waiting"] == 1
+    assert manager["latest_tasks"][0]["age_label"] == "1h 5m"
     assert overview["recent_problem_tasks"][0]["id"] == "task-failed"
 
 
@@ -151,6 +160,8 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"Usage By Project And Manager" in resp.data
     assert b"ollama_cloud" in resp.data
     assert b"qwen3.5:cloud" in resp.data
+    assert b"Stale Work" in resp.data
+    assert b"Oldest" in resp.data
     assert b"Stop Project" in resp.data
     assert b"Stop Lane" in resp.data
 
