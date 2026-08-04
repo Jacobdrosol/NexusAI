@@ -699,6 +699,78 @@ def test_work_overview_surfaces_bot_cap_audit_rows(dashboard_client, tmp_path):
         SettingsManager._instance = original_settings
 
 
+def test_work_overview_surfaces_token_governor_queue_cap_pressure(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_tasks(self, *args, **kwargs):
+            return [
+                {
+                    "id": "queued-1",
+                    "bot_id": "audit-reader",
+                    "status": "queued",
+                    "metadata": {"project_id": "globeiq", "root_pm_bot_id": "manager-a"},
+                },
+                {
+                    "id": "queued-2",
+                    "bot_id": "audit-reader",
+                    "status": "queued",
+                    "metadata": {"project_id": "globeiq", "root_pm_bot_id": "manager-a"},
+                },
+            ]
+
+        def list_projects(self, *args, **kwargs):
+            return [{"id": "globeiq", "name": "GlobeIQ"}]
+
+        def list_bots(self, *args, **kwargs):
+            return [{"id": "manager-a", "name": "Manager A", "role": "project-manager"}]
+
+        def list_workers(self, *args, **kwargs):
+            return []
+
+        def list_work_dispatch_holds(self, *args, **kwargs):
+            return {"holds": []}
+
+        def task_usage(self, *args, **kwargs):
+            return {
+                "totals": {"total_tokens": 0, "tasks_with_usage": 0, "tasks_without_usage": 0},
+                "by_project": [],
+                "by_manager": [],
+                "by_bot": [],
+                "by_provider_model": [],
+                "token_governor": {
+                    "enabled": True,
+                    "limits": {
+                        "max_queued_llm_tasks_per_bot": 2,
+                        "max_queued_llm_tasks_per_project": 4,
+                        "max_queued_llm_tasks_per_manager": 2,
+                    },
+                    "current": {},
+                },
+            }
+
+    with patch("dashboard.routes.work.get_cp_client", return_value=FakeCP()):
+        api_resp = dashboard_client.get("/api/work/overview")
+        page_resp = dashboard_client.get("/work")
+
+    assert api_resp.status_code == 200
+    rows = {
+        (row["scope"], row["value"]): row
+        for row in api_resp.get_json()["token_governor_queue_pressure"]
+    }
+    assert rows[("bot", "audit-reader")]["queued_count"] == 2
+    assert rows[("bot", "audit-reader")]["level"] == "critical"
+    assert rows[("manager", "globeiq::manager-a")]["queued_count"] == 2
+    assert rows[("manager", "globeiq::manager-a")]["level"] == "critical"
+    assert rows[("project", "globeiq")]["usage_ratio"] == 0.5
+
+    assert page_resp.status_code == 200
+    assert b"Token Governor Queue Caps" in page_resp.data
+    assert b"audit-reader" in page_resp.data
+    assert b"globeiq::manager-a" in page_resp.data
+    assert b"critical 1.0" in page_resp.data
+
+
 def test_work_overview_surfaces_partial_control_plane_data(dashboard_client):
     _login_admin(dashboard_client)
 

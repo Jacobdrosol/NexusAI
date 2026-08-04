@@ -42,6 +42,7 @@
 {% set queue_pressure_lanes = overview.queue_pressure_lanes or [] %}
 {% set usage_pressure_lanes = overview.usage_pressure_lanes or [] %}
 {% set bot_cap_audit = overview.bot_cap_audit or [] %}
+{% set token_governor_queue_pressure = overview.token_governor_queue_pressure or [] %}
 <div class="cards">
   <div class="card">
     <div class="card-label">Needs Attention</div>
@@ -275,6 +276,29 @@
             </tr>
             {% else %}
             <tr><td colspan="4" class="empty">No recent bot cap changes</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2 class="panel-title">Token Governor Queue Caps</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Scope</th><th>Value</th><th>Queued</th><th>Cap</th><th>Remaining</th><th>Pressure</th></tr></thead>
+          <tbody>
+            {% for row in token_governor_queue_pressure %}
+            <tr>
+              <td>{{ row.scope }}</td>
+              <td><code>{{ row.value }}</code></td>
+              <td>{{ row.queued_count }}</td>
+              <td>{{ row.limit }}</td>
+              <td>{{ row.remaining }}</td>
+              <td><span class="badge {% if row.level == 'critical' %}badge-failed{% elif row.level == 'warning' %}badge-yellow{% else %}badge-completed{% endif %}">{{ row.level }} {{ row.usage_ratio }}</span></td>
+            </tr>
+            {% else %}
+            <tr><td colspan="6" class="empty">No loaded queued work is approaching token governor queue caps</td></tr>
             {% endfor %}
           </tbody>
         </table>

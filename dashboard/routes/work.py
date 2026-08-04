@@ -171,6 +171,65 @@ def _bot_cap_audit_rows(*, limit: int = 8) -> list[dict[str, Any]]:
     return rows
 
 
+def _token_governor_queue_pressure(
+    tasks: list[dict[str, Any]],
+    usage: dict[str, Any],
+    *,
+    limit: int = 12,
+) -> list[dict[str, Any]]:
+    governor = usage.get("token_governor") if isinstance(usage.get("token_governor"), dict) else {}
+    limits = governor.get("limits") if isinstance(governor.get("limits"), dict) else {}
+    cap_by_scope = {
+        "bot": _safe_count(limits, "max_queued_llm_tasks_per_bot"),
+        "project": _safe_count(limits, "max_queued_llm_tasks_per_project"),
+        "manager": _safe_count(limits, "max_queued_llm_tasks_per_manager"),
+    }
+    if not any(cap_by_scope.values()):
+        return []
+
+    queued_by_scope: dict[tuple[str, str], int] = {}
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+        if str(task.get("status") or "").strip().lower() != "queued":
+            continue
+        values = {
+            "bot": str(task.get("bot_id") or "").strip(),
+            "project": project_id_for_task(task),
+            "manager": f"{project_id_for_task(task)}::{manager_id_for_task(task)}",
+        }
+        for scope, value in values.items():
+            if value and cap_by_scope.get(scope, 0) > 0:
+                key = (scope, value)
+                queued_by_scope[key] = queued_by_scope.get(key, 0) + 1
+
+    rows: list[dict[str, Any]] = []
+    for (scope, value), queued_count in queued_by_scope.items():
+        cap = cap_by_scope.get(scope, 0)
+        if cap <= 0:
+            continue
+        ratio = round(queued_count / cap, 2)
+        if ratio >= 1:
+            level = "critical"
+        elif ratio >= 0.8:
+            level = "warning"
+        else:
+            level = "ready"
+        rows.append(
+            {
+                "scope": scope,
+                "value": value,
+                "queued_count": queued_count,
+                "limit": cap,
+                "remaining": max(0, cap - queued_count),
+                "usage_ratio": ratio,
+                "level": level,
+            }
+        )
+    rows.sort(key=lambda row: (row["level"] != "critical", row["level"] != "warning", -row["usage_ratio"], -row["queued_count"]))
+    return rows[: max(1, int(limit or 12))]
+
+
 def _safe_count(container: dict[str, Any], key: str) -> int:
     try:
         return max(0, int(container.get(key) or 0))
@@ -392,6 +451,7 @@ def _load_work_overview() -> dict[str, Any]:
         overview["usage"] = _empty_usage_summary()
     overview["usage_health"] = _usage_health(overview["usage"])
     overview["usage_pressure_lanes"] = _usage_pressure_lanes(overview["usage"])
+    overview["token_governor_queue_pressure"] = _token_governor_queue_pressure(tasks, overview["usage"])
     overview["bot_cap_audit"] = _bot_cap_audit_rows()
     _attach_attention_summary(overview)
     return overview

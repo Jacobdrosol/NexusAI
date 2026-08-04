@@ -143,6 +143,7 @@ Current item: make Work Overview bot usage pressure actionable with bot hourly c
 - Added `/api/work/bot-cap` for admin-only set/clear updates to `token_governor_bot_hourly_limits`.
 - Added Work Overview Bot Usage Pressure actions to cap a bot at its current measured usage or clear an existing override.
 - Added Bot Cap Audit visibility to Work Overview from the existing settings audit log so cap changes show who changed them, when they changed, how many overrides remain, and which bots changed.
+- Added Token Governor Queue Caps visibility to Work Overview so loaded queued tasks are compared against configured bot, project, and manager queued-task caps.
 
 ## Validation Plan
 
@@ -180,6 +181,7 @@ Current item: make Work Overview bot usage pressure actionable with bot hourly c
 - Added Work Overview assertions proving worker route evidence is preserved, rendered, and missing worker attribution is shown explicitly.
 - Added Work Overview assertions proving route-gap attention counts only active/problem worker-attribution gaps while waiting unknown rows remain visible separately.
 - Added Work Overview tests proving bot-cap audit rows are returned by the API, rendered on the page, and mutating Work APIs reject non-admin users.
+- Added Work Overview tests proving token-governor queue cap pressure is returned by the API and rendered when bot and manager queues reach configured caps.
 - Added Work Overview API assertions proving lane and orchestration drilldowns expose execution-provenance worker/backend fields without changing their bounded summary behavior.
 - Added Work Overview assertions proving attention lanes identify the affected project-manager lane and bounded reason labels.
 - Added Work Overview assertions proving Attention Lanes render direct review/stop actions and preserve project-hold scope.
