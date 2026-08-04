@@ -6,7 +6,7 @@ Improve NexusAI one scoped platform foundation at a time so it can become the pr
 
 ## Current Scope
 
-Current item: restrict Work Overview operational visibility to admin users.
+Current item: surface worker health issues in Work Overview alongside queue depth.
 
 ## Completion Criteria For This Item
 
@@ -15,6 +15,7 @@ Current item: restrict Work Overview operational visibility to admin users.
 - Each project group is further split by manager, with enough detail to identify the manager bot, queue depth, active work, and recent problem tasks.
 - Operators can drill into one project-manager lane from Work Overview and inspect bounded active/waiting/problem task details without loading payload content.
 - Worker queue depth and active worker load are visible alongside project/manager work.
+- Work Overview flags enabled-offline, disabled, high-load, and queued workers so operators can identify capacity problems quickly.
 - Token usage is visible by project, manager, and provider/model for the current operational window.
 - Metered LLM work can be capped by project and manager at admission time.
 - Metered LLM dispatch reserves project and manager budgets so queued work cannot burst past configured limits.
@@ -94,6 +95,8 @@ Current item: restrict Work Overview operational visibility to admin users.
 - Added Work page View Run controls that load one orchestration into the existing detail panel without using the stop endpoint.
 - Restricted `/work`, `/api/work/overview`, `/api/work/lane`, and `/api/work/orchestration` to admin users.
 - Tightened the Work Overview test login helper so tests can safely seed learner and admin accounts in any order.
+- Added worker health counters for enabled-offline workers, disabled workers, high-load workers, queued workers, and total worker issues.
+- Added a Worker Issues card and Worker Load summary text that expose capacity problems on the Work page.
 
 ## Validation Plan
 
@@ -123,6 +126,7 @@ Current item: restrict Work Overview operational visibility to admin users.
 - Added Work Overview API tests proving orchestration drilldown filters to one run, returns bounded task details, sorts newest first, and rejects missing IDs or invalid limits.
 - Added dashboard rendering assertions that Work Overview exposes View Run controls.
 - Added dashboard access test proving non-admin users receive 403 for Work Overview and its read APIs.
+- Added Work Overview assertions proving worker health issue counts are computed and rendered.
 - Run focused pytest coverage for new route, task summaries, and dashboard smoke where applicable.
 - After deployment, measure route render time and verify no fresh 500 or slow-request logs.
 
@@ -146,3 +150,4 @@ Current item: restrict Work Overview operational visibility to admin users.
 - Lane-detail error labels are intentionally bounded summaries for routing and triage, not complete failure payloads.
 - Orchestration drilldown is read-only and summary-only. It does not replace the full pipeline/detail graph views for artifact review or result inspection.
 - Work Overview is an operator/admin surface. Learner or non-admin project users need separate, narrower project status views if they should see any work progress.
+- Worker high-load status currently uses a fixed 0.85 load threshold from reported worker metrics. It depends on workers reporting comparable load values.

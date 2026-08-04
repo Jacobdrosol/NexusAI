@@ -258,6 +258,7 @@ def _worker_row(worker: dict[str, Any]) -> dict[str, Any]:
         "enabled": bool(worker.get("enabled", True)),
         "queue_depth": queue_depth,
         "load": load_value,
+        "overloaded": load_value is not None and load_value >= 0.85,
     }
 
 
@@ -585,9 +586,15 @@ def build_work_overview(
         "total": len(worker_rows),
         "online": sum(1 for worker in worker_rows if worker["status"] == "online" and worker["enabled"]),
         "disabled": sum(1 for worker in worker_rows if not worker["enabled"]),
+        "offline_enabled": sum(1 for worker in worker_rows if worker["enabled"] and worker["status"] != "online"),
+        "overloaded": sum(1 for worker in worker_rows if worker["enabled"] and worker["overloaded"]),
+        "queued_workers": sum(1 for worker in worker_rows if worker["queue_depth"] > 0),
         "queue_depth": sum(worker["queue_depth"] for worker in worker_rows),
         "workers": sorted(worker_rows, key=lambda worker: (worker["queue_depth"], worker["id"]), reverse=True),
     }
+    worker_summary["issue_count"] = (
+        worker_summary["disabled"] + worker_summary["offline_enabled"] + worker_summary["overloaded"]
+    )
     totals_out = dict(totals)
     totals_out["stale_active"] = freshness["stale_active"]
     totals_out["stale_waiting"] = freshness["stale_waiting"]

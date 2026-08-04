@@ -77,6 +77,10 @@
     <div class="card-value card-green">{{ workers.online or 0 }}</div>
   </div>
   <div class="card">
+    <div class="card-label">Worker Issues</div>
+    <div class="card-value {% if workers.issue_count %}card-red{% else %}card-green{% endif %}">{{ workers.issue_count or 0 }}</div>
+  </div>
+  <div class="card">
     <div class="card-label">Tokens 24h</div>
     <div class="card-value card-blue">{{ "{:,}".format(usage_totals.total_tokens or 0) }}</div>
   </div>
@@ -314,6 +318,13 @@
   <aside style="display:flex;flex-direction:column;gap:1rem;">
     <section class="panel">
       <h2 class="panel-title">Worker Load</h2>
+      <div class="mini-note" style="margin-bottom:0.75rem;">
+        {{ workers.online or 0 }} online,
+        {{ workers.offline_enabled or 0 }} enabled offline,
+        {{ workers.disabled or 0 }} disabled,
+        {{ workers.overloaded or 0 }} high load,
+        {{ workers.queued_workers or 0 }} with queued work
+      </div>
       <div class="table-wrap">
         <table>
           <thead><tr><th>Worker</th><th>Status</th><th>Queue</th></tr></thead>
@@ -325,8 +336,18 @@
                 {% if worker.load is not none %}
                 <div class="mini-note">load {{ "%.2f"|format(worker.load) }}</div>
                 {% endif %}
+                {% if worker.overloaded %}
+                <div><span class="badge badge-failed">high load</span></div>
+                {% endif %}
               </td>
-              <td><span class="badge badge-{{ worker.status }}">{{ worker.status }}</span></td>
+              <td>
+                <span class="badge badge-{{ worker.status }}">{{ worker.status }}</span>
+                {% if not worker.enabled %}
+                <div><span class="badge badge-yellow">disabled</span></div>
+                {% elif worker.status != "online" %}
+                <div><span class="badge badge-failed">offline</span></div>
+                {% endif %}
+              </td>
               <td>{{ worker.queue_depth }}</td>
             </tr>
             {% else %}

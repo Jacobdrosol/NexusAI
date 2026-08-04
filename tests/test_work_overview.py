@@ -46,6 +46,8 @@ def test_work_overview_groups_tasks_by_project_and_manager():
         workers=[
             {"id": "worker-a", "name": "Worker A", "status": "online", "enabled": True, "metrics": {"queue_depth": 3, "load": 0.4}},
             {"id": "worker-b", "name": "Worker B", "status": "offline", "enabled": True, "metrics": {"queue_depth": 1}},
+            {"id": "worker-c", "name": "Worker C", "status": "online", "enabled": True, "metrics": {"queue_depth": 0, "load": 0.91}},
+            {"id": "worker-d", "name": "Worker D", "status": "offline", "enabled": False, "metrics": {"queue_depth": 0}},
         ],
         holds=[
             {
@@ -104,7 +106,12 @@ def test_work_overview_groups_tasks_by_project_and_manager():
     assert overview["freshness"]["oldest_active_label"] == "1h 9m"
     assert overview["freshness"]["oldest_waiting_label"] == "1h 8m"
     assert overview["workers"]["queue_depth"] == 4
-    assert overview["workers"]["online"] == 1
+    assert overview["workers"]["online"] == 2
+    assert overview["workers"]["offline_enabled"] == 1
+    assert overview["workers"]["overloaded"] == 1
+    assert overview["workers"]["disabled"] == 1
+    assert overview["workers"]["queued_workers"] == 2
+    assert overview["workers"]["issue_count"] == 3
     project = overview["projects"][0]
     assert project["project_id"] == "globeiq"
     assert project["project_name"] == "GlobeIQ"
@@ -308,7 +315,11 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
             return [{"id": "globeiq-pm", "name": "GlobeIQ Manager", "role": "project-manager"}]
 
         def list_workers(self, **kwargs):
-            return [{"id": "worker-a", "name": "Worker A", "status": "online", "enabled": True, "metrics": {"queue_depth": 2, "load": 0.25}}]
+            return [
+                {"id": "worker-a", "name": "Worker A", "status": "online", "enabled": True, "metrics": {"queue_depth": 2, "load": 0.25}},
+                {"id": "worker-b", "name": "Worker B", "status": "offline", "enabled": True, "metrics": {"queue_depth": 1}},
+                {"id": "worker-c", "name": "Worker C", "status": "online", "enabled": True, "metrics": {"queue_depth": 0, "load": 0.9}},
+            ]
 
         def list_work_dispatch_holds(self, **kwargs):
             return {"holds": [{"id": "globeiq::*", "project_id": "globeiq", "manager_id": "", "reason": "operator hold"}]}
@@ -334,6 +345,11 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"Worker Load" in resp.data
     assert b"worker-a" in resp.data
     assert b"Worker Queue" in resp.data
+    assert b"Worker Issues" in resp.data
+    assert b"enabled offline" in resp.data
+    assert b"high load" in resp.data
+    assert b"worker-b" in resp.data
+    assert b"worker-c" in resp.data
     assert b"Metadata Gaps" in resp.data
     assert b"Loaded task summaries include project and manager metadata." in resp.data
     assert b"Orchestrations" in resp.data
