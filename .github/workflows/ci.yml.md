@@ -1,3 +1,10 @@
+# Disabled GitHub Actions workflow
+
+This file preserves the previous CI workflow configuration, but its `.md` extension prevents GitHub Actions from loading or running it.
+
+To restore the workflow, rename this file back to `ci.yml`. Review the workflow and expected Actions usage before re-enabling it.
+
+```yaml
 name: CI
 
 on:
@@ -37,3 +44,4 @@ jobs:
         run: docker build -f control_plane/Dockerfile -t nexusai-control-plane .
       - name: Build worker_agent image
         run: docker build -f worker_agent/Dockerfile -t nexusai-worker-agent .
+```
