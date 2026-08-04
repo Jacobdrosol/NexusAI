@@ -18,6 +18,11 @@ def _safe_metadata(task: dict[str, Any]) -> dict[str, Any]:
     return metadata if isinstance(metadata, dict) else {}
 
 
+def _execution_provenance(task: dict[str, Any]) -> dict[str, Any]:
+    provenance = _safe_metadata(task).get("execution_provenance")
+    return provenance if isinstance(provenance, dict) else {}
+
+
 def _project_id_for_task(task: dict[str, Any]) -> str:
     project_id, _source = _project_scope_for_task(task)
     return project_id
@@ -471,6 +476,12 @@ def build_work_overview(
                 "hold": None,
                 "held": False,
                 "bots": Counter(),
+                "route_evidence": {
+                    "attributed_task_count": 0,
+                    "missing_worker_count": 0,
+                    "by_worker": Counter(),
+                    "sample_tasks": [],
+                },
                 "latest_tasks": [],
             },
         )
@@ -494,6 +505,26 @@ def build_work_overview(
             manager_bucket["bots"][bot_id] += 1
         if status in ACTIVE_STATUSES | WAITING_STATUSES | PROBLEM_STATUSES:
             metadata = _safe_metadata(task)
+            provenance = _execution_provenance(task)
+            worker_id = str(provenance.get("worker_id") or "").strip()
+            route_evidence = manager_bucket["route_evidence"]
+            if worker_id:
+                route_evidence["attributed_task_count"] += 1
+                route_evidence["by_worker"][worker_id] += 1
+            else:
+                route_evidence["missing_worker_count"] += 1
+            if len(route_evidence["sample_tasks"]) < 6:
+                route_evidence["sample_tasks"].append(
+                    {
+                        "id": str(task.get("id") or ""),
+                        "bot_id": bot_id,
+                        "status": status,
+                        "worker_id": worker_id,
+                        "backend_type": str(provenance.get("backend_type") or ""),
+                        "provider": str(provenance.get("provider") or ""),
+                        "model": str(provenance.get("model") or ""),
+                    }
+                )
             compact_task = {
                 "id": str(task.get("id") or ""),
                 "bot_id": bot_id,
@@ -503,6 +534,7 @@ def build_work_overview(
                 "orchestration_id": str(metadata.get("orchestration_id") or ""),
                 "step_id": str(metadata.get("step_id") or ""),
                 "source": str(metadata.get("source") or ""),
+                "worker_id": worker_id,
             }
             manager_bucket["latest_tasks"].append(compact_task)
             if status in PROBLEM_STATUSES:
@@ -542,6 +574,12 @@ def build_work_overview(
                     "hold": None,
                     "held": False,
                     "bots": Counter(),
+                    "route_evidence": {
+                        "attributed_task_count": 0,
+                        "missing_worker_count": 0,
+                        "by_worker": Counter(),
+                        "sample_tasks": [],
+                    },
                     "latest_tasks": [],
                 },
             )
@@ -559,6 +597,11 @@ def build_work_overview(
         bucket["bots"] = [
             {"bot_id": bot_id, "task_count": count}
             for bot_id, count in bucket["bots"].most_common(8)
+        ]
+        route_evidence = bucket["route_evidence"]
+        route_evidence["by_worker"] = [
+            {"worker_id": worker_id, "task_count": count}
+            for worker_id, count in route_evidence["by_worker"].most_common(6)
         ]
         bucket["latest_tasks"] = sorted(
             bucket["latest_tasks"],

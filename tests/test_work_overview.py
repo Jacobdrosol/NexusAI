@@ -69,7 +69,17 @@ def test_work_overview_groups_tasks_by_project_and_manager():
                 "status": "running",
                 "created_at": "2026-08-04T10:00:00+00:00",
                 "updated_at": "2026-08-04T10:01:00+00:00",
-                "metadata": {"project_id": "globeiq", "root_pm_bot_id": "globeiq-pm", "orchestration_id": "orch-1"},
+                "metadata": {
+                    "project_id": "globeiq",
+                    "root_pm_bot_id": "globeiq-pm",
+                    "orchestration_id": "orch-1",
+                    "execution_provenance": {
+                        "backend_type": "browser",
+                        "provider": "browser",
+                        "model": "browser-ui",
+                        "worker_id": "browser-worker-01",
+                    },
+                },
             },
             {
                 "id": "task-qc",
@@ -131,6 +141,10 @@ def test_work_overview_groups_tasks_by_project_and_manager():
     assert manager["freshness"]["stale_waiting"] == 1
     assert manager["held"] is True
     assert manager["hold"]["reason"] == "quality review"
+    assert manager["route_evidence"]["attributed_task_count"] == 1
+    assert manager["route_evidence"]["missing_worker_count"] == 2
+    assert manager["route_evidence"]["by_worker"] == [{"worker_id": "browser-worker-01", "task_count": 1}]
+    assert manager["latest_tasks"][2]["worker_id"] == "browser-worker-01"
     assert overview["holds"][0]["id"] == "globeiq::globeiq-pm"
     assert overview["holds"][0]["queued_task_count"] == 1
     assert overview["holds"][0]["bot_count"] == 1
@@ -289,7 +303,17 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
                         "status": "running",
                         "created_at": "2026-08-04T10:00:00+00:00",
                         "updated_at": "2026-08-04T10:01:00+00:00",
-                        "metadata": {"project_id": "globeiq", "root_pm_bot_id": "globeiq-pm", "orchestration_id": "orch-1"},
+                        "metadata": {
+                            "project_id": "globeiq",
+                            "root_pm_bot_id": "globeiq-pm",
+                            "orchestration_id": "orch-1",
+                            "execution_provenance": {
+                                "backend_type": "browser",
+                                "provider": "browser",
+                                "model": "browser-ui",
+                                "worker_id": "browser-worker-01",
+                            },
+                        },
                     },
                     {
                         "id": "task-blocked",
@@ -307,7 +331,17 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
                     "status": "running",
                     "created_at": "2026-08-04T10:00:00+00:00",
                     "updated_at": "2026-08-04T10:01:00+00:00",
-                    "metadata": {"project_id": "globeiq", "root_pm_bot_id": "globeiq-pm", "orchestration_id": "orch-1"},
+                    "metadata": {
+                        "project_id": "globeiq",
+                        "root_pm_bot_id": "globeiq-pm",
+                        "orchestration_id": "orch-1",
+                        "execution_provenance": {
+                            "backend_type": "browser",
+                            "provider": "browser",
+                            "model": "browser-ui",
+                            "worker_id": "browser-worker-01",
+                        },
+                    },
                 },
                 {
                     "id": "task-blocked",
@@ -384,6 +418,11 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"worker-a" in resp.data
     assert b"Worker Queue" in resp.data
     assert b"Worker Issues" in resp.data
+    assert b"Worker Evidence" in resp.data
+    assert b"1 attributed" in resp.data
+    assert b"2 unknown" in resp.data
+    assert b"browser-worker-01" in resp.data
+    assert b"worker browser-worker-01" in resp.data
     assert b"enabled offline" in resp.data
     assert b"high load" in resp.data
     assert b"worker-b" in resp.data

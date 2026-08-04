@@ -231,6 +231,7 @@
               <th>Completed</th>
               <th>Total</th>
               <th>Top Bots</th>
+              <th>Worker Evidence</th>
               <th>Latest Work</th>
               <th>Actions</th>
             </tr>
@@ -291,11 +292,26 @@
                 {% endfor %}
               </td>
               <td>
+                {% set route = manager.route_evidence or {} %}
+                <div class="mini-note">{{ route.attributed_task_count or 0 }} attributed</div>
+                {% if route.missing_worker_count %}
+                <div><span class="badge badge-yellow">{{ route.missing_worker_count }} unknown</span></div>
+                {% endif %}
+                {% for worker in route.by_worker[:3] %}
+                <div><code>{{ worker.worker_id }}</code> <span class="mini-note">{{ worker.task_count }}</span></div>
+                {% else %}
+                <span class="empty">No worker route data</span>
+                {% endfor %}
+              </td>
+              <td>
                 {% for task in manager.latest_tasks[:3] %}
                 <div>
                   <span class="badge badge-{{ task.status }}">{{ task.status }}</span>
                   <code>{{ task.id[:8] }}{% if task.id|length > 8 %}...{% endif %}</code>
                   <span class="mini-note">{{ task.age_label }}</span>
+                  {% if task.worker_id %}
+                  <div class="mini-note">worker {{ task.worker_id }}</div>
+                  {% endif %}
                   {% if task.step_id or task.source %}
                   <div class="mini-note">{{ task.step_id or task.source }}</div>
                   {% endif %}
