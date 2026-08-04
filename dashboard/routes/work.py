@@ -67,6 +67,41 @@ def _attach_attention_summary(overview: dict[str, Any]) -> None:
     }
 
 
+def _snapshot_health(task_snapshot: dict[str, Any]) -> dict[str, Any]:
+    unavailable = []
+    capped = []
+    if bool(task_snapshot.get("active_unavailable")):
+        unavailable.append("active/problem")
+    if bool(task_snapshot.get("recent_unavailable")):
+        unavailable.append("recent")
+    if bool(task_snapshot.get("active_window_at_limit")):
+        capped.append("active/problem")
+    if bool(task_snapshot.get("recent_window_at_limit")):
+        capped.append("recent")
+
+    if unavailable:
+        level = "critical"
+        reason = "task snapshot windows unavailable: " + ", ".join(unavailable)
+    elif capped:
+        level = "warning"
+        reason = "task snapshot windows at limit: " + ", ".join(capped)
+    else:
+        level = "ready"
+        reason = "task snapshot loaded within configured windows"
+
+    return {
+        "level": level,
+        "reason": reason,
+        "unavailable_windows": unavailable,
+        "capped_windows": capped,
+        "active_rows": _safe_count(task_snapshot, "active_rows"),
+        "recent_rows": _safe_count(task_snapshot, "recent_rows"),
+        "merged_rows": _safe_count(task_snapshot, "merged_rows"),
+        "active_limit": _safe_count(task_snapshot, "active_limit"),
+        "recent_limit": _safe_count(task_snapshot, "recent_limit"),
+    }
+
+
 def _merge_task_rows(*groups: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     merged: dict[str, dict[str, Any]] = {}
     anonymous_index = 0
@@ -206,6 +241,7 @@ def _load_work_overview() -> dict[str, Any]:
         "active_window_at_limit": isinstance(active_tasks, list) and len(active_tasks) >= OVERVIEW_ACTIVE_LIMIT,
         "recent_window_at_limit": isinstance(recent_tasks, list) and len(recent_tasks) >= OVERVIEW_RECENT_LIMIT,
     }
+    overview["snapshot_health"] = _snapshot_health(overview["task_snapshot"])
     task_usage = getattr(cp, "task_usage", None)
     if callable(task_usage):
         usage, warning = _safe_cp_call(cp, "token usage", task_usage, hours=24, limit_bots=25, timeout=1.5)

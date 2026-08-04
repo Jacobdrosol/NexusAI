@@ -542,6 +542,8 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"showLaneDetails" in resp.data
     assert b"Work snapshot" in resp.data
     assert b"3 task summaries loaded" in resp.data
+    assert b"Snapshot Health" in resp.data
+    assert b"task snapshot loaded within configured windows" in resp.data
     assert b"Stop Project" in resp.data
     assert b"Stop Lane" in resp.data
     assert fake.task_calls[0]["statuses"] == ["blocked", "failed", "queued", "retried", "running"]
@@ -560,6 +562,13 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert data["attention"]["usage_gaps"] == 2
     assert data["attention"]["total"] == 8
     assert data["attention"]["level"] == "critical"
+    assert data["snapshot_health"]["level"] == "ready"
+    assert data["snapshot_health"]["reason"] == "task snapshot loaded within configured windows"
+    assert data["snapshot_health"]["active_rows"] == 2
+    assert data["snapshot_health"]["recent_rows"] == 3
+    assert data["snapshot_health"]["merged_rows"] == 3
+    assert data["snapshot_health"]["capped_windows"] == []
+    assert data["snapshot_health"]["unavailable_windows"] == []
 
 
 def test_work_overview_routes_require_admin_role(dashboard_client):
@@ -622,6 +631,7 @@ def test_work_overview_surfaces_partial_control_plane_data(dashboard_client):
     assert b"active unavailable" in page_resp.data
     assert b"recent unavailable" not in page_resp.data
     assert b"1 task summaries loaded" in page_resp.data
+    assert b"task snapshot windows unavailable: active/problem" in page_resp.data
 
     with patch("dashboard.routes.work.get_cp_client", return_value=FakeCP()):
         api_resp = dashboard_client.get("/api/work/overview")
@@ -634,6 +644,54 @@ def test_work_overview_surfaces_partial_control_plane_data(dashboard_client):
     assert data["task_snapshot"]["active_unavailable"] is True
     assert data["task_snapshot"]["recent_unavailable"] is False
     assert data["task_snapshot"]["merged_rows"] == 1
+    assert data["snapshot_health"]["level"] == "critical"
+    assert data["snapshot_health"]["reason"] == "task snapshot windows unavailable: active/problem"
+    assert data["snapshot_health"]["unavailable_windows"] == ["active/problem"]
+    assert data["snapshot_health"]["capped_windows"] == []
+
+
+def test_work_overview_flags_snapshot_windows_at_limit(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_tasks(self, **kwargs):
+            limit = int(kwargs["limit"])
+            return [
+                {
+                    "id": f"task-{index}",
+                    "bot_id": "lesson-worker",
+                    "status": "queued",
+                    "metadata": {"project_id": "globeiq", "root_pm_bot_id": "globeiq-pm"},
+                }
+                for index in range(limit)
+            ]
+
+        def list_projects(self, **kwargs):
+            return [{"id": "globeiq", "name": "GlobeIQ"}]
+
+        def list_bots(self, **kwargs):
+            return [{"id": "globeiq-pm", "name": "GlobeIQ Manager"}]
+
+        def list_workers(self, **kwargs):
+            return []
+
+        def list_work_dispatch_holds(self, **kwargs):
+            return {"holds": []}
+
+        def task_usage(self, **kwargs):
+            return {"totals": {"total_tokens": 0}, "by_project": [], "by_manager": [], "by_provider_model": []}
+
+    with patch("dashboard.routes.work.get_cp_client", return_value=FakeCP()):
+        api_resp = dashboard_client.get("/api/work/overview")
+
+    assert api_resp.status_code == 200
+    data = api_resp.get_json()
+    assert data["task_snapshot"]["active_window_at_limit"] is True
+    assert data["task_snapshot"]["recent_window_at_limit"] is True
+    assert data["snapshot_health"]["level"] == "warning"
+    assert data["snapshot_health"]["reason"] == "task snapshot windows at limit: active/problem, recent"
+    assert data["snapshot_health"]["capped_windows"] == ["active/problem", "recent"]
+    assert data["snapshot_health"]["unavailable_windows"] == []
 
 
 def test_work_overview_usage_fallback_has_stable_shape(dashboard_client):
