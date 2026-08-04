@@ -6,7 +6,7 @@ Improve NexusAI one scoped platform foundation at a time so it can become the pr
 
 ## Current Scope
 
-Current item: show bot-level token usage in Work Overview.
+Current item: show Work Overview usage-health classification so operators can distinguish complete usage telemetry from missing telemetry and idle windows.
 
 ## Completion Criteria For This Item
 
@@ -19,6 +19,7 @@ Current item: show bot-level token usage in Work Overview.
 - Token usage is visible by project, manager, and provider/model for the current operational window.
 - Work Overview flags tasks missing token usage records so operators can distinguish low usage from missing telemetry.
 - Work Overview shows token usage by bot so runaway usage can be traced to the worker identity causing it.
+- Work Overview classifies usage telemetry health as idle, ready, warning, or critical from measured task usage and missing usage counts.
 - Work Overview provides a single attention rollup across problem tasks, stale work, metadata gaps, worker issues, and usage gaps.
 - Work Overview lists the project-manager lanes that need attention first, with bounded reason labels and active/waiting counts.
 - Attention Lanes expose direct bounded Details, Hold/Release, and Stop controls for the affected project-manager lane.
@@ -132,6 +133,7 @@ Current item: show bot-level token usage in Work Overview.
 - Snapshot Health shows active/problem row counts, recent row counts, merged rows, capped windows, and unavailable windows.
 - Added bot-level token usage to the Work page using the control-plane `by_bot` summary.
 - Added `by_bot` to the Work Overview stable usage fallback shape so unavailable usage data has a consistent contract.
+- Added usage-health classification to Work Overview API and page output so missing token telemetry is visible as an explicit operator health signal.
 
 ## Validation Plan
 
@@ -175,6 +177,7 @@ Current item: show bot-level token usage in Work Overview.
 - Added Work Overview assertions proving capacity pressure ratios are computed and work-without-online-workers is classified as critical.
 - Added Work Overview route assertions proving healthy snapshots render as ready, unavailable active/problem windows render as critical, and capped windows render as warning.
 - Added TaskManager and Work Overview assertions proving bot-level usage totals are emitted, rendered, and stable when usage is unavailable.
+- Added Work Overview assertions proving usage-health levels and reasons are emitted for critical missing-telemetry and idle fallback windows.
 - Run focused pytest coverage for new route, task summaries, and dashboard smoke where applicable.
 - After deployment, measure route render time and verify no fresh 500 or slow-request logs.
 
@@ -211,3 +214,4 @@ Current item: show bot-level token usage in Work Overview.
 - Capacity pressure is a coarse operational signal from bounded task and worker snapshots. It does not replace provider-level concurrency, host resource, or token-governor controls.
 - Snapshot health only describes the bounded dashboard task-summary windows. The control plane remains authoritative for cancellation, dispatch, and complete historical state.
 - Bot-level usage is based on measured usage in completed task results. Tasks without usage are counted as gaps rather than estimated spend.
+- Usage health is based on the current token-usage summary window. It flags missing telemetry, but it does not estimate unreported token spend.

@@ -494,6 +494,9 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"Capacity Snapshot" in resp.data
     assert b"capacity available" in resp.data
     assert b"Total pressure" in resp.data
+    assert b"Usage Health" in resp.data
+    assert b"token usage telemetry is incomplete for most measured tasks" in resp.data
+    assert b"Missing ratio" in resp.data
     assert b"GlobeIQ" in resp.data
     assert b"GlobeIQ Manager" in resp.data
     assert b"lesson-writer" in resp.data
@@ -573,6 +576,15 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert data["snapshot_health"]["merged_rows"] == 3
     assert data["snapshot_health"]["capped_windows"] == []
     assert data["snapshot_health"]["unavailable_windows"] == []
+    assert data["usage_health"] == {
+        "level": "critical",
+        "reason": "token usage telemetry is incomplete for most measured tasks",
+        "measured_tasks": 1,
+        "missing_tasks": 2,
+        "total_tasks": 3,
+        "missing_ratio": 0.67,
+        "total_tokens": 140,
+    }
 
 
 def test_work_overview_routes_require_admin_role(dashboard_client):
@@ -653,6 +665,7 @@ def test_work_overview_surfaces_partial_control_plane_data(dashboard_client):
     assert data["snapshot_health"]["unavailable_windows"] == ["active/problem"]
     assert data["snapshot_health"]["capped_windows"] == []
     assert data["usage"]["by_bot"] == []
+    assert data["usage_health"]["level"] == "idle"
 
 
 def test_work_overview_flags_snapshot_windows_at_limit(dashboard_client):
@@ -730,6 +743,15 @@ def test_work_overview_usage_fallback_has_stable_shape(dashboard_client):
     assert data["usage"]["by_manager"] == []
     assert data["usage"]["by_bot"] == []
     assert data["usage"]["by_provider_model"] == []
+    assert data["usage_health"] == {
+        "level": "idle",
+        "reason": "no token usage recorded in this window",
+        "measured_tasks": 0,
+        "missing_tasks": 0,
+        "total_tasks": 0,
+        "missing_ratio": 0.0,
+        "total_tokens": 0,
+    }
 
 
 def test_work_overview_renders_held_lane_without_loaded_tasks():

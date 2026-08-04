@@ -50,6 +50,38 @@ def _normalize_usage_summary(summary: Any) -> dict[str, Any]:
     return normalized
 
 
+def _usage_health(usage: dict[str, Any]) -> dict[str, Any]:
+    totals = usage.get("totals") if isinstance(usage.get("totals"), dict) else {}
+    measured_tasks = _safe_count(totals, "tasks_with_usage")
+    missing_tasks = _safe_count(totals, "tasks_without_usage")
+    total_tasks = measured_tasks + missing_tasks
+    total_tokens = _safe_count(totals, "total_tokens")
+    missing_ratio = round(missing_tasks / total_tasks, 2) if total_tasks else 0.0
+
+    if missing_tasks and missing_ratio >= 0.5:
+        level = "critical"
+        reason = "token usage telemetry is incomplete for most measured tasks"
+    elif missing_tasks:
+        level = "warning"
+        reason = "some tasks are missing token usage telemetry"
+    elif total_tokens:
+        level = "ready"
+        reason = "token usage telemetry is complete for measured tasks"
+    else:
+        level = "idle"
+        reason = "no token usage recorded in this window"
+
+    return {
+        "level": level,
+        "reason": reason,
+        "measured_tasks": measured_tasks,
+        "missing_tasks": missing_tasks,
+        "total_tasks": total_tasks,
+        "missing_ratio": missing_ratio,
+        "total_tokens": total_tokens,
+    }
+
+
 def _safe_count(container: dict[str, Any], key: str) -> int:
     try:
         return max(0, int(container.get(key) or 0))
@@ -269,6 +301,7 @@ def _load_work_overview() -> dict[str, Any]:
             overview["data_warnings"] = warnings
     else:
         overview["usage"] = _empty_usage_summary()
+    overview["usage_health"] = _usage_health(overview["usage"])
     _attach_attention_summary(overview)
     return overview
 

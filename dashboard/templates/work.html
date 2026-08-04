@@ -27,6 +27,7 @@
 {% set workers = overview.workers or {} %}
 {% set usage = overview.usage or {} %}
 {% set usage_totals = usage.totals or {} %}
+{% set usage_health = overview.usage_health or {} %}
 {% set holds = overview.holds or [] %}
 {% set task_snapshot = overview.task_snapshot or {} %}
 {% set snapshot_health = overview.snapshot_health or {} %}
@@ -64,6 +65,12 @@
     <div class="card-label">Snapshot Health</div>
     <div class="card-value {% if snapshot_health.level == 'critical' %}card-red{% elif snapshot_health.level == 'warning' %}card-yellow{% else %}card-green{% endif %}">
       {{ snapshot_health.level or "unknown" }}
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-label">Usage Health</div>
+    <div class="card-value {% if usage_health.level == 'critical' %}card-red{% elif usage_health.level == 'warning' %}card-yellow{% elif usage_health.level == 'idle' %}card-blue{% else %}card-green{% endif %}">
+      {{ usage_health.level or "unknown" }}
     </div>
   </div>
   <div class="card">
@@ -464,6 +471,21 @@
               <td>Unavailable windows</td>
               <td>{{ (snapshot_health.unavailable_windows or [])|join(", ") if snapshot_health.unavailable_windows else "none" }}</td>
             </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2 class="panel-title">Usage Health</h2>
+      <div class="mini-note" style="margin-bottom:0.75rem;">{{ usage_health.reason or "usage health unavailable" }}</div>
+      <div class="table-wrap">
+        <table>
+          <tbody>
+            <tr><td>Measured tasks</td><td>{{ "{:,}".format(usage_health.measured_tasks or 0) }}</td></tr>
+            <tr><td>Missing usage</td><td>{{ "{:,}".format(usage_health.missing_tasks or 0) }}</td></tr>
+            <tr><td>Missing ratio</td><td>{{ usage_health.missing_ratio if usage_health.missing_ratio is not none else 0 }}</td></tr>
+            <tr><td>Total tokens</td><td>{{ "{:,}".format(usage_health.total_tokens or 0) }}</td></tr>
           </tbody>
         </table>
       </div>
