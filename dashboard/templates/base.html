@@ -27,6 +27,7 @@
 
       <div class="nav-section">
         <span class="nav-section-label">Operations</span>
+        <a href="{{ url_for('work.work_page') }}" {% if active_page == 'work' %}class="active"{% endif %}>Work</a>
         <a href="{{ url_for('bots.bots_page') }}" {% if active_page == 'bots' %}class="active"{% endif %}>Bots</a>
         <a href="{{ url_for('workers.workers_page') }}" {% if active_page == 'workers' %}class="active"{% endif %}>Workers</a>
         <a href="{{ url_for('schedules.schedules_page') }}" {% if active_page == 'schedules' %}class="active"{% endif %}>Schedules</a>

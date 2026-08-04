@@ -1,0 +1,178 @@
+{% extends "base.html" %}
+{% set active_page = "work" %}
+{% block title %}Work{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Work</h1>
+  <a class="btn" href="{{ url_for('tasks.tasks_page') }}">Open Tasks</a>
+</div>
+{% if error %}
+<div class="alert alert-error">{{ error }}</div>
+{% endif %}
+
+{% set totals = overview.totals or {} %}
+{% set workers = overview.workers or {} %}
+<div class="cards">
+  <div class="card">
+    <div class="card-label">Active</div>
+    <div class="card-value card-blue">{{ totals.active or 0 }}</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Waiting</div>
+    <div class="card-value card-yellow">{{ totals.waiting or 0 }}</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Problem</div>
+    <div class="card-value {% if totals.problem %}card-red{% else %}card-green{% endif %}">{{ totals.problem or 0 }}</div>
+  </div>
+  <div class="card">
+    <div class="card-label">QC / Review</div>
+    <div class="card-value card-blue">{{ totals.qc or 0 }}</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Completed</div>
+    <div class="card-value card-green">{{ totals.completed or 0 }}</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Worker Queue</div>
+    <div class="card-value {% if workers.queue_depth %}card-yellow{% else %}card-green{% endif %}">{{ workers.queue_depth or 0 }}</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Workers Online</div>
+    <div class="card-value card-green">{{ workers.online or 0 }}</div>
+  </div>
+</div>
+
+<div class="split-grid" style="grid-template-columns:1fr 320px;gap:1rem;">
+  <div style="display:flex;flex-direction:column;gap:1rem;">
+    {% for project in overview.projects %}
+    <section class="panel">
+      <div class="page-header" style="margin-bottom:0.75rem;">
+        <div>
+          <h2 class="panel-title" style="margin-bottom:0.25rem;">{{ project.project_name }}</h2>
+          <div class="mini-note"><code>{{ project.project_id }}</code></div>
+        </div>
+        <div class="quick-links">
+          <span class="badge badge-running">{{ project.totals.active or 0 }} active</span>
+          <span class="badge badge-queued">{{ project.totals.waiting or 0 }} waiting</span>
+          <span class="badge badge-completed">{{ project.totals.completed or 0 }} completed</span>
+          {% if project.totals.problem %}
+          <span class="badge badge-failed">{{ project.totals.problem }} problem</span>
+          {% endif %}
+          {% if project.totals.qc %}
+          <span class="badge badge-ready">{{ project.totals.qc }} QC</span>
+          {% endif %}
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Manager</th>
+              <th>Active</th>
+              <th>Waiting</th>
+              <th>Blocked</th>
+              <th>Problem</th>
+              <th>QC</th>
+              <th>Completed</th>
+              <th>Total</th>
+              <th>Top Bots</th>
+              <th>Latest Work</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for manager in project.managers %}
+            <tr>
+              <td>
+                <strong>{{ manager.manager_name }}</strong>
+                <div class="mini-note"><code>{{ manager.manager_id }}</code></div>
+              </td>
+              <td>{{ manager.totals.active or 0 }}</td>
+              <td>{{ manager.totals.waiting or 0 }}</td>
+              <td>{{ manager.totals.blocked or 0 }}</td>
+              <td>
+                {% if manager.totals.problem %}
+                <span class="badge badge-failed">{{ manager.totals.problem }}</span>
+                {% else %}
+                <span class="badge badge-ready">0</span>
+                {% endif %}
+              </td>
+              <td>{{ manager.totals.qc or 0 }}</td>
+              <td>{{ manager.totals.completed or 0 }}</td>
+              <td>{{ manager.totals.total or 0 }}</td>
+              <td>
+                {% for bot in manager.bots[:3] %}
+                <div><code>{{ bot.bot_id }}</code> <span class="mini-note">{{ bot.task_count }}</span></div>
+                {% else %}
+                <span class="empty">No bot data</span>
+                {% endfor %}
+              </td>
+              <td>
+                {% for task in manager.latest_tasks[:3] %}
+                <div>
+                  <span class="badge badge-{{ task.status }}">{{ task.status }}</span>
+                  <code>{{ task.id[:8] }}{% if task.id|length > 8 %}...{% endif %}</code>
+                </div>
+                {% else %}
+                <span class="empty">No active task rows</span>
+                {% endfor %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+    {% else %}
+    <section class="panel">
+      <div class="empty">No task summaries are available.</div>
+    </section>
+    {% endfor %}
+  </div>
+
+  <aside style="display:flex;flex-direction:column;gap:1rem;">
+    <section class="panel">
+      <h2 class="panel-title">Worker Load</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Worker</th><th>Status</th><th>Queue</th></tr></thead>
+          <tbody>
+            {% for worker in workers.workers[:12] %}
+            <tr>
+              <td>
+                <code>{{ worker.id }}</code>
+                {% if worker.load is not none %}
+                <div class="mini-note">load {{ "%.2f"|format(worker.load) }}</div>
+                {% endif %}
+              </td>
+              <td><span class="badge badge-{{ worker.status }}">{{ worker.status }}</span></td>
+              <td>{{ worker.queue_depth }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="3" class="empty">No workers available</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2 class="panel-title">Recent Problems</h2>
+      <div class="list">
+        {% for task in overview.recent_problem_tasks %}
+        <a class="list-item" href="{{ url_for('tasks.tasks_page') }}">
+          <strong>{{ task.bot_id or task.manager_id }}</strong>
+          <small>
+            <span class="badge badge-{{ task.status }}">{{ task.status }}</span>
+            <code>{{ task.project_id }}</code>
+            {% if task.orchestration_id %}<code>{{ task.orchestration_id[:8] }}...</code>{% endif %}
+          </small>
+        </a>
+        {% else %}
+        <div class="empty">No recent failed or retried tasks in the loaded window.</div>
+        {% endfor %}
+      </div>
+    </section>
+  </aside>
+</div>
+{% endblock %}
