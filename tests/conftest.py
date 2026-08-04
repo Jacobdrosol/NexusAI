@@ -187,7 +187,10 @@ async def cp_app(tmp_path):
     async def health():
         return {"status": "ok"}
 
-    return app
+    try:
+        yield app
+    finally:
+        await task_manager.close()
 
 
 @pytest_asyncio.fixture

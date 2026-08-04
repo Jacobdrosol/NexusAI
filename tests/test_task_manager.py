@@ -76,6 +76,24 @@ async def test_task_runs_and_completes():
 
 
 @pytest.mark.anyio
+async def test_task_manager_close_clears_running_task_watchdog(tmp_path):
+    from control_plane.task_manager.task_manager import TaskManager
+
+    mock_scheduler = AsyncMock()
+    tm = TaskManager(mock_scheduler, db_path=str(tmp_path / "watchdog-close.db"))
+
+    await tm._ensure_watchdog_started()
+    watchdog = tm._watchdog_task
+    assert watchdog is not None
+    assert not watchdog.done()
+
+    await tm.close()
+
+    assert tm._watchdog_task is None
+    assert watchdog.done()
+
+
+@pytest.mark.anyio
 async def test_token_governor_keeps_llm_task_queued_when_budget_reserved(tmp_path, monkeypatch):
     import asyncio
 

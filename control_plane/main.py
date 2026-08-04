@@ -277,6 +277,7 @@ async def lifespan(app: FastAPI):
         await worker_probe_task
     except asyncio.CancelledError:
         pass
+    await task_manager.close()
     logger.info("NexusAI Control Plane stopped")
 
 

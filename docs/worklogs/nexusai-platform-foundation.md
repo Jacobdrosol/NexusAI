@@ -6,7 +6,7 @@ Improve NexusAI one scoped platform foundation at a time so it can become the pr
 
 ## Current Scope
 
-Current item: add scoped Work Overview stop controls so operators can halt active/waiting work by project or manager.
+Current item: clean up TaskManager background lifecycle so control-plane shutdown and tests do not leave watchdog tasks pending.
 
 ## Completion Criteria For This Item
 
@@ -20,6 +20,8 @@ Current item: add scoped Work Overview stop controls so operators can halt activ
 - The token-governor controls expose live one-hour governor status when the control plane is reachable.
 - Admins can stop active/waiting work for one project or one project-manager lane from Work Overview.
 - Stop actions cancel only non-terminal running, queued, or blocked tasks and preserve an explicit cancellation reason.
+- Control-plane shutdown closes the TaskManager and cancels its watchdog/runner/retry background tasks cleanly.
+- Control-plane API tests tear down TaskManager background tasks after each fixture instance.
 - Page render uses bounded control-plane calls and does not reintroduce slow navigation.
 - Focused tests cover grouping behavior and dashboard rendering.
 - Documentation describes the purpose, data flow, and limitations.
@@ -49,6 +51,9 @@ Current item: add scoped Work Overview stop controls so operators can halt activ
 - Added `/api/work/stop` for admin-only scoped cancellation by project and optional manager.
 - Added Work Overview project and manager stop buttons for lanes that have active or waiting work.
 - Extended task cancellation API/client calls to pass cancellation reasons through to the task manager.
+- Added TaskManager shutdown to the production FastAPI lifespan teardown.
+- Added control-plane test fixture cleanup for TaskManager background tasks.
+- Added a TaskManager lifecycle test proving `close()` clears a running watchdog task.
 
 ## Validation Plan
 
@@ -59,6 +64,7 @@ Current item: add scoped Work Overview stop controls so operators can halt activ
 - Added dashboard tests proving the token-governor Settings tab renders, the API reports settings/live status, valid updates are normalized, and invalid updates are rejected.
 - Added Work Overview tests proving stop controls render, dry-run filtering targets only stoppable project-manager tasks, actual cancellation ignores terminal/out-of-scope tasks, and missing project IDs are rejected.
 - Added control-plane API test proving single-task cancellation preserves the provided reason.
+- Added lifecycle test proving TaskManager watchdog shutdown is explicit and leaves no stored watchdog task.
 - Run focused pytest coverage for new route, task summaries, and dashboard smoke where applicable.
 - After deployment, measure route render time and verify no fresh 500 or slow-request logs.
 
