@@ -6,13 +6,14 @@ Improve NexusAI one scoped platform foundation at a time so it can become the pr
 
 ## Current Scope
 
-First item: build a Work Overview surface that makes active work operationally visible by project and manager.
+Current item: build a Work Overview surface that makes active work and token/model usage operationally visible by project and manager.
 
 ## Completion Criteria For This Item
 
 - Operators can see active, queued, blocked, failed, QC, and completed work grouped by project.
 - Each project group is further split by manager, with enough detail to identify the manager bot, queue depth, active work, and recent problem tasks.
 - Worker queue depth and active worker load are visible alongside project/manager work.
+- Token usage is visible by project, manager, and provider/model for the current operational window.
 - Page render uses bounded control-plane calls and does not reintroduce slow navigation.
 - Focused tests cover grouping behavior and dashboard rendering.
 - Documentation describes the purpose, data flow, and limitations.
@@ -31,11 +32,14 @@ First item: build a Work Overview surface that makes active work operationally v
 - Added `dashboard.work_overview.build_work_overview` to group task summaries by project and manager.
 - Added sidebar navigation entry under Operations.
 - Added focused tests for grouping behavior and page rendering.
+- Extended control-plane token usage summaries with `by_project`, `by_manager`, and `by_provider_model`.
+- Added Work page usage panels for project/manager usage and provider/model usage.
 
 ## Validation Plan
 
 - Added unit-level tests for work grouping with realistic task metadata.
 - Added dashboard route test proving the page renders project and manager groupings.
+- Added task-manager test proving usage grouping by project, manager, and provider/model.
 - Run focused pytest coverage for new route, task summaries, and dashboard smoke where applicable.
 - After deployment, measure route render time and verify no fresh 500 or slow-request logs.
 

@@ -128,6 +128,15 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
         def list_workers(self, **kwargs):
             return [{"id": "worker-a", "name": "Worker A", "status": "online", "enabled": True, "metrics": {"queue_depth": 2, "load": 0.25}}]
 
+        def task_usage(self, **kwargs):
+            return {
+                "window": {"hours": 24},
+                "totals": {"total_tokens": 140},
+                "by_project": [{"project_id": "globeiq", "total_tokens": 140, "tasks_with_usage": 1, "tasks_without_usage": 0}],
+                "by_manager": [{"project_id": "globeiq", "manager_id": "globeiq-pm", "total_tokens": 140, "tasks_with_usage": 1}],
+                "by_provider_model": [{"provider": "ollama_cloud", "model": "qwen3.5:cloud", "total_tokens": 140, "tasks_with_usage": 1}],
+            }
+
     with patch("dashboard.routes.work.get_cp_client", return_value=FakeCP()):
         resp = dashboard_client.get("/work")
 
@@ -139,3 +148,6 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"Worker Load" in resp.data
     assert b"worker-a" in resp.data
     assert b"Worker Queue" in resp.data
+    assert b"Usage By Project And Manager" in resp.data
+    assert b"ollama_cloud" in resp.data
+    assert b"qwen3.5:cloud" in resp.data

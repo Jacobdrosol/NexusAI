@@ -5047,7 +5047,7 @@ class TaskManager:
         clauses = ["result IS NOT NULL", "updated_at >= ?"]
         params: List[Any] = [since.isoformat()]
         query = f"""
-            SELECT id, bot_id, status, result, created_at, updated_at
+            SELECT id, bot_id, status, metadata, result, created_at, updated_at
             FROM {_TASKS_TABLE}
             WHERE {' AND '.join(clauses)}
             ORDER BY updated_at DESC, created_at DESC
@@ -5063,6 +5063,61 @@ class TaskManager:
         }
         by_bot: Dict[str, Dict[str, Any]] = {}
         by_status: Dict[str, Dict[str, Any]] = {}
+        by_project: Dict[str, Dict[str, Any]] = {}
+        by_manager: Dict[str, Dict[str, Any]] = {}
+        by_provider_model: Dict[str, Dict[str, Any]] = {}
+
+        def _new_usage_bucket(**identity: Any) -> Dict[str, Any]:
+            return {
+                **identity,
+                "tasks": 0,
+                "tasks_with_usage": 0,
+                "tasks_without_usage": 0,
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "unknown_total_tasks": 0,
+            }
+
+        def _metadata_dict(raw: Any) -> Dict[str, Any]:
+            metadata = self._decode_json_field(raw, default={})
+            return metadata if isinstance(metadata, dict) else {}
+
+        def _usage_project_id(metadata: Dict[str, Any]) -> str:
+            return str(metadata.get("project_id") or "unassigned").strip() or "unassigned"
+
+        def _usage_manager_id(metadata: Dict[str, Any], bot_id: str) -> str:
+            for key in ("root_pm_bot_id", "pipeline_entry_bot_id", "manager_bot_id"):
+                value = str(metadata.get(key) or "").strip()
+                if value:
+                    return value
+            parent_task_id = str(metadata.get("parent_task_id") or "").strip()
+            if parent_task_id:
+                return f"parent:{parent_task_id[:12]}"
+            return bot_id or "unassigned-manager"
+
+        def _usage_provider_model(metadata: Dict[str, Any], usage: Dict[str, Any]) -> tuple[str, str]:
+            provenance = metadata.get("execution_provenance")
+            provenance = provenance if isinstance(provenance, dict) else {}
+            provider = str(
+                provenance.get("provider")
+                or usage.get("provider")
+                or usage.get("model_provider")
+                or "unknown"
+            ).strip().lower() or "unknown"
+            model = str(
+                provenance.get("model")
+                or usage.get("model")
+                or usage.get("model_name")
+                or "unknown"
+            ).strip() or "unknown"
+            return provider, model
+
+        def _add_usage(bucket: Dict[str, Any], prompt_tokens: int, completion_tokens: int, total_tokens: int) -> None:
+            bucket["tasks_with_usage"] += 1
+            bucket["prompt_tokens"] += prompt_tokens
+            bucket["completion_tokens"] += completion_tokens
+            bucket["total_tokens"] += total_tokens
 
         async with open_sqlite(self._db_path) as db:
             db.row_factory = aiosqlite.Row
@@ -5074,6 +5129,9 @@ class TaskManager:
             bot_id = str(row["bot_id"] or "unknown")
             status = str(row["status"] or "unknown")
             updated_at = str(row["updated_at"] or "")
+            metadata = _metadata_dict(row["metadata"])
+            project_id = _usage_project_id(metadata)
+            manager_id = _usage_manager_id(metadata, bot_id)
             bot_bucket = by_bot.setdefault(
                 bot_id,
                 {
@@ -5088,21 +5146,15 @@ class TaskManager:
                     "last_task_at": updated_at,
                 },
             )
-            status_bucket = by_status.setdefault(
-                status,
-                {
-                    "status": status,
-                    "tasks": 0,
-                    "tasks_with_usage": 0,
-                    "tasks_without_usage": 0,
-                    "prompt_tokens": 0,
-                    "completion_tokens": 0,
-                    "total_tokens": 0,
-                    "unknown_total_tasks": 0,
-                },
+            status_bucket = by_status.setdefault(status, _new_usage_bucket(status=status))
+            project_bucket = by_project.setdefault(project_id, _new_usage_bucket(project_id=project_id))
+            manager_key = f"{project_id}::{manager_id}"
+            manager_bucket = by_manager.setdefault(
+                manager_key,
+                _new_usage_bucket(project_id=project_id, manager_id=manager_id),
             )
-            bot_bucket["tasks"] += 1
-            status_bucket["tasks"] += 1
+            for bucket in (bot_bucket, status_bucket, project_bucket, manager_bucket):
+                bucket["tasks"] += 1
             if updated_at > str(bot_bucket.get("last_task_at") or ""):
                 bot_bucket["last_task_at"] = updated_at
 
@@ -5113,11 +5165,18 @@ class TaskManager:
             usage = _extract_result_usage(result)
             if not usage:
                 totals["tasks_without_usage"] += 1
-                bot_bucket["tasks_without_usage"] += 1
-                status_bucket["tasks_without_usage"] += 1
+                for bucket in (bot_bucket, status_bucket, project_bucket, manager_bucket):
+                    bucket["tasks_without_usage"] += 1
                 continue
 
             summary = _usage_summary(usage)
+            provider, model = _usage_provider_model(metadata, summary)
+            provider_model_key = f"{provider}::{model}"
+            provider_model_bucket = by_provider_model.setdefault(
+                provider_model_key,
+                _new_usage_bucket(provider=provider, model=model),
+            )
+            provider_model_bucket["tasks"] += 1
             prompt_tokens = _usage_int(summary.get("prompt_tokens")) or 0
             completion_tokens = _usage_int(summary.get("completion_tokens")) or 0
             total_tokens = _usage_int(summary.get("total_tokens"))
@@ -5125,14 +5184,11 @@ class TaskManager:
                 total_tokens = prompt_tokens + completion_tokens if prompt_tokens or completion_tokens else 0
             if total_tokens == 0 and not (prompt_tokens or completion_tokens):
                 totals["unknown_total_tasks"] += 1
-                bot_bucket["unknown_total_tasks"] += 1
-                status_bucket["unknown_total_tasks"] += 1
+                for bucket in (bot_bucket, status_bucket, project_bucket, manager_bucket, provider_model_bucket):
+                    bucket["unknown_total_tasks"] += 1
 
-            for bucket in (totals, bot_bucket, status_bucket):
-                bucket["tasks_with_usage"] += 1
-                bucket["prompt_tokens"] += prompt_tokens
-                bucket["completion_tokens"] += completion_tokens
-                bucket["total_tokens"] += total_tokens
+            for bucket in (totals, bot_bucket, status_bucket, project_bucket, manager_bucket, provider_model_bucket):
+                _add_usage(bucket, prompt_tokens, completion_tokens, total_tokens)
 
         bot_rows = sorted(
             by_bot.values(),
@@ -5140,6 +5196,21 @@ class TaskManager:
             reverse=True,
         )
         status_rows = sorted(by_status.values(), key=lambda item: str(item.get("status") or ""))
+        project_rows = sorted(
+            by_project.values(),
+            key=lambda item: int(item.get("total_tokens") or 0),
+            reverse=True,
+        )
+        manager_rows = sorted(
+            by_manager.values(),
+            key=lambda item: int(item.get("total_tokens") or 0),
+            reverse=True,
+        )
+        provider_model_rows = sorted(
+            by_provider_model.values(),
+            key=lambda item: int(item.get("total_tokens") or 0),
+            reverse=True,
+        )
         return {
             "window": {
                 "hours": safe_hours,
@@ -5150,6 +5221,9 @@ class TaskManager:
             "by_bot": bot_rows[:safe_limit_bots],
             "bot_count": len(bot_rows),
             "by_status": status_rows,
+            "by_project": project_rows,
+            "by_manager": manager_rows,
+            "by_provider_model": provider_model_rows,
             "token_governor": await self.token_governor_status(),
         }
 

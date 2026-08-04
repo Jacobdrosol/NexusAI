@@ -327,6 +327,52 @@ async def test_task_manager_lists_task_summaries_without_content(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_token_usage_summary_groups_by_project_manager_and_model(tmp_path):
+    import asyncio
+
+    from control_plane.task_manager.task_manager import TaskManager
+
+    class StubRegistry:
+        async def get(self, bot_id):
+            return Bot(id=bot_id, name="Usage Bot", role="assistant", backends=[])
+
+    mock_scheduler = AsyncMock()
+    mock_scheduler.schedule.return_value = {
+        "output": "ok",
+        "usage": {"prompt_tokens": 100, "completion_tokens": 40, "total_tokens": 140},
+    }
+    tm = TaskManager(mock_scheduler, db_path=str(tmp_path / "usage-groups.db"), bot_registry=StubRegistry())
+    task = await tm.create_task(
+        bot_id="lesson-writer",
+        payload={"instruction": "write lesson"},
+        metadata=TaskMetadata(
+            source="chat_assign",
+            project_id="globeiq",
+            root_pm_bot_id="globeiq-pm",
+            execution_provenance={"provider": "ollama_cloud", "model": "qwen3.5:cloud"},
+        ),
+    )
+
+    for _ in range(40):
+        updated = await tm.get_task(task.id)
+        if updated.status in {"completed", "failed"}:
+            break
+        await asyncio.sleep(0.05)
+
+    usage = await tm.summarize_token_usage(hours=24)
+
+    assert usage["totals"]["total_tokens"] == 140
+    assert usage["by_project"][0]["project_id"] == "globeiq"
+    assert usage["by_project"][0]["total_tokens"] == 140
+    assert usage["by_manager"][0]["project_id"] == "globeiq"
+    assert usage["by_manager"][0]["manager_id"] == "globeiq-pm"
+    assert usage["by_manager"][0]["total_tokens"] == 140
+    assert usage["by_provider_model"][0]["provider"] == "ollama_cloud"
+    assert usage["by_provider_model"][0]["model"] == "qwen3.5:cloud"
+    assert usage["by_provider_model"][0]["total_tokens"] == 140
+
+
+@pytest.mark.anyio
 async def test_task_manager_preserves_strict_browser_payload_for_scheduler(tmp_path):
     import asyncio
 

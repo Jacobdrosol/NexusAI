@@ -31,7 +31,10 @@ def _load_work_overview() -> dict[str, Any]:
     projects = _safe_call(cp.list_projects, timeout=1.0) or []
     bots = _safe_call(cp.list_bots, timeout=1.0) or []
     workers = _safe_call(cp.list_workers, timeout=1.0) or []
-    return build_work_overview(tasks=tasks, projects=projects, bots=bots, workers=workers)
+    overview = build_work_overview(tasks=tasks, projects=projects, bots=bots, workers=workers)
+    task_usage = getattr(cp, "task_usage", None)
+    overview["usage"] = _safe_call(task_usage, hours=24, limit_bots=25, timeout=1.5) if callable(task_usage) else None
+    return overview
 
 
 @bp.get("/work")

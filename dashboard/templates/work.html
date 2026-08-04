@@ -12,6 +12,8 @@
 
 {% set totals = overview.totals or {} %}
 {% set workers = overview.workers or {} %}
+{% set usage = overview.usage or {} %}
+{% set usage_totals = usage.totals or {} %}
 <div class="cards">
   <div class="card">
     <div class="card-label">Active</div>
@@ -41,10 +43,63 @@
     <div class="card-label">Workers Online</div>
     <div class="card-value card-green">{{ workers.online or 0 }}</div>
   </div>
+  <div class="card">
+    <div class="card-label">Tokens 24h</div>
+    <div class="card-value card-blue">{{ "{:,}".format(usage_totals.total_tokens or 0) }}</div>
+  </div>
 </div>
 
 <div class="split-grid" style="grid-template-columns:1fr 320px;gap:1rem;">
   <div style="display:flex;flex-direction:column;gap:1rem;">
+    <section class="panel">
+      <div class="page-header" style="margin-bottom:0.75rem;">
+        <h2 class="panel-title">Usage By Project And Manager</h2>
+        {% if usage.window %}
+        <div class="mini-note">{{ usage.window.hours }}h window</div>
+        {% endif %}
+      </div>
+      {% if usage %}
+      <div class="split-grid" style="grid-template-columns:1fr 1fr;gap:1rem;">
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Project</th><th>Tokens</th><th>Measured</th><th>Missing</th></tr></thead>
+            <tbody>
+              {% for row in usage.by_project[:8] %}
+              <tr>
+                <td><code>{{ row.project_id }}</code></td>
+                <td>{{ "{:,}".format(row.total_tokens or 0) }}</td>
+                <td>{{ row.tasks_with_usage }}</td>
+                <td>{{ row.tasks_without_usage }}</td>
+              </tr>
+              {% else %}
+              <tr><td colspan="4" class="empty">No project token usage in the selected window</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Manager</th><th>Project</th><th>Tokens</th><th>Measured</th></tr></thead>
+            <tbody>
+              {% for row in usage.by_manager[:8] %}
+              <tr>
+                <td><code>{{ row.manager_id }}</code></td>
+                <td><code>{{ row.project_id }}</code></td>
+                <td>{{ "{:,}".format(row.total_tokens or 0) }}</td>
+                <td>{{ row.tasks_with_usage }}</td>
+              </tr>
+              {% else %}
+              <tr><td colspan="4" class="empty">No manager token usage in the selected window</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      {% else %}
+      <div class="empty">Token usage is unavailable.</div>
+      {% endif %}
+    </section>
+
     {% for project in overview.projects %}
     <section class="panel">
       <div class="page-header" style="margin-bottom:0.75rem;">
@@ -150,6 +205,29 @@
             </tr>
             {% else %}
             <tr><td colspan="3" class="empty">No workers available</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2 class="panel-title">Usage By Model</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Provider / Model</th><th>Tokens</th><th>Tasks</th></tr></thead>
+          <tbody>
+            {% for row in usage.by_provider_model[:10] %}
+            <tr>
+              <td>
+                <code>{{ row.provider }}</code>
+                <div class="mini-note">{{ row.model }}</div>
+              </td>
+              <td>{{ "{:,}".format(row.total_tokens or 0) }}</td>
+              <td>{{ row.tasks_with_usage }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="3" class="empty">No model usage in the selected window</td></tr>
             {% endfor %}
           </tbody>
         </table>
