@@ -6,7 +6,7 @@ Improve NexusAI one scoped platform foundation at a time so it can become the pr
 
 ## Current Scope
 
-Current item: classify Work Overview problem sources so failed/retried work can be triaged by bounded error label, task source, and bot without loading task payloads.
+Current item: add bounded orchestration rollups to Work Overview so operators can see active run-level spread across project-manager lanes without loading task payloads.
 
 ## Completion Criteria For This Item
 
@@ -31,6 +31,7 @@ Current item: classify Work Overview problem sources so failed/retried work can 
 - Recent work rows include age labels so operators can see whether active, waiting, or problem tasks are fresh.
 - Work Overview identifies task summaries that are missing project metadata or are grouped under inferred managers instead of explicit manager metadata.
 - Work Overview classifies failed/retried work by bounded error label, source, and bot so operators can identify repeated failure modes quickly.
+- Work Overview summarizes loaded orchestration IDs with project, manager, active/waiting/problem/stale counts, latest task status, and total task count.
 - Page render uses bounded control-plane calls and does not reintroduce slow navigation.
 - Focused tests cover grouping behavior and dashboard rendering.
 - Documentation describes the purpose, data flow, and limitations.
@@ -80,6 +81,7 @@ Current item: classify Work Overview problem sources so failed/retried work can 
 - Added bounded `error_summary` fields to task summaries so dashboards can classify failures while keeping payload/result content excluded.
 - Added Work Overview problem-source aggregation by error code/type, task source, and bot.
 - Added a Work page Problem Sources panel.
+- Added Work Overview orchestration rollups from loaded task summaries and a Work page Orchestrations panel.
 
 ## Validation Plan
 
@@ -102,6 +104,7 @@ Current item: classify Work Overview problem sources so failed/retried work can 
 - Added Work Overview tests proving clean tasks have no metadata gaps and fallback-routed tasks are counted with source-specific samples.
 - Added TaskManager test proving non-content task summaries include bounded error labels without returning full error content.
 - Added Work Overview test proving failed/retried work is grouped by error label, source, and bot.
+- Added Work Overview test proving orchestration rollups include active, waiting, problem, stale, latest-task, project, and manager details.
 - Run focused pytest coverage for new route, task summaries, and dashboard smoke where applicable.
 - After deployment, measure route render time and verify no fresh 500 or slow-request logs.
 
@@ -120,3 +123,4 @@ Current item: classify Work Overview problem sources so failed/retried work can 
 - Degraded-data warnings identify failed control-plane calls, but they do not retry or repair the control plane. They are operator visibility for safe decisions.
 - Metadata-gap counts are based only on the bounded loaded task-summary windows, so they are routing indicators rather than a full historical metadata audit.
 - Problem-source counts are based only on loaded failed/retried task summaries and use bounded error labels, not full task payloads or results.
+- Orchestration rollups are based only on the bounded loaded task-summary windows. They are an operator snapshot, not a complete historical run graph.

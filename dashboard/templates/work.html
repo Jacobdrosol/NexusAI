@@ -32,6 +32,7 @@
 {% set metadata_health = overview.metadata_health or {} %}
 {% set metadata_gap_count = (metadata_health.missing_project_count or 0) + (metadata_health.inferred_manager_count or 0) %}
 {% set problem_summary = overview.problem_summary or {} %}
+{% set orchestrations = overview.orchestrations or [] %}
 <div class="cards">
   <div class="card">
     <div class="card-label">Active</div>
@@ -353,6 +354,58 @@
             </tr>
             {% else %}
             <tr><td colspan="3" class="empty">No model usage in the selected window</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2 class="panel-title">Orchestrations</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Run</th>
+              <th>Project</th>
+              <th>Manager</th>
+              <th>Active</th>
+              <th>Waiting</th>
+              <th>Problem</th>
+              <th>Stale</th>
+              <th>Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for orchestration in orchestrations[:12] %}
+            <tr>
+              <td>
+                <code>{{ orchestration.orchestration_id[:12] }}{% if orchestration.orchestration_id|length > 12 %}...{% endif %}</code>
+                <div class="mini-note">{{ orchestration.latest_status or "unknown" }} {{ orchestration.latest_updated_at or "" }}</div>
+              </td>
+              <td><code>{{ orchestration.project_id }}</code></td>
+              <td><code>{{ orchestration.manager_id }}</code></td>
+              <td>{{ orchestration.active or 0 }}</td>
+              <td>{{ orchestration.waiting or 0 }}</td>
+              <td>
+                {% if orchestration.problem_count %}
+                <span class="badge badge-failed">{{ orchestration.problem_count }}</span>
+                {% else %}
+                <span class="badge badge-ready">0</span>
+                {% endif %}
+              </td>
+              <td>
+                {% set orchestration_stale = (orchestration.stale_active or 0) + (orchestration.stale_waiting or 0) %}
+                {% if orchestration_stale %}
+                <span class="badge badge-failed">{{ orchestration_stale }}</span>
+                {% else %}
+                <span class="badge badge-ready">0</span>
+                {% endif %}
+              </td>
+              <td>{{ orchestration.task_count or 0 }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="8" class="empty">No orchestration IDs in the loaded task window.</td></tr>
             {% endfor %}
           </tbody>
         </table>

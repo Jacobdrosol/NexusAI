@@ -197,6 +197,53 @@ def test_work_overview_groups_problem_sources_from_error_summaries():
     assert overview["problem_summary"]["by_bot"][0] == {"bot_id": "lesson-qc", "count": 2}
 
 
+def test_work_overview_rolls_up_orchestration_activity():
+    overview = build_work_overview(
+        projects=[{"id": "globeiq", "name": "GlobeIQ"}],
+        bots=[],
+        workers=[],
+        tasks=[
+            {
+                "id": "orch-a-running",
+                "bot_id": "lesson-writer",
+                "status": "running",
+                "created_at": "2026-08-04T09:00:00+00:00",
+                "updated_at": "2026-08-04T09:05:00+00:00",
+                "metadata": {"project_id": "globeiq", "root_pm_bot_id": "pm-a", "orchestration_id": "orch-a"},
+            },
+            {
+                "id": "orch-a-failed",
+                "bot_id": "lesson-qc",
+                "status": "failed",
+                "created_at": "2026-08-04T10:00:00+00:00",
+                "updated_at": "2026-08-04T10:10:00+00:00",
+                "metadata": {"project_id": "globeiq", "root_pm_bot_id": "pm-a", "orchestration_id": "orch-a"},
+            },
+            {
+                "id": "orch-b-queued",
+                "bot_id": "asset-worker",
+                "status": "queued",
+                "created_at": "2026-08-04T10:50:00+00:00",
+                "updated_at": "2026-08-04T10:51:00+00:00",
+                "metadata": {"project_id": "globeiq", "root_pm_bot_id": "pm-b", "orchestration_id": "orch-b"},
+            },
+        ],
+        now=datetime(2026, 8, 4, 11, 10, tzinfo=timezone.utc),
+    )
+
+    assert [row["orchestration_id"] for row in overview["orchestrations"]] == ["orch-a", "orch-b"]
+    orch_a = overview["orchestrations"][0]
+    assert orch_a["project_id"] == "globeiq"
+    assert orch_a["manager_id"] == "pm-a"
+    assert orch_a["task_count"] == 2
+    assert orch_a["active"] == 1
+    assert orch_a["waiting"] == 0
+    assert orch_a["problem_count"] == 1
+    assert orch_a["stale_active"] == 1
+    assert orch_a["latest_task_id"] == "orch-a-failed"
+    assert orch_a["state"] == "problem"
+
+
 def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     _login_admin(dashboard_client)
 
@@ -280,6 +327,8 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"Worker Queue" in resp.data
     assert b"Metadata Gaps" in resp.data
     assert b"Loaded task summaries include project and manager metadata." in resp.data
+    assert b"Orchestrations" in resp.data
+    assert b"orch-1" in resp.data
     assert b"Problem Sources" in resp.data
     assert b"Usage By Project And Manager" in resp.data
     assert b"ollama_cloud" in resp.data

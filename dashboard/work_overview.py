@@ -162,6 +162,20 @@ def _counter_rows(counter: Counter, key_name: str, limit: int = 8) -> list[dict[
     return [{key_name: str(key), "count": int(count)} for key, count in counter.most_common(limit)]
 
 
+def _status_group(status: str) -> str:
+    if status in ACTIVE_STATUSES:
+        return "active"
+    if status in WAITING_STATUSES:
+        return "waiting"
+    if status in PROBLEM_STATUSES:
+        return "problem"
+    if status == "completed":
+        return "completed"
+    if status == "cancelled":
+        return "cancelled"
+    return "other"
+
+
 def _record_age(
     freshness: dict[str, Any],
     *,
@@ -327,6 +341,7 @@ def build_work_overview(
     problem_codes = Counter()
     problem_sources = Counter()
     problem_bots = Counter()
+    orchestrations: dict[str, dict[str, Any]] = {}
     freshness = _freshness_summary()
     metadata_health = _metadata_health_summary()
 
@@ -335,6 +350,7 @@ def build_work_overview(
         project_id, project_source = _project_scope_for_task(task)
         manager_id, manager_source = _manager_scope_for_task(task)
         bot_id = str(task.get("bot_id") or "").strip()
+        orchestration_id = str(_safe_metadata(task).get("orchestration_id") or "").strip()
         is_qc = _is_qc_task(task, bot_lookup)
         created_at = _parse_datetime(task.get("created_at"))
         updated_at = _parse_datetime(task.get("updated_at")) or created_at
@@ -382,6 +398,36 @@ def build_work_overview(
             active_age_seconds=active_age_seconds,
             waiting_age_seconds=waiting_age_seconds,
         )
+        if orchestration_id:
+            orchestration = orchestrations.setdefault(
+                orchestration_id,
+                {
+                    "orchestration_id": orchestration_id,
+                    "project_id": project_id,
+                    "manager_id": manager_id,
+                    "task_count": 0,
+                    "status_counts": Counter(),
+                    "stale_active": 0,
+                    "stale_waiting": 0,
+                    "problem_count": 0,
+                    "latest_updated_at": "",
+                    "latest_task_id": "",
+                    "latest_status": "",
+                },
+            )
+            orchestration["task_count"] += 1
+            orchestration["status_counts"][status] += 1
+            if status in PROBLEM_STATUSES:
+                orchestration["problem_count"] += 1
+            if status in ACTIVE_STATUSES and (active_age_seconds is None or active_age_seconds >= STALE_ACTIVE_SECONDS):
+                orchestration["stale_active"] += 1
+            if status in WAITING_STATUSES and (waiting_age_seconds is None or waiting_age_seconds >= STALE_WAITING_SECONDS):
+                orchestration["stale_waiting"] += 1
+            latest_updated_at = str(task.get("updated_at") or "")
+            if latest_updated_at >= str(orchestration.get("latest_updated_at") or ""):
+                orchestration["latest_updated_at"] = latest_updated_at
+                orchestration["latest_task_id"] = str(task.get("id") or "")
+                orchestration["latest_status"] = status
 
         project_bucket = projects_by_id.setdefault(
             project_id,
@@ -545,6 +591,27 @@ def build_work_overview(
     totals_out = dict(totals)
     totals_out["stale_active"] = freshness["stale_active"]
     totals_out["stale_waiting"] = freshness["stale_waiting"]
+    orchestration_rows = []
+    for row in orchestrations.values():
+        status_counts = dict(row["status_counts"])
+        row_out = {
+            **row,
+            "status_counts": status_counts,
+            "active": sum(int(status_counts.get(status, 0)) for status in ACTIVE_STATUSES),
+            "waiting": sum(int(status_counts.get(status, 0)) for status in WAITING_STATUSES),
+            "completed": int(status_counts.get("completed", 0)),
+            "cancelled": int(status_counts.get("cancelled", 0)),
+        }
+        row_out["state"] = _status_group(str(row.get("latest_status") or ""))
+        orchestration_rows.append(row_out)
+    orchestration_rows.sort(
+        key=lambda row: (
+            int(row.get("active", 0)) + int(row.get("waiting", 0)),
+            int(row.get("problem_count", 0)),
+            str(row.get("latest_updated_at") or ""),
+        ),
+        reverse=True,
+    )
     return {
         "totals": totals_out,
         "freshness": freshness,
@@ -558,6 +625,7 @@ def build_work_overview(
             "by_source": _counter_rows(problem_sources, "source"),
             "by_bot": _counter_rows(problem_bots, "bot_id"),
         },
+        "orchestrations": orchestration_rows[:20],
         "recent_problem_tasks": sorted(
             recent_problem_tasks,
             key=lambda item: str(item.get("updated_at") or ""),
