@@ -83,7 +83,9 @@ def test_work_overview_groups_tasks_by_project_and_manager():
                 "status": "failed",
                 "created_at": "2026-08-04T10:04:00+00:00",
                 "updated_at": "2026-08-04T10:05:00+00:00",
-                "metadata": {"project_id": "globeiq", "root_pm_bot_id": "globeiq-pm"},
+                "metadata": {"project_id": "globeiq", "root_pm_bot_id": "globeiq-pm", "source": "repair_lane"},
+                "has_error": True,
+                "error_summary": {"type": "dict", "code": "qc_failed", "message": "Needs repair."},
             },
             {
                 "id": "task-completed",
@@ -129,7 +131,10 @@ def test_work_overview_groups_tasks_by_project_and_manager():
     assert manager["hold"]["reason"] == "quality review"
     assert overview["holds"][0]["id"] == "globeiq::globeiq-pm"
     assert manager["latest_tasks"][0]["age_label"] == "1h 5m"
+    assert any(task["source"] == "repair_lane" for task in manager["latest_tasks"])
     assert overview["recent_problem_tasks"][0]["id"] == "task-failed"
+    assert overview["recent_problem_tasks"][0]["problem_label"] == "qc_failed"
+    assert overview["recent_problem_tasks"][0]["source"] == "repair_lane"
     assert overview["metadata_health"]["missing_project_count"] == 0
     assert overview["metadata_health"]["inferred_manager_count"] == 0
 
@@ -306,6 +311,16 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
                     "updated_at": "2026-08-04T10:03:00+00:00",
                     "metadata": {"project_id": "globeiq", "root_pm_bot_id": "globeiq-pm", "step_id": "quality_gate"},
                 },
+                {
+                    "id": "task-failed",
+                    "bot_id": "lesson-qc",
+                    "status": "failed",
+                    "created_at": "2026-08-04T10:04:00+00:00",
+                    "updated_at": "2026-08-04T10:05:00+00:00",
+                    "metadata": {"project_id": "globeiq", "root_pm_bot_id": "globeiq-pm", "source": "lesson_audit"},
+                    "has_error": True,
+                    "error_summary": {"type": "dict", "code": "browser_evidence_missing"},
+                },
             ]
 
         def list_projects(self, **kwargs):
@@ -363,6 +378,9 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"Stop Run" in resp.data
     assert b"stopOrchestration" in resp.data
     assert b"Problem Sources" in resp.data
+    assert b"Recent Problems" in resp.data
+    assert b"browser_evidence_missing" in resp.data
+    assert b"lesson_audit" in resp.data
     assert b"Usage By Project And Manager" in resp.data
     assert b"Usage Gaps" in resp.data
     assert b"2 missing usage" in resp.data
@@ -378,7 +396,7 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"Lane Details" in resp.data
     assert b"showLaneDetails" in resp.data
     assert b"Work snapshot" in resp.data
-    assert b"2 task summaries loaded" in resp.data
+    assert b"3 task summaries loaded" in resp.data
     assert b"Stop Project" in resp.data
     assert b"Stop Lane" in resp.data
     assert fake.task_calls[0]["statuses"] == ["blocked", "failed", "queued", "retried", "running"]
@@ -389,12 +407,12 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
         api_resp = dashboard_client.get("/api/work/overview")
     assert api_resp.status_code == 200
     data = api_resp.get_json()
-    assert data["attention"]["problem_tasks"] == 0
+    assert data["attention"]["problem_tasks"] == 1
     assert data["attention"]["stale_work"] == 2
     assert data["attention"]["metadata_gaps"] == 0
     assert data["attention"]["worker_issues"] == 2
     assert data["attention"]["usage_gaps"] == 2
-    assert data["attention"]["total"] == 6
+    assert data["attention"]["total"] == 7
     assert data["attention"]["level"] == "critical"
 
 

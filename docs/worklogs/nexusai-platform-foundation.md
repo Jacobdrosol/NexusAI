@@ -6,7 +6,7 @@ Improve NexusAI one scoped platform foundation at a time so it can become the pr
 
 ## Current Scope
 
-Current item: add a Work Overview attention rollup for operator triage.
+Current item: show bounded problem labels and sources in Work Overview problem rows.
 
 ## Completion Criteria For This Item
 
@@ -36,6 +36,7 @@ Current item: add a Work Overview attention rollup for operator triage.
 - Recent work rows include age labels so operators can see whether active, waiting, or problem tasks are fresh.
 - Work Overview identifies task summaries that are missing project metadata or are grouped under inferred managers instead of explicit manager metadata.
 - Work Overview classifies failed/retried work by bounded error label, source, and bot so operators can identify repeated failure modes quickly.
+- Recent problem rows show bounded failure labels and task source or step metadata without loading full task content.
 - Work Overview summarizes loaded orchestration IDs with project, manager, active/waiting/problem/stale counts, latest task status, and total task count.
 - Operators can inspect bounded task details for one orchestration without invoking cancellation preview or loading task content.
 - Lane details show bounded error type, code, and message from non-content task summaries.
@@ -103,6 +104,8 @@ Current item: add a Work Overview attention rollup for operator triage.
 - Added a Usage Gaps card and usage coverage text for measured tasks, missing-usage tasks, and total tokens.
 - Added an attention summary to the Work Overview API after task, worker, metadata, and usage data are loaded.
 - Added a Needs Attention card and Attention Breakdown panel on the Work page.
+- Added step/source metadata to latest manager task summaries.
+- Added bounded problem labels to recent problem task summaries and rendered them in the Recent Problems panel.
 
 ## Validation Plan
 
@@ -135,6 +138,7 @@ Current item: add a Work Overview attention rollup for operator triage.
 - Added Work Overview assertions proving worker health issue counts are computed and rendered.
 - Added Work Overview assertions proving token usage gaps are rendered and missing usage data has a stable API fallback shape.
 - Added Work Overview assertions proving the attention rollup totals and severity level are calculated and rendered.
+- Added Work Overview assertions proving recent problem rows expose bounded failure labels and sources.
 - Run focused pytest coverage for new route, task summaries, and dashboard smoke where applicable.
 - After deployment, measure route render time and verify no fresh 500 or slow-request logs.
 
@@ -161,3 +165,4 @@ Current item: add a Work Overview attention rollup for operator triage.
 - Worker high-load status currently uses a fixed 0.85 load threshold from reported worker metrics. It depends on workers reporting comparable load values.
 - Usage-gap counts depend on the control plane returning `tasks_without_usage`. A zero count means either no gap was reported or the usage endpoint was unavailable and the stable fallback was used with a degraded-data warning if the call failed.
 - The attention rollup is an operator triage signal. Counts can overlap because one underlying task may contribute to multiple signals, such as stale work and missing metadata.
+- Recent problem labels use the same bounded error-summary classifier as the aggregate Problem Sources panel. They are triage labels, not full diagnostic payloads.

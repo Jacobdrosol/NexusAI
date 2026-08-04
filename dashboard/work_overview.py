@@ -493,17 +493,27 @@ def build_work_overview(
         if bot_id:
             manager_bucket["bots"][bot_id] += 1
         if status in ACTIVE_STATUSES | WAITING_STATUSES | PROBLEM_STATUSES:
+            metadata = _safe_metadata(task)
             compact_task = {
                 "id": str(task.get("id") or ""),
                 "bot_id": bot_id,
                 "status": status,
                 "updated_at": str(task.get("updated_at") or ""),
                 "age_label": _age_label(waiting_age_seconds if status in WAITING_STATUSES else active_age_seconds),
-                "orchestration_id": str(_safe_metadata(task).get("orchestration_id") or ""),
+                "orchestration_id": str(metadata.get("orchestration_id") or ""),
+                "step_id": str(metadata.get("step_id") or ""),
+                "source": str(metadata.get("source") or ""),
             }
             manager_bucket["latest_tasks"].append(compact_task)
             if status in PROBLEM_STATUSES:
-                recent_problem_tasks.append(compact_task | {"project_id": project_id, "manager_id": manager_id})
+                recent_problem_tasks.append(
+                    compact_task
+                    | {
+                        "project_id": project_id,
+                        "manager_id": manager_id,
+                        "problem_label": _problem_label(task),
+                    }
+                )
 
     for hold in hold_rows:
         hold_project_id = hold["project_id"]

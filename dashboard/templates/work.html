@@ -286,6 +286,9 @@
                   <span class="badge badge-{{ task.status }}">{{ task.status }}</span>
                   <code>{{ task.id[:8] }}{% if task.id|length > 8 %}...{% endif %}</code>
                   <span class="mini-note">{{ task.age_label }}</span>
+                  {% if task.step_id or task.source %}
+                  <div class="mini-note">{{ task.step_id or task.source }}</div>
+                  {% endif %}
                 </div>
                 {% else %}
                 <span class="empty">No active task rows</span>
@@ -569,8 +572,12 @@
           <small>
             <span class="badge badge-{{ task.status }}">{{ task.status }}</span>
             <code>{{ task.project_id }}</code>
+            {% if task.problem_label %}<code>{{ task.problem_label }}</code>{% endif %}
             {% if task.orchestration_id %}<code>{{ task.orchestration_id[:8] }}...</code>{% endif %}
           </small>
+          {% if task.source or task.step_id %}
+          <small>{{ task.step_id or task.source }}</small>
+          {% endif %}
         </a>
         {% else %}
         <div class="empty">No recent failed or retried tasks in the loaded window.</div>
