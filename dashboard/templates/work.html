@@ -34,6 +34,7 @@
 {% set problem_summary = overview.problem_summary or {} %}
 {% set orchestrations = overview.orchestrations or [] %}
 {% set attention = overview.attention or {} %}
+{% set capacity = overview.capacity or {} %}
 {% set route_evidence = overview.route_evidence or {} %}
 {% set attention_lanes = overview.attention_lanes or [] %}
 {% set queue_pressure_lanes = overview.queue_pressure_lanes or [] %}
@@ -51,6 +52,12 @@
   <div class="card">
     <div class="card-label">Waiting</div>
     <div class="card-value card-yellow">{{ totals.waiting or 0 }}</div>
+  </div>
+  <div class="card">
+    <div class="card-label">Capacity Pressure</div>
+    <div class="card-value {% if capacity.level == 'critical' %}card-red{% elif capacity.level == 'warning' %}card-yellow{% elif capacity.level == 'idle' %}card-blue{% else %}card-green{% endif %}">
+      {{ capacity.pressure_per_online_worker if capacity.pressure_per_online_worker is not none else "none" }}
+    </div>
   </div>
   <div class="card">
     <div class="card-label">Problem</div>
@@ -411,6 +418,24 @@
             <tr><td>Route gaps</td><td>{{ attention.route_gaps or 0 }}</td></tr>
             <tr><td>Worker issues</td><td>{{ attention.worker_issues or 0 }}</td></tr>
             <tr><td>Usage gaps</td><td>{{ attention.usage_gaps or 0 }}</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2 class="panel-title">Capacity Snapshot</h2>
+      <div class="mini-note" style="margin-bottom:0.75rem;">{{ capacity.reason or "capacity unavailable" }}</div>
+      <div class="table-wrap">
+        <table>
+          <tbody>
+            <tr><td>Online workers</td><td>{{ capacity.online_workers or 0 }}</td></tr>
+            <tr><td>Active work</td><td>{{ capacity.active_work or 0 }}</td></tr>
+            <tr><td>Waiting work</td><td>{{ capacity.waiting_work or 0 }}</td></tr>
+            <tr><td>Worker queue depth</td><td>{{ capacity.worker_queue_depth or 0 }}</td></tr>
+            <tr><td>Total pressure</td><td>{{ capacity.total_pressure or 0 }}</td></tr>
+            <tr><td>Active per online worker</td><td>{{ capacity.active_per_online_worker if capacity.active_per_online_worker is not none else "none" }}</td></tr>
+            <tr><td>Waiting per online worker</td><td>{{ capacity.waiting_per_online_worker if capacity.waiting_per_online_worker is not none else "none" }}</td></tr>
           </tbody>
         </table>
       </div>

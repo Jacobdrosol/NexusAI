@@ -492,6 +492,51 @@ def _queue_pressure_lanes(project_summaries: list[dict[str, Any]], limit: int = 
     return rows[:limit]
 
 
+def _capacity_summary(totals: dict[str, Any], workers: dict[str, Any]) -> dict[str, Any]:
+    active_work = _safe_int(totals.get("active"))
+    waiting_work = _safe_int(totals.get("waiting"))
+    online_workers = _safe_int(workers.get("online"))
+    worker_queue_depth = _safe_int(workers.get("queue_depth"))
+    total_pressure = active_work + waiting_work + worker_queue_depth
+    if online_workers:
+        active_per_online_worker = round(active_work / online_workers, 2)
+        waiting_per_online_worker = round(waiting_work / online_workers, 2)
+        pressure_per_online_worker = round(total_pressure / online_workers, 2)
+    else:
+        active_per_online_worker = None
+        waiting_per_online_worker = None
+        pressure_per_online_worker = None
+
+    if total_pressure and not online_workers:
+        level = "critical"
+        reason = "work waiting with no online workers"
+    elif pressure_per_online_worker is not None and pressure_per_online_worker >= 10:
+        level = "critical"
+        reason = "pressure per online worker is critical"
+    elif pressure_per_online_worker is not None and pressure_per_online_worker >= 4:
+        level = "warning"
+        reason = "pressure per online worker is elevated"
+    elif total_pressure:
+        level = "ready"
+        reason = "capacity available"
+    else:
+        level = "idle"
+        reason = "no active or queued pressure"
+
+    return {
+        "level": level,
+        "reason": reason,
+        "active_work": active_work,
+        "waiting_work": waiting_work,
+        "online_workers": online_workers,
+        "worker_queue_depth": worker_queue_depth,
+        "total_pressure": total_pressure,
+        "active_per_online_worker": active_per_online_worker,
+        "waiting_per_online_worker": waiting_per_online_worker,
+        "pressure_per_online_worker": pressure_per_online_worker,
+    }
+
+
 def build_work_overview(
     *,
     tasks: list[dict[str, Any]] | None,
@@ -814,6 +859,7 @@ def build_work_overview(
     totals_out = dict(totals)
     totals_out["stale_active"] = freshness["stale_active"]
     totals_out["stale_waiting"] = freshness["stale_waiting"]
+    capacity_summary = _capacity_summary(totals_out, worker_summary)
     orchestration_rows = []
     for row in orchestrations.values():
         status_counts = dict(row["status_counts"])
@@ -840,6 +886,7 @@ def build_work_overview(
         "freshness": freshness,
         "projects": project_summaries,
         "workers": worker_summary,
+        "capacity": capacity_summary,
         "holds": hold_rows,
         "metadata_health": metadata_health,
         "route_evidence": route_evidence,

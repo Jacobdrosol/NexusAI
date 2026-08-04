@@ -126,6 +126,14 @@ def test_work_overview_groups_tasks_by_project_and_manager():
     assert overview["workers"]["disabled"] == 1
     assert overview["workers"]["queued_workers"] == 2
     assert overview["workers"]["issue_count"] == 3
+    assert overview["capacity"]["level"] == "ready"
+    assert overview["capacity"]["reason"] == "capacity available"
+    assert overview["capacity"]["active_work"] == 1
+    assert overview["capacity"]["waiting_work"] == 1
+    assert overview["capacity"]["online_workers"] == 2
+    assert overview["capacity"]["worker_queue_depth"] == 4
+    assert overview["capacity"]["total_pressure"] == 6
+    assert overview["capacity"]["pressure_per_online_worker"] == 3.0
     project = overview["projects"][0]
     assert project["project_id"] == "globeiq"
     assert project["project_name"] == "GlobeIQ"
@@ -224,6 +232,34 @@ def test_work_overview_surfaces_metadata_routing_gaps():
     assert any(sample["manager_source"] == "metadata.parent_task_id" for sample in health["sample_tasks"])
     assert any(sample["manager_source"] == "missing" for sample in health["sample_tasks"])
     assert any(project["project_id"] == "unassigned" for project in overview["projects"])
+
+
+def test_work_overview_marks_capacity_critical_when_work_has_no_online_workers():
+    overview = build_work_overview(
+        projects=[{"id": "globeiq", "name": "GlobeIQ"}],
+        bots=[],
+        workers=[
+            {"id": "worker-offline", "status": "offline", "enabled": True, "metrics": {"queue_depth": 2}},
+        ],
+        tasks=[
+            {
+                "id": "queued-task",
+                "bot_id": "lesson-worker",
+                "status": "queued",
+                "created_at": "2026-08-04T10:00:00+00:00",
+                "metadata": {"project_id": "globeiq", "root_pm_bot_id": "globeiq-pm"},
+            }
+        ],
+        now=datetime(2026, 8, 4, 10, 5, tzinfo=timezone.utc),
+    )
+
+    assert overview["capacity"]["level"] == "critical"
+    assert overview["capacity"]["reason"] == "work waiting with no online workers"
+    assert overview["capacity"]["online_workers"] == 0
+    assert overview["capacity"]["waiting_work"] == 1
+    assert overview["capacity"]["worker_queue_depth"] == 2
+    assert overview["capacity"]["total_pressure"] == 3
+    assert overview["capacity"]["pressure_per_online_worker"] is None
 
 
 def test_work_overview_groups_problem_sources_from_error_summaries():
@@ -453,6 +489,10 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"Review Queue" in resp.data
     assert b"Stop Queue Lane" in resp.data
     assert b"stale waiting" in resp.data
+    assert b"Capacity Pressure" in resp.data
+    assert b"Capacity Snapshot" in resp.data
+    assert b"capacity available" in resp.data
+    assert b"Total pressure" in resp.data
     assert b"GlobeIQ" in resp.data
     assert b"GlobeIQ Manager" in resp.data
     assert b"lesson-writer" in resp.data

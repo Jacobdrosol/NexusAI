@@ -6,7 +6,7 @@ Improve NexusAI one scoped platform foundation at a time so it can become the pr
 
 ## Current Scope
 
-Current item: show prioritized project-manager queue-pressure lanes in Work Overview.
+Current item: show aggregate capacity pressure in Work Overview.
 
 ## Completion Criteria For This Item
 
@@ -22,6 +22,7 @@ Current item: show prioritized project-manager queue-pressure lanes in Work Over
 - Work Overview lists the project-manager lanes that need attention first, with bounded reason labels and active/waiting counts.
 - Attention Lanes expose direct bounded Details, Hold/Release, and Stop controls for the affected project-manager lane.
 - Work Overview shows prioritized queue-pressure lanes so operators can identify project-manager queues building active, waiting, blocked, problem, stale, or held pressure.
+- Work Overview shows aggregate capacity pressure from active work, waiting work, online workers, and worker queue depth.
 - Metered LLM work can be capped by project and manager at admission time.
 - Metered LLM dispatch reserves project and manager budgets so queued work cannot burst past configured limits.
 - Admins can view and update token-governor limits from a dedicated Settings tab without editing env values.
@@ -123,6 +124,8 @@ Current item: show prioritized project-manager queue-pressure lanes in Work Over
 - Attention Lanes distinguish manager-lane holds from inherited project holds so a project-level hold is not incorrectly released as a manager-lane hold.
 - Added a Queue Pressure panel derived from the loaded task snapshot with per-lane active, waiting, queued, blocked, problem, stale-waiting, and hold signals.
 - Queue Pressure rows reuse lane review, hold/release, and stop actions while preserving project-hold scope.
+- Added a Capacity Pressure card and Capacity Snapshot panel showing active/waiting work, online workers, worker queue depth, total pressure, and per-online-worker ratios.
+- Capacity pressure flags work with no online workers as critical instead of making operators infer that from separate worker and queue tables.
 
 ## Validation Plan
 
@@ -163,6 +166,7 @@ Current item: show prioritized project-manager queue-pressure lanes in Work Over
 - Added Work Overview assertions proving attention lanes identify the affected project-manager lane and bounded reason labels.
 - Added Work Overview assertions proving Attention Lanes render direct review/stop actions and preserve project-hold scope.
 - Added Work Overview assertions proving queue-pressure lanes compute queue state and render direct review/stop actions.
+- Added Work Overview assertions proving capacity pressure ratios are computed and work-without-online-workers is classified as critical.
 - Run focused pytest coverage for new route, task summaries, and dashboard smoke where applicable.
 - After deployment, measure route render time and verify no fresh 500 or slow-request logs.
 
@@ -196,3 +200,4 @@ Current item: show prioritized project-manager queue-pressure lanes in Work Over
 - Attention Lanes are based on the bounded loaded Work Overview task windows. They prioritize operator triage for the visible snapshot and are not a full historical audit.
 - Attention Lane controls reuse the existing scoped Work Overview lane APIs. Stop previews and control-plane cancellation remain authoritative for destructive actions.
 - Queue Pressure is calculated from the bounded loaded Work Overview task windows. It is an operator pressure snapshot, not a full historical backlog inventory.
+- Capacity pressure is a coarse operational signal from bounded task and worker snapshots. It does not replace provider-level concurrency, host resource, or token-governor controls.
