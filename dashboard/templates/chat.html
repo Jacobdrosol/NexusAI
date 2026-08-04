@@ -124,6 +124,30 @@
   height: 36px;
   padding: 0 0.6rem;
 }
+.chat-stream-btn-inline[disabled],
+.chat-attachment-trigger[disabled] {
+  cursor: wait;
+  opacity: 0.72;
+}
+.chat-composer-status {
+  margin-top: 0.5rem;
+  border-radius: 6px;
+  padding: 0.45rem 0.6rem;
+  font-size: 0.86rem;
+}
+.chat-composer-status[hidden] {
+  display: none;
+}
+.chat-composer-status.error {
+  border: 1px solid rgba(248, 113, 113, 0.34);
+  background: rgba(127, 29, 29, 0.28);
+  color: #fecaca;
+}
+.chat-composer-status.info {
+  border: 1px solid rgba(96, 165, 250, 0.28);
+  background: rgba(30, 64, 175, 0.18);
+  color: #bfdbfe;
+}
 .chat-attachment-hint {
   margin-top: 0.45rem;
 }
@@ -513,6 +537,7 @@
           </div>
         </div>
         <div id="chat-attachment-list" class="chat-attachment-list" aria-live="polite"></div>
+        <div id="chat-composer-status" class="chat-composer-status" role="status" aria-live="polite" hidden></div>
         <div class="mini-note chat-attachment-hint">Drag files here or use +. Max {{ chat_attachment_limits.max_files }} files, 1 GB total.</div>
         <div class="chat-compose-footer">
           <label class="context-item chat-message-tools-toggle">
@@ -726,11 +751,64 @@ let lastAssignmentReviewResult = null;
 let lastAssignmentRecapText = '';
 let lastAssignmentRecapOrchestrationId = '';
 let activeAssignmentPreview = null;
+let chatSendInFlight = false;
 
 function scrollMessagesToLatest() {
   const container = document.getElementById('messages');
   if (!container) return;
   container.scrollTop = container.scrollHeight;
+}
+
+function isMessagesNearBottom(offset = 160) {
+  const container = document.getElementById('messages');
+  if (!container) return true;
+  return container.scrollHeight - container.scrollTop - container.clientHeight <= offset;
+}
+
+function shouldAutoScrollMessages(role) {
+  return String(role || '') === 'user' || isMessagesNearBottom();
+}
+
+function removeTransientMessage(el) {
+  if (!el || !el.isConnected) return;
+  el.remove();
+}
+
+function showChatComposerStatus(message, kind = 'error') {
+  const status = document.getElementById('chat-composer-status');
+  if (!status) return;
+  status.textContent = message || '';
+  status.className = 'chat-composer-status ' + (kind === 'info' ? 'info' : 'error');
+  status.hidden = !message;
+}
+
+function clearChatComposerStatus() {
+  showChatComposerStatus('', 'info');
+}
+
+function setChatComposerBusy(isBusy) {
+  chatSendInFlight = !!isBusy;
+  const form = document.getElementById('chat-send-form');
+  if (!form) return;
+  form.querySelectorAll('.chat-stream-btn-inline').forEach((btn) => {
+    btn.disabled = !!isBusy;
+    btn.textContent = isBusy ? 'Sending' : 'Send';
+  });
+  const attachmentTrigger = document.getElementById('chat-attachment-trigger');
+  if (attachmentTrigger) attachmentTrigger.disabled = !!isBusy;
+}
+
+function clearAcceptedComposerDraft(form) {
+  if (!form) return;
+  const textarea = form.querySelector('textarea[name=content]');
+  if (textarea) {
+    textarea.value = '';
+    resizeChatTextarea(textarea);
+  }
+  const codingToggle = document.getElementById('enable-inline-coding-message');
+  if (codingToggle) codingToggle.checked = false;
+  pendingComposerAttachments = [];
+  renderComposerAttachments();
 }
 
 function buildChatUrl(params = {}) {
@@ -1550,6 +1628,7 @@ function getMessageRawContent(bodyEl) {
 function appendMessage(role, content, id='temp-' + Date.now(), meta=null) {
   const container = document.getElementById('messages');
   if (!container) return;
+  const shouldScroll = shouldAutoScrollMessages(role);
   const empty = container.querySelector('.empty');
   if (empty) empty.remove();
   const div = document.createElement('div');
@@ -1581,7 +1660,7 @@ function appendMessage(role, content, id='temp-' + Date.now(), meta=null) {
   `;
   renderMessageBody(div.querySelector('.message-body'), content);
   container.appendChild(div);
-  container.scrollTop = container.scrollHeight;
+  if (shouldScroll) scrollMessagesToLatest();
   return div;
 }
 
@@ -1597,12 +1676,14 @@ function appendPendingAssistantToken(text, pendingEl = null) {
   if (!pending) return;
   const bodyEl = pending.querySelector('.message-body');
   if (!bodyEl) return;
+  const shouldScroll = isMessagesNearBottom();
   if (pending.dataset.streamingStarted !== 'true') {
     bodyEl.innerHTML = '';
     pending.dataset.streamingStarted = 'true';
   }
   const current = getMessageRawContent(bodyEl);
   renderMessageBody(bodyEl, current + text);
+  if (shouldScroll) scrollMessagesToLatest();
 }
 
 function isStreamingMessage(message) {
@@ -1766,7 +1847,7 @@ function processChatStreamEventBlock(block, pending, tempUser) {
       upsertMessage(parsed, pending);
     } else if (eventType === 'error') {
       setPendingAssistantStatus(parsed.error || 'Stream error', pending);
-      alert(parsed.error || 'Stream error');
+      showChatComposerStatus(parsed.error || 'Stream error');
       return {sawDone: true};
     } else if (eventType === 'done') {
       setTimeout(refreshMessages, 150);
@@ -1954,14 +2035,17 @@ function upsertTaskEvent(task) {
 async function sendMessage(streamMode) {
   const form = document.getElementById('chat-send-form');
   if (!form || !selectedConversationId) return;
+  if (chatSendInFlight) return;
   setTaskEventsVisible(false);
+  clearChatComposerStatus();
   const fd = new FormData(form);
   const content = (fd.get('content') || '').toString().trim();
   if (!content && !pendingComposerAttachments.length) return;
   if (pendingComposerAttachments.some((item) => String(item?.kind || '') === 'image') && !activeBotSupportsImages()) {
-    alert('The selected chat bot model does not support image attachments. Switch bots or remove the screenshots.');
+    showChatComposerStatus('The selected chat bot model does not support image attachments. Switch bots or remove the screenshots.');
     return;
   }
+  setChatComposerBusy(true);
 
   const payload = {
     ...(function() {
@@ -1990,15 +2074,6 @@ async function sendMessage(streamMode) {
     if (pending) {
       pending.dataset.pendingAssistant = 'true';
     }
-    const textarea = form.querySelector('textarea[name=content]');
-    if (textarea) {
-      textarea.value = '';
-      resizeChatTextarea(textarea);
-    }
-    const codingToggle = document.getElementById('enable-inline-coding-message');
-    if (codingToggle) codingToggle.checked = false;
-    pendingComposerAttachments = [];
-    renderComposerAttachments();
     startMessagePolling();
     try {
       const res = await fetch('/api/chat/messages', {
@@ -2008,6 +2083,8 @@ async function sendMessage(streamMode) {
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
+        removeTransientMessage(tempUser);
+        removeTransientMessage(pending);
         if (pending) {
           renderMessageBody(
             pending.querySelector('.message-body'),
@@ -2024,17 +2101,18 @@ async function sendMessage(streamMode) {
         });
         const error = (data.error || '').toString().trim();
         if (error) {
-          alert(error);
+          showChatComposerStatus(error);
         }
         return;
       }
       const data = await res.json();
+      clearAcceptedComposerDraft(form);
       if (data.user_message) upsertMessage(data.user_message, tempUser);
       if (data.assistant_message) upsertMessage(data.assistant_message, pending);
       if (data.mode === 'assign') {
         const orchestrationId = data.assignment?.orchestration_id || 'unknown';
         closeAssignModal();
-        alert('Assignment queued: ' + orchestrationId);
+        showChatComposerStatus('Assignment queued: ' + orchestrationId, 'info');
         refreshMessages().catch(() => {});
         pollForAssignmentSummary(orchestrationId).catch(() => {});
         return;
@@ -2042,6 +2120,8 @@ async function sendMessage(streamMode) {
       setTimeout(refreshMessages, 250);
       return;
     } catch (_) {
+      removeTransientMessage(tempUser);
+      removeTransientMessage(pending);
       if (pending) {
         renderMessageBody(
           pending.querySelector('.message-body'),
@@ -2055,7 +2135,10 @@ async function sendMessage(streamMode) {
           'Connection dropped before the response finished. If saved, the reply will appear after refresh.',
         );
       }
+      showChatComposerStatus('Connection issue while sending. Your draft is still in the composer.');
       return;
+    } finally {
+      setChatComposerBusy(false);
     }
   }
 
@@ -2068,11 +2151,6 @@ async function sendMessage(streamMode) {
   if (pending) {
     pending.dataset.pendingAssistant = 'true';
   }
-  form.reset();
-  resizeChatTextarea(form.querySelector('textarea[name=content]'));
-  syncSendBotSelection();
-  pendingComposerAttachments = [];
-  renderComposerAttachments();
   let sawDone = false;
   try {
     const res = await fetch('/api/chat/stream', {
@@ -2082,9 +2160,14 @@ async function sendMessage(streamMode) {
     });
     if (!res.ok || !res.body) {
       const data = await res.json().catch(() => ({}));
-      alert(data.error || 'Stream send failed');
+      removeTransientMessage(tempUser);
+      removeTransientMessage(pending);
+      showChatComposerStatus(data.error || 'Stream send failed');
+      setChatComposerBusy(false);
       return;
     }
+    clearAcceptedComposerDraft(form);
+    syncSendBotSelection();
 
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
@@ -2110,8 +2193,17 @@ async function sendMessage(streamMode) {
     }
   } catch (_) {
     setPendingAssistantStatus('Stream connection failed. Rechecking saved response...', pending);
+    showChatComposerStatus('Stream connection failed. Rechecking saved response...', 'info');
   }
-  if (!sawDone) {
+  if (sawDone) {
+    const recovered = await refreshMessagesUntilSettled(6, 750);
+    if (!recovered && pending && pending.isConnected && pending.dataset.pendingAssistant === 'true') {
+      delete pending.dataset.pendingAssistant;
+      delete pending.dataset.streamingStarted;
+      setPendingAssistantStatus('Response stream finished, but no saved assistant message was returned. Check backend logs before retrying.', pending);
+      showChatComposerStatus('Response stream finished without a saved assistant message.', 'info');
+    }
+  } else {
     setPendingAssistantStatus('Stream closed unexpectedly. Rechecking saved response...', pending);
     const recovered = await refreshMessagesUntilSettled();
     if (!recovered) {
@@ -2129,6 +2221,7 @@ async function sendMessage(streamMode) {
       }).catch(() => {});
     }
   }
+  setChatComposerBusy(false);
 }
 
 document.getElementById('chat-send-form')?.addEventListener('submit', function(e) {

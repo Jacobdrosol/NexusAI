@@ -1940,19 +1940,23 @@ select.form-control {
 
   .page-chat .chat-split-grid {
     grid-template-columns: 1fr;
+    grid-template-rows: auto auto;
     gap: 0;
     overflow: visible;
   }
 
   .page-chat .chat-panel-side {
-    max-height: 38vh;
+    grid-row: 2;
+    max-height: 28vh;
     border-right: 0;
+    border-top: 1px solid #303030;
     border-bottom: 1px solid #303030;
     overflow-y: auto;
   }
 
   .page-chat .chat-panel-main {
-    min-height: 58vh;
+    grid-row: 1;
+    min-height: calc(100dvh - 11rem);
     height: auto;
   }
 
@@ -1972,13 +1976,13 @@ select.form-control {
   }
 
   .page-chat .chat-messages {
-    min-height: 42vh;
-    max-height: 54vh;
+    min-height: 34vh;
+    max-height: none;
     padding: 0.75rem 0.65rem 1rem;
   }
 
   .page-chat .chat-composer {
-    position: static;
+    position: sticky;
     border-top: 0;
     padding: 0.45rem 0.65rem 0.75rem;
   }

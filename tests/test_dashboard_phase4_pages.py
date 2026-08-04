@@ -4,6 +4,7 @@ import bcrypt
 import io
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 from unittest.mock import patch
 
 
@@ -352,6 +353,15 @@ def test_chat_page_loads_when_logged_in(dashboard_client):
     assert b"CHAT_ATTACHMENT_MAX_FILES" in resp.data
     assert b"CHAT_ATTACHMENT_MAX_TOTAL_BYTES" in resp.data
     assert b"scrollMessagesToLatest" in resp.data
+
+
+def test_chat_mobile_layout_prioritizes_active_conversation():
+    css = Path("dashboard/static/style.css").read_text(encoding="utf-8")
+    assert ".page-chat .chat-panel-main" in css
+    assert "grid-row: 1;" in css
+    assert ".page-chat .chat-panel-side" in css
+    assert "grid-row: 2;" in css
+    assert "min-height: calc(100dvh - 11rem);" in css
 
 
 def test_chat_page_handles_legacy_selected_conversation_shapes(dashboard_client):
@@ -1208,6 +1218,11 @@ def test_chat_page_supports_attachment_picker(dashboard_client):
     assert resp.status_code == 200
     assert b'id="chat-attachment-input"' in resp.data
     assert b'Attach Files' in resp.data
+    assert b'id="chat-composer-status"' in resp.data
+    assert b"chatSendInFlight" in resp.data
+    assert b"showChatComposerStatus(data.error || 'Stream send failed')" in resp.data
+    assert b"clearAcceptedComposerDraft(form)" in resp.data
+    assert b"Response stream finished without a saved assistant message." in resp.data
 
 
 def test_chat_message_api_surfaces_control_plane_error(dashboard_client):
