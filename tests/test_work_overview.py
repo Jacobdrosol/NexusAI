@@ -694,6 +694,12 @@ def test_work_orchestration_api_returns_bounded_run_task_details(dashboard_clien
                         "root_pm_bot_id": "manager-a",
                         "orchestration_id": "orch-target",
                         "step_id": "lesson_write",
+                        "execution_provenance": {
+                            "backend_type": "browser",
+                            "provider": "browser",
+                            "model": "browser-ui",
+                            "worker_id": "browser-worker-01",
+                        },
                     },
                 },
                 {
@@ -722,6 +728,7 @@ def test_work_orchestration_api_returns_bounded_run_task_details(dashboard_clien
     fake = FakeCP()
     with patch("dashboard.routes.work.get_cp_client", return_value=fake):
         resp = dashboard_client.get("/api/work/orchestration?orchestration_id=orch-target&limit=1")
+        all_resp = dashboard_client.get("/api/work/orchestration?orchestration_id=orch-target&limit=10")
 
     assert resp.status_code == 200
     data = resp.get_json()
@@ -736,6 +743,12 @@ def test_work_orchestration_api_returns_bounded_run_task_details(dashboard_clien
     assert data["tasks"][0]["manager_id"] == "manager-a"
     assert data["tasks"][0]["source"] == "lesson_audit"
     assert data["tasks"][0]["error_code"] == "browser_evidence_missing"
+    assert data["tasks"][0]["worker_id"] == ""
+    running = next(task for task in all_resp.get_json()["tasks"] if task["id"] == "older-running")
+    assert running["worker_id"] == "browser-worker-01"
+    assert running["backend_type"] == "browser"
+    assert running["provider"] == "browser"
+    assert running["model"] == "browser-ui"
     assert fake.request["orchestration_id"] == "orch-target"
     assert fake.request["include_content"] is False
     assert fake.request["limit"] == 1000
@@ -872,6 +885,12 @@ def test_work_lane_api_returns_bounded_project_manager_task_details(dashboard_cl
                         "root_pm_bot_id": "manager-a",
                         "orchestration_id": "orch-1",
                         "step_id": "lesson_write",
+                        "execution_provenance": {
+                            "backend_type": "browser",
+                            "provider": "browser",
+                            "model": "browser-ui",
+                            "worker_id": "browser-worker-01",
+                        },
                     },
                 },
                 {
@@ -903,6 +922,7 @@ def test_work_lane_api_returns_bounded_project_manager_task_details(dashboard_cl
 
     with patch("dashboard.routes.work.get_cp_client", return_value=FakeCP()):
         resp = dashboard_client.get("/api/work/lane?project_id=globeiq&manager_id=manager-a&limit=1")
+        all_resp = dashboard_client.get("/api/work/lane?project_id=globeiq&manager_id=manager-a&limit=10")
 
     assert resp.status_code == 200
     data = resp.get_json()
@@ -916,6 +936,13 @@ def test_work_lane_api_returns_bounded_project_manager_task_details(dashboard_cl
     assert data["tasks"][0]["error_type"] == "dict"
     assert data["tasks"][0]["error_code"] == "qc_failed"
     assert data["tasks"][0]["error_message"] == "needs repair"
+    assert data["tasks"][0]["worker_id"] == ""
+    all_tasks = all_resp.get_json()
+    running = next(task for task in all_tasks["tasks"] if task["id"] == "running-target")
+    assert running["worker_id"] == "browser-worker-01"
+    assert running["backend_type"] == "browser"
+    assert running["provider"] == "browser"
+    assert running["model"] == "browser-ui"
 
 
 def test_work_lane_api_rejects_missing_project_or_invalid_limit(dashboard_client):

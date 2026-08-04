@@ -6,7 +6,7 @@ Improve NexusAI one scoped platform foundation at a time so it can become the pr
 
 ## Current Scope
 
-Current item: show Work Overview route-coverage gaps without treating queued work as a worker failure.
+Current item: show worker route evidence in Work Overview lane and run drilldowns.
 
 ## Completion Criteria For This Item
 
@@ -43,6 +43,7 @@ Current item: show Work Overview route-coverage gaps without treating queued wor
 - Work Overview summarizes loaded orchestration IDs with project, manager, active/waiting/problem/stale counts, latest task status, and total task count.
 - Operators can inspect bounded task details for one orchestration without invoking cancellation preview or loading task content.
 - Lane details show bounded error type, code, and message from non-content task summaries.
+- Lane and orchestration drilldowns show bounded worker/backend route evidence from task execution provenance without loading payload or result content.
 - Page render uses bounded control-plane calls and does not reintroduce slow navigation.
 - Focused tests cover grouping behavior and dashboard rendering.
 - Documentation describes the purpose, data flow, and limitations.
@@ -113,6 +114,7 @@ Current item: show Work Overview route-coverage gaps without treating queued wor
 - Added hold impact details to held project badges and manager hold cells.
 - Added per-lane worker route evidence with attributed task counts, unknown-worker counts, top worker IDs, and latest task worker labels when task metadata includes execution provenance.
 - Added top-level Route Gaps and Route Coverage signals so operators can distinguish missing execution provenance on active/problem work from queued or blocked work that has not started.
+- Added worker/backend/provider/model fields to lane and orchestration drilldown task rows when execution provenance is present.
 
 ## Validation Plan
 
@@ -149,6 +151,7 @@ Current item: show Work Overview route-coverage gaps without treating queued wor
 - Added Work Overview assertions proving hold impact counts, creator, and creation time are preserved and rendered.
 - Added Work Overview assertions proving worker route evidence is preserved, rendered, and missing worker attribution is shown explicitly.
 - Added Work Overview assertions proving route-gap attention counts only active/problem worker-attribution gaps while waiting unknown rows remain visible separately.
+- Added Work Overview API assertions proving lane and orchestration drilldowns expose execution-provenance worker/backend fields without changing their bounded summary behavior.
 - Run focused pytest coverage for new route, task summaries, and dashboard smoke where applicable.
 - After deployment, measure route render time and verify no fresh 500 or slow-request logs.
 
