@@ -146,6 +146,7 @@ Current item: make Work Overview bot usage pressure actionable with bot hourly c
 - Added Token Governor Queue Caps visibility to Work Overview so loaded queued tasks are compared against configured bot, project, and manager queued-task caps.
 - Added age and stale markers to Work Overview lane and orchestration drilldowns so operators can quickly identify old running, queued, or blocked task rows.
 - Added bounded lane-level problem labels to project-manager rows so recurring failure reasons are visible before opening task drilldowns.
+- Added latest-update freshness signals to global, project, and project-manager summaries so operators can see whether loaded work has moved recently.
 
 ## Validation Plan
 
@@ -186,6 +187,7 @@ Current item: make Work Overview bot usage pressure actionable with bot hourly c
 - Added Work Overview tests proving token-governor queue cap pressure is returned by the API and rendered when bot and manager queues reach configured caps.
 - Added Work Overview API and page tests proving drilldown task rows include age basis, age seconds, stale flags, and an Age column.
 - Added Work Overview builder and page tests proving project-manager rows expose top problem labels such as QC or browser evidence failures.
+- Added Work Overview builder and page tests proving latest-update timestamps and age labels are calculated and rendered.
 - Added Work Overview API assertions proving lane and orchestration drilldowns expose execution-provenance worker/backend fields without changing their bounded summary behavior.
 - Added Work Overview assertions proving attention lanes identify the affected project-manager lane and bounded reason labels.
 - Added Work Overview assertions proving Attention Lanes render direct review/stop actions and preserve project-hold scope.

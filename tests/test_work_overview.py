@@ -121,6 +121,8 @@ def test_work_overview_groups_tasks_by_project_and_manager():
     assert overview["totals"]["stale_waiting"] == 1
     assert overview["freshness"]["oldest_active_label"] == "1h 9m"
     assert overview["freshness"]["oldest_waiting_label"] == "1h 8m"
+    assert overview["freshness"]["latest_updated_at"] == "2026-08-04T10:05:00+00:00"
+    assert overview["freshness"]["latest_update_label"] == "1h 5m"
     assert overview["workers"]["queue_depth"] == 4
     assert overview["workers"]["online"] == 2
     assert overview["workers"]["offline_enabled"] == 1
@@ -150,6 +152,8 @@ def test_work_overview_groups_tasks_by_project_and_manager():
     assert manager["problem_labels"] == [{"code": "qc_failed", "count": 1}]
     assert manager["freshness"]["stale_active"] == 1
     assert manager["freshness"]["stale_waiting"] == 1
+    assert manager["freshness"]["latest_updated_at"] == "2026-08-04T10:05:00+00:00"
+    assert manager["freshness"]["latest_update_label"] == "1h 5m"
     assert manager["held"] is True
     assert manager["hold"]["reason"] == "quality review"
     assert manager["route_evidence"]["attributed_task_count"] == 1
@@ -551,6 +555,9 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"ollama_cloud" in resp.data
     assert b"qwen3.5:cloud" in resp.data
     assert b"Stale Work" in resp.data
+    assert b"Latest Update" in resp.data
+    assert b"Latest update" in resp.data
+    assert b"latest " in resp.data
     assert b"Oldest" in resp.data
     assert b"Held Lanes" in resp.data
     assert b"operator hold" in resp.data

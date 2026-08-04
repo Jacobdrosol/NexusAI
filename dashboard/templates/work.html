@@ -37,6 +37,7 @@
 {% set orchestrations = overview.orchestrations or [] %}
 {% set attention = overview.attention or {} %}
 {% set capacity = overview.capacity or {} %}
+{% set freshness = overview.freshness or {} %}
 {% set route_evidence = overview.route_evidence or {} %}
 {% set attention_lanes = overview.attention_lanes or [] %}
 {% set queue_pressure_lanes = overview.queue_pressure_lanes or [] %}
@@ -87,6 +88,12 @@
     </div>
   </div>
   <div class="card">
+    <div class="card-label">Latest Update</div>
+    <div class="card-value {% if freshness.latest_update_label == 'none' %}card-blue{% else %}card-green{% endif %}">
+      {{ freshness.latest_update_label or "none" }}
+    </div>
+  </div>
+  <div class="card">
     <div class="card-label">Metadata Gaps</div>
     <div class="card-value {% if metadata_gap_count %}card-yellow{% else %}card-green{% endif %}">{{ metadata_gap_count }}</div>
   </div>
@@ -134,6 +141,7 @@
 <div class="mini-note" style="margin:-0.25rem 0 1rem;">
   Work snapshot: {{ task_snapshot.merged_rows or 0 }} task summaries loaded
   ({{ task_snapshot.active_rows or 0 }} active/problem, {{ task_snapshot.recent_rows or 0 }} recent).
+  Latest update {{ freshness.latest_update_label or "none" }}{% if freshness.latest_updated_at %} at {{ freshness.latest_updated_at }}{% endif %}.
   {% if task_snapshot.active_window_at_limit or task_snapshot.recent_window_at_limit %}
   <span class="badge badge-warning">window at limit</span>
   {% endif %}
@@ -325,6 +333,7 @@
           {% if (project.freshness.stale_active or 0) + (project.freshness.stale_waiting or 0) > 0 %}
           <span class="badge badge-failed">{{ (project.freshness.stale_active or 0) + (project.freshness.stale_waiting or 0) }} stale</span>
           {% endif %}
+          <span class="badge badge-ready">latest {{ project.freshness.latest_update_label or "none" }}</span>
           {% if project.held %}
           <span class="badge badge-yellow">held</span>
           {% if project.hold %}
@@ -403,6 +412,7 @@
                 {% endif %}
               </td>
               <td>
+                <div class="mini-note">latest {{ manager.freshness.latest_update_label or "none" }}</div>
                 <div class="mini-note">active {{ manager.freshness.oldest_active_label or "none" }}</div>
                 <div class="mini-note">waiting {{ manager.freshness.oldest_waiting_label or "none" }}</div>
               </td>

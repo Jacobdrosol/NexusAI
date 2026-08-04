@@ -107,6 +107,9 @@ def _freshness_summary() -> dict[str, Any]:
     return {
         "stale_active": 0,
         "stale_waiting": 0,
+        "latest_updated_at": "",
+        "latest_update_age_seconds": None,
+        "latest_update_label": "none",
         "oldest_active_age_seconds": None,
         "oldest_active_label": "none",
         "oldest_waiting_age_seconds": None,
@@ -216,6 +219,23 @@ def _record_age(
                 freshness["oldest_waiting_label"] = _age_label(waiting_age_seconds)
         if waiting_age_seconds is None or waiting_age_seconds >= STALE_WAITING_SECONDS:
             freshness["stale_waiting"] += 1
+
+
+def _record_latest_update(
+    freshness: dict[str, Any],
+    *,
+    updated_at: datetime | None,
+    raw_updated_at: Any,
+    now: datetime,
+) -> None:
+    if updated_at is None:
+        return
+    current_updated_at = _parse_datetime(freshness.get("latest_updated_at"))
+    if current_updated_at is None or updated_at >= current_updated_at:
+        age_seconds = _age_seconds(updated_at, now)
+        freshness["latest_updated_at"] = str(raw_updated_at or updated_at.isoformat())
+        freshness["latest_update_age_seconds"] = age_seconds
+        freshness["latest_update_label"] = _age_label(age_seconds)
 
 
 def _is_qc_task(task: dict[str, Any], bot_lookup: dict[str, dict[str, Any]]) -> bool:
@@ -620,6 +640,12 @@ def build_work_overview(
             active_age_seconds=active_age_seconds,
             waiting_age_seconds=waiting_age_seconds,
         )
+        _record_latest_update(
+            freshness,
+            updated_at=updated_at,
+            raw_updated_at=task.get("updated_at"),
+            now=now_utc,
+        )
         if orchestration_id:
             orchestration = orchestrations.setdefault(
                 orchestration_id,
@@ -679,6 +705,12 @@ def build_work_overview(
             active_age_seconds=active_age_seconds,
             waiting_age_seconds=waiting_age_seconds,
         )
+        _record_latest_update(
+            project_bucket["freshness"],
+            updated_at=updated_at,
+            raw_updated_at=task.get("updated_at"),
+            now=now_utc,
+        )
 
         manager_key = (project_id, manager_id)
         manager_bucket = manager_buckets.setdefault(
@@ -713,6 +745,12 @@ def build_work_overview(
             status=status,
             active_age_seconds=active_age_seconds,
             waiting_age_seconds=waiting_age_seconds,
+        )
+        _record_latest_update(
+            manager_bucket["freshness"],
+            updated_at=updated_at,
+            raw_updated_at=task.get("updated_at"),
+            now=now_utc,
         )
         if bot_id:
             manager_bucket["bots"][bot_id] += 1
