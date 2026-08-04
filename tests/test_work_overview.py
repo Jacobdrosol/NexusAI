@@ -5,7 +5,7 @@ from unittest.mock import patch
 from dashboard.work_overview import build_work_overview
 
 
-def _login_admin(dashboard_client):
+def _login_user(dashboard_client, *, email="admin@test.com", role="admin"):
     from dashboard.db import get_db
     from dashboard.models import User
 
@@ -13,18 +13,27 @@ def _login_admin(dashboard_client):
     password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
     db = get_db()
     try:
-        if db.query(User).count() == 0:
-            db.add(User(email="admin@test.com", password_hash=password_hash, role="admin", is_active=True))
-            db.commit()
+        user = db.query(User).filter(User.email == email).first()
+        if user:
+            user.password_hash = password_hash
+            user.role = role
+            user.is_active = True
+        else:
+            db.add(User(email=email, password_hash=password_hash, role=role, is_active=True))
+        db.commit()
     finally:
         db.close()
 
     resp = dashboard_client.post(
         "/login",
-        data={"email": "admin@test.com", "password": password},
+        data={"email": email, "password": password},
         follow_redirects=False,
     )
     assert resp.status_code in (302, 303)
+
+
+def _login_admin(dashboard_client):
+    _login_user(dashboard_client, email="admin@test.com", role="admin")
 
 
 def test_work_overview_groups_tasks_by_project_and_manager():
@@ -353,6 +362,15 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert fake.task_calls[0]["statuses"] == ["blocked", "failed", "queued", "retried", "running"]
     assert fake.task_calls[0]["limit"] == 1000
     assert fake.task_calls[1]["limit"] == 250
+
+
+def test_work_overview_routes_require_admin_role(dashboard_client):
+    _login_user(dashboard_client, email="learner@test.com", role="learner")
+
+    assert dashboard_client.get("/work").status_code == 403
+    assert dashboard_client.get("/api/work/overview").status_code == 403
+    assert dashboard_client.get("/api/work/lane?project_id=globeiq").status_code == 403
+    assert dashboard_client.get("/api/work/orchestration?orchestration_id=orch-1").status_code == 403
 
 
 def test_work_overview_surfaces_partial_control_plane_data(dashboard_client):

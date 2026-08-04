@@ -6,7 +6,7 @@ Improve NexusAI one scoped platform foundation at a time so it can become the pr
 
 ## Current Scope
 
-Current item: add read-only orchestration drilldown to Work Overview so run inspection is separate from stop previews.
+Current item: restrict Work Overview operational visibility to admin users.
 
 ## Completion Criteria For This Item
 
@@ -25,6 +25,7 @@ Current item: add read-only orchestration drilldown to Work Overview so run insp
 - Stop actions preview the matching and selected task counts before cancellation so destructive work controls are explicit.
 - Orchestration stop actions preview loaded run task counts and active/waiting cancellable counts before cancellation.
 - Admins can place or release a dispatch hold for one project or one project-manager lane from Work Overview.
+- Work Overview page and read APIs are admin-only because they expose operational task, worker, queue, token, and control-plane routing data.
 - Dispatch holds prevent queued matching tasks from starting while leaving task rows intact for later release, inspection, or cancellation.
 - Control-plane shutdown closes the TaskManager and cancels its watchdog/runner/retry background tasks cleanly.
 - Control-plane API tests tear down TaskManager background tasks after each fixture instance.
@@ -91,6 +92,8 @@ Current item: add read-only orchestration drilldown to Work Overview so run insp
 - Updated lane-detail rendering to show error code, type, and bounded message together when available.
 - Added `/api/work/orchestration` for read-only, summary-only orchestration task drilldown with status counts and stoppable counts.
 - Added Work page View Run controls that load one orchestration into the existing detail panel without using the stop endpoint.
+- Restricted `/work`, `/api/work/overview`, `/api/work/lane`, and `/api/work/orchestration` to admin users.
+- Tightened the Work Overview test login helper so tests can safely seed learner and admin accounts in any order.
 
 ## Validation Plan
 
@@ -119,6 +122,7 @@ Current item: add read-only orchestration drilldown to Work Overview so run insp
 - Added lane-detail API assertions proving summary-only error labels are returned without loading full task content.
 - Added Work Overview API tests proving orchestration drilldown filters to one run, returns bounded task details, sorts newest first, and rejects missing IDs or invalid limits.
 - Added dashboard rendering assertions that Work Overview exposes View Run controls.
+- Added dashboard access test proving non-admin users receive 403 for Work Overview and its read APIs.
 - Run focused pytest coverage for new route, task summaries, and dashboard smoke where applicable.
 - After deployment, measure route render time and verify no fresh 500 or slow-request logs.
 
@@ -141,3 +145,4 @@ Current item: add read-only orchestration drilldown to Work Overview so run insp
 - Orchestration stop previews use bounded loaded summaries for operator confirmation; the control-plane cancellation remains authoritative and blocks later fan-out for the orchestration ID.
 - Lane-detail error labels are intentionally bounded summaries for routing and triage, not complete failure payloads.
 - Orchestration drilldown is read-only and summary-only. It does not replace the full pipeline/detail graph views for artifact review or result inspection.
+- Work Overview is an operator/admin surface. Learner or non-admin project users need separate, narrower project status views if they should see any work progress.

@@ -172,12 +172,14 @@ def _load_work_overview() -> dict[str, Any]:
 @bp.get("/work")
 @login_required
 def work_page() -> str:
+    _require_admin()
     return render_template("work.html", overview=_load_work_overview(), error=None)
 
 
 @bp.get("/api/work/overview")
 @login_required
 def api_work_overview():
+    _require_admin()
     return jsonify(_load_work_overview())
 
 
@@ -332,6 +334,7 @@ def api_stop_work():
 @bp.get("/api/work/orchestration")
 @login_required
 def api_work_orchestration():
+    _require_admin()
     orchestration_id = str(request.args.get("orchestration_id") or "").strip()
     if not orchestration_id:
         return jsonify({"error": "orchestration_id is required."}), 400
@@ -446,6 +449,7 @@ def api_stop_orchestration_work():
 @bp.get("/api/work/lane")
 @login_required
 def api_work_lane():
+    _require_admin()
     project_id = str(request.args.get("project_id") or "").strip()
     manager_id = str(request.args.get("manager_id") or "").strip()
     if not project_id:
