@@ -58,6 +58,17 @@
 
 <section class="panel" style="margin-bottom:1rem;">
   <div class="page-header" style="margin-bottom:0.75rem;">
+    <h2 class="panel-title">Personal Memory</h2>
+    <button class="btn btn-primary" type="button" onclick="saveProjectMemoryProfile()">Save Memory Gate</button>
+  </div>
+  <label style="display:block; margin-bottom:0.5rem;">
+    <input type="checkbox" id="project-memory-enabled" {% if project.memory_profiles_enabled %}checked{% endif %}> Enable personal memory for project chats
+  </label>
+  <div id="project-memory-state" class="state-empty">No memory gate update yet.</div>
+</section>
+
+<section class="panel" style="margin-bottom:1rem;">
+  <div class="page-header" style="margin-bottom:0.75rem;">
     <h2 class="panel-title">Cloud Context Policy</h2>
   </div>
   <div id="cloud-policy-state" class="state-empty" style="margin-bottom:0.75rem;">No policy loaded yet.</div>
@@ -1976,6 +1987,29 @@ async function saveProjectChatToolAccess() {
   }
   _applyProjectChatToolPolicy(data);
   _setProjectChatToolState('state-info', 'Chat workspace tool policy saved.');
+}
+
+function _setProjectMemoryState(cls, text) {
+  const el = document.getElementById('project-memory-state');
+  if (!el) return;
+  el.className = cls;
+  el.textContent = text;
+}
+
+async function saveProjectMemoryProfile() {
+  _setProjectMemoryState('state-loading', 'Saving project memory gate...');
+  const enabled = !!document.getElementById('project-memory-enabled')?.checked;
+  const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID) + '/memory-profile', {
+    method: 'PUT',
+    headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify({enabled}),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    _setProjectMemoryState('state-error', data.error || 'Failed to save project memory gate.');
+    return;
+  }
+  _setProjectMemoryState('state-info', data.memory_profiles_enabled ? 'Project memory enabled.' : 'Project memory disabled.');
 }
 
 document.getElementById('policy-bot-provider')?.addEventListener('change', _syncBotPolicyOptions);

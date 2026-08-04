@@ -431,11 +431,28 @@ def api_create_project():
             "bot_ids": data.get("bot_ids", []),
             "settings_overrides": data.get("settings_overrides"),
             "enabled": bool(data.get("enabled", True)),
+            "memory_profiles_enabled": bool(data.get("memory_profiles_enabled", False)),
         }
     )
     if created is None:
         return _cp_error_response(cp)
     return jsonify(created), 201
+
+
+@bp.put("/api/projects/<project_id>/memory-profile")
+@login_required
+def api_update_project_memory_profile(project_id: str):
+    data: dict[str, Any] = request.get_json(force=True) or {}
+    cp = get_cp_client()
+    project = cp.get_project(project_id)
+    if project is None:
+        return _cp_error_response(cp, "project not found")
+    merged = dict(project)
+    merged["memory_profiles_enabled"] = bool(data.get("enabled", False))
+    updated = cp.update_project(project_id, merged)
+    if updated is None:
+        return _cp_error_response(cp, "failed to update project memory profile")
+    return jsonify(updated)
 
 
 @bp.post("/api/projects/<project_id>/bridges")

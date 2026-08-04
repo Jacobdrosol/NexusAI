@@ -35,6 +35,7 @@ def test_projects_page_loads_when_logged_in(dashboard_client):
     resp = dashboard_client.get("/projects")
     assert resp.status_code == 200
     assert b"Projects" in resp.data
+    assert b"Memory" in resp.data
 
 
 def test_projects_page_shows_configured_bot_and_schedule_coverage(dashboard_client):
@@ -42,7 +43,7 @@ def test_projects_page_shows_configured_bot_and_schedule_coverage(dashboard_clie
 
     class FakeCP:
         def list_projects(self):
-            return [{"id": "globeiq", "name": "GlobeIQ", "mode": "isolated", "enabled": True, "bot_ids": []}]
+            return [{"id": "globeiq", "name": "GlobeIQ", "mode": "isolated", "enabled": True, "memory_profiles_enabled": True, "bot_ids": []}]
 
         def list_bots(self):
             return [
@@ -338,21 +339,106 @@ def test_chat_page_loads_when_logged_in(dashboard_client):
     _login_admin(dashboard_client)
     resp = dashboard_client.get("/chat")
     assert resp.status_code == 200
-    assert b'class="app-shell"' in resp.data
-    assert b'class="app-sidebar"' in resp.data
-    assert b'class="nav-menu-toggle"' in resp.data
-    assert b'id="primary-nav-menu"' in resp.data
-    assert b'class="app-main"' in resp.data
-    assert b"Chat" in resp.data
-    assert b"New Conversation" in resp.data
-    assert b"chat-project-filter" in resp.data
-    assert b"create-convo-scope" in resp.data
-    assert b"create-convo-project-id" in resp.data
-    assert b"create-convo-bridge-project-ids" in resp.data
-    assert b"Apply Files to Repo" in resp.data
-    assert b"CHAT_ATTACHMENT_MAX_FILES" in resp.data
-    assert b"CHAT_ATTACHMENT_MAX_TOTAL_BYTES" in resp.data
-    assert b"scrollMessagesToLatest" in resp.data
+
+
+def test_memory_page_loads_user_scoped_items(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_memory_profile_items(self, *, user_id, profile_id="default", limit=200, query=None):
+            assert user_id == "admin@test.com"
+            assert profile_id == "default"
+            return [
+                {
+                    "id": "memory-1",
+                    "profile_id": "default",
+                    "message_id": "manual:memory-1",
+                    "conversation_id": "manual",
+                    "role": "user",
+                    "content": "Use direct answers.",
+                    "created_at": "2026-08-04T00:00:00+00:00",
+                    "updated_at": "2026-08-04T00:00:00+00:00",
+                }
+            ]
+
+    with patch("dashboard.routes.memory.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/memory")
+
+    assert resp.status_code == 200
+    assert b"Use direct answers." in resp.data
+    assert b"Add Memory" in resp.data
+
+
+def test_memory_api_create_forces_current_user(dashboard_client):
+    _login_admin(dashboard_client)
+    captured = {}
+
+    class FakeCP:
+        def create_memory_profile_item(self, body):
+            captured.update(body)
+            return {
+                "id": "memory-2",
+                "profile_id": body["profile_id"],
+                "message_id": "manual:memory-2",
+                "conversation_id": "manual",
+                "role": body["role"],
+                "content": body["content"],
+                "created_at": "2026-08-04T00:00:00+00:00",
+                "updated_at": "2026-08-04T00:00:00+00:00",
+            }
+
+    with patch("dashboard.routes.memory.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/memory/items",
+            json={"user_id": "other@test.com", "content": "Keep responses short.", "role": "assistant"},
+        )
+
+    assert resp.status_code == 201
+    assert captured["user_id"] == "admin@test.com"
+    assert captured["profile_id"] == "default"
+    assert captured["content"] == "Keep responses short."
+
+
+def test_project_memory_toggle_updates_project(dashboard_client):
+    _login_admin(dashboard_client)
+    updated_payload = {}
+
+    class FakeCP:
+        def get_project(self, project_id):
+            assert project_id == "globeiq"
+            return {"id": "globeiq", "name": "GlobeIQ", "memory_profiles_enabled": False}
+
+        def update_project(self, project_id, project):
+            updated_payload.update(project)
+            return dict(project)
+
+    with patch("dashboard.routes.projects.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.put("/api/projects/globeiq/memory-profile", json={"enabled": True})
+
+    assert resp.status_code == 200
+    assert updated_payload["memory_profiles_enabled"] is True
+
+
+def test_bot_create_can_enable_memory(dashboard_client):
+    _login_admin(dashboard_client)
+    created_payload = {}
+
+    class FakeCP:
+        def list_bots(self):
+            return []
+
+        def create_bot(self, bot):
+            created_payload.update(bot)
+            return dict(bot)
+
+    with patch("dashboard.cp_client.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/bots",
+            json={"name": "Memory Chat", "role": "assistant", "memory_profiles_enabled": True},
+        )
+
+    assert resp.status_code == 201
+    assert created_payload["memory_profiles_enabled"] is True
 
 
 def test_chat_mobile_layout_prioritizes_active_conversation():

@@ -12,6 +12,10 @@ Eligible chat turns store user and assistant messages into `memory_profile_items
 
 The profile is scoped by `user_id`. Two users sharing the same NexusAI instance, projects, and bots do not share or train each other's memory profile.
 
+Users can manage their own default profile from the dashboard Memory page. The page supports listing recent memory items, searching by semantic query, manually adding memory items, editing item content and role, and deleting items. Dashboard memory routes always derive `user_id` from the signed-in account and do not accept a caller-provided user id.
+
+Bot and project memory gates are configurable from their dashboard screens. New bots and projects default to memory off. New chats default to memory on.
+
 ## Eligibility Gate
 
 Memory may be used and updated only when all required gates are enabled for the current message turn:

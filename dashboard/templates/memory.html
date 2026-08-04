@@ -1,0 +1,234 @@
+{% extends "base.html" %}
+{% set active_page = "memory" %}
+{% block title %}Memory{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h1>Memory</h1>
+</div>
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+{% if error %}
+<div class="alert alert-error">{{ error }}</div>
+{% endif %}
+
+<section class="panel" style="margin-bottom:1rem;">
+  <div class="page-header" style="margin-bottom:0.75rem;">
+    <h2 class="panel-title">Add Memory</h2>
+    <span class="badge badge-info">{{ profile_id }}</span>
+  </div>
+  <div class="split-grid" style="grid-template-columns:1fr 180px; gap:0.75rem;">
+    <div class="form-group">
+      <label>Content</label>
+      <textarea class="form-control" id="memory-create-content" rows="3" maxlength="4000"></textarea>
+    </div>
+    <div class="form-group">
+      <label>Role</label>
+      <select class="form-control" id="memory-create-role">
+        <option value="user">User</option>
+        <option value="assistant">Assistant</option>
+      </select>
+      <button class="btn btn-primary" type="button" style="margin-top:0.75rem; width:100%;" onclick="createMemoryItem()">Add</button>
+    </div>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="page-header" style="margin-bottom:0.75rem;">
+    <h2 class="panel-title">Memory Items</h2>
+    <div style="display:flex; gap:0.5rem; flex-wrap:wrap;">
+      <input class="form-control" id="memory-search" placeholder="Search memory" style="width:260px;">
+      <button class="btn" type="button" onclick="loadMemoryItems()">Search</button>
+      <button class="btn" type="button" onclick="clearMemorySearch()">Clear</button>
+    </div>
+  </div>
+  <div id="memory-state" class="state-empty" style="margin-bottom:0.75rem;">{{ items|length }} item{{ '' if items|length == 1 else 's' }} loaded.</div>
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>Role</th>
+          <th>Content</th>
+          <th>Source</th>
+          <th>Updated</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="memory-items-body">
+        {% for item in items %}
+        <tr data-id="{{ item.id }}">
+          <td><span class="badge badge-info">{{ item.role }}</span></td>
+          <td style="min-width:320px;">
+            <textarea class="form-control memory-content" rows="3" maxlength="4000">{{ item.content }}</textarea>
+          </td>
+          <td>
+            <code>{{ item.conversation_id }}</code>
+            {% if item.message_id %}<div class="mini-note">{{ item.message_id }}</div>{% endif %}
+          </td>
+          <td>
+            <span class="mini-note">{{ item.updated_at or item.created_at }}</span>
+            {% if item.score is defined %}<div class="mini-note">score {{ '%.3f'|format(item.score) }}</div>{% endif %}
+          </td>
+          <td class="actions">
+            <select class="form-control memory-role" style="margin-bottom:0.5rem;">
+              <option value="user" {% if item.role == "user" %}selected{% endif %}>User</option>
+              <option value="assistant" {% if item.role == "assistant" %}selected{% endif %}>Assistant</option>
+            </select>
+            <button class="btn btn-sm" type="button" onclick="saveMemoryItem('{{ item.id }}')">Save</button>
+            <button class="btn btn-sm btn-danger" type="button" onclick="deleteMemoryItem('{{ item.id }}')">Delete</button>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="empty">No memory items yet</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
+{% block scripts %}
+<script>
+const MEMORY_PROFILE_ID = {{ profile_id|tojson }};
+
+function getCsrf() {
+  const el = document.querySelector('input[name=csrf_token]');
+  return el ? el.value : '';
+}
+
+function setMemoryState(cls, text) {
+  const el = document.getElementById('memory-state');
+  if (!el) return;
+  el.className = cls;
+  el.textContent = text;
+}
+
+function rowHtml(item) {
+  const role = String(item.role || 'user') === 'assistant' ? 'assistant' : 'user';
+  const id = String(item.id || '');
+  const source = String(item.conversation_id || '');
+  const messageId = String(item.message_id || '');
+  const updated = String(item.updated_at || item.created_at || '');
+  const score = typeof item.score === 'number' ? '<div class="mini-note">score ' + item.score.toFixed(3) + '</div>' : '';
+  return `
+    <tr data-id="${escapeHtml(id)}">
+      <td><span class="badge badge-info">${escapeHtml(role)}</span></td>
+      <td style="min-width:320px;"><textarea class="form-control memory-content" rows="3" maxlength="4000">${escapeHtml(String(item.content || ''))}</textarea></td>
+      <td><code>${escapeHtml(source)}</code>${messageId ? '<div class="mini-note">' + escapeHtml(messageId) + '</div>' : ''}</td>
+      <td><span class="mini-note">${escapeHtml(updated)}</span>${score}</td>
+      <td class="actions">
+        <select class="form-control memory-role" style="margin-bottom:0.5rem;">
+          <option value="user"${role === 'user' ? ' selected' : ''}>User</option>
+          <option value="assistant"${role === 'assistant' ? ' selected' : ''}>Assistant</option>
+        </select>
+        <button class="btn btn-sm" type="button" onclick="saveMemoryItem('${escapeJs(id)}')">Save</button>
+        <button class="btn btn-sm btn-danger" type="button" onclick="deleteMemoryItem('${escapeJs(id)}')">Delete</button>
+      </td>
+    </tr>
+  `;
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function escapeJs(value) {
+  return String(value).replaceAll('\\', '\\\\').replaceAll("'", "\\'");
+}
+
+async function loadMemoryItems() {
+  const query = String(document.getElementById('memory-search')?.value || '').trim();
+  const url = '/api/memory/items?limit=200' + (query ? '&query=' + encodeURIComponent(query) : '');
+  setMemoryState('state-loading', 'Loading memory items...');
+  const res = await fetch(url);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    setMemoryState('state-error', data.error || 'Failed to load memory items.');
+    return;
+  }
+  const items = Array.isArray(data.items) ? data.items : [];
+  const body = document.getElementById('memory-items-body');
+  if (body) {
+    body.innerHTML = items.length
+      ? items.map(rowHtml).join('')
+      : '<tr><td colspan="5" class="empty">No memory items found</td></tr>';
+  }
+  setMemoryState('state-info', items.length + ' item' + (items.length === 1 ? '' : 's') + ' loaded.');
+}
+
+function clearMemorySearch() {
+  const input = document.getElementById('memory-search');
+  if (input) input.value = '';
+  loadMemoryItems();
+}
+
+async function createMemoryItem() {
+  const content = String(document.getElementById('memory-create-content')?.value || '').trim();
+  const role = String(document.getElementById('memory-create-role')?.value || 'user');
+  if (!content) {
+    setMemoryState('state-error', 'Content is required.');
+    return;
+  }
+  const res = await fetch('/api/memory/items', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify({content, role}),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    setMemoryState('state-error', data.error || 'Failed to add memory item.');
+    return;
+  }
+  const input = document.getElementById('memory-create-content');
+  if (input) input.value = '';
+  await loadMemoryItems();
+}
+
+async function saveMemoryItem(id) {
+  const row = document.querySelector('tr[data-id="' + CSS.escape(id) + '"]');
+  if (!row) return;
+  const content = String(row.querySelector('.memory-content')?.value || '').trim();
+  const role = String(row.querySelector('.memory-role')?.value || 'user');
+  if (!content) {
+    setMemoryState('state-error', 'Content is required.');
+    return;
+  }
+  const res = await fetch('/api/memory/items/' + encodeURIComponent(id), {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json', 'X-CSRFToken': getCsrf()},
+    body: JSON.stringify({content, role}),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    setMemoryState('state-error', data.error || 'Failed to save memory item.');
+    return;
+  }
+  setMemoryState('state-info', 'Memory item saved.');
+}
+
+async function deleteMemoryItem(id) {
+  if (!confirm('Delete this memory item?')) return;
+  const res = await fetch('/api/memory/items/' + encodeURIComponent(id), {
+    method: 'DELETE',
+    headers: {'X-CSRFToken': getCsrf()},
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    setMemoryState('state-error', data.error || 'Failed to delete memory item.');
+    return;
+  }
+  await loadMemoryItems();
+}
+
+document.getElementById('memory-search')?.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') loadMemoryItems();
+});
+
+// Future expansion: this page currently manages the user's default profile only.
+// Add the profile selector here when multiple memory profiles have storage and import flows.
+void MEMORY_PROFILE_ID;
+</script>
+{% endblock %}

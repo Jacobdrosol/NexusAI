@@ -163,6 +163,55 @@ async def test_project_memory_gate_blocks_profile_retrieval_when_project_disable
 
 
 @pytest.mark.anyio
+async def test_memory_profile_item_crud_is_user_scoped(cp_app):
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        create_resp = await client.post(
+            "/v1/chat/memory-profile/items",
+            json={"user_id": "user-a@example.com", "content": "Use concise answers.", "role": "user"},
+        )
+        assert create_resp.status_code == 200
+        item = create_resp.json()
+        assert item["user_id"] == "user-a@example.com"
+        assert item["profile_id"] == "default"
+        assert item["content"] == "Use concise answers."
+        assert item["updated_at"]
+
+        isolated = await client.get(
+            "/v1/chat/memory-profile/items",
+            params={"user_id": "user-b@example.com", "query": "concise"},
+        )
+        assert isolated.status_code == 200
+        assert isolated.json() == []
+
+        found = await client.get(
+            "/v1/chat/memory-profile/items",
+            params={"user_id": "user-a@example.com", "query": "concise"},
+        )
+        assert found.status_code == 200
+        assert found.json()[0]["id"] == item["id"]
+
+        update_resp = await client.put(
+            f"/v1/chat/memory-profile/items/{item['id']}",
+            json={"user_id": "user-a@example.com", "content": "Use direct answers.", "role": "assistant"},
+        )
+        assert update_resp.status_code == 200
+        assert update_resp.json()["content"] == "Use direct answers."
+        assert update_resp.json()["role"] == "assistant"
+
+        forbidden_delete = await client.delete(
+            f"/v1/chat/memory-profile/items/{item['id']}",
+            params={"user_id": "user-b@example.com"},
+        )
+        assert forbidden_delete.status_code == 404
+
+        delete_resp = await client.delete(
+            f"/v1/chat/memory-profile/items/{item['id']}",
+            params={"user_id": "user-a@example.com"},
+        )
+        assert delete_resp.status_code == 204
+
+
+@pytest.mark.anyio
 async def test_chat_message_rejects_image_attachment_for_non_vision_bot(cp_app):
     cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "assistant reply"})
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:

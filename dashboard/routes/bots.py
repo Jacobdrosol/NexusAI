@@ -582,6 +582,7 @@ def api_create_bot():
                 "role": data.get("role", "") or "assistant",
                 "priority": int(data.get("priority", 0)),
                 "enabled": bool(data.get("enabled", True)),
+                "memory_profiles_enabled": bool(data.get("memory_profiles_enabled", False)),
                 "system_prompt": data.get("system_prompt"),
                 "backends": data.get("backends", []),
                 "assignment_capabilities": data.get("assignment_capabilities"),
@@ -860,6 +861,8 @@ def api_update_bot(bot_id: str):
             bot.priority = int(data["priority"])
         if "enabled" in data:
             bot.enabled = bool(data["enabled"])
+        if "memory_profiles_enabled" in data and hasattr(bot, "memory_profiles_enabled"):
+            bot.memory_profiles_enabled = bool(data["memory_profiles_enabled"])
         if "backends" in data:
             bot.backends = json.dumps(data["backends"])
         if "routing_rules" in data or "workflow" in data:

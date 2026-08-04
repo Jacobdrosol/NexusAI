@@ -142,6 +142,7 @@ def create_app() -> Flask:
     from dashboard.routes.chat import bp as chat_bp
     from dashboard.routes.connections import bp as connections_bp
     from dashboard.routes.events import bp as events_bp
+    from dashboard.routes.memory import bp as memory_bp
     from dashboard.routes.pipelines import bp as pipelines_bp
     from dashboard.routes.platform_ai import bp as platform_ai_bp
     from dashboard.routes.projects import bp as projects_bp
@@ -166,6 +167,7 @@ def create_app() -> Flask:
     app.register_blueprint(supervision_bp)
     app.register_blueprint(platform_ai_bp)
     app.register_blueprint(chat_bp)
+    app.register_blueprint(memory_bp)
     app.register_blueprint(connections_bp)
     app.register_blueprint(vault_bp)
     app.register_blueprint(users_bp)

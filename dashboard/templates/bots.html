@@ -19,7 +19,7 @@
 <table id="bots-table">
   <thead>
     <tr>
-      <th>Name</th><th>Role</th><th>Chat profile</th><th>Priority</th><th>Enabled</th><th>Readiness</th><th>Dispatch mode</th><th>Backends</th><th>Actions</th>
+      <th>Name</th><th>Role</th><th>Chat profile</th><th>Memory</th><th>Priority</th><th>Enabled</th><th>Readiness</th><th>Dispatch mode</th><th>Backends</th><th>Actions</th>
     </tr>
   </thead>
   <tbody>
@@ -34,6 +34,7 @@
         <div class="metrics">{{ profile.capabilities | join(', ') }}</div>
         {% endif %}
       </td>
+      <td><span class="badge badge-{{ 'enabled' if b.memory_profiles_enabled else 'disabled' }}">{{ 'enabled' if b.memory_profiles_enabled else 'off' }}</span></td>
       <td>{{ b.priority }}</td>
       <td><span class="badge badge-{{ 'enabled' if b.enabled else 'disabled' }}">{{ 'enabled' if b.enabled else 'disabled' }}</span></td>
       <td>
@@ -58,7 +59,7 @@
       </td>
     </tr>
     {% else %}
-    <tr><td colspan="9" style="text-align:center;color:#718096;">No bots registered</td></tr>
+    <tr><td colspan="10" style="text-align:center;color:#718096;">No bots registered</td></tr>
     {% endfor %}
   </tbody>
 </table>
@@ -73,6 +74,9 @@
       <div class="form-group"><label>Name</label><input class="form-control" name="name" required></div>
       <div class="form-group"><label>Role</label><input class="form-control" name="role" placeholder="e.g. assistant"></div>
       <div class="form-group"><label>Priority</label><input class="form-control" name="priority" type="number" value="0"></div>
+      <div class="form-group">
+        <label><input type="checkbox" name="memory_profiles_enabled"> Enable personal memory</label>
+      </div>
       <div class="modal-actions">
         <button type="submit" class="btn btn-primary">Add</button>
         <button type="button" class="btn" onclick="hideModal('modal-add-bot')">Cancel</button>
@@ -472,7 +476,12 @@ document.getElementById('form-add-bot').addEventListener('submit', async functio
   const res = await fetch('/api/bots', {
     method: 'POST',
     headers: {'Content-Type':'application/json','X-CSRFToken': fd.get('csrf_token')},
-    body: JSON.stringify({name:fd.get('name'),role:fd.get('role'),priority:parseInt(fd.get('priority'))||0}),
+    body: JSON.stringify({
+      name: fd.get('name'),
+      role: fd.get('role'),
+      priority: parseInt(fd.get('priority')) || 0,
+      memory_profiles_enabled: fd.get('memory_profiles_enabled') === 'on',
+    }),
   });
   if (res.ok) location.reload(); else alert('Error: ' + (await res.json()).error);
 });

@@ -94,6 +94,7 @@ CREATE TABLE IF NOT EXISTS memory_profile_items (
     embedding TEXT NOT NULL,
     metadata TEXT,
     created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
     UNIQUE(user_id, profile_id, message_id)
 )
 """
@@ -142,6 +143,7 @@ class ChatManager:
                 await db.execute(_CREATE_MEMORY_PROFILE_USER_INDEX)
                 await db.execute(_CREATE_CONVERSATIONS_ARCHIVED_UPDATED_INDEX)
                 await self._ensure_conversation_columns(db)
+                await self._ensure_memory_profile_item_columns(db)
                 await db.commit()
             self._db_ready = True
 
@@ -241,6 +243,13 @@ class ChatManager:
             await db.execute("ALTER TABLE conversations ADD COLUMN memory_profiles_enabled INTEGER NOT NULL DEFAULT 1")
         if "memory_profile_id" not in columns:
             await db.execute("ALTER TABLE conversations ADD COLUMN memory_profile_id TEXT")
+
+    async def _ensure_memory_profile_item_columns(self, db: aiosqlite.Connection) -> None:
+        async with db.execute("PRAGMA table_info(memory_profile_items)") as cursor:
+            columns = {row[1] for row in await cursor.fetchall()}
+        if "updated_at" not in columns:
+            await db.execute("ALTER TABLE memory_profile_items ADD COLUMN updated_at TEXT")
+            await db.execute("UPDATE memory_profile_items SET updated_at = created_at WHERE updated_at IS NULL")
 
     async def create_conversation(
         self,
@@ -556,15 +565,16 @@ class ChatManager:
                 await db.execute(
                     """
                     INSERT INTO memory_profile_items (
-                        id, user_id, profile_id, message_id, conversation_id, role, content, embedding, metadata, created_at
+                        id, user_id, profile_id, message_id, conversation_id, role, content, embedding, metadata, created_at, updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(user_id, profile_id, message_id) DO UPDATE SET
                         role = excluded.role,
                         content = excluded.content,
                         embedding = excluded.embedding,
                         metadata = excluded.metadata,
-                        created_at = excluded.created_at
+                        created_at = excluded.created_at,
+                        updated_at = excluded.updated_at
                     """,
                     (
                         str(uuid.uuid4()),
@@ -577,9 +587,204 @@ class ChatManager:
                         json.dumps(self._embed(normalized_content)),
                         json.dumps(metadata) if metadata is not None else None,
                         message.created_at,
+                        datetime.now(timezone.utc).isoformat(),
                     ),
                 )
                 await db.commit()
+
+    def _memory_profile_row_to_dict(self, row: aiosqlite.Row) -> Dict[str, Any]:
+        metadata = None
+        if row["metadata"]:
+            try:
+                metadata = json.loads(row["metadata"])
+            except Exception:
+                metadata = None
+        return {
+            "id": row["id"],
+            "user_id": row["user_id"],
+            "profile_id": row["profile_id"],
+            "message_id": row["message_id"],
+            "conversation_id": row["conversation_id"],
+            "role": row["role"],
+            "content": row["content"],
+            "metadata": metadata,
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"] or row["created_at"],
+        }
+
+    async def list_memory_profile_items(
+        self,
+        *,
+        user_id: str,
+        profile_id: str = "default",
+        limit: int = 200,
+        query: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        await self._ensure_db()
+        normalized_user_id = str(user_id or "").strip()
+        normalized_profile_id = str(profile_id or "default").strip() or "default"
+        normalized_query = str(query or "").strip()
+        if not normalized_user_id:
+            return []
+        if normalized_query:
+            results = await self.search_memory_profile(
+                user_id=normalized_user_id,
+                profile_id=normalized_profile_id,
+                query=normalized_query,
+                limit=limit,
+            )
+            result_ids = [item["id"] for item in results]
+            if not result_ids:
+                return []
+            placeholders = ",".join("?" for _ in result_ids)
+            async with open_sqlite(self._db_path) as db:
+                db.row_factory = aiosqlite.Row
+                async with db.execute(
+                    f"SELECT * FROM memory_profile_items WHERE id IN ({placeholders})",
+                    result_ids,
+                ) as cursor:
+                    rows = await cursor.fetchall()
+            rows_by_id = {row["id"]: self._memory_profile_row_to_dict(row) for row in rows}
+            ordered = []
+            for item in results:
+                row = rows_by_id.get(item["id"])
+                if row:
+                    row["score"] = item.get("score")
+                    ordered.append(row)
+            return ordered
+        safe_limit = max(1, min(int(limit or 200), 500))
+        async with open_sqlite(self._db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                """
+                SELECT *
+                FROM memory_profile_items
+                WHERE user_id = ? AND profile_id = ?
+                ORDER BY COALESCE(updated_at, created_at) DESC, created_at DESC
+                LIMIT ?
+                """,
+                (normalized_user_id, normalized_profile_id, safe_limit),
+            ) as cursor:
+                rows = await cursor.fetchall()
+        return [self._memory_profile_row_to_dict(row) for row in rows]
+
+    async def create_memory_profile_item(
+        self,
+        *,
+        user_id: str,
+        profile_id: str = "default",
+        content: str,
+        role: str = "user",
+        conversation_id: Optional[str] = None,
+        metadata: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        await self._ensure_db()
+        normalized_user_id = str(user_id or "").strip()
+        normalized_profile_id = str(profile_id or "default").strip() or "default"
+        normalized_content = str(content or "").strip()
+        normalized_role = str(role or "user").strip().lower()
+        if normalized_role not in {"user", "assistant"}:
+            normalized_role = "user"
+        if not normalized_user_id:
+            raise ValueError("user_id is required")
+        if not normalized_content:
+            raise ValueError("content is required")
+        now = datetime.now(timezone.utc).isoformat()
+        item_id = str(uuid.uuid4())
+        message_id = f"manual:{item_id}"
+        async with self._lock:
+            async with open_sqlite(self._db_path) as db:
+                db.row_factory = aiosqlite.Row
+                await db.execute(
+                    """
+                    INSERT INTO memory_profile_items (
+                        id, user_id, profile_id, message_id, conversation_id, role, content, embedding, metadata, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        item_id,
+                        normalized_user_id,
+                        normalized_profile_id,
+                        message_id,
+                        str(conversation_id or "manual"),
+                        normalized_role,
+                        normalized_content,
+                        json.dumps(self._embed(normalized_content)),
+                        json.dumps(metadata) if metadata is not None else json.dumps({"source": "manual"}),
+                        now,
+                        now,
+                    ),
+                )
+                await db.commit()
+                async with db.execute("SELECT * FROM memory_profile_items WHERE id = ?", (item_id,)) as cursor:
+                    row = await cursor.fetchone()
+        return self._memory_profile_row_to_dict(row)
+
+    async def update_memory_profile_item(
+        self,
+        item_id: str,
+        *,
+        user_id: str,
+        profile_id: str = "default",
+        content: str,
+        role: str = "user",
+        metadata: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        await self._ensure_db()
+        normalized_item_id = str(item_id or "").strip()
+        normalized_user_id = str(user_id or "").strip()
+        normalized_profile_id = str(profile_id or "default").strip() or "default"
+        normalized_content = str(content or "").strip()
+        normalized_role = str(role or "user").strip().lower()
+        if normalized_role not in {"user", "assistant"}:
+            normalized_role = "user"
+        if not normalized_item_id or not normalized_user_id:
+            raise ValueError("item_id and user_id are required")
+        if not normalized_content:
+            raise ValueError("content is required")
+        now = datetime.now(timezone.utc).isoformat()
+        async with self._lock:
+            async with open_sqlite(self._db_path) as db:
+                db.row_factory = aiosqlite.Row
+                cursor = await db.execute(
+                    """
+                    UPDATE memory_profile_items
+                    SET profile_id = ?, role = ?, content = ?, embedding = ?, metadata = ?, updated_at = ?
+                    WHERE id = ? AND user_id = ?
+                    """,
+                    (
+                        normalized_profile_id,
+                        normalized_role,
+                        normalized_content,
+                        json.dumps(self._embed(normalized_content)),
+                        json.dumps(metadata) if metadata is not None else None,
+                        now,
+                        normalized_item_id,
+                        normalized_user_id,
+                    ),
+                )
+                if cursor.rowcount < 1:
+                    raise KeyError("memory item not found")
+                await db.commit()
+                async with db.execute("SELECT * FROM memory_profile_items WHERE id = ?", (normalized_item_id,)) as cursor:
+                    row = await cursor.fetchone()
+        return self._memory_profile_row_to_dict(row)
+
+    async def delete_memory_profile_item(self, item_id: str, *, user_id: str) -> bool:
+        await self._ensure_db()
+        normalized_item_id = str(item_id or "").strip()
+        normalized_user_id = str(user_id or "").strip()
+        if not normalized_item_id or not normalized_user_id:
+            return False
+        async with self._lock:
+            async with open_sqlite(self._db_path) as db:
+                cursor = await db.execute(
+                    "DELETE FROM memory_profile_items WHERE id = ? AND user_id = ?",
+                    (normalized_item_id, normalized_user_id),
+                )
+                await db.commit()
+                return cursor.rowcount > 0
 
     async def search_memory_profile(
         self,

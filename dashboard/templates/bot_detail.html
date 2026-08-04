@@ -159,6 +159,7 @@
     <div>
       <div><strong>Mode:</strong> <span class="badge badge-info">{{ chat_profile.label }}</span></div>
       <div><strong>Capabilities:</strong> {{ chat_profile.capabilities | join(', ') if chat_profile.capabilities else 'standard chat' }}</div>
+      <div><strong>Personal Memory:</strong> <span class="badge badge-{{ 'enabled' if bot.memory_profiles_enabled else 'disabled' }}">{{ 'enabled' if bot.memory_profiles_enabled else 'off' }}</span></div>
     </div>
     <div>
       <div><strong>Repo Output:</strong> {{ chat_profile.repo_output_mode or 'deny' }}</div>
@@ -397,6 +398,9 @@
     <textarea class="form-control" id="bot-chat-profile-description" rows="2" maxlength="600" placeholder="Short operator-facing purpose for this bot."></textarea>
   </div>
   <div class="split-grid" style="grid-template-columns:1fr 1fr 1fr;">
+    <div class="form-group">
+      <label><input type="checkbox" id="bot-memory-enabled"> Personal memory</label>
+    </div>
     <div class="form-group">
       <label><input type="checkbox" id="bot-chat-profile-attachments"> Attachments</label>
     </div>
@@ -1194,6 +1198,7 @@ function normalizedAssignmentCapabilities() {
 
 function botPayloadForSave() {
   const payload = Object.assign({}, BOT);
+  payload.memory_profiles_enabled = BOT.memory_profiles_enabled === true;
   const routingRules = payload.routing_rules && typeof payload.routing_rules === 'object'
     ? Object.assign({}, payload.routing_rules)
     : {};
@@ -1617,12 +1622,14 @@ function loadChatToolAccessEditor() {
   const profileAttachments = document.getElementById('bot-chat-profile-attachments');
   const profileImages = document.getElementById('bot-chat-profile-images');
   const profileDiagrams = document.getElementById('bot-chat-profile-diagrams');
+  const memoryEnabled = document.getElementById('bot-memory-enabled');
   if (profileMode) profileMode.value = profile.mode;
   if (profileLabel) profileLabel.value = profile.label;
   if (profileDescription) profileDescription.value = profile.description;
   if (profileAttachments) profileAttachments.checked = profile.attachments !== false;
   if (profileImages) profileImages.checked = profile.image_understanding === true;
   if (profileDiagrams) profileDiagrams.checked = profile.diagrams === true;
+  if (memoryEnabled) memoryEnabled.checked = BOT.memory_profiles_enabled === true;
   const cfg = normalizedChatToolAccess();
   const enabled = document.getElementById('bot-chat-tool-enabled');
   const filesystem = document.getElementById('bot-chat-tool-filesystem');
@@ -1647,6 +1654,7 @@ function saveChatToolAccess() {
     filesystem: !!document.getElementById('bot-chat-tool-filesystem')?.checked,
     repo_search: !!document.getElementById('bot-chat-tool-repo-search')?.checked,
   };
+  BOT.memory_profiles_enabled = !!document.getElementById('bot-memory-enabled')?.checked;
   persistBot('Chat tool access saved.');
 }
 

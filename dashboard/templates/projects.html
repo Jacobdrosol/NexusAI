@@ -12,7 +12,7 @@
 <table>
   <thead>
     <tr>
-      <th>ID</th><th>Name</th><th>Mode</th><th>Enabled</th><th>Bridges</th><th>Configured Bots</th><th>Autonomy</th>
+      <th>ID</th><th>Name</th><th>Mode</th><th>Enabled</th><th>Memory</th><th>Bridges</th><th>Configured Bots</th><th>Autonomy</th>
     </tr>
   </thead>
   <tbody>
@@ -22,6 +22,7 @@
       <td><a href="{{ url_for('projects.project_detail_page', project_id=p.id) }}">{{ p.name }}</a></td>
       <td>{{ p.mode }}</td>
       <td><span class="badge badge-{{ 'enabled' if p.enabled else 'disabled' }}">{{ 'enabled' if p.enabled else 'disabled' }}</span></td>
+      <td><span class="badge badge-{{ 'enabled' if p.memory_profiles_enabled else 'disabled' }}">{{ 'enabled' if p.memory_profiles_enabled else 'off' }}</span></td>
       <td>{{ p.bridge_project_ids | length }}</td>
       <td>
         {% if p.autonomy_coverage.available %}
@@ -58,7 +59,7 @@
       </td>
     </tr>
     {% else %}
-    <tr><td colspan="7" style="text-align:center;color:#7b879a;">No projects configured</td></tr>
+    <tr><td colspan="8" style="text-align:center;color:#7b879a;">No projects configured</td></tr>
     {% endfor %}
   </tbody>
 </table>
@@ -77,6 +78,9 @@
           <option value="isolated">isolated</option>
           <option value="bridged">bridged</option>
         </select>
+      </div>
+      <div class="form-group">
+        <label><input type="checkbox" name="memory_profiles_enabled"> Enable personal memory</label>
       </div>
       <div class="modal-actions">
         <button type="submit" class="btn btn-primary">Create</button>
@@ -100,7 +104,8 @@ document.getElementById('form-add-project').addEventListener('submit', async fun
       id: fd.get('id'),
       name: fd.get('name'),
       description: fd.get('description'),
-      mode: fd.get('mode')
+      mode: fd.get('mode'),
+      memory_profiles_enabled: fd.get('memory_profiles_enabled') === 'on'
     }),
   });
   if (res.ok) location.reload();

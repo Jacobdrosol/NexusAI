@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import os
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote
 
 import requests
 
@@ -383,8 +384,34 @@ class CPClient:
     def get_project(self, project_id: str) -> Optional[Dict[str, Any]]:
         return self._get(f"/v1/projects/{project_id}")
 
+    def update_project(self, project_id: str, project: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        return self._put(f"/v1/projects/{project_id}", project)
+
     def delete_project(self, project_id: str) -> bool:
         return self._delete(f"/v1/projects/{project_id}")
+
+    # Memory profiles
+    def list_memory_profile_items(
+        self,
+        *,
+        user_id: str,
+        profile_id: str = "default",
+        limit: int = 200,
+        query: Optional[str] = None,
+    ) -> Optional[List[Dict[str, Any]]]:
+        params = f"user_id={quote(user_id, safe='')}&profile_id={quote(profile_id, safe='')}&limit={int(limit)}"
+        if query:
+            params += f"&query={quote(query, safe='')}"
+        return self._get(f"/v1/chat/memory-profile/items?{params}")
+
+    def create_memory_profile_item(self, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        return self._post("/v1/chat/memory-profile/items", body)
+
+    def update_memory_profile_item(self, item_id: str, body: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        return self._put(f"/v1/chat/memory-profile/items/{item_id}", body)
+
+    def delete_memory_profile_item(self, item_id: str, *, user_id: str) -> bool:
+        return self._delete(f"/v1/chat/memory-profile/items/{item_id}?user_id={quote(user_id, safe='')}")
 
     def add_project_bridge(self, project_id: str, target_project_id: str) -> Optional[Dict[str, Any]]:
         return self._post(f"/v1/projects/{project_id}/bridges/{target_project_id}", {})

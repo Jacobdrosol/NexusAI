@@ -33,6 +33,7 @@
           <a href="{{ url_for('main.index') }}" {% if active_page == 'overview' %}class="active"{% endif %}>Overview</a>
           <a href="{{ url_for('projects.projects_page') }}" {% if active_page == 'projects' %}class="active"{% endif %}>Projects</a>
           <a href="{{ url_for('chat.chat_page') }}" {% if active_page == 'chat' %}class="active"{% endif %}>Chat</a>
+          <a href="{{ url_for('memory.memory_page') }}" {% if active_page == 'memory' %}class="active"{% endif %}>Memory</a>
         </div>
 
         <div class="nav-section">

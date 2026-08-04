@@ -171,6 +171,22 @@ class UpdateConversationMemoryProfileRequest(BaseModel):
     profile_id: Optional[str] = "default"
 
 
+class MemoryProfileItemCreateRequest(BaseModel):
+    user_id: str
+    profile_id: Optional[str] = "default"
+    content: str
+    role: Literal["user", "assistant"] = "user"
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class MemoryProfileItemUpdateRequest(BaseModel):
+    user_id: str
+    profile_id: Optional[str] = "default"
+    content: str
+    role: Literal["user", "assistant"] = "user"
+    metadata: Optional[Dict[str, Any]] = None
+
+
 _REPO_ACTION_RE = re.compile(
     r"\b(read|search|scan|inspect|review|audit|analy[sz]e|open|look\s+through|walk\s+through|go\s+through)\b",
     re.IGNORECASE,
@@ -3607,6 +3623,75 @@ async def update_conversation_memory_profile(
         )
     except ConversationNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/memory-profile/items")
+async def list_memory_profile_items(
+    request: Request,
+    user_id: str = Query(...),
+    profile_id: str = Query(default="default"),
+    limit: int = Query(default=200, ge=1, le=500),
+    query: Optional[str] = Query(default=None),
+) -> List[Dict[str, Any]]:
+    chat_manager = request.app.state.chat_manager
+    return await chat_manager.list_memory_profile_items(
+        user_id=user_id,
+        profile_id=profile_id,
+        limit=limit,
+        query=query,
+    )
+
+
+@router.post("/memory-profile/items")
+async def create_memory_profile_item(
+    request: Request,
+    body: MemoryProfileItemCreateRequest,
+) -> Dict[str, Any]:
+    chat_manager = request.app.state.chat_manager
+    try:
+        return await chat_manager.create_memory_profile_item(
+            user_id=body.user_id,
+            profile_id=body.profile_id or "default",
+            content=body.content,
+            role=body.role,
+            metadata=body.metadata,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.put("/memory-profile/items/{item_id}")
+async def update_memory_profile_item(
+    item_id: str,
+    request: Request,
+    body: MemoryProfileItemUpdateRequest,
+) -> Dict[str, Any]:
+    chat_manager = request.app.state.chat_manager
+    try:
+        return await chat_manager.update_memory_profile_item(
+            item_id,
+            user_id=body.user_id,
+            profile_id=body.profile_id or "default",
+            content=body.content,
+            role=body.role,
+            metadata=body.metadata,
+        )
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/memory-profile/items/{item_id}", status_code=204)
+async def delete_memory_profile_item(
+    item_id: str,
+    request: Request,
+    user_id: str = Query(...),
+) -> None:
+    chat_manager = request.app.state.chat_manager
+    ok = await chat_manager.delete_memory_profile_item(item_id, user_id=user_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="memory item not found")
 
 
 @router.delete("/conversations/{conversation_id}", status_code=204)
