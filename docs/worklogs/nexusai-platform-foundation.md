@@ -6,7 +6,7 @@ Improve NexusAI one scoped platform foundation at a time so it can become the pr
 
 ## Current Scope
 
-Current item: surface worker health issues in Work Overview alongside queue depth.
+Current item: surface token usage coverage gaps in Work Overview.
 
 ## Completion Criteria For This Item
 
@@ -17,6 +17,7 @@ Current item: surface worker health issues in Work Overview alongside queue dept
 - Worker queue depth and active worker load are visible alongside project/manager work.
 - Work Overview flags enabled-offline, disabled, high-load, and queued workers so operators can identify capacity problems quickly.
 - Token usage is visible by project, manager, and provider/model for the current operational window.
+- Work Overview flags tasks missing token usage records so operators can distinguish low usage from missing telemetry.
 - Metered LLM work can be capped by project and manager at admission time.
 - Metered LLM dispatch reserves project and manager budgets so queued work cannot burst past configured limits.
 - Admins can view and update token-governor limits from a dedicated Settings tab without editing env values.
@@ -97,6 +98,8 @@ Current item: surface worker health issues in Work Overview alongside queue dept
 - Tightened the Work Overview test login helper so tests can safely seed learner and admin accounts in any order.
 - Added worker health counters for enabled-offline workers, disabled workers, high-load workers, queued workers, and total worker issues.
 - Added a Worker Issues card and Worker Load summary text that expose capacity problems on the Work page.
+- Added a stable empty usage summary shape when token usage is unavailable.
+- Added a Usage Gaps card and usage coverage text for measured tasks, missing-usage tasks, and total tokens.
 
 ## Validation Plan
 
@@ -127,6 +130,7 @@ Current item: surface worker health issues in Work Overview alongside queue dept
 - Added dashboard rendering assertions that Work Overview exposes View Run controls.
 - Added dashboard access test proving non-admin users receive 403 for Work Overview and its read APIs.
 - Added Work Overview assertions proving worker health issue counts are computed and rendered.
+- Added Work Overview assertions proving token usage gaps are rendered and missing usage data has a stable API fallback shape.
 - Run focused pytest coverage for new route, task summaries, and dashboard smoke where applicable.
 - After deployment, measure route render time and verify no fresh 500 or slow-request logs.
 
@@ -151,3 +155,4 @@ Current item: surface worker health issues in Work Overview alongside queue dept
 - Orchestration drilldown is read-only and summary-only. It does not replace the full pipeline/detail graph views for artifact review or result inspection.
 - Work Overview is an operator/admin surface. Learner or non-admin project users need separate, narrower project status views if they should see any work progress.
 - Worker high-load status currently uses a fixed 0.85 load threshold from reported worker metrics. It depends on workers reporting comparable load values.
+- Usage-gap counts depend on the control plane returning `tasks_without_usage`. A zero count means either no gap was reported or the usage endpoint was unavailable and the stable fallback was used with a degraded-data warning if the call failed.

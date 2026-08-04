@@ -18,6 +18,21 @@ OVERVIEW_RECENT_LIMIT = 250
 OVERVIEW_ACTIVE_LIMIT = 1000
 
 
+def _empty_usage_summary() -> dict[str, Any]:
+    return {
+        "totals": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "tasks_with_usage": 0,
+            "tasks_without_usage": 0,
+        },
+        "by_project": [],
+        "by_manager": [],
+        "by_provider_model": [],
+    }
+
+
 def _merge_task_rows(*groups: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     merged: dict[str, dict[str, Any]] = {}
     anonymous_index = 0
@@ -159,13 +174,14 @@ def _load_work_overview() -> dict[str, Any]:
     }
     task_usage = getattr(cp, "task_usage", None)
     if callable(task_usage):
-        overview["usage"], warning = _safe_cp_call(cp, "token usage", task_usage, hours=24, limit_bots=25, timeout=1.5)
+        usage, warning = _safe_cp_call(cp, "token usage", task_usage, hours=24, limit_bots=25, timeout=1.5)
+        overview["usage"] = usage if isinstance(usage, dict) else _empty_usage_summary()
         if warning:
             warnings.append(warning)
             overview["data_degraded"] = True
             overview["data_warnings"] = warnings
     else:
-        overview["usage"] = None
+        overview["usage"] = _empty_usage_summary()
     return overview
 
 

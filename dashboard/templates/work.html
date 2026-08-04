@@ -84,6 +84,12 @@
     <div class="card-label">Tokens 24h</div>
     <div class="card-value card-blue">{{ "{:,}".format(usage_totals.total_tokens or 0) }}</div>
   </div>
+  <div class="card">
+    <div class="card-label">Usage Gaps</div>
+    <div class="card-value {% if usage_totals.tasks_without_usage %}card-yellow{% else %}card-green{% endif %}">
+      {{ "{:,}".format(usage_totals.tasks_without_usage or 0) }}
+    </div>
+  </div>
 </div>
 <div class="mini-note" style="margin:-0.25rem 0 1rem;">
   Work snapshot: {{ task_snapshot.merged_rows or 0 }} task summaries loaded
@@ -109,6 +115,11 @@
         {% endif %}
       </div>
       {% if usage %}
+      <div class="mini-note" style="margin-bottom:0.75rem;">
+        {{ "{:,}".format(usage_totals.tasks_with_usage or 0) }} task(s) with measured usage,
+        {{ "{:,}".format(usage_totals.tasks_without_usage or 0) }} missing usage,
+        {{ "{:,}".format(usage_totals.total_tokens or 0) }} total tokens.
+      </div>
       <div class="split-grid" style="grid-template-columns:1fr 1fr;gap:1rem;">
         <div class="table-wrap">
           <table>

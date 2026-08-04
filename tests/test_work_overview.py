@@ -327,8 +327,8 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
         def task_usage(self, **kwargs):
             return {
                 "window": {"hours": 24},
-                "totals": {"total_tokens": 140},
-                "by_project": [{"project_id": "globeiq", "total_tokens": 140, "tasks_with_usage": 1, "tasks_without_usage": 0}],
+                "totals": {"total_tokens": 140, "tasks_with_usage": 1, "tasks_without_usage": 2},
+                "by_project": [{"project_id": "globeiq", "total_tokens": 140, "tasks_with_usage": 1, "tasks_without_usage": 2}],
                 "by_manager": [{"project_id": "globeiq", "manager_id": "globeiq-pm", "total_tokens": 140, "tasks_with_usage": 1}],
                 "by_provider_model": [{"provider": "ollama_cloud", "model": "qwen3.5:cloud", "total_tokens": 140, "tasks_with_usage": 1}],
             }
@@ -360,6 +360,8 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"stopOrchestration" in resp.data
     assert b"Problem Sources" in resp.data
     assert b"Usage By Project And Manager" in resp.data
+    assert b"Usage Gaps" in resp.data
+    assert b"2 missing usage" in resp.data
     assert b"ollama_cloud" in resp.data
     assert b"qwen3.5:cloud" in resp.data
     assert b"Stale Work" in resp.data
@@ -452,6 +454,38 @@ def test_work_overview_surfaces_partial_control_plane_data(dashboard_client):
     assert data["task_snapshot"]["active_unavailable"] is True
     assert data["task_snapshot"]["recent_unavailable"] is False
     assert data["task_snapshot"]["merged_rows"] == 1
+
+
+def test_work_overview_usage_fallback_has_stable_shape(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_tasks(self, **kwargs):
+            return []
+
+        def list_projects(self, **kwargs):
+            return []
+
+        def list_bots(self, **kwargs):
+            return []
+
+        def list_workers(self, **kwargs):
+            return []
+
+        def list_work_dispatch_holds(self, **kwargs):
+            return {"holds": []}
+
+    with patch("dashboard.routes.work.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/api/work/overview")
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["usage"]["totals"]["total_tokens"] == 0
+    assert data["usage"]["totals"]["tasks_with_usage"] == 0
+    assert data["usage"]["totals"]["tasks_without_usage"] == 0
+    assert data["usage"]["by_project"] == []
+    assert data["usage"]["by_manager"] == []
+    assert data["usage"]["by_provider_model"] == []
 
 
 def test_work_overview_renders_held_lane_without_loaded_tasks():
