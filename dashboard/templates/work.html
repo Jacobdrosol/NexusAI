@@ -9,6 +9,18 @@
 {% if error %}
 <div class="alert alert-error">{{ error }}</div>
 {% endif %}
+{% if overview.data_degraded %}
+<div class="alert alert-warning">
+  <strong>Work Overview is using partial data.</strong>
+  {% for warning in overview.data_warnings or [] %}
+  <div>
+    {{ warning.source }}: {{ warning.reason }}
+    {% if warning.status_code %}(HTTP {{ warning.status_code }}){% endif %}
+    {% if warning.detail %}<span class="mini-note">{{ warning.detail }}</span>{% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
 <input type="hidden" id="csrf-token" value="{{ csrf_token() }}">
 
 {% set totals = overview.totals or {} %}
@@ -66,6 +78,12 @@
   ({{ task_snapshot.active_rows or 0 }} active/problem, {{ task_snapshot.recent_rows or 0 }} recent).
   {% if task_snapshot.active_window_at_limit or task_snapshot.recent_window_at_limit %}
   <span class="badge badge-warning">window at limit</span>
+  {% endif %}
+  {% if task_snapshot.active_unavailable %}
+  <span class="badge badge-warning">active unavailable</span>
+  {% endif %}
+  {% if task_snapshot.recent_unavailable %}
+  <span class="badge badge-warning">recent unavailable</span>
   {% endif %}
 </div>
 

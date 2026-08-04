@@ -51,6 +51,43 @@ def _safe_call(fn: Any, *args: Any, **kwargs: Any) -> Any:
         return None
 
 
+def _control_plane_warning(cp: Any, source: str) -> dict[str, Any]:
+    reason = "Control plane request failed."
+    detail = ""
+    status_code = None
+
+    unavailable_reason = getattr(cp, "unavailable_reason", None)
+    if callable(unavailable_reason):
+        try:
+            reason = str(unavailable_reason() or reason)
+        except Exception:
+            reason = "Control plane request failed."
+
+    last_error = getattr(cp, "last_error", None)
+    if callable(last_error):
+        try:
+            error = last_error()
+        except Exception:
+            error = None
+        if isinstance(error, dict):
+            detail = str(error.get("detail") or error.get("error") or "")
+            status_code = error.get("status_code")
+
+    warning: dict[str, Any] = {"source": source, "reason": reason}
+    if detail:
+        warning["detail"] = detail
+    if status_code is not None:
+        warning["status_code"] = status_code
+    return warning
+
+
+def _safe_cp_call(cp: Any, source: str, fn: Any, *args: Any, **kwargs: Any) -> tuple[Any, dict[str, Any] | None]:
+    result = _safe_call(fn, *args, **kwargs)
+    if result is None:
+        return None, _control_plane_warning(cp, source)
+    return result, None
+
+
 def _require_admin() -> None:
     if not current_user.is_authenticated or current_user.role != "admin":
         abort(403)
@@ -58,26 +95,56 @@ def _require_admin() -> None:
 
 def _load_work_overview() -> dict[str, Any]:
     cp = get_cp_client()
-    active_tasks = _safe_call(
+    warnings: list[dict[str, Any]] = []
+    active_tasks_result, warning = _safe_cp_call(
+        cp,
+        "active/problem task summaries",
         cp.list_tasks,
         limit=OVERVIEW_ACTIVE_LIMIT,
         statuses=OVERVIEW_ACTIVE_STATUSES,
         include_content=False,
         timeout=1.5,
-    ) or []
-    recent_tasks = _safe_call(
+    )
+    if warning:
+        warnings.append(warning)
+    active_tasks = active_tasks_result if isinstance(active_tasks_result, list) else []
+
+    recent_tasks_result, warning = _safe_cp_call(
+        cp,
+        "recent task summaries",
         cp.list_tasks,
         limit=OVERVIEW_RECENT_LIMIT,
         include_content=False,
         timeout=1.5,
-    ) or []
+    )
+    if warning:
+        warnings.append(warning)
+    recent_tasks = recent_tasks_result if isinstance(recent_tasks_result, list) else []
+
     tasks = _merge_task_rows(active_tasks, recent_tasks)
-    projects = _safe_call(cp.list_projects, timeout=1.0) or []
-    bots = _safe_call(cp.list_bots, timeout=1.0) or []
-    workers = _safe_call(cp.list_workers, timeout=1.0) or []
-    holds_payload = _safe_call(cp.list_work_dispatch_holds, timeout=1.0) or {}
+    projects_result, warning = _safe_cp_call(cp, "projects", cp.list_projects, timeout=1.0)
+    if warning:
+        warnings.append(warning)
+    projects = projects_result if isinstance(projects_result, list) else []
+
+    bots_result, warning = _safe_cp_call(cp, "bots", cp.list_bots, timeout=1.0)
+    if warning:
+        warnings.append(warning)
+    bots = bots_result if isinstance(bots_result, list) else []
+
+    workers_result, warning = _safe_cp_call(cp, "workers", cp.list_workers, timeout=1.0)
+    if warning:
+        warnings.append(warning)
+    workers = workers_result if isinstance(workers_result, list) else []
+
+    holds_payload, warning = _safe_cp_call(cp, "dispatch holds", cp.list_work_dispatch_holds, timeout=1.0)
+    if warning:
+        warnings.append(warning)
+    holds_payload = holds_payload if isinstance(holds_payload, dict) else {}
     holds = holds_payload.get("holds") if isinstance(holds_payload, dict) else []
     overview = build_work_overview(tasks=tasks, projects=projects, bots=bots, workers=workers, holds=holds)
+    overview["data_degraded"] = bool(warnings)
+    overview["data_warnings"] = warnings
     overview["task_snapshot"] = {
         "active_limit": OVERVIEW_ACTIVE_LIMIT,
         "recent_limit": OVERVIEW_RECENT_LIMIT,
@@ -85,11 +152,20 @@ def _load_work_overview() -> dict[str, Any]:
         "recent_rows": len(recent_tasks) if isinstance(recent_tasks, list) else 0,
         "merged_rows": len(tasks),
         "active_statuses": OVERVIEW_ACTIVE_STATUSES,
+        "active_unavailable": active_tasks_result is None,
+        "recent_unavailable": recent_tasks_result is None,
         "active_window_at_limit": isinstance(active_tasks, list) and len(active_tasks) >= OVERVIEW_ACTIVE_LIMIT,
         "recent_window_at_limit": isinstance(recent_tasks, list) and len(recent_tasks) >= OVERVIEW_RECENT_LIMIT,
     }
     task_usage = getattr(cp, "task_usage", None)
-    overview["usage"] = _safe_call(task_usage, hours=24, limit_bots=25, timeout=1.5) if callable(task_usage) else None
+    if callable(task_usage):
+        overview["usage"], warning = _safe_cp_call(cp, "token usage", task_usage, hours=24, limit_bots=25, timeout=1.5)
+        if warning:
+            warnings.append(warning)
+            overview["data_degraded"] = True
+            overview["data_warnings"] = warnings
+    else:
+        overview["usage"] = None
     return overview
 
 

@@ -218,6 +218,71 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert fake.task_calls[1]["limit"] == 250
 
 
+def test_work_overview_surfaces_partial_control_plane_data(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def __init__(self):
+            self.task_calls = 0
+
+        def list_tasks(self, **kwargs):
+            self.task_calls += 1
+            if self.task_calls % 2 == 1:
+                return None
+            return [
+                {
+                    "id": "recent-completed",
+                    "bot_id": "lesson-writer",
+                    "status": "completed",
+                    "created_at": "2026-08-04T10:00:00+00:00",
+                    "updated_at": "2026-08-04T10:05:00+00:00",
+                    "metadata": {"project_id": "globeiq", "root_pm_bot_id": "globeiq-pm"},
+                }
+            ]
+
+        def list_projects(self, **kwargs):
+            return [{"id": "globeiq", "name": "GlobeIQ"}]
+
+        def list_bots(self, **kwargs):
+            return [{"id": "globeiq-pm", "name": "GlobeIQ Manager"}]
+
+        def list_workers(self, **kwargs):
+            return []
+
+        def list_work_dispatch_holds(self, **kwargs):
+            return {"holds": []}
+
+        def task_usage(self, **kwargs):
+            return {"totals": {"total_tokens": 0}, "by_project": [], "by_manager": [], "by_provider_model": []}
+
+        def unavailable_reason(self):
+            return "Control plane timed out."
+
+        def last_error(self):
+            return {"status_code": 504, "detail": "task summaries exceeded timeout"}
+
+    with patch("dashboard.routes.work.get_cp_client", return_value=FakeCP()):
+        page_resp = dashboard_client.get("/work")
+    assert page_resp.status_code == 200
+    assert b"partial data" in page_resp.data
+    assert b"active/problem task summaries" in page_resp.data
+    assert b"active unavailable" in page_resp.data
+    assert b"recent unavailable" not in page_resp.data
+    assert b"1 task summaries loaded" in page_resp.data
+
+    with patch("dashboard.routes.work.get_cp_client", return_value=FakeCP()):
+        api_resp = dashboard_client.get("/api/work/overview")
+
+    assert api_resp.status_code == 200
+    data = api_resp.get_json()
+    assert data["data_degraded"] is True
+    assert data["data_warnings"][0]["source"] == "active/problem task summaries"
+    assert data["data_warnings"][0]["status_code"] == 504
+    assert data["task_snapshot"]["active_unavailable"] is True
+    assert data["task_snapshot"]["recent_unavailable"] is False
+    assert data["task_snapshot"]["merged_rows"] == 1
+
+
 def test_work_overview_renders_held_lane_without_loaded_tasks():
     overview = build_work_overview(
         projects=[{"id": "globeiq", "name": "GlobeIQ"}],

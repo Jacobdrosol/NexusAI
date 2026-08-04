@@ -6,7 +6,7 @@ Improve NexusAI one scoped platform foundation at a time so it can become the pr
 
 ## Current Scope
 
-Current item: add non-destructive project and manager dispatch holds, safer stop previews, lane drilldown, and reliable active-work snapshot loading for scoped work controls.
+Current item: make Work Overview resilient to partial control-plane failures by showing explicit degraded-data warnings instead of allowing failed calls to look like empty queues.
 
 ## Completion Criteria For This Item
 
@@ -71,6 +71,8 @@ Current item: add non-destructive project and manager dispatch holds, safer stop
 - Added a Work Overview lane-details panel with task IDs, bot IDs, status, step/source, updated time, error summary, counts, and hold state.
 - Split Work Overview loading into active/problem and recent-history task-summary windows, merged by task ID, with snapshot window metadata shown on the page.
 - Updated scoped stop and lane-detail APIs to request only relevant task statuses from the control plane.
+- Added degraded-data tracking to Work Overview so failed active/recent task, project, bot, worker, hold, or usage loads are surfaced in both HTML and JSON output.
+- Added active/recent unavailable snapshot flags so a missing task window is visible next to the loaded row counts.
 
 ## Validation Plan
 
@@ -89,6 +91,7 @@ Current item: add non-destructive project and manager dispatch holds, safer stop
 - Added dashboard rendering assertion that the Work page includes stop dry-run preview behavior.
 - Added dashboard API tests covering lane-detail filtering, bounded results, hold state, and validation errors.
 - Added dashboard tests proving Work Overview requests active/problem statuses separately, merges duplicate summary rows, and status-filters stop/lane API queries.
+- Added dashboard test proving a failed active/problem summary load renders a partial-data warning and is returned by `/api/work/overview`.
 - Run focused pytest coverage for new route, task summaries, and dashboard smoke where applicable.
 - After deployment, measure route render time and verify no fresh 500 or slow-request logs.
 
@@ -104,3 +107,4 @@ Current item: add non-destructive project and manager dispatch holds, safer stop
 - Dispatch holds block task start only. They do not cancel running tasks, block task creation, pause schedules, or prevent future orchestration fan-out from adding more queued work.
 - Lane drilldown intentionally uses `include_content=false`; it is for operational routing and triage, not full payload/result review.
 - Work Overview task counts are based on bounded loaded windows. The page flags when an active/problem or recent-history window reaches its configured cap.
+- Degraded-data warnings identify failed control-plane calls, but they do not retry or repair the control plane. They are operator visibility for safe decisions.
