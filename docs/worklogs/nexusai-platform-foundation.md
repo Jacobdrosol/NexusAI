@@ -6,7 +6,7 @@ Improve NexusAI one scoped platform foundation at a time so it can become the pr
 
 ## Current Scope
 
-Current item: add non-destructive project and manager dispatch holds so operators can pause work lanes without cancelling queued tasks.
+Current item: add non-destructive project and manager dispatch holds plus safer stop previews for scoped work controls.
 
 ## Completion Criteria For This Item
 
@@ -20,6 +20,7 @@ Current item: add non-destructive project and manager dispatch holds so operator
 - The token-governor controls expose live one-hour governor status when the control plane is reachable.
 - Admins can stop active/waiting work for one project or one project-manager lane from Work Overview.
 - Stop actions cancel only non-terminal running, queued, or blocked tasks and preserve an explicit cancellation reason.
+- Stop actions preview the matching and selected task counts before cancellation so destructive work controls are explicit.
 - Admins can place or release a dispatch hold for one project or one project-manager lane from Work Overview.
 - Dispatch holds prevent queued matching tasks from starting while leaving task rows intact for later release, inspection, or cancellation.
 - Control-plane shutdown closes the TaskManager and cancels its watchdog/runner/retry background tasks cleanly.
@@ -63,6 +64,7 @@ Current item: add non-destructive project and manager dispatch holds so operator
 - Added `work_dispatch_holds` runtime setting and control-plane endpoints to list, set, and release project/manager dispatch holds.
 - Added task-manager dispatch gating so held project/manager queued tasks remain queued until the hold is released.
 - Added Work Overview held-lane visibility plus Hold/Release Project and Hold/Release Lane controls.
+- Updated Work Overview stop controls to call the existing dry-run endpoint first and include matched/selected task counts in the confirmation.
 
 ## Validation Plan
 
@@ -78,6 +80,7 @@ Current item: add non-destructive project and manager dispatch holds so operator
 - Added task-manager test proving a held project-manager lane does not dispatch until released.
 - Added control-plane task API test covering dispatch hold set/list/release.
 - Added dashboard tests covering Work Overview hold rendering and dashboard hold/release API proxy behavior.
+- Added dashboard rendering assertion that the Work page includes stop dry-run preview behavior.
 - Run focused pytest coverage for new route, task summaries, and dashboard smoke where applicable.
 - After deployment, measure route render time and verify no fresh 500 or slow-request logs.
 

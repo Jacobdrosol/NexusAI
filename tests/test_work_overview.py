@@ -181,6 +181,8 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"Held Lanes" in resp.data
     assert b"operator hold" in resp.data
     assert b"Release Project" in resp.data
+    assert b"dry_run: true" in resp.data
+    assert b"Stop preview failed" in resp.data
     assert b"Stop Project" in resp.data
     assert b"Stop Lane" in resp.data
 

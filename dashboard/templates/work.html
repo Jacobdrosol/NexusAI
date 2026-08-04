@@ -378,20 +378,38 @@ function setWorkHold(scope) {
 function stopWork(scope) {
   var label = scope.label || scope.manager_id || scope.project_id;
   var target = scope.manager_id ? 'manager lane' : 'project';
-  if (!confirm('Stop active and waiting work for this ' + target + ': ' + label + '?')) {
-    return;
+  var payload = {
+    project_id: scope.project_id,
+    manager_id: scope.manager_id || '',
+    reason: 'operator_stopped_from_work_overview'
+  };
+  function postStop(body) {
+    return fetch('/api/work/stop', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-CSRFToken': _csrfToken},
+      body: JSON.stringify(body)
+    }).then(function(r) {
+      return r.json().then(function(d) { return {ok: r.ok, status: r.status, data: d}; });
+    });
   }
-  fetch('/api/work/stop', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json', 'X-CSRFToken': _csrfToken},
-    body: JSON.stringify({
-      project_id: scope.project_id,
-      manager_id: scope.manager_id || '',
-      reason: 'operator_stopped_from_work_overview'
-    })
+  postStop(Object.assign({}, payload, {dry_run: true}))
+  .then(function(preview) {
+    if (!preview.ok) {
+      alert('Stop preview failed: ' + (preview.data.error || 'unknown error'));
+      return null;
+    }
+    var matched = preview.data.matched_task_count || 0;
+    var selected = preview.data.selected_task_count || 0;
+    var extra = preview.data.truncated ? ' This is capped to the first ' + selected + ' task(s).' : '';
+    if (!confirm('Stop active and waiting work for this ' + target + ': ' + label + '? This will cancel ' + selected + ' of ' + matched + ' matching task(s).' + extra)) {
+      return null;
+    }
+    return postStop(payload);
   })
-  .then(function(r) { return r.json().then(function(d) { return {ok: r.ok, status: r.status, data: d}; }); })
   .then(function(res) {
+    if (!res) {
+      return;
+    }
     if (!res.ok && res.status !== 207) {
       alert('Stop failed: ' + (res.data.error || 'unknown error'));
       return;
