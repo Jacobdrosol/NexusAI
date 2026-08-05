@@ -187,6 +187,18 @@ def test_work_overview_groups_tasks_by_project_and_manager():
     assert queue_lane["held"] is True
     assert queue_lane["hold_manager_id"] == "globeiq-pm"
     assert queue_lane["held_by_project"] is False
+    brief = overview["operations_brief"]
+    assert brief["status_breakdown"]["active"] == 1
+    assert brief["status_breakdown"]["waiting"] == 1
+    assert brief["status_breakdown"]["problem"] == 1
+    assert brief["status_breakdown"]["stale"] == 2
+    assert brief["status_breakdown"]["worker_queue"] == 4
+    assert brief["capacity_level"] == "ready"
+    assert brief["top_active_lanes"][0]["manager_id"] == "globeiq-pm"
+    assert brief["top_active_lanes"][0]["active"] == 1
+    assert brief["top_waiting_lanes"][0]["waiting"] == 1
+    assert brief["top_problem_lanes"][0]["problem"] == 1
+    assert brief["attention_lanes"][0]["reasons"] == ["1 problem", "2 stale", "1 route gap", "held"]
     assert manager["latest_tasks"][2]["worker_id"] == "browser-worker-01"
     assert overview["holds"][0]["id"] == "globeiq::globeiq-pm"
     assert overview["holds"][0]["queued_task_count"] == 1
@@ -488,6 +500,12 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert resp.status_code == 200
     assert b"Work" in resp.data
     assert b"Needs Attention" in resp.data
+    assert b"Active Work Brief" in resp.data
+    assert b"Compact project and manager snapshot for the loaded task window." in resp.data
+    assert b"Top Active Lanes" in resp.data
+    assert b"Top Waiting Lanes" in resp.data
+    assert b"Top Problem Lanes" in resp.data
+    assert b"capacity ready" in resp.data
     assert b"Attention Breakdown" in resp.data
     assert b"Attention Lanes" in resp.data
     assert b"Problem tasks" in resp.data

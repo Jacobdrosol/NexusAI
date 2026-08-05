@@ -84,6 +84,7 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - Batch 46 in progress: added dashboard API default-route provider compatibility guards so invalid default bot/model pairs are rejected before proxying create or update requests to the control plane.
 - Batch 47 in progress: added dashboard API attachment payload guards so malformed, too-many, or oversized message attachments are rejected before non-streaming or streaming chat dispatch.
 - Batch 48 in progress: added browser-side default-route provider compatibility preflight so incompatible default bot/model pairs are blocked before new-chat create or route-default save.
+- Batch 49 in progress: added a compact active-work operations brief to the Work overview builder, JSON API, and page so top active, waiting, and problem project-manager lanes are visible without scanning all detailed tables.
 
 ## Validation
 
@@ -135,3 +136,4 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - `pytest tests/test_dashboard_phase4_pages.py::test_chat_create_conversation_api_blocks_default_route_provider_mismatch tests/test_dashboard_phase4_pages.py::test_chat_conversation_route_defaults_api_blocks_default_route_provider_mismatch tests/test_dashboard_phase4_pages.py::test_chat_create_conversation_api_proxies_default_model tests/test_dashboard_phase4_pages.py::test_chat_conversation_route_defaults_api_proxies_control_plane -q` passed for Batch 46 dashboard default-route provider compatibility guards.
 - `pytest tests/test_dashboard_phase4_pages.py::test_chat_message_api_proxies_attachments tests/test_dashboard_phase4_pages.py::test_chat_message_api_blocks_invalid_attachment_payload tests/test_dashboard_phase4_pages.py::test_chat_message_api_blocks_attachment_count_limit tests/test_dashboard_phase4_pages.py::test_chat_stream_api_blocks_attachment_total_size_limit -q` passed for Batch 47 dashboard attachment payload guards.
 - `pytest tests/test_dashboard_phase4_pages.py::test_chat_page_limits_normal_bot_selectors_to_chat_bots -q` passed for Batch 48 browser-side default-route provider compatibility preflight.
+- `pytest tests/test_work_overview.py::test_work_overview_groups_tasks_by_project_and_manager tests/test_work_overview.py::test_work_page_renders_project_manager_and_worker_load -q` passed for Batch 49 active-work operations brief.

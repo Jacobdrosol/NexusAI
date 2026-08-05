@@ -176,6 +176,25 @@ A "pipeline" is inferred from CP tasks that share a `metadata.orchestration_id` 
 
 ---
 
+## `routes/work.py`
+
+Blueprint: `work`. Provides the operator command-center view for active project and manager lanes.
+
+| Method | Path | Description | Auth Required |
+|-|-|-|-|
+| GET | `/work` | Work overview page with active-work brief, project/manager lanes, token usage, queue pressure, holds, route gaps, and stop controls | Yes |
+| GET | `/api/work/overview` | JSON work overview using the same active-work brief and lane summaries as the page | Yes |
+| GET | `/api/work/lane` | List task rows for a project or project-manager lane | Yes |
+| POST | `/api/work/stop` | Stop active or waiting work for a project or project-manager lane | Yes |
+| GET | `/api/work/orchestration` | List task rows for one orchestration run | Yes |
+| POST | `/api/work/orchestration/stop` | Stop cancellable work for one orchestration run | Yes |
+| POST | `/api/work/hold` | Hold or release queue intake for a project or manager lane | Yes |
+| POST | `/api/work/bot-cap` | Set or clear bot hourly token cap overrides | Yes |
+
+The overview includes a compact `operations_brief` containing status totals, capacity state, top active lanes, top waiting lanes, top problem lanes, attention lanes, queue-pressure lanes, and recent problem tasks. This is intended for the dashboard, automation monitors, and future mobile summaries without forcing callers to re-derive lane priority from raw task rows.
+
+---
+
 ## `routes/projects.py`
 
 Blueprint: `projects`.

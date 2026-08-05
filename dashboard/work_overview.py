@@ -512,6 +512,87 @@ def _queue_pressure_lanes(project_summaries: list[dict[str, Any]], limit: int = 
     return rows[:limit]
 
 
+def _lane_sort_key(row: dict[str, Any], primary_key: str) -> tuple[int, int, int, int, str, str]:
+    return (
+        _safe_int(row.get(primary_key)),
+        _safe_int(row.get("problem")),
+        _safe_int(row.get("stale")),
+        _safe_int(row.get("waiting")),
+        str(row.get("project_name") or "").lower(),
+        str(row.get("manager_name") or "").lower(),
+    )
+
+
+def _operations_brief(
+    *,
+    totals: dict[str, Any],
+    project_summaries: list[dict[str, Any]],
+    worker_summary: dict[str, Any],
+    capacity: dict[str, Any],
+    attention_lanes: list[dict[str, Any]],
+    queue_pressure_lanes: list[dict[str, Any]],
+    recent_problem_tasks: list[dict[str, Any]],
+    limit: int = 5,
+) -> dict[str, Any]:
+    active_lanes: list[dict[str, Any]] = []
+    waiting_lanes: list[dict[str, Any]] = []
+    problem_lanes: list[dict[str, Any]] = []
+    for project in project_summaries:
+        project_id = str(project.get("project_id") or "")
+        project_name = str(project.get("project_name") or project_id)
+        for manager in project.get("managers") or []:
+            if not isinstance(manager, dict):
+                continue
+            manager_totals = manager.get("totals") if isinstance(manager.get("totals"), dict) else {}
+            manager_freshness = manager.get("freshness") if isinstance(manager.get("freshness"), dict) else {}
+            row = {
+                "project_id": project_id,
+                "project_name": project_name,
+                "manager_id": str(manager.get("manager_id") or ""),
+                "manager_name": str(manager.get("manager_name") or manager.get("manager_id") or ""),
+                "active": _safe_int(manager_totals.get("active")),
+                "waiting": _safe_int(manager_totals.get("waiting")),
+                "queued": _safe_int(manager_totals.get("queued")),
+                "blocked": _safe_int(manager_totals.get("blocked")),
+                "problem": _safe_int(manager_totals.get("problem")),
+                "stale": _safe_int(manager_freshness.get("stale_active")) + _safe_int(manager_freshness.get("stale_waiting")),
+                "latest_update_label": str(manager_freshness.get("latest_update_label") or "none"),
+                "oldest_active_label": str(manager_freshness.get("oldest_active_label") or "none"),
+                "oldest_waiting_label": str(manager_freshness.get("oldest_waiting_label") or "none"),
+                "held": bool(manager.get("held")),
+            }
+            if row["active"]:
+                active_lanes.append(row)
+            if row["waiting"]:
+                waiting_lanes.append(row)
+            if row["problem"]:
+                problem_lanes.append(row)
+
+    active_lanes.sort(key=lambda row: _lane_sort_key(row, "active"), reverse=True)
+    waiting_lanes.sort(key=lambda row: _lane_sort_key(row, "waiting"), reverse=True)
+    problem_lanes.sort(key=lambda row: _lane_sort_key(row, "problem"), reverse=True)
+    status_breakdown = {
+        "active": _safe_int(totals.get("active")),
+        "waiting": _safe_int(totals.get("waiting")),
+        "problem": _safe_int(totals.get("problem")),
+        "completed": _safe_int(totals.get("completed")),
+        "cancelled": _safe_int(totals.get("cancelled")),
+        "stale": _safe_int(totals.get("stale_active")) + _safe_int(totals.get("stale_waiting")),
+        "worker_queue": _safe_int(worker_summary.get("queue_depth")),
+    }
+    return {
+        "status_breakdown": status_breakdown,
+        "capacity_level": str(capacity.get("level") or "unknown"),
+        "capacity_reason": str(capacity.get("reason") or ""),
+        "top_active_lanes": active_lanes[:limit],
+        "top_waiting_lanes": waiting_lanes[:limit],
+        "top_problem_lanes": problem_lanes[:limit],
+        "attention_lanes": attention_lanes[:limit],
+        "queue_pressure_lanes": queue_pressure_lanes[:limit],
+        "recent_problem_tasks": recent_problem_tasks[:limit],
+    }
+
+
 def _capacity_summary(totals: dict[str, Any], workers: dict[str, Any]) -> dict[str, Any]:
     active_work = _safe_int(totals.get("active"))
     waiting_work = _safe_int(totals.get("waiting"))
@@ -923,6 +1004,13 @@ def build_work_overview(
         ),
         reverse=True,
     )
+    attention_lanes = _attention_lanes(project_summaries)
+    queue_pressure_lanes = _queue_pressure_lanes(project_summaries)
+    recent_problem_tasks_out = sorted(
+        recent_problem_tasks,
+        key=lambda item: str(item.get("updated_at") or ""),
+        reverse=True,
+    )[:12]
     return {
         "totals": totals_out,
         "freshness": freshness,
@@ -932,8 +1020,17 @@ def build_work_overview(
         "holds": hold_rows,
         "metadata_health": metadata_health,
         "route_evidence": route_evidence,
-        "attention_lanes": _attention_lanes(project_summaries),
-        "queue_pressure_lanes": _queue_pressure_lanes(project_summaries),
+        "operations_brief": _operations_brief(
+            totals=totals_out,
+            project_summaries=project_summaries,
+            worker_summary=worker_summary,
+            capacity=capacity_summary,
+            attention_lanes=attention_lanes,
+            queue_pressure_lanes=queue_pressure_lanes,
+            recent_problem_tasks=recent_problem_tasks_out,
+        ),
+        "attention_lanes": attention_lanes,
+        "queue_pressure_lanes": queue_pressure_lanes,
         "problem_summary": {
             "total": int(sum(problem_codes.values())),
             "by_code": _counter_rows(problem_codes, "code"),
@@ -941,9 +1038,5 @@ def build_work_overview(
             "by_bot": _counter_rows(problem_bots, "bot_id"),
         },
         "orchestrations": orchestration_rows[:20],
-        "recent_problem_tasks": sorted(
-            recent_problem_tasks,
-            key=lambda item: str(item.get("updated_at") or ""),
-            reverse=True,
-        )[:12],
+        "recent_problem_tasks": recent_problem_tasks_out,
     }
