@@ -208,6 +208,53 @@ def _usage_pressure_lanes(usage: dict[str, Any], *, limit: int = 10) -> list[dic
     return rows[: max(1, int(limit or 10))]
 
 
+def _chat_usage_pressure_lanes(chat_usage: dict[str, Any], *, limit: int = 10) -> list[dict[str, Any]]:
+    governor = chat_usage.get("chat_token_governor") if isinstance(chat_usage.get("chat_token_governor"), dict) else {}
+    if not governor.get("enabled"):
+        return []
+    limits = governor.get("limits") if isinstance(governor.get("limits"), dict) else {}
+    default_bot_limit = _safe_count(limits, "bot_hourly_tokens")
+    bot_overrides = limits.get("bot_hourly_token_overrides")
+    bot_overrides = bot_overrides if isinstance(bot_overrides, dict) else {}
+    rows: list[dict[str, Any]] = []
+    for item in chat_usage.get("by_bot") or []:
+        if not isinstance(item, dict):
+            continue
+        bot_id = str(item.get("bot_id") or "").strip()
+        if not bot_id:
+            continue
+        try:
+            effective_limit = int(bot_overrides.get(bot_id, default_bot_limit) or 0)
+        except (TypeError, ValueError):
+            effective_limit = default_bot_limit
+        if effective_limit <= 0:
+            continue
+        total_tokens = _safe_count(item, "total_tokens")
+        ratio = round(total_tokens / effective_limit, 2) if effective_limit else 0.0
+        if ratio >= 1:
+            level = "critical"
+        elif ratio >= 0.8:
+            level = "warning"
+        else:
+            level = "ready"
+        rows.append(
+            {
+                "bot_id": bot_id,
+                "total_tokens": total_tokens,
+                "hourly_limit": effective_limit,
+                "remaining_tokens": max(0, effective_limit - total_tokens),
+                "usage_ratio": ratio,
+                "level": level,
+                "cap_source": "override" if bot_id in bot_overrides else "default",
+                "messages_with_usage": _safe_count(item, "messages_with_usage"),
+                "messages_without_usage": _safe_count(item, "messages_without_usage"),
+                "last_message_at": item.get("last_message_at") or "",
+            }
+        )
+    rows.sort(key=lambda row: (row["level"] != "critical", row["level"] != "warning", -row["usage_ratio"], -row["total_tokens"]))
+    return rows[: max(1, int(limit or 10))]
+
+
 def _usage_brief(usage: dict[str, Any], *, limit: int = 5) -> dict[str, Any]:
     totals = usage.get("totals") if isinstance(usage.get("totals"), dict) else {}
 
@@ -638,6 +685,7 @@ def _load_work_overview() -> dict[str, Any]:
         overview["chat_usage"] = _empty_chat_usage_summary()
     overview["chat_usage_health"] = _chat_usage_health(overview["chat_usage"])
     overview["chat_usage_brief"] = _chat_usage_brief(overview["chat_usage"])
+    overview["chat_usage_pressure_lanes"] = _chat_usage_pressure_lanes(overview["chat_usage"])
     list_quality_suites = getattr(cp, "list_platform_ai_quality_suites_global", None)
     if callable(list_quality_suites):
         quality_suites, warning = _safe_cp_call(cp, "quality gate suites", list_quality_suites, limit=8, timeout=1.0)
@@ -683,6 +731,7 @@ def api_work_brief():
             "chat_usage_brief": overview.get("chat_usage_brief") or {},
             "chat_token_governor": (overview.get("chat_usage") or {}).get("chat_token_governor") or {},
             "usage_pressure_lanes": overview.get("usage_pressure_lanes") or [],
+            "chat_usage_pressure_lanes": overview.get("chat_usage_pressure_lanes") or [],
             "token_governor_queue_pressure": overview.get("token_governor_queue_pressure") or [],
             "capacity": overview.get("capacity") or {},
             "workers": overview.get("workers") or {},

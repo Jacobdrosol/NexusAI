@@ -47,6 +47,7 @@
 {% set attention_lanes = overview.attention_lanes or [] %}
 {% set queue_pressure_lanes = overview.queue_pressure_lanes or [] %}
 {% set usage_pressure_lanes = overview.usage_pressure_lanes or [] %}
+{% set chat_usage_pressure_lanes = overview.chat_usage_pressure_lanes or [] %}
 {% set bot_cap_audit = overview.bot_cap_audit or [] %}
 {% set token_governor_queue_pressure = overview.token_governor_queue_pressure or [] %}
 {% set quality_gates = overview.quality_gates or {} %}
@@ -450,6 +451,28 @@
             </tbody>
           </table>
         </div>
+      </div>
+      <div class="table-wrap" style="margin-top:0.75rem;">
+        <table>
+          <thead><tr><th>Chat Bot Usage Pressure</th><th>Tokens</th><th>Cap</th><th>Remaining</th><th>Status</th><th>Latest</th></tr></thead>
+          <tbody>
+            {% for row in chat_usage_pressure_lanes %}
+            <tr>
+              <td>
+                <code>{{ row.bot_id }}</code>
+                <div class="mini-note">{{ row.cap_source }} chat cap</div>
+              </td>
+              <td>{{ "{:,}".format(row.total_tokens or 0) }}</td>
+              <td>{{ "{:,}".format(row.hourly_limit or 0) }}</td>
+              <td>{{ "{:,}".format(row.remaining_tokens or 0) }}</td>
+              <td><span class="badge {% if row.level == 'critical' %}badge-failed{% elif row.level == 'warning' %}badge-yellow{% else %}badge-completed{% endif %}">{{ row.level }} {{ row.usage_ratio }}</span></td>
+              <td>{{ row.last_message_at or '' }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="6" class="empty">No chat bot hourly caps are active for measured usage</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
       </div>
       {% else %}
       <div class="empty">Token usage is unavailable.</div>

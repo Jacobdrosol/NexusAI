@@ -574,6 +574,7 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
                     "limits": {
                         "global_hourly_tokens": 90000,
                         "bot_hourly_tokens": 12000,
+                        "bot_hourly_token_overrides": {"general-chat": 50},
                         "estimated_tokens_per_message": 3500,
                     },
                 },
@@ -674,6 +675,9 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"Chat governor:" in resp.data
     assert b"global cap 90,000" in resp.data
     assert b"estimate 3,500" in resp.data
+    assert b"Chat Bot Usage Pressure" in resp.data
+    assert b"override chat cap" in resp.data
+    assert b"warning 0.8" in resp.data
     assert b"No chat token usage" not in resp.data
     assert b"ollama_cloud" in resp.data
     assert b"qwen3.5:cloud" in resp.data
@@ -759,6 +763,10 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert brief_data["chat_usage_brief"]["top_conversations"][0]["last_message_at"] == "2026-08-05T01:02:03+00:00"
     assert brief_data["chat_token_governor"]["enabled"] is True
     assert brief_data["chat_token_governor"]["limits"]["global_hourly_tokens"] == 90000
+    assert brief_data["chat_usage_pressure_lanes"][0]["bot_id"] == "general-chat"
+    assert brief_data["chat_usage_pressure_lanes"][0]["usage_ratio"] == 0.8
+    assert brief_data["chat_usage_pressure_lanes"][0]["cap_source"] == "override"
+    assert brief_data["chat_usage_pressure_lanes"][0]["last_message_at"] == "2026-08-05T01:02:03+00:00"
     assert brief_data["usage_brief"]["top_bots"][0]["bot_id"] == "lesson-writer"
     assert brief_data["usage_brief"]["top_project_manager_bots"][0]["project_id"] == "globeiq"
     assert brief_data["usage_brief"]["top_project_manager_bots"][0]["manager_id"] == "globeiq-pm"
@@ -780,6 +788,20 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
             "cap_source": "override",
             "tasks_with_usage": 1,
             "tasks_without_usage": 0,
+        }
+    ]
+    assert data["chat_usage_pressure_lanes"] == [
+        {
+            "bot_id": "general-chat",
+            "total_tokens": 40,
+            "hourly_limit": 50,
+            "remaining_tokens": 10,
+            "usage_ratio": 0.8,
+            "level": "warning",
+            "cap_source": "override",
+            "messages_with_usage": 1,
+            "messages_without_usage": 1,
+            "last_message_at": "2026-08-05T01:02:03+00:00",
         }
     ]
 
@@ -1102,6 +1124,7 @@ def test_work_overview_usage_fallback_has_stable_shape(dashboard_client):
     assert data["chat_usage"]["by_bot"] == []
     assert data["chat_usage"]["by_provider_model"] == []
     assert data["usage_pressure_lanes"] == []
+    assert data["chat_usage_pressure_lanes"] == []
     assert data["usage_health"] == {
         "level": "idle",
         "reason": "no token usage recorded in this window",
