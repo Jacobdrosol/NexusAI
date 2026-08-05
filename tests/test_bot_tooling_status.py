@@ -211,6 +211,10 @@ def test_bots_page_surfaces_tooling_readiness_panel(dashboard_client):
     assert b"Owner approval: 1" in page.data
     assert b"Browser owner approval: 1" in page.data
     assert b"Context: globeiq-agent-api" in page.data
+    page_html = page.data.decode("utf-8")
+    connection_row_start = page_html.index('data-id="connection-bot"')
+    connection_row = page_html[connection_row_start:page_html.index("</tr>", connection_row_start)]
+    assert 'data-has-tools="true"' in connection_row
     assert api.status_code == 200
     payload = api.get_json()
     assert payload["summary"]["blocked"] == 1

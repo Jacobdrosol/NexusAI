@@ -149,7 +149,7 @@
     {% set bot_tooling = (tooling.rows | selectattr('bot_id', 'equalto', b.id) | list | first) if tooling.rows else None %}
     <tr data-id="{{ b.id }}"
         data-readiness="{{ (bot_tooling.state if bot_tooling else (b.readiness.state if b.readiness else 'unknown')) }}"
-        data-has-tools="{{ 'true' if bot_tooling and bot_tooling.required_tools else 'false' }}">
+        data-has-tools="{{ 'true' if bot_tooling and (bot_tooling.required_tools or bot_tooling.connection_actions or bot_tooling.browser_actions or bot_tooling.owner_approval_actions or bot_tooling.browser_owner_approval_actions or bot_tooling.connection_backend_count) else 'false' }}">
       <td><a href="{{ url_for('bots.bot_detail_page', bot_id=b.id) }}">{{ b.name }}</a></td>
       <td>{{ b.role }}</td>
       <td>
