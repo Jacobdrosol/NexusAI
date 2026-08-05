@@ -1376,6 +1376,38 @@ def _conversation_matches_project(row: dict[str, Any], project_id: str) -> bool:
     return primary_id == pid or pid in bridge_ids
 
 
+def _conversation_scope_counts(conversations: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
+    counts: dict[str, dict[str, int]] = {
+        "all": {"active": 0, "archived": 0, "total": 0},
+        UNSCOPED_PROJECT_FILTER: {"active": 0, "archived": 0, "total": 0},
+    }
+    for row in conversations:
+        if not isinstance(row, dict):
+            continue
+        bucket_key = "archived" if row.get("archived_at") else "active"
+        counts["all"][bucket_key] += 1
+        counts["all"]["total"] += 1
+        primary_id = str(row.get("project_id") or "").strip()
+        bridge_ids = [
+            str(item or "").strip()
+            for item in row.get("bridge_project_ids") or []
+            if str(item or "").strip()
+        ]
+        project_ids: list[str] = []
+        if primary_id:
+            project_ids.append(primary_id)
+        for bridge_id in bridge_ids:
+            if bridge_id not in project_ids:
+                project_ids.append(bridge_id)
+        if not project_ids:
+            project_ids = [UNSCOPED_PROJECT_FILTER]
+        for project_id in project_ids:
+            bucket = counts.setdefault(project_id, {"active": 0, "archived": 0, "total": 0})
+            bucket[bucket_key] += 1
+            bucket["total"] += 1
+    return counts
+
+
 def _normalize_message_row(raw: Any) -> dict[str, Any] | None:
     if not isinstance(raw, dict):
         return None
@@ -1529,6 +1561,7 @@ def chat_page() -> str:
         except Exception:
             model_catalog = []
 
+        conversation_scope_counts = _conversation_scope_counts(conversations)
         if active_project_filter:
             conversations = [c for c in conversations if _conversation_matches_project(c, active_project_filter)]
 
@@ -1629,6 +1662,7 @@ def chat_page() -> str:
             archived_conversations=[c for c in conversations if c.get("archived_at")],
             active_project_filter=active_project_filter,
             unscoped_project_filter=UNSCOPED_PROJECT_FILTER,
+            conversation_scope_counts=conversation_scope_counts,
             selected_conversation=selected,
             messages=messages,
             bots=bots,
@@ -1662,6 +1696,7 @@ def chat_page() -> str:
             archived_conversations=[],
             active_project_filter=active_project_filter,
             unscoped_project_filter=UNSCOPED_PROJECT_FILTER,
+            conversation_scope_counts=_conversation_scope_counts([]),
             selected_conversation=None,
             messages=[],
             bots=[],

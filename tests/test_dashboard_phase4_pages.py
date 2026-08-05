@@ -1779,7 +1779,10 @@ def test_chat_page_unscoped_filter_limits_conversation_list(dashboard_client):
     assert b"Project Chat" not in resp.data
     assert b"Bridged Chat" not in resp.data
     assert b'option value="__unscoped__" selected' in resp.data
-    assert b"Unscoped chats" in resp.data
+    assert b"All projects (3 active / 0 archived)" in resp.data
+    assert b"Unscoped chats (1 active / 0 archived)" in resp.data
+    assert b"GlobeIQ (globeiq) - 2 active / 0 archived" in resp.data
+    assert b"NexusAI (nexusai) - 1 active / 0 archived" in resp.data
     assert b'option value="global" selected' in resp.data
     assert b"Unscoped chat" in resp.data
     assert b"Unscoped" in resp.data
