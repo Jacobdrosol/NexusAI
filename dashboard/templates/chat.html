@@ -752,22 +752,8 @@
         {% endfor %}
       </select>
     </div>
-    <div class="form-group">
-      <label for="chat-default-model-selector">Default model</label>
-      <select id="chat-default-model-selector" class="form-control" aria-label="Conversation default model">
-        <option value="">Bot default model</option>
-        {% for model in model_catalog %}
-        {% set model_value = model.id or model.name %}
-        {% set model_label = model.name or model.id %}
-        {% if model_value %}
-        <option value="{{ model_value }}" {% if selected_conversation.default_model_id and selected_conversation.default_model_id == model_value %}selected{% endif %} {% if model.enabled is defined and model.enabled == false %}disabled{% endif %}>
-          {% if model.provider %}{{ model.provider }} - {% endif %}{{ model_label }}{% if model.enabled is defined and model.enabled == false %} - disabled{% endif %}
-        </option>
-        {% endif %}
-        {% endfor %}
-      </select>
-      <div class="chat-tool-save-wrap"><button class="btn btn-sm" type="button" onclick="saveConversationRouteDefaults()">Save routing</button></div>
-    </div>
+    <div class="chat-tool-save-wrap"><button class="btn btn-sm" type="button" onclick="saveConversationRouteDefaults()">Save bot</button></div>
+    <p class="mini-note">The selected bot's configured backend model is always used. Saving clears any legacy conversation model override.</p>
     <div class="form-group">
       <label>Personal memory</label>
       <label class="context-item">
@@ -864,23 +850,6 @@
           {% endfor %}
         </select>
         <p class="mini-note" id="create-convo-bot-summary">Select a default bot or leave blank to use the platform default.</p>
-      </div>
-      <div class="form-group">
-        <label>Default Model</label>
-        <select class="form-control" name="default_model_id" id="create-convo-default-model-id">
-          <option value="">Bot default</option>
-          {% for model in model_catalog %}
-          {% set model_value = model.id or model.name %}
-          {% set model_label = model.name or model.id %}
-          {% if model_value %}
-          <option value="{{ model_value }}" {% if model.enabled is defined and model.enabled == false %}disabled{% endif %}>
-            {% if model.provider %}{{ model.provider }} / {% endif %}{{ model_label }}
-            {% if model.enabled is defined and model.enabled == false %} - disabled{% endif %}
-          </option>
-          {% endif %}
-          {% endfor %}
-        </select>
-        <p class="mini-note" id="create-convo-model-summary">Bot default model. Select a model only when this chat needs a specific backend route.</p>
       </div>
       <div class="form-group">
         <label>Personal Memory</label>
@@ -1781,8 +1750,7 @@ function modelSupportsImages(provider, modelName, capabilities = null) {
 }
 
 function selectedChatDefaultModelId() {
-  const selector = document.getElementById('chat-default-model-selector');
-  return String((selector && selector.value) || selectedConversation.default_model_id || '').trim();
+  return '';
 }
 
 function routeUsesConversationDefaultModel() {
@@ -1976,7 +1944,7 @@ function updateChatBotCapabilitySummary() {
   summary.textContent = `${bot.name || bot.id}: ${profileLabel}; ${capabilityLabel}; ${routeLabel} ${modelLabel}; ${imageLabel}; ${memoryLabel}; chat tools ${toolLabel}; ${readinessLabel}.`;
 }
 
-function botCapabilitySummaryText(bot, modelId = '') {
+function botCapabilitySummaryText(bot) {
   if (!bot) return 'Select a default bot or leave blank to use the platform default.';
   const rules = bot.routing_rules && typeof bot.routing_rules === 'object' ? bot.routing_rules : {};
   const profile = bot.chat_profile && typeof bot.chat_profile === 'object'
@@ -1988,12 +1956,10 @@ function botCapabilitySummaryText(bot, modelId = '') {
   if (tools.repo_search) toolParts.push('repo search');
   const toolLabel = profile.tool_label || (tools.enabled ? (toolParts.length ? toolParts.join(', ') : 'enabled') : 'off');
   const memoryLabel = bot.memory_profiles_enabled === true ? 'memory on' : 'memory off';
-  const selectedModel = modelCatalogEntryById(modelId);
   const backend = Array.isArray(bot.backends) && bot.backends.length ? bot.backends[0] : null;
-  const provider = selectedModel?.provider || backend?.provider || '';
-  const model = selectedModel ? (selectedModel.name || selectedModel.id) : (backend?.model || 'bot default model');
-  const modelSource = selectedModel ? 'selected model' : 'bot backend';
-  const imageLabel = modelSupportsImages(provider, model, selectedModel ? modelCatalogCapabilities(selectedModel) : []) ? 'images supported' : 'text only';
+  const provider = backend?.provider || '';
+  const model = backend?.model || 'bot default model';
+  const imageLabel = modelSupportsImages(provider, model, []) ? 'images supported' : 'text only';
   const profileLabel = String(profile.label || profile.mode || bot.role || 'chat').trim();
   const useLabel = String(profile.use_label || '').trim();
   const capabilityLabel = botCapabilityLabelText(profile);
@@ -2004,31 +1970,13 @@ function botCapabilitySummaryText(bot, modelId = '') {
     ? `readiness ${readinessState} (${readinessDetail})`
     : `readiness ${readinessState}`;
   const usePrefix = useLabel ? `${useLabel}; ` : '';
-  const routeBlocker = routeDefaultCompatibilityBlocker(bot.id || '', modelId);
-  const routeWarning = routeBlocker ? `; route warning ${routeBlocker}` : '';
-  return `${bot.name || bot.id}: ${usePrefix}${profileLabel}; ${capabilityLabel}; ${modelSource} ${[provider, model].filter(Boolean).join(' / ') || 'model unknown'}; ${imageLabel}; ${memoryLabel}; chat tools ${toolLabel}; ${readinessLabel}${routeWarning}.`;
-}
-
-function createConversationModelSummaryText(modelId = '') {
-  const safeModelId = String(modelId || '').trim();
-  if (!safeModelId) return 'Bot default model. Select a model only when this chat needs a specific backend route.';
-  const model = modelCatalogEntryById(safeModelId);
-  if (!model) return 'Selected model is not available. Pick an enabled model or leave this as bot default.';
-  const provider = String(model.provider || '').trim() || 'provider unknown';
-  const modelName = String(model.name || model.id || '').trim() || safeModelId;
-  const capabilities = modelCatalogCapabilities(model);
-  const capabilityLabel = capabilities.length ? `capabilities ${capabilities.join(', ')}` : 'capabilities unspecified';
-  const imageLabel = modelSupportsImages(provider, modelName, capabilities) ? 'images supported' : 'text only';
-  return `Selected model: ${provider} / ${modelName}; ${capabilityLabel}; ${imageLabel}.`;
+  return `${bot.name || bot.id}: ${usePrefix}${profileLabel}; ${capabilityLabel}; bot backend ${[provider, model].filter(Boolean).join(' / ') || 'model unknown'}; ${imageLabel}; ${memoryLabel}; chat tools ${toolLabel}; ${readinessLabel}.`;
 }
 
 function updateCreateConversationBotSummary() {
   const summary = document.getElementById('create-convo-bot-summary');
   const botId = String(document.getElementById('create-convo-default-bot-id')?.value || '').trim();
-  const modelId = String(document.getElementById('create-convo-default-model-id')?.value || '').trim();
-  if (summary) summary.textContent = botCapabilitySummaryText(chatBotById(botId), modelId);
-  const modelSummary = document.getElementById('create-convo-model-summary');
-  if (modelSummary) modelSummary.textContent = createConversationModelSummaryText(modelId);
+  if (summary) summary.textContent = botCapabilitySummaryText(chatBotById(botId));
 }
 
 function _chatGateCheckboxValue(id, fallback) {
@@ -3038,15 +2986,9 @@ async function saveConversationMemoryProfile() {
 async function saveConversationRouteDefaults() {
   if (!selectedConversationId) return;
   const botId = activeChatBotId();
-  const modelId = String(document.getElementById('chat-default-model-selector')?.value || '').trim();
   const readinessBlocker = activeBotReadinessBlocker();
   if (readinessBlocker) {
     showChatComposerStatus(readinessBlocker);
-    return;
-  }
-  const routeBlocker = routeDefaultCompatibilityBlocker(botId, modelId);
-  if (routeBlocker) {
-    showChatComposerStatus(routeBlocker);
     return;
   }
   const res = await fetch('/api/chat/conversations/' + encodeURIComponent(selectedConversationId) + '/route-defaults', {
@@ -3054,7 +2996,7 @@ async function saveConversationRouteDefaults() {
     headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
     body: JSON.stringify({
       default_bot_id: botId || null,
-      default_model_id: modelId || null,
+      default_model_id: null,
     }),
   });
   if (!res.ok) {
@@ -3368,17 +3310,11 @@ document.getElementById('form-create-convo')?.addEventListener('submit', async f
   e.preventDefault();
   const fd = new FormData(this);
   const requestedDefaultBotId = String(fd.get('default_bot_id') || '').trim();
-  const requestedDefaultModelId = String(fd.get('default_model_id') || '').trim();
   if (requestedDefaultBotId) {
     const requestedDefaultBot = chatBotById(requestedDefaultBotId);
     const readinessBlocker = chatBotReadinessBlocker(requestedDefaultBot);
     if (readinessBlocker) {
       alert(`Default bot is unavailable: ${readinessBlocker}`);
-      return;
-    }
-    const routeBlocker = routeDefaultCompatibilityBlocker(requestedDefaultBotId, requestedDefaultModelId);
-    if (routeBlocker) {
-      alert(`Default route is unavailable: ${routeBlocker}`);
       return;
     }
   }
@@ -3411,7 +3347,7 @@ document.getElementById('form-create-convo')?.addEventListener('submit', async f
       bridge_project_ids: bridgeProjectIds,
       scope,
       default_bot_id: requestedDefaultBotId || null,
-      default_model_id: requestedDefaultModelId || null,
+      default_model_id: null,
       memory_profiles_enabled: !!document.getElementById('create-convo-memory-enabled')?.checked,
       memory_profile_id: fd.get('memory_profile_id') || 'default',
       tool_access_enabled: scopedToolAccessAllowed && !!document.getElementById('create-convo-tool-enabled')?.checked,
@@ -4446,7 +4382,6 @@ document.getElementById('create-convo-bridged-primary')?.addEventListener('chang
 });
 document.getElementById('create-convo-bridge-project-ids')?.addEventListener('change', syncCreateConversationToolFields);
 document.getElementById('create-convo-default-bot-id')?.addEventListener('change', updateCreateConversationBotSummary);
-document.getElementById('create-convo-default-model-id')?.addEventListener('change', updateCreateConversationBotSummary);
 document.getElementById('create-convo-tool-enabled')?.addEventListener('change', syncCreateConversationToolFields);
 document.getElementById('chat-tool-enabled')?.addEventListener('change', () => {
   syncConversationToolAccessEditor();
@@ -4471,14 +4406,6 @@ document.getElementById('use-workspace-tools-message')?.addEventListener('change
 document.getElementById('enable-inline-coding-message')?.addEventListener('change', () => {
   renderChatEffectiveContextSummary();
   refreshServerEffectiveContextSummary().catch(() => {});
-});
-document.getElementById('chat-default-model-selector')?.addEventListener('change', () => {
-  updateChatBotCapabilitySummary();
-  renderChatEffectiveContextSummary();
-  refreshServerEffectiveContextSummary().catch(() => {});
-  if (pendingComposerAttachments.some((item) => String(item?.kind || '') === 'image') && !activeBotSupportsImages()) {
-    alert('The newly selected conversation model does not support image attachments. Remove the screenshots or switch to a vision-capable model.');
-  }
 });
 document.getElementById('chat-bot-selector')?.addEventListener('change', () => {
   syncSendBotSelection();

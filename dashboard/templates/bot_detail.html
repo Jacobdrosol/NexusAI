@@ -317,6 +317,7 @@
       <div><strong>Chat Tools:</strong> {{ chat_profile.tool_label or 'off' }}</div>
       <div><strong>Repo Output:</strong> {{ chat_profile.repo_output_mode or 'deny' }}</div>
       <div><strong>Inline Coding Default:</strong> {{ 'yes' if chat_profile.inline_coding_default else 'no' }}</div>
+      <div><strong>Direct chat:</strong> <span class="badge badge-{{ 'enabled' if bot.direct_chat_access.enabled else 'disabled' }}">{{ 'enabled' if bot.direct_chat_access.enabled else 'off' }}</span></div>
     </div>
   </div>
   {% if chat_profile.description %}
@@ -547,6 +548,10 @@
     </div>
   </div>
   <p class="mini-note" style="margin-bottom:0.75rem;">Bot-level workspace tool policy is one gate in a strict 3-switch hierarchy. Tools are available only when bot, project, and chat settings are all enabled.</p>
+  <div class="form-group">
+    <label><input type="checkbox" id="bot-direct-chat-enabled"> Allow this bot to be selected for direct conversations</label>
+    <div class="mini-note">This is separate from the bot's worker enablement and tool permissions.</div>
+  </div>
   <div class="split-grid" style="grid-template-columns:1fr 1fr;">
     <div class="form-group">
       <label>Chat Profile</label>
@@ -1317,6 +1322,11 @@ BOT.chat_tool_access = BOT.chat_tool_access && typeof BOT.chat_tool_access === '
     : ((BOT.routing_rules && typeof BOT.routing_rules === 'object' && BOT.routing_rules.tool_access && typeof BOT.routing_rules.tool_access === 'object')
       ? BOT.routing_rules.tool_access
       : {enabled: false, filesystem: false, repo_search: false}));
+BOT.direct_chat_access = BOT.direct_chat_access && typeof BOT.direct_chat_access === 'object'
+  ? BOT.direct_chat_access
+  : ((BOT.routing_rules && typeof BOT.routing_rules === 'object' && BOT.routing_rules.direct_chat && typeof BOT.routing_rules.direct_chat === 'object')
+    ? BOT.routing_rules.direct_chat
+    : {enabled: false});
 BOT.chat_profile = BOT.chat_profile && typeof BOT.chat_profile === 'object'
   ? BOT.chat_profile
   : ((BOT.routing_rules && typeof BOT.routing_rules === 'object' && BOT.routing_rules.chat_profile && typeof BOT.routing_rules.chat_profile === 'object')
@@ -1421,6 +1431,7 @@ function botPayloadForSave() {
   routingRules.external_trigger = normalizedExternalTrigger();
   routingRules.chat_profile = normalizedChatProfile();
   routingRules.chat_tool_access = normalizedChatToolAccess();
+  routingRules.direct_chat = normalizedDirectChatAccess();
   payload.routing_rules = routingRules;
   payload.workflow = BOT.workflow;
   payload.assignment_capabilities = normalizedAssignmentCapabilities();
@@ -1788,6 +1799,11 @@ function normalizedChatToolAccess() {
   };
 }
 
+function normalizedDirectChatAccess() {
+  const cfg = BOT.direct_chat_access && typeof BOT.direct_chat_access === 'object' ? BOT.direct_chat_access : {};
+  return {enabled: cfg.enabled === true};
+}
+
 function normalizedChatProfile() {
   const cfg = BOT.chat_profile && typeof BOT.chat_profile === 'object' ? BOT.chat_profile : {};
   const allowedModes = ['chat', 'tutor', 'vision', 'coding', 'automation'];
@@ -1833,6 +1849,7 @@ function loadChatToolAccessEditor() {
   const profileImages = document.getElementById('bot-chat-profile-images');
   const profileDiagrams = document.getElementById('bot-chat-profile-diagrams');
   const memoryEnabled = document.getElementById('bot-memory-enabled');
+  const directChatEnabled = document.getElementById('bot-direct-chat-enabled');
   if (profileMode) profileMode.value = profile.mode;
   if (profileLabel) profileLabel.value = profile.label;
   if (profileDescription) profileDescription.value = profile.description;
@@ -1840,6 +1857,7 @@ function loadChatToolAccessEditor() {
   if (profileImages) profileImages.checked = profile.image_understanding === true;
   if (profileDiagrams) profileDiagrams.checked = profile.diagrams === true;
   if (memoryEnabled) memoryEnabled.checked = BOT.memory_profiles_enabled === true;
+  if (directChatEnabled) directChatEnabled.checked = normalizedDirectChatAccess().enabled;
   const cfg = normalizedChatToolAccess();
   const enabled = document.getElementById('bot-chat-tool-enabled');
   const filesystem = document.getElementById('bot-chat-tool-filesystem');
@@ -1864,6 +1882,7 @@ function saveChatToolAccess() {
     filesystem: !!document.getElementById('bot-chat-tool-filesystem')?.checked,
     repo_search: !!document.getElementById('bot-chat-tool-repo-search')?.checked,
   };
+  BOT.direct_chat_access = {enabled: !!document.getElementById('bot-direct-chat-enabled')?.checked};
   BOT.memory_profiles_enabled = !!document.getElementById('bot-memory-enabled')?.checked;
   persistBot('Chat tool access saved.');
 }

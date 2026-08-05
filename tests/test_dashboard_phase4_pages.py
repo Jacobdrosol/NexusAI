@@ -1399,17 +1399,12 @@ def test_chat_page_limits_normal_bot_selectors_to_chat_bots(dashboard_client):
     assert b"model credential missing" in resp.data
     assert b"function activeBotReadinessBlocker" in resp.data
     assert b"function chatBotReadinessBlocker" in resp.data
-    assert b'name="default_model_id"' in resp.data
-    assert b'value="ollama-cloud-gpt-oss-120b"' in resp.data
-    assert b"ollama_cloud / gpt-oss:120b" in resp.data
-    assert b'value="ollama-cloud-disabled" disabled' in resp.data
+    assert b'name="default_model_id"' not in resp.data
+    assert b'id="chat-default-model-selector"' not in resp.data
     assert b"old-model" in resp.data
-    assert b'id="chat-default-model-selector"' in resp.data
-    assert b"Save Defaults" in resp.data
+    assert b"Save bot" in resp.data
     assert b"function saveConversationRouteDefaults" in resp.data
-    assert b"function routeDefaultCompatibilityBlocker" in resp.data
-    assert b"function chatBotHasProviderBackend" in resp.data
-    assert b"Default route is unavailable: ${routeBlocker}" in resp.data
+    assert b"The selected bot's configured backend model is always used." in resp.data
 
 
 def test_chat_page_warns_when_conversation_default_bot_is_not_chat_selectable(dashboard_client):
@@ -5266,10 +5261,10 @@ def test_chat_create_conversation_api_blocks_non_chat_default_bot(dashboard_clie
 
     assert resp.status_code == 409
     assert b"Default bot is unavailable" in resp.data
-    assert b"worker-qc is not configured for manual chat use" in resp.data
+    assert b"worker-qc is not configured for direct chat use" in resp.data
 
 
-def test_chat_create_conversation_api_proxies_default_model(dashboard_client):
+def test_chat_create_conversation_api_ignores_default_model_override(dashboard_client):
     _login_admin(dashboard_client)
     captured = {}
 
@@ -5292,7 +5287,7 @@ def test_chat_create_conversation_api_proxies_default_model(dashboard_client):
         )
 
     assert resp.status_code == 201
-    assert captured["default_model_id"] == "ollama-cloud-gpt-oss-120b"
+    assert captured["default_model_id"] is None
     assert captured["owner_user_id"] == "admin@test.com"
 
 
@@ -6197,7 +6192,7 @@ def test_chat_conversation_route_defaults_api_proxies_control_plane(dashboard_cl
     assert captured == {
         "conversation_id": "c1",
         "default_bot_id": "personal-research-chat",
-        "default_model_id": "ollama-cloud-gpt-oss-120b",
+        "default_model_id": None,
     }
 
 

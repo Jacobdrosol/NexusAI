@@ -42,6 +42,35 @@ def bot_chat_tool_access(bot: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _legacy_direct_chat_enabled(bot: dict[str, Any]) -> bool:
+    """Retain existing chat availability until a bot is explicitly reconfigured."""
+    routing = bot.get("routing_rules") if isinstance(bot.get("routing_rules"), dict) else {}
+    operator_profile = routing.get("operator_profile") if isinstance(routing.get("operator_profile"), dict) else {}
+    autonomy = str(operator_profile.get("autonomy") or "").strip().lower()
+    role = str(bot.get("role") or "").strip().lower()
+    name = str(bot.get("name") or "").strip().lower()
+    bot_id = str(bot.get("id") or "").strip().lower()
+    tools = bot_chat_tool_access(bot)
+    return bool(
+        autonomy == "manual_chat_only"
+        or tools.get("enabled")
+        or role in {"assistant", "coding_assistant", "code-reviewer", "tutor"}
+        or bot_id.startswith("personal-")
+        or "chat" in name
+    )
+
+
+def bot_direct_chat_access(bot: dict[str, Any]) -> dict[str, Any]:
+    """Normalize direct-chat eligibility separately from bot execution and tools."""
+    routing = bot.get("routing_rules") if isinstance(bot.get("routing_rules"), dict) else {}
+    raw = routing.get("direct_chat") if isinstance(routing.get("direct_chat"), dict) else None
+    explicit = isinstance(raw, dict) and isinstance(raw.get("enabled"), bool)
+    return {
+        "enabled": bool(raw.get("enabled")) if explicit else _legacy_direct_chat_enabled(bot),
+        "explicit": explicit,
+    }
+
+
 def bot_chat_profile(bot: dict[str, Any]) -> dict[str, Any]:
     routing = bot.get("routing_rules") if isinstance(bot.get("routing_rules"), dict) else {}
     raw_profile = routing.get("chat_profile") if isinstance(routing, dict) else None
@@ -52,6 +81,7 @@ def bot_chat_profile(bot: dict[str, Any]) -> dict[str, Any]:
     launch_profile = launch_profile if isinstance(launch_profile, dict) else {}
     assignment_capabilities = _dict_from_any(bot.get("assignment_capabilities"))
     tool_access = bot_chat_tool_access(bot)
+    direct_chat = bot_direct_chat_access(bot)
     policy = _dict_from_any(bot.get("execution_policy"))
     mode = str(profile.get("mode") or "").strip().lower()
     if mode not in CHAT_PROFILE_LABELS:
@@ -140,6 +170,8 @@ def bot_chat_profile(bot: dict[str, Any]) -> dict[str, Any]:
         "use_label": use_label,
         "repo_output_mode": str(policy.get("repo_output_mode") or "deny").strip().lower(),
         "inline_coding_default": bool(policy.get("inline_coding_default", False)),
+        "direct_chat_enabled": bool(direct_chat["enabled"]),
+        "direct_chat_explicit": bool(direct_chat["explicit"]),
     }
 
 
@@ -148,5 +180,6 @@ def with_bot_chat_profiles(bots: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for bot in bots:
         row = dict(bot)
         row["chat_profile"] = bot_chat_profile(row)
+        row["direct_chat_access"] = bot_direct_chat_access(row)
         enriched.append(row)
     return enriched

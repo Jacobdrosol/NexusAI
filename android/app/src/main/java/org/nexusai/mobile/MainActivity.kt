@@ -4,6 +4,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -17,9 +18,12 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -58,7 +62,15 @@ private fun NexusMobileApp(store: InstanceStore) {
     var restoringSession by remember { mutableStateOf(store.instanceUrl() != null) }
     var availableUpdate by remember { mutableStateOf<AndroidUpdate?>(null) }
     var updateRequired by remember { mutableStateOf(false) }
+    var theme by remember { mutableStateOf(store.themePreference()) }
 
+    val useDarkTheme = when (theme) {
+        AppTheme.SYSTEM -> isSystemInDarkTheme()
+        AppTheme.DARK -> true
+        AppTheme.LIGHT -> false
+    }
+
+    MaterialTheme(colorScheme = if (useDarkTheme) darkColorScheme() else lightColorScheme()) {
     LaunchedEffect(Unit) {
         if (store.instanceUrl() == null) return@LaunchedEffect
         val restored = withContext(Dispatchers.IO) { runCatching { apiClient.restoreSession() }.getOrNull() }
@@ -83,6 +95,10 @@ private fun NexusMobileApp(store: InstanceStore) {
                 onInstallUpdate = { availableUpdate?.let { UpdateInstaller(store.context).downloadAndPrompt(it.releaseUrl) } },
                 onSessionExpired = { session = null; status = "Your session expired. Sign in again." },
                 onDisconnect = { apiClient.clearSession(); session = null; status = "Disconnected." },
+                instanceUrl = store.instanceUrl()?.toString().orEmpty(),
+                theme = theme,
+                onThemeChange = { selected -> store.saveThemePreference(selected); theme = selected },
+                onChangeInstance = { apiClient.clearSession(); apiClient = NexusApiClient(store); session = null; configuredInstance = false; status = "" },
             )
             !configuredInstance -> ConnectionScreen(Modifier.padding(padding)) { rawUrl ->
                 store.saveInstanceUrl(rawUrl).onSuccess { apiClient = NexusApiClient(store); configuredInstance = true; status = "Instance saved. Sign in." }
@@ -113,6 +129,7 @@ private fun NexusMobileApp(store: InstanceStore) {
             )
         }
     }
+    }
 }
 
 @Composable
@@ -124,6 +141,10 @@ private fun ChatApp(
     onInstallUpdate: () -> Unit,
     onSessionExpired: () -> Unit,
     onDisconnect: () -> Unit,
+    instanceUrl: String,
+    theme: AppTheme,
+    onThemeChange: (AppTheme) -> Unit,
+    onChangeInstance: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     var projects by remember { mutableStateOf<List<ChatProject>>(emptyList()) }
@@ -136,6 +157,7 @@ private fun ChatApp(
     var projectPickerOpen by remember { mutableStateOf(false) }
     var newChatOpen by remember { mutableStateOf(false) }
     var settingsOpen by remember { mutableStateOf(false) }
+    var appSettingsOpen by remember { mutableStateOf(false) }
     var chatBootstrap by remember { mutableStateOf<ChatBootstrap?>(null) }
 
     fun loadMessages(conversation: ChatConversation) {
@@ -176,6 +198,7 @@ private fun ChatApp(
                 Text(selectedProject?.name ?: "Unscoped chats")
             }
             Button(onClick = { newChatOpen = true }) { Text("New chat") }
+            Button(onClick = { appSettingsOpen = true }) { Text("App") }
             Button(onClick = onDisconnect) { Text("Sign out") }
         }
         if (selectedConversation == null) {
@@ -238,12 +261,12 @@ private fun ChatApp(
         conversation = selectedConversation!!,
         bootstrap = chatBootstrap!!,
         onDismiss = { settingsOpen = false },
-        onSave = { memoryEnabled, botId, modelId ->
+        onSave = { memoryEnabled, botId ->
             scope.launch {
                 runCatching {
                     withContext(Dispatchers.IO) {
                         api.updateMemory(selectedConversation!!.id, memoryEnabled)
-                        api.updateRoute(selectedConversation!!.id, botId, modelId)
+                        api.updateRoute(selectedConversation!!.id, botId)
                     }
                 }.onSuccess { updated ->
                     selectedConversation = updated
@@ -266,6 +289,15 @@ private fun ChatApp(
                     .onFailure { status = it.message ?: "Could not delete chat." }
             }
         },
+    )
+    if (appSettingsOpen) AppSettingsDialog(
+        instanceUrl = instanceUrl,
+        theme = theme,
+        update = update,
+        onDismiss = { appSettingsOpen = false },
+        onThemeChange = onThemeChange,
+        onInstallUpdate = onInstallUpdate,
+        onChangeInstance = onChangeInstance,
     )
 }
 
@@ -296,10 +328,9 @@ private fun ConversationScreen(modifier: Modifier, conversation: ChatConversatio
 }
 
 @Composable
-private fun ChatSettingsDialog(conversation: ChatConversation, bootstrap: ChatBootstrap, onDismiss: () -> Unit, onSave: (Boolean, String?, String?) -> Unit, onArchive: () -> Unit, onDelete: () -> Unit) {
+private fun ChatSettingsDialog(conversation: ChatConversation, bootstrap: ChatBootstrap, onDismiss: () -> Unit, onSave: (Boolean, String?) -> Unit, onArchive: () -> Unit, onDelete: () -> Unit) {
     var memoryEnabled by remember { mutableStateOf(conversation.memoryEnabled) }
     var botId by remember { mutableStateOf(conversation.defaultBotId.orEmpty()) }
-    var modelId by remember { mutableStateOf(conversation.defaultModelId.orEmpty()) }
     var deleteConfirmation by remember { mutableStateOf(false) }
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -312,8 +343,7 @@ private fun ChatSettingsDialog(conversation: ChatConversation, bootstrap: ChatBo
                 }
                 Text("Bot ID", style = MaterialTheme.typography.labelMedium)
                 OutlinedTextField(value = botId, onValueChange = { botId = it }, modifier = Modifier.fillMaxWidth(), supportingText = { Text(bootstrap.bots.joinToString { it.id }) })
-                Text("Model ID", style = MaterialTheme.typography.labelMedium)
-                OutlinedTextField(value = modelId, onValueChange = { modelId = it }, modifier = Modifier.fillMaxWidth(), supportingText = { Text(bootstrap.models.joinToString { it.id }) })
+                Text("The selected bot's configured backend model is used for this conversation.", style = MaterialTheme.typography.bodySmall)
                 Button(onClick = onArchive, modifier = Modifier.fillMaxWidth()) { Text("Archive chat") }
                 Button(onClick = { deleteConfirmation = true }, modifier = Modifier.fillMaxWidth()) { Text("Delete chat") }
                 if (deleteConfirmation) Text("Delete is permanent. Tap Delete chat again to confirm.", color = MaterialTheme.colorScheme.error)
@@ -321,12 +351,49 @@ private fun ChatSettingsDialog(conversation: ChatConversation, bootstrap: ChatBo
         },
         confirmButton = {
             Button(onClick = {
-                if (deleteConfirmation) onDelete() else onSave(memoryEnabled, botId.ifBlank { null }, modelId.ifBlank { null })
+            if (deleteConfirmation) onDelete() else onSave(memoryEnabled, botId.ifBlank { null })
             }) { Text(if (deleteConfirmation) "Delete chat" else "Save") }
         },
         dismissButton = { Button(onClick = onDismiss) { Text("Cancel") } },
     )
 }
+
+@Composable
+private fun AppSettingsDialog(
+    instanceUrl: String,
+    theme: AppTheme,
+    update: AndroidUpdate?,
+    onDismiss: () -> Unit,
+    onThemeChange: (AppTheme) -> Unit,
+    onInstallUpdate: () -> Unit,
+    onChangeInstance: () -> Unit,
+) = AlertDialog(
+    onDismissRequest = onDismiss,
+    title = { Text("App settings") },
+    text = {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("Instance", style = MaterialTheme.typography.labelMedium)
+            Text(instanceUrl, style = MaterialTheme.typography.bodySmall)
+            Text("Appearance", style = MaterialTheme.typography.labelMedium)
+            AppTheme.entries.forEach { option ->
+                Row(Modifier.fillMaxWidth().clickable { onThemeChange(option) }, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    RadioButton(selected = theme == option, onClick = { onThemeChange(option) })
+                    Text(option.name.lowercase().replaceFirstChar { it.uppercase() })
+                }
+            }
+            Text("App version ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})", style = MaterialTheme.typography.bodySmall)
+            Text("Build ${BuildConfig.BUILD_COMMIT}", style = MaterialTheme.typography.bodySmall)
+            if (update != null) {
+                Text("Update ${update.latestVersionCode} is available.", style = MaterialTheme.typography.bodySmall)
+                Button(onClick = onInstallUpdate, modifier = Modifier.fillMaxWidth()) { Text("Install update") }
+            } else {
+                Text("No newer update is currently advertised by this instance.", style = MaterialTheme.typography.bodySmall)
+            }
+            Button(onClick = onChangeInstance, modifier = Modifier.fillMaxWidth()) { Text("Change instance") }
+        }
+    },
+    confirmButton = { Button(onClick = onDismiss) { Text("Close") } },
+)
 
 @Composable
 private fun ProjectPicker(projects: List<ChatProject>, selected: ChatProject?, onDismiss: () -> Unit, onSelect: (ChatProject?) -> Unit) = AlertDialog(

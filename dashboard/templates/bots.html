@@ -217,11 +217,9 @@
     {% set bot_tooling = (tooling.rows | selectattr('bot_id', 'equalto', b.id) | list | first) if tooling.rows else None %}
     {% set row_profile = b.chat_profile or {'label': 'Chat Only', 'capabilities': []} %}
     {% set row_readiness_state = bot_tooling.state if bot_tooling else (b.readiness.state if b.readiness else 'unknown') %}
-    {% set row_chat_use = row_profile.use_label or 'General chat' %}
-    {% set row_chat_mode = row_profile.mode or '' %}
     {% set row_chat_has_blocker = (bot_tooling and (bot_tooling.missing_credential_refs or bot_tooling.blocking_messages or bot_tooling.disabled_activation_messages)) or ((not bot_tooling) and b.readiness and b.readiness.state == 'blocked') %}
     {% set row_chat_blocked = row_readiness_state == 'disabled' or (row_readiness_state == 'blocked' and row_chat_has_blocker) %}
-    {% set row_chat_capable = b.enabled and not row_chat_blocked and row_chat_use not in ['Scheduled worker', 'Project manager', 'Pipeline entry', 'Workflow worker', 'Tool policy incomplete'] and (row_chat_use in ['Manual chat', 'Tool-enabled chat', 'General chat'] or row_chat_mode in ['chat', 'tutor', 'vision', 'vision_math', 'coding', 'research']) %}
+    {% set row_chat_capable = b.enabled and b.direct_chat_access.enabled and not row_chat_blocked %}
     <tr data-id="{{ b.id }}"
         data-readiness="{{ row_readiness_state }}"
         data-disabled-needs-fix="{{ 'true' if bot_tooling and bot_tooling.disabled_activation_messages else 'false' }}"
@@ -237,6 +235,7 @@
         <div class="metrics">Use: {{ profile.use_label or 'General chat' }}</div>
         <div class="metrics">Autonomy: {{ profile.autonomy }}</div>
         <div class="metrics">Chat tools: {{ profile.tool_label }}</div>
+        <div class="metrics">Direct chat: {{ 'enabled' if b.direct_chat_access.enabled else 'off' }}{% if not b.direct_chat_access.explicit %} (legacy){% endif %}</div>
         {% if profile.repo_output_mode == 'allow' %}
         <div class="metrics">Repo output: allow</div>
         {% endif %}

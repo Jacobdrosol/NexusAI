@@ -1,4 +1,4 @@
-from dashboard.bot_chat_profiles import bot_chat_profile, with_bot_chat_profiles
+from dashboard.bot_chat_profiles import bot_chat_profile, bot_direct_chat_access, with_bot_chat_profiles
 
 
 def test_bot_chat_profile_identifies_manual_coding_tool_gates():
@@ -143,3 +143,15 @@ def test_bot_chat_profile_labels_manual_and_scheduled_use():
 
     assert manual["use_label"] == "Manual chat"
     assert scheduled["use_label"] == "Scheduled worker"
+
+
+def test_direct_chat_access_prefers_explicit_bot_configuration():
+    disabled = bot_direct_chat_access(
+        {"id": "personal-chat", "routing_rules": {"direct_chat": {"enabled": False}}}
+    )
+    enabled = bot_direct_chat_access(
+        {"id": "scheduled-worker", "routing_rules": {"direct_chat": {"enabled": True}}}
+    )
+
+    assert disabled == {"enabled": False, "explicit": True}
+    assert enabled == {"enabled": True, "explicit": True}

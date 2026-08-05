@@ -7,6 +7,7 @@ val signingStoreFile = providers.environmentVariable("NEXUSAI_ANDROID_STORE_FILE
 val signingStorePassword = providers.environmentVariable("NEXUSAI_ANDROID_STORE_PASSWORD").orNull
 val signingKeyAlias = providers.environmentVariable("NEXUSAI_ANDROID_KEY_ALIAS").orNull
 val signingKeyPassword = providers.environmentVariable("NEXUSAI_ANDROID_KEY_PASSWORD").orNull
+val buildCommit = providers.environmentVariable("NEXUSAI_ANDROID_GIT_SHA").orNull ?: "local"
 
 android {
     namespace = "org.nexusai.mobile"
@@ -16,8 +17,9 @@ android {
         applicationId = "org.nexusai.mobile"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
+        buildConfigField("String", "BUILD_COMMIT", "\"$buildCommit\"")
     }
 
     buildFeatures {

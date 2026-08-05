@@ -196,8 +196,8 @@ class NexusApiClient(private val store: InstanceStore) {
     )
 
     @Throws(IOException::class)
-    fun updateRoute(conversationId: String, botId: String?, modelId: String?) = mutateConversation(
-        conversationId, "route-defaults", JSONObject().put("default_bot_id", botId ?: "").put("default_model_id", modelId ?: ""),
+    fun updateRoute(conversationId: String, botId: String?) = mutateConversation(
+        conversationId, "route-defaults", JSONObject().put("default_bot_id", botId ?: "").put("default_model_id", JSONObject.NULL),
     )
 
     @Throws(IOException::class)

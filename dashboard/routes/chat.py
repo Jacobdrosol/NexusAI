@@ -10,7 +10,7 @@ import requests
 from flask import Blueprint, Response, jsonify, render_template, request, stream_with_context
 from flask_login import current_user, login_required
 
-from dashboard.bot_chat_profiles import bot_chat_profile, bot_chat_tool_access, with_bot_chat_profiles
+from dashboard.bot_chat_profiles import bot_chat_profile, bot_chat_tool_access, bot_direct_chat_access, with_bot_chat_profiles
 from dashboard.bot_tooling_status import build_bot_tooling_status
 from dashboard.cp_client import get_cp_client
 from dashboard.routes._sse_proxy import proxy_upstream_sse_lines
@@ -20,12 +20,6 @@ from shared.chat_attachments import CHAT_ATTACHMENT_MAX_FILES, CHAT_ATTACHMENT_M
 bp = Blueprint("chat", __name__)
 
 UNSCOPED_PROJECT_FILTER = "__unscoped__"
-_CHAT_SELECTABLE_ROLES = {
-    "assistant",
-    "coding_assistant",
-    "code-reviewer",
-    "tutor",
-}
 _ALLOWED_CONVERSATION_SCOPES = {"global", "project", "bridged"}
 _CHAT_CONTEXT_ITEM_MAX_CHARS = 12000
 _CHAT_CONTEXT_ITEM_ID_MAX_CHARS = 256
@@ -76,20 +70,16 @@ def _http_connection_backend_count(bot: Any) -> int:
 def _chat_selectable_bots(bots: Iterable[Any]) -> list[Any]:
     selectable: list[dict[str, Any]] = []
     for bot in bots:
-        rules = _routing_rules(bot)
-        operator_profile = rules.get("operator_profile") if isinstance(rules.get("operator_profile"), dict) else {}
-        chat_tool_access = rules.get("chat_tool_access") if isinstance(rules.get("chat_tool_access"), dict) else {}
-        autonomy = str(operator_profile.get("autonomy") or "").strip().lower()
-        role = str(_bot_value(bot, "role", "") or "").strip().lower()
-        name = str(_bot_value(bot, "name", "") or "").strip().lower()
-        bot_id = str(_bot_value(bot, "id", "") or "").strip().lower()
-        if (
-            autonomy == "manual_chat_only"
-            or bool(chat_tool_access.get("enabled"))
-            or role in _CHAT_SELECTABLE_ROLES
-            or bot_id.startswith("personal-")
-            or "chat" in name
-        ):
+        normalized = bot if isinstance(bot, dict) else {
+            "id": _bot_value(bot, "id"),
+            "name": _bot_value(bot, "name"),
+            "role": _bot_value(bot, "role"),
+            "routing_rules": _routing_rules(bot),
+            "backends": _bot_value(bot, "backends", []),
+            "memory_profiles_enabled": bool(_bot_value(bot, "memory_profiles_enabled", False)),
+            "execution_policy": _bot_value(bot, "execution_policy", None),
+        }
+        if bot_direct_chat_access(normalized)["enabled"]:
             if isinstance(bot, dict):
                 selectable.append(dict(bot))
             elif hasattr(bot, "model_dump"):
@@ -413,8 +403,7 @@ def _chat_selectability_blocker_from_cp(cp: Any, bot_id: str) -> str:
         if isinstance(row, dict) and str(row.get("id") or "").strip()
     }
     if safe_bot_id not in selectable_ids:
-        if _is_explicit_worker_bot(bot):
-            return f"{safe_bot_id} is not configured for manual chat use"
+        return f"{safe_bot_id} is not configured for direct chat use"
     return ""
 
 
@@ -2157,16 +2146,9 @@ def api_create_conversation():
         return jsonify({"error": "workspace tools require a project-scoped or bridged conversation"}), 400
     cp = get_cp_client()
     default_bot_id = str(data.get("default_bot_id") or "").strip()
-    default_model_id = str(data.get("default_model_id") or "").strip()
     readiness_blocker = _chat_bot_availability_blocker_from_cp(cp, default_bot_id)
     if readiness_blocker:
         return jsonify({"error": f"Default bot is unavailable: {readiness_blocker}"}), 409
-    model_blocker = _model_catalog_blocker_from_cp(cp, default_model_id)
-    if model_blocker:
-        return jsonify({"error": f"Default model is unavailable: {model_blocker}"}), 409
-    route_blocker = _default_route_model_compatibility_blocker_from_cp(cp, default_bot_id, default_model_id)
-    if route_blocker:
-        return jsonify({"error": f"Default route is unavailable: {route_blocker}"}), 409
     created = cp.create_conversation(
         {
             "title": title,
@@ -2174,7 +2156,7 @@ def api_create_conversation():
             "bridge_project_ids": data.get("bridge_project_ids") or [],
             "scope": scope,
             "default_bot_id": default_bot_id or None,
-            "default_model_id": default_model_id or None,
+            "default_model_id": None,
             "owner_user_id": _current_memory_user_id(),
             "memory_profiles_enabled": bool(data.get("memory_profiles_enabled", True)),
             "memory_profile_id": data.get("memory_profile_id") or "default",
@@ -2298,20 +2280,13 @@ def api_update_conversation_route_defaults(conversation_id: str):
     data: dict[str, Any] = request.get_json(force=True) or {}
     cp = get_cp_client()
     default_bot_id = str(data.get("default_bot_id") or "").strip()
-    default_model_id = str(data.get("default_model_id") or "").strip()
     readiness_blocker = _chat_bot_availability_blocker_from_cp(cp, default_bot_id)
     if readiness_blocker:
         return jsonify({"error": f"Default bot is unavailable: {readiness_blocker}"}), 409
-    model_blocker = _model_catalog_blocker_from_cp(cp, default_model_id)
-    if model_blocker:
-        return jsonify({"error": f"Default model is unavailable: {model_blocker}"}), 409
-    route_blocker = _default_route_model_compatibility_blocker_from_cp(cp, default_bot_id, default_model_id)
-    if route_blocker:
-        return jsonify({"error": f"Default route is unavailable: {route_blocker}"}), 409
     updated = cp.update_conversation_route_defaults(
         conversation_id=conversation_id,
         default_bot_id=default_bot_id or None,
-        default_model_id=default_model_id or None,
+        default_model_id=None,
     )
     if updated is None:
         return _cp_error_response(cp, "conversation route defaults update failed")

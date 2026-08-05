@@ -392,15 +392,7 @@ class UpdateConversationMemoryProfileRequest(BaseModel):
 
 
 def _chat_turn_preferred_model_id(conversation: ChatConversation, requested_bot_id: Optional[str]) -> Optional[str]:
-    default_model_id = str(conversation.default_model_id or "").strip()
-    if not default_model_id:
-        return None
-    requested = str(requested_bot_id or "").strip()
-    if not requested:
-        return default_model_id
-    default_bot_id = str(conversation.default_bot_id or "").strip()
-    if not default_bot_id or requested == default_bot_id:
-        return default_model_id
+    # Conversation-level model overrides are retired. Bots own their backend model.
     return None
 
 
@@ -3913,20 +3905,13 @@ async def create_conversation(request: Request, body: CreateConversationRequest)
             detail="workspace tools require a project-scoped or bridged conversation",
         )
 
-    catalog_model = await _validate_default_model_id(request, body.default_model_id)
-    await _validate_default_model_compatible_with_bot(
-        request,
-        default_bot_id=body.default_bot_id,
-        catalog_model=catalog_model,
-    )
-
     return await chat_manager.create_conversation(
         title=body.title,
         project_id=project_id,
         bridge_project_ids=bridge_project_ids,
         scope=scope,
         default_bot_id=body.default_bot_id,
-        default_model_id=body.default_model_id,
+        default_model_id=None,
         owner_user_id=body.owner_user_id,
         memory_profiles_enabled=body.memory_profiles_enabled,
         memory_profile_id=body.memory_profile_id,
@@ -4027,16 +4012,10 @@ async def update_conversation_route_defaults(
 ) -> ChatConversation:
     chat_manager = request.app.state.chat_manager
     try:
-        catalog_model = await _validate_default_model_id(request, body.default_model_id)
-        await _validate_default_model_compatible_with_bot(
-            request,
-            default_bot_id=body.default_bot_id,
-            catalog_model=catalog_model,
-        )
         return await chat_manager.update_conversation_route_defaults(
             conversation_id,
             default_bot_id=body.default_bot_id,
-            default_model_id=body.default_model_id,
+            default_model_id=None,
         )
     except ConversationNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))

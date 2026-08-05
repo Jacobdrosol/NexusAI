@@ -37,6 +37,14 @@ class InstanceStore(val context: Context) {
         preferences.edit().clear().apply()
     }
 
+    fun themePreference(): AppTheme = runCatching {
+        AppTheme.valueOf(preferences.getString(KEY_THEME, AppTheme.SYSTEM.name) ?: AppTheme.SYSTEM.name)
+    }.getOrDefault(AppTheme.SYSTEM)
+
+    fun saveThemePreference(theme: AppTheme) {
+        preferences.edit().putString(KEY_THEME, theme.name).apply()
+    }
+
     fun loadCookies(url: HttpUrl): List<Cookie> = preferences.getString(KEY_COOKIES, "").orEmpty()
         .lineSequence()
         .mapNotNull { Cookie.parse(url, it) }
@@ -49,5 +57,8 @@ class InstanceStore(val context: Context) {
     private companion object {
         const val KEY_INSTANCE_URL = "instance_url"
         const val KEY_COOKIES = "session_cookies"
+        const val KEY_THEME = "theme"
     }
 }
+
+enum class AppTheme { SYSTEM, DARK, LIGHT }
