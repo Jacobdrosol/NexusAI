@@ -444,8 +444,30 @@ def test_memory_page_loads_user_scoped_items(dashboard_client):
                     "conversation_id": "manual",
                     "role": "user",
                     "content": "Use direct answers.",
+                    "metadata": {"source": "manual"},
                     "created_at": "2026-08-04T00:00:00+00:00",
                     "updated_at": "2026-08-04T00:00:00+00:00",
+                },
+                {
+                    "id": "memory-2",
+                    "profile_id": "default",
+                    "message_id": "msg-1",
+                    "conversation_id": "chat-1",
+                    "role": "assistant",
+                    "content": "User is working on NexusAI chat migration.",
+                    "metadata": {"source": "generated_chat"},
+                    "created_at": "2026-08-04T00:01:00+00:00",
+                    "updated_at": "2026-08-04T00:01:00+00:00",
+                },
+                {
+                    "id": "memory-3",
+                    "profile_id": "default",
+                    "message_id": "",
+                    "conversation_id": "manual",
+                    "role": "user",
+                    "content": "Legacy memory without metadata.",
+                    "created_at": "2026-08-04T00:02:00+00:00",
+                    "updated_at": "2026-08-04T00:02:00+00:00",
                 }
             ]
 
@@ -454,7 +476,15 @@ def test_memory_page_loads_user_scoped_items(dashboard_client):
 
     assert resp.status_code == 200
     assert b"Use direct answers." in resp.data
+    assert b"User is working on NexusAI chat migration." in resp.data
+    assert b"Legacy memory without metadata." in resp.data
     assert b"Add Memory" in resp.data
+    assert b"manual" in resp.data
+    assert b"generated chat" in resp.data
+    assert b"profile default" in resp.data
+    assert b"chat-1" in resp.data
+    assert b"message msg-1" in resp.data
+    assert b"function memorySourceLabel" in resp.data
 
 
 def test_memory_api_create_forces_current_user(dashboard_client):
