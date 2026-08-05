@@ -941,6 +941,7 @@ let lastAssignmentRecapText = '';
 let lastAssignmentRecapOrchestrationId = '';
 let activeAssignmentPreview = null;
 let chatSendInFlight = false;
+let lastServerEffectiveContext = null;
 
 function scrollMessagesToLatest() {
   const container = document.getElementById('messages');
@@ -1737,8 +1738,9 @@ function inlineCodingRequestBlocker() {
   return '';
 }
 
-async function serverChatEffectiveContextBlocker({useWorkspaceTools, inlineCodingEnabled}) {
-  if (!selectedConversationId || (!useWorkspaceTools && !inlineCodingEnabled)) return '';
+async function serverChatEffectiveContextBlocker({useWorkspaceTools, inlineCodingEnabled, hasImageAttachment}) {
+  lastServerEffectiveContext = null;
+  if (!selectedConversationId || (!useWorkspaceTools && !inlineCodingEnabled && !hasImageAttachment)) return '';
   const params = new URLSearchParams();
   const botId = activeChatBotId();
   if (botId) params.set('bot_id', botId);
@@ -1752,14 +1754,20 @@ async function serverChatEffectiveContextBlocker({useWorkspaceTools, inlineCodin
   if (!res.ok) {
     return data.error || 'Unable to verify chat tool context before sending.';
   }
+  lastServerEffectiveContext = data;
   const tools = data.workspace_tools && typeof data.workspace_tools === 'object' ? data.workspace_tools : {};
   const coding = data.inline_coding && typeof data.inline_coding === 'object' ? data.inline_coding : {};
+  const model = data.model && typeof data.model === 'object' ? data.model : {};
   if (useWorkspaceTools && tools.request_allowed !== true) {
     const reasons = Array.isArray(tools.reasons) ? tools.reasons.filter(Boolean).join(', ') : '';
     return 'Workspace tools are not available: ' + (reasons || 'server gate off') + '.';
   }
   if (inlineCodingEnabled && coding.request_allowed !== true) {
     return 'Inline coding is not available: ' + (coding.blocker || 'server gate off') + '.';
+  }
+  if (hasImageAttachment && model.image_attachments_supported !== true) {
+    const blocker = String(model.blocker || '').trim();
+    return 'The selected chat bot model does not support image attachments.' + (blocker ? ' ' + blocker : '');
   }
   return '';
 }
@@ -2637,10 +2645,10 @@ async function sendMessage(streamMode) {
     showChatComposerStatus(readinessBlocker);
     return;
   }
-  if (pendingComposerAttachments.some((item) => String(item?.kind || '') === 'image') && !activeBotSupportsImages()) {
-    showChatComposerStatus('The selected chat bot model does not support image attachments. Switch bots or remove the screenshots.');
-    return;
-  }
+  const hasImageAttachment = pendingComposerAttachments.some((item) => String(item?.kind || '') === 'image');
+  const localImageBlocker = hasImageAttachment && !activeBotSupportsImages()
+    ? 'The selected chat bot model does not support image attachments. Switch bots or remove the screenshots.'
+    : '';
   const toolBlocker = workspaceToolRequestBlocker();
   if (toolBlocker) {
     showChatComposerStatus(toolBlocker);
@@ -2654,10 +2662,14 @@ async function sendMessage(streamMode) {
   }
   const useWorkspaceTools = !!document.getElementById('use-workspace-tools-message')?.checked;
   const inlineCodingEnabled = !!document.getElementById('enable-inline-coding-message')?.checked;
-  const serverBlocker = await serverChatEffectiveContextBlocker({useWorkspaceTools, inlineCodingEnabled});
+  const serverBlocker = await serverChatEffectiveContextBlocker({useWorkspaceTools, inlineCodingEnabled, hasImageAttachment});
   if (serverBlocker) {
     showChatComposerStatus(serverBlocker);
     renderChatEffectiveContextSummary();
+    return;
+  }
+  if (localImageBlocker && lastServerEffectiveContext?.model?.image_attachments_supported !== true) {
+    showChatComposerStatus(localImageBlocker);
     return;
   }
   setChatComposerBusy(true);

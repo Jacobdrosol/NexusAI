@@ -1163,6 +1163,8 @@ def test_chat_page_embeds_effective_context_gate_inputs(dashboard_client):
     assert b"function inlineCodingRequestBlocker" in resp.data
     assert b"function serverChatEffectiveContextBlocker" in resp.data
     assert b"/effective-context?" in resp.data
+    assert b"hasImageAttachment" in resp.data
+    assert b"image_attachments_supported" in resp.data
     assert b"Workspace tools are not available:" in resp.data
     assert b"Inline coding is not available:" in resp.data
     assert b"inline coding inactive: message toggle off" in resp.data
