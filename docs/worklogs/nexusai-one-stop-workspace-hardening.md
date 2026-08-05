@@ -22,7 +22,7 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 
 ## Current State
 
-- Public NexusAI is deployed at `3808ea1`.
+- Public NexusAI has pushed hardening commits after deployed commit `3808ea1`.
 - Live readiness before this hardening pass: 105 ready, 2 enabled blocked, 23 disabled.
 - The only enabled blockers are GlobeIQ browser-session attestation failures for the browser inspector lane.
 - Work overview already tracks project/manager lanes, token usage, queue pressure, holds, route evidence, and task freshness.
@@ -36,4 +36,10 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 
 ## Progress
 
-- Started Batch 1 by adding a reusable bot tooling status builder and dashboard/API integration.
+- Batch 1 complete and pushed as `0fb7a5c`: added reusable bot tooling status builder, `/bots` readiness overview, `/api/bots/tooling-status`, grouped blocker causes, required tool summaries, and focused tests.
+- Batch 2 in progress: added chat assistant provenance rendering so normal messages show the answering bot, provider, model, and bot update timestamp when stored in message metadata.
+
+## Validation
+
+- `pytest tests/test_bot_tooling_status.py tests/test_bot_readiness.py tests/test_bot_tool_policy.py -q` passed for Batch 1.
+- `pytest tests/test_dashboard_phase4_pages.py::test_chat_page_surfaces_assistant_bot_and_model_provenance tests/test_dashboard_phase4_pages.py::test_chat_page_unscoped_filter_limits_conversation_list tests/test_dashboard_phase4_pages.py::test_chat_page_project_filter_limits_conversation_list tests/test_chat_api.py::test_create_conversation_and_post_message -q` passed for Batch 2 chat provenance.

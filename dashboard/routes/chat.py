@@ -449,6 +449,9 @@ def _normalize_message_row(raw: Any) -> dict[str, Any] | None:
         "role": str(raw.get("role") or "").strip() or "assistant",
         "content": str(raw.get("content") or ""),
         "created_at": str(raw.get("created_at") or "").strip() or None,
+        "bot_id": str(raw.get("bot_id") or "").strip() or None,
+        "provider": str(raw.get("provider") or "").strip() or None,
+        "model": str(raw.get("model") or "").strip() or None,
         "metadata": None,
     }
     metadata = raw.get("metadata")

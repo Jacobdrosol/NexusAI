@@ -576,6 +576,29 @@ select.form-control {
   margin-bottom: 0.25rem;
 }
 
+.message-provenance {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: -0.05rem 0 0.48rem;
+  color: #a3a3a3;
+  font-size: 0.78rem;
+}
+
+.message-provenance span {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0.13rem 0.42rem;
+  border: 1px solid rgba(163, 163, 163, 0.18);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .message-indicator {
   display: inline-flex;
   align-items: center;
@@ -1102,6 +1125,10 @@ select.form-control {
 .page-chat .message-role {
   font-size: 0.72rem;
   letter-spacing: 0.07em;
+}
+
+.page-chat .message-provenance {
+  font-size: 0.76rem;
 }
 
 .page-chat .message-actions .btn {
