@@ -395,7 +395,19 @@ def _chat_selectability_blocker_from_cp(cp: Any, bot_id: str) -> str:
         if isinstance(row, dict) and str(row.get("id") or "").strip()
     }
     if safe_bot_id not in selectable_ids:
-        return f"{safe_bot_id} is not configured for manual chat use"
+        rules = _routing_rules(bot)
+        operator_profile = rules.get("operator_profile") if isinstance(rules.get("operator_profile"), dict) else {}
+        autonomy = str(operator_profile.get("autonomy") or "").strip().lower()
+        role = str(_bot_value(bot, "role", "") or "").strip().lower()
+        capabilities = _bot_value(bot, "assignment_capabilities", {}) or {}
+        is_project_manager = isinstance(capabilities, dict) and bool(capabilities.get("is_project_manager"))
+        explicit_worker = (
+            autonomy in {"scheduled_worker", "autonomous_worker", "background_worker", "pipeline_worker"}
+            or role in {"pm", "qc", "worker", "auditor"}
+            or is_project_manager
+        )
+        if explicit_worker:
+            return f"{safe_bot_id} is not configured for manual chat use"
     return ""
 
 
