@@ -305,3 +305,6 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - Docs-only validation for Batch 140: reviewed `docs/CHAT_HISTORY_MIGRATION.md` diff; no runtime tests required.
 - Batch 141: added `scripts/validate_chat_import_manifest.py`, a dry-run JSONL validator for staged chat-history imports that blocks unsafe memory/tool defaults, unknown project mappings, secret-like values, malformed timestamps, and unsafe attachment types before any database import path exists.
 - `pytest tests/test_chat_import_manifest_validator.py -q` passed for Batch 141 chat import manifest validation.
+- Batch 142: added `scripts/summarize_bot_tooling_snapshot.py`, a VM/local snapshot summarizer for bot tooling readiness so operators can review blocked groups and recommended actions without relying only on the dashboard.
+- `pytest tests/test_bot_tooling_snapshot_summary.py -q` passed for Batch 142 snapshot summarizer behavior.
+- Scratch snapshot verification for Batch 142: `python scripts\summarize_bot_tooling_snapshot.py --bots tmp-live-tooling-audit\bots-current.json --readiness tmp-live-tooling-audit\readiness-final-tooling-pass.json --workers tmp-live-tooling-audit\workers-current.json --limit 3` reported 130 total bots, 105 ready, 2 blocked, 23 disabled, and both enabled blockers in the browser-session group.

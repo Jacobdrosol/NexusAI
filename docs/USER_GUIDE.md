@@ -341,6 +341,18 @@ If that runtime does not have a required toolchain installed, the PM test step f
 
 The Bots page includes a Bot Tooling Readiness panel for worker-backed, browser-backed, HTTP-connection, and policy-gated bots. The panel groups blocked bots by cause and includes a recommended action for each group, such as restoring a browser session, refreshing CLI auth, configuring a vault key, repairing a worker runtime, fixing a model route, or reviewing project/bot policy. These recommendations are operator guidance only; they do not mutate bot config or credentials automatically.
 
+For offline review or VM-side checks, export bot, readiness, worker, and optional probe snapshots, then run:
+
+```bash
+python scripts/summarize_bot_tooling_snapshot.py \
+  --bots bots.json \
+  --readiness readiness.json \
+  --workers workers.json \
+  --worker-probes worker-probes.json
+```
+
+The command prints the same high-level readiness counts and grouped recommended actions used by the dashboard. It exits non-zero when enabled bots are blocked so it can be used in operator checklists without starting or changing worker tasks.
+
 ## 7. GitHub Integration
 
 Per project you can:
