@@ -4537,6 +4537,10 @@ def test_chat_message_api_blocks_image_attachment_for_text_only_effective_model(
     assert resp.status_code == 409
     assert b"Image attachments are not available" in resp.data
     assert b"selected chat bot model does not support image attachments" in resp.data
+    payload = resp.get_json()
+    assert payload["code"] == "image_attachments_unavailable"
+    assert payload["effective_context"]["model"]["image_attachments_supported"] is False
+    assert payload["effective_context"]["bot"]["id"] == "text-bot"
 
 
 def test_chat_message_api_blocks_image_attachment_when_effective_model_unavailable(dashboard_client):
@@ -5784,6 +5788,11 @@ def test_chat_message_api_blocks_inline_coding_for_repo_output_denied_bot(dashbo
     assert resp.status_code == 409
     assert b"Inline coding is not available" in resp.data
     assert b"repo output is deny" in resp.data
+    payload = resp.get_json()
+    assert payload["code"] == "inline_coding_unavailable"
+    assert payload["effective_context"]["inline_coding"]["requested"] is True
+    assert payload["effective_context"]["inline_coding"]["available"] is False
+    assert payload["effective_context"]["inline_coding"]["blocker"] == "bot read-only-bot repo output is deny"
 
 
 def test_chat_assignment_create_api_blocks_unavailable_pm_bot(dashboard_client):
@@ -6416,6 +6425,11 @@ def test_chat_stream_api_blocks_inline_coding_for_unscoped_chat(dashboard_client
     assert resp.status_code == 409
     assert b"Inline coding is not available" in resp.data
     assert b"no scoped project" in resp.data
+    payload = resp.get_json()
+    assert payload["code"] == "inline_coding_unavailable"
+    assert payload["effective_context"]["inline_coding"]["requested"] is True
+    assert payload["effective_context"]["inline_coding"]["available"] is False
+    assert payload["effective_context"]["project_id"] is None
 
 
 def test_chat_stream_forwards_control_plane_auth_header(dashboard_client):
