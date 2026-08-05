@@ -456,6 +456,26 @@ def _image_attachment_model_blocker_from_cp(
 ) -> str:
     if not _attachments_include_image(attachments):
         return ""
+    conversation = _conversation_from_cp(cp, conversation_id)
+    if not conversation:
+        return "conversation unavailable"
+    default_model_id = str(conversation.get("default_model_id") or "").strip()
+    default_bot_id = str(conversation.get("default_bot_id") or "").strip()
+    safe_requested_bot_id = str(requested_bot_id or "").strip()
+    route_uses_default_model = bool(
+        default_model_id
+        and (
+            not safe_requested_bot_id
+            or not default_bot_id
+            or safe_requested_bot_id == default_bot_id
+        )
+    )
+    if route_uses_default_model:
+        catalog_model, catalog_blocker = _model_catalog_entry_from_cp(cp, default_model_id)
+        if catalog_blocker:
+            return f"effective model unavailable: {catalog_blocker}"
+        if not catalog_model:
+            return f"effective model unavailable: {default_model_id} is not in the enabled model catalog"
     context = _effective_chat_context_from_cp(
         cp,
         conversation_id,
@@ -469,7 +489,9 @@ def _image_attachment_model_blocker_from_cp(
     if model.get("image_attachments_supported") is True:
         return ""
     blocker = str(model.get("blocker") or "").strip()
-    return "selected chat bot model does not support image attachments" + (f": {blocker}" if blocker else "")
+    if blocker:
+        return f"effective model unavailable: {blocker}"
+    return "selected chat bot model does not support image attachments"
 
 
 def _conversation_from_cp(cp: Any, conversation_id: str) -> dict[str, Any] | None:

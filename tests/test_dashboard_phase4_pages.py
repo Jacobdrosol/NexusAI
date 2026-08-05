@@ -2616,6 +2616,78 @@ def test_chat_message_api_blocks_image_attachment_for_text_only_effective_model(
     assert b"selected chat bot model does not support image attachments" in resp.data
 
 
+def test_chat_message_api_blocks_image_attachment_when_effective_model_unavailable(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_conversations(self, archived="all"):
+            return [{"id": "c1", "project_id": None, "default_bot_id": "text-bot", "default_model_id": "missing-model"}]
+
+        def list_bot_readiness(self):
+            return {"readiness": []}
+
+        def list_bots(self):
+            return [{"id": "text-bot", "backends": [{"provider": "openai", "model": "gpt-4o-mini"}]}]
+
+        def list_models(self):
+            return []
+
+        def post_message(self, conversation_id, body):
+            raise AssertionError("unavailable effective model should not reach control plane message send")
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/chat/messages",
+            json={
+                "conversation_id": "c1",
+                "content": "read this screenshot",
+                "attachments": [{"name": "screen.png", "kind": "image", "mime_type": "image/png", "size_bytes": 42}],
+            },
+        )
+
+    assert resp.status_code == 409
+    assert b"Image attachments are not available" in resp.data
+    assert b"effective model unavailable" in resp.data
+    assert b"missing-model is not in the enabled model catalog" in resp.data
+
+
+def test_chat_message_api_allows_image_attachment_for_vision_default_model(dashboard_client):
+    _login_admin(dashboard_client)
+    seen: dict[str, object] = {}
+
+    class FakeCP:
+        def list_conversations(self, archived="all"):
+            return [{"id": "c1", "project_id": None, "default_bot_id": "text-bot", "default_model_id": "vision-default"}]
+
+        def list_bot_readiness(self):
+            return {"readiness": []}
+
+        def list_bots(self):
+            return [{"id": "text-bot", "backends": [{"provider": "openai", "model": "gpt-3.5-turbo"}]}]
+
+        def list_models(self):
+            return [{"id": "vision-default", "name": "gpt-4o-mini", "provider": "openai", "enabled": True, "capabilities": ["vision"]}]
+
+        def post_message(self, conversation_id, body):
+            seen["conversation_id"] = conversation_id
+            seen["body"] = body
+            return {"assistant_message": {"id": "a1", "content": "ok"}}
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/chat/messages",
+            json={
+                "conversation_id": "c1",
+                "content": "read this screenshot",
+                "attachments": [{"name": "screen.png", "kind": "image", "mime_type": "image/png", "size_bytes": 42}],
+            },
+        )
+
+    assert resp.status_code == 200
+    assert seen["conversation_id"] == "c1"
+    assert seen["body"]["attachments"][0]["kind"] == "image"
+
+
 def test_chat_stream_api_blocks_image_attachment_for_text_only_effective_model(dashboard_client):
     _login_admin(dashboard_client)
 
