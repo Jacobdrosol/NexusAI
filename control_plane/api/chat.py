@@ -579,11 +579,48 @@ def _message_attachment_parts(metadata: Any) -> List[Dict[str, Any]]:
     return parts
 
 
-async def _target_supports_image_attachments(request: Request, *, target_bot_id: str) -> bool:
+def _model_supports_image_attachments(*, provider: str, model_name: str, capabilities: Any = None) -> bool:
+    caps = {str(item or "").strip().lower() for item in (capabilities or [])}
+    if caps:
+        return bool(caps & _IMAGE_CAPABILITY_MARKERS)
+    lowered_model = str(model_name or "").strip().lower()
+    provider = str(provider or "").strip().lower()
+    if provider == "gemini":
+        return True
+    if provider == "openai":
+        return any(token in lowered_model for token in ("gpt-4o", "gpt-4.1", "gpt-5"))
+    if provider == "claude":
+        return any(token in lowered_model for token in ("claude-3", "claude-4"))
+    if provider in {"ollama_cloud", "ollama"}:
+        return any(
+            token in lowered_model
+            for token in ("vision", "-vl", "qwen2.5-vl", "qwen-vl", "qwen3-vl", "qwen3.5:", "llava", "gemma3")
+        )
+    return False
+
+
+async def _target_supports_image_attachments(
+    request: Request,
+    *,
+    target_bot_id: str,
+    preferred_model_id: Optional[str] = None,
+) -> bool:
     bot_registry = getattr(request.app.state, "bot_registry", None)
     model_registry = getattr(request.app.state, "model_registry", None)
     if bot_registry is None:
         return False
+    preferred_id = str(preferred_model_id or "").strip()
+    if preferred_id and model_registry is not None:
+        try:
+            catalog_model = await model_registry.get(preferred_id)
+            if bool(getattr(catalog_model, "enabled", True)):
+                return _model_supports_image_attachments(
+                    provider=str(getattr(catalog_model, "provider", "") or ""),
+                    model_name=str(getattr(catalog_model, "name", "") or ""),
+                    capabilities=getattr(catalog_model, "capabilities", None),
+                )
+        except Exception:
+            pass
     try:
         bot = await bot_registry.get(target_bot_id)
     except Exception:
@@ -603,23 +640,14 @@ async def _target_supports_image_attachments(request: Request, *, target_bot_id:
                     continue
                 if str(getattr(catalog_model, "name", "") or "").strip() != model_name:
                     continue
-                caps = {str(item or "").strip().lower() for item in (getattr(catalog_model, "capabilities", None) or [])}
-                return bool(caps & _IMAGE_CAPABILITY_MARKERS)
+                return _model_supports_image_attachments(
+                    provider=provider,
+                    model_name=model_name,
+                    capabilities=getattr(catalog_model, "capabilities", None),
+                )
         except Exception:
             pass
-    lowered_model = model_name.lower()
-    if provider == "gemini":
-        return True
-    if provider == "openai":
-        return any(token in lowered_model for token in ("gpt-4o", "gpt-4.1", "gpt-5"))
-    if provider == "claude":
-        return any(token in lowered_model for token in ("claude-3", "claude-4"))
-    if provider in {"ollama_cloud", "ollama"}:
-        return any(
-            token in lowered_model
-            for token in ("vision", "-vl", "qwen2.5-vl", "qwen-vl", "qwen3-vl", "qwen3.5:", "llava", "gemma3")
-        )
-    return False
+    return _model_supports_image_attachments(provider=provider, model_name=model_name)
 
 
 async def _validate_default_model_id(request: Request, default_model_id: Optional[str]) -> Any | None:
@@ -4033,11 +4061,16 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
     try:
         conversation = await chat_manager.get_conversation(conversation_id)
         target_bot_id = body.bot_id or conversation.default_bot_id
+        preferred_model_id = _chat_turn_preferred_model_id(conversation, body.bot_id)
         attachments = _attachment_payload_dicts(body.attachments)
         if any(str(item.get("kind") or "") == "image" for item in attachments):
             if not target_bot_id:
                 raise HTTPException(status_code=400, detail="Image attachments require an explicit bot or conversation bot.")
-            if not await _target_supports_image_attachments(request, target_bot_id=target_bot_id):
+            if not await _target_supports_image_attachments(
+                request,
+                target_bot_id=target_bot_id,
+                preferred_model_id=preferred_model_id,
+            ):
                 raise HTTPException(status_code=400, detail="The selected bot model does not support image attachments.")
         if not str(body.content or "").strip() and not attachments:
             raise HTTPException(status_code=400, detail="content or attachments are required")
@@ -4765,7 +4798,7 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
                 source="chat",
                 project_id=conversation.project_id,
                 conversation_id=conversation_id,
-                preferred_model_id=_chat_turn_preferred_model_id(conversation, body.bot_id),
+                preferred_model_id=preferred_model_id,
             ),
             status="running",
             created_at=user_message.created_at,
@@ -4832,11 +4865,16 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
         try:
             conversation = await chat_manager.get_conversation(conversation_id)
             target_bot_id = body.bot_id or conversation.default_bot_id
+            preferred_model_id = _chat_turn_preferred_model_id(conversation, body.bot_id)
             attachments = _attachment_payload_dicts(body.attachments)
             if any(str(item.get("kind") or "") == "image" for item in attachments):
                 if not target_bot_id:
                     raise HTTPException(status_code=400, detail="Image attachments require an explicit bot or conversation bot.")
-                if not await _target_supports_image_attachments(request, target_bot_id=target_bot_id):
+                if not await _target_supports_image_attachments(
+                    request,
+                    target_bot_id=target_bot_id,
+                    preferred_model_id=preferred_model_id,
+                ):
                     raise HTTPException(status_code=400, detail="The selected bot model does not support image attachments.")
             if not str(body.content or "").strip() and not attachments:
                 raise HTTPException(status_code=400, detail="content or attachments are required")
@@ -5709,7 +5747,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
                     source="chat",
                     project_id=conversation.project_id,
                     conversation_id=conversation_id,
-                    preferred_model_id=_chat_turn_preferred_model_id(conversation, body.bot_id),
+                    preferred_model_id=preferred_model_id,
                 ),
                 status="running",
                 created_at=user_message.created_at,

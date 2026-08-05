@@ -484,6 +484,133 @@ async def test_chat_message_accepts_image_attachment_for_ollama_cloud_qwen35_bot
 
 
 @pytest.mark.anyio
+async def test_chat_message_uses_default_model_capabilities_for_image_attachment(cp_app):
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "assistant reply"})
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        await client.post(
+            "/v1/models",
+            json={
+                "id": "ollama-qwen-vision",
+                "name": "qwen3.5:397b-cloud",
+                "provider": "ollama_cloud",
+                "capabilities": ["vision"],
+                "enabled": True,
+            },
+        )
+        await client.post(
+            "/v1/models",
+            json={
+                "id": "ollama-text-base",
+                "name": "llama3.1:8b",
+                "provider": "ollama_cloud",
+                "capabilities": ["chat"],
+                "enabled": True,
+            },
+        )
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-text-base-vision-default",
+                "name": "Text Base Vision Default",
+                "role": "assistant",
+                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "llama3.1:8b"}],
+                "enabled": True,
+            },
+        )
+        create_resp = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Default Vision Model",
+                "default_bot_id": "bot-text-base-vision-default",
+                "default_model_id": "ollama-qwen-vision",
+            },
+        )
+        assert create_resp.status_code == 200
+        conversation_id = create_resp.json()["id"]
+
+        post_resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": "Inspect this image",
+                "attachments": [
+                    {
+                        "name": "image.png",
+                        "mime_type": "image/png",
+                        "kind": "image",
+                        "data_url": "data:image/png;base64,aGVsbG8=",
+                    }
+                ],
+            },
+        )
+
+    assert post_resp.status_code == 200
+
+
+@pytest.mark.anyio
+async def test_chat_message_rejects_image_when_default_model_is_text_only(cp_app):
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "assistant reply"})
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        await client.post(
+            "/v1/models",
+            json={
+                "id": "ollama-qwen-vision",
+                "name": "qwen3.5:397b-cloud",
+                "provider": "ollama_cloud",
+                "capabilities": ["vision"],
+                "enabled": True,
+            },
+        )
+        await client.post(
+            "/v1/models",
+            json={
+                "id": "ollama-text-default",
+                "name": "llama3.1:8b",
+                "provider": "ollama_cloud",
+                "capabilities": ["chat"],
+                "enabled": True,
+            },
+        )
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-vision-base-text-default",
+                "name": "Vision Base Text Default",
+                "role": "assistant",
+                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "qwen3.5:397b-cloud"}],
+                "enabled": True,
+            },
+        )
+        create_resp = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Default Text Model",
+                "default_bot_id": "bot-vision-base-text-default",
+                "default_model_id": "ollama-text-default",
+            },
+        )
+        assert create_resp.status_code == 200
+        conversation_id = create_resp.json()["id"]
+
+        post_resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={
+                "content": "Inspect this image",
+                "attachments": [
+                    {
+                        "name": "image.png",
+                        "mime_type": "image/png",
+                        "kind": "image",
+                        "data_url": "data:image/png;base64,aGVsbG8=",
+                    }
+                ],
+            },
+        )
+
+    assert post_resp.status_code == 400
+    assert "does not support image attachments" in str(post_resp.json().get("detail") or "")
+
+
+@pytest.mark.anyio
 async def test_chat_message_rejects_more_than_15_attachments(cp_app):
     cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "assistant reply"})
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:

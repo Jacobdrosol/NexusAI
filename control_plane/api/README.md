@@ -94,6 +94,8 @@ All routes are prefixed with `/v1/`. Auth: set `X-Nexus-API-Key: <token>` header
 
 For individual messages, the conversation default model is applied only when the request uses the conversation default bot, omits `bot_id`, or the conversation has no default bot. A one-off explicit `bot_id` override on a conversation with a different default bot uses that bot's own backend model instead of inheriting the conversation model.
 
+Image attachments are validated against that same effective model route. A vision-capable preferred model allows screenshots even if the bot's base backend is text-only; a text-only preferred model rejects screenshots even if the bot's base backend is vision-capable.
+
 ---
 
 ## Vault — `/v1/vault`
