@@ -7981,6 +7981,22 @@ def test_bots_page_surfaces_bot_scoped_chat_profiles(dashboard_client):
                     "execution_policy": {"repo_output_mode": "deny"},
                 },
                 {
+                    "id": "missing-credential-chat",
+                    "name": "Missing Credential Chat",
+                    "role": "assistant",
+                    "enabled": True,
+                    "backends": [
+                        {
+                            "type": "cloud_api",
+                            "provider": "ollama_cloud",
+                            "model": "gpt-oss:120b",
+                            "api_key_ref": "MISSING_OLLAMA_KEY",
+                        }
+                    ],
+                    "routing_rules": {"operator_profile": {"autonomy": "manual_chat_only"}},
+                    "execution_policy": {"repo_output_mode": "deny"},
+                },
+                {
                     "id": "scheduled-worker",
                     "name": "Scheduled Worker",
                     "role": "worker",
@@ -8038,6 +8054,14 @@ def test_bots_page_surfaces_bot_scoped_chat_profiles(dashboard_client):
     assert b"Chat tools: no enabled tool mode" in resp.data
     assert b"Chat tools: filesystem, repo_search" in resp.data
     assert b"Repo output: allow" in resp.data
+    assert b'href="/chat?bot_id=chat-only">Chat</a>' in resp.data
+    assert b'href="/chat?bot_id=repo-coder">Chat</a>' in resp.data
+    assert b'href="/chat?bot_id=incomplete-tool-bot">Chat</a>' not in resp.data
+    assert b"Missing Credential Chat" in resp.data
+    assert b"MISSING_OLLAMA_KEY" in resp.data
+    assert b'href="/chat?bot_id=missing-credential-chat">Chat</a>' not in resp.data
+    assert b'href="/chat?bot_id=scheduled-worker">Chat</a>' not in resp.data
+    assert b'href="/chat?bot_id=project-manager">Chat</a>' not in resp.data
 
 
 def test_worker_live_endpoint_returns_payload(dashboard_client):

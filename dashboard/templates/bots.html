@@ -215,14 +215,21 @@
   <tbody>
     {% for b in bots %}
     {% set bot_tooling = (tooling.rows | selectattr('bot_id', 'equalto', b.id) | list | first) if tooling.rows else None %}
+    {% set row_profile = b.chat_profile or {'label': 'Chat Only', 'capabilities': []} %}
+    {% set row_readiness_state = bot_tooling.state if bot_tooling else (b.readiness.state if b.readiness else 'unknown') %}
+    {% set row_chat_use = row_profile.use_label or 'General chat' %}
+    {% set row_chat_mode = row_profile.mode or '' %}
+    {% set row_chat_has_blocker = (bot_tooling and (bot_tooling.missing_credential_refs or bot_tooling.blocking_messages or bot_tooling.disabled_activation_messages)) or ((not bot_tooling) and b.readiness and b.readiness.state == 'blocked') %}
+    {% set row_chat_blocked = row_readiness_state == 'disabled' or (row_readiness_state == 'blocked' and row_chat_has_blocker) %}
+    {% set row_chat_capable = b.enabled and not row_chat_blocked and row_chat_use not in ['Scheduled worker', 'Project manager', 'Pipeline entry', 'Workflow worker', 'Tool policy incomplete'] and (row_chat_use in ['Manual chat', 'Tool-enabled chat', 'General chat'] or row_chat_mode in ['chat', 'tutor', 'vision', 'vision_math', 'coding', 'research']) %}
     <tr data-id="{{ b.id }}"
-        data-readiness="{{ (bot_tooling.state if bot_tooling else (b.readiness.state if b.readiness else 'unknown')) }}"
+        data-readiness="{{ row_readiness_state }}"
         data-disabled-needs-fix="{{ 'true' if bot_tooling and bot_tooling.disabled_activation_messages else 'false' }}"
         data-has-tools="{{ 'true' if bot_tooling and (bot_tooling.required_tools or bot_tooling.connection_actions or bot_tooling.browser_actions or bot_tooling.owner_approval_actions or bot_tooling.browser_owner_approval_actions or bot_tooling.connection_backend_count) else 'false' }}">
       <td><a href="{{ url_for('bots.bot_detail_page', bot_id=b.id) }}">{{ b.name }}</a></td>
       <td>{{ b.role }}</td>
       <td>
-        {% set profile = b.chat_profile or {'label': 'Chat Only', 'capabilities': []} %}
+        {% set profile = row_profile %}
         <span class="badge badge-info">{{ profile.label }}</span>
         {% if profile.capabilities %}
         <div class="metrics">{{ profile.capabilities | join(', ') }}</div>
@@ -238,7 +245,7 @@
       <td>{{ b.priority }}</td>
       <td><span class="badge badge-{{ 'enabled' if b.enabled else 'disabled' }}">{{ 'enabled' if b.enabled else 'disabled' }}</span></td>
       <td>
-        {% set readiness_state = bot_tooling.state if bot_tooling else (b.readiness.state if b.readiness else 'unknown') %}
+        {% set readiness_state = row_readiness_state %}
         {% if b.readiness %}
         <span class="badge badge-{{ readiness_state }}" title="{{ b.readiness.detail }}">{{ readiness_state }}</span>
         {% if b.readiness.state != 'disabled' and b.readiness.failed %}<div class="metrics">{{ b.readiness.failed }} check(s)</div>{% endif %}
@@ -345,6 +352,9 @@
         {% endif %}
       </td>
       <td class="actions">
+        {% if row_chat_capable %}
+        <a class="btn btn-sm btn-primary" href="{{ url_for('chat.chat_page') }}?bot_id={{ b.id }}">Chat</a>
+        {% endif %}
         <button class="btn btn-sm" onclick="toggleBot('{{ b.id }}', {{ 'false' if b.enabled else 'true' }})">
           {{ 'Disable' if b.enabled else 'Enable' }}
         </button>
