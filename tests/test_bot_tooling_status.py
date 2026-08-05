@@ -39,6 +39,18 @@ def test_bot_tooling_status_groups_blocked_worker_tool_causes():
                     "browser_action_allowlist": ["question_bank.patch_existing"],
                     "browser_action_owner_approval_required": ["question_bank.patch_existing"],
                 },
+                "routing_rules": {
+                    "worker_profile": {
+                        "worker_id": "browser-worker",
+                        "service": "globeiq-browser-worker",
+                        "role": "browser-inspector",
+                        "task_scope": "single-lesson-browser-qc",
+                        "can_edit": False,
+                        "course_scope": ["57"],
+                        "lesson_scope": ["1201"],
+                        "site_account": "content-kc@globaliq.local",
+                    }
+                },
             },
             {
                 "id": "ready-bot",
@@ -173,6 +185,8 @@ def test_bot_tooling_status_groups_blocked_worker_tool_causes():
     assert status["summary"]["credential_ref_bot_count"] == 2
     assert status["summary"]["backend_credential_ref_count"] == 2
     assert status["summary"]["raw_credential_ref_bot_count"] == 1
+    assert status["summary"]["worker_profile_bot_count"] == 1
+    assert status["summary"]["editable_worker_profile_bot_count"] == 0
     assert status["summary"]["disabled_activation_blocker_bot_count"] == 1
     assert status["summary"]["disabled_activation_blocker_count"] == 1
     assert status["summary"]["worker_assignment_count"] == 5
@@ -190,6 +204,11 @@ def test_bot_tooling_status_groups_blocked_worker_tool_causes():
     assert browser_row["browser_owner_approval_actions"] == ["question_bank.patch_existing"]
     assert browser_row["blocking_category_view"]["label"] == "Authenticated browser session"
     assert browser_row["recommended_action"]["label"] == "restore browser session"
+    assert browser_row["worker_profile"]["task_scope"] == "single-lesson-browser-qc"
+    assert browser_row["worker_profile"]["can_edit"] is False
+    assert browser_row["worker_profile"]["course_scope"] == ["57"]
+    assert browser_row["worker_profile"]["lesson_scope"] == ["1201"]
+    assert browser_row["worker_profile"]["site_account"] == "content-kc@globaliq.local"
     connection_row = next(row for row in status["rows"] if row["bot_id"] == "connection-bot")
     assert connection_row["connection_actions"] == ["globeiq-agent-api.updateLesson"]
     assert connection_row["owner_approval_actions"] == ["globeiq-agent-api.updateLesson"]
@@ -278,6 +297,17 @@ def test_bots_page_surfaces_tooling_readiness_panel(dashboard_client):
                         "required_worker_tools": ["browser-ui"],
                         "browser_action_allowlist": ["question_bank.patch_existing"],
                         "browser_action_owner_approval_required": ["question_bank.patch_existing"],
+                    },
+                    "routing_rules": {
+                        "worker_profile": {
+                            "worker_id": "browser-worker",
+                            "service": "globeiq-browser-worker",
+                            "role": "browser-inspector",
+                            "task_scope": "single-lesson-browser-qc",
+                            "can_edit": False,
+                            "course_scope": ["57"],
+                            "site_username": "content-kc@globaliq.local",
+                        }
                     },
                 },
                 {
@@ -376,10 +406,16 @@ def test_bots_page_surfaces_tooling_readiness_panel(dashboard_client):
     assert b"Connection Action Bots" in page.data
     assert b"Browser Action Bots" in page.data
     assert b"Worker Assignments" in page.data
+    assert b"Scoped Worker Profiles" in page.data
+    assert b"Edit-Capable Profiles" in page.data
     assert b"Credential Ref Bots" in page.data
     assert b"Missing Credential Refs" in page.data
     assert b"Raw Credential Refs" in page.data
     assert b"Route: browser on browser-worker" in page.data
+    assert b"Scope: single-lesson-browser-qc" in page.data
+    assert b"Edits: not allowed" in page.data
+    assert b"Courses: 57" in page.data
+    assert b"Site account: content-kc@globaliq.local" in page.data
     assert b"Route: http_connection / attached-http" in page.data
     assert b"Disabled Needs Fix" in page.data
     assert b"setBotTableFilter('disabled-needs-fix')" in page.data
@@ -420,6 +456,8 @@ def test_bots_page_surfaces_tooling_readiness_panel(dashboard_client):
     assert payload["summary"]["disabled_activation_blocker_bot_count"] == 1
     assert payload["summary"]["disabled_activation_blocker_count"] == 1
     assert payload["summary"]["worker_assignment_count"] == 1
+    assert payload["summary"]["worker_profile_bot_count"] == 1
+    assert payload["summary"]["editable_worker_profile_bot_count"] == 0
     assert payload["summary"]["degraded_worker_probe_count"] == 1
     assert payload["summary"]["recommended_action"]["label"] == "restore browser session"
     assert payload["blocked_groups"][0]["category"] == "browser_session"

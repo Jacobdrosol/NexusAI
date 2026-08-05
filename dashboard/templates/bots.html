@@ -80,6 +80,14 @@
       <div class="card-value card-blue">{{ tooling_summary.worker_assignment_count or 0 }}</div>
     </div>
     <div class="card">
+      <div class="card-label">Scoped Worker Profiles</div>
+      <div class="card-value card-blue">{{ tooling_summary.worker_profile_bot_count or 0 }}</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Edit-Capable Profiles</div>
+      <div class="card-value {% if tooling_summary.editable_worker_profile_bot_count %}card-yellow{% else %}card-green{% endif %}">{{ tooling_summary.editable_worker_profile_bot_count or 0 }}</div>
+    </div>
+    <div class="card">
       <div class="card-label">Credential Ref Bots</div>
       <div class="card-value card-blue">{{ tooling_summary.credential_ref_bot_count or 0 }}</div>
     </div>
@@ -269,6 +277,23 @@
         <span class="badge badge-{{ mode_badge }}" title="{{ mode.detail }}">{{ mode.state }}</span>
         {% if mode.active_schedule_count or mode.paused_schedule_count %}
         <div class="metrics">{{ mode.active_schedule_count or 0 }} active / {{ mode.paused_schedule_count or 0 }} paused schedule(s)</div>
+        {% endif %}
+        {% if bot_tooling and bot_tooling.worker_profile %}
+        {% set profile = bot_tooling.worker_profile %}
+        <div class="metrics">Scope: {{ profile.task_scope or profile.role or 'worker profile' }}</div>
+        <div class="metrics">Edits: {{ 'allowed' if profile.can_edit else 'not allowed' }}</div>
+        {% if profile.course_scope %}
+        <div class="metrics">Courses: {{ profile.course_scope | join(', ') }}</div>
+        {% endif %}
+        {% if profile.lesson_scope %}
+        <div class="metrics">Lessons: {{ profile.lesson_scope | join(', ') }}</div>
+        {% endif %}
+        {% if profile.allowed_pages %}
+        <div class="metrics">Pages: {{ profile.allowed_pages | join(', ') }}</div>
+        {% endif %}
+        {% if profile.site_account %}
+        <div class="metrics">Site account: {{ profile.site_account }}</div>
+        {% endif %}
         {% endif %}
       </td>
       <td>

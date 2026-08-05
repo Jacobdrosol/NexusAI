@@ -147,6 +147,41 @@ def _connection_context_label(bot: dict[str, Any]) -> str:
     return "attached connection context"
 
 
+def _bounded_string_list(values: Any, *, limit: int = 8) -> list[str]:
+    items = []
+    for value in _as_list(values):
+        label = str(value or "").strip()
+        if label and label not in items:
+            items.append(label)
+        if len(items) >= limit:
+            break
+    return items
+
+
+def _worker_profile(bot: dict[str, Any]) -> dict[str, Any]:
+    routing = _as_dict(bot.get("routing_rules"))
+    profile = _as_dict(routing.get("worker_profile"))
+    if not profile:
+        return {}
+    site_account = ""
+    for key in ("site_account", "site_user", "site_username", "globeiq_user_email"):
+        site_account = _safe_reference_label(profile.get(key))
+        if site_account:
+            break
+    return {
+        "worker_id": str(profile.get("worker_id") or "").strip(),
+        "service": str(profile.get("service") or "").strip(),
+        "role": str(profile.get("role") or "").strip(),
+        "task_scope": str(profile.get("task_scope") or "").strip(),
+        "can_edit": bool(profile.get("can_edit")),
+        "site_account": site_account,
+        "course_scope": _bounded_string_list(profile.get("course_scope")),
+        "lesson_scope": _bounded_string_list(profile.get("lesson_scope")),
+        "allowed_pages": _bounded_string_list(profile.get("allowed_pages")),
+        "cli_tools": _bounded_string_list(profile.get("cli_tools")),
+    }
+
+
 def _failed_messages(readiness: dict[str, Any]) -> list[str]:
     messages = []
     for check in _as_list(readiness.get("checks")):
@@ -383,6 +418,7 @@ def build_bot_tooling_status(
         raw_credential_ref_detected = "[redacted raw credential]" in credential_refs
         missing_credential_refs = _missing_credential_refs(credential_refs, key_names)
         connection_context = _connection_context_label(bot)
+        worker_profile = _worker_profile(bot)
         worker_ids = _worker_ids(bot)
         messages = _failed_messages(readiness)
         disabled_activation_messages = _disabled_activation_messages(readiness) if state == "disabled" else []
@@ -434,6 +470,7 @@ def build_bot_tooling_status(
             "raw_credential_ref_detected": raw_credential_ref_detected,
             "missing_credential_refs": missing_credential_refs,
             "connection_context": connection_context,
+            "worker_profile": worker_profile,
             "worker_ids": worker_ids,
             "workers": worker_statuses,
             "blocking_category": category,
@@ -489,6 +526,8 @@ def build_bot_tooling_status(
             "missing_credential_ref_bot_count": sum(1 for row in rows if row["missing_credential_refs"]),
             "missing_credential_ref_count": sum(len(row["missing_credential_refs"]) for row in rows),
             "raw_credential_ref_bot_count": sum(1 for row in rows if row["raw_credential_ref_detected"]),
+            "worker_profile_bot_count": sum(1 for row in rows if row["worker_profile"]),
+            "editable_worker_profile_bot_count": sum(1 for row in rows if row["worker_profile"].get("can_edit")),
             "disabled_activation_blocker_bot_count": sum(1 for row in rows if row["disabled_activation_messages"]),
             "disabled_activation_blocker_count": sum(len(row["disabled_activation_messages"]) for row in rows),
             "worker_assignment_count": len(worker_statuses),
