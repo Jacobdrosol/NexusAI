@@ -106,7 +106,15 @@ def test_bot_tooling_status_groups_blocked_worker_tool_causes():
                 },
                 {"bot_id": "ready-bot", "state": "ready", "ready": True, "checks": []},
                 {"bot_id": "connection-bot", "state": "ready", "ready": True, "checks": []},
-                {"bot_id": "disabled-bot", "state": "disabled", "ready": False, "checks": []},
+                {
+                    "bot_id": "disabled-bot",
+                    "state": "disabled",
+                    "ready": False,
+                    "checks": [
+                        {"component": "bot", "status": "failed", "message": "Bot is disabled."},
+                        {"component": "backend[0]", "status": "failed", "message": "Model 'offline-model' is not present/enabled in the model catalog."},
+                    ],
+                },
                 {
                     "bot_id": "missing-worker-bot",
                     "state": "blocked",
@@ -151,6 +159,8 @@ def test_bot_tooling_status_groups_blocked_worker_tool_causes():
     assert status["summary"]["http_connection_backend_count"] == 1
     assert status["summary"]["credential_ref_bot_count"] == 2
     assert status["summary"]["backend_credential_ref_count"] == 2
+    assert status["summary"]["disabled_activation_blocker_bot_count"] == 1
+    assert status["summary"]["disabled_activation_blocker_count"] == 1
     assert status["summary"]["worker_assignment_count"] == 5
     assert status["summary"]["missing_worker_assignment_count"] == 1
     assert status["summary"]["offline_worker_assignment_count"] == 3
@@ -172,6 +182,8 @@ def test_bot_tooling_status_groups_blocked_worker_tool_causes():
     assert connection_row["credential_refs"] == ["GLOBEIQ_AGENT_TOKEN"]
     raw_secret_row = next(row for row in status["rows"] if row["bot_id"] == "raw-secret-bot")
     assert raw_secret_row["credential_refs"] == ["[redacted raw credential]"]
+    disabled_row = next(row for row in status["rows"] if row["bot_id"] == "disabled-bot")
+    assert disabled_row["disabled_activation_messages"] == ["Model 'offline-model' is not present/enabled in the model catalog."]
     groups = {group["category"]: group for group in status["blocked_groups"]}
     assert groups["browser_session"]["label"] == "Authenticated browser session"
     assert "site account can exist" in groups["browser_session"]["detail"]
@@ -217,7 +229,14 @@ def test_bots_page_surfaces_tooling_readiness_panel(dashboard_client):
                         "connection_action_allowlist": ["globeiq-agent-api.updateLesson"],
                         "connection_action_owner_approval_required": ["globeiq-agent-api.updateLesson"],
                     },
-                }
+                },
+                {
+                    "id": "disabled-needs-model",
+                    "name": "Disabled Needs Model",
+                    "role": "chat",
+                    "enabled": False,
+                    "backends": [{"type": "cloud_api", "provider": "ollama", "model": "missing-model"}],
+                },
             ]
 
         def list_bot_readiness(self):
@@ -234,7 +253,16 @@ def test_bots_page_surfaces_tooling_readiness_panel(dashboard_client):
                         "state": "ready",
                         "ready": True,
                         "checks": [],
-                    }
+                    },
+                    {
+                        "bot_id": "disabled-needs-model",
+                        "state": "disabled",
+                        "ready": False,
+                        "checks": [
+                            {"component": "bot", "status": "failed", "message": "Bot is disabled."},
+                            {"component": "backend[0]", "status": "failed", "message": "Model 'missing-model' is not present/enabled in the model catalog."},
+                        ],
+                    },
                 ]
             }
 
@@ -269,6 +297,7 @@ def test_bots_page_surfaces_tooling_readiness_panel(dashboard_client):
     assert b"Browser Action Bots" in page.data
     assert b"Worker Assignments" in page.data
     assert b"Credential Ref Bots" in page.data
+    assert b"Disabled Needs Fix" in page.data
     assert b"Recommended action:" in page.data
     assert b"restore browser session" in page.data
     assert b"Open the worker browser profile" in page.data
@@ -294,6 +323,8 @@ def test_bots_page_surfaces_tooling_readiness_panel(dashboard_client):
     assert payload["summary"]["browser_action_bot_count"] == 1
     assert payload["summary"]["credential_ref_bot_count"] == 1
     assert payload["summary"]["backend_credential_ref_count"] == 1
+    assert payload["summary"]["disabled_activation_blocker_bot_count"] == 1
+    assert payload["summary"]["disabled_activation_blocker_count"] == 1
     assert payload["summary"]["worker_assignment_count"] == 1
     assert payload["summary"]["degraded_worker_probe_count"] == 1
     assert payload["summary"]["recommended_action"]["label"] == "restore browser session"

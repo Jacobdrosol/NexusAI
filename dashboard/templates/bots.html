@@ -59,6 +59,10 @@
       <div class="card-value card-gray">{{ tooling_summary.disabled or 0 }}</div>
     </div>
     <div class="card">
+      <div class="card-label">Disabled Needs Fix</div>
+      <div class="card-value {% if tooling_summary.disabled_activation_blocker_bot_count %}card-yellow{% else %}card-green{% endif %}">{{ tooling_summary.disabled_activation_blocker_bot_count or 0 }}</div>
+    </div>
+    <div class="card">
       <div class="card-label">Tooling Bots</div>
       <div class="card-value card-blue">{{ tooling_summary.tooling_bot_count or 0 }}</div>
     </div>
