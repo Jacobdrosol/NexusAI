@@ -30,11 +30,13 @@
 {% set usage_health = overview.usage_health or {} %}
 {% set usage_brief = overview.usage_brief or {} %}
 {% set usage_provider_model_attribution = usage_brief.provider_model_attribution or {} %}
+{% set usage_provider_model_spend = usage_brief.provider_model_spend or {} %}
 {% set chat_usage = overview.chat_usage or {} %}
 {% set chat_usage_totals = chat_usage.totals or {} %}
 {% set chat_usage_health = overview.chat_usage_health or {} %}
 {% set chat_usage_brief = overview.chat_usage_brief or {} %}
 {% set chat_provider_model_attribution = chat_usage_brief.provider_model_attribution or {} %}
+{% set chat_provider_model_spend = chat_usage_brief.provider_model_spend or {} %}
 {% set chat_governor = chat_usage.chat_token_governor or {} %}
 {% set chat_governor_limits = chat_governor.limits or {} %}
 {% set holds = overview.holds or [] %}
@@ -216,6 +218,11 @@
         worker {{ worker_global_cap.label }}
       </span>
       {% endif %}
+      {% if usage_provider_model_spend.level in ["critical", "warning", "watch"] %}
+      <span class="badge {% if usage_provider_model_spend.level == 'critical' %}badge-failed{% elif usage_provider_model_spend.level == 'warning' %}badge-yellow{% else %}badge-queued{% endif %}">
+        worker model {{ usage_provider_model_spend.label }}
+      </span>
+      {% endif %}
       {% set chat_cap = operations_brief.chat_cap_pressure or {} %}
       {% if chat_cap.level in ["critical", "warning"] %}
       <span class="badge {% if chat_cap.level == 'critical' %}badge-failed{% else %}badge-yellow{% endif %}">
@@ -226,6 +233,11 @@
       {% if chat_global_cap.level in ["critical", "warning"] %}
       <span class="badge {% if chat_global_cap.level == 'critical' %}badge-failed{% else %}badge-yellow{% endif %}">
         chat {{ chat_global_cap.label }}
+      </span>
+      {% endif %}
+      {% if chat_provider_model_spend.level in ["critical", "warning", "watch"] %}
+      <span class="badge {% if chat_provider_model_spend.level == 'critical' %}badge-failed{% elif chat_provider_model_spend.level == 'warning' %}badge-yellow{% else %}badge-queued{% endif %}">
+        chat model {{ chat_provider_model_spend.label }}
       </span>
       {% endif %}
     </div>
@@ -419,6 +431,13 @@
           </span>
           {{ usage_provider_model_attribution.reason or "worker provider/model attribution unavailable" }}
         </div>
+        <div class="mini-note" style="margin-bottom:0.45rem;">
+          Worker model spend:
+          <span class="badge {% if usage_provider_model_spend.level == 'critical' %}badge-failed{% elif usage_provider_model_spend.level == 'warning' %}badge-yellow{% elif usage_provider_model_spend.level == 'watch' %}badge-queued{% elif usage_provider_model_spend.level == 'ready' %}badge-completed{% else %}badge-queued{% endif %}">
+            {{ usage_provider_model_spend.label or "unknown" }}
+          </span>
+          {{ usage_provider_model_spend.detail or "worker provider/model spend unavailable" }}
+        </div>
         <table>
           <thead><tr><th>Provider</th><th>Model</th><th>Tokens</th><th>Measured</th><th>Missing</th></tr></thead>
           <tbody>
@@ -496,6 +515,13 @@
               {{ chat_provider_model_attribution.level or "unknown" }}
             </span>
             {{ chat_provider_model_attribution.reason or "chat provider/model attribution unavailable" }}
+          </div>
+          <div class="mini-note" style="margin-bottom:0.45rem;">
+            Chat model spend:
+            <span class="badge {% if chat_provider_model_spend.level == 'critical' %}badge-failed{% elif chat_provider_model_spend.level == 'warning' %}badge-yellow{% elif chat_provider_model_spend.level == 'watch' %}badge-queued{% elif chat_provider_model_spend.level == 'ready' %}badge-completed{% else %}badge-queued{% endif %}">
+              {{ chat_provider_model_spend.label or "unknown" }}
+            </span>
+            {{ chat_provider_model_spend.detail or "chat provider/model spend unavailable" }}
           </div>
           <table>
             <thead><tr><th>Chat Provider</th><th>Model</th><th>Tokens</th><th>Measured</th><th>Latest</th></tr></thead>

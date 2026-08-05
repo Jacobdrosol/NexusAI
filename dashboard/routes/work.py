@@ -273,6 +273,48 @@ def _provider_model_attribution_health(summary: dict[str, Any], *, unit_label: s
     }
 
 
+def _provider_model_spend_brief(summary: dict[str, Any], *, unit_label: str) -> dict[str, Any]:
+    totals = summary.get("totals") if isinstance(summary.get("totals"), dict) else {}
+    total_tokens = _safe_count(totals, "total_tokens")
+    rows = [dict(row) for row in summary.get("by_provider_model") or [] if isinstance(row, dict)]
+    rows.sort(key=lambda row: _safe_count(row, "total_tokens"), reverse=True)
+    top = rows[0] if rows else {}
+    top_tokens = _safe_count(top, "total_tokens") if top else 0
+    top_ratio = round(top_tokens / total_tokens, 2) if total_tokens else 0.0
+    provider = str(top.get("provider") or "").strip() if top else ""
+    model = str(top.get("model") or "").strip() if top else ""
+    if not total_tokens:
+        level = "idle"
+        label = "no spend"
+        detail = f"No {unit_label} provider/model token spend recorded in this window."
+    elif not provider or not model or provider.lower() == "unknown" or model.lower() == "unknown":
+        level = "critical"
+        label = "unattributed spend"
+        detail = f"Top {unit_label} provider/model spend is missing attribution; fix message/task metadata before scaling usage."
+    elif top_ratio >= 0.75:
+        level = "warning"
+        label = "concentrated spend"
+        detail = f"{provider} / {model} is using {top_ratio} of measured {unit_label} tokens; review quality before increasing throughput."
+    elif top_ratio >= 0.5:
+        level = "watch"
+        label = "watch model mix"
+        detail = f"{provider} / {model} is the largest {unit_label} model lane at {top_ratio} of measured tokens."
+    else:
+        level = "ready"
+        label = "balanced spend"
+        detail = f"No single {unit_label} provider/model lane dominates measured token usage."
+    return {
+        "level": level,
+        "label": label,
+        "detail": detail,
+        "provider": provider or "unknown",
+        "model": model or "unknown",
+        "total_tokens": total_tokens,
+        "top_tokens": top_tokens,
+        "top_ratio": top_ratio,
+    }
+
+
 def _chat_usage_pressure_lanes(chat_usage: dict[str, Any], *, limit: int = 10) -> list[dict[str, Any]]:
     governor = chat_usage.get("chat_token_governor") if isinstance(chat_usage.get("chat_token_governor"), dict) else {}
     if not governor.get("enabled"):
@@ -415,6 +457,7 @@ def _usage_brief(usage: dict[str, Any], *, limit: int = 5) -> dict[str, Any]:
         "top_managers": _top_rows("by_manager"),
         "top_project_manager_bots": _top_rows("by_project_manager_bot"),
         "provider_model_attribution": _provider_model_attribution_health(usage, unit_label="worker"),
+        "provider_model_spend": _provider_model_spend_brief(usage, unit_label="worker"),
     }
 
 
@@ -439,6 +482,7 @@ def _chat_usage_brief(chat_usage: dict[str, Any], *, limit: int = 5) -> dict[str
         "top_bots": _top_rows("by_bot"),
         "top_provider_models": _top_rows("by_provider_model"),
         "provider_model_attribution": _provider_model_attribution_health(chat_usage, unit_label="chat"),
+        "provider_model_spend": _provider_model_spend_brief(chat_usage, unit_label="chat"),
     }
 
 

@@ -661,8 +661,14 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"Chat Usage Health" in resp.data
     assert b"Provider/model attribution:" in resp.data
     assert b"worker provider/model attribution is complete" in resp.data
+    assert b"Worker model spend:" in resp.data
+    assert b"worker model concentrated spend" in resp.data
+    assert b"ollama_cloud / qwen3.5:cloud is using 1.0 of measured worker tokens" in resp.data
     assert b"Chat provider/model attribution:" in resp.data
     assert b"chat provider/model attribution is complete" in resp.data
+    assert b"Chat model spend:" in resp.data
+    assert b"chat model concentrated spend" in resp.data
+    assert b"ollama_cloud / qwen3.5:397b is using 1.0 of measured chat tokens" in resp.data
     assert b"token usage telemetry is incomplete for most measured tasks" in resp.data
     assert b"chat token usage telemetry is incomplete for most assistant messages" in resp.data
     assert b"Missing ratio" in resp.data
@@ -857,11 +863,31 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
         "unknown_tokens": 0,
         "unknown_ratio": 0.0,
     }
+    assert brief_data["usage_brief"]["provider_model_spend"] == {
+        "level": "warning",
+        "label": "concentrated spend",
+        "detail": "ollama_cloud / qwen3.5:cloud is using 1.0 of measured worker tokens; review quality before increasing throughput.",
+        "provider": "ollama_cloud",
+        "model": "qwen3.5:cloud",
+        "total_tokens": 140,
+        "top_tokens": 140,
+        "top_ratio": 1.0,
+    }
     assert brief_data["chat_usage_brief"]["provider_model_attribution"] == {
         "level": "ready",
         "reason": "chat provider/model attribution is complete",
         "unknown_tokens": 0,
         "unknown_ratio": 0.0,
+    }
+    assert brief_data["chat_usage_brief"]["provider_model_spend"] == {
+        "level": "warning",
+        "label": "concentrated spend",
+        "detail": "ollama_cloud / qwen3.5:397b is using 1.0 of measured chat tokens; review quality before increasing throughput.",
+        "provider": "ollama_cloud",
+        "model": "qwen3.5:397b",
+        "total_tokens": 40,
+        "top_tokens": 40,
+        "top_ratio": 1.0,
     }
     assert brief_data["usage_pressure_lanes"][0]["bot_id"] == "lesson-writer"
     assert brief_data["usage_pressure_lanes"][0]["usage_ratio"] == 0.93
@@ -1251,11 +1277,31 @@ def test_work_overview_usage_fallback_has_stable_shape(dashboard_client):
         "unknown_tokens": 0,
         "unknown_ratio": 0.0,
     }
+    assert data["usage_brief"]["provider_model_spend"] == {
+        "level": "idle",
+        "label": "no spend",
+        "detail": "No worker provider/model token spend recorded in this window.",
+        "provider": "unknown",
+        "model": "unknown",
+        "total_tokens": 0,
+        "top_tokens": 0,
+        "top_ratio": 0.0,
+    }
     assert data["chat_usage_brief"]["provider_model_attribution"] == {
         "level": "idle",
         "reason": "no chat token usage recorded in this window",
         "unknown_tokens": 0,
         "unknown_ratio": 0.0,
+    }
+    assert data["chat_usage_brief"]["provider_model_spend"] == {
+        "level": "idle",
+        "label": "no spend",
+        "detail": "No chat provider/model token spend recorded in this window.",
+        "provider": "unknown",
+        "model": "unknown",
+        "total_tokens": 0,
+        "top_tokens": 0,
+        "top_ratio": 0.0,
     }
 
 
@@ -1305,12 +1351,16 @@ def test_work_overview_flags_missing_provider_model_attribution(dashboard_client
         "unknown_tokens": 200,
         "unknown_ratio": 1.0,
     }
+    assert data["usage_brief"]["provider_model_spend"]["level"] == "critical"
+    assert data["usage_brief"]["provider_model_spend"]["label"] == "unattributed spend"
     assert data["chat_usage_brief"]["provider_model_attribution"] == {
         "level": "critical",
         "reason": "most chat token usage is missing provider/model attribution",
         "unknown_tokens": 100,
         "unknown_ratio": 1.0,
     }
+    assert data["chat_usage_brief"]["provider_model_spend"]["level"] == "critical"
+    assert data["chat_usage_brief"]["provider_model_spend"]["label"] == "unattributed spend"
 
 
 def test_work_overview_renders_held_lane_without_loaded_tasks():
