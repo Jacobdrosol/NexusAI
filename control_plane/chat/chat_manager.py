@@ -17,6 +17,20 @@ from shared.models import ChatConversation, ChatMessage
 
 _DEFAULT_DB_PATH = str(Path(__file__).parent.parent.parent / "data" / "nexusai.db")
 
+
+def _normalize_tool_access_flags(
+    *,
+    enabled: Any,
+    filesystem: Any,
+    repo_search: Any,
+) -> tuple[bool, bool, bool]:
+    normalized_enabled = bool(enabled)
+    return (
+        normalized_enabled,
+        bool(filesystem) if normalized_enabled else False,
+        bool(repo_search) if normalized_enabled else False,
+    )
+
 _CREATE_CONVERSATIONS = """
 CREATE TABLE IF NOT EXISTS conversations (
     id TEXT PRIMARY KEY,
@@ -268,6 +282,11 @@ class ChatManager:
     ) -> ChatConversation:
         await self._ensure_db()
         now = datetime.now(timezone.utc).isoformat()
+        normalized_tool_enabled, normalized_tool_filesystem, normalized_tool_repo_search = _normalize_tool_access_flags(
+            enabled=tool_access_enabled,
+            filesystem=tool_access_filesystem,
+            repo_search=tool_access_repo_search,
+        )
         conversation = ChatConversation(
             id=str(uuid.uuid4()),
             title=title.strip() or "New Conversation",
@@ -279,9 +298,9 @@ class ChatManager:
             owner_user_id=str(owner_user_id or "").strip() or None,
             memory_profiles_enabled=bool(memory_profiles_enabled),
             memory_profile_id=str(memory_profile_id or "default").strip() or "default",
-            tool_access_enabled=bool(tool_access_enabled),
-            tool_access_filesystem=bool(tool_access_filesystem),
-            tool_access_repo_search=bool(tool_access_repo_search),
+            tool_access_enabled=normalized_tool_enabled,
+            tool_access_filesystem=normalized_tool_filesystem,
+            tool_access_repo_search=normalized_tool_repo_search,
             archived_at=None,
             created_at=now,
             updated_at=now,
@@ -347,9 +366,15 @@ class ChatManager:
                             data["bridge_project_ids"] = []
                     else:
                         data["bridge_project_ids"] = []
-                    data["tool_access_enabled"] = bool(data.get("tool_access_enabled") or False)
-                    data["tool_access_filesystem"] = bool(data.get("tool_access_filesystem") or False)
-                    data["tool_access_repo_search"] = bool(data.get("tool_access_repo_search") or False)
+                    (
+                        data["tool_access_enabled"],
+                        data["tool_access_filesystem"],
+                        data["tool_access_repo_search"],
+                    ) = _normalize_tool_access_flags(
+                        enabled=data.get("tool_access_enabled"),
+                        filesystem=data.get("tool_access_filesystem"),
+                        repo_search=data.get("tool_access_repo_search"),
+                    )
                     data["memory_profiles_enabled"] = bool(data.get("memory_profiles_enabled", 1))
                     data["memory_profile_id"] = str(data.get("memory_profile_id") or "default").strip() or "default"
                     conversation = ChatConversation.model_validate(data)
@@ -381,9 +406,15 @@ class ChatManager:
                         data["bridge_project_ids"] = []
                 else:
                     data["bridge_project_ids"] = []
-                data["tool_access_enabled"] = bool(data.get("tool_access_enabled") or False)
-                data["tool_access_filesystem"] = bool(data.get("tool_access_filesystem") or False)
-                data["tool_access_repo_search"] = bool(data.get("tool_access_repo_search") or False)
+                (
+                    data["tool_access_enabled"],
+                    data["tool_access_filesystem"],
+                    data["tool_access_repo_search"],
+                ) = _normalize_tool_access_flags(
+                    enabled=data.get("tool_access_enabled"),
+                    filesystem=data.get("tool_access_filesystem"),
+                    repo_search=data.get("tool_access_repo_search"),
+                )
                 data["memory_profiles_enabled"] = bool(data.get("memory_profiles_enabled", 1))
                 data["memory_profile_id"] = str(data.get("memory_profile_id") or "default").strip() or "default"
                 return ChatConversation.model_validate(data)
@@ -435,6 +466,11 @@ class ChatManager:
     ) -> ChatConversation:
         await self.get_conversation(conversation_id)
         now = datetime.now(timezone.utc).isoformat()
+        normalized_tool_enabled, normalized_tool_filesystem, normalized_tool_repo_search = _normalize_tool_access_flags(
+            enabled=tool_access_enabled,
+            filesystem=tool_access_filesystem,
+            repo_search=tool_access_repo_search,
+        )
         async with self._lock:
             async with open_sqlite(self._db_path) as db:
                 await db.execute(
@@ -444,9 +480,9 @@ class ChatManager:
                     WHERE id = ?
                     """,
                     (
-                        1 if tool_access_enabled else 0,
-                        1 if tool_access_filesystem else 0,
-                        1 if tool_access_repo_search else 0,
+                        1 if normalized_tool_enabled else 0,
+                        1 if normalized_tool_filesystem else 0,
+                        1 if normalized_tool_repo_search else 0,
                         now,
                         conversation_id,
                     ),

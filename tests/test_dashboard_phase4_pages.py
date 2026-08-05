@@ -1991,6 +1991,117 @@ def test_chat_effective_context_api_explains_blocked_gates(dashboard_client):
     assert payload["inline_coding"]["blocker"] == "no scoped project"
 
 
+def test_chat_effective_context_api_normalizes_stale_tool_modes(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_conversations(self, archived="all"):
+            return [
+                {
+                    "id": "c-project",
+                    "title": "Project Chat",
+                    "project_id": "globeiq",
+                    "default_bot_id": "chat-bot",
+                    "memory_profiles_enabled": False,
+                    "tool_access_enabled": False,
+                    "tool_access_filesystem": True,
+                    "tool_access_repo_search": True,
+                }
+            ]
+
+        def list_bots(self):
+            return [
+                {
+                    "id": "chat-bot",
+                    "name": "Chat Bot",
+                    "routing_rules": {
+                        "chat_tool_access": {"enabled": False, "filesystem": True, "repo_search": True}
+                    },
+                }
+            ]
+
+        def list_projects(self):
+            return [{"id": "globeiq", "memory_profiles_enabled": False}]
+
+        def get_project_chat_tool_access(self, project_id):
+            return {"enabled": False, "filesystem": True, "repo_search": True}
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/api/chat/conversations/c-project/effective-context?use_workspace_tools=true")
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload["workspace_tools"]["available"] is False
+    assert payload["workspace_tools"]["chat_access"] == {
+        "enabled": False,
+        "filesystem": False,
+        "repo_search": False,
+        "mode_error": "",
+    }
+    assert payload["workspace_tools"]["bot_access"] == {
+        "enabled": False,
+        "filesystem": False,
+        "repo_search": False,
+        "mode_error": "",
+    }
+    assert payload["workspace_tools"]["project_access"] == {
+        "enabled": False,
+        "filesystem": False,
+        "repo_search": False,
+        "mode_error": "",
+    }
+    assert payload["workspace_tools"]["modes"] == []
+    assert "chat off" in payload["workspace_tools"]["reasons"]
+    assert "bot off" in payload["workspace_tools"]["reasons"]
+    assert "project off" in payload["workspace_tools"]["reasons"]
+
+
+def test_chat_effective_context_api_reports_mode_less_tool_policy(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_conversations(self, archived="all"):
+            return [
+                {
+                    "id": "c-project",
+                    "title": "Project Chat",
+                    "project_id": "globeiq",
+                    "default_bot_id": "chat-bot",
+                    "memory_profiles_enabled": False,
+                    "tool_access_enabled": True,
+                    "tool_access_filesystem": False,
+                    "tool_access_repo_search": False,
+                }
+            ]
+
+        def list_bots(self):
+            return [
+                {
+                    "id": "chat-bot",
+                    "name": "Chat Bot",
+                    "routing_rules": {
+                        "chat_tool_access": {"enabled": True, "filesystem": True, "repo_search": False}
+                    },
+                }
+            ]
+
+        def list_projects(self):
+            return [{"id": "globeiq", "memory_profiles_enabled": False}]
+
+        def get_project_chat_tool_access(self, project_id):
+            return {"enabled": True, "filesystem": True, "repo_search": False}
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/api/chat/conversations/c-project/effective-context?use_workspace_tools=true")
+
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload["workspace_tools"]["available"] is False
+    assert payload["workspace_tools"]["chat_access"]["mode_error"] == "chat: no enabled tool mode"
+    assert "chat: no enabled tool mode" in payload["workspace_tools"]["reasons"]
+    assert "no shared tool mode" in payload["workspace_tools"]["reasons"]
+
+
 def test_chat_page_unscoped_filter_limits_conversation_list(dashboard_client):
     _login_admin(dashboard_client)
 
@@ -5407,6 +5518,52 @@ def test_chat_message_api_blocks_workspace_tools_without_project_policy(dashboar
     assert resp.status_code == 409
     assert b"Workspace tools are not available" in resp.data
     assert b"project off" in resp.data
+
+
+def test_chat_message_api_blocks_workspace_tools_with_mode_less_chat_policy(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_conversations(self, archived="all"):
+            return [
+                {
+                    "id": "c1",
+                    "project_id": "globeiq",
+                    "default_bot_id": "tool-bot",
+                    "tool_access_enabled": True,
+                    "tool_access_filesystem": False,
+                    "tool_access_repo_search": False,
+                }
+            ]
+
+        def list_bot_readiness(self):
+            return {"readiness": []}
+
+        def list_bots(self):
+            return [
+                {
+                    "id": "tool-bot",
+                    "routing_rules": {
+                        "chat_tool_access": {"enabled": True, "filesystem": True, "repo_search": False}
+                    },
+                }
+            ]
+
+        def get_project_chat_tool_access(self, project_id):
+            return {"enabled": True, "filesystem": True, "repo_search": False}
+
+        def post_message(self, conversation_id, body):
+            raise AssertionError("mode-less chat tool policy should not dispatch")
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/chat/messages",
+            json={"conversation_id": "c1", "content": "hello", "use_workspace_tools": True},
+        )
+
+    assert resp.status_code == 409
+    assert b"Workspace tools are not available" in resp.data
+    assert b"chat: no enabled tool mode" in resp.data
 
 
 def test_chat_message_api_allows_workspace_tools_when_all_gates_overlap(dashboard_client):

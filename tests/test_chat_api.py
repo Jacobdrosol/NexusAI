@@ -6512,6 +6512,45 @@ async def test_update_conversation_tool_access_endpoint(cp_app):
 
 
 @pytest.mark.anyio
+async def test_create_conversation_clears_tool_modes_when_access_disabled(cp_app):
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        create_resp = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Disabled Tool Modes",
+                "tool_access_enabled": False,
+                "tool_access_filesystem": True,
+                "tool_access_repo_search": True,
+            },
+        )
+
+        assert create_resp.status_code == 200
+        body = create_resp.json()
+        assert body["tool_access_enabled"] is False
+        assert body["tool_access_filesystem"] is False
+        assert body["tool_access_repo_search"] is False
+
+
+@pytest.mark.anyio
+async def test_create_conversation_blocks_workspace_tools_without_enabled_mode(cp_app):
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        create_resp = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Mode-less Tool Conversation",
+                "scope": "project",
+                "project_id": "globeiq",
+                "tool_access_enabled": True,
+                "tool_access_filesystem": False,
+                "tool_access_repo_search": False,
+            },
+        )
+
+        assert create_resp.status_code == 400
+        assert "workspace tools require at least one enabled tool mode" in create_resp.text
+
+
+@pytest.mark.anyio
 async def test_create_conversation_blocks_workspace_tools_without_project_scope(cp_app):
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
         create_resp = await client.post(
@@ -6554,6 +6593,47 @@ async def test_update_conversation_tool_access_blocks_unscoped_conversation(cp_a
 
         assert update_resp.status_code == 400
         assert "workspace tools require a project-scoped or bridged conversation" in update_resp.text
+
+
+@pytest.mark.anyio
+async def test_update_conversation_tool_access_clears_modes_when_disabled(cp_app):
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        create_resp = await client.post(
+            "/v1/chat/conversations",
+            json={"title": "Disabled Update Modes", "scope": "project", "project_id": "globeiq"},
+        )
+        assert create_resp.status_code == 200
+        conversation_id = create_resp.json()["id"]
+
+        update_resp = await client.put(
+            f"/v1/chat/conversations/{conversation_id}/tool-access",
+            json={"enabled": False, "filesystem": True, "repo_search": True},
+        )
+
+        assert update_resp.status_code == 200
+        body = update_resp.json()
+        assert body["tool_access_enabled"] is False
+        assert body["tool_access_filesystem"] is False
+        assert body["tool_access_repo_search"] is False
+
+
+@pytest.mark.anyio
+async def test_update_conversation_tool_access_blocks_enabled_without_mode(cp_app):
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        create_resp = await client.post(
+            "/v1/chat/conversations",
+            json={"title": "Mode-less Update Guard", "scope": "project", "project_id": "globeiq"},
+        )
+        assert create_resp.status_code == 200
+        conversation_id = create_resp.json()["id"]
+
+        update_resp = await client.put(
+            f"/v1/chat/conversations/{conversation_id}/tool-access",
+            json={"enabled": True, "filesystem": False, "repo_search": False},
+        )
+
+        assert update_resp.status_code == 400
+        assert "workspace tools require at least one enabled tool mode" in update_resp.text
 
 
 @pytest.mark.anyio

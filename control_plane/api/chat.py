@@ -205,13 +205,21 @@ class CreateConversationRequest(BaseModel):
     tool_access_repo_search: bool = False
 
 
-def _workspace_tool_access_requested(
+def _normalize_tool_access_request(
     *,
     enabled: bool = False,
     filesystem: bool = False,
     repo_search: bool = False,
-) -> bool:
-    return bool(enabled or filesystem or repo_search)
+) -> tuple[Dict[str, bool], str]:
+    normalized_enabled = bool(enabled)
+    normalized = {
+        "enabled": normalized_enabled,
+        "filesystem": bool(filesystem) if normalized_enabled else False,
+        "repo_search": bool(repo_search) if normalized_enabled else False,
+    }
+    if normalized_enabled and not (normalized["filesystem"] or normalized["repo_search"]):
+        return normalized, "workspace tools require at least one enabled tool mode"
+    return normalized, ""
 
 
 def _workspace_tool_access_allowed_for_scope(*, scope: str, project_id: Optional[str]) -> bool:
@@ -1427,20 +1435,27 @@ def _conversation_project_ids(conversation: Optional[ChatConversation]) -> List[
 
 def _parse_tool_access_config(raw: Any) -> Dict[str, Any]:
     cfg = raw if isinstance(raw, dict) else {}
+    enabled = bool(cfg.get("enabled", False))
+    filesystem = bool(cfg.get("filesystem", False)) if enabled else False
+    repo_search = bool(cfg.get("repo_search", False)) if enabled else False
+    mode_error = "no enabled tool mode" if enabled and not (filesystem or repo_search) else ""
     return {
-        "enabled": bool(cfg.get("enabled", False)),
-        "filesystem": bool(cfg.get("filesystem", False)),
-        "repo_search": bool(cfg.get("repo_search", False)),
+        "enabled": enabled,
+        "filesystem": filesystem,
+        "repo_search": repo_search,
+        "mode_error": mode_error,
         "workspace_root": str(cfg.get("workspace_root") or "").strip() or None,
     }
 
 
 def _conversation_tool_access(conversation: ChatConversation) -> Dict[str, Any]:
-    return {
-        "enabled": bool(getattr(conversation, "tool_access_enabled", False)),
-        "filesystem": bool(getattr(conversation, "tool_access_filesystem", False)),
-        "repo_search": bool(getattr(conversation, "tool_access_repo_search", False)),
-    }
+    return _parse_tool_access_config(
+        {
+            "enabled": bool(getattr(conversation, "tool_access_enabled", False)),
+            "filesystem": bool(getattr(conversation, "tool_access_filesystem", False)),
+            "repo_search": bool(getattr(conversation, "tool_access_repo_search", False)),
+        }
+    )
 
 
 def _bot_tool_access(bot: Any) -> Dict[str, Any]:
@@ -3885,11 +3900,14 @@ async def create_conversation(request: Request, body: CreateConversationRequest)
         if not project_id:
             raise HTTPException(status_code=400, detail="project_id is required for bridged conversations")
         bridge_project_ids = [pid for pid in bridge_project_ids if pid != project_id]
-    if _workspace_tool_access_requested(
+    tool_access, tool_access_error = _normalize_tool_access_request(
         enabled=body.tool_access_enabled,
         filesystem=body.tool_access_filesystem,
         repo_search=body.tool_access_repo_search,
-    ) and not _workspace_tool_access_allowed_for_scope(scope=scope, project_id=project_id):
+    )
+    if tool_access_error:
+        raise HTTPException(status_code=400, detail=tool_access_error)
+    if tool_access["enabled"] and not _workspace_tool_access_allowed_for_scope(scope=scope, project_id=project_id):
         raise HTTPException(
             status_code=400,
             detail="workspace tools require a project-scoped or bridged conversation",
@@ -3912,9 +3930,9 @@ async def create_conversation(request: Request, body: CreateConversationRequest)
         owner_user_id=body.owner_user_id,
         memory_profiles_enabled=body.memory_profiles_enabled,
         memory_profile_id=body.memory_profile_id,
-        tool_access_enabled=body.tool_access_enabled,
-        tool_access_filesystem=body.tool_access_filesystem,
-        tool_access_repo_search=body.tool_access_repo_search,
+        tool_access_enabled=tool_access["enabled"],
+        tool_access_filesystem=tool_access["filesystem"],
+        tool_access_repo_search=tool_access["repo_search"],
     )
 
 
@@ -3957,11 +3975,14 @@ async def update_conversation_tool_access(
 ) -> ChatConversation:
     chat_manager = request.app.state.chat_manager
     try:
-        if _workspace_tool_access_requested(
+        tool_access, tool_access_error = _normalize_tool_access_request(
             enabled=body.enabled,
             filesystem=body.filesystem,
             repo_search=body.repo_search,
-        ):
+        )
+        if tool_access_error:
+            raise HTTPException(status_code=400, detail=tool_access_error)
+        if tool_access["enabled"]:
             conversation = await chat_manager.get_conversation(conversation_id)
             if not _workspace_tool_access_allowed_for_scope(
                 scope=conversation.scope,
@@ -3973,9 +3994,9 @@ async def update_conversation_tool_access(
                 )
         return await chat_manager.update_conversation_tool_access(
             conversation_id,
-            tool_access_enabled=body.enabled,
-            tool_access_filesystem=body.filesystem,
-            tool_access_repo_search=body.repo_search,
+            tool_access_enabled=tool_access["enabled"],
+            tool_access_filesystem=tool_access["filesystem"],
+            tool_access_repo_search=tool_access["repo_search"],
         )
     except ConversationNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))

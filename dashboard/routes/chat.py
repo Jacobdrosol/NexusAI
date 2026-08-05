@@ -894,6 +894,10 @@ def _workspace_tool_request_blocker_from_cp(cp: Any, conversation_id: str, reque
         reasons.append("chat off")
     if not project_access.get("enabled"):
         reasons.append("project off")
+    for access in (bot_access, chat_access, project_access):
+        mode_error = str(access.get("mode_error") or "").strip()
+        if mode_error:
+            reasons.append(mode_error)
 
     shared_modes = _tool_modes(bot_access) & _tool_modes(chat_access) & _tool_modes(project_access)
     if not reasons and not shared_modes:
@@ -1001,6 +1005,10 @@ def _effective_chat_context_from_cp(
         tool_reasons.append("no scoped project")
     if project_id and not project_access.get("enabled"):
         tool_reasons.append("project off")
+    for access in (bot_access, chat_access, project_access):
+        mode_error = str(access.get("mode_error") or "").strip()
+        if mode_error:
+            tool_reasons.append(mode_error)
     shared_tool_modes = sorted(_tool_modes(bot_access) & _tool_modes(chat_access) & _tool_modes(project_access))
     if bot and bot_access.get("enabled") and chat_access.get("enabled") and project_access.get("enabled") and not shared_tool_modes:
         tool_reasons.append("no shared tool mode")
@@ -1511,23 +1519,46 @@ def _normalize_create_conversation_scope(data: dict[str, Any]) -> str:
     return scope
 
 
-def _normalize_project_chat_tool_access(raw: Any) -> dict[str, bool]:
+def _normalize_tool_access_state(
+    raw: dict[str, Any],
+    *,
+    enabled_key: str = "enabled",
+    filesystem_key: str = "filesystem",
+    repo_search_key: str = "repo_search",
+    mode_error_prefix: str = "",
+) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raw = {}
+    enabled = bool(raw.get(enabled_key, False))
+    filesystem = bool(raw.get(filesystem_key, False)) if enabled else False
+    repo_search = bool(raw.get(repo_search_key, False)) if enabled else False
+    mode_error = "no enabled tool mode" if enabled and not (filesystem or repo_search) else ""
+    if mode_error and mode_error_prefix:
+        mode_error = f"{mode_error_prefix}: {mode_error}"
     return {
-        "enabled": bool(raw.get("enabled", False)),
-        "filesystem": bool(raw.get("filesystem", False)),
-        "repo_search": bool(raw.get("repo_search", False)),
+        "enabled": enabled,
+        "filesystem": filesystem,
+        "repo_search": repo_search,
+        "mode_error": mode_error,
     }
 
 
-def _chat_tool_access_from_conversation(conversation: dict[str, Any] | None) -> dict[str, bool]:
+def _normalize_project_chat_tool_access(raw: Any) -> dict[str, Any]:
+    return _normalize_tool_access_state(
+        raw if isinstance(raw, dict) else {},
+        mode_error_prefix="project",
+    )
+
+
+def _chat_tool_access_from_conversation(conversation: dict[str, Any] | None) -> dict[str, Any]:
     row = conversation if isinstance(conversation, dict) else {}
-    return {
-        "enabled": bool(row.get("tool_access_enabled", False)),
-        "filesystem": bool(row.get("tool_access_filesystem", False)),
-        "repo_search": bool(row.get("tool_access_repo_search", False)),
-    }
+    return _normalize_tool_access_state(
+        row,
+        enabled_key="tool_access_enabled",
+        filesystem_key="tool_access_filesystem",
+        repo_search_key="tool_access_repo_search",
+        mode_error_prefix="chat",
+    )
 
 
 def _tool_modes(access: dict[str, bool]) -> set[str]:
