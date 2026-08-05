@@ -20,8 +20,9 @@ data class AndroidUpdate(
     val releaseUrl: String,
 )
 data class MobileBootstrap(val apiVersion: Int, val androidUpdate: AndroidUpdate)
-data class ChatConversation(val id: String, val title: String, val updatedAt: String)
+data class ChatConversation(val id: String, val title: String, val projectId: String?, val updatedAt: String)
 data class ChatMessage(val id: String, val role: String, val content: String, val createdAt: String)
+data class ChatProject(val id: String, val name: String)
 
 class NexusApiClient(private val store: InstanceStore) {
     private val cookies = mutableListOf<Cookie>()
@@ -108,11 +109,38 @@ class NexusApiClient(private val store: InstanceStore) {
     }
 
     @Throws(IOException::class)
-    fun listConversations(): List<ChatConversation> = getJsonArray("api/chat/conversations").toChatConversations()
+    fun listConversations(projectId: String? = null, unscoped: Boolean = false): List<ChatConversation> {
+        val builder = requireInstanceUrl().newBuilder().addPathSegments("api/chat/conversations")
+        if (!projectId.isNullOrBlank()) builder.addQueryParameter("project_id", projectId)
+        if (unscoped) builder.addQueryParameter("project_id", "__unscoped__")
+        return getJsonArray(builder.build()).toChatConversations()
+    }
+
+    @Throws(IOException::class)
+    fun listProjects(): List<ChatProject> = getJsonArray(
+        requireInstanceUrl().newBuilder().addPathSegments("api/projects").build(),
+    ).toChatProjects()
+
+    @Throws(IOException::class)
+    fun createConversation(title: String, projectId: String?): ChatConversation {
+        val csrf = csrfToken()
+        val payload = JSONObject().put("title", title).put("memory_profiles_enabled", true)
+        if (!projectId.isNullOrBlank()) payload.put("project_id", projectId)
+        val request = Request.Builder()
+            .url(requireInstanceUrl().newBuilder().addPathSegments("api/chat/conversations").build())
+            .header("X-CSRFToken", csrf)
+            .post(payload.toString().toRequestBody("application/json".toMediaType()))
+            .build()
+        return client.newCall(request).execute().use { response ->
+            val body = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw IOException(jsonError(body, "Could not create the chat."))
+            JSONObject(body).toChatConversation()
+        }
+    }
 
     @Throws(IOException::class)
     fun listMessages(conversationId: String): List<ChatMessage> = getJsonArray(
-        "api/chat/conversations/$conversationId/messages",
+        requireInstanceUrl().newBuilder().addPathSegments("api/chat/conversations/$conversationId/messages").build(),
     ).toChatMessages()
 
     @Throws(IOException::class)
@@ -159,8 +187,8 @@ class NexusApiClient(private val store: InstanceStore) {
         )
     }
 
-    private fun getJsonArray(path: String): JSONArray {
-        val request = Request.Builder().url(requireInstanceUrl().newBuilder().addPathSegments(path).build()).build()
+    private fun getJsonArray(url: HttpUrl): JSONArray {
+        val request = Request.Builder().url(url).build()
         return client.newCall(request).execute().use { response ->
             val body = response.body?.string().orEmpty()
             if (!response.isSuccessful) throw IOException(jsonError(body, "NexusAI request failed (${response.code})."))
@@ -176,7 +204,7 @@ class NexusApiClient(private val store: InstanceStore) {
 private fun JSONArray.toChatConversations(): List<ChatConversation> = buildList {
     for (index in 0 until length()) {
         val row = optJSONObject(index) ?: continue
-        add(ChatConversation(row.optString("id"), row.optString("title", "Untitled chat"), row.optString("updated_at")))
+        add(row.toChatConversation())
     }
 }
 
@@ -186,6 +214,20 @@ private fun JSONArray.toChatMessages(): List<ChatMessage> = buildList {
         add(row.toChatMessage())
     }
 }
+
+private fun JSONArray.toChatProjects(): List<ChatProject> = buildList {
+    for (index in 0 until length()) {
+        val row = optJSONObject(index) ?: continue
+        add(ChatProject(row.optString("id"), row.optString("name", row.optString("id"))))
+    }
+}
+
+private fun JSONObject.toChatConversation() = ChatConversation(
+    id = optString("id"),
+    title = optString("title", "Untitled chat"),
+    projectId = optString("project_id").takeIf { it.isNotBlank() },
+    updatedAt = optString("updated_at"),
+)
 
 private fun JSONObject.toChatMessage() = ChatMessage(
     id = optString("id"),

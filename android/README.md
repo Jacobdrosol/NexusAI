@@ -9,8 +9,9 @@ This native Android client connects to a user-owned NexusAI dashboard deployment
 - Encrypted local storage for the instance URL and dashboard session cookie.
 - Session restoration when the app is reopened.
 - Instance-driven update checks through `/api/mobile/bootstrap`.
+- Project and unscoped conversation selection, new chat creation, message history, refresh, and normal text messages.
 
-Chat, work monitoring, update enforcement, notifications, and file uploads are follow-up milestones.
+File uploads, streamed tokens, chat settings, work monitoring, notifications, and agentic controls are follow-up milestones. The first client intentionally sends only normal text messages and does not expose worker, repository, deployment, or automation controls.
 
 ## Updating Without Reinstalling
 

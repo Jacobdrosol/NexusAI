@@ -2092,11 +2092,16 @@ def api_list_conversations():
     cp = get_cp_client()
     project_id = str(request.args.get("project_id") or "").strip() or None
     try:
-        conversations = cp.list_conversations(archived="active", project_id=project_id)
+        conversations = cp.list_conversations(archived="active")
     except TypeError:
         conversations = cp.list_conversations(archived="active")
     if conversations is None:
         return _cp_error_response(cp, "chat conversations unavailable")
+    if project_id:
+        conversations = [
+            row for row in conversations
+            if isinstance(row, dict) and _conversation_matches_project(row, project_id)
+        ]
     return jsonify(conversations)
 
 
