@@ -115,6 +115,36 @@ def _parse_json(raw: str, default: Any) -> Any:
         return default
 
 
+def _safe_backend_ref_label(value: Any) -> tuple[str, bool]:
+    label = str(value or "").strip()
+    if not label:
+        return "", False
+    lowered = label.lower()
+    suspicious_prefixes = ("sk-", "xoxb-", "xoxp-", "ghp_", "github_pat_", "ya29.", "eyj")
+    if any(lowered.startswith(prefix) for prefix in suspicious_prefixes):
+        return "[redacted raw credential]", True
+    if len(label) > 96:
+        return label[:93] + "...", False
+    return label, False
+
+
+def _sanitize_bot_for_detail(bot: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(bot or {})
+    sanitized_backends = []
+    for backend in payload.get("backends") or []:
+        if not isinstance(backend, dict):
+            continue
+        row = dict(backend)
+        display_ref, raw_detected = _safe_backend_ref_label(row.get("api_key_ref"))
+        row["api_key_ref_display"] = display_ref
+        row["api_key_ref_raw_detected"] = raw_detected
+        if raw_detected:
+            row["api_key_ref"] = ""
+        sanitized_backends.append(row)
+    payload["backends"] = sanitized_backends
+    return payload
+
+
 def _cp_error_payload(cp, fallback: str) -> tuple[dict[str, Any], int]:
     """Normalize a control-plane error without losing safe readiness details."""
     err = cp.last_error() if hasattr(cp, "last_error") else {}
@@ -148,6 +178,7 @@ def _bot_test_preflight_summary(row: dict[str, Any]) -> dict[str, Any]:
         "browser_actions": row.get("browser_actions") or [],
         "credential_refs": row.get("credential_refs") or [],
         "missing_credential_refs": row.get("missing_credential_refs") or [],
+        "raw_credential_ref_detected": bool(row.get("raw_credential_ref_detected")),
         "worker_ids": row.get("worker_ids") or [],
     }
 
@@ -630,9 +661,10 @@ def bot_detail_page(bot_id: str):
 
     if cp_bot is not None:
         tasks = [t for t in (cp_tasks or []) if str(t.get("bot_id")) == str(bot_id)]
-        bot_payload = _with_bot_chat_profiles([cp_bot])[0]
+        raw_bot_payload = _with_bot_chat_profiles([cp_bot])[0]
+        bot_payload = _sanitize_bot_for_detail(raw_bot_payload)
         tooling_status = build_bot_tooling_status(
-            bots=[bot_payload],
+            bots=[raw_bot_payload],
             readiness_payload={"readiness": [cp_readiness]} if isinstance(cp_readiness, dict) else None,
             workers=cp_workers,
             worker_probes_payload=cp_worker_probes if isinstance(cp_worker_probes, dict) else None,
@@ -651,7 +683,7 @@ def bot_detail_page(bot_id: str):
             readiness=cp_readiness,
             tooling_row=tooling_row,
             bot_dependencies=cp_dependencies,
-            operating_summary=_bot_detail_operating_summary(bot_payload, cp_readiness, cp_dependencies),
+            operating_summary=_bot_detail_operating_summary(raw_bot_payload, cp_readiness, cp_dependencies),
             error=None,
         )
 
@@ -679,9 +711,10 @@ def bot_detail_page(bot_id: str):
                 }
             )
         bot_payload = _bot_to_dict(bot)
+        safe_bot_payload = _sanitize_bot_for_detail(bot_payload)
         return render_template(
             "bot_detail.html",
-            bot=bot_payload,
+            bot=safe_bot_payload,
             tasks=tasks,
             runs=[],
             artifacts=[],

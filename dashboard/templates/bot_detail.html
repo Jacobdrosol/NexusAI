@@ -185,7 +185,12 @@
         <td>{{ b.provider }}</td>
         <td>{{ b.model }}</td>
         <td>{{ b.worker_id or '—' }}</td>
-        <td>{{ b.api_key_ref or '—' }}</td>
+        <td>
+          {{ b.api_key_ref_display or b.api_key_ref or '—' }}
+          {% if b.api_key_ref_raw_detected %}
+          <div class="metrics">Replace with a vault key reference before saving.</div>
+          {% endif %}
+        </td>
         <td class="actions">
           <button class="btn btn-sm" onclick="moveBackendUp({{ loop.index0 }})">↑</button>
           <button class="btn btn-sm" onclick="moveBackendDown({{ loop.index0 }})">↓</button>
@@ -2164,7 +2169,7 @@ function renderBackendChain() {
       <td>${b.provider ?? ''}</td>
       <td>${b.model ?? ''}</td>
       <td>${b.worker_id || '—'}</td>
-      <td>${b.api_key_ref || '—'}</td>
+      <td>${b.api_key_ref_display || b.api_key_ref || '—'}${b.api_key_ref_raw_detected ? '<div class="metrics">Replace with a vault key reference before saving.</div>' : ''}</td>
       <td class="actions">
         <button class="btn btn-sm" onclick="moveBackendUp(${idx})">↑</button>
         <button class="btn btn-sm" onclick="moveBackendDown(${idx})">↓</button>

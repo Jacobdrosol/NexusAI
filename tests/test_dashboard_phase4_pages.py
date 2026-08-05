@@ -2786,6 +2786,71 @@ def test_bot_detail_page_still_loads_when_history_endpoints_fail(dashboard_clien
     assert b"Chat Profile" in resp.data
 
 
+def test_bot_detail_page_redacts_raw_backend_credential_refs(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def get_bot(self, bot_id):
+            return {
+                "id": bot_id,
+                "name": "Raw Secret Bot",
+                "role": "assistant",
+                "enabled": True,
+                "backends": [
+                    {
+                        "type": "cloud_api",
+                        "provider": "openai",
+                        "model": "gpt-5",
+                        "api_key_ref": "sk-live-secret",
+                    }
+                ],
+            }
+
+        def get_bot_readiness(self, bot_id):
+            return {
+                "bot_id": bot_id,
+                "state": "ready",
+                "ready": True,
+                "summary": {"checks": 0, "blocking": 0, "warnings": 0},
+                "checks": [],
+            }
+
+        def get_bot_dependencies(self, bot_id):
+            return {"schedule_references": [], "workflow_references": [], "can_disable": True, "can_delete": True}
+
+        def list_tasks(self, **kwargs):
+            return []
+
+        def list_bot_runs(self, bot_id, **kwargs):
+            return []
+
+        def list_bot_artifacts(self, bot_id, **kwargs):
+            return []
+
+        def list_workers(self):
+            return []
+
+        def list_worker_probes(self):
+            return {"probes": []}
+
+        def list_models(self):
+            return []
+
+        def list_keys(self):
+            return []
+
+    with patch("dashboard.cp_client.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/bots/raw-secret-bot")
+
+    assert resp.status_code == 200
+    assert b"Raw Secret Bot" in resp.data
+    assert b"[redacted raw credential]" in resp.data
+    assert b"Replace with a vault key reference before saving." in resp.data
+    assert b"sk-live-secret" not in resp.data
+    assert b"api_key_ref_raw_detected" in resp.data
+    assert b"configure vault key" in resp.data
+
+
 def test_bot_test_run_api_proxies_to_control_plane(dashboard_client):
     _login_admin(dashboard_client)
 
@@ -2866,6 +2931,49 @@ def test_bot_test_run_api_blocks_tooling_preflight_failures(dashboard_client):
     assert body["tooling"]["tooling_state"] == "blocked"
     assert body["tooling"]["blocking_category"] == "credential"
     assert body["tooling"]["missing_credential_refs"] == ["MISSING_SITE_TOKEN"]
+    assert body["tooling"]["recommended_action"]["label"] == "configure vault key"
+
+
+def test_bot_test_run_api_blocks_raw_credential_refs(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def get_bot(self, bot_id):
+            return {
+                "id": bot_id,
+                "name": "Raw Secret Bot",
+                "enabled": True,
+                "backends": [{"type": "cloud_api", "provider": "openai", "model": "gpt-5", "api_key_ref": "sk-live-secret"}],
+            }
+
+        def get_bot_readiness(self, bot_id):
+            return {"bot_id": bot_id, "state": "ready", "ready": True, "checks": []}
+
+        def list_workers(self):
+            return []
+
+        def list_worker_probes(self):
+            return {"probes": []}
+
+        def list_keys(self):
+            return []
+
+        def create_task_full(self, bot_id, payload, metadata=None, depends_on=None):
+            raise AssertionError("raw credential bot test runs must not create tasks")
+
+    with patch("dashboard.cp_client.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/bots/raw-secret-bot/test-run",
+            json={"payload": {"instruction": "hello"}},
+        )
+
+    assert resp.status_code == 409
+    body = resp.get_json()
+    assert body["error"] == "bot test run blocked by tooling readiness"
+    assert body["tooling"]["tooling_state"] == "blocked"
+    assert body["tooling"]["blocking_category"] == "credential"
+    assert body["tooling"]["raw_credential_ref_detected"] is True
+    assert body["tooling"]["credential_refs"] == ["[redacted raw credential]"]
     assert body["tooling"]["recommended_action"]["label"] == "configure vault key"
 
 
