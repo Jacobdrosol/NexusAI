@@ -970,6 +970,19 @@ select.form-control {
   overflow-y: auto;
 }
 
+.chat-create-convo-modal {
+  width: min(100%, 620px);
+  max-height: calc(100dvh - 2rem);
+  margin: auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+#modal-create-convo {
+  padding: 1rem;
+  overflow-y: auto;
+}
+
 .chat-font-size-row {
   display: flex;
   align-items: center;
