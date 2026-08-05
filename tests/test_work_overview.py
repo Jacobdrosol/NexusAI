@@ -187,6 +187,8 @@ def test_work_overview_groups_tasks_by_project_and_manager():
     assert attention_lane["hold_manager_id"] == "globeiq-pm"
     assert attention_lane["held_by_project"] is False
     assert attention_lane["reasons"] == ["1 problem", "2 stale", "1 route gap", "held"]
+    assert attention_lane["recommended_action"]["label"] == "review failed output"
+    assert attention_lane["recommended_action"]["level"] == "critical"
     queue_lane = overview["queue_pressure_lanes"][0]
     assert queue_lane["project_id"] == "globeiq"
     assert queue_lane["manager_id"] == "globeiq-pm"
@@ -199,6 +201,8 @@ def test_work_overview_groups_tasks_by_project_and_manager():
     assert queue_lane["held"] is True
     assert queue_lane["hold_manager_id"] == "globeiq-pm"
     assert queue_lane["held_by_project"] is False
+    assert queue_lane["recommended_action"]["label"] == "unblock before adding work"
+    assert queue_lane["recommended_action"]["level"] == "critical"
     brief = overview["operations_brief"]
     assert brief["status_breakdown"]["active"] == 1
     assert brief["status_breakdown"]["waiting"] == 1
@@ -213,6 +217,7 @@ def test_work_overview_groups_tasks_by_project_and_manager():
     assert brief["top_waiting_lanes"][0]["waiting"] == 1
     assert brief["top_problem_lanes"][0]["problem"] == 1
     assert brief["attention_lanes"][0]["reasons"] == ["1 problem", "2 stale", "1 route gap", "held"]
+    assert brief["attention_lanes"][0]["recommended_action"]["label"] == "review failed output"
     assert manager["latest_tasks"][2]["worker_id"] == "browser-worker-01"
     assert overview["holds"][0]["id"] == "globeiq::globeiq-pm"
     assert overview["holds"][0]["queued_task_count"] == 1
@@ -584,6 +589,9 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"needs intervention" in resp.data
     assert b"critical lanes" in resp.data
     assert b"active/problem task(s) missing worker evidence" in resp.data
+    assert b"Recommended Action" in resp.data
+    assert b"review failed output" in resp.data
+    assert b"unblock before adding work" in resp.data
     assert b"<th>Bot</th><th>Tokens</th><th>Measured</th><th>Missing</th>" in resp.data
     assert b"Bot Usage Pressure" in resp.data
     assert b"override cap" in resp.data
@@ -634,6 +642,8 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert data["operations_brief"]["lane_health_counts"]["critical"] == 1
     assert data["operations_brief"]["top_active_lanes"][0]["lane_health"]["level"] == "critical"
     assert data["operations_brief"]["top_problem_lanes"][0]["manager_id"] == "globeiq-pm"
+    assert data["attention_lanes"][0]["recommended_action"]["label"] == "review failed output"
+    assert data["queue_pressure_lanes"][0]["recommended_action"]["label"] == "unblock before adding work"
     assert data["attention"]["problem_tasks"] == 1
     assert data["attention"]["stale_work"] == 2
     assert data["attention"]["metadata_gaps"] == 0

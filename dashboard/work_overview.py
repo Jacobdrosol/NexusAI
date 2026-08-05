@@ -418,6 +418,14 @@ def _attention_lanes(project_summaries: list[dict[str, Any]], limit: int = 12) -
             if not reasons:
                 continue
             score = (problem * 100) + (stale * 25) + (route_gaps * 15) + (10 if held else 0) + active + waiting
+            recommended_action = _attention_lane_action(
+                problem=problem,
+                stale=stale,
+                route_gaps=route_gaps,
+                held=held,
+                active=active,
+                waiting=waiting,
+            )
             rows.append(
                 {
                     "project_id": project_id,
@@ -435,6 +443,7 @@ def _attention_lanes(project_summaries: list[dict[str, Any]], limit: int = 12) -
                     "oldest_active_label": str(freshness.get("oldest_active_label") or "none"),
                     "oldest_waiting_label": str(freshness.get("oldest_waiting_label") or "none"),
                     "reasons": reasons,
+                    "recommended_action": recommended_action,
                     "score": score,
                 }
             )
@@ -472,6 +481,14 @@ def _queue_pressure_lanes(project_summaries: list[dict[str, Any]], limit: int = 
             hold = manager.get("hold") if isinstance(manager.get("hold"), dict) else {}
             held = bool(manager.get("held"))
             hold_manager_id = str(hold.get("manager_id") or "")
+            recommended_action = _queue_lane_action(
+                blocked=blocked,
+                problem=problem,
+                stale_waiting=stale_waiting,
+                waiting=waiting,
+                queued=queued,
+                held=held,
+            )
             score = (
                 (blocked * 50)
                 + (problem * 40)
@@ -496,6 +513,7 @@ def _queue_pressure_lanes(project_summaries: list[dict[str, Any]], limit: int = 
                     "hold_manager_id": hold_manager_id,
                     "held_by_project": held and not hold_manager_id,
                     "oldest_waiting_label": str(freshness.get("oldest_waiting_label") or "none"),
+                    "recommended_action": recommended_action,
                     "score": score,
                 }
             )
@@ -628,6 +646,98 @@ def _project_lane_health(managers: list[dict[str, Any]]) -> dict[str, Any]:
         "label": label,
         "counts": dict(counts),
         "top_reasons": [{"reason": reason, "count": count} for reason, count in reasons.most_common(5)],
+    }
+
+
+def _attention_lane_action(
+    *,
+    problem: int,
+    stale: int,
+    route_gaps: int,
+    held: bool,
+    active: int,
+    waiting: int,
+) -> dict[str, str]:
+    if problem:
+        return {
+            "level": "critical",
+            "label": "review failed output",
+            "detail": "Open lane details, inspect failed or retried task evidence, then repair or stop the lane.",
+        }
+    if stale and active:
+        return {
+            "level": "critical",
+            "label": "clear stale running work",
+            "detail": "Open lane details and verify whether running tasks are still advancing before stopping or retrying.",
+        }
+    if route_gaps:
+        return {
+            "level": "warning",
+            "label": "restore worker evidence",
+            "detail": "Check execution provenance and worker routing before trusting this lane's output.",
+        }
+    if stale:
+        return {
+            "level": "warning",
+            "label": "review stale waiting work",
+            "detail": "Check queued or blocked tasks and confirm worker capacity before adding more work.",
+        }
+    if held:
+        return {
+            "level": "paused",
+            "label": "release or keep held",
+            "detail": "Release the lane only after the hold reason has been addressed.",
+        }
+    if active or waiting:
+        return {
+            "level": "ready",
+            "label": "monitor lane",
+            "detail": "Lane has loaded work and no immediate attention reason.",
+        }
+    return {
+        "level": "idle",
+        "label": "no action",
+        "detail": "No loaded work in this lane.",
+    }
+
+
+def _queue_lane_action(
+    *,
+    blocked: int,
+    problem: int,
+    stale_waiting: int,
+    waiting: int,
+    queued: int,
+    held: bool,
+) -> dict[str, str]:
+    if blocked or problem:
+        return {
+            "level": "critical",
+            "label": "unblock before adding work",
+            "detail": "Review blocked/problem tasks before increasing concurrency or queue size.",
+        }
+    if stale_waiting:
+        return {
+            "level": "warning",
+            "label": "inspect queue age",
+            "detail": "Confirm waiting tasks are being picked up before routing more work into this lane.",
+        }
+    if held:
+        return {
+            "level": "paused",
+            "label": "held queue",
+            "detail": "Queue is intentionally paused until the hold is released.",
+        }
+    if waiting or queued:
+        return {
+            "level": "ready",
+            "label": "queue moving",
+            "detail": "Queue has loaded work and no loaded blocker evidence.",
+        }
+    return {
+        "level": "idle",
+        "label": "no queue action",
+        "detail": "No loaded queue pressure in this lane.",
     }
 
 

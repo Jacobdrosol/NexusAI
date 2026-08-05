@@ -787,7 +787,7 @@
       <h2 class="panel-title">Attention Lanes</h2>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Lane</th><th>Reasons</th><th>Work</th><th>Actions</th></tr></thead>
+          <thead><tr><th>Lane</th><th>Reasons</th><th>Recommended Action</th><th>Work</th><th>Actions</th></tr></thead>
           <tbody>
             {% for lane in attention_lanes[:12] %}
             <tr>
@@ -800,6 +800,15 @@
                 {% for reason in lane.reasons %}
                 <div><span class="badge {% if 'problem' in reason %}badge-failed{% elif 'stale' in reason %}badge-yellow{% else %}badge-queued{% endif %}">{{ reason }}</span></div>
                 {% endfor %}
+              </td>
+              <td>
+                {% set action = lane.recommended_action or {} %}
+                <span class="badge {% if action.level == 'critical' %}badge-failed{% elif action.level == 'warning' %}badge-yellow{% elif action.level == 'paused' %}badge-queued{% elif action.level == 'ready' %}badge-completed{% else %}badge-unknown{% endif %}">
+                  {{ action.label or "review lane" }}
+                </span>
+                {% if action.detail %}
+                <div class="mini-note">{{ action.detail }}</div>
+                {% endif %}
               </td>
               <td>
                 <div class="mini-note">{{ lane.active }} active / {{ lane.waiting }} waiting</div>
@@ -837,7 +846,7 @@
               </td>
             </tr>
             {% else %}
-            <tr><td colspan="4" class="empty">No project-manager lanes need attention in the loaded window.</td></tr>
+            <tr><td colspan="5" class="empty">No project-manager lanes need attention in the loaded window.</td></tr>
             {% endfor %}
           </tbody>
         </table>
@@ -848,7 +857,7 @@
       <h2 class="panel-title">Queue Pressure</h2>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Lane</th><th>Pressure</th><th>Oldest</th><th>Actions</th></tr></thead>
+          <thead><tr><th>Lane</th><th>Pressure</th><th>Recommended Action</th><th>Oldest</th><th>Actions</th></tr></thead>
           <tbody>
             {% for lane in queue_pressure_lanes[:12] %}
             <tr>
@@ -864,6 +873,15 @@
                 {% if lane.problem %}<div><span class="badge badge-failed">{{ lane.problem }} problem</span></div>{% endif %}
                 {% if lane.stale_waiting %}<div><span class="badge badge-yellow">{{ lane.stale_waiting }} stale waiting</span></div>{% endif %}
                 {% if lane.held %}<div><span class="badge badge-yellow">held</span></div>{% endif %}
+              </td>
+              <td>
+                {% set action = lane.recommended_action or {} %}
+                <span class="badge {% if action.level == 'critical' %}badge-failed{% elif action.level == 'warning' %}badge-yellow{% elif action.level == 'paused' %}badge-queued{% elif action.level == 'ready' %}badge-completed{% else %}badge-unknown{% endif %}">
+                  {{ action.label or "review queue" }}
+                </span>
+                {% if action.detail %}
+                <div class="mini-note">{{ action.detail }}</div>
+                {% endif %}
               </td>
               <td>{{ lane.oldest_waiting_label }}</td>
               <td>
@@ -897,7 +915,7 @@
               </td>
             </tr>
             {% else %}
-            <tr><td colspan="4" class="empty">No active or waiting project-manager queues in the loaded window.</td></tr>
+            <tr><td colspan="5" class="empty">No active or waiting project-manager queues in the loaded window.</td></tr>
             {% endfor %}
           </tbody>
         </table>
