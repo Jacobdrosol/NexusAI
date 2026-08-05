@@ -814,21 +814,31 @@
       <table>
         <thead>
           <tr>
-            <th>Status</th><th>Started</th><th>Source</th><th>Trigger</th><th>Artifacts</th><th>Task</th>
+            <th>Status</th><th>Started</th><th>Source</th><th>Preflight</th><th>Trigger</th><th>Artifacts</th><th>Task</th>
           </tr>
         </thead>
         <tbody>
           {% for run in runs %}
+          {% set preflight = run.metadata.tooling_preflight if run.metadata and run.metadata.tooling_preflight else None %}
           <tr class="run-row" data-run-task-id="{{ run.task_id }}">
             <td>{{ run.status }}</td>
             <td>{{ ((run.started_at or run.created_at or '')[:19]) | replace('T',' ') }}</td>
             <td>{{ (run.metadata.source if run.metadata else '') or 'manual' }}</td>
+            <td>
+              {% if preflight %}
+              <span class="badge badge-{{ preflight.tooling_state or 'unknown' }}">{{ preflight.tooling_state or 'unknown' }}</span>
+              {% if preflight.recommended_action %}<div class="metrics">Action: {{ preflight.recommended_action.label }}</div>{% endif %}
+              {% if preflight.missing_credential_refs %}<div class="metrics">Missing credentials: {{ preflight.missing_credential_refs | join(', ') }}</div>{% endif %}
+              {% else %}
+              <span class="badge badge-unknown">not recorded</span>
+              {% endif %}
+            </td>
             <td>{{ run.trigger_rule_id or '—' }}</td>
             <td><span class="badge badge-blue">{{ artifacts | selectattr("task_id", "equalto", run.task_id) | list | length }}</span></td>
             <td><button class="btn btn-sm" onclick="event.stopPropagation(); openTaskModal('{{ run.task_id|e }}')">{{ run.task_id[:8] }}…</button></td>
           </tr>
           {% else %}
-          <tr><td colspan="6" class="empty">No recorded runs yet</td></tr>
+          <tr><td colspan="7" class="empty">No recorded runs yet</td></tr>
           {% endfor %}
         </tbody>
       </table>

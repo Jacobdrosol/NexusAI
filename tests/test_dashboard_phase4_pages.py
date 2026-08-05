@@ -2255,7 +2255,23 @@ def test_bot_detail_page_renders_chat_profile_controls(dashboard_client):
             return []
 
         def list_bot_runs(self, bot_id, **kwargs):
-            return []
+            return [
+                {
+                    "task_id": "task-test-run-123",
+                    "bot_id": bot_id,
+                    "status": "completed",
+                    "started_at": "2026-08-05T12:00:00Z",
+                    "trigger_rule_id": None,
+                    "metadata": {
+                        "source": "bot_test",
+                        "tooling_preflight": {
+                            "tooling_state": "ready",
+                            "recommended_action": {"label": "continue"},
+                            "missing_credential_refs": [],
+                        },
+                    },
+                }
+            ]
 
         def list_bot_artifacts(self, bot_id, **kwargs):
             return []
@@ -2279,6 +2295,9 @@ def test_bot_detail_page_renders_chat_profile_controls(dashboard_client):
     assert b"Chat Profile" in resp.data
     assert b"Operating Summary" in resp.data
     assert b"Tooling Readiness" in resp.data
+    assert b"Preflight" in resp.data
+    assert b"bot_test" in resp.data
+    assert b"Action: continue" in resp.data
     assert b"Recommended action:" in resp.data
     assert b"continue" in resp.data
     assert b"No blocking tooling readiness issue is currently reported for this bot." in resp.data
