@@ -2217,6 +2217,7 @@ def test_chat_page_unscoped_filter_limits_conversation_list(dashboard_client):
     assert b'option value="global" selected' in resp.data
     assert b"Unscoped chat" in resp.data
     assert b"Unscoped" in resp.data
+    assert b"It can use chat and bot memory, but workspace tools stay off." in resp.data
     assert b"project_id=__unscoped__" in resp.data
     assert b"targetProjectFilter = scope === 'global' ? unscopedProjectFilter" in resp.data
     assert b'id="chat-conversation-search"' in resp.data

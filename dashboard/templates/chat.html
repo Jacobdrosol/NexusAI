@@ -799,7 +799,7 @@
           {% if active_project_filter and active_project_filter != unscoped_project_filter %}
           This chat will be scoped to the selected project.
           {% else %}
-          This chat is not scoped to a project.
+          This chat is not scoped to a project. It can use chat and bot memory, but workspace tools stay off.
           {% endif %}
         </p>
       </div>
@@ -1403,7 +1403,7 @@ function syncConversationScopeFields() {
         ? `This chat will bridge from ${bridgedLabel}.`
         : 'Select a primary bridged project before creating this chat.';
     } else {
-      summary.textContent = 'This chat is not scoped to a project.';
+      summary.textContent = 'This chat is not scoped to a project. It can use chat and bot memory, but workspace tools stay off.';
     }
   }
 }
