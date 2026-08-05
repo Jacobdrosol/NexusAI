@@ -268,6 +268,12 @@
         chat model {{ chat_provider_model_spend.label }}
       </span>
       {% endif %}
+      {% set chat_risk = operations_brief.chat_risk_summary or {} %}
+      {% if chat_risk.level in ["critical", "warning", "watch"] %}
+      <span class="badge {% if chat_risk.level == 'critical' %}badge-failed{% elif chat_risk.level == 'warning' %}badge-yellow{% else %}badge-queued{% endif %}" title="{{ chat_risk.detail }}">
+        chat risk {{ chat_risk.recommended_action.label if chat_risk.recommended_action else chat_risk.label }}
+      </span>
+      {% endif %}
     </div>
   </div>
   <div class="split-grid" style="grid-template-columns:1fr 1fr 1fr;gap:1rem;">

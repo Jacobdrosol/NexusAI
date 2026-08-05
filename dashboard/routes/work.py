@@ -436,6 +436,98 @@ def _global_cap_pressure(
     }
 
 
+def _chat_risk_summary(
+    *,
+    chat_usage_health: dict[str, Any],
+    chat_cap_pressure: dict[str, Any],
+    chat_global_cap_pressure: dict[str, Any],
+    chat_usage_brief: dict[str, Any],
+) -> dict[str, Any]:
+    spend = (
+        chat_usage_brief.get("provider_model_spend")
+        if isinstance(chat_usage_brief.get("provider_model_spend"), dict)
+        else {}
+    )
+    attribution = (
+        chat_usage_brief.get("provider_model_attribution")
+        if isinstance(chat_usage_brief.get("provider_model_attribution"), dict)
+        else {}
+    )
+    signals = [
+        ("global_cap", chat_global_cap_pressure),
+        ("bot_cap", chat_cap_pressure),
+        ("telemetry", chat_usage_health),
+        ("provider_model_attribution", attribution),
+        ("provider_model_spend", spend),
+    ]
+    level_rank = {"critical": 5, "warning": 4, "watch": 3, "ready": 2, "idle": 1}
+    top_source = "none"
+    top_level = "idle"
+    top_label = "no direct chat risk"
+    top_detail = "No direct-chat usage risk is currently visible in the loaded window."
+    reasons: list[str] = []
+    for source, payload in signals:
+        if not isinstance(payload, dict):
+            continue
+        level = str(payload.get("level") or "idle").strip().lower()
+        if level not in level_rank:
+            level = "idle"
+        label = str(payload.get("label") or payload.get("reason") or source.replace("_", " ")).strip()
+        detail = str(payload.get("detail") or payload.get("reason") or label).strip()
+        if level in {"critical", "warning", "watch"}:
+            reasons.append(f"{source}: {detail}")
+        if level_rank[level] > level_rank[top_level]:
+            top_source = source
+            top_level = level
+            top_label = label
+            top_detail = detail
+
+    if top_level in {"ready", "idle"}:
+        top_source = "none"
+        top_label = "no direct chat risk"
+        top_detail = "No direct-chat usage risk is currently visible in the loaded window."
+
+    if top_level == "critical":
+        action = {
+            "level": "critical",
+            "label": "stop and inspect chat",
+            "detail": "Direct-chat usage has a critical cap, telemetry, or attribution risk. Pause high-volume sends until the source is resolved.",
+        }
+    elif top_level == "warning":
+        action = {
+            "level": "warning",
+            "label": "watch chat spend",
+            "detail": "Direct-chat usage is near a cap or has incomplete telemetry. Review recent output and attribution before increasing usage.",
+        }
+    elif top_level == "watch":
+        action = {
+            "level": "watch",
+            "label": "review chat mix",
+            "detail": "Direct-chat usage is acceptable but model concentration should be watched before scaling.",
+        }
+    else:
+        action = {
+            "level": "ready",
+            "label": "continue chat",
+            "detail": "Direct-chat usage is within visible limits and attribution is usable.",
+        }
+
+    return {
+        "level": top_level,
+        "label": top_label,
+        "source": top_source,
+        "detail": top_detail,
+        "reasons": reasons[:5],
+        "recommended_action": action,
+        "missing_messages": _safe_count(chat_usage_health, "missing_messages"),
+        "total_tokens": _safe_count(chat_usage_health, "total_tokens"),
+        "global_cap_level": str(chat_global_cap_pressure.get("level") or "idle"),
+        "bot_cap_level": str(chat_cap_pressure.get("level") or "idle"),
+        "provider_model_spend_level": str(spend.get("level") or "idle"),
+        "provider_model_attribution_level": str(attribution.get("level") or "idle"),
+    }
+
+
 def _usage_brief(usage: dict[str, Any], *, limit: int = 5) -> dict[str, Any]:
     totals = usage.get("totals") if isinstance(usage.get("totals"), dict) else {}
 
@@ -1011,6 +1103,12 @@ def _load_work_overview() -> dict[str, Any]:
     operations_brief["usage_global_cap_pressure"] = overview["usage_global_cap_pressure"]
     operations_brief["chat_cap_pressure"] = overview["chat_cap_pressure"]
     operations_brief["chat_global_cap_pressure"] = overview["chat_global_cap_pressure"]
+    operations_brief["chat_risk_summary"] = _chat_risk_summary(
+        chat_usage_health=overview["chat_usage_health"],
+        chat_cap_pressure=overview["chat_cap_pressure"],
+        chat_global_cap_pressure=overview["chat_global_cap_pressure"],
+        chat_usage_brief=overview["chat_usage_brief"],
+    )
     overview["operations_brief"] = operations_brief
     list_quality_suites = getattr(cp, "list_platform_ai_quality_suites_global", None)
     if callable(list_quality_suites):

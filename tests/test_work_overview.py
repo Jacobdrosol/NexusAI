@@ -4,7 +4,7 @@ import bcrypt
 from datetime import datetime, timezone
 from unittest.mock import patch
 
-from dashboard.routes.work import _quality_gate_overall_action, _quality_gate_recommended_action
+from dashboard.routes.work import _chat_risk_summary, _quality_gate_overall_action, _quality_gate_recommended_action
 from dashboard.work_overview import build_work_overview
 
 
@@ -23,6 +23,38 @@ def test_quality_gate_overall_action_prioritizes_operator_risk():
     assert _quality_gate_overall_action({"passed": 2}, available=True, suite_count=2)["level"] == "ready"
     assert _quality_gate_overall_action({}, available=True, suite_count=0)["label"] == "create quality gates"
     assert _quality_gate_overall_action({}, available=False, suite_count=0)["level"] == "unknown"
+
+
+def test_chat_risk_summary_reports_ready_when_chat_usage_is_healthy():
+    summary = _chat_risk_summary(
+        chat_usage_health={
+            "level": "ready",
+            "reason": "chat token usage telemetry is complete for measured messages",
+            "missing_messages": 0,
+            "total_tokens": 120,
+        },
+        chat_cap_pressure={"level": "ready", "label": "within cap"},
+        chat_global_cap_pressure={"level": "ready", "label": "global cap ok"},
+        chat_usage_brief={
+            "provider_model_attribution": {
+                "level": "ready",
+                "reason": "chat provider/model attribution is complete",
+            },
+            "provider_model_spend": {
+                "level": "ready",
+                "label": "balanced spend",
+                "detail": "No single chat provider/model lane dominates measured token usage.",
+            },
+        },
+    )
+
+    assert summary["level"] == "ready"
+    assert summary["source"] == "none"
+    assert summary["label"] == "no direct chat risk"
+    assert summary["recommended_action"]["label"] == "continue chat"
+    assert summary["reasons"] == []
+    assert summary["missing_messages"] == 0
+    assert summary["total_tokens"] == 120
 
 
 def _login_user(dashboard_client, *, email="admin@test.com", role="admin"):
@@ -759,6 +791,7 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"worker caps near cap" in resp.data
     assert b"chat caps near cap" in resp.data
     assert b"chat global cap near" in resp.data
+    assert b"chat risk stop and inspect chat" in resp.data
     assert b"override chat cap" in resp.data
     assert b"warning 0.8" in resp.data
     assert b"Cap Chat At Current" in resp.data
@@ -821,6 +854,10 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert data["operations_brief"]["chat_cap_pressure"]["top_lane"]["bot_id"] == "general-chat"
     assert data["operations_brief"]["chat_global_cap_pressure"]["level"] == "warning"
     assert data["operations_brief"]["chat_global_cap_pressure"]["usage_ratio"] == 0.89
+    assert data["operations_brief"]["chat_risk_summary"]["level"] == "critical"
+    assert data["operations_brief"]["chat_risk_summary"]["source"] == "telemetry"
+    assert data["operations_brief"]["chat_risk_summary"]["missing_messages"] == 1
+    assert data["operations_brief"]["chat_risk_summary"]["recommended_action"]["label"] == "stop and inspect chat"
     assert data["attention_lanes"][0]["recommended_action"]["label"] == "review failed output"
     assert data["queue_pressure_lanes"][0]["recommended_action"]["label"] == "unblock before adding work"
     assert data["attention"]["problem_tasks"] == 1
@@ -869,6 +906,8 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert brief_data["chat_usage_health"]["total_tokens"] == 40
     assert brief_data["chat_cap_pressure"]["label"] == "near cap"
     assert brief_data["chat_global_cap_pressure"]["remaining_tokens"] == 5
+    assert brief_data["operations_brief"]["chat_risk_summary"]["level"] == "critical"
+    assert any("telemetry" in reason for reason in brief_data["operations_brief"]["chat_risk_summary"]["reasons"])
     assert brief_data["usage_brief"]["totals"]["prompt_tokens"] == 60
     assert brief_data["usage_brief"]["totals"]["completion_tokens"] == 80
     assert brief_data["chat_usage_brief"]["totals"]["prompt_tokens"] == 30
