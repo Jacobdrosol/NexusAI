@@ -111,6 +111,10 @@ def _failed_messages(readiness: dict[str, Any]) -> list[str]:
 
 def _blocking_category(messages: list[str], required_tools: list[str], worker_ids: list[str]) -> str:
     joined = " ".join(messages).lower()
+    if "project policy" in joined or "project chat tool access" in joined or "project does not allow" in joined:
+        return "project_policy"
+    if "bot policy" in joined or "bot does not allow" in joined or "chat_tool_access" in joined or "tool access disabled" in joined:
+        return "bot_policy"
     if "browser" in joined or "browser-ui" in required_tools:
         return "browser_session"
     if "cli authentication" in joined or "unauthenticated" in joined:
@@ -131,6 +135,8 @@ def _blocking_category_view(category: str) -> dict[str, str]:
         "browser_session": "Authenticated browser session",
         "cli_auth": "CLI authentication",
         "credential": "Vault credential",
+        "project_policy": "Project tool policy",
+        "bot_policy": "Bot tool policy",
         "worker_runtime": "Worker runtime",
         "model": "Model availability",
         "readiness": "Readiness check",
@@ -143,6 +149,8 @@ def _blocking_category_view(category: str) -> dict[str, str]:
         ),
         "cli_auth": "A configured CLI tool is installed but needs a local login or token refresh.",
         "credential": "A required key-vault credential reference is missing or unavailable.",
+        "project_policy": "The scoped project does not currently allow the requested chat or worker tooling.",
+        "bot_policy": "The bot configuration does not currently allow the requested chat or worker tooling.",
         "worker_runtime": "The configured worker is missing, disabled, offline, or not exposing the required capability.",
         "model": "The configured model or provider backend is not currently usable.",
         "readiness": "One or more readiness checks are failing.",

@@ -72,6 +72,18 @@ def test_bot_tooling_status_groups_blocked_worker_tool_causes():
                 "enabled": True,
                 "backends": [{"worker_id": "missing-worker", "type": "remote_llm"}],
             },
+            {
+                "id": "bot-policy-blocked",
+                "name": "Bot Policy Blocked",
+                "enabled": True,
+                "backends": [{"worker_id": "llm-worker", "type": "remote_llm"}],
+            },
+            {
+                "id": "project-policy-blocked",
+                "name": "Project Policy Blocked",
+                "enabled": True,
+                "backends": [{"worker_id": "llm-worker", "type": "remote_llm"}],
+            },
         ],
         readiness_payload={
             "readiness": [
@@ -95,6 +107,18 @@ def test_bot_tooling_status_groups_blocked_worker_tool_causes():
                     "ready": False,
                     "checks": [{"status": "failed", "message": "Worker 'missing-worker' is missing."}],
                 },
+                {
+                    "bot_id": "bot-policy-blocked",
+                    "state": "blocked",
+                    "ready": False,
+                    "checks": [{"status": "failed", "message": "Bot policy does not allow workspace tools."}],
+                },
+                {
+                    "bot_id": "project-policy-blocked",
+                    "state": "blocked",
+                    "ready": False,
+                    "checks": [{"status": "failed", "message": "Project policy does not allow repo search."}],
+                },
             ]
         },
         workers=[
@@ -110,7 +134,7 @@ def test_bot_tooling_status_groups_blocked_worker_tool_causes():
     )
 
     assert status["summary"]["ready"] == 2
-    assert status["summary"]["blocked"] == 2
+    assert status["summary"]["blocked"] == 4
     assert status["summary"]["disabled"] == 1
     assert status["summary"]["tooling_bot_count"] == 1
     assert status["summary"]["connection_action_bot_count"] == 1
@@ -118,9 +142,9 @@ def test_bot_tooling_status_groups_blocked_worker_tool_causes():
     assert status["summary"]["owner_approval_action_count"] == 1
     assert status["summary"]["browser_owner_approval_action_count"] == 1
     assert status["summary"]["http_connection_backend_count"] == 1
-    assert status["summary"]["worker_assignment_count"] == 3
+    assert status["summary"]["worker_assignment_count"] == 5
     assert status["summary"]["missing_worker_assignment_count"] == 1
-    assert status["summary"]["offline_worker_assignment_count"] == 1
+    assert status["summary"]["offline_worker_assignment_count"] == 3
     assert status["summary"]["degraded_worker_probe_count"] == 1
     assert status["required_tools"] == [{"tool": "browser-ui", "bot_count": 1}]
     assert status["connection_actions"] == [{"action": "globeiq-agent-api.updateLesson", "bot_count": 1}]
@@ -133,10 +157,14 @@ def test_bot_tooling_status_groups_blocked_worker_tool_causes():
     assert connection_row["owner_approval_actions"] == ["globeiq-agent-api.updateLesson"]
     assert connection_row["connection_backend_count"] == 1
     assert connection_row["connection_context"] == "globeiq-agent-api"
-    assert status["blocked_groups"][0]["category"] == "browser_session"
-    assert status["blocked_groups"][0]["label"] == "Authenticated browser session"
-    assert "site account can exist" in status["blocked_groups"][0]["detail"]
-    assert status["blocked_groups"][0]["bots"][0]["workers"][0]["probe_status"] == "degraded"
+    groups = {group["category"]: group for group in status["blocked_groups"]}
+    assert groups["browser_session"]["label"] == "Authenticated browser session"
+    assert "site account can exist" in groups["browser_session"]["detail"]
+    assert groups["browser_session"]["bots"][0]["workers"][0]["probe_status"] == "degraded"
+    assert groups["bot_policy"]["label"] == "Bot tool policy"
+    assert "bot configuration" in groups["bot_policy"]["detail"]
+    assert groups["project_policy"]["label"] == "Project tool policy"
+    assert "scoped project" in groups["project_policy"]["detail"]
 
 
 def test_bots_page_surfaces_tooling_readiness_panel(dashboard_client):

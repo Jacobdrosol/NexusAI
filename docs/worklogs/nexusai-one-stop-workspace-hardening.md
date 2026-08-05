@@ -226,3 +226,4 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - Batch 97: added enabled-bot worker assignment health counts to Bot Tooling Readiness so missing workers, offline workers, and degraded probes are visible before assigning worker-backed or browser-backed tasks.
 - Batch 98: added stream chat usage regression coverage so streamed assistant responses must persist provider/model/bot usage metadata and appear in the same `/v1/chat/usage` totals used by Work and Settings.
 - Batch 99: exposed quality-gate summaries in `/api/work/brief` so lightweight monitors can see gate status counts, latest rows, and recommended actions without pulling the full Work overview.
+- Batch 100: split bot tooling readiness blockers into bot-policy and project-policy categories so operators can distinguish configuration denials from browser sessions, worker runtime, credentials, CLI auth, and model availability.
