@@ -146,6 +146,112 @@ def _normalize_project_repo_workspace(raw: Any) -> dict[str, Any]:
     }
 
 
+def _build_project_ai_readiness(
+    *,
+    project: dict[str, Any],
+    project_bots: list[dict[str, Any]],
+    vault_items: list[dict[str, Any]],
+    project_connections: list[dict[str, Any]],
+    github_status: dict[str, Any],
+    chat_tool_access: dict[str, Any],
+    repo_workspace: dict[str, Any],
+) -> dict[str, Any]:
+    enabled_bots = [bot for bot in project_bots if bool(bot.get("enabled", True))]
+    vault_count = len(vault_items)
+    connection_count = len(project_connections)
+    checks: list[dict[str, str]] = []
+
+    def add_check(label: str, state: str, detail: str) -> None:
+        checks.append({"label": label, "state": state, "detail": detail})
+
+    project_enabled = bool(project.get("enabled", True))
+    add_check(
+        "Project",
+        "ready" if project_enabled else "disabled",
+        "Project is enabled." if project_enabled else "Project is disabled.",
+    )
+    add_check(
+        "Assigned Bots",
+        "ready" if enabled_bots else "attention",
+        f"{len(enabled_bots)} enabled bot(s), {len(project_bots)} assigned bot(s).",
+    )
+
+    memory_enabled = bool(project.get("memory_profiles_enabled", False))
+    add_check(
+        "Personal Memory",
+        "ready" if memory_enabled else "disabled",
+        "Project memory gate is enabled." if memory_enabled else "Project memory gate is off.",
+    )
+
+    chat_tools_enabled = bool(chat_tool_access.get("enabled", False))
+    chat_tool_modes = [
+        label
+        for key, label in (("filesystem", "filesystem"), ("repo_search", "repo search"))
+        if bool(chat_tool_access.get(key, False))
+    ]
+    if not chat_tools_enabled:
+        add_check("Chat Tools", "disabled", "Project chat workspace tools are off.")
+    elif chat_tool_modes:
+        add_check("Chat Tools", "ready", "Enabled for " + ", ".join(chat_tool_modes) + ".")
+    else:
+        add_check("Chat Tools", "attention", "Enabled with no filesystem or repo-search capability.")
+
+    repo_enabled = bool(repo_workspace.get("enabled", False))
+    if repo_enabled:
+        repo_detail_parts = ["managed workspace enabled"]
+        if repo_workspace.get("default_branch"):
+            repo_detail_parts.append(f"default branch {repo_workspace.get('default_branch')}")
+        if bool(repo_workspace.get("allow_command_execution", False)):
+            repo_detail_parts.append("command runner allowed")
+        if bool(repo_workspace.get("allow_push", False)):
+            repo_detail_parts.append("push allowed")
+        add_check("Repo Workspace", "ready", "; ".join(repo_detail_parts) + ".")
+    else:
+        add_check(
+            "Repo Workspace",
+            "attention" if bool(chat_tool_access.get("filesystem", False)) else "disabled",
+            "Repository workspace is off.",
+        )
+
+    context_sources = []
+    if vault_count:
+        context_sources.append(f"{vault_count} vault item(s)")
+    if connection_count:
+        context_sources.append(f"{connection_count} database connection(s)")
+    if bool(github_status.get("connected", False)):
+        context_sources.append("GitHub connected")
+    github_sync = github_status.get("context_sync") if isinstance(github_status.get("context_sync"), dict) else {}
+    if github_sync.get("namespace"):
+        context_sources.append(f"context namespace {github_sync.get('namespace')}")
+    add_check(
+        "Context Sources",
+        "ready" if context_sources else "attention",
+        ", ".join(context_sources) + "." if context_sources else "No vault, database, or GitHub context is configured.",
+    )
+
+    attention_count = sum(1 for check in checks if check["state"] == "attention")
+    disabled_count = sum(1 for check in checks if check["state"] == "disabled")
+    if attention_count:
+        overall_state = "attention"
+        overall_label = f"{attention_count} setup item(s) need attention"
+    elif disabled_count:
+        overall_state = "disabled"
+        overall_label = f"{disabled_count} optional gate(s) off"
+    else:
+        overall_state = "ready"
+        overall_label = "Ready for AI work"
+
+    return {
+        "overall_state": overall_state,
+        "overall_label": overall_label,
+        "checks": checks,
+        "enabled_bot_count": len(enabled_bots),
+        "assigned_bot_count": len(project_bots),
+        "vault_item_count": vault_count,
+        "connection_count": connection_count,
+    }
+
+
 def _cp_error_response(cp, fallback: str = "control plane unavailable") -> tuple[Any, int]:
     err = cp.last_error() if hasattr(cp, "last_error") else {}
     detail = ""
@@ -396,6 +502,17 @@ def project_detail_page(project_id: str):
         if hasattr(cp, "get_project_repo_workspace")
         else None
     )
+    github_status = _normalize_github_status(cp.get_project_github_status(project_id))
+    project_connections = _project_connections(project_id)
+    project_ai_readiness = _build_project_ai_readiness(
+        project=project,
+        project_bots=project_bots,
+        vault_items=vault_items,
+        project_connections=project_connections,
+        github_status=github_status,
+        chat_tool_access=chat_tool_access,
+        repo_workspace=repo_workspace,
+    )
     orchestration_workspaces = (
         cp.list_project_orchestration_workspaces(project_id)
         if hasattr(cp, "list_project_orchestration_workspaces")
@@ -409,7 +526,7 @@ def project_detail_page(project_id: str):
         tasks=project_tasks,
         vault_items=vault_items,
         all_projects=all_projects,
-        github_status=_normalize_github_status(cp.get_project_github_status(project_id)),
+        github_status=github_status,
         webhook_events=_normalize_webhook_events(
             cp.list_project_github_webhook_events(project_id, limit=30)
         ),
@@ -418,7 +535,8 @@ def project_detail_page(project_id: str):
         orchestration_workspaces=orchestration_workspaces.get("workspaces") or [],
         project_data_root=str(project_data_root),
         project_data_tree=build_project_data_tree(project_id),
-        project_connections=_project_connections(project_id),
+        project_connections=project_connections,
+        project_ai_readiness=project_ai_readiness,
         project_reports=project_reports,
         error=None,
     )

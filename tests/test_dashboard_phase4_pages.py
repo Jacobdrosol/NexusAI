@@ -175,6 +175,79 @@ def test_project_detail_page_renders_with_partial_github_status(dashboard_client
     assert b"Show File Status" in resp.data
 
 
+def test_project_detail_page_surfaces_ai_workspace_readiness(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def get_project(self, project_id):
+            return {
+                "id": project_id,
+                "name": "GlobeIQ",
+                "mode": "isolated",
+                "enabled": True,
+                "description": "test project",
+                "settings_overrides": {},
+                "bridge_project_ids": [],
+                "bot_ids": ["bot-1"],
+                "memory_profiles_enabled": True,
+            }
+
+        def list_projects(self):
+            return [
+                {
+                    "id": "globeiq",
+                    "name": "GlobeIQ",
+                    "mode": "isolated",
+                    "enabled": True,
+                    "bridge_project_ids": [],
+                    "bot_ids": ["bot-1"],
+                }
+            ]
+
+        def list_bots(self):
+            return [{"id": "bot-1", "name": "Research Bot", "project_id": "globeiq", "enabled": True}]
+
+        def list_bot_artifacts(self, bot_id, limit=20):
+            return []
+
+        def list_tasks(self):
+            return []
+
+        def list_vault_items(self, **kwargs):
+            return [{"id": "vault-1", "title": "Project Notes"}]
+
+        def get_project_github_status(self, project_id):
+            return {
+                "connected": True,
+                "context_sync": {"namespace": "project:globeiq:github"},
+            }
+
+        def list_project_github_webhook_events(self, project_id, limit=30):
+            return {"events": []}
+
+        def get_project_chat_tool_access(self, project_id):
+            return {"enabled": True, "filesystem": True, "repo_search": True}
+
+        def get_project_repo_workspace(self, project_id):
+            return {
+                "enabled": True,
+                "default_branch": "main",
+                "allow_command_execution": True,
+                "allow_push": False,
+            }
+
+    with patch("dashboard.routes.projects.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/projects/globeiq")
+
+    assert resp.status_code == 200
+    assert b"AI Workspace Readiness" in resp.data
+    assert b"Ready for AI work" in resp.data
+    assert b"1 enabled / 1 total" in resp.data
+    assert b"Enabled for filesystem, repo search." in resp.data
+    assert b"managed workspace enabled; default branch main; command runner allowed." in resp.data
+    assert b"context namespace project:globeiq:github" in resp.data
+
+
 def test_project_git_status_api_reports_uncommitted_files(dashboard_client):
     _login_admin(dashboard_client)
 

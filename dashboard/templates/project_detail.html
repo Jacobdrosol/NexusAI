@@ -58,6 +58,39 @@
 
 <section class="panel" style="margin-bottom:1rem;">
   <div class="page-header" style="margin-bottom:0.75rem;">
+    <h2 class="panel-title">AI Workspace Readiness</h2>
+    <span class="badge badge-{{ project_ai_readiness.overall_state }}">{{ project_ai_readiness.overall_label }}</span>
+  </div>
+  <div class="split-grid" style="grid-template-columns:repeat(auto-fit, minmax(12rem, 1fr)); gap:0.75rem; margin-bottom:0.75rem;">
+    <div>
+      <div class="mini-note">Assigned Bots</div>
+      <strong>{{ project_ai_readiness.enabled_bot_count }} enabled / {{ project_ai_readiness.assigned_bot_count }} total</strong>
+    </div>
+    <div>
+      <div class="mini-note">Vault Context</div>
+      <strong>{{ project_ai_readiness.vault_item_count }} item{{ '' if project_ai_readiness.vault_item_count == 1 else 's' }}</strong>
+    </div>
+    <div>
+      <div class="mini-note">Database Context</div>
+      <strong>{{ project_ai_readiness.connection_count }} connection{{ '' if project_ai_readiness.connection_count == 1 else 's' }}</strong>
+    </div>
+  </div>
+  <table>
+    <thead><tr><th>Gate</th><th>Status</th><th>Detail</th></tr></thead>
+    <tbody>
+      {% for check in project_ai_readiness.checks %}
+      <tr>
+        <td>{{ check.label }}</td>
+        <td><span class="badge badge-{{ check.state }}">{{ check.state }}</span></td>
+        <td>{{ check.detail }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="panel" style="margin-bottom:1rem;">
+  <div class="page-header" style="margin-bottom:0.75rem;">
     <h2 class="panel-title">Personal Memory</h2>
     <button class="btn btn-primary" type="button" onclick="saveProjectMemoryProfile()">Save Memory Gate</button>
   </div>
