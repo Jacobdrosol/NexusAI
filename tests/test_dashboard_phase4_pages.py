@@ -1319,6 +1319,85 @@ def test_chat_page_limits_normal_bot_selectors_to_chat_bots(dashboard_client):
     assert b"Default route is unavailable: ${routeBlocker}" in resp.data
 
 
+def test_chat_page_does_not_block_chat_bot_when_readiness_is_unreported(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_conversations(self, archived="all", project_id=None):
+            return [
+                {
+                    "id": "c-chat",
+                    "title": "Chat",
+                    "project_id": None,
+                    "bridge_project_ids": [],
+                    "updated_at": "2026-03-12T00:00:00+00:00",
+                    "archived_at": None,
+                    "default_bot_id": "personal-general-chat",
+                    "memory_profiles_enabled": True,
+                    "memory_profile_id": "default",
+                    "tool_access_enabled": False,
+                    "tool_access_filesystem": False,
+                    "tool_access_repo_search": False,
+                }
+            ]
+
+        def list_messages(self, conversation_id, limit=None):
+            return []
+
+        def list_bots(self):
+            return [
+                {
+                    "id": "personal-general-chat",
+                    "name": "Personal General Chat",
+                    "role": "assistant",
+                    "backends": [
+                        {
+                            "type": "cloud_api",
+                            "provider": "ollama_cloud",
+                            "model": "gpt-oss:120b",
+                            "api_key_ref": "OLLAMA_CLOUD_KEY",
+                        }
+                    ],
+                    "routing_rules": {
+                        "operator_profile": {"autonomy": "manual_chat_only"},
+                        "chat_profile": {"mode": "chat", "label": "General Chat"},
+                    },
+                }
+            ]
+
+        def list_bot_readiness(self):
+            return {"readiness": []}
+
+        def list_workers(self):
+            return []
+
+        def list_worker_probes(self):
+            return {"probes": []}
+
+        def list_keys(self):
+            return [{"name": "OLLAMA_CLOUD_KEY"}]
+
+        def list_projects(self):
+            return []
+
+        def list_models(self):
+            return []
+
+        def list_vault_items(self, **kwargs):
+            return []
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/chat?conversation_id=c-chat")
+
+    assert resp.status_code == 200
+    page_html = resp.data.decode("utf-8")
+    selector_start = page_html.index('id="chat-bot-selector"')
+    chat_selector = page_html[selector_start:page_html.index("</select>", selector_start)]
+    assert "Personal General Chat - General Chat" in chat_selector
+    assert 'value="personal-general-chat" selected  disabled' not in chat_selector
+    assert "Readiness not reported." in page_html
+
+
 def test_chat_page_embeds_effective_context_gate_inputs(dashboard_client):
     _login_admin(dashboard_client)
 

@@ -181,6 +181,16 @@ def _with_bot_readiness(bots: Iterable[Any], readiness_payload: Any) -> list[dic
     return enriched
 
 
+def _tooling_row_has_concrete_blocker(row: dict[str, Any]) -> bool:
+    state = str(row.get("state") or "").strip().lower()
+    if state == "disabled":
+        return True
+    if row.get("missing_credential_refs"):
+        return True
+    messages = row.get("blocking_messages") or row.get("disabled_activation_messages") or []
+    return bool(messages)
+
+
 def _with_bot_tooling_readiness(
     bots: Iterable[Any],
     readiness_payload: Any,
@@ -209,7 +219,7 @@ def _with_bot_tooling_readiness(
             continue
         row["tooling"] = tooling
         tooling_state = str(tooling.get("state") or "").strip().lower()
-        if tooling_state in {"blocked", "disabled"}:
+        if tooling_state in {"blocked", "disabled"} and _tooling_row_has_concrete_blocker(tooling):
             messages = tooling.get("blocking_messages") or tooling.get("disabled_activation_messages") or []
             detail = str(messages[0] if messages else "").strip()
             if not detail and tooling.get("recommended_action"):
@@ -324,10 +334,8 @@ def _bot_readiness_blocker_from_cp(cp: Any, bot_id: str) -> str:
     except Exception:
         return ""
     readiness = _readiness_by_bot_id(readiness_payload).get(safe_bot_id)
-    if not readiness:
-        return ""
-    state = str(readiness.get("state") or "").strip().lower()
-    if state in {"blocked", "disabled"}:
+    state = str((readiness or {}).get("state") or "").strip().lower()
+    if readiness and state in {"blocked", "disabled"}:
         detail = str(readiness.get("detail") or "").strip()
         return f"{safe_bot_id} is {state}: {detail}" if detail else f"{safe_bot_id} is {state}"
 
@@ -359,7 +367,7 @@ def _bot_readiness_blocker_from_cp(cp: Any, bot_id: str) -> str:
     )
     row = (tooling.get("rows") or [{}])[0]
     tooling_state = str(row.get("state") or "").strip().lower()
-    if tooling_state not in {"blocked", "disabled"}:
+    if tooling_state not in {"blocked", "disabled"} or not _tooling_row_has_concrete_blocker(row):
         return ""
     messages = row.get("blocking_messages") or row.get("disabled_activation_messages") or []
     detail = str(messages[0] if messages else "").strip()
