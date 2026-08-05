@@ -1864,6 +1864,36 @@ function chatBotToolAccess(bot) {
   };
 }
 
+const botCapabilityLabels = {
+  attachments: 'attachments',
+  image_understanding: 'image understanding',
+  diagrams: 'diagrams',
+  math_reasoning: 'math reasoning',
+  physics_reasoning: 'physics reasoning',
+  engineering_reasoning: 'engineering reasoning',
+  step_by_step_reasoning: 'step-by-step reasoning',
+  repo_search: 'repo search',
+  filesystem: 'filesystem',
+  inline_coding_default: 'inline coding',
+  repo_output: 'repo output',
+};
+
+function botCapabilityLabelText(profile) {
+  const capabilities = Array.isArray(profile?.capabilities)
+    ? profile.capabilities.map((item) => String(item || '').trim()).filter(Boolean)
+    : [];
+  if (!capabilities.length) return 'capabilities unspecified';
+  const labels = [];
+  capabilities.forEach((capability) => {
+    const key = capability.toLowerCase();
+    const label = botCapabilityLabels[key] || capability.replaceAll('_', ' ');
+    if (label && !labels.includes(label)) labels.push(label);
+  });
+  const visible = labels.slice(0, 6);
+  const extra = labels.length > visible.length ? ` +${labels.length - visible.length} more` : '';
+  return `capabilities ${visible.join(', ')}${extra}`;
+}
+
 function updateChatBotCapabilitySummary() {
   const summary = document.getElementById('chat-bot-capability-summary');
   if (!summary) return;
@@ -1887,13 +1917,14 @@ function updateChatBotCapabilitySummary() {
   const modelLabel = [effectiveModel.provider, effectiveModel.model].filter(Boolean).join(' / ') || 'model unknown';
   const routeLabel = effectiveModel.source || 'bot backend';
   const profileLabel = String(profile.label || profile.mode || bot.role || 'chat').trim();
+  const capabilityLabel = botCapabilityLabelText(profile);
   const readiness = bot.readiness && typeof bot.readiness === 'object' ? bot.readiness : {};
   const readinessState = String(readiness.state || 'unknown').trim() || 'unknown';
   const readinessDetail = String(readiness.detail || '').trim();
   const readinessLabel = readinessDetail
     ? `readiness ${readinessState} (${readinessDetail})`
     : `readiness ${readinessState}`;
-  summary.textContent = `${bot.name || bot.id}: ${profileLabel}; ${routeLabel} ${modelLabel}; ${imageLabel}; ${memoryLabel}; chat tools ${toolLabel}; ${readinessLabel}.`;
+  summary.textContent = `${bot.name || bot.id}: ${profileLabel}; ${capabilityLabel}; ${routeLabel} ${modelLabel}; ${imageLabel}; ${memoryLabel}; chat tools ${toolLabel}; ${readinessLabel}.`;
 }
 
 function botCapabilitySummaryText(bot, modelId = '') {
@@ -1916,6 +1947,7 @@ function botCapabilitySummaryText(bot, modelId = '') {
   const imageLabel = modelSupportsImages(provider, model, selectedModel ? modelCatalogCapabilities(selectedModel) : []) ? 'images supported' : 'text only';
   const profileLabel = String(profile.label || profile.mode || bot.role || 'chat').trim();
   const useLabel = String(profile.use_label || '').trim();
+  const capabilityLabel = botCapabilityLabelText(profile);
   const readiness = bot.readiness && typeof bot.readiness === 'object' ? bot.readiness : {};
   const readinessState = String(readiness.state || 'unknown').trim() || 'unknown';
   const readinessDetail = String(readiness.detail || '').trim();
@@ -1925,7 +1957,7 @@ function botCapabilitySummaryText(bot, modelId = '') {
   const usePrefix = useLabel ? `${useLabel}; ` : '';
   const routeBlocker = routeDefaultCompatibilityBlocker(bot.id || '', modelId);
   const routeWarning = routeBlocker ? `; route warning ${routeBlocker}` : '';
-  return `${bot.name || bot.id}: ${usePrefix}${profileLabel}; ${modelSource} ${[provider, model].filter(Boolean).join(' / ') || 'model unknown'}; ${imageLabel}; ${memoryLabel}; chat tools ${toolLabel}; ${readinessLabel}${routeWarning}.`;
+  return `${bot.name || bot.id}: ${usePrefix}${profileLabel}; ${capabilityLabel}; ${modelSource} ${[provider, model].filter(Boolean).join(' / ') || 'model unknown'}; ${imageLabel}; ${memoryLabel}; chat tools ${toolLabel}; ${readinessLabel}${routeWarning}.`;
 }
 
 function updateCreateConversationBotSummary() {

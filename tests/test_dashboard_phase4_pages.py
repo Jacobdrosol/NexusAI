@@ -993,7 +993,11 @@ def test_chat_create_modal_surfaces_default_bot_capability_summary(dashboard_cli
     assert b"Vision Math Tutor (personal-vision-math-tutor)" in resp.data
     assert b"function botCapabilitySummaryText" in resp.data
     assert b"updateCreateConversationBotSummary" in resp.data
+    assert b"function botCapabilityLabelText" in resp.data
     assert b"Homework and engineering help" in resp.data
+    assert b"math reasoning" in resp.data
+    assert b"physics reasoning" in resp.data
+    assert b"engineering reasoning" in resp.data
     assert b"route warning" in resp.data
     assert b"Default model provider" in resp.data
     assert b"Workspace tools require a project-scoped chat." in resp.data
