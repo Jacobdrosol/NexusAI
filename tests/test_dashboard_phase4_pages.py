@@ -4945,6 +4945,60 @@ def test_chat_create_conversation_api_blocks_unscoped_workspace_tools(dashboard_
     assert b"workspace tools require a project-scoped or bridged conversation" in resp.data
 
 
+def test_chat_create_conversation_api_blocks_tool_access_without_modes(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def create_conversation(self, body):
+            raise AssertionError("mode-less workspace tool enablement should not reach control plane create")
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/chat/conversations",
+            json={
+                "title": "Mode-less tools",
+                "scope": "project",
+                "project_id": "globeiq",
+                "tool_access_enabled": True,
+                "tool_access_filesystem": False,
+                "tool_access_repo_search": False,
+            },
+        )
+
+    assert resp.status_code == 400
+    assert b"workspace tools require at least one enabled tool mode" in resp.data
+
+
+def test_chat_create_conversation_api_clears_tool_modes_when_disabled(dashboard_client):
+    _login_admin(dashboard_client)
+    captured: dict[str, object] = {}
+
+    class FakeCP:
+        def list_bot_readiness(self):
+            return {"readiness": []}
+
+        def create_conversation(self, body):
+            captured.update(body)
+            return {"id": "c1", **body}
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/chat/conversations",
+            json={
+                "title": "Tools off",
+                "scope": "global",
+                "tool_access_enabled": False,
+                "tool_access_filesystem": True,
+                "tool_access_repo_search": True,
+            },
+        )
+
+    assert resp.status_code == 201
+    assert captured["tool_access_enabled"] is False
+    assert captured["tool_access_filesystem"] is False
+    assert captured["tool_access_repo_search"] is False
+
+
 def test_chat_create_conversation_api_blocks_invalid_scope(dashboard_client):
     _login_admin(dashboard_client)
 
@@ -5537,11 +5591,37 @@ def test_chat_conversation_tool_access_api_blocks_unscoped_enablement(dashboard_
     assert b"workspace tools require a project-scoped or bridged conversation" in resp.data
 
 
-def test_chat_conversation_tool_access_api_allows_unscoped_disablement(dashboard_client):
+def test_chat_conversation_tool_access_api_blocks_enablement_without_modes(dashboard_client):
     _login_admin(dashboard_client)
 
     class FakeCP:
         def update_conversation_tool_access(self, conversation_id, enabled, filesystem, repo_search):
+            raise AssertionError("mode-less workspace tool enablement should not reach control plane update")
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.put(
+            "/api/chat/conversations/c1/tool-access",
+            json={"enabled": True, "filesystem": False, "repo_search": False},
+        )
+
+    assert resp.status_code == 400
+    assert b"workspace tools require at least one enabled tool mode" in resp.data
+
+
+def test_chat_conversation_tool_access_api_allows_unscoped_disablement(dashboard_client):
+    _login_admin(dashboard_client)
+    captured: dict[str, object] = {}
+
+    class FakeCP:
+        def update_conversation_tool_access(self, conversation_id, enabled, filesystem, repo_search):
+            captured.update(
+                {
+                    "conversation_id": conversation_id,
+                    "enabled": enabled,
+                    "filesystem": filesystem,
+                    "repo_search": repo_search,
+                }
+            )
             return {
                 "id": conversation_id,
                 "scope": "global",
@@ -5553,11 +5633,17 @@ def test_chat_conversation_tool_access_api_allows_unscoped_disablement(dashboard
     with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
         resp = dashboard_client.put(
             "/api/chat/conversations/c-global/tool-access",
-            json={"enabled": False, "filesystem": False, "repo_search": False},
+            json={"enabled": False, "filesystem": True, "repo_search": True},
         )
 
     assert resp.status_code == 200
     assert resp.get_json()["tool_access_enabled"] is False
+    assert captured == {
+        "conversation_id": "c-global",
+        "enabled": False,
+        "filesystem": False,
+        "repo_search": False,
+    }
 
 
 def test_chat_conversation_memory_profile_api_warns_when_project_gate_blocks_memory(dashboard_client):

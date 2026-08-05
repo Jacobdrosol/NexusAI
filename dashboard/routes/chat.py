@@ -1473,12 +1473,21 @@ def _normalize_conversation_rows(rows: Any) -> list[dict[str, Any]]:
     return result
 
 
-def _workspace_tool_access_requested(data: dict[str, Any]) -> bool:
-    return bool(
-        data.get("tool_access_enabled", False)
-        or data.get("tool_access_filesystem", False)
-        or data.get("tool_access_repo_search", False)
-    )
+def _normalize_chat_tool_access_request(
+    *,
+    enabled: Any,
+    filesystem: Any,
+    repo_search: Any,
+) -> tuple[dict[str, bool], str]:
+    normalized_enabled = _request_bool(enabled)
+    normalized = {
+        "enabled": normalized_enabled,
+        "filesystem": _request_bool(filesystem) if normalized_enabled else False,
+        "repo_search": _request_bool(repo_search) if normalized_enabled else False,
+    }
+    if normalized_enabled and not (normalized["filesystem"] or normalized["repo_search"]):
+        return normalized, "workspace tools require at least one enabled tool mode"
+    return normalized, ""
 
 
 def _workspace_tool_access_allowed_for_create(data: dict[str, Any]) -> bool:
@@ -2034,7 +2043,14 @@ def api_create_conversation():
         scope = _normalize_create_conversation_scope(data)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
-    if _workspace_tool_access_requested(data) and not _workspace_tool_access_allowed_for_create(data):
+    tool_access, tool_access_error = _normalize_chat_tool_access_request(
+        enabled=data.get("tool_access_enabled", False),
+        filesystem=data.get("tool_access_filesystem", False),
+        repo_search=data.get("tool_access_repo_search", False),
+    )
+    if tool_access_error:
+        return jsonify({"error": tool_access_error}), 400
+    if tool_access["enabled"] and not _workspace_tool_access_allowed_for_create(data):
         return jsonify({"error": "workspace tools require a project-scoped or bridged conversation"}), 400
     cp = get_cp_client()
     default_bot_id = str(data.get("default_bot_id") or "").strip()
@@ -2059,9 +2075,9 @@ def api_create_conversation():
             "owner_user_id": _current_memory_user_id(),
             "memory_profiles_enabled": bool(data.get("memory_profiles_enabled", True)),
             "memory_profile_id": data.get("memory_profile_id") or "default",
-            "tool_access_enabled": bool(data.get("tool_access_enabled", False)),
-            "tool_access_filesystem": bool(data.get("tool_access_filesystem", False)),
-            "tool_access_repo_search": bool(data.get("tool_access_repo_search", False)),
+            "tool_access_enabled": tool_access["enabled"],
+            "tool_access_filesystem": tool_access["filesystem"],
+            "tool_access_repo_search": tool_access["repo_search"],
         }
     )
     if created is None:
@@ -2109,13 +2125,14 @@ def api_restore_conversation(conversation_id: str):
 def api_update_conversation_tool_access(conversation_id: str):
     data: dict[str, Any] = request.get_json(force=True) or {}
     cp = get_cp_client()
-    if _workspace_tool_access_requested(
-        {
-            "tool_access_enabled": bool(data.get("enabled", False)),
-            "tool_access_filesystem": bool(data.get("filesystem", False)),
-            "tool_access_repo_search": bool(data.get("repo_search", False)),
-        }
-    ):
+    tool_access, tool_access_error = _normalize_chat_tool_access_request(
+        enabled=data.get("enabled", False),
+        filesystem=data.get("filesystem", False),
+        repo_search=data.get("repo_search", False),
+    )
+    if tool_access_error:
+        return jsonify({"error": tool_access_error}), 400
+    if tool_access["enabled"]:
         conversation = _conversation_from_cp(cp, conversation_id)
         if conversation is None:
             return jsonify({"error": "conversation unavailable"}), 404
@@ -2123,9 +2140,9 @@ def api_update_conversation_tool_access(conversation_id: str):
             return jsonify({"error": "workspace tools require a project-scoped or bridged conversation"}), 400
     updated = cp.update_conversation_tool_access(
         conversation_id=conversation_id,
-        enabled=bool(data.get("enabled", False)),
-        filesystem=bool(data.get("filesystem", False)),
-        repo_search=bool(data.get("repo_search", False)),
+        enabled=tool_access["enabled"],
+        filesystem=tool_access["filesystem"],
+        repo_search=tool_access["repo_search"],
     )
     if updated is None:
         return _cp_error_response(cp, "conversation tool access update failed")
