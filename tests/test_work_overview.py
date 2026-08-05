@@ -478,7 +478,13 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
         def task_usage(self, **kwargs):
             return {
                 "window": {"hours": 24},
-                "totals": {"total_tokens": 140, "tasks_with_usage": 1, "tasks_without_usage": 2},
+                "totals": {
+                    "prompt_tokens": 60,
+                    "completion_tokens": 80,
+                    "total_tokens": 140,
+                    "tasks_with_usage": 1,
+                    "tasks_without_usage": 2,
+                },
                 "by_project": [{"project_id": "globeiq", "total_tokens": 140, "tasks_with_usage": 1, "tasks_without_usage": 2}],
                 "by_manager": [{"project_id": "globeiq", "manager_id": "globeiq-pm", "total_tokens": 140, "tasks_with_usage": 1}],
                 "by_bot": [{"bot_id": "lesson-writer", "total_tokens": 140, "tasks_with_usage": 1, "tasks_without_usage": 0}],
@@ -641,6 +647,10 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert brief_data["attention"]["total"] == 8
     assert brief_data["snapshot_health"]["level"] == "ready"
     assert brief_data["usage_health"]["missing_tasks"] == 2
+    assert brief_data["usage_brief"]["totals"]["prompt_tokens"] == 60
+    assert brief_data["usage_brief"]["totals"]["completion_tokens"] == 80
+    assert brief_data["usage_brief"]["top_bots"][0]["bot_id"] == "lesson-writer"
+    assert brief_data["usage_brief"]["top_provider_models"][0]["provider"] == "ollama_cloud"
     assert brief_data["usage_pressure_lanes"][0]["bot_id"] == "lesson-writer"
     assert brief_data["usage_pressure_lanes"][0]["usage_ratio"] == 0.93
     assert brief_data["capacity"]["worker_queue_depth"] == 3

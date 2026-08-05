@@ -140,6 +140,29 @@ def _usage_pressure_lanes(usage: dict[str, Any], *, limit: int = 10) -> list[dic
     return rows[: max(1, int(limit or 10))]
 
 
+def _usage_brief(usage: dict[str, Any], *, limit: int = 5) -> dict[str, Any]:
+    totals = usage.get("totals") if isinstance(usage.get("totals"), dict) else {}
+
+    def _top_rows(key: str) -> list[dict[str, Any]]:
+        rows = [dict(row) for row in usage.get(key) or [] if isinstance(row, dict)]
+        rows.sort(key=lambda row: _safe_count(row, "total_tokens"), reverse=True)
+        return rows[: max(1, int(limit or 5))]
+
+    return {
+        "totals": {
+            "prompt_tokens": _safe_count(totals, "prompt_tokens"),
+            "completion_tokens": _safe_count(totals, "completion_tokens"),
+            "total_tokens": _safe_count(totals, "total_tokens"),
+            "tasks_with_usage": _safe_count(totals, "tasks_with_usage"),
+            "tasks_without_usage": _safe_count(totals, "tasks_without_usage"),
+        },
+        "top_bots": _top_rows("by_bot"),
+        "top_provider_models": _top_rows("by_provider_model"),
+        "top_projects": _top_rows("by_project"),
+        "top_managers": _top_rows("by_manager"),
+    }
+
+
 def _parse_json_object(raw: Any) -> dict[str, Any]:
     if isinstance(raw, dict):
         return raw
@@ -508,6 +531,7 @@ def _load_work_overview() -> dict[str, Any]:
     else:
         overview["usage"] = _empty_usage_summary()
     overview["usage_health"] = _usage_health(overview["usage"])
+    overview["usage_brief"] = _usage_brief(overview["usage"])
     overview["usage_pressure_lanes"] = _usage_pressure_lanes(overview["usage"])
     overview["token_governor_queue_pressure"] = _token_governor_queue_pressure(tasks, overview["usage"])
     list_quality_suites = getattr(cp, "list_platform_ai_quality_suites_global", None)
@@ -550,6 +574,7 @@ def api_work_brief():
             "attention": overview.get("attention") or {},
             "snapshot_health": overview.get("snapshot_health") or {},
             "usage_health": overview.get("usage_health") or {},
+            "usage_brief": overview.get("usage_brief") or {},
             "usage_pressure_lanes": overview.get("usage_pressure_lanes") or [],
             "token_governor_queue_pressure": overview.get("token_governor_queue_pressure") or [],
             "capacity": overview.get("capacity") or {},
