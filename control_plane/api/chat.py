@@ -241,7 +241,7 @@ def _settings_json_dict(mgr: SettingsManager, key: str) -> Dict[str, Any]:
 
 
 def _chat_token_governor_config() -> Dict[str, Any]:
-    mgr = SettingsManager()
+    mgr = SettingsManager.instance()
     enabled = bool(mgr.get("token_governor_enabled", False))
     return {
         "enabled": enabled,

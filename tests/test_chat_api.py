@@ -213,6 +213,35 @@ async def test_chat_token_governor_blocks_bot_hourly_limit(cp_app, monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_chat_token_governor_uses_shared_settings_instance(cp_app, tmp_path):
+    from shared.settings_manager import SettingsManager
+
+    original_settings = SettingsManager._instance
+    SettingsManager._instance = SettingsManager(str(tmp_path / "chat-governor-settings.db"))
+    try:
+        SettingsManager._instance.set("token_governor_enabled", "true", changed_by="test")
+        SettingsManager._instance.set("token_governor_chat_global_hourly_limit", "10", changed_by="test")
+        SettingsManager._instance.set("token_governor_estimated_tokens_per_chat_message", "20", changed_by="test")
+
+        cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "should not run"})
+        async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+            create_resp = await client.post("/v1/chat/conversations", json={"title": "Shared Settings Governor"})
+            assert create_resp.status_code == 200
+            conversation_id = create_resp.json()["id"]
+
+            post_resp = await client.post(
+                f"/v1/chat/conversations/{conversation_id}/messages",
+                json={"content": "hello"},
+            )
+
+        assert post_resp.status_code == 429
+        assert "chat token governor rejected message" in post_resp.text
+        cp_app.state.scheduler.schedule.assert_not_awaited()
+    finally:
+        SettingsManager._instance = original_settings
+
+
+@pytest.mark.anyio
 async def test_user_scoped_memory_profile_retrieved_on_later_eligible_turn(cp_app):
     captured_payloads = []
 
