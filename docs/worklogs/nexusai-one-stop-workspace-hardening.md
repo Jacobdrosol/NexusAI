@@ -285,3 +285,5 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - `pytest tests/test_bot_tooling_status.py -q` passed for Batch 130 disabled activation-blocker row visibility.
 - Batch 131: added recommended operator actions to the Work page top active, waiting, and problem lane rows and included those actions in the operations brief payload.
 - `pytest tests/test_work_overview.py::test_work_overview_groups_tasks_by_project_and_manager tests/test_work_overview.py::test_work_page_renders_project_manager_and_worker_load -q` passed for Batch 131 Work brief lane actions.
+- Batch 132: aligned chat route-default draft/saved status text with the friendly bot/model labels already used by conversation badges and message provenance.
+- `pytest tests/test_dashboard_phase4_pages.py::test_chat_page_embeds_effective_context_gate_inputs tests/test_dashboard_phase4_pages.py::test_chat_page_renders_project_filter_metadata_on_conversations -q` passed for Batch 132 chat route-default status labels.

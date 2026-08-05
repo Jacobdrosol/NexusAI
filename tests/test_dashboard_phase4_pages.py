@@ -1311,6 +1311,8 @@ def test_chat_page_embeds_effective_context_gate_inputs(dashboard_client):
     assert b"browser owner approval" in resp.data
     assert b"HTTP connection backend" in resp.data
     assert b"function routeDefaultDraftState" in resp.data
+    assert b"function chatBotDisplayLabel" in resp.data
+    assert b"function chatModelDisplayLabel" in resp.data
     assert b"route draft unsaved:" in resp.data
     assert b"route saved:" in resp.data
     assert b"Workspace tools are not available:" in resp.data

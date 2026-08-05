@@ -1652,6 +1652,18 @@ function chatBotHasProviderBackend(bot, provider) {
   });
 }
 
+function chatBotDisplayLabel(botId, fallback = 'conversation bot') {
+  const safeId = String(botId || '').trim();
+  if (!safeId) return fallback;
+  return botDisplayLabels[safeId] || safeId;
+}
+
+function chatModelDisplayLabel(modelId, fallback = 'bot default model') {
+  const safeId = String(modelId || '').trim();
+  if (!safeId) return fallback;
+  return modelDisplayLabels[safeId] || safeId;
+}
+
 function routeDefaultCompatibilityBlocker(botId, modelId) {
   const safeBotId = String(botId || '').trim();
   const safeModelId = String(modelId || '').trim();
@@ -1673,12 +1685,12 @@ function routeDefaultDraftState() {
   const savedModelId = String(selectedConversation.default_model_id || '').trim();
   const botChanged = selectedBotId !== savedBotId;
   const modelChanged = selectedModelId !== savedModelId;
-  const selectedBotLabel = selectedBotId || 'conversation bot';
-  const selectedModelLabel = selectedModelId || 'bot default model';
+  const selectedBotLabel = chatBotDisplayLabel(selectedBotId);
+  const selectedModelLabel = chatModelDisplayLabel(selectedModelId);
   if (!botChanged && !modelChanged) {
     return {
       changed: false,
-      text: `route saved: bot ${savedBotId || 'conversation bot'}; model ${savedModelId || 'bot default model'}`,
+      text: `route saved: bot ${chatBotDisplayLabel(savedBotId)}; model ${chatModelDisplayLabel(savedModelId)}`,
     };
   }
   const changes = [];
