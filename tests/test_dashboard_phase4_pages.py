@@ -244,7 +244,15 @@ def test_project_detail_page_surfaces_ai_workspace_readiness(dashboard_client):
                     "role": "researcher",
                     "project_id": "globeiq",
                     "enabled": True,
-                    "backends": [{"type": "remote_llm", "provider": "ollama_cloud", "model": "qwen3.5:cloud", "api_key_ref": "OLLAMA_CLOUD_KEY"}],
+                    "backends": [
+                        {
+                            "type": "remote_llm",
+                            "provider": "ollama_cloud",
+                            "model": "qwen3.5:cloud",
+                            "worker_id": "globeiq-reader",
+                            "api_key_ref": "OLLAMA_CLOUD_KEY",
+                        }
+                    ],
                     "execution_policy": {
                         "required_worker_tools": ["browser-ui"],
                         "connection_action_allowlist": ["globeiq-agent-api.updateLesson"],
@@ -297,6 +305,12 @@ def test_project_detail_page_surfaces_ai_workspace_readiness(dashboard_client):
                 "allow_push": False,
             }
 
+        def list_workers(self):
+            return [{"id": "globeiq-reader", "status": "online", "enabled": True}]
+
+        def list_worker_probes(self):
+            return {"probes": [{"worker_id": "globeiq-reader", "probe_status": "expired_browser_session"}]}
+
     with patch("dashboard.routes.projects.get_cp_client", return_value=FakeCP()):
         resp = dashboard_client.get("/projects/globeiq")
 
@@ -306,8 +320,13 @@ def test_project_detail_page_surfaces_ai_workspace_readiness(dashboard_client):
     assert b"1 enabled assigned bot(s) are blocked." in resp.data
     assert b"1 enabled / 1 total" in resp.data
     assert b"Assigned Bot Scope" in resp.data
+    assert b"Project Bot Tooling Risks" in resp.data
+    assert b"restore browser session" in resp.data
+    assert b"Authenticated browser session" in resp.data
     assert b"Research Bot" in resp.data
     assert b"Browser session expired" in resp.data
+    assert b"globeiq-reader" in resp.data
+    assert b"expired_browser_session" in resp.data
     assert b"Routes: ollama_cloud / qwen3.5:cloud" in resp.data
     assert b"Tools: browser-ui" in resp.data
     assert b"Site/API actions: globeiq-agent-api.updateLesson" in resp.data

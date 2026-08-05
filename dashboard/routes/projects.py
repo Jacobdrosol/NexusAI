@@ -22,6 +22,7 @@ from dashboard.connections_service import (
 from dashboard.cp_client import get_cp_client
 from dashboard.db import get_db
 from dashboard.models import Connection, ProjectConnection
+from dashboard.bot_tooling_status import build_bot_tooling_status
 from dashboard.project_data import (
     build_project_data_tree,
     create_project_data_folder,
@@ -625,6 +626,14 @@ def project_detail_page(project_id: str):
     list_readiness = getattr(cp, "list_bot_readiness", None)
     readiness_payload = list_readiness() if callable(list_readiness) else None
     project_bots = _with_project_bot_readiness_views(project_bots, readiness_payload)
+    list_workers = getattr(cp, "list_workers", None)
+    list_worker_probes = getattr(cp, "list_worker_probes", None)
+    project_tooling_status = build_bot_tooling_status(
+        bots=project_bots,
+        readiness_payload=readiness_payload if isinstance(readiness_payload, dict) else None,
+        workers=list_workers() if callable(list_workers) else [],
+        worker_probes_payload=list_worker_probes() if callable(list_worker_probes) else None,
+    )
     project_reports: list[dict[str, Any]] = []
     for bot in project_bots:
         bot_id = str(bot.get("id") or "")
@@ -693,6 +702,7 @@ def project_detail_page(project_id: str):
         project_data_tree=build_project_data_tree(project_id),
         project_connections=project_connections,
         project_ai_readiness=project_ai_readiness,
+        project_tooling_status=project_tooling_status,
         project_reports=project_reports,
         error=None,
     )
