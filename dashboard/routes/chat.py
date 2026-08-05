@@ -10,7 +10,7 @@ import requests
 from flask import Blueprint, Response, jsonify, render_template, request, stream_with_context
 from flask_login import current_user, login_required
 
-from dashboard.bot_chat_profiles import with_bot_chat_profiles
+from dashboard.bot_chat_profiles import bot_chat_tool_access, with_bot_chat_profiles
 from dashboard.cp_client import get_cp_client
 from dashboard.routes._sse_proxy import proxy_upstream_sse_lines
 from dashboard.work_overview import manager_id_for_task, project_id_for_task
@@ -256,27 +256,75 @@ def _bot_readiness_blocker_from_cp(cp: Any, bot_id: str) -> str:
     return f"{safe_bot_id} is {state}: {detail}" if detail else f"{safe_bot_id} is {state}"
 
 
-def _conversation_default_bot_id_from_cp(cp: Any, conversation_id: str) -> str:
+def _conversation_from_cp(cp: Any, conversation_id: str) -> dict[str, Any] | None:
     safe_conversation_id = str(conversation_id or "").strip()
     if not safe_conversation_id or not hasattr(cp, "list_conversations"):
-        return ""
+        return None
     try:
         conversations = cp.list_conversations(archived="all")
     except TypeError:
         try:
             conversations = cp.list_conversations()
         except Exception:
-            return ""
+            return None
     except Exception:
-        return ""
-    if not isinstance(conversations, list):
-        return ""
-    for row in conversations:
-        if not isinstance(row, dict):
-            continue
+        return None
+    for row in _normalize_conversation_rows(conversations):
         if str(row.get("id") or "").strip() == safe_conversation_id:
-            return str(row.get("default_bot_id") or "").strip()
-    return ""
+            return row
+    return None
+
+
+def _conversation_default_bot_id_from_cp(cp: Any, conversation_id: str) -> str:
+    conversation = _conversation_from_cp(cp, conversation_id)
+    return str((conversation or {}).get("default_bot_id") or "").strip()
+
+
+def _workspace_tool_request_blocker_from_cp(cp: Any, conversation_id: str, requested_bot_id: str) -> str:
+    conversation = _conversation_from_cp(cp, conversation_id)
+    if not conversation:
+        return "conversation unavailable"
+
+    effective_bot_id = str(requested_bot_id or conversation.get("default_bot_id") or "").strip()
+    if not effective_bot_id:
+        return "no selected bot with tool access"
+
+    bots: list[Any] = []
+    try:
+        bots = cp.list_bots() if hasattr(cp, "list_bots") else []
+    except Exception:
+        bots = []
+    bot = next(
+        (row for row in bots if isinstance(row, dict) and str(row.get("id") or "").strip() == effective_bot_id),
+        None,
+    )
+    if not bot:
+        return f"bot {effective_bot_id} unavailable"
+
+    project_id = str(conversation.get("project_id") or "").strip()
+    if not project_id:
+        return "no scoped project"
+
+    chat_access = _chat_tool_access_from_conversation(conversation)
+    bot_access = bot_chat_tool_access(bot)
+    try:
+        project_access = _normalize_project_chat_tool_access(cp.get_project_chat_tool_access(project_id))
+    except Exception:
+        project_access = _normalize_project_chat_tool_access(None)
+
+    reasons: list[str] = []
+    if not bot_access.get("enabled"):
+        reasons.append("bot off")
+    if not chat_access.get("enabled"):
+        reasons.append("chat off")
+    if not project_access.get("enabled"):
+        reasons.append("project off")
+
+    shared_modes = _tool_modes(bot_access) & _tool_modes(chat_access) & _tool_modes(project_access)
+    if not reasons and not shared_modes:
+        reasons.append("no shared tool mode")
+
+    return ", ".join(reasons)
 
 
 def _task_sort_key(task: dict[str, Any]) -> tuple[int, int, str, str]:
@@ -656,6 +704,36 @@ def _normalize_project_chat_tool_access(raw: Any) -> dict[str, bool]:
         "filesystem": bool(raw.get("filesystem", False)),
         "repo_search": bool(raw.get("repo_search", False)),
     }
+
+
+def _chat_tool_access_from_conversation(conversation: dict[str, Any] | None) -> dict[str, bool]:
+    row = conversation if isinstance(conversation, dict) else {}
+    return {
+        "enabled": bool(row.get("tool_access_enabled", False)),
+        "filesystem": bool(row.get("tool_access_filesystem", False)),
+        "repo_search": bool(row.get("tool_access_repo_search", False)),
+    }
+
+
+def _tool_modes(access: dict[str, bool]) -> set[str]:
+    if not bool(access.get("enabled", False)):
+        return set()
+    modes: set[str] = set()
+    if bool(access.get("filesystem", False)):
+        modes.add("filesystem")
+    if bool(access.get("repo_search", False)):
+        modes.add("repo_search")
+    return modes
+
+
+def _request_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
 
 
 def _project_memory_profiles_enabled(projects: list[Any], project_id: str) -> bool:
@@ -1079,6 +1157,11 @@ def api_send_message():
     readiness_blocker = _bot_readiness_blocker_from_cp(cp, readiness_bot_id)
     if readiness_blocker:
         return jsonify({"error": f"Selected bot is unavailable: {readiness_blocker}"}), 409
+    use_workspace_tools = _request_bool(data.get("use_workspace_tools", False))
+    if use_workspace_tools:
+        tool_blocker = _workspace_tool_request_blocker_from_cp(cp, conversation_id, bot_id)
+        if tool_blocker:
+            return jsonify({"error": f"Workspace tools are not available: {tool_blocker}"}), 409
 
     resp = cp.post_message(
         conversation_id,
@@ -1090,7 +1173,7 @@ def api_send_message():
             "context_items": data.get("context_items"),
             "context_item_ids": data.get("context_item_ids"),
             "include_project_context": data.get("include_project_context", False),
-            "use_workspace_tools": data.get("use_workspace_tools", False),
+            "use_workspace_tools": use_workspace_tools,
             "inline_coding_enabled": data.get("inline_coding_enabled", False),
         },
     )
@@ -1290,6 +1373,11 @@ def api_send_message_stream():
     readiness_blocker = _bot_readiness_blocker_from_cp(cp, readiness_bot_id)
     if readiness_blocker:
         return jsonify({"error": f"Selected bot is unavailable: {readiness_blocker}"}), 409
+    use_workspace_tools = _request_bool(data.get("use_workspace_tools", False))
+    if use_workspace_tools:
+        tool_blocker = _workspace_tool_request_blocker_from_cp(cp, conversation_id, bot_id)
+        if tool_blocker:
+            return jsonify({"error": f"Workspace tools are not available: {tool_blocker}"}), 409
     cp_base = (
         cp.base_url
         if hasattr(cp, "base_url")
@@ -1304,7 +1392,7 @@ def api_send_message_stream():
         "context_items": data.get("context_items"),
         "context_item_ids": data.get("context_item_ids"),
         "include_project_context": data.get("include_project_context", False),
-        "use_workspace_tools": data.get("use_workspace_tools", False),
+        "use_workspace_tools": use_workspace_tools,
         "inline_coding_enabled": data.get("inline_coding_enabled", False),
     }
 

@@ -2335,6 +2335,102 @@ def test_chat_message_api_blocks_unavailable_conversation_default_bot(dashboard_
     assert b"default bot disabled after chat creation" in resp.data
 
 
+def test_chat_message_api_blocks_workspace_tools_without_project_policy(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_conversations(self, archived="all"):
+            return [
+                {
+                    "id": "c1",
+                    "project_id": "globeiq",
+                    "default_bot_id": "tool-bot",
+                    "tool_access_enabled": True,
+                    "tool_access_filesystem": True,
+                    "tool_access_repo_search": True,
+                }
+            ]
+
+        def list_bot_readiness(self):
+            return {"readiness": []}
+
+        def list_bots(self):
+            return [
+                {
+                    "id": "tool-bot",
+                    "routing_rules": {
+                        "chat_tool_access": {"enabled": True, "filesystem": True, "repo_search": True}
+                    },
+                }
+            ]
+
+        def get_project_chat_tool_access(self, project_id):
+            assert project_id == "globeiq"
+            return {"enabled": False, "filesystem": True, "repo_search": True}
+
+        def post_message(self, conversation_id, body):
+            raise AssertionError("workspace tool request should not dispatch when project policy is off")
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/chat/messages",
+            json={"conversation_id": "c1", "content": "hello", "use_workspace_tools": True},
+        )
+
+    assert resp.status_code == 409
+    assert b"Workspace tools are not available" in resp.data
+    assert b"project off" in resp.data
+
+
+def test_chat_message_api_allows_workspace_tools_when_all_gates_overlap(dashboard_client):
+    _login_admin(dashboard_client)
+    seen: dict[str, object] = {}
+
+    class FakeCP:
+        def list_conversations(self, archived="all"):
+            return [
+                {
+                    "id": "c1",
+                    "project_id": "globeiq",
+                    "default_bot_id": "tool-bot",
+                    "tool_access_enabled": True,
+                    "tool_access_filesystem": True,
+                    "tool_access_repo_search": False,
+                }
+            ]
+
+        def list_bot_readiness(self):
+            return {"readiness": []}
+
+        def list_bots(self):
+            return [
+                {
+                    "id": "tool-bot",
+                    "routing_rules": {
+                        "chat_tool_access": {"enabled": True, "filesystem": True, "repo_search": True}
+                    },
+                }
+            ]
+
+        def get_project_chat_tool_access(self, project_id):
+            return {"enabled": True, "filesystem": True, "repo_search": False}
+
+        def post_message(self, conversation_id, body):
+            seen["conversation_id"] = conversation_id
+            seen["body"] = body
+            return {"assistant_message": {"id": "a1", "content": "ok"}}
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/chat/messages",
+            json={"conversation_id": "c1", "content": "hello", "use_workspace_tools": True},
+        )
+
+    assert resp.status_code == 200
+    assert seen["conversation_id"] == "c1"
+    assert seen["body"]["use_workspace_tools"] is True
+
+
 def test_chat_assignment_create_api_blocks_unavailable_pm_bot(dashboard_client):
     _login_admin(dashboard_client)
 
@@ -2485,6 +2581,55 @@ def test_chat_stream_api_blocks_unavailable_conversation_default_bot(dashboard_c
     assert resp.status_code == 409
     assert b"Selected bot is unavailable" in resp.data
     assert b"default stream bot blocked" in resp.data
+
+
+def test_chat_stream_api_blocks_workspace_tools_without_shared_mode(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        base_url = "http://100.81.64.82:8000"
+
+        def list_conversations(self, archived="all"):
+            return [
+                {
+                    "id": "c1",
+                    "project_id": "globeiq",
+                    "default_bot_id": "tool-bot",
+                    "tool_access_enabled": True,
+                    "tool_access_filesystem": True,
+                    "tool_access_repo_search": False,
+                }
+            ]
+
+        def list_bot_readiness(self):
+            return {"readiness": []}
+
+        def list_bots(self):
+            return [
+                {
+                    "id": "tool-bot",
+                    "routing_rules": {
+                        "chat_tool_access": {"enabled": True, "filesystem": False, "repo_search": True}
+                    },
+                }
+            ]
+
+        def get_project_chat_tool_access(self, project_id):
+            return {"enabled": True, "filesystem": True, "repo_search": False}
+
+    def _fake_post(*args, **kwargs):
+        raise AssertionError("workspace tool stream request should not dispatch without shared mode")
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()), \
+         patch("dashboard.routes.chat.requests.post", side_effect=_fake_post):
+        resp = dashboard_client.post(
+            "/api/chat/stream",
+            json={"conversation_id": "c1", "content": "hello", "use_workspace_tools": True},
+        )
+
+    assert resp.status_code == 409
+    assert b"Workspace tools are not available" in resp.data
+    assert b"no shared tool mode" in resp.data
 
 
 def test_chat_stream_forwards_control_plane_auth_header(dashboard_client):
