@@ -2959,6 +2959,51 @@ select.form-control {
   padding: 0;
 }
 
+/* Chat keeps the primary navigation behind the same compact menu at every width. */
+.page-chat .nav-menu-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.page-chat .nav-menu {
+  display: none;
+  flex: 1 0 100%;
+  width: 100%;
+  align-items: stretch;
+  gap: 0.75rem;
+  padding: 0.25rem 0 0.4rem;
+}
+
+.page-chat .nav-menu.nav-menu-open {
+  display: grid;
+}
+
+.page-chat .app-sidebar .nav-section {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 0.25rem;
+}
+
+.page-chat .app-sidebar .nav-section-label {
+  display: block;
+  grid-column: 1 / -1;
+  padding: 0.35rem 0.2rem 0;
+  color: #71839c;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.page-chat .app-sidebar .nav-account {
+  display: grid;
+  margin-left: 0;
+  padding: 0.6rem 0.2rem 0;
+  border-left: 0;
+  border-top: 1px solid var(--line);
+}
+
 @media (max-width: 1050px) {
   .app-sidebar {
     padding: 0.55rem 0.75rem;

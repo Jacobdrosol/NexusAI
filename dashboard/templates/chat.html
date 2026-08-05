@@ -531,7 +531,7 @@
       <h2 class="panel-title">Messages</h2>
       {% if selected_conversation %}
       <div class="chat-main-header-controls">
-        <button class="btn btn-sm" type="button" onclick="showChatSettings()">Chat settings</button>
+        <button id="chat-settings-toggle" class="btn btn-sm" type="button">Chat settings</button>
       </div>
     </div>
     <div id="task-events-shell" class="chat-task-shell" hidden>
@@ -1224,10 +1224,6 @@ function setConversationPanelOpen(isOpen) {
   grid.classList.toggle('chat-conversations-collapsed', !mobile && !isOpen);
   toggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
   toggle.textContent = mobile ? (isOpen ? 'Close Chats' : 'Chats') : (isOpen ? 'Hide conversations' : 'Show conversations');
-}
-
-function showChatSettings() {
-  showModal('modal-chat-settings');
 }
 
 async function refreshMessagesUntilSettled(maxAttempts = 20, delayMs = 1000) {
@@ -4391,6 +4387,10 @@ document.getElementById('chat-clear-filters')?.addEventListener('click', clearCo
 document.getElementById('chat-conversations-toggle')?.addEventListener('click', function() {
   const isOpen = this.getAttribute('aria-expanded') === 'true';
   setConversationPanelOpen(!isOpen);
+});
+document.getElementById('chat-settings-toggle')?.addEventListener('click', () => {
+  const modal = document.getElementById('modal-chat-settings');
+  if (modal) modal.style.display = 'flex';
 });
 document.querySelectorAll('.chat-conversation-link').forEach((link) => {
   link.addEventListener('click', () => {
