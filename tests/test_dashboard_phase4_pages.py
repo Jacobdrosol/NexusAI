@@ -3182,6 +3182,62 @@ def test_bot_detail_page_hides_chat_handoff_for_tooling_blocked_bot(dashboard_cl
     assert b"/chat?bot_id=blocked-chat-bot" not in resp.data
 
 
+def test_bot_detail_page_allows_chat_handoff_when_readiness_unreported(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def get_bot(self, bot_id):
+            return {
+                "id": bot_id,
+                "name": "Unreported Readiness Chat",
+                "role": "assistant",
+                "enabled": True,
+                "backends": [],
+                "routing_rules": {
+                    "operator_profile": {"autonomy": "manual_chat_only"},
+                    "chat_profile": {"mode": "chat", "label": "General Chat"},
+                },
+                "execution_policy": {},
+            }
+
+        def get_bot_readiness(self, bot_id):
+            return None
+
+        def get_bot_dependencies(self, bot_id):
+            return {"schedule_references": [], "workflow_references": [], "can_disable": True, "can_delete": True}
+
+        def list_tasks(self, **kwargs):
+            return []
+
+        def list_bot_runs(self, bot_id, **kwargs):
+            return []
+
+        def list_bot_artifacts(self, bot_id, **kwargs):
+            return []
+
+        def list_workers(self):
+            return []
+
+        def list_worker_probes(self):
+            return {"probes": []}
+
+        def list_models(self):
+            return []
+
+        def list_keys(self):
+            return []
+
+    with patch("dashboard.cp_client.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/bots/unreported-readiness-chat")
+
+    assert resp.status_code == 200
+    assert b"Unreported Readiness Chat" in resp.data
+    assert b"Use in Chat" in resp.data
+    assert b"/chat?bot_id=unreported-readiness-chat" in resp.data
+    assert b"Unknown blocker" in resp.data
+    assert b"no specific blocker category" in resp.data
+
+
 def test_bot_test_run_api_proxies_to_control_plane(dashboard_client):
     _login_admin(dashboard_client)
 
