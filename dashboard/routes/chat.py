@@ -395,20 +395,23 @@ def _chat_selectability_blocker_from_cp(cp: Any, bot_id: str) -> str:
         if isinstance(row, dict) and str(row.get("id") or "").strip()
     }
     if safe_bot_id not in selectable_ids:
-        rules = _routing_rules(bot)
-        operator_profile = rules.get("operator_profile") if isinstance(rules.get("operator_profile"), dict) else {}
-        autonomy = str(operator_profile.get("autonomy") or "").strip().lower()
-        role = str(_bot_value(bot, "role", "") or "").strip().lower()
-        capabilities = _bot_value(bot, "assignment_capabilities", {}) or {}
-        is_project_manager = isinstance(capabilities, dict) and bool(capabilities.get("is_project_manager"))
-        explicit_worker = (
-            autonomy in {"scheduled_worker", "autonomous_worker", "background_worker", "pipeline_worker"}
-            or role in {"pm", "qc", "worker", "auditor"}
-            or is_project_manager
-        )
-        if explicit_worker:
+        if _is_explicit_worker_bot(bot):
             return f"{safe_bot_id} is not configured for manual chat use"
     return ""
+
+
+def _is_explicit_worker_bot(bot: Any) -> bool:
+    rules = _routing_rules(bot)
+    operator_profile = rules.get("operator_profile") if isinstance(rules.get("operator_profile"), dict) else {}
+    autonomy = str(operator_profile.get("autonomy") or "").strip().lower()
+    role = str(_bot_value(bot, "role", "") or "").strip().lower()
+    capabilities = _bot_value(bot, "assignment_capabilities", {}) or {}
+    is_project_manager = isinstance(capabilities, dict) and bool(capabilities.get("is_project_manager"))
+    return (
+        autonomy in {"scheduled_worker", "autonomous_worker", "background_worker", "pipeline_worker"}
+        or role in {"pm", "qc", "worker", "auditor"}
+        or is_project_manager
+    )
 
 
 def _chat_bot_availability_blocker_from_cp(cp: Any, bot_id: str) -> str:
@@ -436,13 +439,19 @@ def _selected_default_bot_notice(
         return None
     labels = _bot_display_labels(bots)
     label = labels.get(default_bot_id, default_bot_id)
-    bot_exists = any(
-        isinstance(bot, dict) and str(bot.get("id") or "").strip() == default_bot_id
-        for bot in bots or []
+    bot = next(
+        (
+            bot
+            for bot in bots or []
+            if isinstance(bot, dict) and str(bot.get("id") or "").strip() == default_bot_id
+        ),
+        None,
     )
+    if bot is not None and not _is_explicit_worker_bot(bot):
+        return None
     detail = (
         "This conversation default bot is not configured for manual chat use. Pick a chat-capable bot and save defaults before sending."
-        if bot_exists
+        if bot is not None
         else "This conversation default bot is not present in the current bot inventory. Pick an available chat bot and save defaults before sending."
     )
     return {"bot_id": default_bot_id, "label": label, "detail": detail}
