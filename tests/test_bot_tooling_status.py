@@ -149,8 +149,8 @@ def test_bot_tooling_status_groups_blocked_worker_tool_causes():
         api_keys=[{"name": "GLOBEIQ_AGENT_TOKEN"}],
     )
 
-    assert status["summary"]["ready"] == 3
-    assert status["summary"]["blocked"] == 4
+    assert status["summary"]["ready"] == 2
+    assert status["summary"]["blocked"] == 5
     assert status["summary"]["disabled"] == 1
     assert status["summary"]["tooling_bot_count"] == 1
     assert status["summary"]["connection_action_bot_count"] == 1
@@ -160,13 +160,14 @@ def test_bot_tooling_status_groups_blocked_worker_tool_causes():
     assert status["summary"]["http_connection_backend_count"] == 1
     assert status["summary"]["credential_ref_bot_count"] == 2
     assert status["summary"]["backend_credential_ref_count"] == 2
+    assert status["summary"]["raw_credential_ref_bot_count"] == 1
     assert status["summary"]["disabled_activation_blocker_bot_count"] == 1
     assert status["summary"]["disabled_activation_blocker_count"] == 1
     assert status["summary"]["worker_assignment_count"] == 5
     assert status["summary"]["missing_worker_assignment_count"] == 1
     assert status["summary"]["offline_worker_assignment_count"] == 3
     assert status["summary"]["degraded_worker_probe_count"] == 1
-    assert status["summary"]["recommended_action"]["label"] == "restore worker runtime"
+    assert status["summary"]["recommended_action"]["label"] == "configure vault key"
     assert status["summary"]["recommended_action"]["level"] == "critical"
     assert "1 bot(s)" in status["summary"]["recommended_action"]["detail"]
     assert status["required_tools"] == [{"tool": "browser-ui", "bot_count": 1}]
@@ -184,8 +185,12 @@ def test_bot_tooling_status_groups_blocked_worker_tool_causes():
     assert connection_row["connection_context"] == "globeiq-agent-api"
     assert connection_row["credential_refs"] == ["GLOBEIQ_AGENT_TOKEN"]
     raw_secret_row = next(row for row in status["rows"] if row["bot_id"] == "raw-secret-bot")
+    assert raw_secret_row["state"] == "blocked"
     assert raw_secret_row["credential_refs"] == ["[redacted raw credential]"]
-    assert raw_secret_row["recommended_action"]["label"] == "continue"
+    assert raw_secret_row["raw_credential_ref_detected"] is True
+    assert raw_secret_row["blocking_category"] == "credential"
+    assert raw_secret_row["recommended_action"]["label"] == "configure vault key"
+    assert "Raw credential material" in raw_secret_row["blocking_messages"][0]
     disabled_row = next(row for row in status["rows"] if row["bot_id"] == "disabled-bot")
     assert disabled_row["disabled_activation_messages"] == ["Model 'offline-model' is not present/enabled in the model catalog."]
     groups = {group["category"]: group for group in status["blocked_groups"]}
@@ -344,6 +349,7 @@ def test_bots_page_surfaces_tooling_readiness_panel(dashboard_client):
     assert b"Worker Assignments" in page.data
     assert b"Credential Ref Bots" in page.data
     assert b"Missing Credential Refs" in page.data
+    assert b"Raw Credential Refs" in page.data
     assert b"Route: browser on browser-worker" in page.data
     assert b"Route: http_connection / attached-http" in page.data
     assert b"Disabled Needs Fix" in page.data

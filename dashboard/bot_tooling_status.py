@@ -363,11 +363,15 @@ def build_bot_tooling_status(
             browser_action_counts[action] += 1
         connection_backend_count = _connection_backend_count(bot)
         credential_refs = _backend_credential_refs(bot)
+        raw_credential_ref_detected = "[redacted raw credential]" in credential_refs
         missing_credential_refs = _missing_credential_refs(credential_refs, key_names)
         connection_context = _connection_context_label(bot)
         worker_ids = _worker_ids(bot)
         messages = _failed_messages(readiness)
         disabled_activation_messages = _disabled_activation_messages(readiness) if state == "disabled" else []
+        if state != "disabled" and raw_credential_ref_detected:
+            state = "blocked"
+            messages.append("Raw credential material is present in backend credential references; use a vault key reference instead.")
         if state != "disabled" and missing_credential_refs:
             state = "blocked"
             messages.append("Missing key-vault credential reference(s): " + ", ".join(missing_credential_refs))
@@ -408,6 +412,7 @@ def build_bot_tooling_status(
             "browser_owner_approval_actions": browser_owner_approval_actions,
             "connection_backend_count": connection_backend_count,
             "credential_refs": credential_refs,
+            "raw_credential_ref_detected": raw_credential_ref_detected,
             "missing_credential_refs": missing_credential_refs,
             "connection_context": connection_context,
             "worker_ids": worker_ids,
@@ -464,6 +469,7 @@ def build_bot_tooling_status(
             "backend_credential_ref_count": sum(len(row["credential_refs"]) for row in rows),
             "missing_credential_ref_bot_count": sum(1 for row in rows if row["missing_credential_refs"]),
             "missing_credential_ref_count": sum(len(row["missing_credential_refs"]) for row in rows),
+            "raw_credential_ref_bot_count": sum(1 for row in rows if row["raw_credential_ref_detected"]),
             "disabled_activation_blocker_bot_count": sum(1 for row in rows if row["disabled_activation_messages"]),
             "disabled_activation_blocker_count": sum(len(row["disabled_activation_messages"]) for row in rows),
             "worker_assignment_count": len(worker_statuses),

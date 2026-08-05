@@ -88,6 +88,10 @@
       <div class="card-value {% if tooling_summary.missing_credential_ref_count %}card-red{% else %}card-green{% endif %}">{{ tooling_summary.missing_credential_ref_count or 0 }}</div>
     </div>
     <div class="card">
+      <div class="card-label">Raw Credential Refs</div>
+      <div class="card-value {% if tooling_summary.raw_credential_ref_bot_count %}card-red{% else %}card-green{% endif %}">{{ tooling_summary.raw_credential_ref_bot_count or 0 }}</div>
+    </div>
+    <div class="card">
       <div class="card-label">Missing Workers</div>
       <div class="card-value {% if tooling_summary.missing_worker_assignment_count %}card-red{% else %}card-green{% endif %}">{{ tooling_summary.missing_worker_assignment_count or 0 }}</div>
     </div>
