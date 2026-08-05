@@ -415,6 +415,8 @@ def test_bots_page_surfaces_tooling_readiness_panel(dashboard_client):
     assert b"Raw Credential Refs" in page.data
     assert b"Route: browser on browser-worker" in page.data
     assert b"Scope: single-lesson-browser-qc" in page.data
+    assert b"Worker profile: browser-worker" in page.data
+    assert b"Service: globeiq-browser-worker" in page.data
     assert b"Edits: not allowed" in page.data
     assert b"Courses: 57" in page.data
     assert b"CLI tools: browser-ui, codex-cli" in page.data

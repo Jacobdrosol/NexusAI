@@ -503,3 +503,5 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - `pytest tests/test_dashboard_phase4_pages.py::test_chat_create_modal_surfaces_default_bot_capability_summary tests/test_bot_chat_profiles.py -q` passed for Batch 237 create-chat model summary coverage.
 - Batch 238: refreshed create-chat workspace-tool summary state when project, bridged primary project, or bridged project selections change so scope/tool guidance stays current while configuring a new conversation.
 - `pytest tests/test_dashboard_phase4_pages.py::test_chat_create_modal_surfaces_default_bot_capability_summary -q` passed for Batch 238 create-chat tool summary refresh coverage.
+- Batch 239: surfaced worker profile IDs and service bindings on Bots table rows so operator review can connect each scoped bot to its configured worker process without opening detail pages.
+- `pytest tests/test_bot_tooling_status.py::test_bots_page_surfaces_tooling_readiness_panel tests/test_dashboard_phase4_pages.py::test_bots_page_surfaces_bot_scoped_chat_profiles -q` passed for Batch 239 bot-list worker identity coverage.

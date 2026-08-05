@@ -280,6 +280,12 @@
         {% endif %}
         {% if bot_tooling and bot_tooling.worker_profile %}
         {% set profile = bot_tooling.worker_profile %}
+        {% if profile.worker_id %}
+        <div class="metrics">Worker profile: {{ profile.worker_id }}</div>
+        {% endif %}
+        {% if profile.service %}
+        <div class="metrics">Service: {{ profile.service }}</div>
+        {% endif %}
         <div class="metrics">Scope: {{ profile.task_scope or profile.role or 'worker profile' }}</div>
         <div class="metrics">Edits: {{ 'allowed' if profile.can_edit else 'not allowed' }}</div>
         {% if profile.course_scope %}
