@@ -245,6 +245,51 @@ def _cp_catalog_items(cp, method_name: str) -> list[dict[str, Any]]:
     return result if isinstance(result, list) else []
 
 
+def _cp_warning(cp: Any, source: str) -> dict[str, Any]:
+    reason = "Control plane request failed."
+    detail = ""
+    status_code = None
+    last_error = getattr(cp, "last_error", None)
+    if callable(last_error):
+        try:
+            error = last_error()
+        except Exception:
+            error = None
+        if isinstance(error, dict):
+            reason = str(error.get("error") or reason)
+            detail = str(error.get("detail") or "")
+            status_code = error.get("status_code")
+    warning: dict[str, Any] = {"source": source, "reason": reason}
+    if detail:
+        warning["detail"] = detail
+    if status_code is not None:
+        warning["status_code"] = status_code
+    return warning
+
+
+def _optional_cp_payload(cp: Any, source: str, fn: Any, *args: Any, **kwargs: Any) -> tuple[Any, dict[str, Any] | None]:
+    if not callable(fn):
+        return None, {"source": source, "reason": "Control plane method unavailable."}
+    try:
+        result = fn(*args, **kwargs)
+    except TypeError:
+        try:
+            result = fn(*args)
+        except Exception:
+            return None, _cp_warning(cp, source)
+    except Exception:
+        return None, _cp_warning(cp, source)
+    if result is None:
+        return None, _cp_warning(cp, source)
+    return result, None
+
+
+def _attach_tooling_data_warnings(status: dict[str, Any], warnings: list[dict[str, Any]]) -> dict[str, Any]:
+    status["data_degraded"] = bool(warnings)
+    status["data_warnings"] = warnings
+    return status
+
+
 def _bot_readiness_view(readiness: Any) -> dict[str, Any] | None:
     if not isinstance(readiness, dict):
         return None
@@ -422,19 +467,27 @@ def bots_page() -> str:
     cp = get_cp_client()
     cp_data = cp.list_bots()
     if cp_data is not None:
-        readiness_getter = getattr(cp, "list_bot_readiness", None)
-        readiness_payload = readiness_getter() if callable(readiness_getter) else None
-        schedule_getter = getattr(cp, "list_schedules", None)
-        schedule_payload = schedule_getter(limit=200) if callable(schedule_getter) else None
-        workers = _cp_catalog_items(cp, "list_workers")
-        probe_getter = getattr(cp, "list_worker_probes", None)
-        worker_probes = probe_getter() if callable(probe_getter) else None
+        warnings: list[dict[str, Any]] = []
+        readiness_payload, warning = _optional_cp_payload(cp, "bot readiness", getattr(cp, "list_bot_readiness", None))
+        if warning:
+            warnings.append(warning)
+        schedule_payload, warning = _optional_cp_payload(cp, "schedules", getattr(cp, "list_schedules", None), limit=200)
+        if warning:
+            warnings.append(warning)
+        workers_payload, warning = _optional_cp_payload(cp, "workers", getattr(cp, "list_workers", None))
+        if warning:
+            warnings.append(warning)
+        workers = workers_payload if isinstance(workers_payload, list) else []
+        worker_probes, warning = _optional_cp_payload(cp, "worker probes", getattr(cp, "list_worker_probes", None))
+        if warning:
+            warnings.append(warning)
         tooling_status = build_bot_tooling_status(
             bots=cp_data,
             readiness_payload=readiness_payload if isinstance(readiness_payload, dict) else None,
             workers=workers,
             worker_probes_payload=worker_probes if isinstance(worker_probes, dict) else None,
         )
+        _attach_tooling_data_warnings(tooling_status, warnings)
         return render_template(
             "bots.html",
             bots=_with_bot_chat_profiles(_with_bot_operating_mode(cp_data, readiness_payload, schedule_payload)),
@@ -586,16 +639,26 @@ def api_bot_tooling_status():
         return jsonify({"error": str((err or {}).get("detail") or "control plane unavailable")}), status
 
     readiness_getter = getattr(cp, "list_bot_readiness", None)
-    readiness_payload = readiness_getter() if callable(readiness_getter) else None
-    workers = cp.list_workers() or []
-    probe_getter = getattr(cp, "list_worker_probes", None)
-    worker_probes = probe_getter() if callable(probe_getter) else None
+    warnings: list[dict[str, Any]] = []
+    readiness_payload, warning = _optional_cp_payload(cp, "bot readiness", readiness_getter)
+    if warning:
+        warnings.append(warning)
+    workers_payload, warning = _optional_cp_payload(cp, "workers", getattr(cp, "list_workers", None))
+    if warning:
+        warnings.append(warning)
+    workers = workers_payload if isinstance(workers_payload, list) else []
+    worker_probes, warning = _optional_cp_payload(cp, "worker probes", getattr(cp, "list_worker_probes", None))
+    if warning:
+        warnings.append(warning)
     return jsonify(
-        build_bot_tooling_status(
-            bots=bots,
-            readiness_payload=readiness_payload if isinstance(readiness_payload, dict) else None,
-            workers=workers,
-            worker_probes_payload=worker_probes if isinstance(worker_probes, dict) else None,
+        _attach_tooling_data_warnings(
+            build_bot_tooling_status(
+                bots=bots,
+                readiness_payload=readiness_payload if isinstance(readiness_payload, dict) else None,
+                workers=workers,
+                worker_probes_payload=worker_probes if isinstance(worker_probes, dict) else None,
+            ),
+            warnings,
         )
     )
 

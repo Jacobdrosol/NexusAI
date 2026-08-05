@@ -151,3 +151,58 @@ def test_bots_page_surfaces_tooling_readiness_panel(dashboard_client):
     assert payload["summary"]["blocked"] == 1
     assert payload["blocked_groups"][0]["category"] == "browser_session"
     assert payload["blocked_groups"][0]["label"] == "Authenticated browser session"
+
+
+def test_bots_tooling_status_surfaces_partial_control_plane_data(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_bots(self):
+            return [
+                {
+                    "id": "browser-bot",
+                    "name": "Browser Bot",
+                    "role": "browser-inspector",
+                    "enabled": True,
+                    "backends": [{"worker_id": "browser-worker", "type": "browser"}],
+                    "execution_policy": {"required_worker_tools": ["browser-ui"]},
+                }
+            ]
+
+        def list_bot_readiness(self):
+            return None
+
+        def list_schedules(self, limit=200):
+            return {"schedules": []}
+
+        def list_workers(self):
+            return [{"id": "browser-worker", "name": "Browser Worker", "status": "online", "enabled": True}]
+
+        def list_worker_probes(self):
+            return {"probes": [{"worker_id": "browser-worker", "probe_status": "ready"}]}
+
+        def list_models(self):
+            return []
+
+        def list_keys(self):
+            return []
+
+        def list_projects(self):
+            return []
+
+        def last_error(self):
+            return {"status_code": 503, "detail": "readiness endpoint unavailable"}
+
+    with patch("dashboard.cp_client.get_cp_client", return_value=FakeCP()):
+        page = dashboard_client.get("/bots")
+        api = dashboard_client.get("/api/bots/tooling-status")
+
+    assert page.status_code == 200
+    assert b"Bot tooling data is incomplete" in page.data
+    assert b"bot readiness" in page.data
+    assert b"readiness endpoint unavailable" in page.data
+    assert api.status_code == 200
+    payload = api.get_json()
+    assert payload["data_degraded"] is True
+    assert payload["data_warnings"][0]["source"] == "bot readiness"
+    assert payload["data_warnings"][0]["detail"] == "readiness endpoint unavailable"

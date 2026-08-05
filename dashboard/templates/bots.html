@@ -29,6 +29,14 @@
       <button class="btn btn-sm" type="button" onclick="setBotTableFilter('tooling')">Tooling</button>
     </div>
   </div>
+  {% if tooling.data_degraded %}
+  <div class="alert alert-warning" style="margin-bottom:0.75rem;">
+    Bot tooling data is incomplete.
+    {% for warning in tooling.data_warnings or [] %}
+    <div><strong>{{ warning.source }}</strong>: {{ warning.detail or warning.reason }}</div>
+    {% endfor %}
+  </div>
+  {% endif %}
   <div class="cards compact-cards">
     <div class="card">
       <div class="card-label">Ready</div>

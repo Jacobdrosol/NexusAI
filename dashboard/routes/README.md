@@ -90,6 +90,7 @@ Blueprint: `bots`.
 | GET | `/api/bots` | List all bots as JSON | Yes |
 | POST | `/api/bots` | Create a new bot (CP first, then local fallback) | Yes |
 | GET | `/api/bots/<bot_id>` | Get single bot (CP first, then local fallback) | Yes |
+| GET | `/api/bots/tooling-status` | Operator summary of bot readiness, required worker tools, blockers, and partial-data warnings | Yes |
 | GET | `/api/bots/<bot_id>/export` | Download bot as `<id>.bot.json` bundle (includes connections) | Yes |
 | POST | `/api/bots/import` | Import a bot bundle; supports `overwrite` flag | Yes |
 | PUT | `/api/bots/<bot_id>` | Update bot (CP first, then local fallback) | Yes |
