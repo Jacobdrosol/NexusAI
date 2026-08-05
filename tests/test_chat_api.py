@@ -213,6 +213,74 @@ async def test_chat_token_governor_blocks_bot_hourly_limit(cp_app, monkeypatch):
 
 
 @pytest.mark.anyio
+async def test_chat_token_governor_uses_payload_size_estimate(cp_app, monkeypatch):
+    from control_plane.api import chat as chat_module
+
+    monkeypatch.setattr(
+        chat_module,
+        "_chat_token_governor_config",
+        lambda: {
+            "enabled": True,
+            "global_hourly_limit": 100,
+            "bot_hourly_limit": 0,
+            "bot_hourly_limits": {},
+            "estimated_tokens_per_message": 1,
+        },
+    )
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "should not run"})
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        create_resp = await client.post("/v1/chat/conversations", json={"title": "Payload Governor"})
+        assert create_resp.status_code == 200
+        conversation_id = create_resp.json()["id"]
+
+        post_resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={"content": "x" * 500},
+        )
+
+    assert post_resp.status_code == 429
+    assert "plus estimate 125" in post_resp.text
+    cp_app.state.scheduler.schedule.assert_not_awaited()
+    messages = await cp_app.state.chat_manager.list_messages(conversation_id)
+    assert messages == []
+
+
+@pytest.mark.anyio
+async def test_chat_stream_token_governor_uses_payload_size_estimate(cp_app, monkeypatch):
+    from control_plane.api import chat as chat_module
+
+    monkeypatch.setattr(
+        chat_module,
+        "_chat_token_governor_config",
+        lambda: {
+            "enabled": True,
+            "global_hourly_limit": 100,
+            "bot_hourly_limit": 0,
+            "bot_hourly_limits": {},
+            "estimated_tokens_per_message": 1,
+        },
+    )
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "should not run"})
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        create_resp = await client.post("/v1/chat/conversations", json={"title": "Stream Payload Governor"})
+        assert create_resp.status_code == 200
+        conversation_id = create_resp.json()["id"]
+
+        stream_resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/stream",
+            json={"content": "x" * 500},
+        )
+        body = stream_resp.text
+
+    assert stream_resp.status_code == 200
+    assert "event: error" in body
+    assert "plus estimate 125" in body
+    cp_app.state.scheduler.schedule.assert_not_awaited()
+    messages = await cp_app.state.chat_manager.list_messages(conversation_id)
+    assert messages == []
+
+
+@pytest.mark.anyio
 async def test_chat_token_governor_uses_shared_settings_instance(cp_app, tmp_path):
     from shared.settings_manager import SettingsManager
 

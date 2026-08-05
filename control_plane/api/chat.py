@@ -267,11 +267,37 @@ def _chat_bot_hourly_limit(config: Dict[str, Any], bot_id: str) -> int:
     return default_limit
 
 
-async def _validate_chat_token_governor_admission(request: Request, *, bot_id: Optional[str]) -> None:
+def _estimate_chat_turn_tokens(config: Dict[str, Any], body: Any) -> int:
+    configured_estimate = max(1, int(config.get("estimated_tokens_per_message") or 4000))
+    if body is None:
+        return configured_estimate
+    char_count = len(str(getattr(body, "content", "") or ""))
+    for item in getattr(body, "context_items", None) or []:
+        char_count += len(str(item or ""))
+    for item_id in getattr(body, "context_item_ids", None) or []:
+        char_count += len(str(item_id or ""))
+    attachment_token_estimate = 0
+    for attachment in getattr(body, "attachments", None) or []:
+        char_count += len(str(getattr(attachment, "name", "") or ""))
+        char_count += len(str(getattr(attachment, "mime_type", "") or ""))
+        text_content = str(getattr(attachment, "text_content", "") or "")
+        if text_content:
+            char_count += len(text_content)
+        else:
+            kind = str(getattr(attachment, "kind", "") or "").strip().lower()
+            if kind == "image":
+                attachment_token_estimate += 1500
+            elif kind:
+                attachment_token_estimate += 500
+    payload_estimate = max(1, (char_count + 3) // 4) + attachment_token_estimate
+    return max(configured_estimate, payload_estimate)
+
+
+async def _validate_chat_token_governor_admission(request: Request, *, bot_id: Optional[str], body: Any = None) -> None:
     config = _chat_token_governor_config()
     if not bool(config.get("enabled")):
         return
-    estimated = max(1, int(config.get("estimated_tokens_per_message") or 4000))
+    estimated = _estimate_chat_turn_tokens(config, body)
     global_limit = int(config.get("global_hourly_limit") or 0)
     bot_key = str(bot_id or "unknown").strip() or "unknown"
     bot_limit = _chat_bot_hourly_limit(config, bot_key)
@@ -4218,7 +4244,7 @@ async def post_message(conversation_id: str, request: Request, body: PostMessage
         conversation = await chat_manager.get_conversation(conversation_id)
         target_bot_id = body.bot_id or conversation.default_bot_id
         preferred_model_id = _chat_turn_preferred_model_id(conversation, body.bot_id)
-        await _validate_chat_token_governor_admission(request, bot_id=target_bot_id)
+        await _validate_chat_token_governor_admission(request, bot_id=target_bot_id, body=body)
         attachments = _attachment_payload_dicts(body.attachments)
         if any(str(item.get("kind") or "") == "image" for item in attachments):
             if not target_bot_id:
@@ -5026,7 +5052,7 @@ async def stream_message(conversation_id: str, request: Request, body: PostMessa
             conversation = await chat_manager.get_conversation(conversation_id)
             target_bot_id = body.bot_id or conversation.default_bot_id
             preferred_model_id = _chat_turn_preferred_model_id(conversation, body.bot_id)
-            await _validate_chat_token_governor_admission(request, bot_id=target_bot_id)
+            await _validate_chat_token_governor_admission(request, bot_id=target_bot_id, body=body)
             attachments = _attachment_payload_dicts(body.attachments)
             if any(str(item.get("kind") or "") == "image" for item in attachments):
                 if not target_bot_id:
