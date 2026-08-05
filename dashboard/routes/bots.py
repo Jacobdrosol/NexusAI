@@ -12,6 +12,7 @@ from typing import Any
 from flask import Blueprint, flash, jsonify, render_template, request, send_file
 from flask_login import login_required
 
+from dashboard.bot_tooling_status import build_bot_tooling_status
 from dashboard.connections_service import (
     mask_auth_payload,
     mask_connection_config,
@@ -438,10 +439,20 @@ def bots_page() -> str:
         readiness_payload = readiness_getter() if callable(readiness_getter) else None
         schedule_getter = getattr(cp, "list_schedules", None)
         schedule_payload = schedule_getter(limit=200) if callable(schedule_getter) else None
+        workers = _cp_catalog_items(cp, "list_workers")
+        probe_getter = getattr(cp, "list_worker_probes", None)
+        worker_probes = probe_getter() if callable(probe_getter) else None
+        tooling_status = build_bot_tooling_status(
+            bots=cp_data,
+            readiness_payload=readiness_payload if isinstance(readiness_payload, dict) else None,
+            workers=workers,
+            worker_probes_payload=worker_probes if isinstance(worker_probes, dict) else None,
+        )
         return render_template(
             "bots.html",
             bots=_with_bot_chat_profiles(_with_bot_operating_mode(cp_data, readiness_payload, schedule_payload)),
-            workers=_cp_catalog_items(cp, "list_workers"),
+            tooling_status=tooling_status,
+            workers=workers,
             models=_cp_catalog_items(cp, "list_models"),
             api_keys=_cp_catalog_items(cp, "list_keys"),
             projects=_cp_catalog_items(cp, "list_projects"),
@@ -452,9 +463,16 @@ def bots_page() -> str:
     db = get_db()
     try:
         bots = db.query(Bot).order_by(Bot.priority).all()
+        bot_rows = [_bot_to_dict(b) for b in bots]
         return render_template(
             "bots.html",
-            bots=[_bot_to_dict(b) for b in bots],
+            bots=bot_rows,
+            tooling_status=build_bot_tooling_status(
+                bots=bot_rows,
+                readiness_payload=None,
+                workers=[],
+                worker_probes_payload=None,
+            ),
             workers=[],
             models=[],
             api_keys=[],
@@ -559,6 +577,36 @@ def api_list_bots():
         return jsonify([_bot_to_dict(b) for b in bots])
     finally:
         db.close()
+
+
+@bp.get("/api/bots/tooling-status")
+@login_required
+def api_bot_tooling_status():
+    """Return a bounded operator summary of bot readiness and required tools."""
+    from dashboard.cp_client import get_cp_client
+
+    cp = get_cp_client()
+    bots = cp.list_bots()
+    if bots is None:
+        err = cp.last_error()
+        status = int((err or {}).get("status_code") or 502)
+        if status < 400 or status > 599:
+            status = 502
+        return jsonify({"error": str((err or {}).get("detail") or "control plane unavailable")}), status
+
+    readiness_getter = getattr(cp, "list_bot_readiness", None)
+    readiness_payload = readiness_getter() if callable(readiness_getter) else None
+    workers = cp.list_workers() or []
+    probe_getter = getattr(cp, "list_worker_probes", None)
+    worker_probes = probe_getter() if callable(probe_getter) else None
+    return jsonify(
+        build_bot_tooling_status(
+            bots=bots,
+            readiness_payload=readiness_payload if isinstance(readiness_payload, dict) else None,
+            workers=workers,
+            worker_probes_payload=worker_probes if isinstance(worker_probes, dict) else None,
+        )
+    )
 
 
 @bp.post("/api/bots")

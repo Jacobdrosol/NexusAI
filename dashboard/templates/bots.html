@@ -15,6 +15,79 @@
 {% if error %}
 <div class="alert alert-error">{{ error }}</div>
 {% endif %}
+{% set tooling = tooling_status or {} %}
+{% set tooling_summary = tooling.summary or {} %}
+<section class="panel tooling-status-panel">
+  <div class="page-header" style="margin-bottom:0.75rem;">
+    <div>
+      <h2 class="panel-title" style="margin-bottom:0.25rem;">Bot Tooling Readiness</h2>
+      <div class="mini-note">Operator view of dispatch readiness, worker-backed tools, and blocked causes.</div>
+    </div>
+    <div class="quick-links">
+      <button class="btn btn-sm" type="button" onclick="setBotTableFilter('all')">All</button>
+      <button class="btn btn-sm" type="button" onclick="setBotTableFilter('blocked')">Blocked</button>
+      <button class="btn btn-sm" type="button" onclick="setBotTableFilter('tooling')">Tooling</button>
+    </div>
+  </div>
+  <div class="cards compact-cards">
+    <div class="card">
+      <div class="card-label">Ready</div>
+      <div class="card-value card-green">{{ tooling_summary.ready or 0 }}</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Blocked</div>
+      <div class="card-value {% if tooling_summary.blocked %}card-red{% else %}card-green{% endif %}">{{ tooling_summary.blocked or 0 }}</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Disabled</div>
+      <div class="card-value card-gray">{{ tooling_summary.disabled or 0 }}</div>
+    </div>
+    <div class="card">
+      <div class="card-label">Tooling Bots</div>
+      <div class="card-value card-blue">{{ tooling_summary.tooling_bot_count or 0 }}</div>
+    </div>
+  </div>
+  <div class="split-grid bot-tooling-grid">
+    <div>
+      <h3 class="panel-title">Blocked Groups</h3>
+      <div class="list">
+        {% for group in tooling.blocked_groups or [] %}
+        <div class="list-item">
+          <strong>{{ group.category | replace('_', ' ') }}</strong>
+          <small><span class="badge badge-blocked">{{ group.count }} bot(s)</span></small>
+          {% for bot in group.bots[:4] %}
+          <small>
+            <code>{{ bot.bot_id }}</code>
+            {% if bot.required_tools %}tools: {{ bot.required_tools | join(', ') }}{% endif %}
+            {% if bot.worker_ids %}worker: {{ bot.worker_ids | join(', ') }}{% endif %}
+          </small>
+          {% if bot.blocking_messages %}
+          <small>{{ bot.blocking_messages[0] }}</small>
+          {% endif %}
+          {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty">No enabled bots are blocked.</div>
+        {% endfor %}
+      </div>
+    </div>
+    <div>
+      <h3 class="panel-title">Required Tools</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Tool</th><th>Bots</th></tr></thead>
+          <tbody>
+            {% for row in tooling.required_tools or [] %}
+            <tr><td><code>{{ row.tool }}</code></td><td>{{ row.bot_count }}</td></tr>
+            {% else %}
+            <tr><td colspan="2" class="empty">No worker-backed tools required by registered bots.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
 <div class="table-scroll">
 <table id="bots-table">
   <thead>
@@ -24,7 +97,10 @@
   </thead>
   <tbody>
     {% for b in bots %}
-    <tr data-id="{{ b.id }}">
+    {% set bot_tooling = (tooling.rows | selectattr('bot_id', 'equalto', b.id) | list | first) if tooling.rows else None %}
+    <tr data-id="{{ b.id }}"
+        data-readiness="{{ (bot_tooling.state if bot_tooling else (b.readiness.state if b.readiness else 'unknown')) }}"
+        data-has-tools="{{ 'true' if bot_tooling and bot_tooling.required_tools else 'false' }}">
       <td><a href="{{ url_for('bots.bot_detail_page', bot_id=b.id) }}">{{ b.name }}</a></td>
       <td>{{ b.role }}</td>
       <td>
@@ -561,6 +637,19 @@ function submitBotImport(bundle, overwrite, fileName) {
     }
     if (!r.ok) throw new Error(data.error || 'Import failed');
     return data;
+  });
+}
+
+function setBotTableFilter(mode) {
+  const normalized = String(mode || 'all');
+  document.querySelectorAll('#bots-table tbody tr[data-id]').forEach((row) => {
+    const readiness = String(row.dataset.readiness || '');
+    const hasTools = row.dataset.hasTools === 'true';
+    const visible =
+      normalized === 'all'
+      || (normalized === 'blocked' && readiness === 'blocked')
+      || (normalized === 'tooling' && hasTools);
+    row.style.display = visible ? '' : 'none';
   });
 }
 

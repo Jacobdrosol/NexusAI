@@ -1,0 +1,197 @@
+"""Operator summaries for bot readiness and required worker tooling."""
+from __future__ import annotations
+
+from collections import Counter, defaultdict
+from typing import Any
+
+
+def _as_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _as_list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
+def _readiness_by_bot(readiness_payload: Any) -> dict[str, dict[str, Any]]:
+    payload = _as_dict(readiness_payload)
+    rows = _as_list(payload.get("readiness"))
+    return {
+        str(row.get("bot_id") or "").strip(): row
+        for row in rows
+        if isinstance(row, dict) and str(row.get("bot_id") or "").strip()
+    }
+
+
+def _worker_by_id(workers: Any) -> dict[str, dict[str, Any]]:
+    return {
+        str(row.get("id") or "").strip(): row
+        for row in _as_list(workers)
+        if isinstance(row, dict) and str(row.get("id") or "").strip()
+    }
+
+
+def _probe_by_worker_id(worker_probes_payload: Any) -> dict[str, dict[str, Any]]:
+    payload = _as_dict(worker_probes_payload)
+    return {
+        str(row.get("worker_id") or "").strip(): row
+        for row in _as_list(payload.get("probes"))
+        if isinstance(row, dict) and str(row.get("worker_id") or "").strip()
+    }
+
+
+def _required_tools(bot: dict[str, Any]) -> list[str]:
+    policy = _as_dict(bot.get("execution_policy"))
+    tools = []
+    for tool in _as_list(policy.get("required_worker_tools")):
+        label = str(tool or "").strip()
+        if label and label not in tools:
+            tools.append(label)
+    return tools
+
+
+def _worker_ids(bot: dict[str, Any]) -> list[str]:
+    ids = []
+    for backend in _as_list(bot.get("backends")):
+        if not isinstance(backend, dict):
+            continue
+        worker_id = str(backend.get("worker_id") or "").strip()
+        if worker_id and worker_id not in ids:
+            ids.append(worker_id)
+    return ids
+
+
+def _failed_messages(readiness: dict[str, Any]) -> list[str]:
+    messages = []
+    for check in _as_list(readiness.get("checks")):
+        if not isinstance(check, dict):
+            continue
+        status = str(check.get("status") or "").strip().lower()
+        if status not in {"failed", "blocking"}:
+            continue
+        message = str(check.get("message") or check.get("component") or "blocking readiness check").strip()
+        if message:
+            messages.append(message)
+    return messages
+
+
+def _blocking_category(messages: list[str], required_tools: list[str], worker_ids: list[str]) -> str:
+    joined = " ".join(messages).lower()
+    if "browser" in joined or "browser-ui" in required_tools:
+        return "browser_session"
+    if "cli authentication" in joined or "unauthenticated" in joined:
+        return "cli_auth"
+    if "vault credential" in joined or "credential" in joined:
+        return "credential"
+    if "worker" in joined or worker_ids:
+        return "worker_runtime"
+    if "model" in joined:
+        return "model"
+    if messages:
+        return "readiness"
+    return "unknown"
+
+
+def _probe_status(worker_id: str, probes: dict[str, dict[str, Any]]) -> str:
+    probe = probes.get(worker_id) or {}
+    status = str(probe.get("probe_status") or "").strip().lower()
+    return status or "unknown"
+
+
+def build_bot_tooling_status(
+    *,
+    bots: list[dict[str, Any]] | None,
+    readiness_payload: dict[str, Any] | None,
+    workers: list[dict[str, Any]] | None,
+    worker_probes_payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a bounded operator view of bot tooling readiness."""
+    bot_rows = [row for row in (bots or []) if isinstance(row, dict)]
+    readiness_lookup = _readiness_by_bot(readiness_payload)
+    workers_lookup = _worker_by_id(workers)
+    probe_lookup = _probe_by_worker_id(worker_probes_payload)
+
+    state_counts: Counter[str] = Counter()
+    tool_counts: Counter[str] = Counter()
+    blocker_counts: Counter[str] = Counter()
+    blocked_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    rows: list[dict[str, Any]] = []
+
+    for bot in bot_rows:
+        bot_id = str(bot.get("id") or "").strip()
+        enabled = bool(bot.get("enabled", True))
+        readiness = readiness_lookup.get(bot_id, {})
+        state = str(readiness.get("state") or "").strip().lower()
+        if not state:
+            state = "disabled" if not enabled else ("ready" if bool(readiness.get("ready")) else "blocked")
+        if not enabled:
+            state = "disabled"
+        state_counts[state] += 1
+
+        tools = _required_tools(bot)
+        for tool in tools:
+            tool_counts[tool] += 1
+        worker_ids = _worker_ids(bot)
+        messages = _failed_messages(readiness)
+        category = _blocking_category(messages, tools, worker_ids) if state == "blocked" else ""
+        if category:
+            blocker_counts[category] += 1
+
+        worker_statuses = []
+        for worker_id in worker_ids:
+            worker = workers_lookup.get(worker_id, {})
+            worker_statuses.append(
+                {
+                    "worker_id": worker_id,
+                    "status": str(worker.get("status") or "missing").strip().lower(),
+                    "enabled": bool(worker.get("enabled", False)) if worker else False,
+                    "probe_status": _probe_status(worker_id, probe_lookup),
+                }
+            )
+
+        row = {
+            "bot_id": bot_id,
+            "name": str(bot.get("name") or bot_id).strip(),
+            "role": str(bot.get("role") or "").strip(),
+            "project_id": str(bot.get("project_id") or "").strip(),
+            "enabled": enabled,
+            "state": state,
+            "required_tools": tools,
+            "worker_ids": worker_ids,
+            "workers": worker_statuses,
+            "blocking_category": category,
+            "blocking_messages": messages[:4],
+        }
+        rows.append(row)
+        if state == "blocked":
+            blocked_groups[category or "unknown"].append(row)
+
+    rows.sort(
+        key=lambda row: (
+            0 if row["state"] == "blocked" else 1 if row["state"] == "disabled" else 2,
+            row["blocking_category"],
+            row["bot_id"],
+        )
+    )
+
+    return {
+        "summary": {
+            "total": len(bot_rows),
+            "ready": int(state_counts.get("ready", 0)),
+            "blocked": int(state_counts.get("blocked", 0)),
+            "disabled": int(state_counts.get("disabled", 0)),
+            "required_tool_count": int(sum(tool_counts.values())),
+            "tooling_bot_count": sum(1 for row in rows if row["required_tools"]),
+        },
+        "state_counts": dict(state_counts),
+        "required_tools": [
+            {"tool": tool, "bot_count": int(count)}
+            for tool, count in sorted(tool_counts.items(), key=lambda item: (-item[1], item[0]))
+        ],
+        "blocked_groups": [
+            {"category": category, "count": len(group), "bots": group[:8]}
+            for category, group in sorted(blocked_groups.items(), key=lambda item: (-len(item[1]), item[0]))
+        ],
+        "blocker_counts": dict(blocker_counts),
+        "rows": rows,
+    }
