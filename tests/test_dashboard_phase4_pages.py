@@ -844,7 +844,8 @@ def test_chat_page_limits_normal_bot_selectors_to_chat_bots(dashboard_client):
     assert b"function updateChatBotCapabilitySummary" in resp.data
     assert b"backend ready for chat" in resp.data
     assert b"readinessLabel" in resp.data
-    assert b"Personal Blocked Chat - Blocked Chat" in resp.data
+    assert b"Personal Blocked Chat - Blocked Chat - blocked" in resp.data
+    assert b"Personal Blocked Chat (personal-blocked-chat) - blocked" in resp.data
     assert b"model credential missing" in resp.data
     assert b"function activeBotReadinessBlocker" in resp.data
 
