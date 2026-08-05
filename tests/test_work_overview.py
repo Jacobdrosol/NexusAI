@@ -737,8 +737,10 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"ollama_cloud" in resp.data
     assert b"qwen3.5:cloud" in resp.data
     assert b"Quality Gates" in resp.data
+    assert b"Overall action:" in resp.data
     assert b"GlobeIQ Lesson Quality" in resp.data
     assert b"review failed gates" in resp.data
+    assert b"hold dependent automation" in resp.data
     assert b"Stale Work" in resp.data
     assert b"Latest Update" in resp.data
     assert b"Latest update" in resp.data

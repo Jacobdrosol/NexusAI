@@ -564,6 +564,16 @@
         <h2 class="panel-title">Quality Gates</h2>
         <div class="mini-note">{{ quality_gates.suite_count or 0 }} stored suite(s)</div>
       </div>
+      {% set gate_action = quality_gates.recommended_action or {} %}
+      {% if gate_action %}
+      <div class="mini-note" style="margin-bottom:0.75rem;">
+        Overall action:
+        <span class="badge {% if gate_action.level == 'critical' %}badge-failed{% elif gate_action.level == 'warning' %}badge-yellow{% elif gate_action.level == 'watch' %}badge-running{% elif gate_action.level == 'unknown' %}badge-unknown{% else %}badge-completed{% endif %}">
+          {{ gate_action.label or "review" }}
+        </span>
+        {% if gate_action.detail %}{{ gate_action.detail }}{% endif %}
+      </div>
+      {% endif %}
       {% if quality_gates.available %}
       <div class="table-wrap">
         <table>
