@@ -420,3 +420,5 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - `pytest tests/test_dashboard_phase4_pages.py::test_chat_message_api_proxies_attachments tests/test_dashboard_phase4_pages.py::test_chat_message_api_sanitizes_send_response_attachment_preview_urls tests/test_dashboard_phase4_pages.py::test_chat_messages_api_sanitizes_attachment_preview_urls -q` passed for Batch 196 direct-send response normalization.
 - Batch 197: added a top-level Work summary card for chat usage gaps so missing assistant-message token telemetry is visible beside worker usage gaps.
 - `pytest tests/test_work_overview.py::test_work_page_renders_project_manager_and_worker_load -q` passed for Batch 197 chat usage gap summary visibility.
+- Batch 198: added persistent top-level Work cards for worker and chat global cap pressure so token safety state remains visible even when it is not yet warning or critical.
+- `pytest tests/test_work_overview.py::test_work_page_renders_project_manager_and_worker_load -q` passed for Batch 198 cap-pressure card visibility.

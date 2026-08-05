@@ -157,6 +157,20 @@
     <div class="card-label">Chat Tokens 24h</div>
     <div class="card-value card-blue">{{ "{:,}".format(chat_usage_totals.total_tokens or 0) }}</div>
   </div>
+  {% set worker_global_cap = operations_brief.usage_global_cap_pressure or {} %}
+  <div class="card">
+    <div class="card-label">Worker Cap</div>
+    <div class="card-value {% if worker_global_cap.level == 'critical' %}card-red{% elif worker_global_cap.level == 'warning' %}card-yellow{% elif worker_global_cap.level == 'idle' %}card-blue{% else %}card-green{% endif %}">
+      {{ worker_global_cap.label or "unknown" }}
+    </div>
+  </div>
+  {% set chat_global_cap = operations_brief.chat_global_cap_pressure or {} %}
+  <div class="card">
+    <div class="card-label">Chat Cap</div>
+    <div class="card-value {% if chat_global_cap.level == 'critical' %}card-red{% elif chat_global_cap.level == 'warning' %}card-yellow{% elif chat_global_cap.level == 'idle' %}card-blue{% else %}card-green{% endif %}">
+      {{ chat_global_cap.label or "unknown" }}
+    </div>
+  </div>
   <div class="card">
     <div class="card-label">Usage Gaps</div>
     <div class="card-value {% if usage_totals.tasks_without_usage %}card-yellow{% else %}card-green{% endif %}">
