@@ -3711,7 +3711,7 @@ def test_chat_page_formats_saved_attachment_sizes(dashboard_client):
                                 "mime_type": "image/svg+xml",
                                 "kind": "image",
                                 "size_bytes": 512,
-                                "data_url": "javascript:alert(1)",
+                                "data_url": "data:image/svg+xml;base64,PHN2ZyBvbmxvYWQ9YWxlcnQoMSk+",
                             },
                         ]
                     },
@@ -3741,8 +3741,8 @@ def test_chat_page_formats_saved_attachment_sizes(dashboard_client):
     assert b"image/png" in resp.data
     assert b"2.0 MB" in resp.data
     assert b"unsafe.svg" in resp.data
-    assert b"javascript:alert(1)" not in resp.data
-    assert b"dataUrl.startsWith('data:image/')" in resp.data
+    assert b"data:image/svg+xml" not in resp.data
+    assert b"isSafeAttachmentPreviewDataUrl(dataUrl)" in resp.data
     assert b"2097152 bytes" not in resp.data
 
 
@@ -3882,7 +3882,7 @@ def test_chat_messages_api_sanitizes_attachment_preview_urls(dashboard_client):
                                 "name": "unsafe.svg",
                                 "mime_type": "image/svg+xml",
                                 "kind": "image",
-                                "data_url": "javascript:alert(1)",
+                                "data_url": "data:image/svg+xml;base64,PHN2ZyBvbmxvYWQ9YWxlcnQoMSk+",
                                 "size_bytes": 512,
                             },
                             {

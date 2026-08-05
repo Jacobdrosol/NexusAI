@@ -1377,6 +1377,19 @@ def _json_safe(value: Any) -> Any:
     return str(value)
 
 
+def _is_safe_attachment_preview_data_url(value: Any) -> bool:
+    data_url = str(value or "").strip().lower()
+    return data_url.startswith(
+        (
+            "data:image/png",
+            "data:image/jpeg",
+            "data:image/jpg",
+            "data:image/webp",
+            "data:image/gif",
+        )
+    )
+
+
 def _sanitize_attachment_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     safe = _json_safe(metadata)
     if not isinstance(safe, dict):
@@ -1390,7 +1403,7 @@ def _sanitize_attachment_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
             continue
         row = dict(attachment)
         data_url = str(row.get("data_url") or "").strip()
-        if data_url and not data_url.startswith("data:image/"):
+        if data_url and not _is_safe_attachment_preview_data_url(data_url):
             row.pop("data_url", None)
         cleaned_attachments.append(row)
     safe["attachments"] = cleaned_attachments

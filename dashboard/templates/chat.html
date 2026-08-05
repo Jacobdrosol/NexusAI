@@ -693,7 +693,7 @@
             {% for attachment in m.metadata.get('attachments') %}
             <div class="message-attachment">
               {% set attachment_data_url = (attachment.get('data_url') or '') | string %}
-              {% if attachment.get('kind') == 'image' and attachment_data_url.startswith('data:image/') %}
+              {% if attachment.get('kind') == 'image' and (attachment_data_url.startswith('data:image/png') or attachment_data_url.startswith('data:image/jpeg') or attachment_data_url.startswith('data:image/jpg') or attachment_data_url.startswith('data:image/webp') or attachment_data_url.startswith('data:image/gif')) %}
               <img class="message-attachment-preview" src="{{ attachment.get('data_url') }}" alt="{{ attachment.get('name') }}">
               {% endif %}
               <div class="message-attachment-meta">
@@ -1640,7 +1640,7 @@ function renderMessageAttachmentsHtml(meta) {
         const kind = String(attachment?.kind || '').trim().toLowerCase();
         const dataUrl = String(attachment?.data_url || '').trim();
         const sizeText = esc(formatAttachmentBytes(attachment?.size_bytes || 0));
-        const preview = kind === 'image' && dataUrl.startsWith('data:image/')
+        const preview = kind === 'image' && isSafeAttachmentPreviewDataUrl(dataUrl)
           ? `<img class="message-attachment-preview" src="${esc(dataUrl)}" alt="${name}">`
           : '';
         const detail = [mime, sizeText].filter(Boolean).join(' · ');
@@ -1657,6 +1657,15 @@ function renderMessageAttachmentsHtml(meta) {
       </div>
     </div>
   `;
+}
+
+function isSafeAttachmentPreviewDataUrl(dataUrl) {
+  const value = String(dataUrl || '').trim().toLowerCase();
+  return value.startsWith('data:image/png')
+    || value.startsWith('data:image/jpeg')
+    || value.startsWith('data:image/jpg')
+    || value.startsWith('data:image/webp')
+    || value.startsWith('data:image/gif');
 }
 
 function activeChatBotId() {
