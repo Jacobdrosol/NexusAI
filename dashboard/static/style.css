@@ -811,6 +811,7 @@ select.form-control {
 
 /* Chat page Codex-style shell */
 .page-chat {
+  --chat-font-scale: 1;
   display: flex;
   flex-direction: column;
   min-height: 100dvh;
@@ -958,6 +959,24 @@ select.form-control {
 
 .chat-settings-modal {
   width: min(100%, 620px);
+}
+
+.chat-font-size-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.chat-font-size-row input[type="range"] {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.chat-font-size-row output {
+  width: 3.25rem;
+  color: #d4d4d4;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
 }
 
 .chat-route-actions {
@@ -1150,6 +1169,7 @@ select.form-control {
 .page-chat .chat-composer textarea {
   min-height: 44px;
   max-height: 28vh;
+  font-size: calc(1rem * var(--chat-font-scale));
   resize: none;
   overflow-y: auto;
 }
@@ -1167,6 +1187,7 @@ select.form-control {
 }
 
 .page-chat .message {
+  font-size: calc(1rem * var(--chat-font-scale));
   border-radius: 8px;
   border: 0;
   padding: 0.76rem 0.85rem;
@@ -1187,16 +1208,16 @@ select.form-control {
 }
 
 .page-chat .message-role {
-  font-size: 0.72rem;
+  font-size: calc(0.72rem * var(--chat-font-scale));
   letter-spacing: 0.07em;
 }
 
 .page-chat .message-timestamp {
-  font-size: 0.74rem;
+  font-size: calc(0.74rem * var(--chat-font-scale));
 }
 
 .page-chat .message-provenance {
-  font-size: 0.76rem;
+  font-size: calc(0.76rem * var(--chat-font-scale));
 }
 
 .page-chat .message-actions .btn {
