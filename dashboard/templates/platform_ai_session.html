@@ -344,6 +344,7 @@
       <input id="context-files-input" class="form-control" type="file" multiple>
       <input id="context-folder-input" class="form-control" type="file" webkitdirectory directory multiple style="margin-top:0.45rem;">
       <div class="mini-note" style="margin-top:0.35rem;">Attach sample outputs/spec files so Platform AI can tune toward expected quality and structure.</div>
+      <div class="mini-note" style="margin-top:0.35rem;">Session upload limit: {{ (upload_limits or {}).get('max_files', 15) }} files, {{ (upload_limits or {}).get('max_total_bytes', 1073741824) }} bytes total, {{ (upload_limits or {}).get('max_file_bytes', 134217728) }} bytes per file.</div>
     </div>
     <div style="display:flex;align-items:flex-end;">
       <button class="btn btn-primary" type="button" onclick="uploadContextFiles()">Upload Files</button>

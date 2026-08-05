@@ -6030,6 +6030,7 @@ def test_platform_ai_session_uses_server_upload_limits(dashboard_client, monkeyp
     assert resp.status_code == 200
     assert b'"max_files": 7' in resp.data
     assert b'"max_total_bytes": 123456' in resp.data
+    assert b"Session upload limit: 7 files, 123456 bytes total" in resp.data
     assert b"SESSION_ATTACHMENT_MAX_FILES = Number(sessionUploadLimits?.max_files || 15)" in resp.data
     assert b"SESSION_ATTACHMENT_MAX_TOTAL_BYTES = Number(sessionUploadLimits?.max_total_bytes || 1024 * 1024 * 1024)" in resp.data
     assert b"SESSION_MESSAGE_CONTENT_MAX_CHARS = 120000" in resp.data
