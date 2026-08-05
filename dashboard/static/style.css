@@ -576,6 +576,12 @@ select.form-control {
   margin-bottom: 0.25rem;
 }
 
+.message-timestamp {
+  color: #8f8f8f;
+  font-size: 0.76rem;
+  margin: -0.12rem 0 0.42rem;
+}
+
 .message-provenance {
   display: flex;
   flex-wrap: wrap;
@@ -1132,6 +1138,10 @@ select.form-control {
 .page-chat .message-role {
   font-size: 0.72rem;
   letter-spacing: 0.07em;
+}
+
+.page-chat .message-timestamp {
+  font-size: 0.74rem;
 }
 
 .page-chat .message-provenance {

@@ -297,3 +297,5 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - `pytest tests/test_dashboard_phase4_pages.py::test_worker_detail_page_surfaces_dependent_bot_worker_scope -q` passed for Batch 136 worker dependent-bot route visibility.
 - Batch 137: added dependent-bot counts, names, and backend routes to the Workers inventory so operators can see worker blast radius without opening each detail page.
 - `pytest tests/test_dashboard_phase4_pages.py::test_workers_page_surfaces_runtime_tool_evidence -q` passed for Batch 137 worker inventory dependency visibility.
+- Batch 138: added persisted message timestamps to saved chat rendering and the live message hydrator so user and assistant turns can be audited in normal chat sessions.
+- `pytest tests/test_dashboard_phase4_pages.py::test_chat_page_surfaces_assistant_bot_and_model_provenance -q` passed for Batch 138 chat message timestamp visibility.

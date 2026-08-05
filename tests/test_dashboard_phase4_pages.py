@@ -1655,9 +1655,17 @@ def test_chat_page_surfaces_assistant_bot_and_model_provenance(dashboard_client)
         def list_messages(self, conversation_id, limit=None):
             return [
                 {
+                    "id": "m-user",
+                    "role": "user",
+                    "content": "User prompt",
+                    "created_at": "2026-08-04T12:33:00+00:00",
+                    "metadata": {},
+                },
+                {
                     "id": "m-assistant",
                     "role": "assistant",
                     "content": "Assistant reply",
+                    "created_at": "2026-08-04T12:34:00+00:00",
                     "bot_id": "personal-general-chat",
                     "provider": "ollama_cloud",
                     "model": "qwen3.5:397b",
@@ -1701,6 +1709,10 @@ def test_chat_page_surfaces_assistant_bot_and_model_provenance(dashboard_client)
     assert b"ollama_cloud / qwen3.5:397b" in resp.data
     assert b"1,690 tokens (1,234 in / 456 out)" in resp.data
     assert b"bot updated 2026-08-04 12:34:56" in resp.data
+    assert b"message-timestamp" in resp.data
+    assert b"2026-08-04 12:33:00" in resp.data
+    assert b"2026-08-04 12:34:00" in resp.data
+    assert b"function renderMessageTimestampHtml" in resp.data
     assert b"function formatMessageUsageLabel" in resp.data
 
 
