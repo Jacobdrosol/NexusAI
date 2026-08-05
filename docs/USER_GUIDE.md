@@ -309,6 +309,8 @@ If the token governor is enabled, direct chat can also be capped from Settings:
 
 The default chat caps are `0`, which means disabled. When a configured chat cap would be exceeded, the chat API rejects the message before saving the user message or dispatching model work.
 
+The Work page also shows direct-chat bot pressure against the active chat bot caps. Operators can set a chat bot cap at its current measured spend or clear a chat-specific override from that table without changing autonomous worker bot caps.
+
 ### 6.6 Repository Workspace Runtime and Toolchains
 
 Repository workspace actions and PM-generated assignment test runs execute in the configured repo workspace runtime for the project. In most self-hosted setups, that means the VM or container running NexusAI, not the operator's local laptop/browser session.

@@ -195,6 +195,7 @@ Blueprint: `work`. Provides the operator command-center view for active project 
 | POST | `/api/work/orchestration/stop` | Stop cancellable work for one orchestration run | Yes |
 | POST | `/api/work/hold` | Hold or release queue intake for a project or manager lane | Yes |
 | POST | `/api/work/bot-cap` | Set or clear bot hourly token cap overrides | Yes |
+| POST | `/api/work/chat-bot-cap` | Set or clear direct-chat bot hourly token cap overrides | Yes |
 
 The overview includes a compact `operations_brief` containing status totals, capacity state, top active lanes, top waiting lanes, top problem lanes, attention lanes, queue-pressure lanes, and recent problem tasks. The brief endpoint also includes usage pressure, token-governor queue-cap pressure, and worker capacity fields so dashboard pollers, automation monitors, and future mobile summaries can detect runaway usage or queue saturation without pulling raw task rows.
 
