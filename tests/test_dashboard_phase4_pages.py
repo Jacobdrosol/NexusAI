@@ -4209,6 +4209,55 @@ def test_chat_stream_api_proxies_string_context_and_vault_ids(dashboard_client):
     assert captured["json"]["include_project_context"] is True
 
 
+def test_chat_stream_api_sanitizes_message_event_attachment_metadata(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeStreamResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def raise_for_status(self):
+            return None
+
+        def iter_lines(self, decode_unicode=True):
+            yield "event: user_message"
+            yield (
+                'data: {"id":"u1","role":"user","content":"see this","metadata":{"attachments":['
+                '{"name":"unsafe.svg","kind":"image","data_url":"data:image/svg+xml;base64,PHN2ZyA+","size_bytes":512},'
+                '{"name":"screen.png","kind":"image","data_url":"data:image/png;base64,aGVsbG8=","size_bytes":1024}'
+                ']}}'
+            )
+            yield ""
+            yield "event: assistant_message"
+            yield 'data: {"id":"a1","role":"assistant","content":"ok"}'
+
+    class FakeCP:
+        base_url = "http://100.81.64.82:8000"
+
+        def list_bot_readiness(self):
+            return {"readiness": []}
+
+    def _fake_post(url, json=None, headers=None, stream=None, timeout=None):
+        return FakeStreamResponse()
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()), \
+         patch("dashboard.routes.chat.requests.post", side_effect=_fake_post):
+        resp = dashboard_client.post(
+            "/api/chat/stream",
+            json={"conversation_id": "c1", "content": "hello"},
+        )
+
+    body = resp.get_data(as_text=True)
+    assert resp.status_code == 200
+    assert "event: user_message" in body
+    assert "unsafe.svg" in body
+    assert "data:image/svg+xml" not in body
+    assert "data:image/png;base64,aGVsbG8=" in body
+
+
 def test_chat_message_api_blocks_image_attachment_for_text_only_effective_model(dashboard_client):
     _login_admin(dashboard_client)
 

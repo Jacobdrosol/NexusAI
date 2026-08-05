@@ -1668,6 +1668,29 @@ def _normalize_chat_send_response(raw: Any) -> Any:
     return normalized
 
 
+def _sanitize_chat_stream_sse_line(line: str, current_event: str | None) -> tuple[str, str | None]:
+    event_prefix = "event:"
+    data_prefix = "data:"
+    stripped = str(line or "")
+    line_ending = "\n" if stripped.endswith("\n") else ""
+    content = stripped[:-1] if line_ending else stripped
+    if content.startswith(event_prefix):
+        return stripped, content[len(event_prefix):].strip()
+    if current_event not in {"user_message", "assistant_message"} or not content.startswith(data_prefix):
+        return stripped, current_event
+    raw_payload = content[len(data_prefix):].lstrip()
+    try:
+        parsed = json.loads(raw_payload)
+    except Exception:
+        return stripped, current_event
+    normalized = _normalize_message_row(parsed)
+    if normalized is None and isinstance(parsed, dict):
+        normalized = _normalize_chat_send_response({current_event: parsed}).get(current_event)
+    if not isinstance(normalized, dict):
+        return stripped, current_event
+    return f"data: {json.dumps(normalized)}{line_ending}", current_event
+
+
 def _normalize_vault_item_row(raw: Any) -> dict[str, Any] | None:
     if not isinstance(raw, dict):
         return None
@@ -2454,7 +2477,10 @@ def api_send_message_stream():
         )
 
     def generate() -> Iterable[str]:
-        yield from proxy_upstream_sse_lines(_open_upstream, heartbeat_seconds=heartbeat_seconds)
+        current_event: str | None = None
+        for line in proxy_upstream_sse_lines(_open_upstream, heartbeat_seconds=heartbeat_seconds):
+            sanitized_line, current_event = _sanitize_chat_stream_sse_line(line, current_event)
+            yield sanitized_line
 
     return Response(
         stream_with_context(generate()),
