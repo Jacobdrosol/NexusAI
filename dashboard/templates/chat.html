@@ -3283,6 +3283,9 @@ document.getElementById('form-create-convo')?.addEventListener('submit', async f
     return;
   }
   const created = await res.json();
+  if (created.memory_effective_warning) {
+    persistChatComposerStatus(created.memory_effective_warning, 'info');
+  }
   const targetProjectFilter = scope === 'global' ? unscopedProjectFilter : projectId;
   window.location = buildChatUrl({
     conversation_id: created.id,
