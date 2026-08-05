@@ -1540,6 +1540,8 @@ def test_chat_page_unscoped_filter_limits_conversation_list(dashboard_client):
                     "bridge_project_ids": [],
                     "updated_at": "2026-03-12T00:00:00+00:00",
                     "archived_at": None,
+                    "default_bot_id": "personal-general-chat",
+                    "default_model_id": "ollama-qwen",
                     "tool_access_enabled": False,
                     "tool_access_filesystem": False,
                     "tool_access_repo_search": False,
@@ -1602,6 +1604,12 @@ def test_chat_page_unscoped_filter_limits_conversation_list(dashboard_client):
     assert b"Unscoped" in resp.data
     assert b"project_id=__unscoped__" in resp.data
     assert b"targetProjectFilter = scope === 'global' ? unscopedProjectFilter" in resp.data
+    assert b'id="chat-conversation-search"' in resp.data
+    assert b'placeholder="Title, project, bot, or model"' in resp.data
+    assert b'data-search-text="one-off chat c-unscoped global' in resp.data
+    assert b"personal-general-chat" in resp.data
+    assert b"ollama-qwen" in resp.data
+    assert b"applyConversationProjectFilter" in resp.data
 
 
 def test_chat_page_surfaces_assistant_bot_and_model_provenance(dashboard_client):

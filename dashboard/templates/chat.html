@@ -269,6 +269,14 @@
         <option value="{{ p.id }}" {% if active_project_filter == p.id %}selected{% endif %}>{{ p.name }} ({{ p.id }})</option>
         {% endfor %}
       </select>
+      <label for="chat-conversation-search" class="mini-note">Search chats</label>
+      <input
+        id="chat-conversation-search"
+        class="form-control chat-project-filter"
+        type="search"
+        placeholder="Title, project, bot, or model"
+        autocomplete="off"
+      >
     </div>
     <div class="list">
       {% for c in conversations %}
@@ -277,6 +285,7 @@
         data-filterable="true"
         data-project-id="{{ c.project_id or '' }}"
         data-bridge-project-ids="{{ (c.bridge_project_ids or [])|join(',') }}"
+        data-search-text="{{ [c.title, c.id, c.scope, c.project_id, (c.bridge_project_ids or [])|join(' '), c.default_bot_id, c.default_model_id] | join(' ') | lower }}"
       >
         <a href="{{ url_for('chat.chat_page') }}?conversation_id={{ c.id }}{% if active_project_filter %}&project_id={{ active_project_filter }}{% endif %}" class="chat-conversation-link">
           <div class="chat-conversation-title-row">
@@ -320,6 +329,7 @@
           data-filterable="true"
           data-project-id="{{ c.project_id or '' }}"
           data-bridge-project-ids="{{ (c.bridge_project_ids or [])|join(',') }}"
+          data-search-text="{{ [c.title, c.id, c.scope, c.project_id, (c.bridge_project_ids or [])|join(' '), c.default_bot_id, c.default_model_id] | join(' ') | lower }}"
         >
           <a href="{{ url_for('chat.chat_page') }}?conversation_id={{ c.id }}{% if active_project_filter %}&project_id={{ active_project_filter }}{% endif %}" class="chat-conversation-link">
             <div class="chat-conversation-title-row">
@@ -1023,19 +1033,30 @@ function buildChatUrl(params = {}) {
 function applyConversationProjectFilter() {
   const filterEl = document.getElementById('chat-project-filter');
   const projectFilter = String(filterEl?.value || '').trim();
+  const searchEl = document.getElementById('chat-conversation-search');
+  const searchTerms = String(searchEl?.value || '')
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean);
   const rows = Array.from(document.querySelectorAll('.chat-conversation-row[data-filterable="true"]'));
   let activeVisible = 0;
   let archivedVisible = 0;
+  const projectFilterActive = !!projectFilter;
+  const searchActive = searchTerms.length > 0;
   rows.forEach((row) => {
     const primaryProjectId = String(row.dataset.projectId || '').trim();
     const bridgeProjectIds = String(row.dataset.bridgeProjectIds || '')
       .split(',')
       .map((item) => item.trim())
       .filter(Boolean);
-    const matches = !projectFilter
+    const matchesProject = !projectFilter
       || (projectFilter === unscopedProjectFilter && !primaryProjectId && bridgeProjectIds.length === 0)
       || primaryProjectId === projectFilter
       || bridgeProjectIds.includes(projectFilter);
+    const searchText = String(row.dataset.searchText || row.textContent || '').toLowerCase();
+    const matchesSearch = !searchTerms.length || searchTerms.every((term) => searchText.includes(term));
+    const matches = matchesProject && matchesSearch;
     row.hidden = !matches;
     const archived = !!row.closest('.chat-archived-list');
     if (matches) {
@@ -1046,9 +1067,9 @@ function applyConversationProjectFilter() {
   document.querySelectorAll('.chat-filter-empty').forEach((emptyEl) => {
     const kind = String(emptyEl.dataset.filterEmpty || '').trim();
     if (kind === 'archived') {
-      emptyEl.hidden = archivedVisible > 0 || !projectFilter || !rows.some((row) => !!row.closest('.chat-archived-list'));
+      emptyEl.hidden = archivedVisible > 0 || (!projectFilterActive && !searchActive) || !rows.some((row) => !!row.closest('.chat-archived-list'));
     } else {
-      emptyEl.hidden = activeVisible > 0 || !projectFilter || !rows.some((row) => !row.closest('.chat-archived-list'));
+      emptyEl.hidden = activeVisible > 0 || (!projectFilterActive && !searchActive) || !rows.some((row) => !row.closest('.chat-archived-list'));
     }
   });
 }
@@ -3978,6 +3999,7 @@ bindConversationActions();
 document.getElementById('chat-project-filter')?.addEventListener('change', function() {
   window.location = buildChatUrl({project_id: this.value});
 });
+document.getElementById('chat-conversation-search')?.addEventListener('input', applyConversationProjectFilter);
 document.getElementById('create-convo-scope')?.addEventListener('change', () => {
   syncConversationScopeFields();
   syncCreateConversationToolFields();
