@@ -689,8 +689,9 @@
         <label>PM Bot</label>
         <select class="form-control" name="bot_id" required>
           <option value="">Select a project manager bot</option>
-          {% for b in bots if b.assignment_capabilities and b.assignment_capabilities.is_project_manager %}
-          <option value="{{ b.id }}">{{ b.name }} ({{ b.role }})</option>
+          {% for b in assignment_bots %}
+          {% set blocked_pm_bot = b.readiness and b.readiness.state in ['blocked', 'disabled'] %}
+          <option value="{{ b.id }}" {% if blocked_pm_bot %}disabled title="{{ b.readiness.detail }}"{% endif %}>{{ b.name }} ({{ b.role }}){% if b.readiness and b.readiness.state and b.readiness.state not in ['ready', 'unknown'] %} - {{ b.readiness.state }}{% if b.readiness.detail %}: {{ b.readiness.detail }}{% endif %}{% endif %}</option>
           {% endfor %}
         </select>
       </div>
@@ -782,6 +783,7 @@ const activeProjectFilter = {{ (active_project_filter or "")|tojson }};
 const unscopedProjectFilter = {{ unscoped_project_filter|tojson }};
 const availableProjects = {{ projects|tojson }};
 const initialMessages = {{ messages|tojson }};
+const assignmentBots = {{ assignment_bots|tojson }};
 const availableBots = {{ chat_bots|tojson }};
 const availableModels = {{ model_catalog|tojson }};
 const chatAttachmentLimits = {{ chat_attachment_limits|tojson }};
@@ -2549,6 +2551,14 @@ document.getElementById('form-assign')?.addEventListener('submit', async functio
   if (!instruction) return;
   if (!pmBotId) {
     alert('Select an explicit project manager bot.');
+    return;
+  }
+  const pmBot = Array.isArray(assignmentBots)
+    ? assignmentBots.find((bot) => String(bot?.id || '') === pmBotId)
+    : null;
+  const readinessBlocker = chatBotReadinessBlocker(pmBot);
+  if (readinessBlocker) {
+    alert(`Project manager bot is unavailable: ${readinessBlocker}`);
     return;
   }
   const res = await fetch('/api/chat/assignments/preview', {

@@ -54,6 +54,7 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - Batch 16 in progress: added a chat send guard that blocks known blocked or disabled selected bots before dispatching the message, while leaving default and unknown-readiness chats usable.
 - Batch 17 in progress: labeled blocked or disabled chat bots directly in chat bot dropdowns so operators can avoid selecting unavailable bots before composing.
 - Batch 18 in progress: prevented new conversations from selecting blocked or disabled default chat bots by disabling unavailable default-bot options and reusing the readiness guard during create.
+- Batch 19 in progress: added readiness labels and create-time guarding to assignment PM bot selection while keeping non-chat scheduled workers out of serialized chat bot data.
 
 ## Validation
 
@@ -75,3 +76,4 @@ Make NexusAI usable as the primary workspace for chat, project context, worker o
 - `pytest tests/test_dashboard_phase4_pages.py::test_chat_page_limits_normal_bot_selectors_to_chat_bots tests/test_dashboard_phase4_pages.py::test_chat_page_embeds_effective_context_gate_inputs tests/test_dashboard_phase4_pages.py::test_chat_page_surfaces_assistant_bot_and_model_provenance tests/test_chat_api.py::test_create_conversation_and_post_message -q` passed for Batch 16 blocked-chat-bot send guard.
 - `pytest tests/test_dashboard_phase4_pages.py::test_chat_page_limits_normal_bot_selectors_to_chat_bots tests/test_dashboard_phase4_pages.py::test_chat_page_embeds_effective_context_gate_inputs tests/test_chat_api.py::test_create_conversation_and_post_message -q` passed for Batch 17 chat bot dropdown readiness labels.
 - `pytest tests/test_dashboard_phase4_pages.py::test_chat_page_limits_normal_bot_selectors_to_chat_bots tests/test_dashboard_phase4_pages.py::test_chat_page_embeds_effective_context_gate_inputs tests/test_chat_api.py::test_create_conversation_and_post_message -q` passed for Batch 18 default-bot create guard.
+- `pytest tests/test_dashboard_phase4_pages.py::test_chat_page_limits_normal_bot_selectors_to_chat_bots tests/test_dashboard_phase4_pages.py::test_chat_page_embeds_effective_context_gate_inputs tests/test_chat_api.py::test_create_conversation_and_post_message -q` passed for Batch 19 PM assignment readiness guard.

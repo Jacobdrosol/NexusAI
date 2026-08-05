@@ -116,11 +116,26 @@ def _readiness_by_bot_id(payload: Any) -> dict[str, dict[str, Any]]:
     return result
 
 
-def _with_chat_bot_readiness(chat_bots: list[dict[str, Any]], readiness_payload: Any) -> list[dict[str, Any]]:
+def _with_bot_readiness(bots: Iterable[Any], readiness_payload: Any) -> list[dict[str, Any]]:
     readiness = _readiness_by_bot_id(readiness_payload)
     enriched: list[dict[str, Any]] = []
-    for bot in chat_bots:
-        row = dict(bot)
+    for bot in bots:
+        if isinstance(bot, dict):
+            row = dict(bot)
+        elif hasattr(bot, "model_dump"):
+            dumped = bot.model_dump()
+            row = dumped if isinstance(dumped, dict) else {}
+        else:
+            row = {
+                "id": _bot_value(bot, "id"),
+                "name": _bot_value(bot, "name"),
+                "role": _bot_value(bot, "role"),
+                "backends": _bot_value(bot, "backends", []),
+                "routing_rules": _routing_rules(bot),
+                "memory_profiles_enabled": bool(_bot_value(bot, "memory_profiles_enabled", False)),
+                "execution_policy": _bot_value(bot, "execution_policy", None),
+                "assignment_capabilities": _bot_value(bot, "assignment_capabilities", None),
+            }
         bot_id = str(row.get("id") or "").strip()
         row["readiness"] = readiness.get(
             bot_id,
@@ -128,6 +143,20 @@ def _with_chat_bot_readiness(chat_bots: list[dict[str, Any]], readiness_payload:
         )
         enriched.append(row)
     return enriched
+
+
+def _with_chat_bot_readiness(chat_bots: list[dict[str, Any]], readiness_payload: Any) -> list[dict[str, Any]]:
+    return _with_bot_readiness(chat_bots, readiness_payload)
+
+
+def _assignment_manager_bots(bots: Iterable[Any]) -> list[dict[str, Any]]:
+    managers: list[dict[str, Any]] = []
+    for bot in bots:
+        row = dict(bot) if isinstance(bot, dict) else {}
+        capabilities = row.get("assignment_capabilities")
+        if isinstance(capabilities, dict) and bool(capabilities.get("is_project_manager")):
+            managers.append(row)
+    return managers
 
 
 def _task_sort_key(task: dict[str, Any]) -> tuple[int, int, str, str]:
@@ -757,7 +786,9 @@ def chat_page() -> str:
             vault_items_raw = []
         vault_items = _normalize_vault_item_rows(vault_items_raw)
 
-        chat_bots = _with_chat_bot_readiness(_chat_selectable_bots(bots), bot_readiness_payload)
+        bots = _with_bot_readiness(bots, bot_readiness_payload)
+        chat_bots = _chat_selectable_bots(bots)
+        assignment_bots = _assignment_manager_bots(bots)
 
         return render_template(
             "chat.html",
@@ -769,6 +800,7 @@ def chat_page() -> str:
             messages=messages,
             bots=bots,
             chat_bots=chat_bots,
+            assignment_bots=assignment_bots,
             projects=projects,
             vault_items=vault_items,
             repo_context_items=repo_context_items,
@@ -798,6 +830,7 @@ def chat_page() -> str:
             messages=[],
             bots=[],
             chat_bots=[],
+            assignment_bots=[],
             projects=[],
             vault_items=[],
             repo_context_items=[],

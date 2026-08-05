@@ -819,6 +819,17 @@ def test_chat_page_limits_normal_bot_selectors_to_chat_bots(dashboard_client):
                             }
                         ],
                     },
+                    {
+                        "bot_id": "pm-orchestrator",
+                        "state": "blocked",
+                        "ready": False,
+                        "checks": [
+                            {
+                                "status": "failed",
+                                "message": "PM worker route missing",
+                            }
+                        ],
+                    },
                 ]
             }
 
@@ -840,6 +851,8 @@ def test_chat_page_limits_normal_bot_selectors_to_chat_bots(dashboard_client):
     assert b"GlobeIQ Live Audit QC 02" not in resp.data
     assert b"PM Orchestrator" in resp.data
     assert b"Select a project manager bot" in resp.data
+    assert b"PM Orchestrator (pm) - blocked: PM worker route missing" in resp.data
+    assert b'value="pm-orchestrator" disabled title="PM worker route missing"' in resp.data
     assert b"chat-bot-capability-summary" in resp.data
     assert b"function updateChatBotCapabilitySummary" in resp.data
     assert b"backend ready for chat" in resp.data
