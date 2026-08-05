@@ -1153,6 +1153,146 @@ async def test_stream_message_rejects_attachment_total_size_over_1gb(cp_app):
 
 
 @pytest.mark.anyio
+async def test_stream_message_uses_default_model_capabilities_for_image_attachment(cp_app):
+    async def _stream(_task):
+        yield {"event": "backend_selected", "provider": "ollama_cloud", "model": "qwen3.5:397b-cloud"}
+        yield {"event": "final", "output": "vision stream reply"}
+
+    cp_app.state.scheduler.stream = _stream
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        model_resp = await client.post(
+            "/v1/models",
+            json={
+                "id": "ollama-qwen-vision-stream",
+                "name": "qwen3.5:397b-cloud",
+                "provider": "ollama_cloud",
+                "capabilities": ["vision"],
+                "enabled": True,
+            },
+        )
+        assert model_resp.status_code == 200
+        text_backend_model_resp = await client.post(
+            "/v1/models",
+            json={
+                "id": "ollama-llama-text-stream-base",
+                "name": "llama3.1:8b",
+                "provider": "ollama_cloud",
+                "capabilities": ["chat"],
+                "enabled": True,
+            },
+        )
+        assert text_backend_model_resp.status_code == 200
+        bot_resp = await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-text-base-vision-stream-default",
+                "name": "Text Base Vision Stream Default",
+                "role": "assistant",
+                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "llama3.1:8b"}],
+                "enabled": True,
+            },
+        )
+        assert bot_resp.status_code == 200, bot_resp.text
+        create_resp = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Default Vision Stream Model",
+                "default_bot_id": "bot-text-base-vision-stream-default",
+                "default_model_id": "ollama-qwen-vision-stream",
+            },
+        )
+        assert create_resp.status_code == 200
+        conversation_id = create_resp.json()["id"]
+
+        stream_resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/stream",
+            json={
+                "content": "Inspect this image",
+                "bot_id": "bot-text-base-vision-stream-default",
+                "attachments": [
+                    {
+                        "name": "image.png",
+                        "mime_type": "image/png",
+                        "kind": "image",
+                        "data_url": "data:image/png;base64,aGVsbG8=",
+                    }
+                ],
+            },
+        )
+
+    assert stream_resp.status_code == 200
+    assert "event: assistant_message" in stream_resp.text
+
+
+@pytest.mark.anyio
+async def test_stream_message_rejects_image_when_default_model_is_text_only(cp_app):
+    cp_app.state.scheduler.stream = AsyncMock()
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        model_resp = await client.post(
+            "/v1/models",
+            json={
+                "id": "ollama-text-stream-default",
+                "name": "llama3.1:8b",
+                "provider": "ollama_cloud",
+                "capabilities": ["chat"],
+                "enabled": True,
+            },
+        )
+        assert model_resp.status_code == 200
+        vision_backend_model_resp = await client.post(
+            "/v1/models",
+            json={
+                "id": "ollama-qwen-vision-stream-base",
+                "name": "qwen3.5:397b-cloud",
+                "provider": "ollama_cloud",
+                "capabilities": ["vision"],
+                "enabled": True,
+            },
+        )
+        assert vision_backend_model_resp.status_code == 200
+        bot_resp = await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-vision-base-text-stream-default",
+                "name": "Vision Base Text Stream Default",
+                "role": "assistant",
+                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "qwen3.5:397b-cloud"}],
+                "enabled": True,
+            },
+        )
+        assert bot_resp.status_code == 200, bot_resp.text
+        create_resp = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Default Text Stream Model",
+                "default_bot_id": "bot-vision-base-text-stream-default",
+                "default_model_id": "ollama-text-stream-default",
+            },
+        )
+        assert create_resp.status_code == 200
+        conversation_id = create_resp.json()["id"]
+
+        stream_resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/stream",
+            json={
+                "content": "Inspect this image",
+                "attachments": [
+                    {
+                        "name": "image.png",
+                        "mime_type": "image/png",
+                        "kind": "image",
+                        "data_url": "data:image/png;base64,aGVsbG8=",
+                    }
+                ],
+            },
+        )
+
+    assert stream_resp.status_code == 400
+    assert "does not support image attachments" in str(stream_resp.json().get("detail") or "")
+    cp_app.state.scheduler.stream.assert_not_called()
+
+
+@pytest.mark.anyio
 async def test_stream_default_model_id_is_attached_to_scheduled_task(cp_app):
     captured_tasks = []
 
