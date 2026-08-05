@@ -438,6 +438,65 @@ def test_bot_import_blocks_raw_secret_values_inside_bot_config(dashboard_client)
     assert body["blocked_paths"] == ["bot.backends[0].api_key_ref"]
 
 
+def test_bot_import_returns_readiness_for_disabled_unready_bot(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def __init__(self):
+            self._last_error = {"status_code": 404, "detail": "not found"}
+            self.created = None
+
+        def get_bot(self, bot_id):
+            return None
+
+        def preflight_bot(self, body):
+            return {
+                "bot_id": body["id"],
+                "candidate_enabled": False,
+                "ready_to_enable": False,
+                "readiness": {
+                    "ready": False,
+                    "state": "blocked",
+                    "checks": [{"status": "failed", "message": "Worker missing browser session."}],
+                },
+            }
+
+        def create_bot(self, body):
+            self.created = dict(body)
+            return dict(body)
+
+        def update_bot(self, bot_id, body):
+            raise AssertionError("new disabled import should create the bot")
+
+        def last_error(self):
+            return self._last_error
+
+    fake_cp = FakeCP()
+    bundle = {
+        "schema_version": "nexusai.bot-export.v1",
+        "bot": {
+            "id": "disabled-browser-bot",
+            "name": "Disabled Browser Bot",
+            "role": "worker",
+            "enabled": False,
+            "backends": [{"type": "browser", "provider": "browser", "model": "browser-ui", "worker_id": "missing-browser-worker"}],
+        },
+        "connections": [],
+    }
+
+    with patch("dashboard.cp_client.get_cp_client", return_value=fake_cp):
+        response = dashboard_client.post("/api/bots/import", json={"bundle": bundle, "overwrite": False})
+
+    assert response.status_code == 200
+    body = response.get_json()
+    assert body["ok"] is True
+    assert body["ready_to_enable"] is False
+    assert body["readiness"]["state"] == "blocked"
+    assert body["readiness"]["checks"][0]["message"] == "Worker missing browser session."
+    assert body["preflight"]["candidate_enabled"] is False
+    assert fake_cp.created["enabled"] is False
+
+
 def test_project_database_connection_create_test_and_schema_ingest(dashboard_client):
     _login_admin(dashboard_client)
 

@@ -801,7 +801,24 @@ async function handleBotImportFile(event) {
         continue;
       }
       const botId = String((data.bot && data.bot.id) || file.name);
-      results.push({fileName: file.name, status: 'ok', botId, overwritten: !!data.overwritten});
+      const readiness = data && typeof data.readiness === 'object' ? data.readiness : null;
+      const readyToEnable = data.ready_to_enable === true;
+      const checks = Array.isArray(readiness?.checks) ? readiness.checks : [];
+      const blockerMessages = checks
+        .filter((check) => {
+          const status = String(check?.status || '').trim().toLowerCase();
+          return status === 'failed' || status === 'blocking';
+        })
+        .map((check) => String(check?.message || check?.component || '').trim())
+        .filter(Boolean);
+      results.push({
+        fileName: file.name,
+        status: 'ok',
+        botId,
+        overwritten: !!data.overwritten,
+        readyToEnable,
+        blockerMessages,
+      });
     } catch (e) {
       results.push({fileName: file.name, status: 'error', message: e.message || 'Import failed'});
     }
@@ -811,7 +828,11 @@ async function handleBotImportFile(event) {
   const failedCount = results.filter((item) => item.status === 'error').length;
   const lines = results.map((item) => {
     if (item.status === 'ok') {
-      return 'OK: ' + item.fileName + ' -> ' + item.botId + (item.overwritten ? ' (overwritten)' : '');
+      const readinessSuffix = item.readyToEnable ? ' (ready)' : ' (imported disabled or needs readiness work)';
+      const blockerSuffix = item.blockerMessages && item.blockerMessages.length
+        ? '\n  Readiness blockers: ' + item.blockerMessages.slice(0, 3).join('; ')
+        : '';
+      return 'OK: ' + item.fileName + ' -> ' + item.botId + (item.overwritten ? ' (overwritten)' : '') + readinessSuffix + blockerSuffix;
     }
     if (item.status === 'skipped') {
       return 'Skipped: ' + item.fileName + ' -> ' + item.message;

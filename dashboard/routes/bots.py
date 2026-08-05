@@ -1130,6 +1130,9 @@ def api_import_bot():
             "ok": True,
             "bot": saved,
             "overwritten": existing is not None,
+            "ready_to_enable": bool(preflight.get("ready_to_enable")),
+            "readiness": preflight.get("readiness") if isinstance(preflight, dict) else None,
+            "preflight": preflight,
             "connection_count": len(bundle.get("connections") if isinstance(bundle.get("connections"), list) else []),
         }
     )
