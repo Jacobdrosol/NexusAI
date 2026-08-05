@@ -7,7 +7,7 @@ from typing import Any
 CHAT_PROFILE_LABELS = {
     "chat": "Chat Only",
     "tutor": "Tutor / Reasoning",
-    "vision": "Vision / Math",
+    "vision": "Vision / STEM",
     "coding": "Coding",
     "automation": "Automation",
 }
@@ -89,6 +89,10 @@ def bot_chat_profile(bot: dict[str, Any]) -> dict[str, Any]:
         add_capability("diagrams")
     if mode in {"vision", "tutor"} or bool(profile.get("math_reasoning", False)):
         add_capability("math_reasoning")
+    if mode in {"vision", "tutor"} or bool(profile.get("physics_reasoning", False)):
+        add_capability("physics_reasoning")
+    if mode in {"vision", "tutor"} or bool(profile.get("engineering_reasoning", False)):
+        add_capability("engineering_reasoning")
     if mode == "tutor" or bool(profile.get("step_by_step_reasoning", False)):
         add_capability("step_by_step_reasoning")
     if bool(tool_access.get("repo_search", False)):

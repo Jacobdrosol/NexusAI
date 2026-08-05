@@ -98,7 +98,7 @@ def test_bot_chat_profile_preserves_explicit_capabilities_without_duplicates():
     assert "step_by_step_reasoning" in profile["capabilities"]
 
 
-def test_bot_chat_profile_adds_math_reasoning_to_vision_profiles():
+def test_bot_chat_profile_adds_stem_reasoning_to_vision_profiles():
     profile = bot_chat_profile(
         {
             "id": "vision-stem-helper",
@@ -109,9 +109,12 @@ def test_bot_chat_profile_adds_math_reasoning_to_vision_profiles():
     )
 
     assert profile["mode"] == "vision"
+    assert profile["label"] == "Vision / STEM"
     assert "image_understanding" in profile["capabilities"]
     assert "diagrams" in profile["capabilities"]
     assert "math_reasoning" in profile["capabilities"]
+    assert "physics_reasoning" in profile["capabilities"]
+    assert "engineering_reasoning" in profile["capabilities"]
 
 
 def test_bot_chat_profile_labels_project_manager_and_pipeline_use():
