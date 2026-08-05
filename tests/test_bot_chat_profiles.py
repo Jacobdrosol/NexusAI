@@ -41,3 +41,41 @@ def test_with_bot_chat_profiles_preserves_bot_fields_and_adds_profile():
     assert rows[0]["id"] == "personal-vision-math-tutor"
     assert rows[0]["chat_profile"]["label"] == "STEM Vision Tutor"
     assert "image_understanding" in rows[0]["chat_profile"]["capabilities"]
+
+
+def test_bot_chat_profile_preserves_explicit_capabilities_without_duplicates():
+    profile = bot_chat_profile(
+        {
+            "id": "research-tutor",
+            "name": "Research Tutor",
+            "role": "tutor",
+            "routing_rules": {
+                "chat_profile": {
+                    "mode": "tutor",
+                    "capabilities": ["physics_reasoning", "engineering_reasoning", "math_reasoning"],
+                }
+            },
+        }
+    )
+
+    assert profile["mode"] == "tutor"
+    assert profile["capabilities"].count("math_reasoning") == 1
+    assert "physics_reasoning" in profile["capabilities"]
+    assert "engineering_reasoning" in profile["capabilities"]
+    assert "step_by_step_reasoning" in profile["capabilities"]
+
+
+def test_bot_chat_profile_adds_math_reasoning_to_vision_profiles():
+    profile = bot_chat_profile(
+        {
+            "id": "vision-stem-helper",
+            "name": "Vision STEM Helper",
+            "role": "assistant",
+            "backends": [{"capabilities": ["vision"]}],
+        }
+    )
+
+    assert profile["mode"] == "vision"
+    assert "image_understanding" in profile["capabilities"]
+    assert "diagrams" in profile["capabilities"]
+    assert "math_reasoning" in profile["capabilities"]

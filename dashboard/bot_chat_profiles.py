@@ -66,20 +66,31 @@ def bot_chat_profile(bot: dict[str, Any]) -> dict[str, Any]:
         else:
             mode = "chat"
     capabilities: list[str] = []
+    def add_capability(label: str) -> None:
+        safe_label = str(label or "").strip()
+        if safe_label and safe_label not in capabilities:
+            capabilities.append(safe_label)
+
+    for capability in profile.get("capabilities", []) if isinstance(profile.get("capabilities"), list) else []:
+        add_capability(str(capability or ""))
     if bool(profile.get("attachments", True)):
-        capabilities.append("attachments")
+        add_capability("attachments")
     if mode in {"vision", "tutor"} or bool(profile.get("image_understanding", False)):
-        capabilities.append("image_understanding")
+        add_capability("image_understanding")
     if mode in {"vision", "tutor"} or bool(profile.get("diagrams", False)):
-        capabilities.append("diagrams")
+        add_capability("diagrams")
+    if mode in {"vision", "tutor"} or bool(profile.get("math_reasoning", False)):
+        add_capability("math_reasoning")
+    if mode == "tutor" or bool(profile.get("step_by_step_reasoning", False)):
+        add_capability("step_by_step_reasoning")
     if bool(tool_access.get("repo_search", False)):
-        capabilities.append("repo_search")
+        add_capability("repo_search")
     if bool(tool_access.get("filesystem", False)):
-        capabilities.append("filesystem")
+        add_capability("filesystem")
     if bool(policy.get("inline_coding_default", False)):
-        capabilities.append("inline_coding_default")
+        add_capability("inline_coding_default")
     if str(policy.get("repo_output_mode") or "").strip().lower() == "allow":
-        capabilities.append("repo_output")
+        add_capability("repo_output")
     tool_labels: list[str] = []
     if bool(tool_access.get("filesystem", False)):
         tool_labels.append("filesystem")
