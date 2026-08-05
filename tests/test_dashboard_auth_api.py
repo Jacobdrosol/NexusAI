@@ -1,4 +1,5 @@
 import bcrypt
+import json
 
 
 def _seed_user():
@@ -71,3 +72,27 @@ def test_dashboard_mobile_bootstrap_and_authenticated_csrf(dashboard_client, mon
     csrf = dashboard_client.get("/api/auth/csrf")
     assert csrf.status_code == 200
     assert csrf.get_json()["csrf_token"]
+
+
+def test_dashboard_mobile_bootstrap_reads_published_manifest(dashboard_client, monkeypatch, tmp_path):
+    manifest = tmp_path / "mobile-release.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "version_code": 12,
+                "minimum_version_code": 5,
+                "release_url": "https://chat.example.com/releases/nexusai.apk",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("NEXUSAI_MOBILE_RELEASE_MANIFEST", str(manifest))
+
+    bootstrap = dashboard_client.get("/api/mobile/bootstrap")
+
+    assert bootstrap.status_code == 200
+    assert bootstrap.get_json()["android"] == {
+        "minimum_version_code": 5,
+        "latest_version_code": 12,
+        "release_url": "https://chat.example.com/releases/nexusai.apk",
+    }

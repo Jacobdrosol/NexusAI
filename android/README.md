@@ -15,27 +15,17 @@ File uploads, streamed tokens, chat settings, work monitoring, notifications, an
 
 ## Updating Without Reinstalling
 
-Publish each release APK from an HTTPS URL controlled by the self-hosted instance, then set these dashboard environment variables before deploying the dashboard:
+The deployment workflow publishes the signed APK to the self-hosted instance's `/releases/nexusai.apk` endpoint and writes `data/mobile-release.json`. The dashboard exposes that manifest through `/api/mobile/bootstrap`; no release values need to be manually maintained in `.env`.
 
-```env
-NEXUSAI_MOBILE_ANDROID_MIN_VERSION_CODE=1
-NEXUSAI_MOBILE_ANDROID_LATEST_VERSION_CODE=2
-NEXUSAI_MOBILE_ANDROID_RELEASE_URL=https://chat.example.com/releases/nexusai-android.apk
-```
+Increment `versionCode` in `android/app/build.gradle.kts` for each mobile release, commit it, and run the normal NexusAI deployment. The deployment script compares the version to the manifest, builds only when a newer version is needed, replaces the hosted APK, and updates the manifest. The app checks after launch/session restoration and after sign-in.
 
-The app compares these version codes with its installed version. When an update is available, it downloads the configured APK and opens Android's standard installer. Android replaces the existing NexusAI package in place only when the APK uses the same application ID and signing key, preserving the configured instance and encrypted local session. The user must approve installation; Android does not allow an ordinary app to silently replace itself.
+When an update is available, the app downloads it and opens Android's standard installer. Android replaces the existing NexusAI package in place only when the APK uses the same application ID and signing key, preserving the configured instance and encrypted local session. The user must approve installation; an ordinary Android app cannot silently replace itself.
 
-Keep the APK URL on HTTPS and retain the same release signing key. A mismatched signature is rejected by Android rather than replacing the app.
+Keep the APK endpoint on HTTPS and retain the same release signing key. A mismatched signature is rejected by Android rather than replacing the app.
 
 ## Self-Hosted Release Publishing
 
-The persistent signing material is intentionally stored outside the repository at `%USERPROFILE%\.nexusai\android-release`. Publish without GitHub Actions:
-
-```powershell
-.\scripts\publish-android-release.ps1 -ReleaseTarget 'jacob@your-server:/srv/nexusai/releases/nexusai.apk'
-```
-
-Point `NEXUSAI_MOBILE_ANDROID_RELEASE_URL` at that HTTPS-served file and increase `NEXUSAI_MOBILE_ANDROID_LATEST_VERSION_CODE` for every published build. The app checks after sign-in and on launch, downloads an available update automatically, and asks Android for the one-time NexusAI installer permission if needed.
+The release signing material is stored outside the repository. On a self-hosted instance, place it at `data/android-signing/` and configure the secret values in `data/android-signing/release-signing.env`. The deployment publisher mounts this directory read-only into its Android build container. No GitHub Actions runner is required.
 
 ## Build
 

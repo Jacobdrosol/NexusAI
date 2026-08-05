@@ -58,12 +58,13 @@ Worker execution, repository actions, deployment controls, and operational dashb
 - Discovery complete: NexusAI has no existing Android client. Dashboard authentication is session-cookie based through `/api/auth/login`, and chat/work APIs already provide the initial read/write surface.
 - Android project scaffold complete in `android/`, including the Gradle wrapper, native Kotlin/Compose shell, HTTPS-only instance onboarding, encrypted instance/session storage, cookie-backed dashboard login, and launch-time session restoration.
 - Dashboard mobile contract added: `/api/mobile/bootstrap` returns versioned, public Android update metadata, and authenticated `/api/auth/csrf` issues a session-bound token for mobile mutations without exempting chat APIs from CSRF protections.
-- Android update delivery added: the client checks the instance contract after session restoration and uses Android's package installer to apply a user-approved replacement APK. Same package ID and signing key preserve local app data across updates.
+- Android update delivery added: the client checks the instance contract after session restoration and uses Android's package installer to apply a user-approved replacement APK. Same package ID and signing key preserve local app data across updates. Deployments publish a versioned signed APK to the instance's own `/releases/nexusai.apk` endpoint and write `data/mobile-release.json`; the dashboard reads that manifest for the public bootstrap contract.
 - First chat UI complete: project and unscoped scope picker, active conversation list, new scoped chat creation, message-history reader, refresh, and normal text composer. Native mutations use a session-bound CSRF token rather than weakening the dashboard's browser protections.
 - In progress: mobile chat configuration bootstrap and conversation lifecycle client methods. These provide the native settings and archive/delete work without exposing worker controls.
-- Verification: `ANDROID_HOME=%LOCALAPPDATA%\\Android\\Sdk .\\gradlew.bat :app:assembleDebug` completed successfully. The debug APK is at `android/app/build/outputs/apk/debug/app-debug.apk`.
+- Verification: dashboard auth/mobile-contract tests pass, including manifest-backed release metadata. The signed release build has completed previously with the persistent signing key. The current workstation shell does not have `ANDROID_HOME` or Docker Desktop available, so the final containerized deployment build must be verified on the server.
 
 ## Risks and Blockers
 
 - Compact work monitoring, attachments, streamed responses, chat settings, and notifications remain after the first chat release.
 - Push notifications, offline queues, file uploads, and mutation controls are intentionally deferred until the read/send client is proven.
+- The first debug-to-release cutover requires one uninstall/install because Android will not replace a debug-signed package with the persistent release-signed package. Subsequent release-signed updates preserve application data and install in place after Android's standard confirmation.

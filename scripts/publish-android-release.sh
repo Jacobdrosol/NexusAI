@@ -11,11 +11,14 @@ if [ -n "$CURRENT" ] && [ "$VERSION_CODE" -le "$CURRENT" ]; then echo "[android]
 
 SIGNING_ENV="${NEXUSAI_ANDROID_SIGNING_ENV:-$RUNTIME_DATA_DIR/android-signing/release-signing.env}"
 . "$SIGNING_ENV"
-export NEXUSAI_ANDROID_STORE_FILE NEXUSAI_ANDROID_STORE_PASSWORD NEXUSAI_ANDROID_KEY_ALIAS NEXUSAI_ANDROID_KEY_PASSWORD
+SIGNING_DIR="$(dirname "$NEXUSAI_ANDROID_STORE_FILE")"
+SIGNING_STORE_NAME="$(basename "$NEXUSAI_ANDROID_STORE_FILE")"
+[ -f "$NEXUSAI_ANDROID_STORE_FILE" ] || { echo "[android] signing store not found: $NEXUSAI_ANDROID_STORE_FILE"; exit 2; }
 ANDROID_BUILD_IMAGE="${NEXUSAI_ANDROID_BUILD_IMAGE:-ghcr.io/cirruslabs/android-sdk:36}"
 docker run --rm --user "$(id -u):$(id -g)" \
   -v "$(pwd):/workspace" -w /workspace/android \
-  -e NEXUSAI_ANDROID_STORE_FILE -e NEXUSAI_ANDROID_STORE_PASSWORD \
+  -v "$SIGNING_DIR:/signing:ro" \
+  -e "NEXUSAI_ANDROID_STORE_FILE=/signing/$SIGNING_STORE_NAME" -e NEXUSAI_ANDROID_STORE_PASSWORD \
   -e NEXUSAI_ANDROID_KEY_ALIAS -e NEXUSAI_ANDROID_KEY_PASSWORD \
   "$ANDROID_BUILD_IMAGE" ./gradlew :app:assembleRelease
 mkdir -p "$RELEASE_DIR"
