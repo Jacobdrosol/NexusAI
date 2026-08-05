@@ -2745,6 +2745,15 @@ def test_bot_detail_page_renders_chat_profile_controls(dashboard_client):
                     }
                 ],
                 "routing_rules": {
+                    "launch_profile": {
+                        "enabled": True,
+                        "label": "Run Coding Check",
+                        "payload": {"instruction": "check repo", "repo": "nexusai"},
+                        "project_id": "nexusai",
+                        "priority": 2,
+                        "show_on_overview": True,
+                        "show_on_tasks": False,
+                    },
                     "chat_profile": {
                         "mode": "coding",
                         "label": "Coding",
@@ -2842,6 +2851,11 @@ def test_bot_detail_page_renders_chat_profile_controls(dashboard_client):
     assert b"Recommended action:" in resp.data
     assert b"continue" in resp.data
     assert b"No blocking tooling readiness issue is currently reported for this bot." in resp.data
+    assert b"Launch gate:" in resp.data
+    assert b"Run Coding Check" in resp.data
+    assert b"Project: nexusai" in resp.data
+    assert b"Priority: 2" in resp.data
+    assert b"Payload keys: instruction, repo" in resp.data
     assert b"scheduled" in resp.data
     assert b"ready" in resp.data
     assert b"1 active / 0 paused" in resp.data
@@ -2988,6 +3002,10 @@ def test_bot_detail_page_redacts_raw_backend_credential_refs(dashboard_client):
 
     assert resp.status_code == 200
     assert b"Raw Secret Bot" in resp.data
+    assert b"Launch gate:" in resp.data
+    assert b"Queue Saved Launch" in resp.data
+    assert b'id="queue-saved-launch-btn"' in resp.data
+    assert b"disabled" in resp.data
     assert b"[redacted raw credential]" in resp.data
     assert b"Replace with a vault key reference before saving." in resp.data
     assert b"sk-live-secret" not in resp.data

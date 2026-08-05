@@ -759,11 +759,41 @@
   <div class="page-header" style="margin-bottom:0.75rem;">
     <h2 class="panel-title">Saved Launch Profile</h2>
     <div>
-      <button class="btn" onclick="queueSavedLaunch()">Queue Saved Launch</button>
+      <button
+        class="btn"
+        id="queue-saved-launch-btn"
+        onclick="queueSavedLaunch()"
+        {% if tooling.state == 'blocked' %}disabled title="{{ (tooling_action.detail or 'Resolve tooling readiness before queueing this saved launch.')|e }}"{% endif %}
+      >Queue Saved Launch</button>
       <button class="btn btn-primary" onclick="saveLaunchProfile()">Save Launch Profile</button>
     </div>
   </div>
   <p class="mini-note" style="margin-bottom:0.75rem;">Store one reusable launch payload here, then queue this bot directly from Overview or Tasks without filling the contract form every time.</p>
+  {% set saved_launch = bot.launch_profile if bot.launch_profile else (bot.routing_rules.launch_profile if bot.routing_rules and bot.routing_rules.launch_profile else {}) %}
+  {% set saved_launch_payload = saved_launch.payload if saved_launch and saved_launch.payload else {} %}
+  <div class="state-info" style="margin-bottom:0.75rem;">
+    <div>
+      Launch gate:
+      <span class="badge badge-{{ tooling.state or 'unknown' }}">{{ tooling.state or 'unknown' }}</span>
+      <span class="badge {% if tooling_action.level == 'critical' %}badge-failed{% elif tooling_action.level == 'warning' %}badge-yellow{% elif tooling_action.level == 'ready' %}badge-completed{% else %}badge-queued{% endif %}">
+        {{ tooling_action.label or 'inspect bot' }}
+      </span>
+      {{ tooling_action.detail or 'No blocking tooling readiness issue is currently reported for this bot.' }}
+    </div>
+    <div class="metrics" style="margin-top:0.35rem;">
+      {% if saved_launch %}
+      {{ 'Enabled' if saved_launch.enabled is not sameas false else 'Disabled' }} ·
+      {{ 'pipeline' if saved_launch.is_pipeline else 'single task' }} ·
+      {{ 'Overview' if saved_launch.show_on_overview is not sameas false else 'hidden from Overview' }} ·
+      {{ 'Tasks' if saved_launch.show_on_tasks is not sameas false else 'hidden from Tasks' }} ·
+      Project: {{ saved_launch.project_id or 'unscoped' }} ·
+      Priority: {{ saved_launch.priority if saved_launch.priority is not none else 'default' }} ·
+      Payload keys: {{ saved_launch_payload.keys() | list | join(', ') if saved_launch_payload else 'none' }}
+      {% else %}
+      No saved launch profile is configured yet.
+      {% endif %}
+    </div>
+  </div>
   <div class="form-group">
     <label><input type="checkbox" id="launch-profile-enabled" checked> Enable saved launch profile</label>
   </div>
