@@ -2809,6 +2809,8 @@ def test_chat_page_supports_attachment_picker(dashboard_client):
     assert b'id="chat-composer-status"' in resp.data
     assert b"chatSendInFlight" in resp.data
     assert b"showChatComposerStatus(data.error || 'Stream send failed')" in resp.data
+    assert b"persistChatComposerStatus(data.memory_effective_warning, 'info')" in resp.data
+    assert b"replayPersistedChatComposerStatus()" in resp.data
     assert b"clearAcceptedComposerDraft(form)" in resp.data
     assert b"Response stream finished without a saved assistant message." in resp.data
 

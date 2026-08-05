@@ -1018,6 +1018,37 @@ function showChatComposerStatus(message, kind = 'error') {
   status.hidden = !message;
 }
 
+function persistChatComposerStatus(message, kind = 'info') {
+  try {
+    if (message) {
+      window.sessionStorage.setItem('chatComposerStatusAfterReload', JSON.stringify({message, kind}));
+    } else {
+      window.sessionStorage.removeItem('chatComposerStatusAfterReload');
+    }
+  } catch (err) {
+    return;
+  }
+}
+
+function replayPersistedChatComposerStatus() {
+  let raw = null;
+  try {
+    raw = window.sessionStorage.getItem('chatComposerStatusAfterReload');
+    window.sessionStorage.removeItem('chatComposerStatusAfterReload');
+  } catch (err) {
+    return;
+  }
+  if (!raw) return;
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed?.message) {
+      showChatComposerStatus(parsed.message, parsed.kind === 'error' ? 'error' : 'info');
+    }
+  } catch (err) {
+    return;
+  }
+}
+
 function clearChatComposerStatus() {
   showChatComposerStatus('', 'info');
 }
@@ -2814,6 +2845,12 @@ async function saveConversationMemoryProfile() {
     alert(data.error || 'Failed to update chat memory profile.');
     return;
   }
+  const data = await res.json().catch(() => ({}));
+  if (data.memory_effective_warning) {
+    persistChatComposerStatus(data.memory_effective_warning, 'info');
+  } else {
+    persistChatComposerStatus('Personal memory settings saved.', 'info');
+  }
   window.location.reload();
 }
 
@@ -4141,6 +4178,7 @@ async function loadChatUsagePressureBanner() {
 }
 
 bindConversationActions();
+replayPersistedChatComposerStatus();
 document.getElementById('chat-project-filter')?.addEventListener('change', function() {
   window.location = buildChatUrl({project_id: this.value});
 });
