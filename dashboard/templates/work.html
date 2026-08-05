@@ -163,6 +163,12 @@
       {{ "{:,}".format(usage_totals.tasks_without_usage or 0) }}
     </div>
   </div>
+  <div class="card">
+    <div class="card-label">Chat Usage Gaps</div>
+    <div class="card-value {% if chat_usage_totals.messages_without_usage %}card-yellow{% else %}card-green{% endif %}">
+      {{ "{:,}".format(chat_usage_totals.messages_without_usage or 0) }}
+    </div>
+  </div>
 </div>
 <div class="mini-note" style="margin:-0.25rem 0 1rem;">
   Work snapshot: {{ task_snapshot.merged_rows or 0 }} task summaries loaded

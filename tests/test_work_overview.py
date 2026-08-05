@@ -659,6 +659,7 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"Total pressure" in resp.data
     assert b"Usage Health" in resp.data
     assert b"Chat Usage Health" in resp.data
+    assert b"Chat Usage Gaps" in resp.data
     assert b"Provider/model attribution:" in resp.data
     assert b"worker provider/model attribution is complete" in resp.data
     assert b"Worker model spend:" in resp.data
