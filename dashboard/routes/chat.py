@@ -11,6 +11,7 @@ from flask import Blueprint, Response, jsonify, render_template, request, stream
 from flask_login import current_user, login_required
 
 from dashboard.bot_chat_profiles import bot_chat_profile, bot_chat_tool_access, with_bot_chat_profiles
+from dashboard.bot_tooling_status import build_bot_tooling_status
 from dashboard.cp_client import get_cp_client
 from dashboard.routes._sse_proxy import proxy_upstream_sse_lines
 from dashboard.work_overview import manager_id_for_task, project_id_for_task
@@ -180,6 +181,48 @@ def _with_bot_readiness(bots: Iterable[Any], readiness_payload: Any) -> list[dic
     return enriched
 
 
+def _with_bot_tooling_readiness(
+    bots: Iterable[Any],
+    readiness_payload: Any,
+    *,
+    workers: list[dict[str, Any]] | None = None,
+    worker_probes_payload: dict[str, Any] | None = None,
+    api_keys: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    enriched = _with_bot_readiness(bots, readiness_payload)
+    tooling_status = build_bot_tooling_status(
+        bots=enriched,
+        readiness_payload=readiness_payload if isinstance(readiness_payload, dict) else None,
+        workers=workers or [],
+        worker_probes_payload=worker_probes_payload if isinstance(worker_probes_payload, dict) else None,
+        api_keys=api_keys,
+    )
+    tooling_by_id = {
+        str(row.get("bot_id") or ""): row
+        for row in tooling_status.get("rows", [])
+        if isinstance(row, dict) and str(row.get("bot_id") or "")
+    }
+    for row in enriched:
+        bot_id = str(row.get("id") or "").strip()
+        tooling = tooling_by_id.get(bot_id)
+        if not tooling:
+            continue
+        row["tooling"] = tooling
+        tooling_state = str(tooling.get("state") or "").strip().lower()
+        if tooling_state in {"blocked", "disabled"}:
+            messages = tooling.get("blocking_messages") or tooling.get("disabled_activation_messages") or []
+            detail = str(messages[0] if messages else "").strip()
+            if not detail and tooling.get("recommended_action"):
+                detail = str((tooling.get("recommended_action") or {}).get("detail") or "").strip()
+            row["readiness"] = {
+                "state": tooling_state,
+                "ready": False,
+                "detail": detail or "Bot tooling is not ready.",
+                "failed": max(1, int((row.get("readiness") or {}).get("failed") or 0)),
+            }
+    return enriched
+
+
 def _with_chat_bot_readiness(chat_bots: list[dict[str, Any]], readiness_payload: Any) -> list[dict[str, Any]]:
     return _with_bot_readiness(chat_bots, readiness_payload)
 
@@ -284,10 +327,45 @@ def _bot_readiness_blocker_from_cp(cp: Any, bot_id: str) -> str:
     if not readiness:
         return ""
     state = str(readiness.get("state") or "").strip().lower()
-    if state not in {"blocked", "disabled"}:
+    if state in {"blocked", "disabled"}:
+        detail = str(readiness.get("detail") or "").strip()
+        return f"{safe_bot_id} is {state}: {detail}" if detail else f"{safe_bot_id} is {state}"
+
+    try:
+        bots = cp.list_bots() if hasattr(cp, "list_bots") else []
+    except Exception:
+        bots = []
+    bot = next((row for row in bots if isinstance(row, dict) and str(row.get("id") or "") == safe_bot_id), None)
+    if not bot:
         return ""
-    detail = str(readiness.get("detail") or "").strip()
-    return f"{safe_bot_id} is {state}: {detail}" if detail else f"{safe_bot_id} is {state}"
+    try:
+        workers = cp.list_workers() if hasattr(cp, "list_workers") else []
+    except Exception:
+        workers = []
+    try:
+        worker_probes = cp.list_worker_probes() if hasattr(cp, "list_worker_probes") else None
+    except Exception:
+        worker_probes = None
+    try:
+        api_keys = cp.list_keys() if hasattr(cp, "list_keys") else None
+    except Exception:
+        api_keys = None
+    tooling = build_bot_tooling_status(
+        bots=[bot],
+        readiness_payload=readiness_payload if isinstance(readiness_payload, dict) else None,
+        workers=workers if isinstance(workers, list) else [],
+        worker_probes_payload=worker_probes if isinstance(worker_probes, dict) else None,
+        api_keys=api_keys if isinstance(api_keys, list) else None,
+    )
+    row = (tooling.get("rows") or [{}])[0]
+    tooling_state = str(row.get("state") or "").strip().lower()
+    if tooling_state not in {"blocked", "disabled"}:
+        return ""
+    messages = row.get("blocking_messages") or row.get("disabled_activation_messages") or []
+    detail = str(messages[0] if messages else "").strip()
+    if not detail and isinstance(row.get("recommended_action"), dict):
+        detail = str((row.get("recommended_action") or {}).get("detail") or "").strip()
+    return f"{safe_bot_id} is {tooling_state}: {detail}" if detail else f"{safe_bot_id} is {tooling_state}"
 
 
 def _model_catalog_blocker_from_cp(cp: Any, model_id: str) -> str:
@@ -1421,6 +1499,18 @@ def chat_page() -> str:
             bot_readiness_payload = cp.list_bot_readiness() if hasattr(cp, "list_bot_readiness") else {}
         except Exception:
             bot_readiness_payload = {}
+        try:
+            worker_rows = cp.list_workers() if hasattr(cp, "list_workers") else []
+        except Exception:
+            worker_rows = []
+        try:
+            worker_probes_payload = cp.list_worker_probes() if hasattr(cp, "list_worker_probes") else None
+        except Exception:
+            worker_probes_payload = None
+        try:
+            api_key_rows = cp.list_keys() if hasattr(cp, "list_keys") else None
+        except Exception:
+            api_key_rows = None
 
         try:
             projects = cp.list_projects() or []
@@ -1515,7 +1605,13 @@ def chat_page() -> str:
             vault_items_raw = []
         vault_items = _normalize_vault_item_rows(vault_items_raw)
 
-        bots = _with_bot_readiness(bots, bot_readiness_payload)
+        bots = _with_bot_tooling_readiness(
+            bots,
+            bot_readiness_payload,
+            workers=worker_rows if isinstance(worker_rows, list) else [],
+            worker_probes_payload=worker_probes_payload if isinstance(worker_probes_payload, dict) else None,
+            api_keys=api_key_rows if isinstance(api_key_rows, list) else None,
+        )
         chat_bots = _chat_selectable_bots(bots)
         assignment_bots = _assignment_manager_bots(bots)
 

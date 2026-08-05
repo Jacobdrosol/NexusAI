@@ -1178,6 +1178,24 @@ def test_chat_page_limits_normal_bot_selectors_to_chat_bots(dashboard_client):
                     "assignment_capabilities": None,
                 },
                 {
+                    "id": "personal-missing-key-chat",
+                    "name": "Personal Missing Key Chat",
+                    "role": "assistant",
+                    "backends": [
+                        {
+                            "type": "cloud_api",
+                            "provider": "ollama_cloud",
+                            "model": "gpt-oss:120b",
+                            "api_key_ref": "MISSING_OLLAMA_KEY",
+                        }
+                    ],
+                    "routing_rules": {
+                        "operator_profile": {"autonomy": "manual_chat_only"},
+                        "chat_profile": {"mode": "chat", "label": "Missing Key Chat"},
+                    },
+                    "assignment_capabilities": None,
+                },
+                {
                     "id": "globeiq-live-audit-qc-02-bot",
                     "name": "GlobeIQ Live Audit QC 02",
                     "role": "qc",
@@ -1219,6 +1237,12 @@ def test_chat_page_limits_normal_bot_selectors_to_chat_bots(dashboard_client):
                         ],
                     },
                     {
+                        "bot_id": "personal-missing-key-chat",
+                        "state": "ready",
+                        "ready": True,
+                        "checks": [],
+                    },
+                    {
                         "bot_id": "pm-orchestrator",
                         "state": "blocked",
                         "ready": False,
@@ -1244,6 +1268,15 @@ def test_chat_page_limits_normal_bot_selectors_to_chat_bots(dashboard_client):
         def list_vault_items(self, **kwargs):
             return []
 
+        def list_workers(self):
+            return []
+
+        def list_worker_probes(self):
+            return {"probes": []}
+
+        def list_keys(self):
+            return []
+
     with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
         resp = dashboard_client.get("/chat?conversation_id=c-chat")
 
@@ -1255,6 +1288,8 @@ def test_chat_page_limits_normal_bot_selectors_to_chat_bots(dashboard_client):
     assert b"Personal General Chat - General Chat" in resp.data
     assert "GlobeIQ Live Audit QC 02" not in chat_selector
     assert 'value="personal-blocked-chat"  disabled title="model credential missing"' in chat_selector
+    assert "Personal Missing Key Chat - Missing Key Chat - blocked" in chat_selector
+    assert 'value="personal-missing-key-chat"  disabled title="Missing key-vault credential reference(s): MISSING_OLLAMA_KEY"' in chat_selector
     assert b"PM Orchestrator" in resp.data
     assert b"Select a project manager bot" in resp.data
     assert b"PM Orchestrator (pm) - blocked: PM worker route missing" in resp.data
@@ -1266,6 +1301,8 @@ def test_chat_page_limits_normal_bot_selectors_to_chat_bots(dashboard_client):
     assert b"Personal Blocked Chat - Blocked Chat - blocked" in resp.data
     assert b"Personal Blocked Chat (personal-blocked-chat) - blocked: model credential missing" in resp.data
     assert b'value="personal-blocked-chat" disabled title="model credential missing"' in resp.data
+    assert b"Personal Missing Key Chat (personal-missing-key-chat) - blocked: Missing key-vault credential reference(s): MISSING_OLLAMA_KEY" in resp.data
+    assert b'value="personal-missing-key-chat" disabled title="Missing key-vault credential reference(s): MISSING_OLLAMA_KEY"' in resp.data
     assert b"model credential missing" in resp.data
     assert b"function activeBotReadinessBlocker" in resp.data
     assert b"function chatBotReadinessBlocker" in resp.data
@@ -3835,6 +3872,54 @@ def test_chat_create_conversation_api_blocks_unavailable_default_bot(dashboard_c
     assert resp.status_code == 409
     assert b"Default bot is unavailable" in resp.data
     assert b"model credential missing" in resp.data
+
+
+def test_chat_create_conversation_api_blocks_missing_default_bot_credential_ref(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_bot_readiness(self):
+            return {"readiness": [{"bot_id": "missing-key-chat", "state": "ready", "ready": True, "checks": []}]}
+
+        def list_bots(self):
+            return [
+                {
+                    "id": "missing-key-chat",
+                    "name": "Missing Key Chat",
+                    "role": "assistant",
+                    "backends": [
+                        {
+                            "type": "cloud_api",
+                            "provider": "ollama_cloud",
+                            "model": "gpt-oss:120b",
+                            "api_key_ref": "MISSING_OLLAMA_KEY",
+                        }
+                    ],
+                    "routing_rules": {"operator_profile": {"autonomy": "manual_chat_only"}},
+                }
+            ]
+
+        def list_workers(self):
+            return []
+
+        def list_worker_probes(self):
+            return {"probes": []}
+
+        def list_keys(self):
+            return [{"name": "OTHER_KEY"}]
+
+        def create_conversation(self, body):
+            raise AssertionError("missing default bot credential should not reach control plane create")
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/chat/conversations",
+            json={"title": "Missing Key Default", "default_bot_id": "missing-key-chat"},
+        )
+
+    assert resp.status_code == 409
+    assert b"Default bot is unavailable" in resp.data
+    assert b"Missing key-vault credential reference(s): MISSING_OLLAMA_KEY" in resp.data
 
 
 def test_chat_create_conversation_api_proxies_default_model(dashboard_client):
