@@ -571,6 +571,47 @@ def _quality_gate_recommended_action(status: str) -> dict[str, str]:
     }
 
 
+def _quality_gate_overall_action(status_counts: dict[str, int], *, available: bool, suite_count: int) -> dict[str, str]:
+    if not available:
+        return {
+            "level": "unknown",
+            "label": "quality gates unavailable",
+            "detail": "Quality gate suites could not be loaded; check the control plane before approving dependent work.",
+        }
+    if suite_count <= 0:
+        return {
+            "level": "warning",
+            "label": "create quality gates",
+            "detail": "No quality gate suites are configured; add suites before trusting autonomous output at scale.",
+        }
+    failed = int(status_counts.get("failed") or 0) + int(status_counts.get("error") or 0)
+    active = int(status_counts.get("running") or 0) + int(status_counts.get("queued") or 0)
+    not_run = int(status_counts.get("not_run") or 0)
+    if failed:
+        return {
+            "level": "critical",
+            "label": "review failed gates",
+            "detail": f"{failed} quality gate suite{' is' if failed == 1 else 's are'} failing or errored; hold dependent automation.",
+        }
+    if active:
+        return {
+            "level": "watch",
+            "label": "wait for gate result",
+            "detail": f"{active} quality gate suite{' is' if active == 1 else 's are'} still running or queued.",
+        }
+    if not_run:
+        return {
+            "level": "warning",
+            "label": "run quality gates",
+            "detail": f"{not_run} quality gate suite{' has' if not_run == 1 else 's have'} no latest run.",
+        }
+    return {
+        "level": "ready",
+        "label": "continue monitoring",
+        "detail": "Loaded quality gate suites have passing latest results.",
+    }
+
+
 def _quality_gate_summary(cp: Any, suites_payload: Any, *, limit: int = 5) -> dict[str, Any]:
     suites = suites_payload.get("suites") if isinstance(suites_payload, dict) else []
     suites = [suite for suite in (suites or []) if isinstance(suite, dict)]
@@ -609,11 +650,14 @@ def _quality_gate_summary(cp: Any, suites_payload: Any, *, limit: int = 5) -> di
             }
         )
 
+    suite_count = len(suites)
+    available = isinstance(suites_payload, dict)
     return {
-        "available": isinstance(suites_payload, dict),
-        "suite_count": len(suites),
+        "available": available,
+        "suite_count": suite_count,
         "shown_count": len(rows),
         "status_counts": status_counts,
+        "recommended_action": _quality_gate_overall_action(status_counts, available=available, suite_count=suite_count),
         "rows": rows,
     }
 

@@ -4,7 +4,7 @@ import bcrypt
 from datetime import datetime, timezone
 from unittest.mock import patch
 
-from dashboard.routes.work import _quality_gate_recommended_action
+from dashboard.routes.work import _quality_gate_overall_action, _quality_gate_recommended_action
 from dashboard.work_overview import build_work_overview
 
 
@@ -14,6 +14,15 @@ def test_quality_gate_recommended_action_maps_operator_steps():
     assert _quality_gate_recommended_action("error")["level"] == "critical"
     assert _quality_gate_recommended_action("running")["label"] == "wait for gate result"
     assert _quality_gate_recommended_action("not_run")["label"] == "run quality gates"
+
+
+def test_quality_gate_overall_action_prioritizes_operator_risk():
+    assert _quality_gate_overall_action({"failed": 1}, available=True, suite_count=2)["level"] == "critical"
+    assert _quality_gate_overall_action({"running": 1}, available=True, suite_count=2)["label"] == "wait for gate result"
+    assert _quality_gate_overall_action({"not_run": 1}, available=True, suite_count=2)["label"] == "run quality gates"
+    assert _quality_gate_overall_action({"passed": 2}, available=True, suite_count=2)["level"] == "ready"
+    assert _quality_gate_overall_action({}, available=True, suite_count=0)["label"] == "create quality gates"
+    assert _quality_gate_overall_action({}, available=False, suite_count=0)["level"] == "unknown"
 
 
 def _login_user(dashboard_client, *, email="admin@test.com", role="admin"):
@@ -833,6 +842,8 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert brief_data["quality_gates"]["status_counts"]["failed"] == 1
     assert brief_data["quality_gates"]["rows"][0]["suite_id"] == "suite-globeiq-lessons"
     assert brief_data["quality_gates"]["rows"][0]["recommended_action"]["label"] == "review failed gates"
+    assert brief_data["quality_gates"]["recommended_action"]["level"] == "critical"
+    assert brief_data["quality_gates"]["recommended_action"]["label"] == "review failed gates"
     assert brief_data["usage_brief"]["top_bots"][0]["bot_id"] == "lesson-writer"
     assert brief_data["usage_brief"]["top_project_manager_bots"][0]["project_id"] == "globeiq"
     assert brief_data["usage_brief"]["top_project_manager_bots"][0]["manager_id"] == "globeiq-pm"
