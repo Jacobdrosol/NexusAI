@@ -888,6 +888,15 @@ def test_chat_page_renders_project_filter_metadata_on_conversations(dashboard_cl
     assert b'title="Model ollama-cloud/gpt-oss-120b"' in resp.data
     assert b"Bot Personal Research Chat (personal-research-chat)" in resp.data
     assert b"Model ollama_cloud / kimi-k2" in resp.data
+    page_html = resp.data.decode("utf-8")
+    active_row_start = page_html.index('data-project-id="globeiq"')
+    active_row = page_html[active_row_start:page_html.index("</div>", active_row_start)]
+    archived_row_start = page_html.index('data-search-text="archived project chat')
+    archived_row = page_html[archived_row_start:page_html.index("</div>", archived_row_start)]
+    assert "personal general chat (personal-general-chat)" in active_row
+    assert "ollama_cloud / gpt-oss:120b" in active_row
+    assert "personal research chat (personal-research-chat)" in archived_row
+    assert "ollama_cloud / kimi-k2" in archived_row
     assert b'id="chat-usage-pressure-banner"' in resp.data
     assert b"loadChatUsagePressureBanner" in resp.data
     assert b"chatHealthMessage" in resp.data

@@ -298,7 +298,7 @@
         data-filterable="true"
         data-project-id="{{ c.project_id or '' }}"
         data-bridge-project-ids="{{ (c.bridge_project_ids or [])|join(',') }}"
-        data-search-text="{{ [c.title, c.id, c.scope, c.project_id, (c.bridge_project_ids or [])|join(' '), c.default_bot_id, c.default_model_id] | join(' ') | lower }}"
+        data-search-text="{{ [c.title, c.id, c.scope, c.project_id, (c.bridge_project_ids or [])|join(' '), c.default_bot_id, bot_display_labels.get(c.default_bot_id, ''), c.default_model_id, model_display_labels.get(c.default_model_id, '')] | join(' ') | lower }}"
       >
         <a href="{{ url_for('chat.chat_page') }}?conversation_id={{ c.id }}{% if active_project_filter %}&project_id={{ active_project_filter }}{% endif %}" class="chat-conversation-link">
           <div class="chat-conversation-title-row">
@@ -350,7 +350,7 @@
           data-filterable="true"
           data-project-id="{{ c.project_id or '' }}"
           data-bridge-project-ids="{{ (c.bridge_project_ids or [])|join(',') }}"
-          data-search-text="{{ [c.title, c.id, c.scope, c.project_id, (c.bridge_project_ids or [])|join(' '), c.default_bot_id, c.default_model_id] | join(' ') | lower }}"
+          data-search-text="{{ [c.title, c.id, c.scope, c.project_id, (c.bridge_project_ids or [])|join(' '), c.default_bot_id, bot_display_labels.get(c.default_bot_id, ''), c.default_model_id, model_display_labels.get(c.default_model_id, '')] | join(' ') | lower }}"
         >
           <a href="{{ url_for('chat.chat_page') }}?conversation_id={{ c.id }}{% if active_project_filter %}&project_id={{ active_project_filter }}{% endif %}" class="chat-conversation-link">
             <div class="chat-conversation-title-row">
