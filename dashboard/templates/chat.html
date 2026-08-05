@@ -2124,6 +2124,42 @@ async function serverChatEffectiveContextBlocker({useWorkspaceTools, inlineCodin
   return '';
 }
 
+function formatChatGateError(data, fallback) {
+  const payload = data && typeof data === 'object' ? data : {};
+  const base = String(payload.error || fallback || 'Chat send failed').trim();
+  const context = payload.effective_context && typeof payload.effective_context === 'object'
+    ? payload.effective_context
+    : null;
+  if (!context) return base;
+  lastServerEffectiveContext = context;
+  const code = String(payload.code || '').trim();
+  if (code === 'workspace_tools_unavailable') {
+    const tools = context.workspace_tools && typeof context.workspace_tools === 'object' ? context.workspace_tools : {};
+    const reasons = Array.isArray(tools.reasons) ? tools.reasons.filter(Boolean).join(', ') : '';
+    const modes = Array.isArray(tools.modes) ? tools.modes.filter(Boolean).join(', ') : '';
+    const project = String(context.project_id || 'unscoped').trim() || 'unscoped';
+    const detail = [
+      reasons ? `Reasons: ${reasons}` : '',
+      modes ? `Shared modes: ${modes}` : 'Shared modes: none',
+      `Project: ${project}`,
+    ].filter(Boolean).join(' / ');
+    return detail ? `${base} (${detail})` : base;
+  }
+  if (code === 'inline_coding_unavailable') {
+    const coding = context.inline_coding && typeof context.inline_coding === 'object' ? context.inline_coding : {};
+    const blocker = String(coding.blocker || '').trim();
+    return blocker && !base.includes(blocker) ? `${base} (${blocker})` : base;
+  }
+  if (code === 'image_attachments_unavailable') {
+    const model = context.model && typeof context.model === 'object' ? context.model : {};
+    const provider = String(model.provider || '').trim();
+    const modelName = String(model.model || model.id || '').trim();
+    const route = [provider, modelName].filter(Boolean).join(' / ');
+    return route ? `${base} (Effective model: ${route})` : base;
+  }
+  return base;
+}
+
 function renderChatEffectiveContextSummary() {
   const summary = document.getElementById('chat-effective-context-summary');
   if (!summary) return;
@@ -3147,9 +3183,10 @@ async function sendMessage(streamMode) {
             );
           }
         });
-        const error = (data.error || '').toString().trim();
+        const error = formatChatGateError(data, 'Message send failed');
         if (error) {
           showChatComposerStatus(error);
+          renderChatEffectiveContextSummary();
         }
         return;
       }
@@ -3210,7 +3247,8 @@ async function sendMessage(streamMode) {
       const data = await res.json().catch(() => ({}));
       removeTransientMessage(tempUser);
       removeTransientMessage(pending);
-      showChatComposerStatus(data.error || 'Stream send failed');
+      showChatComposerStatus(formatChatGateError(data, 'Stream send failed'));
+      renderChatEffectiveContextSummary();
       setChatComposerBusy(false);
       return;
     }

@@ -3918,13 +3918,16 @@ def test_chat_page_supports_attachment_picker(dashboard_client):
     assert b'Attach Files' in resp.data
     assert b'id="chat-composer-status"' in resp.data
     assert b"chatSendInFlight" in resp.data
-    assert b"showChatComposerStatus(data.error || 'Stream send failed')" in resp.data
+    assert b"showChatComposerStatus(formatChatGateError(data, 'Stream send failed'))" in resp.data
     assert b"persistChatComposerStatus(data.memory_effective_warning, 'info')" in resp.data
     assert b"persistChatComposerStatus(created.memory_effective_warning, 'info')" in resp.data
     assert b"replayPersistedChatComposerStatus()" in resp.data
     assert b"kind === 'image' && isSafeAttachmentPreviewDataUrl(dataUrl)" in resp.data
     assert b"clearAcceptedComposerDraft(form)" in resp.data
     assert b"Response stream finished without a saved assistant message." in resp.data
+    assert b"function formatChatGateError(data, fallback)" in resp.data
+    assert b"workspace_tools_unavailable" in resp.data
+    assert b"Shared modes: none" in resp.data
 
 
 def test_chat_page_formats_saved_attachment_sizes(dashboard_client):
