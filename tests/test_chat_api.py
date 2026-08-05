@@ -64,6 +64,31 @@ async def test_create_conversation_and_post_message(cp_app):
 
 
 @pytest.mark.anyio
+async def test_chat_usage_recovers_provider_model_from_assistant_metadata(cp_app):
+    chat_manager = cp_app.state.chat_manager
+    conversation = await chat_manager.create_conversation("Legacy Metadata Usage")
+    await chat_manager.add_message(
+        conversation_id=conversation.id,
+        role="assistant",
+        content="legacy answer",
+        bot_id="legacy-chat-bot",
+        metadata={
+            "model": {"provider": "ollama_cloud", "model": "legacy-model", "source": "bot_config"},
+            "usage": {"prompt_tokens": 5, "completion_tokens": 6},
+        },
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        usage_resp = await client.get("/v1/chat/usage?hours=24&limit_conversations=5")
+
+    assert usage_resp.status_code == 200
+    usage = usage_resp.json()
+    assert usage["totals"]["total_tokens"] == 11
+    assert usage["by_provider_model"][0]["provider"] == "ollama_cloud"
+    assert usage["by_provider_model"][0]["model"] == "legacy-model"
+
+
+@pytest.mark.anyio
 async def test_chat_default_model_id_is_attached_to_scheduled_task(cp_app):
     cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "assistant reply"})
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:

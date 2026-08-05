@@ -1044,10 +1044,17 @@ class ChatManager:
 
         for row in rows:
             totals["messages"] += 1
+            metadata = _metadata_dict(row["metadata"])
             conversation_id = str(row["conversation_id"] or "unknown").strip() or "unknown"
             bot_id = str(row["bot_id"] or "unknown").strip() or "unknown"
             provider = str(row["provider"] or "unknown").strip().lower() or "unknown"
             model = str(row["model"] or "unknown").strip() or "unknown"
+            if provider == "unknown" or model == "unknown":
+                metadata_model = metadata.get("model") if isinstance(metadata.get("model"), dict) else {}
+                if provider == "unknown":
+                    provider = str(metadata_model.get("provider") or "unknown").strip().lower() or "unknown"
+                if model == "unknown":
+                    model = str(metadata_model.get("model") or "unknown").strip() or "unknown"
             created_at = str(row["created_at"] or "")
             conv_bucket = by_conversation.setdefault(
                 conversation_id,
@@ -1069,7 +1076,6 @@ class ChatManager:
                 if created_at > str(bucket.get("last_message_at") or ""):
                     bucket["last_message_at"] = created_at
 
-            metadata = _metadata_dict(row["metadata"])
             usage = _usage_summary(metadata)
             if not usage:
                 totals["messages_without_usage"] += 1
