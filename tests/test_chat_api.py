@@ -1293,6 +1293,150 @@ async def test_stream_message_rejects_image_when_default_model_is_text_only(cp_a
 
 
 @pytest.mark.anyio
+async def test_stream_message_retrieves_user_scoped_memory_profile(cp_app):
+    captured_payloads = []
+
+    async def _stream(task):
+        captured_payloads.append(task.payload)
+        yield {"event": "backend_selected", "provider": "ollama_cloud", "model": "qwen3.5:397b", "worker_id": None}
+        yield {"event": "final", "output": f"stream reply {len(captured_payloads)}"}
+
+    cp_app.state.scheduler.stream = _stream
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        model_resp = await client.post(
+            "/v1/models",
+            json={
+                "id": "ollama-qwen-memory-stream",
+                "name": "qwen3.5:397b",
+                "provider": "ollama_cloud",
+                "capabilities": ["chat"],
+                "enabled": True,
+            },
+        )
+        assert model_resp.status_code == 200
+        bot_resp = await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-memory-stream",
+                "name": "Memory Stream Bot",
+                "role": "assistant",
+                "memory_profiles_enabled": True,
+                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "qwen3.5:397b"}],
+                "enabled": True,
+            },
+        )
+        assert bot_resp.status_code == 200, bot_resp.text
+        create_resp = await client.post(
+            "/v1/chat/conversations",
+            json={"title": "Memory Stream Chat", "owner_user_id": "user@example.com"},
+        )
+        assert create_resp.status_code == 200
+        conversation_id = create_resp.json()["id"]
+
+        first = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/stream",
+            json={"content": "My preferred name is Jacob.", "bot_id": "bot-memory-stream", "user_id": "user@example.com"},
+        )
+        assert first.status_code == 200
+        assert "event: assistant_message" in first.text
+
+        second = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/stream",
+            json={"content": "What name should you use for me?", "bot_id": "bot-memory-stream", "user_id": "user@example.com"},
+        )
+        assert second.status_code == 200
+
+        messages_resp = await client.get(f"/v1/chat/conversations/{conversation_id}/messages")
+
+    assert any(
+        item["role"] == "system" and "Personal Memory Profile:" in str(item["content"])
+        for item in captured_payloads[-1]
+    )
+    assert "My preferred name is Jacob." in str(captured_payloads[-1][0]["content"])
+    messages = messages_resp.json()
+    assert messages[-1]["metadata"]["memory_profile"]["eligible"] is True
+    assert messages[-1]["metadata"]["memory_profile"]["hit_count"] >= 1
+
+
+@pytest.mark.anyio
+async def test_stream_message_project_memory_gate_blocks_profile_retrieval(cp_app):
+    captured_payloads = []
+
+    async def _stream(task):
+        captured_payloads.append(task.payload)
+        yield {"event": "backend_selected", "provider": "ollama_cloud", "model": "qwen3.5:397b", "worker_id": None}
+        yield {"event": "final", "output": "stream reply"}
+
+    cp_app.state.scheduler.stream = _stream
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        model_resp = await client.post(
+            "/v1/models",
+            json={
+                "id": "ollama-qwen-memory-stream-project",
+                "name": "qwen3.5:397b",
+                "provider": "ollama_cloud",
+                "capabilities": ["chat"],
+                "enabled": True,
+            },
+        )
+        assert model_resp.status_code == 200
+        bot_resp = await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-memory-stream-project",
+                "name": "Project Memory Stream Bot",
+                "role": "assistant",
+                "memory_profiles_enabled": True,
+                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "qwen3.5:397b"}],
+                "enabled": True,
+            },
+        )
+        assert bot_resp.status_code == 200, bot_resp.text
+        seed_resp = await client.post(
+            "/v1/chat/conversations",
+            json={"title": "Seed Stream Memory", "owner_user_id": "user@example.com"},
+        )
+        seed_id = seed_resp.json()["id"]
+        await client.post(
+            f"/v1/chat/conversations/{seed_id}/stream",
+            json={"content": "I prefer concise answers.", "bot_id": "bot-memory-stream-project", "user_id": "user@example.com"},
+        )
+
+        project_resp = await client.post(
+            "/v1/projects",
+            json={"id": "project-memory-stream-off", "name": "Memory Stream Off Project"},
+        )
+        assert project_resp.status_code == 200
+        assert project_resp.json()["memory_profiles_enabled"] is False
+
+        convo_resp = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Project Stream Chat",
+                "scope": "project",
+                "project_id": "project-memory-stream-off",
+                "owner_user_id": "user@example.com",
+            },
+        )
+        project_conversation_id = convo_resp.json()["id"]
+        gated = await client.post(
+            f"/v1/chat/conversations/{project_conversation_id}/stream",
+            json={"content": "Use my preferences.", "bot_id": "bot-memory-stream-project", "user_id": "user@example.com"},
+        )
+        assert gated.status_code == 200
+
+        messages_resp = await client.get(f"/v1/chat/conversations/{project_conversation_id}/messages")
+
+    assert not any(
+        item["role"] == "system" and "Personal Memory Profile:" in str(item["content"])
+        for item in captured_payloads[-1]
+    )
+    messages = messages_resp.json()
+    assert messages[-1]["metadata"]["memory_profile"]["eligible"] is False
+    assert messages[-1]["metadata"]["memory_profile"]["gates"]["project_enabled"] is False
+
+
+@pytest.mark.anyio
 async def test_stream_default_model_id_is_attached_to_scheduled_task(cp_app):
     captured_tasks = []
 
