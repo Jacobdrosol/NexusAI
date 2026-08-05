@@ -1889,14 +1889,18 @@ function renderChatEffectiveContextSummary() {
   const useLabel = String(serverProfile?.use_label || serverProfile?.label || '').trim();
   const connectionActions = Array.isArray(serverBot?.connection_actions) ? serverBot.connection_actions.length : 0;
   const ownerApprovalActions = Array.isArray(serverBot?.owner_approval_actions) ? serverBot.owner_approval_actions.length : 0;
+  const browserActions = Array.isArray(serverBot?.browser_actions) ? serverBot.browser_actions.length : 0;
+  const browserOwnerApprovalActions = Array.isArray(serverBot?.browser_owner_approval_actions) ? serverBot.browser_owner_approval_actions.length : 0;
   const httpConnectionBackends = Number(serverBot?.http_connection_backend_count || 0);
   const botContextParts = [];
   if (useLabel) botContextParts.push(useLabel);
   if (connectionActions) botContextParts.push(`${connectionActions} connection action${connectionActions === 1 ? '' : 's'}`);
+  if (browserActions) botContextParts.push(`${browserActions} browser action${browserActions === 1 ? '' : 's'}`);
   if (ownerApprovalActions) botContextParts.push(`${ownerApprovalActions} owner approval${ownerApprovalActions === 1 ? '' : 's'}`);
+  if (browserOwnerApprovalActions) botContextParts.push(`${browserOwnerApprovalActions} browser owner approval${browserOwnerApprovalActions === 1 ? '' : 's'}`);
   if (httpConnectionBackends) botContextParts.push(`${httpConnectionBackends} HTTP connection backend${httpConnectionBackends === 1 ? '' : 's'}`);
   const botContextText = botContextParts.length ? `bot context: ${botContextParts.join('; ')}` : 'bot context: standard chat';
-  const botContextClass = ownerApprovalActions || connectionActions ? 'attention' : 'ready';
+  const botContextClass = ownerApprovalActions || connectionActions || browserActions || browserOwnerApprovalActions ? 'attention' : 'ready';
   const routeDraft = routeDefaultDraftState();
   const routeClass = routeDraft.changed ? 'attention' : 'ready';
   summary.innerHTML = `

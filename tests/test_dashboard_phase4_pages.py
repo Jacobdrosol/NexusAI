@@ -1169,7 +1169,9 @@ def test_chat_page_embeds_effective_context_gate_inputs(dashboard_client):
     assert b"effective model:" in resp.data
     assert b"bot context:" in resp.data
     assert b"connection action" in resp.data
+    assert b"browser action" in resp.data
     assert b"owner approval" in resp.data
+    assert b"browser owner approval" in resp.data
     assert b"HTTP connection backend" in resp.data
     assert b"function routeDefaultDraftState" in resp.data
     assert b"route draft unsaved:" in resp.data
@@ -1220,6 +1222,8 @@ def test_chat_effective_context_api_reports_active_memory_tools_and_coding(dashb
                         "repo_output_mode": "allow",
                         "connection_action_allowlist": ["globeiq-agent-api.updateLesson"],
                         "connection_action_owner_approval_required": ["globeiq-agent-api.updateLesson"],
+                        "browser_action_allowlist": ["lesson_preview.read"],
+                        "browser_action_owner_approval_required": ["lesson_preview.read"],
                     },
                 }
             ]
@@ -1256,6 +1260,8 @@ def test_chat_effective_context_api_reports_active_memory_tools_and_coding(dashb
     assert payload["bot"]["chat_profile"]["use_label"] == "Tool-enabled chat"
     assert payload["bot"]["connection_actions"] == ["globeiq-agent-api.updateLesson"]
     assert payload["bot"]["owner_approval_actions"] == ["globeiq-agent-api.updateLesson"]
+    assert payload["bot"]["browser_actions"] == ["lesson_preview.read"]
+    assert payload["bot"]["browser_owner_approval_actions"] == ["lesson_preview.read"]
     assert payload["bot"]["http_connection_backend_count"] == 1
     assert payload["route"]["default_model_id"] == "ollama-cloud-gpt-oss-120b"
     assert payload["model"]["source"] == "conversation_default_model"

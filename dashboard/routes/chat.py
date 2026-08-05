@@ -721,6 +721,8 @@ def _effective_chat_context_from_cp(
             "chat_profile": normalized_profile,
             "connection_actions": _policy_string_list(bot or {}, "connection_action_allowlist"),
             "owner_approval_actions": _policy_string_list(bot or {}, "connection_action_owner_approval_required"),
+            "browser_actions": _policy_string_list(bot or {}, "browser_action_allowlist"),
+            "browser_owner_approval_actions": _policy_string_list(bot or {}, "browser_action_owner_approval_required"),
             "http_connection_backend_count": _http_connection_backend_count(bot or {}),
         },
         "route": {
