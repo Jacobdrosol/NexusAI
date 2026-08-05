@@ -6,7 +6,7 @@ import httpx
 
 import pytest
 
-from shared.models import BackendConfig
+from shared.models import BackendConfig, CatalogModel, Task, TaskMetadata
 
 
 @pytest.mark.anyio
@@ -445,6 +445,66 @@ def test_scheduler_retry_attempt_increases_max_tokens_and_num_width(monkeypatch)
     assert effective.params.max_tokens == 1536
     assert effective.params.num_width == 192
     assert effective.params.temperature == 0.2
+
+
+@pytest.mark.anyio
+async def test_scheduler_preferred_model_uses_enabled_catalog_model():
+    from control_plane.scheduler.scheduler import _backend_with_preferred_model
+
+    class _Registry:
+        async def get(self, model_id):
+            assert model_id == "ollama-cloud-gpt-oss-120b"
+            return CatalogModel(
+                id=model_id,
+                name="gpt-oss:120b",
+                provider="ollama_cloud",
+                enabled=True,
+            )
+
+    backend = BackendConfig(type="cloud_api", provider="ollama_cloud", model="qwen3.5:397b")
+    task = Task(
+        id="task-preferred-model",
+        bot_id="bot-1",
+        payload={"instruction": "chat"},
+        metadata=TaskMetadata(source="chat", preferred_model_id="ollama-cloud-gpt-oss-120b"),
+        status="queued",
+        created_at="2026-08-05T00:00:00+00:00",
+        updated_at="2026-08-05T00:00:00+00:00",
+    )
+
+    effective = await _backend_with_preferred_model(backend, task, _Registry())
+
+    assert effective.provider == "ollama_cloud"
+    assert effective.model == "gpt-oss:120b"
+
+
+@pytest.mark.anyio
+async def test_scheduler_preferred_model_rejects_provider_mismatch():
+    from control_plane.scheduler.scheduler import _backend_with_preferred_model
+    from shared.exceptions import BackendError
+
+    class _Registry:
+        async def get(self, _model_id):
+            return CatalogModel(
+                id="openai-gpt-5",
+                name="gpt-5",
+                provider="openai",
+                enabled=True,
+            )
+
+    backend = BackendConfig(type="cloud_api", provider="ollama_cloud", model="qwen3.5:397b")
+    task = Task(
+        id="task-preferred-provider-mismatch",
+        bot_id="bot-1",
+        payload={"instruction": "chat"},
+        metadata=TaskMetadata(source="chat", preferred_model_id="openai-gpt-5"),
+        status="queued",
+        created_at="2026-08-05T00:00:00+00:00",
+        updated_at="2026-08-05T00:00:00+00:00",
+    )
+
+    with pytest.raises(BackendError, match="does not match backend provider"):
+        await _backend_with_preferred_model(backend, task, _Registry())
 
 
 def test_scheduler_retry_attempt_falls_back_to_num_ctx_when_num_width_missing(monkeypatch):

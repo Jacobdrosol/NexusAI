@@ -17,6 +17,7 @@ TaskManager._run_task(task)
         ├─ bot_registry.get(task.bot_id)          # Load bot config
         ├─ _apply_input_transform(bot, payload)    # Optional payload rewrite
         ├─ iterate bot.backends (in order):
+        │       ├─ _backend_with_preferred_model() # Apply chat/request model hint
         │       ├─ _backend_with_retry_params()    # Escalate params on retry
         │       ├─ _prepare_payload_for_backend()  # Inject system prompt, reduce context
         │       └─ _dispatch_backend()             # Route to worker or cloud API
@@ -28,6 +29,8 @@ TaskManager._run_task(task)
 ## Backend Selection
 
 Backends are stored in `bot.backends` (a list). They are evaluated in order; the first viable backend wins. On failure the scheduler logs a warning and tries the next backend. If all fail, `NoViableBackendError` is raised with a combined failure message.
+
+When `task.metadata.preferred_model_id` is present, `_backend_with_preferred_model` resolves it through the model catalog and substitutes the backend model before dispatch. The override is limited to LLM backends and must match the backend provider; a provider mismatch raises `BackendError` so the scheduler can try the next configured backend instead of sending credentials to the wrong provider.
 
 | `backend.type` | Routing |
 |---|---|

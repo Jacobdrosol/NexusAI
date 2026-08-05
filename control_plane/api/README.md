@@ -90,6 +90,8 @@ All routes are prefixed with `/v1/`. Auth: set `X-Nexus-API-Key: <token>` header
 | `PUT` | `/v1/chat/conversations/{id}/tool-access` | Update tool access flags | `enabled`, `filesystem`, `repo_search` | 404 |
 | `GET` | `/v1/chat/conversations/{id}/memory` | Semantic search in conv memory | `query`, `limit` | 404 |
 
+`default_model_id` is copied into chat task metadata as `preferred_model_id` for normal and streaming message dispatch. The scheduler resolves catalog IDs against the model catalog and applies the selected model only to compatible LLM backends.
+
 ---
 
 ## Vault — `/v1/vault`

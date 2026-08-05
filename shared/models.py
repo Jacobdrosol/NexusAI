@@ -235,6 +235,7 @@ class TaskMetadata(BaseModel):
     source: Optional[str] = None
     priority: Optional[int] = None
     conversation_id: Optional[str] = None
+    preferred_model_id: Optional[str] = None
     orchestration_id: Optional[str] = None
     step_id: Optional[str] = None
     parent_task_id: Optional[str] = None

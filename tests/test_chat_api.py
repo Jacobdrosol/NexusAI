@@ -49,6 +49,41 @@ async def test_create_conversation_and_post_message(cp_app):
 
 
 @pytest.mark.anyio
+async def test_chat_default_model_id_is_attached_to_scheduled_task(cp_app):
+    cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "assistant reply"})
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        create_resp = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Chat Model Default",
+                "default_model_id": "ollama-cloud-gpt-oss-120b",
+            },
+        )
+        assert create_resp.status_code == 200
+        conversation_id = create_resp.json()["id"]
+
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-chat-model",
+                "name": "Chat Model Bot",
+                "role": "assistant",
+                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "qwen3.5:397b"}],
+                "enabled": True,
+            },
+        )
+
+        post_resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/messages",
+            json={"content": "hello", "bot_id": "bot-chat-model"},
+        )
+        assert post_resp.status_code == 200
+        task_arg = cp_app.state.scheduler.schedule.await_args[0][0]
+        assert task_arg.metadata is not None
+        assert task_arg.metadata.preferred_model_id == "ollama-cloud-gpt-oss-120b"
+
+
+@pytest.mark.anyio
 async def test_user_scoped_memory_profile_retrieved_on_later_eligible_turn(cp_app):
     captured_payloads = []
 
@@ -652,6 +687,48 @@ async def test_stream_message_endpoint(cp_app):
         assert messages[-1]["metadata"]["model"]["model"] == "llama3.1:8b"
         assert messages[-1]["metadata"]["model"]["worker_id"] == "w1"
         assert messages[-1]["metadata"]["model"]["source"] == "scheduler"
+
+
+@pytest.mark.anyio
+async def test_stream_default_model_id_is_attached_to_scheduled_task(cp_app):
+    captured_tasks = []
+
+    async def _stream(task):
+        captured_tasks.append(task)
+        yield {"event": "backend_selected", "provider": "ollama_cloud", "model": "gpt-oss:120b", "worker_id": None}
+        yield {"event": "final", "output": "stream reply"}
+
+    cp_app.state.scheduler.stream = _stream
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        create_resp = await client.post(
+            "/v1/chat/conversations",
+            json={
+                "title": "Chat Stream Model Default",
+                "default_model_id": "ollama-cloud-gpt-oss-120b",
+            },
+        )
+        assert create_resp.status_code == 200
+        conversation_id = create_resp.json()["id"]
+
+        await client.post(
+            "/v1/bots",
+            json={
+                "id": "bot-stream-model",
+                "name": "Stream Model Bot",
+                "role": "assistant",
+                "backends": [{"type": "cloud_api", "provider": "ollama_cloud", "model": "qwen3.5:397b"}],
+                "enabled": True,
+            },
+        )
+
+        stream_resp = await client.post(
+            f"/v1/chat/conversations/{conversation_id}/stream",
+            json={"content": "hello", "bot_id": "bot-stream-model"},
+        )
+        assert stream_resp.status_code == 200
+        assert len(captured_tasks) == 1
+        assert captured_tasks[0].metadata is not None
+        assert captured_tasks[0].metadata.preferred_model_id == "ollama-cloud-gpt-oss-120b"
 
 
 @pytest.mark.anyio

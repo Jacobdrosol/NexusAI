@@ -413,6 +413,45 @@ def _backend_with_retry_params(backend: BackendConfig, task: Task | None = None)
     return backend.model_copy(update={"params": updated_params})
 
 
+def _task_preferred_model_id(task: Task | None = None) -> str:
+    if task is None or task.metadata is None:
+        return ""
+    return str(getattr(task.metadata, "preferred_model_id", "") or "").strip()
+
+
+async def _backend_with_preferred_model(
+    backend: BackendConfig,
+    task: Task | None = None,
+    model_registry: Any = None,
+) -> BackendConfig:
+    preferred_model_id = _task_preferred_model_id(task)
+    if not preferred_model_id:
+        return backend
+    if backend.type not in {"cloud_api", "local_llm", "remote_llm"}:
+        return backend
+
+    catalog_model = None
+    if model_registry is not None:
+        try:
+            catalog_model = await model_registry.get(preferred_model_id)
+        except Exception:
+            catalog_model = None
+
+    if catalog_model is not None:
+        if getattr(catalog_model, "enabled", True) is False:
+            raise BackendError(f"Preferred model is disabled: {preferred_model_id}")
+        catalog_provider = str(getattr(catalog_model, "provider", "") or "").strip()
+        if catalog_provider and catalog_provider != backend.provider:
+            raise BackendError(
+                f"Preferred model provider '{catalog_provider}' does not match backend provider '{backend.provider}'"
+            )
+        model_name = str(getattr(catalog_model, "name", "") or "").strip()
+        if model_name:
+            return backend.model_copy(update={"model": model_name})
+
+    return backend.model_copy(update={"model": preferred_model_id})
+
+
 def _payload_to_messages(payload: Any) -> list[dict[str, str]]:
     if isinstance(payload, list):
         normalized: list[dict[str, str]] = []
@@ -2108,7 +2147,8 @@ class Scheduler:
 
         for backend in bot.backends:
             try:
-                effective_backend = _backend_with_retry_params(backend, task)
+                preferred_backend = await _backend_with_preferred_model(backend, task, self.model_registry)
+                effective_backend = _backend_with_retry_params(preferred_backend, task)
                 if is_test_task and effective_backend.type in {"cli", "custom"}:
                     raise BackendError(
                         "Test-mode tasks do not execute CLI or custom backends; configure an LLM backend for analysis."
@@ -2815,7 +2855,8 @@ class Scheduler:
         workspace_root, allow_writes = _agent_workspace_context(bot, task)
         for backend in bot.backends:
             try:
-                effective_backend = _backend_with_retry_params(backend, task)
+                preferred_backend = await _backend_with_preferred_model(backend, task, self.model_registry)
+                effective_backend = _backend_with_retry_params(preferred_backend, task)
                 prepared_payload = _prepare_payload_for_backend(bot, effective_backend, transformed_payload, task=task)
                 yield {
                     "event": "backend_selected",
