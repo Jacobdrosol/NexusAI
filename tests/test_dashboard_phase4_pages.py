@@ -267,6 +267,20 @@ def test_project_detail_page_surfaces_ai_workspace_readiness(dashboard_client):
                         "browser_action_owner_approval_required": ["lesson_preview.read"],
                         "repo_output_mode": "allow",
                     },
+                    "routing_rules": {
+                        "worker_profile": {
+                            "worker_id": "globeiq-reader",
+                            "service": "GlobeIQ",
+                            "role": "lesson auditor",
+                            "task_scope": "published-lesson-quality-audit",
+                            "can_edit": False,
+                            "globeiq_user_email": "qc.quinn@globaliq.local",
+                            "course_scope": ["57", "101"],
+                            "lesson_scope": ["lesson-1"],
+                            "allowed_pages": ["lesson_preview"],
+                            "cli_tools": ["browser-ui"],
+                        }
+                    },
                 }
             ]
 
@@ -346,6 +360,13 @@ def test_project_detail_page_surfaces_ai_workspace_readiness(dashboard_client):
     assert b"[redacted raw credential]" in resp.data
     assert b"sk-live-secret" not in resp.data
     assert b"Repo output: allow" in resp.data
+    assert b"Worker scope: published-lesson-quality-audit" in resp.data
+    assert b"Edits: not allowed" in resp.data
+    assert b"Site account: qc.quinn@globaliq.local" in resp.data
+    assert b"Courses: 57, 101" in resp.data
+    assert b"Lessons: lesson-1" in resp.data
+    assert b"Pages: lesson_preview" in resp.data
+    assert b"CLI tools: browser-ui" in resp.data
     assert b"2 approval gates" in resp.data
     assert b"Enabled for filesystem, repo search." in resp.data
     assert b"managed workspace enabled; default branch main; command runner allowed." in resp.data
