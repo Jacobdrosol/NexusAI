@@ -2085,6 +2085,21 @@ def chat_page() -> str:
         )
 
 
+@bp.get("/api/chat/conversations")
+@login_required
+def api_list_conversations():
+    """Return active conversations for native and browser clients."""
+    cp = get_cp_client()
+    project_id = str(request.args.get("project_id") or "").strip() or None
+    try:
+        conversations = cp.list_conversations(archived="active", project_id=project_id)
+    except TypeError:
+        conversations = cp.list_conversations(archived="active")
+    if conversations is None:
+        return _cp_error_response(cp, "chat conversations unavailable")
+    return jsonify(conversations)
+
+
 @bp.post("/api/chat/conversations")
 @login_required
 def api_create_conversation():

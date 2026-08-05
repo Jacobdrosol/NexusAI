@@ -13,6 +13,7 @@ from flask import (
 )
 from flask_login import current_user, login_required, login_user, logout_user
 from flask_wtf import FlaskForm
+from flask_wtf.csrf import generate_csrf
 from wtforms import EmailField, PasswordField
 from wtforms.validators import DataRequired, Email
 
@@ -23,6 +24,26 @@ from dashboard.db import get_db
 from dashboard.models import User
 
 bp = Blueprint("auth", __name__)
+
+
+def _mobile_update_config() -> dict[str, object]:
+    """Return public Android update metadata without exposing server secrets."""
+    import os
+
+    def _version(name: str, default: int) -> int:
+        try:
+            return max(0, int(os.environ.get(name, str(default))))
+        except (TypeError, ValueError):
+            return default
+
+    release_url = str(os.environ.get("NEXUSAI_MOBILE_ANDROID_RELEASE_URL", "")).strip()
+    if release_url and not release_url.startswith("https://"):
+        release_url = ""
+    return {
+        "minimum_version_code": _version("NEXUSAI_MOBILE_ANDROID_MIN_VERSION_CODE", 1),
+        "latest_version_code": _version("NEXUSAI_MOBILE_ANDROID_LATEST_VERSION_CODE", 1),
+        "release_url": release_url,
+    }
 
 
 def _authenticate_user(email: str, password: str):
@@ -128,6 +149,20 @@ def api_session_status():
             },
         }
     )
+
+
+@bp.get("/api/auth/csrf")
+def api_csrf_token():
+    """Issue a session-bound CSRF token for native clients using cookie sessions."""
+    if not current_user.is_authenticated:
+        return jsonify({"error": "authentication required"}), 401
+    return jsonify({"csrf_token": generate_csrf()})
+
+
+@bp.get("/api/mobile/bootstrap")
+def api_mobile_bootstrap():
+    """Expose the minimal public contract used by self-hosted Android clients."""
+    return jsonify({"api_version": 1, "android": _mobile_update_config()})
 
 
 @bp.post("/api/auth/logout")

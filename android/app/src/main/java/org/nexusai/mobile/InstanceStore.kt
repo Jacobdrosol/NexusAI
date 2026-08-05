@@ -7,7 +7,7 @@ import okhttp3.Cookie
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
-class InstanceStore(context: Context) {
+class InstanceStore(val context: Context) {
     private val preferences = EncryptedSharedPreferences.create(
         context,
         "nexusai_mobile_session",

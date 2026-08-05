@@ -43,3 +43,31 @@ def test_dashboard_auth_api_login_session_and_logout(dashboard_client):
 
     final = dashboard_client.get("/api/auth/session")
     assert final.status_code == 401
+
+
+def test_dashboard_mobile_bootstrap_and_authenticated_csrf(dashboard_client, monkeypatch):
+    password = _seed_user()
+    monkeypatch.setenv("NEXUSAI_MOBILE_ANDROID_MIN_VERSION_CODE", "4")
+    monkeypatch.setenv("NEXUSAI_MOBILE_ANDROID_LATEST_VERSION_CODE", "7")
+    monkeypatch.setenv("NEXUSAI_MOBILE_ANDROID_RELEASE_URL", "https://chat.example.com/releases/nexusai.apk")
+
+    bootstrap = dashboard_client.get("/api/mobile/bootstrap")
+    assert bootstrap.status_code == 200
+    assert bootstrap.get_json() == {
+        "api_version": 1,
+        "android": {
+            "minimum_version_code": 4,
+            "latest_version_code": 7,
+            "release_url": "https://chat.example.com/releases/nexusai.apk",
+        },
+    }
+
+    assert dashboard_client.get("/api/auth/csrf").status_code == 401
+    login = dashboard_client.post(
+        "/api/auth/login",
+        json={"email": "admin@test.com", "password": password},
+    )
+    assert login.status_code == 200
+    csrf = dashboard_client.get("/api/auth/csrf")
+    assert csrf.status_code == 200
+    assert csrf.get_json()["csrf_token"]

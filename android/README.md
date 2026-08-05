@@ -8,8 +8,23 @@ This native Android client connects to a user-owned NexusAI dashboard deployment
 - Dashboard account sign-in through `/api/auth/login`.
 - Encrypted local storage for the instance URL and dashboard session cookie.
 - Session restoration when the app is reopened.
+- Instance-driven update checks through `/api/mobile/bootstrap`.
 
 Chat, work monitoring, update enforcement, notifications, and file uploads are follow-up milestones.
+
+## Updating Without Reinstalling
+
+Publish each release APK from an HTTPS URL controlled by the self-hosted instance, then set these dashboard environment variables before deploying the dashboard:
+
+```env
+NEXUSAI_MOBILE_ANDROID_MIN_VERSION_CODE=1
+NEXUSAI_MOBILE_ANDROID_LATEST_VERSION_CODE=2
+NEXUSAI_MOBILE_ANDROID_RELEASE_URL=https://chat.example.com/releases/nexusai-android.apk
+```
+
+The app compares these version codes with its installed version. When an update is available, it downloads the configured APK and opens Android's standard installer. Android replaces the existing NexusAI package in place only when the APK uses the same application ID and signing key, preserving the configured instance and encrypted local session. The user must approve installation; Android does not allow an ordinary app to silently replace itself.
+
+Keep the APK URL on HTTPS and retain the same release signing key. A mismatched signature is rejected by Android rather than replacing the app.
 
 ## Build
 

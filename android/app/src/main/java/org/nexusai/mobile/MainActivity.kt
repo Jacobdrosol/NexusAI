@@ -52,12 +52,19 @@ private fun NexusMobileApp(store: InstanceStore) {
     var status by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(false) }
     var restoringSession by remember { mutableStateOf(store.instanceUrl() != null) }
+    var availableUpdate by remember { mutableStateOf<AndroidUpdate?>(null) }
+    var updateRequired by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         if (store.instanceUrl() == null) return@LaunchedEffect
         val restored = withContext(Dispatchers.IO) { runCatching { apiClient.restoreSession() }.getOrNull() }
         session = restored
         restoringSession = false
+        if (restored != null) {
+            val update = withContext(Dispatchers.IO) { runCatching { apiClient.fetchBootstrap().androidUpdate }.getOrNull() }
+            availableUpdate = update?.takeIf { it.latestVersionCode > BuildConfig.VERSION_CODE && it.releaseUrl.isNotBlank() }
+            updateRequired = update?.minimumVersionCode?.let { it > BuildConfig.VERSION_CODE } == true
+        }
     }
 
     Scaffold(
@@ -67,6 +74,9 @@ private fun NexusMobileApp(store: InstanceStore) {
             session != null -> HomeScreen(
                 modifier = Modifier.padding(padding),
                 session = session!!,
+                update = availableUpdate,
+                updateRequired = updateRequired,
+                onInstallUpdate = { availableUpdate?.let { UpdateInstaller(store.context).downloadAndPrompt(it.releaseUrl) } },
                 onDisconnect = {
                     apiClient.clearSession()
                     session = null
@@ -195,13 +205,24 @@ private fun LoginScreen(
 }
 
 @androidx.compose.runtime.Composable
-private fun HomeScreen(modifier: Modifier, session: MobileSession, onDisconnect: () -> Unit) {
+private fun HomeScreen(
+    modifier: Modifier,
+    session: MobileSession,
+    update: AndroidUpdate?,
+    updateRequired: Boolean,
+    onInstallUpdate: () -> Unit,
+    onDisconnect: () -> Unit,
+) {
     Column(
         modifier = modifier.fillMaxSize().padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Text("Connected", style = MaterialTheme.typography.headlineSmall)
         Text(session.user.email)
+        if (update != null) {
+            Text(if (updateRequired) "An update is required to continue." else "A NexusAI update is available.")
+            Button(onClick = onInstallUpdate) { Text("Install update") }
+        }
         Text("Chat and Work monitoring are the next Android client screens.")
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Button(onClick = onDisconnect) { Text("Disconnect") }

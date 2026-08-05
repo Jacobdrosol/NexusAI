@@ -43,9 +43,11 @@ The client uses a versioned API surface in the dashboard. The initial implementa
 
 - Discovery complete: NexusAI has no existing Android client. Dashboard authentication is session-cookie based through `/api/auth/login`, and chat/work APIs already provide the initial read/write surface.
 - Android project scaffold complete in `android/`, including the Gradle wrapper, native Kotlin/Compose shell, HTTPS-only instance onboarding, encrypted instance/session storage, cookie-backed dashboard login, and launch-time session restoration.
+- Dashboard mobile contract added: `/api/mobile/bootstrap` returns versioned, public Android update metadata, and authenticated `/api/auth/csrf` issues a session-bound token for mobile mutations without exempting chat APIs from CSRF protections.
+- Android update delivery added: the client checks the instance contract after session restoration and uses Android's package installer to apply a user-approved replacement APK. Same package ID and signing key preserve local app data across updates.
 - Verification: `ANDROID_HOME=%LOCALAPPDATA%\\Android\\Sdk .\\gradlew.bat :app:assembleDebug` completed successfully. The debug APK is at `android/app/build/outputs/apk/debug/app-debug.apk`.
 
 ## Risks and Blockers
 
-- The dashboard APIs were designed for the web client and need a small documented mobile contract before long-term compatibility can be claimed.
+- Conversation browsing, message composition, compact work monitoring, and attachment handling still need native client screens.
 - Push notifications, offline queues, file uploads, and mutation controls are intentionally deferred until the read/send client is proven.
