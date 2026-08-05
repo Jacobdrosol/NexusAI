@@ -2337,6 +2337,72 @@ def test_chat_message_api_proxies_attachments(dashboard_client):
     assert seen["body"]["attachments"][0]["name"] == "notes.md"
 
 
+def test_chat_message_api_blocks_invalid_attachment_payload(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def post_message(self, conversation_id, body):
+            raise AssertionError("invalid attachments should not reach control plane message send")
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/chat/messages",
+            json={"conversation_id": "c1", "content": "hello", "attachments": {"name": "bad.txt"}},
+        )
+
+    assert resp.status_code == 400
+    assert b"Invalid attachments" in resp.data
+    assert b"attachments must be a list" in resp.data
+
+
+def test_chat_message_api_blocks_attachment_count_limit(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def post_message(self, conversation_id, body):
+            raise AssertionError("too many attachments should not reach control plane message send")
+
+    attachments = [{"name": f"file-{idx}.txt", "kind": "text", "size_bytes": 1} for idx in range(16)]
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.post(
+            "/api/chat/messages",
+            json={"conversation_id": "c1", "content": "hello", "attachments": attachments},
+        )
+
+    assert resp.status_code == 400
+    assert b"Invalid attachments" in resp.data
+    assert b"maximum is 15 files per message" in resp.data
+
+
+def test_chat_stream_api_blocks_attachment_total_size_limit(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        base_url = "http://100.81.64.82:8000"
+
+        def list_bot_readiness(self):
+            return {"readiness": []}
+
+    def _fake_post(*args, **kwargs):
+        raise AssertionError("oversized attachments should not open an upstream stream request")
+
+    with patch("dashboard.routes.chat.get_cp_client", return_value=FakeCP()), \
+         patch("dashboard.routes.chat.requests.post", side_effect=_fake_post):
+        resp = dashboard_client.post(
+            "/api/chat/stream",
+            json={
+                "conversation_id": "c1",
+                "content": "hello",
+                "attachments": [{"name": "huge.bin", "kind": "file", "size_bytes": 1_073_741_825}],
+            },
+        )
+
+    assert resp.status_code == 400
+    assert b"Invalid attachments" in resp.data
+    assert b"attachments exceed 1073741824 bytes total" in resp.data
+
+
 def test_chat_messages_api_proxies_control_plane_messages(dashboard_client):
     _login_admin(dashboard_client)
     seen: dict[str, object] = {}

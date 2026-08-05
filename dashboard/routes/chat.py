@@ -318,6 +318,27 @@ def _default_route_model_compatibility_blocker_from_cp(cp: Any, default_bot_id: 
     return ""
 
 
+def _attachment_payload_blocker(raw_attachments: Any) -> str:
+    if raw_attachments is None:
+        return ""
+    if not isinstance(raw_attachments, list):
+        return "attachments must be a list"
+    if len(raw_attachments) > CHAT_ATTACHMENT_MAX_FILES:
+        return f"too many attachments; maximum is {CHAT_ATTACHMENT_MAX_FILES} files per message"
+    total_bytes = 0
+    for item in raw_attachments:
+        if not isinstance(item, dict):
+            return "attachments must contain objects"
+        try:
+            size_bytes = int(item.get("size_bytes") or 0)
+        except Exception:
+            size_bytes = 0
+        total_bytes += max(0, size_bytes)
+    if total_bytes > CHAT_ATTACHMENT_MAX_TOTAL_BYTES:
+        return f"attachments exceed {CHAT_ATTACHMENT_MAX_TOTAL_BYTES} bytes total"
+    return ""
+
+
 def _conversation_from_cp(cp: Any, conversation_id: str) -> dict[str, Any] | None:
     safe_conversation_id = str(conversation_id or "").strip()
     if not safe_conversation_id or not hasattr(cp, "list_conversations"):
@@ -1288,6 +1309,9 @@ def api_send_message():
     attachments = data.get("attachments") if isinstance(data.get("attachments"), list) else []
     if not conversation_id or (not content and not attachments):
         return jsonify({"error": "conversation_id and either content or attachments are required"}), 400
+    attachment_blocker = _attachment_payload_blocker(data.get("attachments"))
+    if attachment_blocker:
+        return jsonify({"error": f"Invalid attachments: {attachment_blocker}"}), 400
     cp = get_cp_client()
     bot_id = str(data.get("bot_id") or "").strip()
     readiness_bot_id = bot_id or _conversation_default_bot_id_from_cp(cp, conversation_id)
@@ -1311,7 +1335,7 @@ def api_send_message():
             "content": content,
             "bot_id": bot_id or data.get("bot_id"),
             "user_id": _current_memory_user_id(),
-            "attachments": data.get("attachments") or [],
+            "attachments": attachments,
             "context_items": data.get("context_items"),
             "context_item_ids": data.get("context_item_ids"),
             "include_project_context": data.get("include_project_context", False),
@@ -1513,6 +1537,9 @@ def api_send_message_stream():
     attachments = data.get("attachments") if isinstance(data.get("attachments"), list) else []
     if not conversation_id or (not content and not attachments):
         return jsonify({"error": "conversation_id and either content or attachments are required"}), 400
+    attachment_blocker = _attachment_payload_blocker(data.get("attachments"))
+    if attachment_blocker:
+        return jsonify({"error": f"Invalid attachments: {attachment_blocker}"}), 400
 
     cp = get_cp_client()
     bot_id = str(data.get("bot_id") or "").strip()
@@ -1540,7 +1567,7 @@ def api_send_message_stream():
         "content": content,
         "bot_id": bot_id or data.get("bot_id"),
         "user_id": _current_memory_user_id(),
-        "attachments": data.get("attachments") or [],
+        "attachments": attachments,
         "context_items": data.get("context_items"),
         "context_item_ids": data.get("context_item_ids"),
         "include_project_context": data.get("include_project_context", False),
