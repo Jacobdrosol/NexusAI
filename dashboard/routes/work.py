@@ -164,6 +164,28 @@ def _chat_usage_health(chat_usage: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _usage_pressure_recommended_action(level: str, *, kind: str) -> dict[str, str]:
+    normalized = str(level or "").strip().lower()
+    chat = kind == "chat"
+    if normalized == "critical":
+        return {
+            "label": "pause or cap now",
+            "level": "critical",
+            "detail": "Usage is at or above the hourly cap; stop new sends or lower the bot cap before continuing.",
+        }
+    if normalized == "warning":
+        return {
+            "label": "watch spend",
+            "level": "warning",
+            "detail": "Usage is near the hourly cap; review recent output quality before increasing throughput.",
+        }
+    return {
+        "label": "continue",
+        "level": "ready",
+        "detail": "Direct chat usage is within cap." if chat else "Worker usage is within cap.",
+    }
+
+
 def _usage_pressure_lanes(usage: dict[str, Any], *, limit: int = 10) -> list[dict[str, Any]]:
     governor = usage.get("token_governor") if isinstance(usage.get("token_governor"), dict) else {}
     limits = governor.get("limits") if isinstance(governor.get("limits"), dict) else {}
@@ -202,6 +224,7 @@ def _usage_pressure_lanes(usage: dict[str, Any], *, limit: int = 10) -> list[dic
                 "cap_source": "override" if bot_id in bot_overrides else "default",
                 "tasks_with_usage": _safe_count(item, "tasks_with_usage"),
                 "tasks_without_usage": _safe_count(item, "tasks_without_usage"),
+                "recommended_action": _usage_pressure_recommended_action(level, kind="task"),
             }
         )
     rows.sort(key=lambda row: (row["level"] != "critical", row["level"] != "warning", -row["usage_ratio"], -row["total_tokens"]))
@@ -249,6 +272,7 @@ def _chat_usage_pressure_lanes(chat_usage: dict[str, Any], *, limit: int = 10) -
                 "messages_with_usage": _safe_count(item, "messages_with_usage"),
                 "messages_without_usage": _safe_count(item, "messages_without_usage"),
                 "last_message_at": item.get("last_message_at") or "",
+                "recommended_action": _usage_pressure_recommended_action(level, kind="chat"),
             }
         )
     rows.sort(key=lambda row: (row["level"] != "critical", row["level"] != "warning", -row["usage_ratio"], -row["total_tokens"]))

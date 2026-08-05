@@ -457,6 +457,7 @@
           <thead><tr><th>Chat Bot Usage Pressure</th><th>Tokens</th><th>Cap</th><th>Remaining</th><th>Status</th><th>Latest</th><th>Actions</th></tr></thead>
           <tbody>
             {% for row in chat_usage_pressure_lanes %}
+            {% set action = row.recommended_action or {} %}
             <tr>
               <td>
                 <code>{{ row.bot_id }}</code>
@@ -468,6 +469,8 @@
               <td><span class="badge {% if row.level == 'critical' %}badge-failed{% elif row.level == 'warning' %}badge-yellow{% else %}badge-completed{% endif %}">{{ row.level }} {{ row.usage_ratio }}</span></td>
               <td>{{ row.last_message_at or '' }}</td>
               <td>
+                <span class="badge {% if action.level == 'critical' %}badge-failed{% elif action.level == 'warning' %}badge-yellow{% else %}badge-completed{% endif %}">{{ action.label or 'review' }}</span>
+                {% if action.detail %}<div class="mini-note">{{ action.detail }}</div>{% endif %}
                 <button class="btn btn-sm"
                         type="button"
                         onclick="setChatBotHourlyCap({bot_id: {{ row.bot_id|tojson }}, hourly_limit: {{ row.total_tokens or 0 }}, label: {{ row.bot_id|tojson }}})">
@@ -537,6 +540,7 @@
           <thead><tr><th>Bot</th><th>Tokens</th><th>Cap</th><th>Remaining</th><th>Pressure</th><th>Actions</th></tr></thead>
           <tbody>
             {% for row in usage_pressure_lanes %}
+            {% set action = row.recommended_action or {} %}
             <tr>
               <td>
                 <code>{{ row.bot_id }}</code>
@@ -547,6 +551,8 @@
               <td>{{ "{:,}".format(row.remaining_tokens or 0) }}</td>
               <td><span class="badge {% if row.level == 'critical' %}badge-failed{% elif row.level == 'warning' %}badge-yellow{% else %}badge-completed{% endif %}">{{ row.level }} {{ row.usage_ratio }}</span></td>
               <td>
+                <span class="badge {% if action.level == 'critical' %}badge-failed{% elif action.level == 'warning' %}badge-yellow{% else %}badge-completed{% endif %}">{{ action.label or 'review' }}</span>
+                {% if action.detail %}<div class="mini-note">{{ action.detail }}</div>{% endif %}
                 <button class="btn btn-sm"
                         type="button"
                         onclick="setBotHourlyCap({bot_id: {{ row.bot_id|tojson }}, hourly_limit: {{ row.total_tokens or 0 }}, label: {{ row.bot_id|tojson }}})">

@@ -695,6 +695,8 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert b"Bot Usage Pressure" in resp.data
     assert b"override cap" in resp.data
     assert b"warning 0.93" in resp.data
+    assert b"watch spend" in resp.data
+    assert b"review recent output quality before increasing throughput" in resp.data
     assert b"Cap At Current" in resp.data
     assert b"Clear Cap" in resp.data
     assert b"setBotHourlyCap" in resp.data
@@ -806,6 +808,7 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert brief_data["chat_usage_pressure_lanes"][0]["usage_ratio"] == 0.8
     assert brief_data["chat_usage_pressure_lanes"][0]["cap_source"] == "override"
     assert brief_data["chat_usage_pressure_lanes"][0]["last_message_at"] == "2026-08-05T01:02:03+00:00"
+    assert brief_data["chat_usage_pressure_lanes"][0]["recommended_action"]["label"] == "watch spend"
     assert brief_data["quality_gates"]["status_counts"]["failed"] == 1
     assert brief_data["quality_gates"]["rows"][0]["suite_id"] == "suite-globeiq-lessons"
     assert brief_data["quality_gates"]["rows"][0]["recommended_action"]["label"] == "review failed gates"
@@ -816,6 +819,7 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
     assert brief_data["usage_brief"]["top_provider_models"][0]["provider"] == "ollama_cloud"
     assert brief_data["usage_pressure_lanes"][0]["bot_id"] == "lesson-writer"
     assert brief_data["usage_pressure_lanes"][0]["usage_ratio"] == 0.93
+    assert brief_data["usage_pressure_lanes"][0]["recommended_action"]["label"] == "watch spend"
     assert brief_data["capacity"]["worker_queue_depth"] == 3
     assert brief_data["workers"]["queue_depth"] == 3
     assert "projects" not in brief_data
@@ -830,6 +834,11 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
             "cap_source": "override",
             "tasks_with_usage": 1,
             "tasks_without_usage": 0,
+            "recommended_action": {
+                "label": "watch spend",
+                "level": "warning",
+                "detail": "Usage is near the hourly cap; review recent output quality before increasing throughput.",
+            },
         }
     ]
     assert data["chat_usage_pressure_lanes"] == [
@@ -844,6 +853,11 @@ def test_work_page_renders_project_manager_and_worker_load(dashboard_client):
             "messages_with_usage": 1,
             "messages_without_usage": 1,
             "last_message_at": "2026-08-05T01:02:03+00:00",
+            "recommended_action": {
+                "label": "watch spend",
+                "level": "warning",
+                "detail": "Usage is near the hourly cap; review recent output quality before increasing throughput.",
+            },
         }
     ]
 
