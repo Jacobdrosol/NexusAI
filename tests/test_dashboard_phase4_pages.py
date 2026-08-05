@@ -938,6 +938,9 @@ def test_chat_page_renders_project_filter_metadata_on_conversations(dashboard_cl
     assert b"Chat provider/model attribution" in resp.data
     assert b"Chat provider/model spend" in resp.data
     assert b"/api/work/brief" in resp.data
+    assert b'id="chat-clear-filters"' in resp.data
+    assert b"function clearConversationFilters" in resp.data
+    assert b"addEventListener('click', clearConversationFilters)" in resp.data
 
 
 def test_chat_create_modal_surfaces_default_bot_capability_summary(dashboard_client):
@@ -2225,6 +2228,7 @@ def test_chat_page_unscoped_filter_limits_conversation_list(dashboard_client):
     assert b"project_id=__unscoped__" in resp.data
     assert b"targetProjectFilter = scope === 'global' ? unscopedProjectFilter" in resp.data
     assert b'id="chat-conversation-search"' in resp.data
+    assert b'id="chat-clear-filters"' in resp.data
     assert b'placeholder="Title, project, bot, or model"' in resp.data
     assert b'data-search-text="one-off chat c-unscoped global' in resp.data
     assert b"personal-general-chat" in resp.data

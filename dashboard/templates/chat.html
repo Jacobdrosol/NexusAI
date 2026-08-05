@@ -161,6 +161,11 @@
 .chat-project-filter {
   width: 100%;
 }
+.chat-filter-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 0.45rem;
+}
 .chat-conversation-title-row {
   display: flex;
   align-items: center;
@@ -289,6 +294,9 @@
         data-archived-total="{{ archived_conversations|length }}"
       >
         Active {{ conversations|length }} / Archived {{ archived_conversations|length }}
+      </div>
+      <div class="chat-filter-actions">
+        <button type="button" id="chat-clear-filters" class="btn btn-sm">Clear Filters</button>
       </div>
     </div>
     <div class="list">
@@ -1185,6 +1193,14 @@ function applyConversationProjectFilter() {
       ? `Showing ${activeVisible} of ${activeTotal} active / ${archivedVisible} of ${archivedTotal} archived`
       : `Active ${activeTotal} / Archived ${archivedTotal}`;
   }
+}
+
+function clearConversationFilters() {
+  const filterEl = document.getElementById('chat-project-filter');
+  const searchEl = document.getElementById('chat-conversation-search');
+  if (filterEl) filterEl.value = '';
+  if (searchEl) searchEl.value = '';
+  applyConversationProjectFilter();
 }
 
 async function refreshMessagesUntilSettled(maxAttempts = 20, delayMs = 1000) {
@@ -4344,6 +4360,7 @@ document.getElementById('chat-project-filter')?.addEventListener('change', funct
   window.location = buildChatUrl({project_id: this.value});
 });
 document.getElementById('chat-conversation-search')?.addEventListener('input', applyConversationProjectFilter);
+document.getElementById('chat-clear-filters')?.addEventListener('click', clearConversationFilters);
 document.getElementById('create-convo-scope')?.addEventListener('change', () => {
   syncConversationScopeFields();
   syncCreateConversationToolFields();
