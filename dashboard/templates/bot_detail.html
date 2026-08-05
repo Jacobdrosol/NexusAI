@@ -10,7 +10,10 @@
   {% set header_chat_tool_access = header_routing_rules.chat_tool_access if header_routing_rules and header_routing_rules.chat_tool_access else {} %}
   {% set header_chat_mode = header_chat_profile.mode or '' %}
   {% set header_chat_autonomy = header_operator_profile.autonomy or header_chat_profile.autonomy or '' %}
-  {% set header_chat_capable = bot and bot.enabled and (header_chat_autonomy in ['chat', 'manual_chat_only'] or header_chat_tool_access.enabled or header_chat_mode in ['chat', 'tutor', 'vision', 'vision_math', 'coding', 'research']) %}
+  {% set header_readiness_state = readiness.state if readiness and readiness.state else '' %}
+  {% set header_tooling_state = tooling_row.state if tooling_row and tooling_row.state else '' %}
+  {% set header_chat_blocked = header_readiness_state in ['blocked', 'disabled'] or header_tooling_state in ['blocked', 'disabled'] %}
+  {% set header_chat_capable = bot and bot.enabled and not header_chat_blocked and (header_chat_autonomy in ['chat', 'manual_chat_only'] or header_chat_tool_access.enabled or header_chat_mode in ['chat', 'tutor', 'vision', 'vision_math', 'coding', 'research']) %}
   <div style="display:flex;gap:0.5rem;">
     {% if header_chat_capable %}
     <a class="btn btn-primary" href="{{ url_for('chat.chat_page') }}?bot_id={{ bot.id }}">Use in Chat</a>

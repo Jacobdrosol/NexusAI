@@ -3119,6 +3119,69 @@ def test_bot_detail_page_disables_saved_launch_for_disabled_bot(dashboard_client
     assert b"disabled" in resp.data
 
 
+def test_bot_detail_page_hides_chat_handoff_for_tooling_blocked_bot(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def get_bot(self, bot_id):
+            return {
+                "id": bot_id,
+                "name": "Blocked Chat Bot",
+                "role": "assistant",
+                "enabled": True,
+                "backends": [
+                    {
+                        "type": "cloud_api",
+                        "provider": "ollama_cloud",
+                        "model": "gpt-oss:120b",
+                        "api_key_ref": "MISSING_OLLAMA_KEY",
+                    }
+                ],
+                "routing_rules": {
+                    "operator_profile": {"autonomy": "manual_chat_only"},
+                    "chat_profile": {"mode": "chat", "label": "General Chat"},
+                },
+                "execution_policy": {},
+            }
+
+        def get_bot_readiness(self, bot_id):
+            return {"bot_id": bot_id, "state": "ready", "ready": True, "checks": []}
+
+        def get_bot_dependencies(self, bot_id):
+            return {"schedule_references": [], "workflow_references": [], "can_disable": True, "can_delete": True}
+
+        def list_tasks(self, **kwargs):
+            return []
+
+        def list_bot_runs(self, bot_id, **kwargs):
+            return []
+
+        def list_bot_artifacts(self, bot_id, **kwargs):
+            return []
+
+        def list_workers(self):
+            return []
+
+        def list_worker_probes(self):
+            return {"probes": []}
+
+        def list_models(self):
+            return []
+
+        def list_keys(self):
+            return []
+
+    with patch("dashboard.cp_client.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/bots/blocked-chat-bot")
+
+    assert resp.status_code == 200
+    assert b"Blocked Chat Bot" in resp.data
+    assert b"Tooling Readiness" in resp.data
+    assert b"MISSING_OLLAMA_KEY" in resp.data
+    assert b"Use in Chat" not in resp.data
+    assert b"/chat?bot_id=blocked-chat-bot" not in resp.data
+
+
 def test_bot_test_run_api_proxies_to_control_plane(dashboard_client):
     _login_admin(dashboard_client)
 
