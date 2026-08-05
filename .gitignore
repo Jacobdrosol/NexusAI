@@ -38,6 +38,8 @@ build/
 .uat-logs/
 worker_node/
 tmp_pm_probe*/
+android/.gradle/
+android/.kotlin/
 
 # Personal bot configurations — import via UI, never commit
 *.bot.json
