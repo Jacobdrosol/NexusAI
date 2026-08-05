@@ -3627,6 +3627,66 @@ def test_schedules_page_and_proxy_support_operational_schedule_management(dashbo
     assert runs.get_json()["runs"] == []
 
 
+def test_work_page_surfaces_provider_model_usage(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_tasks(self, **kwargs):
+            return [
+                {
+                    "id": "task-1",
+                    "bot_id": "research-bot",
+                    "status": "completed",
+                    "metadata": {"project_id": "globeiq", "manager_id": "research-manager"},
+                    "updated_at": "2026-03-12T00:00:00+00:00",
+                }
+            ]
+
+        def list_projects(self):
+            return [{"id": "globeiq", "name": "GlobeIQ", "enabled": True}]
+
+        def list_bots(self):
+            return [{"id": "research-bot", "name": "Research Bot", "enabled": True}]
+
+        def list_workers(self):
+            return []
+
+        def list_work_dispatch_holds(self):
+            return {"holds": []}
+
+        def task_usage(self, **kwargs):
+            return {
+                "window": {"hours": 24},
+                "totals": {
+                    "total_tokens": 12345,
+                    "tasks_with_usage": 1,
+                    "tasks_without_usage": 0,
+                },
+                "by_project": [{"project_id": "globeiq", "total_tokens": 12345, "tasks_with_usage": 1, "tasks_without_usage": 0}],
+                "by_manager": [{"project_id": "globeiq", "manager_id": "research-manager", "total_tokens": 12345, "tasks_with_usage": 1}],
+                "by_bot": [{"bot_id": "research-bot", "total_tokens": 12345, "tasks_with_usage": 1, "tasks_without_usage": 0}],
+                "by_provider_model": [
+                    {
+                        "provider": "ollama_cloud",
+                        "model": "gpt-oss:120b",
+                        "total_tokens": 12345,
+                        "tasks_with_usage": 1,
+                        "tasks_without_usage": 0,
+                    }
+                ],
+                "token_governor": {"limits": {}},
+            }
+
+    with patch("dashboard.routes.work.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/work")
+
+    assert resp.status_code == 200
+    assert b"Usage By Project And Manager" in resp.data
+    assert b"ollama_cloud" in resp.data
+    assert b"gpt-oss:120b" in resp.data
+    assert b"12,345" in resp.data
+
+
 def test_vault_upload_api_validates_required_fields(dashboard_client):
     _login_admin(dashboard_client)
     resp = dashboard_client.post("/api/vault/upload", data={"source_mode": "paste"})

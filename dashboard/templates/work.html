@@ -221,6 +221,24 @@
           </tbody>
         </table>
       </div>
+      <div class="table-wrap" style="margin-top:0.75rem;">
+        <table>
+          <thead><tr><th>Provider</th><th>Model</th><th>Tokens</th><th>Measured</th><th>Missing</th></tr></thead>
+          <tbody>
+            {% for row in usage.by_provider_model[:10] %}
+            <tr>
+              <td><code>{{ row.provider or 'unknown' }}</code></td>
+              <td><code>{{ row.model or 'unknown' }}</code></td>
+              <td>{{ "{:,}".format(row.total_tokens or 0) }}</td>
+              <td>{{ row.tasks_with_usage }}</td>
+              <td>{{ row.tasks_without_usage }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="5" class="empty">No provider/model token usage in the selected window</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
       {% else %}
       <div class="empty">Token usage is unavailable.</div>
       {% endif %}
