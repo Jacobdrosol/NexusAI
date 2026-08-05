@@ -607,6 +607,28 @@ async def _target_supports_image_attachments(request: Request, *, target_bot_id:
             for token in ("vision", "-vl", "qwen2.5-vl", "qwen-vl", "qwen3-vl", "qwen3.5:", "llava", "gemma3")
         )
     return False
+
+
+async def _validate_default_model_id(request: Request, default_model_id: Optional[str]) -> None:
+    model_id = str(default_model_id or "").strip()
+    if not model_id:
+        return
+    model_registry = getattr(request.app.state, "model_registry", None)
+    if model_registry is None:
+        return
+    try:
+        if not await model_registry.has_any():
+            return
+    except Exception:
+        return
+    try:
+        catalog_model = await model_registry.get(model_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail=f"default_model_id is not in the enabled model catalog: {model_id}")
+    if not bool(getattr(catalog_model, "enabled", True)):
+        raise HTTPException(status_code=400, detail=f"default_model_id is disabled: {model_id}")
+
+
 _GROUNDING_NOTE_LINE_RE = re.compile(r"^\s*grounding\s+note\s*:\s*", re.IGNORECASE)
 _PLANNING_PREAMBLE_LINE_RE = re.compile(
     r"^\s*(i(?:\s*['’]ll|\s+will)\s+help\s+you\b|"
@@ -3642,6 +3664,8 @@ async def create_conversation(request: Request, body: CreateConversationRequest)
             raise HTTPException(status_code=400, detail="project_id is required for bridged conversations")
         bridge_project_ids = [pid for pid in bridge_project_ids if pid != project_id]
 
+    await _validate_default_model_id(request, body.default_model_id)
+
     return await chat_manager.create_conversation(
         title=body.title,
         project_id=project_id,
@@ -3720,6 +3744,7 @@ async def update_conversation_route_defaults(
 ) -> ChatConversation:
     chat_manager = request.app.state.chat_manager
     try:
+        await _validate_default_model_id(request, body.default_model_id)
         return await chat_manager.update_conversation_route_defaults(
             conversation_id,
             default_bot_id=body.default_bot_id,

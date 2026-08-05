@@ -5690,6 +5690,54 @@ async def test_update_conversation_route_defaults_endpoint(cp_app):
 
 
 @pytest.mark.anyio
+async def test_create_conversation_blocks_disabled_catalog_default_model(cp_app):
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        model_resp = await client.post(
+            "/v1/models",
+            json={
+                "id": "disabled-chat-model",
+                "name": "disabled-model",
+                "provider": "ollama_cloud",
+                "enabled": False,
+            },
+        )
+        assert model_resp.status_code == 200
+
+        create_resp = await client.post(
+            "/v1/chat/conversations",
+            json={"title": "Disabled Model", "default_model_id": "disabled-chat-model"},
+        )
+
+        assert create_resp.status_code == 400
+        assert "default_model_id is disabled" in create_resp.text
+
+
+@pytest.mark.anyio
+async def test_update_conversation_route_defaults_blocks_unknown_catalog_default_model(cp_app):
+    async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
+        await client.post(
+            "/v1/models",
+            json={
+                "id": "known-chat-model",
+                "name": "known-model",
+                "provider": "ollama_cloud",
+                "enabled": True,
+            },
+        )
+        create_resp = await client.post("/v1/chat/conversations", json={"title": "Route Default Guard"})
+        assert create_resp.status_code == 200
+        conversation_id = create_resp.json()["id"]
+
+        update_resp = await client.put(
+            f"/v1/chat/conversations/{conversation_id}/route-defaults",
+            json={"default_model_id": "missing-chat-model"},
+        )
+
+        assert update_resp.status_code == 400
+        assert "default_model_id is not in the enabled model catalog" in update_resp.text
+
+
+@pytest.mark.anyio
 async def test_chat_task_metadata_includes_project_id(cp_app):
     cp_app.state.scheduler.schedule = AsyncMock(return_value={"output": "ok"})
     async with AsyncClient(transport=ASGITransport(app=cp_app), base_url="http://test") as client:
