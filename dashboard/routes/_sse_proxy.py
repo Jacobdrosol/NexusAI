@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import queue
 import threading
 from typing import Callable, ContextManager, Iterator
@@ -57,9 +58,8 @@ def proxy_upstream_sse_lines(
             yield f"{payload}\n"
             continue
         if kind == "error":
-            escaped = str(payload).replace('"', '\\"')
             yield "event: error\n"
-            yield f'data: {{"error": "{escaped}"}}\n\n'
+            yield f"data: {json.dumps({'error': str(payload)})}\n\n"
             continue
         if kind == "eof":
             return
