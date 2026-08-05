@@ -219,7 +219,7 @@ def create_app() -> Flask:
             cp_workers is not None and cp_bots is not None and cp_projects is not None
         )
         cp_available = cp_auth_ok or cp_tasks is not None
-        overview_launch_bots = []
+        overview_launch_bots = launchable_bots(cp_bots or [], surface="overview")
         enabled_bot_readiness = []
         bot_readiness_unavailable = False
         worker_probes_unavailable = False
@@ -419,21 +419,24 @@ def create_app() -> Flask:
                     ]
                 else:
                     bot_readiness_unavailable = True
-                key_getter = getattr(cp, "list_keys", None)
-                tooling_status = build_bot_tooling_status(
-                    bots=bots,
-                    readiness_payload=readiness_payload if isinstance(readiness_payload, dict) else None,
-                    workers=workers,
-                    worker_probes_payload=probe_payload if isinstance(probe_payload, dict) else None,
-                    api_keys=key_getter() if callable(key_getter) else None,
-                )
-                overview_launch_bots = launchable_bots(
-                    bots,
-                    surface="overview",
-                    blocked_bot_ids=blocked_launch_bot_ids(tooling_status),
-                )
-            else:
-                overview_launch_bots = launchable_bots(bots, surface="overview")
+                launch_candidate_ids = {str(bot.get("id") or "").strip() for bot in overview_launch_bots}
+                launch_candidate_bots = [
+                    bot for bot in bots if str(bot.get("id") or "").strip() in launch_candidate_ids
+                ]
+                if launch_candidate_bots:
+                    key_getter = getattr(cp, "list_keys", None)
+                    tooling_status = build_bot_tooling_status(
+                        bots=launch_candidate_bots,
+                        readiness_payload=readiness_payload if isinstance(readiness_payload, dict) else None,
+                        workers=workers,
+                        worker_probes_payload=probe_payload if isinstance(probe_payload, dict) else None,
+                        api_keys=key_getter() if callable(key_getter) else None,
+                    )
+                    overview_launch_bots = launchable_bots(
+                        bots,
+                        surface="overview",
+                        blocked_bot_ids=blocked_launch_bot_ids(tooling_status),
+                    )
 
             worker_health = []
             for w in worker_rows[:12]:

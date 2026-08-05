@@ -3314,6 +3314,35 @@ def test_tasks_page_hides_tooling_blocked_quick_launch_buttons(dashboard_client)
     assert b"Unsafe Launch" not in resp.data
 
 
+def test_tasks_page_skips_launch_tooling_checks_without_launch_profiles(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def list_tasks(self, **kwargs):
+            return []
+
+        def list_bots(self):
+            return [{"id": "chat-only", "name": "Chat Only", "enabled": True}]
+
+        def list_bot_readiness(self):
+            raise AssertionError("readiness should not load without saved launch profiles")
+
+        def list_workers(self):
+            raise AssertionError("workers should not load without saved launch profiles")
+
+        def list_worker_probes(self):
+            raise AssertionError("worker probes should not load without saved launch profiles")
+
+        def list_keys(self):
+            raise AssertionError("keys should not load without saved launch profiles")
+
+    with patch("dashboard.routes.tasks.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/tasks")
+
+    assert resp.status_code == 200
+    assert b"Quick Launch" not in resp.data
+
+
 def test_tasks_api_summary_and_download(dashboard_client):
     _login_admin(dashboard_client)
 
@@ -7984,6 +8013,45 @@ def test_overview_page_hides_tooling_blocked_saved_launch_profiles(dashboard_cli
 
     assert resp.status_code == 200
     assert b"Unsafe Launch" not in resp.data
+
+
+def test_overview_page_skips_launch_tooling_checks_without_launch_profiles(dashboard_client):
+    _login_admin(dashboard_client)
+
+    class FakeCP:
+        def health(self):
+            return True
+
+        def list_workers(self):
+            return []
+
+        def list_bots(self):
+            return [{"id": "chat-only", "name": "Chat Only", "enabled": True}]
+
+        def list_bot_readiness(self):
+            return {"readiness": [{"bot_id": "chat-only", "state": "ready", "ready": True, "checks": []}]}
+
+        def list_worker_probes(self):
+            return {"probes": []}
+
+        def list_keys(self):
+            raise AssertionError("keys should not load without saved launch profiles")
+
+        def list_projects(self):
+            return []
+
+        def list_tasks(self):
+            return []
+
+        def probe_paths(self, paths):
+            return [{"path": p, "ok": True, "status_code": 200, "detail": "ok"} for p in paths]
+
+    with patch("dashboard.cp_client.get_cp_client", return_value=FakeCP()):
+        resp = dashboard_client.get("/")
+
+    assert resp.status_code == 200
+    assert b"Workflow Launch" in resp.data
+    assert b"No saved launch profiles yet" in resp.data
 
 
 def test_pipelines_pages_render_grouped_pipeline_runs(dashboard_client):

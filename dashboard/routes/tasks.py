@@ -112,17 +112,25 @@ def tasks_page() -> str:
     usage_summary = _safe_cp_task_usage(cp, hours=24, limit_bots=15, timeout=1.0)
     if cp_data is not None:
         cp_bots = cp.list_bots() or []
-        list_readiness = getattr(cp, "list_bot_readiness", None)
-        list_workers = getattr(cp, "list_workers", None)
-        list_worker_probes = getattr(cp, "list_worker_probes", None)
-        list_keys = getattr(cp, "list_keys", None)
-        tooling_status = build_bot_tooling_status(
-            bots=cp_bots,
-            readiness_payload=list_readiness() if callable(list_readiness) else None,
-            workers=list_workers() if callable(list_workers) else [],
-            worker_probes_payload=list_worker_probes() if callable(list_worker_probes) else None,
-            api_keys=list_keys() if callable(list_keys) else None,
-        )
+        initial_launchable_bots = launchable_bots(cp_bots, surface="tasks")
+        launch_candidate_ids = {str(bot.get("id") or "").strip() for bot in initial_launchable_bots}
+        launch_candidate_bots = [
+            bot for bot in cp_bots if str(bot.get("id") or "").strip() in launch_candidate_ids
+        ]
+        blocked_launch_ids = set()
+        if launch_candidate_bots:
+            list_readiness = getattr(cp, "list_bot_readiness", None)
+            list_workers = getattr(cp, "list_workers", None)
+            list_worker_probes = getattr(cp, "list_worker_probes", None)
+            list_keys = getattr(cp, "list_keys", None)
+            tooling_status = build_bot_tooling_status(
+                bots=launch_candidate_bots,
+                readiness_payload=list_readiness() if callable(list_readiness) else None,
+                workers=list_workers() if callable(list_workers) else [],
+                worker_probes_payload=list_worker_probes() if callable(list_worker_probes) else None,
+                api_keys=list_keys() if callable(list_keys) else None,
+            )
+            blocked_launch_ids = blocked_launch_bot_ids(tooling_status)
         now = datetime.now(timezone.utc)
         recent_cutoff = now - timedelta(hours=24)
         sorted_tasks = sorted(cp_data, key=_task_sort_key, reverse=True)
@@ -148,7 +156,7 @@ def tasks_page() -> str:
             launchable_bots=launchable_bots(
                 cp_bots,
                 surface="tasks",
-                blocked_bot_ids=blocked_launch_bot_ids(tooling_status),
+                blocked_bot_ids=blocked_launch_ids,
             ),
             usage_summary=usage_summary,
             error=None,
