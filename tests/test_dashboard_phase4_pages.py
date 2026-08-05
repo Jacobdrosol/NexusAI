@@ -1330,6 +1330,9 @@ def test_chat_page_limits_normal_bot_selectors_to_chat_bots(dashboard_client):
     chat_selector = page_html[selector_start:page_html.index("</select>", selector_start)]
     assert b"Personal General Chat" in resp.data
     assert b"Personal General Chat - General Chat" in resp.data
+    assert '<optgroup label="General Chat">' in chat_selector
+    assert '<optgroup label="Blocked Chat">' in chat_selector
+    assert '<optgroup label="Missing Key Chat">' in chat_selector
     assert "GlobeIQ Live Audit QC 02" not in chat_selector
     assert 'value="personal-blocked-chat"  disabled title="model credential missing"' in chat_selector
     assert "Personal Missing Key Chat - Missing Key Chat - blocked" in chat_selector
@@ -1344,6 +1347,10 @@ def test_chat_page_limits_normal_bot_selectors_to_chat_bots(dashboard_client):
     assert b"readinessLabel" in resp.data
     assert b"Personal Blocked Chat - Blocked Chat - blocked" in resp.data
     assert b"Personal Blocked Chat (personal-blocked-chat) - blocked: model credential missing" in resp.data
+    modal_selector_start = page_html.index('id="create-convo-default-bot-id"')
+    create_bot_selector = page_html[modal_selector_start:page_html.index("</select>", modal_selector_start)]
+    assert '<optgroup label="General Chat">' in create_bot_selector
+    assert '<optgroup label="Blocked Chat">' in create_bot_selector
     assert b'value="personal-blocked-chat" disabled title="model credential missing"' in resp.data
     assert b"Personal Missing Key Chat (personal-missing-key-chat) - blocked: Missing key-vault credential reference(s): MISSING_OLLAMA_KEY" in resp.data
     assert b'value="personal-missing-key-chat" disabled title="Missing key-vault credential reference(s): MISSING_OLLAMA_KEY"' in resp.data

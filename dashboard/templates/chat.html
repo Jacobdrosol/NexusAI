@@ -547,11 +547,15 @@
       <div class="chat-main-header-controls">
         <select id="chat-bot-selector" class="form-control chat-bot-selector" aria-label="Message bot">
           <option value="">Conversation Bot</option>
-          {% for b in chat_bots %}
-          {% set blocked_chat_bot = b.readiness and b.readiness.state in ['blocked', 'disabled'] %}
-          <option value="{{ b.id }}" {% if selected_conversation.default_bot_id and selected_conversation.default_bot_id == b.id %}selected{% endif %} {% if blocked_chat_bot %}disabled title="{{ b.readiness.detail }}"{% endif %}>
-            {{ b.name }}{% if b.chat_profile and b.chat_profile.label %} - {{ b.chat_profile.label }}{% endif %}{% if b.readiness and b.readiness.state and b.readiness.state not in ['ready', 'unknown'] %} - {{ b.readiness.state }}{% endif %}
-          </option>
+          {% for group in chat_bots|groupby('chat_profile.label', default='Chat') %}
+          <optgroup label="{{ group.grouper or 'Chat' }}">
+            {% for b in group.list %}
+            {% set blocked_chat_bot = b.readiness and b.readiness.state in ['blocked', 'disabled'] %}
+            <option value="{{ b.id }}" {% if selected_conversation.default_bot_id and selected_conversation.default_bot_id == b.id %}selected{% endif %} {% if blocked_chat_bot %}disabled title="{{ b.readiness.detail }}"{% endif %}>
+              {{ b.name }}{% if b.chat_profile and b.chat_profile.label %} - {{ b.chat_profile.label }}{% endif %}{% if b.readiness and b.readiness.state and b.readiness.state not in ['ready', 'unknown'] %} - {{ b.readiness.state }}{% endif %}
+            </option>
+            {% endfor %}
+          </optgroup>
           {% endfor %}
         </select>
         <select id="chat-default-model-selector" class="form-control chat-bot-selector" aria-label="Conversation default model">
@@ -830,9 +834,13 @@
         <label>Default Bot</label>
         <select class="form-control" name="default_bot_id" id="create-convo-default-bot-id">
           <option value="">None</option>
-          {% for b in chat_bots %}
-          {% set blocked_default_bot = b.readiness and b.readiness.state in ['blocked', 'disabled'] %}
-          <option value="{{ b.id }}" {% if blocked_default_bot %}disabled title="{{ b.readiness.detail }}"{% endif %}>{{ b.name }} ({{ b.id }}){% if b.readiness and b.readiness.state and b.readiness.state not in ['ready', 'unknown'] %} - {{ b.readiness.state }}{% if b.readiness.detail %}: {{ b.readiness.detail }}{% endif %}{% endif %}</option>
+          {% for group in chat_bots|groupby('chat_profile.label', default='Chat') %}
+          <optgroup label="{{ group.grouper or 'Chat' }}">
+            {% for b in group.list %}
+            {% set blocked_default_bot = b.readiness and b.readiness.state in ['blocked', 'disabled'] %}
+            <option value="{{ b.id }}" {% if blocked_default_bot %}disabled title="{{ b.readiness.detail }}"{% endif %}>{{ b.name }} ({{ b.id }}){% if b.readiness and b.readiness.state and b.readiness.state not in ['ready', 'unknown'] %} - {{ b.readiness.state }}{% if b.readiness.detail %}: {{ b.readiness.detail }}{% endif %}{% endif %}</option>
+            {% endfor %}
+          </optgroup>
           {% endfor %}
         </select>
         <p class="mini-note" id="create-convo-bot-summary">Select a default bot or leave blank to use the platform default.</p>
