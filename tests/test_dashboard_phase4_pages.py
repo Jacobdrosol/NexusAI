@@ -1340,6 +1340,9 @@ def test_chat_page_embeds_effective_context_gate_inputs(dashboard_client):
     assert b"const selectedConversationProjectId = \"globeiq\";" in resp.data
     assert b"const selectedProjectMemoryProfilesEnabled = true;" in resp.data
     assert b"\"repo_search\": true" in resp.data
+    assert b"const assignmentContext = selectedContextItems();" in resp.data
+    assert b"context_items: assignmentContext.contexts" in resp.data
+    assert b"Context items: " in resp.data
 
 
 def test_chat_effective_context_api_reports_active_memory_tools_and_coding(dashboard_client):

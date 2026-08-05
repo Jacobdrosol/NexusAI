@@ -1217,8 +1217,9 @@ function renderAssignmentConfig(preview) {
   const graph = preview?.graph || {};
   const nodes = Array.isArray(graph.nodes) ? graph.nodes : [];
   const projectConnections = Array.isArray(preview?.project_connections) ? preview.project_connections : [];
+  const contextCount = Number(preview?.context_item_count || 0);
   state.textContent = 'Configure per-node directives before queueing this assignment.';
-  summary.textContent = 'Stages: ' + nodes.length + ' · Project connections: ' + projectConnections.length;
+  summary.textContent = 'Stages: ' + nodes.length + ' · Project connections: ' + projectConnections.length + ' · Context items: ' + contextCount;
   nodesWrap.innerHTML = nodes.map((node) => {
     const nodeId = String(node?.id || '').trim();
     const title = String(node?.title || node?.bot_id || nodeId || 'stage');
@@ -3214,13 +3215,15 @@ document.getElementById('form-assign')?.addEventListener('submit', async functio
     alert(`Project manager bot is unavailable: ${readinessBlocker}`);
     return;
   }
+  const assignmentContext = selectedContextItems();
   const res = await fetch('/api/chat/assignments/preview', {
     method: 'POST',
     headers: {'Content-Type':'application/json', 'X-CSRFToken': getCsrf()},
     body: JSON.stringify({
       conversation_id: fd.get('conversation_id'),
       instruction,
-      pm_bot_id: pmBotId
+      pm_bot_id: pmBotId,
+      context_items: assignmentContext.contexts
     }),
   });
   if (!res.ok) {
@@ -3239,13 +3242,14 @@ document.getElementById('assign-config-submit')?.addEventListener('click', async
   }
   const nodeOverrides = collectAssignmentNodeOverrides();
   const includeProjectContext = document.getElementById('include-project-context');
+  const assignmentContext = selectedContextItems();
   const payload = {
     conversation_id: activeAssignmentPreview.conversation_id,
     instruction: activeAssignmentPreview.instruction,
     pm_bot_id: activeAssignmentPreview.pm_bot_id,
     run_id: activeAssignmentPreview.run_id,
     node_overrides: nodeOverrides,
-    context_items: [],
+    context_items: assignmentContext.contexts,
     include_project_context: includeProjectContext ? includeProjectContext.checked : false,
     use_workspace_tools: !!document.getElementById('use-workspace-tools-message')?.checked
   };
